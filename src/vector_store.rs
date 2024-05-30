@@ -71,23 +71,16 @@ fn shift_and_accumulate(value: u32) -> i32 {
     result
 }
 
-fn dot_product(va: &[i32], vb: &[i32]) -> u32 {
-    let value1 = bits_to_integer(va, 8);
-    let value2 = bits_to_integer(vb, 8);
-    shift_and_accumulate(value1 & value2) as u32
+fn dot_product(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b.iter()).map(|(&x, &y)| x * y).sum()
 }
 
-fn magnitude(v: &[i32]) -> f64 {
-    let value = bits_to_integer(v, 8);
-    let x = shift_and_accumulate(value);
-    (x as f64).sqrt()
+fn magnitude(vec: &[f32]) -> f32 {
+    vec.iter().map(|&x| x * x).sum::<f32>().sqrt()
 }
 
-pub fn cosine_similarity(v1: &[i32], v2: &[i32]) -> f64 {
-    let dp = dot_product(v1, v2) as f64;
-    let mag1 = magnitude(v1);
-    let mag2 = magnitude(v2);
-    dp / (mag1 * mag2)
+pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    dot_product(a, b) / (magnitude(a) * magnitude(b))
 }
 
 pub fn compute_cosine_similarity(a: &[i32], b: &[i32], size: usize) -> CosResult {

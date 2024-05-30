@@ -1,10 +1,15 @@
 mod vector_store;
+use async_channel::Sender;
+use async_std::task;
+use lazy_static::lazy_static;
 use rand::Rng;
 use std::f64;
-use async_std::task;
 use std::sync::{Arc, Mutex};
-use async_channel::Sender;
 
+lazy_static! {
+    static ref random_numbers_a: Vec<f32> = generate_random_vector();
+    static ref random_numbers_b: Vec<f32> = generate_random_vector();
+}
 use vector_store::{
     compute_cosine_similarity, cosine_coalesce, cosine_similarity, quantize, VectorEmbedding,
     VectorStore, VectorTreeNode,
@@ -26,10 +31,7 @@ fn generate_random_vector() -> Vec<f32> {
     numbers
 }
 
-fn run() -> f64 {
-    let random_numbers_a = generate_random_vector();
-    let random_numbers_b = generate_random_vector();
-
+fn run_quantized_cs() -> f64 {
     let quantized_values_x = quantize(&random_numbers_a);
     let quantized_values_y = quantize(&random_numbers_b);
 
@@ -38,28 +40,18 @@ fn run() -> f64 {
     // println!("{:.8}", similarity);
     return similarity;
 }
+
+fn run_cs() -> f32 {
+    let similarity = cosine_similarity(&random_numbers_a, &random_numbers_b);
+    return similarity;
+}
 fn main() {
-    // Example bit sequence
-    let bits1 = [1, 0, 1, 1, 0, 1, 1, 1]; // Represents the binary value 101101
-    let bits2 = [1, 0, 0, 1, 0, 0, 0, 1]; // Represents the binary value 101101
-
-    // Compute the cosine similarity
-    let result = cosine_similarity(&bits1, &bits2);
-    println!("Cosine similarity result: {}", result);
-
-    // Compute the CosResult struct
-    let cos_result = compute_cosine_similarity(&bits1, &bits2, 8);
-    println!(
-        "CosResult -> dotprod: {}, premagA: {}, premagB: {}",
-        cos_result.dotprod, cos_result.premag_a, cos_result.premag_b
-    );
-
     async_std::task::block_on(async {
-        let tasks = (0..10000)
+        let tasks = (0..(932500))
             .map(|_| {
                 let (sender, receiver) = async_channel::bounded(1);
                 task::spawn(async move {
-                    let similarity = run();
+                    let similarity = run_cs();
                     sender
                         .send(similarity)
                         .await
@@ -70,7 +62,8 @@ fn main() {
             .collect::<Vec<_>>();
 
         for task in tasks {
-            println!("{:.8}", task.recv().await.expect("Receiving result failed"));
+            task.recv().await.expect("Receiving result failed");
+            // println!("{:.8}", task.recv().await.expect("Receiving result failed"));
         }
     });
 }
