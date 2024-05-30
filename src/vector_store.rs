@@ -116,6 +116,27 @@ pub fn cosine_coalesce(x: &[Vec<i32>], y: &[Vec<i32>]) -> f64 {
         / (f64::sqrt(f64::from(summed.premag_a)) * f64::sqrt(f64::from(summed.premag_b)))
 }
 
+pub fn cosine_sim_unsigned(x: &Vec<u32>, y: &Vec<u32>) -> f64 {
+
+    let mut acc = CosResult {
+        dotprod: 0,
+        premag_a: 0,
+        premag_b: 0,
+    };
+    for (value1, value2) in x.iter().zip(y.iter()) {
+        let dotprod = shift_and_accumulate(value1 & value2);
+        let premag_a = shift_and_accumulate(*value1);
+        let premag_b = shift_and_accumulate(*value2);
+    
+        acc.dotprod += dotprod;
+        acc.premag_a += premag_a;
+        acc.premag_b += premag_b;
+    }
+
+    f64::from(acc.dotprod)
+        / (f64::sqrt(f64::from(acc.premag_a)) * f64::sqrt(f64::from(acc.premag_b)))
+}
+
 fn sum_components(results: &[CosResult]) -> CosResult {
     let mut acc = CosResult {
         dotprod: 0,
@@ -138,6 +159,18 @@ fn to_float_flag(x: f32) -> i32 {
     } else {
         0
     }
+}
+
+pub fn floats_to_bits(floats: &[f32]) -> Vec<u32> {
+    let mut result = vec![0; (floats.len() + 31) / 32];
+
+    for (i, &f) in floats.iter().enumerate() {
+        if f >= 0.0 {
+            result[i / 32] |= 1 << (i % 32);
+        }
+    }
+
+    result
 }
 
 pub fn quantize(fins: &[f32]) -> Vec<Vec<i32>> {

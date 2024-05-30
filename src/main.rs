@@ -1,4 +1,6 @@
 mod vector_store;
+mod api_service;
+
 use async_channel::Sender;
 use async_std::task;
 use lazy_static::lazy_static;
@@ -11,8 +13,7 @@ lazy_static! {
     static ref random_numbers_b: Vec<f32> = generate_random_vector();
 }
 use vector_store::{
-    compute_cosine_similarity, cosine_coalesce, cosine_similarity, quantize, VectorEmbedding,
-    VectorStore, VectorTreeNode,
+    compute_cosine_similarity, cosine_coalesce, cosine_sim_unsigned, cosine_similarity, floats_to_bits, quantize, VectorEmbedding, VectorStore, VectorTreeNode
 };
 
 // Function to generate a vector of 1024 f32 random numbers in the range -1.0 to 1.0
@@ -45,13 +46,22 @@ fn run_cs() -> f32 {
     let similarity = cosine_similarity(&random_numbers_a, &random_numbers_b);
     return similarity;
 }
+
+fn run_cs_new() -> f64 {
+    let x = floats_to_bits(&random_numbers_a);
+    let y = floats_to_bits(&random_numbers_b);
+
+    let similarity = cosine_sim_unsigned(&x, &y);
+    return similarity;
+}
+
 fn main() {
     async_std::task::block_on(async {
-        let tasks = (0..(932500))
+        let tasks = (0..(932500* 4))
             .map(|_| {
                 let (sender, receiver) = async_channel::bounded(1);
                 task::spawn(async move {
-                    let similarity = run_cs();
+                    let similarity = run_cs_new();
                     sender
                         .send(similarity)
                         .await
