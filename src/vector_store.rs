@@ -7,7 +7,7 @@ type VectorHash = String; // Assuming VectorHash is a String, replace with appro
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct VectorTreeNode {
-    vector_list: NumericValue, // Two-dimensional vector
+    vector_list: NumericValue,         // Two-dimensional vector
     neighbors: Vec<(VectorHash, f64)>, // neighbor, cosine distance
 }
 
@@ -24,7 +24,6 @@ pub struct VectorEmbedding {
     raw_vec: NumericValue, // Two-dimensional vector
     hash_vec: VectorHash,
 }
-
 
 pub struct CosResult {
     pub dotprod: i32,
@@ -78,11 +77,6 @@ fn dot_product(va: &[i32], vb: &[i32]) -> u32 {
     shift_and_accumulate(value1 & value2) as u32
 }
 
-fn pre_magnitude(v: &[i32]) -> u32 {
-    let value = bits_to_integer(v, 8);
-    shift_and_accumulate(value) as u32
-}
-
 fn magnitude(v: &[i32]) -> f64 {
     let value = bits_to_integer(v, 8);
     let x = shift_and_accumulate(value);
@@ -111,7 +105,7 @@ pub fn compute_cosine_similarity(a: &[i32], b: &[i32], size: usize) -> CosResult
     }
 }
 
-fn cosine_coalesce(x: &[Vec<i32>], y: &[Vec<i32>]) -> f64 {
+pub fn cosine_coalesce(x: &[Vec<i32>], y: &[Vec<i32>]) -> f64 {
     if x.len() != y.len() {
         panic!("Input vectors must have the same length");
     }
@@ -119,16 +113,15 @@ fn cosine_coalesce(x: &[Vec<i32>], y: &[Vec<i32>]) -> f64 {
     let mut results = Vec::new();
 
     for (sub_x, sub_y) in x.iter().zip(y.iter()) {
-            let cs = compute_cosine_similarity(sub_x, sub_y, 16);
-            results.push(cs);
-        
+        let cs = compute_cosine_similarity(sub_x, sub_y, 16);
+        results.push(cs);
     }
 
     let summed = sum_components(&results);
 
-    f64::from(summed.dotprod) / (f64::sqrt(f64::from(summed.premag_a)) * f64::sqrt(f64::from(summed.premag_b)))
+    f64::from(summed.dotprod)
+        / (f64::sqrt(f64::from(summed.premag_a)) * f64::sqrt(f64::from(summed.premag_b)))
 }
-
 
 fn sum_components(results: &[CosResult]) -> CosResult {
     let mut acc = CosResult {
@@ -146,8 +139,6 @@ fn sum_components(results: &[CosResult]) -> CosResult {
     acc
 }
 
-
-
 fn to_float_flag(x: f32) -> i32 {
     if x >= 0.0 {
         1
@@ -156,7 +147,7 @@ fn to_float_flag(x: f32) -> i32 {
     }
 }
 
-fn quantize(fins: &[f32]) -> Vec<Vec<i32>> {
+pub fn quantize(fins: &[f32]) -> Vec<Vec<i32>> {
     let mut quantized = Vec::with_capacity((fins.len() + 15) / 16);
     let mut chunk = Vec::with_capacity(16);
 
