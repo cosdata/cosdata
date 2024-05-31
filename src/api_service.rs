@@ -3,93 +3,82 @@
 // use serde::{Deserialize, Serialize};
 // use std::sync::{Arc, Mutex, RwLock};
 // use log::info;
-
 use crate::models::encoding_format::EncodingFormat;
 use crate::models::rpc::{
-    RPCReqParams, RPCReqMethodParams, RPCMessage, RPCError, RPCErrors, RPCResponseBody,
+    RPCError, RPCErrors, RPCMessage, RPCReqMethodParams, RPCReqParams, RPCResponseBody,
 };
-use crate::models::user::{AuthResp, AddUserResp, User, Statistics};
+use crate::models::user::{AddUserResp, AuthResp, Statistics, User};
+use chrono::prelude::*;
 
-use std::sync::{Arc, Mutex};
 use log::info;
+use std::sync::{Arc, Mutex};
 
+fn auth_login_client(
+    rq_method: String,
+    username: String,
+    password: String,
+    pretty: bool,
+) -> Result<RPCMessage, RPCError> {
+    let dbe = get_db();
 
-
-
-
-async fn auth_login_client(msg: RPCMessage, pretty: bool) -> Result<RPCMessage, RPCError> {
-    let dbe = get_db().await;
-    match msg {
-        RPCMessage::RPCRequest { rq_method, rq_params } => {
-            if rq_method == "AUTHENTICATE" {
-                match rq_params {
-                    RPCReqParams::AuthenticateReq { username, password, pretty } => {
-                        let resp = login(&username, &password).await;
-                        Ok(RPCMessage::RPCResponse {
-                            rs_status_code: 200,
-                            pretty,
-                            rs_resp: Ok(Some(RPCResponseBody::AuthenticateResp { auth: resp })),
-                        })
-                    }
-                    _ => Ok(RPCMessage::RPCResponse {
-                        rs_status_code: 404,
-                        pretty,
-                        rs_resp: Err(RPCError {
-                            rs_status_message: RPCErrors::InvalidRequest,
-                            rs_error_data: None,
-                        }),
-                    }),
-                }
-            } else {
-                Ok(RPCMessage::RPCResponse {
-                    rs_status_code: 200,
-                    pretty,
-                    rs_resp: Ok(Some(RPCResponseBody::AuthenticateResp {
-                        auth: AuthResp {
-                            session_key: None,
-                            calls_used: 0,
-                            calls_remaining: 0,
-                        },
-                    })),
-                })
-            }
-        }
-        _ => Err(RPCError {
-            rs_status_message: RPCErrors::InvalidRequest,
-            rs_error_data: None,
-        }),
+    if rq_method == "AUTHENTICATE" {
+        let resp = login(&username, &password);
+        Ok(RPCMessage::RPCResponse {
+            rs_status_code: 200,
+            pretty,
+            rs_resp: Ok(Some(RPCResponseBody::AuthenticateResp { auth: resp })),
+        })
+    } else {
+        Ok(RPCMessage::RPCResponse {
+            rs_status_code: 200,
+            pretty,
+            rs_resp: Ok(Some(RPCResponseBody::AuthenticateResp {
+                auth: AuthResp {
+                    session_key: None,
+                    calls_used: 0,
+                    calls_remaining: 0,
+                },
+            })),
+        })
     }
 }
 
-async fn delegate_request(enc_req: RPCMessage) -> Result<RPCMessage, RPCError> {
-    let dbe = get_db().await;
-    let ain = get_ain().await;
+fn delegate_request(enc_req: RPCMessage) -> Result<RPCMessage, RPCError> {
+    let dbe = get_db();
+    let ain = get_ain();
+  
 
     match enc_req {
-        RPCMessage::RPCRequest { rq_params, .. } => match rq_params {
-            RPCReqParams::AuthenticateReq { .. } => auth_login_client(enc_req, true).await,
+        RPCMessage::RPCRequest { rq_method, rq_params }  => {
+        let rq = rq_method;
+        match rq_params {
+            RPCReqParams::AuthenticateReq {
+                username,
+                password,
+                pretty_print,
+            } => auth_login_client(rq, username, password, pretty_print),
             RPCReqParams::GeneralReq {
                 session_key,
-                pretty,
+                pretty_print,
                 ..
             } => {
-                let user_data = lookup_user_data(&session_key).await;
+                let user_data = lookup_user_data(&session_key);
 
                 match user_data {
-                    None => go_get_resource(enc_req, vec![], &session_key, pretty).await,
+                    None => go_get_resource(enc_req, vec![], &session_key, pretty_print),
                     Some((name, quota, used, exp, roles)) => {
-                        let curtm = get_current_time().await;
+                        let curtm = Utc::now().to_rfc3339();
                         if exp > curtm && quota > used {
                             if (used + 1) % 100 == 0 {
                                 // Placeholder for additional logic
                             }
-                            update_user_data(&session_key, name, quota, used + 1, exp, roles).await;
-                            go_get_resource(enc_req, roles, &session_key, pretty).await
+                            update_user_data(&session_key, name, quota, used + 1, exp, &roles);
+                            go_get_resource(enc_req, roles, &session_key, pretty_print)
                         } else {
-                            delete_user_data(&session_key).await;
+                            delete_user_data(&session_key);
                             Ok(RPCMessage::RPCResponse {
                                 rs_status_code: 200,
-                                pretty,
+                                pretty: true,
                                 rs_resp: Ok(Some(RPCResponseBody::AuthenticateResp {
                                     auth: AuthResp {
                                         session_key: None,
@@ -102,7 +91,7 @@ async fn delegate_request(enc_req: RPCMessage) -> Result<RPCMessage, RPCError> {
                     }
                 }
             }
-        },
+        }},
         _ => Err(RPCError {
             rs_status_message: RPCErrors::InvalidRequest,
             rs_error_data: None,
@@ -110,17 +99,20 @@ async fn delegate_request(enc_req: RPCMessage) -> Result<RPCMessage, RPCError> {
     }
 }
 
-async fn go_get_resource(
+fn go_get_resource(
     msg: RPCMessage,
     roles: Vec<String>,
     sess_key: &str,
     pretty: bool,
 ) -> Result<RPCMessage, RPCError> {
-    let dbe = get_db().await;
-    let ain = get_ain().await;
+    let dbe = get_db();
+    let ain = get_ain();
 
     match msg {
-        RPCMessage::RPCRequest { rq_method, rq_params } => {
+        RPCMessage::RPCRequest {
+            rq_method,
+            rq_params,
+        } => {
             match rq_method.as_str() {
                 "ADD_USER" => {
                     // Placeholder for ADD_USER logic
@@ -130,12 +122,13 @@ async fn go_get_resource(
                     info!("Creating Vector DB");
                     match rq_params {
                         RPCReqParams::GeneralReq {
-                            method_params: Some(RPCReqMethodParams::CreateVectorDb {
-                                cv_vector_db_name,
-                                cv_dimensions,
-                                cv_max_val,
-                                cv_min_val,
-                            }),
+                            method_params:
+                                Some(RPCReqMethodParams::CreateVectorDb {
+                                    cv_vector_db_name,
+                                    cv_dimensions,
+                                    cv_max_val,
+                                    cv_min_val,
+                                }),
                             ..
                         } => {
                             info!("Creating Vector DB: {}", cv_vector_db_name);
@@ -144,8 +137,7 @@ async fn go_get_resource(
                                 cv_dimensions as usize,
                                 cv_max_val,
                                 cv_min_val,
-                            )
-                            .await;
+                            );
                             Ok(RPCMessage::RPCResponse {
                                 rs_status_code: 200,
                                 pretty,
@@ -163,16 +155,17 @@ async fn go_get_resource(
                 "UPSERT_VECTORS" => {
                     match rq_params {
                         RPCReqParams::GeneralReq {
-                            method_params: Some(RPCReqMethodParams::UpsertVectors {
-                                uv_vector_db_name,
-                                uv_vector,
-                            }),
+                            method_params:
+                                Some(RPCReqMethodParams::UpsertVectors {
+                                    uv_vector_db_name,
+                                    uv_vector,
+                                }),
                             ..
                         } => {
-                            let vss = lookup_vector_store(&uv_vector_db_name).await;
+                            let vss = lookup_vector_store(&uv_vector_db_name);
                             match vss {
                                 Some(vs) => {
-                                    let levels = run_upload(&vs, &uv_vector).await;
+                                    let levels = run_upload(&vs, &uv_vector);
                                     let stats = calculate_statistics(&[]); // Placeholder for levels
                                     Ok(RPCMessage::RPCResponse {
                                         rs_status_code: 200,
@@ -205,16 +198,17 @@ async fn go_get_resource(
                     info!("KNN vectors");
                     match rq_params {
                         RPCReqParams::GeneralReq {
-                            method_params: Some(RPCReqMethodParams::VectorKNN {
-                                knn_vector_db_name,
-                                knn_vector,
-                            }),
+                            method_params:
+                                Some(RPCReqMethodParams::VectorKNN {
+                                    knn_vector_db_name,
+                                    knn_vector,
+                                }),
                             ..
                         } => {
-                            let vss = lookup_vector_store(&knn_vector_db_name).await;
+                            let vss = lookup_vector_store(&knn_vector_db_name);
                             match vss {
                                 Some(vs) => {
-                                    let knn = vector_knn(&vs, &knn_vector).await;
+                                    let knn = vector_knn(&vs, &knn_vector);
                                     Ok(RPCMessage::RPCResponse {
                                         rs_status_code: 200,
                                         pretty,
@@ -253,50 +247,46 @@ async fn go_get_resource(
     }
 }
 
-async fn get_db() -> Arc<Mutex<()>> {
+fn get_db() -> Arc<Mutex<()>> {
     // Placeholder for getting DB connection
     Arc::new(Mutex::new(()))
 }
 
-async fn get_ain() -> Arc<Mutex<()>> {
+fn get_ain() -> Arc<Mutex<()>> {
     // Placeholder for getting AIN connection
     Arc::new(Mutex::new(()))
 }
 
-async fn lookup_user_data(session_key: &str) -> Option<(String, i32, i32, time::Instant, Vec<String>)> {
+fn lookup_user_data(session_key: &str) -> Option<(String, i32, i32, String, Vec<String>)> {
     // Placeholder for looking up user data
     None
 }
 
-async fn update_user_data(
+fn update_user_data(
     session_key: &str,
     name: String,
     quota: i32,
     used: i32,
-    exp: time::Instant,
-    roles: Vec<String>,
+    exp: String,
+    roles: &Vec<String>,
 ) {
     // Placeholder for updating user data
 }
 
-async fn delete_user_data(session_key: &str) {
+fn delete_user_data(session_key: &str) {
     // Placeholder for deleting user data
 }
 
-async fn get_current_time() -> time::Instant {
-    time::Instant::now()
-}
-
-async fn init_vector_store(name: &str, dim: usize, max: Option<f32>, min: Option<f32>) {
+fn init_vector_store(name: &str, dim: usize, max: Option<f32>, min: Option<f32>) {
     // Placeholder for initializing vector store
 }
 
-async fn lookup_vector_store(name: &str) -> Option<Vec<f32>> {
+fn lookup_vector_store(name: &str) -> Option<Vec<f32>> {
     // Placeholder for looking up vector store
     None
 }
 
-async fn run_upload(vs: &Vec<f32>, vecs: &Vec<Vec<f32>>) -> Vec<i32> {
+fn run_upload(vs: &Vec<f32>, vecs: &Vec<Vec<f32>>) -> Vec<i32> {
     // Placeholder for running upload
     vec![]
 }
@@ -306,12 +296,12 @@ fn calculate_statistics(_: &[i32]) -> Option<Statistics> {
     None
 }
 
-async fn vector_knn(vs: &Vec<f32>, vecs: &Vec<f32>) -> Vec<(i8, i8, String, f64)> {
+fn vector_knn(vs: &Vec<f32>, vecs: &Vec<f32>) -> Vec<(i8, i8, String, f64)> {
     // Placeholder for vector KNN
     vec![]
 }
 
-async fn login(user: &str, pass: &str) -> AuthResp {
+fn login(user: &str, pass: &str) -> AuthResp {
     // Placeholder for login function
     AuthResp {
         session_key: None,

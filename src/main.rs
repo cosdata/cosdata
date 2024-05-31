@@ -1,5 +1,6 @@
 mod vector_store;
 mod api_service;
+mod tls_server;
 
 use async_channel::Sender;
 use async_std::task;
