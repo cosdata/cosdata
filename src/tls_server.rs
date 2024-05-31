@@ -1,4 +1,23 @@
 use rayon::ThreadPool;
+use rustls_pemfile::Item;
+use std::arch::x86_64;
+use std::sync::{Arc, Mutex};
+use crate::models::rpc::{
+
+    RPCError, RPCErrors, RPCMessage, RPCReqMethodParams, RPCReqParams, RPCResponseBody,AuthResp,
+};
+use std::fs::File;
+use std::io::{BufReader, Read, Write};
+use std::net::TcpListener;
+use std::sync::{Arc, Mutex};
+use rustls::*;
+use rustls::ServerConnection;
+use rustls::StreamOwned;
+use serde::{Deserialize, Serialize};
+use log::{info, error};
+use rayon::ThreadPoolBuilder;
+use rustls::pki_types::{CertificateDer, CertificateRevocationListDer, PrivateKeyDer};
+use std::{fs, net};
 
 fn handle_rpc_request(msg: RPCMessage) -> RPCMessage {
     match msg {
@@ -27,7 +46,7 @@ fn handle_rpc_request(msg: RPCMessage) -> RPCMessage {
     }
 }
 
-fn handle_client(mut stream: StreamOwned<ServerSession, std::net::TcpStream>, tx: Arc<Mutex<Vec<RPCMessage>>>, pool: Arc<ThreadPool>) {
+fn handle_client(mut stream: StreamOwned<ServerConnection, std::net::TcpStream>, tx: Arc<Mutex<Vec<RPCMessage>>>, pool: Arc<ThreadPool>) {
     let mut buffer = vec![0; 4096];
 
     loop {
@@ -63,8 +82,35 @@ fn handle_client(mut stream: StreamOwned<ServerSession, std::net::TcpStream>, tx
     }
 }
 
+fn load_private_key(filename: &str) -> PrivateKeyDer<'static> {
+    let keyfile = fs::File::open(filename).expect("cannot open private key file");
+    let mut reader = BufReader::new(keyfile);
+
+    loop {
+        match rustls_pemfile::read_one(&mut reader).expect("cannot parse private key .pem file") {
+            Some(rustls_pemfile::Item::Pkcs1Key(key)) => return key.into(),
+            Some(rustls_pemfile::Item::Pkcs8Key(key)) => return key.into(),
+            Some(rustls_pemfile::Item::Sec1Key(key)) => return key.into(),
+            None => break,
+            _ => {}
+        }
+    }
+
+    panic!(
+        "no keys found in {:?} (encrypted keys not supported)",
+        filename
+    );
+}
+
+fn load_certs(filename: &str) -> Vec<CertificateDer<'static>> {
+    let certfile = fs::File::open(filename).expect("cannot open certificate file");
+    let mut reader = BufReader::new(certfile);
+    rustls_pemfile::certs(&mut reader)
+        .map(|result| result.unwrap())
+        .collect()
+}
+
 fn main() {
-    env_logger::init();
 
     let addr = "127.0.0.1:8443";
     let listener = TcpListener::bind(addr).expect("Failed to bind address");
@@ -73,7 +119,6 @@ fn main() {
     let key = load_private_key("certs/server.key");
 
     let config = ServerConfig::builder()
-        .with_safe_defaults()
         .with_no_client_auth()
         .with_single_cert(certs, key)
         .expect("bad certificate/key");
@@ -90,7 +135,7 @@ fn main() {
                 let pool = pool.clone();
 
                 thread::spawn(move || {
-                    let session = ServerSession::new(&config);
+                    let session = ServerConnection::new(config);
                     let stream = StreamOwned::new(session, stream);
                     handle_client(stream, tx, pool);
                 });

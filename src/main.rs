@@ -1,8 +1,8 @@
 mod vector_store;
 mod api_service;
 mod tls_server;
+mod models;
 
-use async_channel::Sender;
 use async_std::task;
 use lazy_static::lazy_static;
 use rand::Rng;
