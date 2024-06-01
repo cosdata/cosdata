@@ -2,21 +2,39 @@ use std::{fs::File, io::BufReader};
 
 use actix_files::Files;
 use actix_web::{
-    http::header::ContentType, middleware, web, App, HttpRequest, HttpResponse, HttpServer,
+    http::header::ContentType, middleware, web, App, Error, HttpRequest, HttpResponse, HttpServer,
 };
 use log::debug;
 use rustls::{pki_types::PrivateKeyDer, ServerConfig};
 use rustls_pemfile::{certs, pkcs8_private_keys};
+use serde::{Deserialize, Serialize};
 
-/// simple handle
-async fn index(req: HttpRequest) -> HttpResponse {
-    debug!("{req:?}");
+#[derive(Debug, Serialize, Deserialize)]
+struct MyObj {
+    name: String,
+    number: i32,
+}
 
-    HttpResponse::Ok().content_type(ContentType::html()).body(
-        "<!DOCTYPE html><html><body>\
-            <p>Welcome to your TLS-secured homepage!</p>\
-        </body></html>",
-    )
+
+/// This handler uses json extractor
+async fn index(item: web::Json<MyObj>) -> HttpResponse {
+    println!("model: {:?}", &item);
+    HttpResponse::Ok().json(item.0) // <- send response
+}
+
+/// This handler uses json extractor with limit
+async fn extract_item(item: web::Json<MyObj>, req: HttpRequest) -> HttpResponse {
+    println!("request: {req:?}");
+    println!("model: {item:?}");
+
+    HttpResponse::Ok().json(item.0) // <- send json response
+}
+
+/// This handler manually load request payload and parse json object
+async fn index_manual(body: web::Bytes) -> Result<HttpResponse, Error> {
+    // body is loaded, now we can deserialize serde-json
+    let obj = serde_json::from_slice::<MyObj>(&body)?;
+    Ok(HttpResponse::Ok().json(obj)) // <- send response
 }
 
 #[actix_web::main]
@@ -32,9 +50,15 @@ async fn main() -> std::io::Result<()> {
             // enable logger
             .wrap(middleware::Logger::default())
             // register simple handler, handle all methods
-            .service(web::resource("/index.html").to(index))
-            .service(web::redirect("/", "/index.html"))
-            .service(Files::new("/static", "static"))
+            .app_data(web::JsonConfig::default().limit(4096)) // <- limit size of the payload (global configuration)
+            .service(web::resource("/index").route(web::post().to(index)))
+            .service(
+                web::resource("/extractor")
+                    .app_data(web::JsonConfig::default().limit(1024)) // <- limit size of the payload (resource level)
+                    .route(web::post().to(extract_item)),
+            )
+            .service(web::resource("/manual").route(web::post().to(index_manual)))
+            .service(web::resource("/").route(web::post().to(index)))
     })
     .bind_rustls_0_23("127.0.0.1:8443", config)?
     .run()
