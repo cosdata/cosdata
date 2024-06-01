@@ -1,4 +1,4 @@
-use crate::models::rpc::{RPCReqMethodParams, RPCReqParams, RPCResponseBody};
+use crate::models::rpc::*;
 use actix_cors::Cors;
 use actix_files::Files;
 use actix_web::{
@@ -11,6 +11,8 @@ use rustls::{pki_types::PrivateKeyDer, ServerConfig};
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use serde::{Deserialize, Serialize};
 use std::{fs::File, io::BufReader};
+use waco::models::rpc::Authenticate;
+
 #[derive(Debug, Serialize, Deserialize)]
 struct MyObj {
     name: String,
@@ -26,13 +28,25 @@ async fn validator(
 }
 
 /// This handler uses json extractor
-async fn authenticate(item: web::Json<crate::models::rpc::RPCReqParams>) -> HttpResponse {
+async fn authenticate(item: web::Json<Authenticate>) -> HttpResponse {
     println!("model: {:?}", &item);
     HttpResponse::Ok().json(item.0) // <- send response
 }
 
 /// This handler uses json extractor
-async fn index(item: web::Json<RPCReqMethodParams>) -> HttpResponse {
+async fn create_vector_db(item: web::Json<CreateVectorDb>) -> HttpResponse {
+    println!("model: {:?}", &item);
+    HttpResponse::Ok().json(item.0) // <- send response
+}
+
+/// This handler uses json extractor
+async fn upsert_vector_db(item: web::Json<UpsertVectors>) -> HttpResponse {
+    println!("model: {:?}", &item);
+    HttpResponse::Ok().json(item.0) // <- send response
+}
+
+/// This handler uses json extractor
+async fn search_vector_db(item: web::Json<VectorANN>) -> HttpResponse {
     println!("model: {:?}", &item);
     HttpResponse::Ok().json(item.0) // <- send response
 }
@@ -71,14 +85,15 @@ pub async fn run_actix_server() -> std::io::Result<()> {
             // register simple handler, handle all methods
             .app_data(web::JsonConfig::default().limit(4096)) // <- limit size of the payload (global configuration)
             .service(
-                web::scope("/auth").service(web::resource("/gettoken").route(web::post().to(authenticate))),
+                web::scope("/auth")
+                    .service(web::resource("/gettoken").route(web::post().to(authenticate))),
             )
             .service(
                 web::scope("/vectordb")
                     .wrap(auth.clone())
-                    .service(web::resource("/createdb").route(web::post().to(index)))
-                    .service(web::resource("/upsert").route(web::post().to(index)))
-                    .service(web::resource("/search").route(web::post().to(index))),
+                    .service(web::resource("/createdb").route(web::post().to(create_vector_db)))
+                    .service(web::resource("/upsert").route(web::post().to(upsert_vector_db)))
+                    .service(web::resource("/search").route(web::post().to(search_vector_db))),
             )
         // .service(web::resource("/index").route(web::post().to(index)))
         // .service(

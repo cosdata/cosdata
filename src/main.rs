@@ -1,21 +1,22 @@
 mod vector_store;
-mod api_service;
-mod web_server;
+//mod api_service;
 mod models;
+mod web_server;
 
 use async_std::task;
 use lazy_static::lazy_static;
 use rand::Rng;
-use web_server::run_actix_server;
 use std::f64;
 use std::sync::{Arc, Mutex};
+use web_server::run_actix_server;
 
 lazy_static! {
     static ref random_numbers_a: Vec<f32> = generate_random_vector();
     static ref random_numbers_b: Vec<f32> = generate_random_vector();
 }
 use vector_store::{
-    compute_cosine_similarity, cosine_coalesce, cosine_sim_unsigned, cosine_similarity, floats_to_bits, quantize, VectorEmbedding, VectorStore, VectorTreeNode
+    compute_cosine_similarity, cosine_coalesce, cosine_sim_unsigned, cosine_similarity,
+    floats_to_bits, quantize, VectorEmbedding, VectorStore, VectorTreeNode,
 };
 
 // Function to generate a vector of 1024 f32 random numbers in the range -1.0 to 1.0
@@ -59,7 +60,7 @@ fn run_cs_new() -> f64 {
 
 fn main() {
     async_std::task::block_on(async {
-        let tasks = (0..( 4))
+        let tasks = (0..(4))
             .map(|_| {
                 let (sender, receiver) = async_channel::bounded(1);
                 task::spawn(async move {
