@@ -1,6 +1,6 @@
 mod vector_store;
 mod api_service;
-mod tls_server;
+mod web_server;
 mod models;
 
 use async_std::task;
