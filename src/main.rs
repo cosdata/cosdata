@@ -6,6 +6,7 @@ mod models;
 use async_std::task;
 use lazy_static::lazy_static;
 use rand::Rng;
+use web_server::run_actix_server;
 use std::f64;
 use std::sync::{Arc, Mutex};
 
@@ -58,7 +59,7 @@ fn run_cs_new() -> f64 {
 
 fn main() {
     async_std::task::block_on(async {
-        let tasks = (0..(932500* 4))
+        let tasks = (0..( 4))
             .map(|_| {
                 let (sender, receiver) = async_channel::bounded(1);
                 task::spawn(async move {
@@ -77,4 +78,5 @@ fn main() {
             // println!("{:.8}", task.recv().await.expect("Receiving result failed"));
         }
     });
+    run_actix_server();
 }

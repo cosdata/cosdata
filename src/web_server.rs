@@ -1,23 +1,38 @@
-use std::{fs::File, io::BufReader};
-
+use crate::models::rpc::{RPCReqMethodParams, RPCReqParams, RPCResponseBody};
+use actix_cors::Cors;
 use actix_files::Files;
 use actix_web::{
-    http::header::ContentType, middleware, web, App, Error, HttpRequest, HttpResponse, HttpServer,
+    dev::ServiceRequest, http::header::ContentType, middleware, web, App, Error, HttpRequest,
+    HttpResponse, HttpServer,
 };
+use actix_web_httpauth::{extractors::bearer::BearerAuth, middleware::HttpAuthentication};
 use log::debug;
 use rustls::{pki_types::PrivateKeyDer, ServerConfig};
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use serde::{Deserialize, Serialize};
-
+use std::{fs::File, io::BufReader};
 #[derive(Debug, Serialize, Deserialize)]
 struct MyObj {
     name: String,
     number: i32,
 }
 
+async fn validator(
+    req: ServiceRequest,
+    credentials: BearerAuth,
+) -> Result<ServiceRequest, (Error, ServiceRequest)> {
+    println!("cred: {credentials:?}");
+    Ok(req)
+}
 
 /// This handler uses json extractor
-async fn index(item: web::Json<MyObj>) -> HttpResponse {
+async fn authenticate(item: web::Json<crate::models::rpc::RPCReqParams>) -> HttpResponse {
+    println!("model: {:?}", &item);
+    HttpResponse::Ok().json(item.0) // <- send response
+}
+
+/// This handler uses json extractor
+async fn index(item: web::Json<RPCReqMethodParams>) -> HttpResponse {
     println!("model: {:?}", &item);
     HttpResponse::Ok().json(item.0) // <- send response
 }
@@ -38,7 +53,7 @@ async fn index_manual(body: web::Bytes) -> Result<HttpResponse, Error> {
 }
 
 #[actix_web::main]
-async fn main() -> std::io::Result<()> {
+pub async fn run_actix_server() -> std::io::Result<()> {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
 
     let config = load_rustls_config();
@@ -46,19 +61,33 @@ async fn main() -> std::io::Result<()> {
     log::info!("starting HTTPS server at https://localhost:8443");
 
     HttpServer::new(|| {
+        let auth = HttpAuthentication::bearer(validator);
         App::new()
             // enable logger
             .wrap(middleware::Logger::default())
+            // ensure the CORS middleware is wrapped around the httpauth middleware so it is able to
+            // add headers to error responses
+            .wrap(Cors::permissive())
             // register simple handler, handle all methods
             .app_data(web::JsonConfig::default().limit(4096)) // <- limit size of the payload (global configuration)
-            .service(web::resource("/index").route(web::post().to(index)))
             .service(
-                web::resource("/extractor")
-                    .app_data(web::JsonConfig::default().limit(1024)) // <- limit size of the payload (resource level)
-                    .route(web::post().to(extract_item)),
+                web::scope("/auth").service(web::resource("/gettoken").route(web::post().to(authenticate))),
             )
-            .service(web::resource("/manual").route(web::post().to(index_manual)))
-            .service(web::resource("/").route(web::post().to(index)))
+            .service(
+                web::scope("/vectordb")
+                    .wrap(auth.clone())
+                    .service(web::resource("/createdb").route(web::post().to(index)))
+                    .service(web::resource("/upsert").route(web::post().to(index)))
+                    .service(web::resource("/search").route(web::post().to(index))),
+            )
+        // .service(web::resource("/index").route(web::post().to(index)))
+        // .service(
+        //     web::resource("/extractor")
+        //         .app_data(web::JsonConfig::default().limit(1024)) // <- limit size of the payload (resource level)
+        //         .route(web::post().to(extract_item)),
+        // )
+        // .service(web::resource("/manual").route(web::post().to(index_manual)))
+        // .service(web::resource("/").route(web::post().to(index)))
     })
     .bind_rustls_0_23("127.0.0.1:8443", config)?
     .run()
@@ -74,8 +103,8 @@ fn load_rustls_config() -> rustls::ServerConfig {
     let config = ServerConfig::builder().with_no_client_auth();
 
     // load TLS key/cert files
-    let cert_file = &mut BufReader::new(File::open("cert.pem").unwrap());
-    let key_file = &mut BufReader::new(File::open("key.pem").unwrap());
+    let cert_file = &mut BufReader::new(File::open("/home/nithin/example.crt").unwrap());
+    let key_file = &mut BufReader::new(File::open("/home/nithin/example.key").unwrap());
 
     // convert files to key/cert objects
     let cert_chain = certs(cert_file).collect::<Result<Vec<_>, _>>().unwrap();

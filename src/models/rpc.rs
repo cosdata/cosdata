@@ -4,42 +4,42 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub enum RPCReqParams {
-    AuthenticateReq {
+    Authenticate {
         username: String,
         password: String,
         pretty_print: bool,
     },
-    GeneralReq {
+    Request {
         session_key: String,
         pretty_print: bool,
-        method_params: Option<RPCReqMethodParams>,
+        method_params: RPCReqMethodParams,
     },
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub enum RPCReqMethodParams {
     AddUser {
-        au_username: String,
-        au_api_expiry_time: Option<String>,
-        au_api_quota: Option<i32>,
-        au_first_name: String,
-        au_last_name: String,
-        au_email: String,
-        au_roles: Option<Vec<String>>,
+        username: String,
+        api_expiry_time: Option<String>,
+        api_quota: Option<i32>,
+        first_name: String,
+        last_name: String,
+        email: String,
+        roles: Option<Vec<String>>,
     },
     VectorKNN {
-        knn_vector_db_name: String,
-        knn_vector: Vec<f32>,
+        vector_db_name: String,
+        vector: Vec<f32>,
     },
     UpsertVectors {
-        uv_vector_db_name: String,
-        uv_vector: Vec<Vec<f32>>,
+        vector_db_name: String,
+        vector: Vec<Vec<f32>>,
     },
     CreateVectorDb {
-        cv_vector_db_name: String,
-        cv_dimensions: i32,
-        cv_max_val: Option<f32>,
-        cv_min_val: Option<f32>,
+        vector_db_name: String,
+        dimensions: i32,
+        max_val: Option<f32>,
+        min_val: Option<f32>,
     },
 }
 
