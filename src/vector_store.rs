@@ -1,8 +1,8 @@
+use dashmap::DashMap;
 use futures::future::join_all;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::task;
-
 // type NumericValue = Vec<Vec<i32>>; // Two-dimensional vector
 
 // type VectorHash = String; // Assuming VectorHash is a String, replace with appropriate type if different
@@ -193,25 +193,29 @@ pub fn quantize(fins: &[f32]) -> Vec<Vec<i32>> {
     quantized
 }
 
-#[derive(Debug, Clone)]
-enum NumericValue {
-    U32(Vec<u32>),
-    F32(Vec<f32>),
-}
-
+// #[derive(Debug, Clone)]
+// enum NumericValue {
+//     U32(Vec<u32>),
+//     F32(Vec<f32>),
+// }
+type NumericValue = Vec<f32>;
 type VectorHash = Vec<u8>;
 
+type CacheType = DashMap<(i8, VectorHash), Option<(VectorTreeNode, Arc<()>)>>;
+
 pub struct VectorStore {
-    cache: Arc<Mutex<HashMap<(i8, VectorHash), Option<(VectorTreeNode, Arc<Mutex<()>>)>>>>,
+    cache: Arc<CacheType>,
     max_cache_level: i8,
     database_name: String,
     root_vec: (VectorHash, NumericValue),
 }
+
 #[derive(Debug, Clone)]
 pub struct VectorEmbedding {
     raw_vec: NumericValue,
     hash_vec: VectorHash,
 }
+
 #[derive(Debug, Clone)]
 pub struct VectorTreeNode {
     vector_list: NumericValue,
@@ -225,22 +229,19 @@ async fn insert_embedding(
     cur_level: i8,
     max_insert_level: i8,
 ) {
-    if (cur_level == -1) {
+    if cur_level == -1 {
         return;
     }
 
-    let cache = vec_store.cache.clone();
-    let res = {
-        let cache = cache.lock().unwrap();
-        cache.get(&(cur_level, cur_entry.clone())).cloned()
-    };
-
-    if let Some((vthm, mv)) = res {
+    if let Some(res) = vec_store.cache.clone().get(&(cur_level, cur_entry.clone())) {
         let fvec = vector_emb.raw_vec.clone();
-        if let Some(vtm) = vthm {
-            let skipm = Arc::new(Mutex::new(HashMap::new()));
+
+        if let Some((vthm, mv)) = res.value() {
+            //let Some((vthm,  mv))= x.value();
+            let vtm = vthm.clone();
+            let skipm = Arc::new(DashMap::new());
             let z = traverse_find_nearest(
-                vec_store,
+                vec_store.clone(),
                 mv.clone(),
                 vtm.clone(),
                 fvec.clone(),
@@ -251,7 +252,7 @@ async fn insert_embedding(
             )
             .await;
 
-            let y = cosine_coalesce(&fvec, &vtm.vector_list);
+            let y = cosine_similarity(&fvec, &vtm.vector_list);
             let z = if z.is_empty() {
                 vec![(cur_entry.clone(), y)]
             } else {
@@ -289,10 +290,10 @@ async fn insert_embedding(
             if cur_level > vec_store.max_cache_level {
                 let xvtm = get_vector_from_db(&vec_store.database_name, cur_entry.clone()).await;
                 if let Some(vtm) = xvtm {
-                    let skipm = Arc::new(Mutex::new(HashMap::new()));
+                    let skipm = Arc::new(DashMap::new());
                     let z = traverse_find_nearest(
-                        vec_store,
-                        mv.clone(),
+                        vec_store.clone(),
+                        Arc::new(()),
                         vtm.clone(),
                         fvec.clone(),
                         vector_emb.hash_vec.clone(),
@@ -316,7 +317,7 @@ async fn insert_embedding(
                     );
                 }
             } else {
-                eprintln!("Error case, should not happen: {} {:?}", cur_level, vthm);
+                eprintln!("Error case, should not happen: {} ", cur_level);
             }
         }
     } else {
@@ -331,16 +332,15 @@ async fn insert_node_create_edges(
     nbs: Vec<(VectorHash, f32)>,
     cur_level: i8,
 ) {
-    let em = Arc::new(Mutex::new(()));
+    let em = Arc::new(());
     let nv = VectorTreeNode {
         vector_list: fvec.clone(),
         neighbors: nbs.clone(),
     };
 
-    {
-        let mut cache = vec_store.cache.lock().unwrap();
-        cache.insert((cur_level, hs.clone()), Some((nv, em.clone())));
-    }
+    vec_store
+        .cache
+        .insert((cur_level, hs.clone()), Some((nv, em.clone())));
 
     let tasks: Vec<_> = nbs
         .into_iter()
@@ -350,51 +350,44 @@ async fn insert_node_create_edges(
             let hs = hs.clone();
             let cur_level = cur_level;
             task::spawn(async move {
-                let cache = vec_store.cache.clone();
-                let res = {
-                    let cache = cache.lock().unwrap();
-                    cache.get(&(cur_level, nb.clone())).cloned()
-                };
+                if let Some(res) = vec_store.cache.get(&(cur_level, nb.clone())){
 
-                if let Some((vthm, mv)) = res {
-                    if let Some(vtm) = vthm {
-                        let mut ng = vtm.neighbors.clone();
-                        ng.push((hs.clone(), cs));
-                        ng.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-                        ng.dedup_by(|a, b| a.0 == b.0);
-                        let ng = ng.into_iter().take(2).collect::<Vec<_>>();
+                if let Some((vthm, mv)) = res.value() {
+                    let mut ng = vthm.neighbors.clone();
+                    ng.push((hs.clone(), cs));
+                    ng.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+                    ng.dedup_by(|a, b| a.0 == b.0);
+                    let ng = ng.into_iter().take(2).collect::<Vec<_>>();
 
-                        let nv = VectorTreeNode {
-                            vector_list: vtm.vector_list.clone(),
-                            neighbors: ng,
-                        };
-                        let mut cache = vec_store.cache.lock().unwrap();
-                        cache.insert((cur_level, nb.clone()), Some((nv, mv)));
-                        true
-                    } else {
-                        false
-                    }
+                    let nv = VectorTreeNode {
+                        vector_list: vthm.vector_list.clone(),
+                        neighbors: ng,
+                    };
+                    vec_store
+                        .cache
+                        .insert((cur_level, nb.clone()), Some((nv, mv.clone())));
+                    return ;
                 } else {
-                    false
+                    return ;
+                }} else {
+                    return ;
                 }
             })
         })
         .collect();
 
-    let results = join_all(tasks).await;
-    if results.iter().any(|&res| res.unwrap_or(false) == false) {
-        eprintln!("Error case, should not happen: {}", cur_level);
-    }
+    join_all(tasks).await;
+
 }
 
 async fn traverse_find_nearest(
     vec_store: Arc<VectorStore>,
-    mv: Arc<Mutex<()>>,
+    mv: Arc<()>,
     vtm: VectorTreeNode,
     fvec: NumericValue,
     hs: VectorHash,
     hops: i8,
-    skipm: Arc<Mutex<HashMap<VectorHash, ()>>>,
+    skipm: Arc<DashMap<VectorHash, ()>>,
     cur_level: i8,
 ) -> Vec<(VectorHash, f32)> {
     let tasks: Vec<_> = vtm
@@ -407,26 +400,19 @@ async fn traverse_find_nearest(
             let vec_store = vec_store.clone();
             let fvec = fvec.clone();
             task::spawn(async move {
-                let mut skipm = skipm.lock().unwrap();
                 if skipm.contains_key(&nb) {
                     vec![]
                 } else {
                     skipm.insert(nb.clone(), ());
-                    drop(skipm);
 
-                    let res = {
-                        let cache = vec_store.cache.lock().unwrap();
-                        cache.get(&(cur_level, nb.clone())).cloned()
-                    };
-
-                    if let Some((vthm, mv)) = res {
-                        if let Some(vtm) = vthm {
-                            let cs = cosine_coalesce(&fvec, &vtm.vector_list);
+                    if let Some(res) = vec_store.cache.get(&(cur_level, nb.clone())) {
+                        if let (Some((vthm, mv))) = res.value() {
+                            let cs = cosine_similarity(&fvec, &vthm.vector_list);
                             if hops < 4 {
                                 let mut z = traverse_find_nearest(
-                                    vec_store,
-                                    mv,
-                                    vtm.clone(),
+                                    vec_store.clone(),
+                                    *mv,
+                                    vthm.clone(),
                                     fvec.clone(),
                                     hs.clone(),
                                     hops + 1,
@@ -440,7 +426,11 @@ async fn traverse_find_nearest(
                                 vec![(nb.clone(), cs)]
                             }
                         } else {
-                            eprintln!("Error case, should not happen: {} {:?}", cur_level, vthm);
+                            eprintln!(
+                                "Error case, should not happen: {} key {:?}",
+                                cur_level,
+                                (cur_level, nb)
+                            );
                             vec![]
                         }
                     } else {
@@ -459,7 +449,7 @@ async fn traverse_find_nearest(
     let results = join_all(tasks).await;
     let mut nn: Vec<_> = results.into_iter().flatten().collect();
     nn.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-    nn.dedup_by(|a, b| a.0 == a.0);
+    nn.dedup_by(|a: &mut Vec<(Vec<u8>, f32)>, b| a.0 == a.0);
     nn.into_iter().take(2).collect()
 }
 
