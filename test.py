@@ -47,9 +47,9 @@ if __name__ == "__main__":
 
     create_response = create_db(vector_db_name, dimensions, max_val, min_val)
     print("Create DB Response:", create_response)
-    time.sleep(3)
+    # time.sleep(3)
     # Upsert vectors in a loop of 100 times
-    for i in range(1):
+    for i in range(100):
         vector = generate_random_vector(rows, dimensions, min_val, max_val)
         upsert_response = upsert_vector(vector_db_name, vector)
         print(f"Upsert Vector Response {i+1}:", upsert_response)

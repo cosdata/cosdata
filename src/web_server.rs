@@ -48,7 +48,7 @@ async fn create_vector_db(item: web::Json<CreateVectorDb>) -> HttpResponse {
     let size = dimensions as usize;
     let lower_bound = min_val;
     let upper_bound = max_val;
-    let max_cache_level = 0; // Change this according to your requirements
+    let max_cache_level = 5;
 
     // Call init_vector_store using web::block
     let result = init_vector_store(name, size, lower_bound, upper_bound, max_cache_level).await;
@@ -60,14 +60,11 @@ async fn create_vector_db(item: web::Json<CreateVectorDb>) -> HttpResponse {
 }
 /// This handler uses json extractor
 async fn upsert_vector_db(item: web::Json<UpsertVectors>) -> HttpResponse {
-    println!("upsert_vector_db: {:?}", 0);
-
     // Extract values from the JSON request
     let vector_db_name = &item.vector_db_name;
     let vector = item.vector.clone(); // Clone the vector for async usage
 
     let ain_env = get_app_env();
-    println!("upsert_vector_db: {:?}", 1);
 
     // Try to get the vector store from the environment
     let vec_store = match ain_env.vector_store_map.get(vector_db_name) {
@@ -77,7 +74,6 @@ async fn upsert_vector_db(item: web::Json<UpsertVectors>) -> HttpResponse {
             return HttpResponse::InternalServerError().body("Vector store not found");
         }
     };
-    println!("upsert_vector_db: {:?}", 2);
 
     // Call run_upload with the extracted parameters
     let __result = run_upload(vec_store.clone().into(), vector).await;
