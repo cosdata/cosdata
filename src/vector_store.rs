@@ -1,10 +1,11 @@
 use dashmap::DashMap;
 use futures::future::{join_all, BoxFuture, FutureExt};
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tokio::task;
-use sha2::{Sha256, Digest};
-// type NumericValue = Vec<Vec<i32>>; // Two-dimensional vector
+use thiserror::Error;
+use tokio::task; // Import the Error trait for custom error handling
+                 // type NumericValue = Vec<Vec<i32>>; // Two-dimensional vector
 
 // type VectorHash = String; // Assuming VectorHash is a String, replace with appropriate type if different
 
@@ -194,23 +195,32 @@ pub fn quantize(fins: &[f32]) -> Vec<Vec<i32>> {
     quantized
 }
 
+#[derive(Debug, Error)]
+pub enum CustomError {
+    #[error("Failed to create the database")]
+    CreateDatabaseFailed,
+
+    #[error("Failed to upsert vectors")]
+    UpsertFailed,
+}
+
 // #[derive(Debug, Clone)]
 // enum NumericValue {
 //     U32(Vec<u32>),
 //     F32(Vec<f32>),
 // }
+
 type NumericValue = Vec<f32>;
 type VectorHash = Vec<u8>;
 
 type CacheType = DashMap<(i8, VectorHash), Option<(VectorTreeNode, Arc<()>)>>;
-
 
 #[derive(Debug, Clone)]
 pub struct VectorStore {
     cache: Arc<CacheType>,
     max_cache_level: i8,
     database_name: String,
-    root_vec: (VectorHash, NumericValue)
+    root_vec: (VectorHash, NumericValue),
 }
 
 #[derive(Debug, Clone)]
@@ -228,23 +238,24 @@ pub struct VectorTreeNode {
 type VectorStoreMap = DashMap<String, VectorStore>;
 type UserDataCache = DashMap<String, (String, i32, i32, std::time::SystemTime, Vec<String>)>;
 
-// Define the AinEnv struct
-struct AinEnv {
-    user_data_cache: UserDataCache,
-    vector_store_map: VectorStoreMap,
+// Define the AppEnv struct
+pub struct AppEnv {
+    pub user_data_cache: UserDataCache,
+    pub vector_store_map: VectorStoreMap,
 }
-// Initialize the AinEnv with once_cell
+// Initialize the AppEnv with once_cell
 use once_cell::sync::OnceCell;
-static AIN_ENV: OnceCell<Arc<AinEnv>> = OnceCell::new();
+static AIN_ENV: OnceCell<Arc<AppEnv>> = OnceCell::new();
 
-
-fn init_ain_env() -> Arc<AinEnv> {
-    AIN_ENV.get_or_init(|| {
-        Arc::new(AinEnv {
-            user_data_cache: DashMap::new(),
-            vector_store_map: DashMap::new(),
+pub fn get_app_env() -> Arc<AppEnv> {
+    AIN_ENV
+        .get_or_init(|| {
+            Arc::new(AppEnv {
+                user_data_cache: DashMap::new(),
+                vector_store_map: DashMap::new(),
+            })
         })
-    }).clone()
+        .clone()
 }
 
 fn hash_float_vec(vec: Vec<f32>) -> Vec<u8> {
@@ -267,26 +278,107 @@ pub async fn init_vector_store(
     lower_bound: Option<f32>,
     upper_bound: Option<f32>,
     max_cache_level: i8,
-) -> Arc<VectorStore> {
-    let ain_env = init_ain_env();
-    let vec = (0..size).map(|_| rand::random::<f32>() * (upper_bound.unwrap_or(1.0) - lower_bound.unwrap_or(-1.0)) + lower_bound.unwrap_or(-1.0)).collect::<Vec<f32>>();
+) -> Result<(), CustomError> {
+    if name.is_empty() {
+        return Err(CustomError::CreateDatabaseFailed);
+    }
+    println!("init_vector_store: {:?}", 0);
+    let ain_env = get_app_env();
+    println!("init_vector_store: {:?}", 1);
+    let vec = (0..size)
+        .map(|_| {
+            rand::random::<f32>() * (upper_bound.unwrap_or(1.0) - lower_bound.unwrap_or(-1.0))
+                + lower_bound.unwrap_or(-1.0)
+        })
+        .collect::<Vec<f32>>();
+    println!("init_vector_store: {:?}", 2);
+
     let vec_hash = hash_float_vec(vec.clone());
+    println!("init_vector_store: {:?}", 2);
+
     let root = (vec_hash.clone(), vec.clone());
+    println!("init_vector_store: {:?}", 2);
+
     let cache = Arc::new(DashMap::new());
+
+    println!("init_vector_store: {:?}", 2);
 
     for l in 0..=max_cache_level {
         let mv = Arc::new(());
-        cache.insert((l, vec_hash.clone()), Some((VectorTreeNode { vector_list: vec.clone(), neighbors: vec![] }, mv)));
+        cache.insert(
+            (l, vec_hash.clone()),
+            Some((
+                VectorTreeNode {
+                    vector_list: vec.clone(),
+                    neighbors: vec![],
+                },
+                mv,
+            )),
+        );
     }
 
-    //let vec_store = VectorStore { cache, max_cache_level,name, root };
-    let vec_store = VectorStore { cache, max_cache_level, database_name: name.clone(), root_vec:root };
+    let vec_store = VectorStore {
+        cache,
+        max_cache_level,
+        database_name: name.clone(),
+        root_vec: root,
+    };
 
-    ain_env.vector_store_map.insert(name.clone(), vec_store.clone());
-    Arc::new(vec_store)
+    ain_env
+        .vector_store_map
+        .insert(name.clone(), vec_store.clone());
+    println!(
+        "vector store map: {:?}",
+        ain_env.vector_store_map.clone().len()
+    );
+    Ok(())
 }
 
+pub async fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<Vec<f32>>) -> Vec<()> {
+    use futures::stream::{self, StreamExt};
 
+    println!("run_upload: {:?}", 0);
+    stream::iter(vecxx)
+        .map(|vec| {
+            let vec_store = vec_store.clone();
+            async move {
+                let rhash = &vec_store.root_vec.0;
+                let vec_hash = hash_float_vec(vec.clone());
+                let vec_emb = VectorEmbedding {
+                    raw_vec: vec,
+                    hash_vec: vec_hash,
+                };
+                let lst = vec![
+                    (0.0, 0),
+                    (0.9, 1),
+                    (0.99, 2),
+                    (0.999, 3),
+                    (0.9999, 4),
+                    (0.99999, 5),
+                ];
+                let iv = find_value(&lst, rand::random::<f32>().into());
+                insert_embedding(
+                    vec_store.clone(),
+                    vec_emb,
+                    rhash.clone(),
+                    vec_store.max_cache_level,
+                    iv.try_into().unwrap(),
+                )
+                .await;
+            }
+        })
+        .buffer_unordered(10)
+        .collect::<Vec<_>>()
+        .await
+}
+
+fn find_value(lst: &[(f64, i32)], x: f64) -> i32 {
+    let reversed_list = lst.iter().rev();
+    match reversed_list.clone().find(|(value, _)| x >= *value) {
+        Some((_, index)) => *index,
+        None => panic!("No matching element found"),
+    }
+}
 
 async fn insert_embedding(
     vec_store: Arc<VectorStore>,
@@ -298,6 +390,7 @@ async fn insert_embedding(
     if cur_level == -1 {
         return;
     }
+    println!("insert_embedding: {:?}", 0);
 
     if let Some(res) = vec_store.cache.clone().get(&(cur_level, cur_entry.clone())) {
         let fvec = vector_emb.raw_vec.clone();

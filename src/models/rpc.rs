@@ -29,8 +29,8 @@ pub struct VectorANN {
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 
 pub struct UpsertVectors {
-    vector_db_name: String,
-    vector: Vec<Vec<f32>>,
+    pub vector_db_name: String,
+    pub vector: Vec<Vec<f32>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]

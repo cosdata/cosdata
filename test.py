@@ -1,7 +1,7 @@
 import requests
 import json
 import numpy as np
-
+import time
 # Define your dynamic variables
 token = "8cf11a8cb97b0e002b31197c5808d13e3b18e488234a61946690668db5c5fece"
 base_url = "https://127.0.0.1:8443/vectordb"
@@ -47,7 +47,7 @@ if __name__ == "__main__":
 
     create_response = create_db(vector_db_name, dimensions, max_val, min_val)
     print("Create DB Response:", create_response)
-
+    time.sleep(3)
     # Upsert vectors in a loop of 100 times
     for i in range(1):
         vector = generate_random_vector(rows, dimensions, min_val, max_val)

@@ -10,6 +10,7 @@ use log::debug;
 use rustls::{pki_types::PrivateKeyDer, ServerConfig};
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use serde::{Deserialize, Serialize};
+use std::ops::Deref;
 use std::{fs::File, io::BufReader};
 use waco::models::rpc::Authenticate;
 use waco::models::rpc::CreateVectorDb;
@@ -50,22 +51,42 @@ async fn create_vector_db(item: web::Json<CreateVectorDb>) -> HttpResponse {
     let max_cache_level = 0; // Change this according to your requirements
 
     // Call init_vector_store using web::block
-    let result = web::block(move || {
-        init_vector_store(name, size, lower_bound, upper_bound, max_cache_level)
-    })
-    .await;
+    let result = init_vector_store(name, size, lower_bound, upper_bound, max_cache_level).await;
 
     match result {
-        Ok(vector_store) => {
-            HttpResponse::Ok().json(RPCResponseBody::RespCreateVectorDb { result: true })
-        }
-        Err(e) => HttpResponse::InternalServerError().body(format!("Error: {}", e)),
+        Ok(__) => HttpResponse::Ok().json(RPCResponseBody::RespCreateVectorDb { result: true }),
+        Err(e) => HttpResponse::NotAcceptable().body(format!("Error: {}", e)),
     }
 }
 /// This handler uses json extractor
 async fn upsert_vector_db(item: web::Json<UpsertVectors>) -> HttpResponse {
-    println!("model: {:?}", &item);
-    HttpResponse::Ok().json(item.0) // <- send response
+    println!("upsert_vector_db: {:?}", 0);
+
+    // Extract values from the JSON request
+    let vector_db_name = &item.vector_db_name;
+    let vector = item.vector.clone(); // Clone the vector for async usage
+
+    let ain_env = get_app_env();
+    println!("upsert_vector_db: {:?}", 1);
+
+    // Try to get the vector store from the environment
+    let vec_store = match ain_env.vector_store_map.get(vector_db_name) {
+        Some(store) => store,
+        None => {
+            // Vector store not found, return an error response
+            return HttpResponse::InternalServerError().body("Vector store not found");
+        }
+    };
+    println!("upsert_vector_db: {:?}", 2);
+
+    // Call run_upload with the extracted parameters
+    let __result = run_upload(vec_store.clone().into(), vector).await;
+
+    // Placeholder response
+    let response_data = RPCResponseBody::RespUpsertVectors { insert_stats: None }; //
+    let response = HttpResponse::Ok().json(response_data);
+
+    response // Return the response
 }
 
 /// This handler uses json extractor
