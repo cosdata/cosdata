@@ -2,6 +2,8 @@ import requests
 import json
 import numpy as np
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 # Define your dynamic variables
 token = "8cf11a8cb97b0e002b31197c5808d13e3b18e488234a61946690668db5c5fece"
 base_url = "https://127.0.0.1:8443/vectordb"
@@ -47,9 +49,17 @@ if __name__ == "__main__":
 
     create_response = create_db(vector_db_name, dimensions, max_val, min_val)
     print("Create DB Response:", create_response)
-    # time.sleep(3)
-    # Upsert vectors in a loop of 100 times
-    for i in range(100):
-        vector = generate_random_vector(rows, dimensions, min_val, max_val)
-        upsert_response = upsert_vector(vector_db_name, vector)
-        print(f"Upsert Vector Response {i+1}:", upsert_response)
+
+    # Upsert vectors concurrently
+    with ThreadPoolExecutor(max_workers=32) as executor:
+        futures = []
+        for i in range(100):
+            vector = generate_random_vector(rows, dimensions, min_val, max_val)
+            futures.append(executor.submit(upsert_vector, vector_db_name, vector))
+
+        for i, future in enumerate(as_completed(futures)):
+            try:
+                upsert_response = future.result()
+                print(f"Upsert Vector Response {i+1}:", upsert_response)
+            except Exception as e:
+                print(f"Error in upsert vector {i+1}: {e}")

@@ -85,7 +85,9 @@ fn magnitude(vec: &[f32]) -> f32 {
 }
 
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    dot_product(a, b) / (magnitude(a) * magnitude(b))
+    let cs = dot_product(a, b) / (magnitude(a) * magnitude(b));
+    println!("cs: {:?}", cs);
+    cs
 }
 
 pub fn compute_cosine_similarity(a: &[i32], b: &[i32], size: usize) -> CosResult {
@@ -493,6 +495,7 @@ async fn insert_embedding(
     }
 }
 
+
 async fn insert_node_create_edges(
     vec_store: Arc<VectorStore>,
     fvec: NumericValue,
@@ -510,40 +513,39 @@ async fn insert_node_create_edges(
         .cache
         .insert((cur_level, hs.clone()), Some((nv, em.clone())));
 
-    let tasks: Vec<_> = nbs
-        .into_iter()
-        .map(|(nb, cs)| {
-            let vec_store = vec_store.clone();
-            let hs = hs.clone();
-            let cur_level = cur_level;
-            task::spawn(async move {
-                {
-                    let mut entry = vec_store
+    let tasks: Vec<_> =
+        nbs.into_iter()
+            .map(|(nb, cs)| {
+                let vec_store = vec_store.clone();
+                let hs = hs.clone();
+                let cur_level = cur_level;
+                task::spawn(async move {
+                    vec_store
                         .cache
-                        .get_mut(&(cur_level.clone(), nb.clone()))
-                        .unwrap();
-                    let existing_value = entry.value_mut();
+                        .alter(&(cur_level.clone(), nb.clone()).clone(), |_,  existing_value| {
+                            match existing_value {
+                                Some(res) => {
+                                    let ((vthm, mv)) = res;
+                                    let mut ng = vthm.neighbors.clone();
+                                    ng.push((hs.clone(), cs));
+                                    ng.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+                                    ng.dedup_by(|a, b| a.0 == b.0);
+                                    let ng = ng.into_iter().take(2).collect::<Vec<_>>();
 
-                    match existing_value {
-                        Some((vthm, mv)) => {
-                            let mut ng = vthm.neighbors.clone();
-                            ng.push((hs.clone(), cs));
-                            ng.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-                            ng.dedup_by(|a, b| a.0 == b.0);
-                            let ng = ng.into_iter().take(2).collect::<Vec<_>>();
-
-                            let nv = VectorTreeNode {
-                                vector_list: vthm.vector_list.clone(),
-                                neighbors: ng,
-                            };
-                            *entry = Some((nv, mv.clone()));
-                        }
-                        None => {}
-                    }
-                } // Explicitly release the entry reference here
+                                    let nv = VectorTreeNode {
+                                        vector_list: vthm.vector_list.clone(),
+                                        neighbors: ng,
+                                    };
+                                    return Some((nv, mv.clone()));
+                                }
+                                None => {
+                                    return existing_value.clone();
+                                }
+                            }
+                        });
+                })
             })
-        })
-        .collect();
+            .collect();
 
     join_all(tasks).await;
 }
