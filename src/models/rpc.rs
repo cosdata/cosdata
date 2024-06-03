@@ -36,10 +36,10 @@ pub struct UpsertVectors {
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 
 pub struct CreateVectorDb {
-    vector_db_name: String,
-    dimensions: i32,
-    max_val: Option<f32>,
-    min_val: Option<f32>,
+    pub vector_db_name: String,
+    pub dimensions: i32,
+    pub max_val: Option<f32>,
+    pub min_val: Option<f32>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]

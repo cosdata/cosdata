@@ -1,4 +1,4 @@
-use crate::models::rpc::*;
+use crate::{models::rpc::*, vector_store::*};
 use actix_cors::Cors;
 use actix_files::Files;
 use actix_web::{
@@ -12,6 +12,7 @@ use rustls_pemfile::{certs, pkcs8_private_keys};
 use serde::{Deserialize, Serialize};
 use std::{fs::File, io::BufReader};
 use waco::models::rpc::Authenticate;
+use waco::models::rpc::CreateVectorDb;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct MyObj {
@@ -35,10 +36,32 @@ async fn authenticate(item: web::Json<Authenticate>) -> HttpResponse {
 
 /// This handler uses json extractor
 async fn create_vector_db(item: web::Json<CreateVectorDb>) -> HttpResponse {
-    println!("model: {:?}", &item);
-    HttpResponse::Ok().json(item.0) // <- send response
-}
+    // Extract values from the JSON request
+    let vector_db_name = &item.vector_db_name;
+    let dimensions = item.dimensions;
+    let max_val = item.max_val;
+    let min_val = item.min_val;
 
+    // Define the parameters for init_vector_store
+    let name = vector_db_name.clone();
+    let size = dimensions as usize;
+    let lower_bound = min_val;
+    let upper_bound = max_val;
+    let max_cache_level = 0; // Change this according to your requirements
+
+    // Call init_vector_store using web::block
+    let result = web::block(move || {
+        init_vector_store(name, size, lower_bound, upper_bound, max_cache_level)
+    })
+    .await;
+
+    match result {
+        Ok(vector_store) => {
+            HttpResponse::Ok().json(RPCResponseBody::RespCreateVectorDb { result: true })
+        }
+        Err(e) => HttpResponse::InternalServerError().body(format!("Error: {}", e)),
+    }
+}
 /// This handler uses json extractor
 async fn upsert_vector_db(item: web::Json<UpsertVectors>) -> HttpResponse {
     println!("model: {:?}", &item);
@@ -83,7 +106,7 @@ pub async fn run_actix_server() -> std::io::Result<()> {
             // add headers to error responses
             .wrap(Cors::permissive())
             // register simple handler, handle all methods
-            .app_data(web::JsonConfig::default().limit(4096)) // <- limit size of the payload (global configuration)
+            .app_data(web::JsonConfig::default().limit(4 * 1048576)) // <- 4 mb limit size of the payload (global configuration)
             .service(
                 web::scope("/auth")
                     .service(web::resource("/gettoken").route(web::post().to(authenticate))),

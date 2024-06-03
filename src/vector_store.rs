@@ -3,6 +3,7 @@ use futures::future::{join_all, BoxFuture, FutureExt};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::task;
+use sha2::{Sha256, Digest};
 // type NumericValue = Vec<Vec<i32>>; // Two-dimensional vector
 
 // type VectorHash = String; // Assuming VectorHash is a String, replace with appropriate type if different
@@ -203,11 +204,13 @@ type VectorHash = Vec<u8>;
 
 type CacheType = DashMap<(i8, VectorHash), Option<(VectorTreeNode, Arc<()>)>>;
 
+
+#[derive(Debug, Clone)]
 pub struct VectorStore {
     cache: Arc<CacheType>,
     max_cache_level: i8,
     database_name: String,
-    root_vec: (VectorHash, NumericValue),
+    root_vec: (VectorHash, NumericValue)
 }
 
 #[derive(Debug, Clone)]
@@ -221,6 +224,69 @@ pub struct VectorTreeNode {
     vector_list: NumericValue,
     neighbors: Vec<(VectorHash, f32)>,
 }
+
+type VectorStoreMap = DashMap<String, VectorStore>;
+type UserDataCache = DashMap<String, (String, i32, i32, std::time::SystemTime, Vec<String>)>;
+
+// Define the AinEnv struct
+struct AinEnv {
+    user_data_cache: UserDataCache,
+    vector_store_map: VectorStoreMap,
+}
+// Initialize the AinEnv with once_cell
+use once_cell::sync::OnceCell;
+static AIN_ENV: OnceCell<Arc<AinEnv>> = OnceCell::new();
+
+
+fn init_ain_env() -> Arc<AinEnv> {
+    AIN_ENV.get_or_init(|| {
+        Arc::new(AinEnv {
+            user_data_cache: DashMap::new(),
+            vector_store_map: DashMap::new(),
+        })
+    }).clone()
+}
+
+fn hash_float_vec(vec: Vec<f32>) -> Vec<u8> {
+    // Create a new hasher instance
+    let mut hasher = Sha256::new();
+
+    // Convert the Vec<f32> to a byte representation
+    for &num in &vec {
+        // Convert each f32 to its byte representation and update the hasher
+        hasher.update(&num.to_le_bytes());
+    }
+
+    // Finalize the hash and return the result as a Vec<u8>
+    hasher.finalize().to_vec()
+}
+
+pub async fn init_vector_store(
+    name: String,
+    size: usize,
+    lower_bound: Option<f32>,
+    upper_bound: Option<f32>,
+    max_cache_level: i8,
+) -> Arc<VectorStore> {
+    let ain_env = init_ain_env();
+    let vec = (0..size).map(|_| rand::random::<f32>() * (upper_bound.unwrap_or(1.0) - lower_bound.unwrap_or(-1.0)) + lower_bound.unwrap_or(-1.0)).collect::<Vec<f32>>();
+    let vec_hash = hash_float_vec(vec.clone());
+    let root = (vec_hash.clone(), vec.clone());
+    let cache = Arc::new(DashMap::new());
+
+    for l in 0..=max_cache_level {
+        let mv = Arc::new(());
+        cache.insert((l, vec_hash.clone()), Some((VectorTreeNode { vector_list: vec.clone(), neighbors: vec![] }, mv)));
+    }
+
+    //let vec_store = VectorStore { cache, max_cache_level,name, root };
+    let vec_store = VectorStore { cache, max_cache_level, database_name: name.clone(), root_vec:root };
+
+    ain_env.vector_store_map.insert(name.clone(), vec_store.clone());
+    Arc::new(vec_store)
+}
+
+
 
 async fn insert_embedding(
     vec_store: Arc<VectorStore>,
