@@ -8,6 +8,7 @@ use waco::models::common::*;
 
 use crate::models::types::*;
 
+
 pub async fn insert_embedding(
     vec_store: Arc<VectorStore>,
     vector_emb: VectorEmbedding,
@@ -68,7 +69,7 @@ pub async fn insert_embedding(
                 });
                 recursive_call.await;
                 insert_node_create_edges(
-                    vec_store_clone.clone(),
+                    vec_store_clone,
                     fvec,
                     vector_emb_clone.hash_vec.clone(),
                     z_clone,
@@ -128,15 +129,15 @@ pub async fn insert_embedding(
 
 async fn insert_node_create_edges(
     vec_store: Arc<VectorStore>,
-    fvec: NumericValue,
+    fvec: Arc<NumericVector>,
     hs: VectorHash,
     nbs: Vec<(VectorHash, f32)>,
     cur_level: i8,
 ) {
-    let nv = VectorTreeNode {
+    let nv = Arc::new(VectorTreeNode {
         vector_list: fvec.clone(),
         neighbors: nbs.clone(),
-    };
+    });
 
     vec_store.cache.insert((cur_level, hs.clone()), Some(nv));
 
@@ -158,10 +159,10 @@ async fn insert_node_create_edges(
                             ng.dedup_by(|a, b| a.0 == b.0);
                             let ng = ng.into_iter().take(2).collect::<Vec<_>>();
 
-                            let nv = VectorTreeNode {
+                            let nv = Arc::new(VectorTreeNode {
                                 vector_list: vthm.vector_list.clone(),
                                 neighbors: ng,
-                            };
+                            });
                             return Some(nv);
                         }
                         None => {
@@ -178,8 +179,8 @@ async fn insert_node_create_edges(
 
 async fn traverse_find_nearest(
     vec_store: Arc<VectorStore>,
-    vtm: VectorTreeNode,
-    fvec: NumericValue,
+    vtm: Arc<VectorTreeNode>,
+    fvec: Arc<NumericVector>,
     hs: VectorHash,
     hops: i8,
     skipm: Arc<DashMap<VectorHash, ()>>,
@@ -190,8 +191,8 @@ async fn traverse_find_nearest(
 
 fn traverse_find_nearest_inner(
     vec_store: Arc<VectorStore>,
-    vtm: VectorTreeNode,
-    fvec: NumericValue,
+    vtm: Arc<VectorTreeNode>,
+    fvec: Arc<NumericVector>,
     hs: VectorHash,
     hops: i8,
     skipm: Arc<DashMap<VectorHash, ()>>,
@@ -264,7 +265,7 @@ fn traverse_find_nearest_inner(
     .boxed()
 }
 
-async fn get_vector_from_db(db_name: &str, entry: VectorHash) -> Option<VectorTreeNode> {
+async fn get_vector_from_db(db_name: &str, entry: VectorHash) -> Option<Arc<VectorTreeNode>> {
     // Your implementation to get vector from the database
     unimplemented!()
 }

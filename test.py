@@ -3,6 +3,10 @@ import json
 import numpy as np
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import urllib3
+
+# Suppress only the single InsecureRequestWarning from urllib3 needed for this script
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Define your dynamic variables
 token = "8cf11a8cb97b0e002b31197c5808d13e3b18e488234a61946690668db5c5fece"

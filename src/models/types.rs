@@ -1,30 +1,31 @@
 use dashmap::DashMap;
 use std::sync::Arc;
 
-pub type NumericValue = Vec<f32>;
+pub type NumericVector = Vec<f32>;
 pub type VectorHash = Vec<u8>;
 
-type CacheType = DashMap<(i8, VectorHash), Option<(VectorTreeNode)>>;
+type CacheType = DashMap<(i8, VectorHash), Option<Arc<(VectorTreeNode)>>>;
 
 #[derive(Debug, Clone)]
 pub struct VectorStore {
     pub cache: Arc<CacheType>,
     pub max_cache_level: i8,
     pub database_name: String,
-    pub root_vec: (VectorHash, NumericValue),
+    pub root_vec: (VectorHash, NumericVector),
 }
 
 #[derive(Debug, Clone)]
 pub struct VectorEmbedding {
-    pub raw_vec: NumericValue,
+    pub raw_vec: Arc<NumericVector>,
     pub hash_vec: VectorHash,
 }
 
 #[derive(Debug, Clone)]
 pub struct VectorTreeNode {
-    pub vector_list: NumericValue,
+    pub vector_list: Arc<NumericVector>,
     pub neighbors: Vec<(VectorHash, f32)>,
 }
+
 
 type VectorStoreMap = DashMap<String, VectorStore>;
 type UserDataCache = DashMap<String, (String, i32, i32, std::time::SystemTime, Vec<String>)>;

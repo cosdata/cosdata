@@ -64,7 +64,7 @@ fn magnitude(vec: &[f32]) -> f32 {
 
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     let cs = dot_product(a, b) / (magnitude(a) * magnitude(b));
-    println!("cs: {:?}", cs);
+    // println!("cs: {:?}", cs);
     cs
 }
 

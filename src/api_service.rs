@@ -35,10 +35,10 @@ pub async fn init_vector_store(
     for l in 0..=max_cache_level {
         cache.insert(
             (l, vec_hash.clone()),
-            Some(VectorTreeNode {
-                vector_list: vec.clone(),
+            Some(Arc::new(VectorTreeNode {
+                vector_list: Arc::new(vec.clone()),
                 neighbors: vec![],
-            }),
+            })),
         );
     }
 
@@ -69,7 +69,7 @@ pub async fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<Vec<f32>>) -> Ve
                 let rhash = &vec_store.root_vec.0;
                 let vec_hash = hash_float_vec(vec.clone());
                 let vec_emb = VectorEmbedding {
-                    raw_vec: vec,
+                    raw_vec: Arc::new(vec),
                     hash_vec: vec_hash,
                 };
                 let lst = vec![
