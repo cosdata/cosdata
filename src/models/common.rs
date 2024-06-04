@@ -6,6 +6,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::task;
+
+
 pub struct CosResult {
     pub dotprod: i32,
     pub premag_a: i32,

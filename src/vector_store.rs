@@ -1,10 +1,8 @@
-use async_std::stream::Cloned;
 use dashmap::DashMap;
 use futures::future::{join_all, BoxFuture, FutureExt};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use thiserror::Error;
 use tokio::task;
 use waco::models::common::*;
 
@@ -32,12 +30,11 @@ pub async fn insert_embedding(
         });
 
     if let Some((fvec, vthm_mv)) = maybe_res {
-        if let Some((vthm, mv)) = vthm_mv {
+        if let Some(vthm) = vthm_mv { 
             let vtm = vthm.clone();
             let skipm = Arc::new(DashMap::new());
             let z = traverse_find_nearest(
                 vec_store.clone(),
-                mv.clone(),
                 vtm.clone(),
                 fvec.clone(),
                 vector_emb.hash_vec.clone(),
@@ -98,7 +95,6 @@ pub async fn insert_embedding(
                     let skipm = Arc::new(DashMap::new());
                     let z = traverse_find_nearest(
                         vec_store.clone(),
-                        Arc::new(()),
                         vtm.clone(),
                         fvec.clone(),
                         vector_emb.hash_vec.clone(),
@@ -137,15 +133,12 @@ async fn insert_node_create_edges(
     nbs: Vec<(VectorHash, f32)>,
     cur_level: i8,
 ) {
-    let em = Arc::new(());
     let nv = VectorTreeNode {
         vector_list: fvec.clone(),
         neighbors: nbs.clone(),
     };
 
-    vec_store
-        .cache
-        .insert((cur_level, hs.clone()), Some((nv, em.clone())));
+    vec_store.cache.insert((cur_level, hs.clone()), Some(nv));
 
     let tasks: Vec<_> = nbs
         .into_iter()
@@ -158,7 +151,7 @@ async fn insert_node_create_edges(
                     &(cur_level.clone(), nb.clone()).clone(),
                     |_, existing_value| match existing_value {
                         Some(res) => {
-                            let ((vthm, mv)) = res;
+                            let vthm = res;
                             let mut ng = vthm.neighbors.clone();
                             ng.push((hs.clone(), cs));
                             ng.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
@@ -169,7 +162,7 @@ async fn insert_node_create_edges(
                                 vector_list: vthm.vector_list.clone(),
                                 neighbors: ng,
                             };
-                            return Some((nv, mv.clone()));
+                            return Some(nv);
                         }
                         None => {
                             return existing_value.clone();
@@ -185,7 +178,6 @@ async fn insert_node_create_edges(
 
 async fn traverse_find_nearest(
     vec_store: Arc<VectorStore>,
-    mv: Arc<()>,
     vtm: VectorTreeNode,
     fvec: NumericValue,
     hs: VectorHash,
@@ -193,12 +185,11 @@ async fn traverse_find_nearest(
     skipm: Arc<DashMap<VectorHash, ()>>,
     cur_level: i8,
 ) -> Vec<(VectorHash, f32)> {
-    traverse_find_nearest_inner(vec_store, mv, vtm, fvec, hs, hops, skipm, cur_level).await
+    traverse_find_nearest_inner(vec_store, vtm, fvec, hs, hops, skipm, cur_level).await
 }
 
 fn traverse_find_nearest_inner(
     vec_store: Arc<VectorStore>,
-    mv: Arc<()>,
     vtm: VectorTreeNode,
     fvec: NumericValue,
     hs: VectorHash,
@@ -228,12 +219,11 @@ fn traverse_find_nearest_inner(
                             value
                         });
 
-                        if let Some(Some((vthm, mv))) = maybe_res {
+                        if let Some(Some(vthm)) = maybe_res {
                             let cs = cosine_similarity(&fvec, &vthm.vector_list);
                             if hops < 4 {
                                 let mut z = traverse_find_nearest_inner(
                                     vec_store.clone(),
-                                    mv.clone(),
                                     vthm.clone(),
                                     fvec.clone(),
                                     hs.clone(),

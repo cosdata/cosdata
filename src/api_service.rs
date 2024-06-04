@@ -33,16 +33,12 @@ pub async fn init_vector_store(
     let cache = Arc::new(DashMap::new());
 
     for l in 0..=max_cache_level {
-        let mv = Arc::new(());
         cache.insert(
             (l, vec_hash.clone()),
-            Some((
-                VectorTreeNode {
-                    vector_list: vec.clone(),
-                    neighbors: vec![],
-                },
-                mv,
-            )),
+            Some(VectorTreeNode {
+                vector_list: vec.clone(),
+                neighbors: vec![],
+            }),
         );
     }
 

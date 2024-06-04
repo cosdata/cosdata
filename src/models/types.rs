@@ -4,7 +4,7 @@ use std::sync::Arc;
 pub type NumericValue = Vec<f32>;
 pub type VectorHash = Vec<u8>;
 
-type CacheType = DashMap<(i8, VectorHash), Option<(VectorTreeNode, Arc<()>)>>;
+type CacheType = DashMap<(i8, VectorHash), Option<(VectorTreeNode)>>;
 
 #[derive(Debug, Clone)]
 pub struct VectorStore {
