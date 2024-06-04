@@ -6,6 +6,7 @@ use actix_web::{
 };
 use actix_web_httpauth::{extractors::bearer::BearerAuth, middleware::HttpAuthentication};
 use log::debug;
+use rayon::result;
 use rustls::{pki_types::PrivateKeyDer, ServerConfig};
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use serde::{Deserialize, Serialize};
@@ -28,13 +29,13 @@ async fn validator(
     Ok(req)
 }
 
-/// This handler uses json extractor
+ 
 async fn authenticate(item: web::Json<Authenticate>) -> HttpResponse {
     println!("model: {:?}", &item);
     HttpResponse::Ok().json(item.0) // <- send response
 }
 
-/// This handler uses json extractor
+ 
 async fn create_vector_db(item: web::Json<CreateVectorDb>) -> HttpResponse {
     // Extract values from the JSON request
     let vector_db_name = &item.vector_db_name;
@@ -57,7 +58,7 @@ async fn create_vector_db(item: web::Json<CreateVectorDb>) -> HttpResponse {
         Err(e) => HttpResponse::NotAcceptable().body(format!("Error: {}", e)),
     }
 }
-/// This handler uses json extractor
+ 
 async fn upsert_vector_db(item: web::Json<UpsertVectors>) -> HttpResponse {
     // Extract values from the JSON request
     let vector_db_name = &item.vector_db_name;
@@ -77,20 +78,37 @@ async fn upsert_vector_db(item: web::Json<UpsertVectors>) -> HttpResponse {
     // Call run_upload with the extracted parameters
     let __result = run_upload(vec_store.clone().into(), vector).await;
 
-    // Placeholder response
     let response_data = RPCResponseBody::RespUpsertVectors { insert_stats: None }; //
     let response = HttpResponse::Ok().json(response_data);
 
-    response // Return the response
+    response  
 }
 
-/// This handler uses json extractor
+ 
 async fn search_vector_db(item: web::Json<VectorANN>) -> HttpResponse {
     println!("model: {:?}", &item);
-    HttpResponse::Ok().json(item.0) // <- send response
+    let vector_db_name = &item.vector_db_name;
+    let vector = item.vector.clone(); // Clone the vector for async usage
+
+    let ain_env = get_app_env();
+
+    // Try to get the vector store from the environment
+    let vec_store = match ain_env.vector_store_map.get(vector_db_name) {
+        Some(store) => store,
+        None => {
+            // Vector store not found, return an error response
+            return HttpResponse::InternalServerError().body("Vector store not found");
+        }
+    };
+
+    let result = ann_vector_query(vec_store.clone().into(), vector).await;
+
+    let response_data = RPCResponseBody::RespVectorKNN { knn: result }; //
+    let response = HttpResponse::Ok().json(response_data);
+
+    response 
 }
 
-/// This handler uses json extractor with limit
 async fn extract_item(item: web::Json<MyObj>, req: HttpRequest) -> HttpResponse {
     println!("request: {req:?}");
     println!("model: {item:?}");

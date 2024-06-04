@@ -7,7 +7,6 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::task;
 
-
 pub struct CosResult {
     pub dotprod: i32,
     pub premag_a: i32,
@@ -197,4 +196,20 @@ pub fn hash_float_vec(vec: Vec<f32>) -> Vec<u8> {
 
     // Finalize the hash and return the result as a Vec<u8>
     hasher.finalize().to_vec()
+}
+
+pub fn find_value(x: f64) -> i32 {
+    let lst = vec![
+        (0.0, 0),
+        (0.9, 1),
+        (0.99, 2),
+        (0.999, 3),
+        (0.9999, 4),
+        (0.99999, 5),
+    ];
+    let reversed_list = lst.iter().rev();
+    match reversed_list.clone().find(|(value, _)| x >= *value) {
+        Some((_, index)) => *index,
+        None => panic!("No matching element found"),
+    }
 }

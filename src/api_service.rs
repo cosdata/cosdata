@@ -1,11 +1,13 @@
 use crate::models::common::*;
 use crate::models::types::*;
 use crate::models::user::{AuthResp, Statistics};
+use crate::vector_store;
 use crate::vector_store::*;
 use chrono::prelude::*;
 use dashmap::DashMap;
 use log::info;
 use serde::{Deserialize, Serialize};
+use std::f64::consts::E;
 use std::sync::{Arc, Mutex, RwLock};
 
 pub async fn init_vector_store(
@@ -72,15 +74,8 @@ pub async fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<Vec<f32>>) -> Ve
                     raw_vec: Arc::new(vec),
                     hash_vec: vec_hash,
                 };
-                let lst = vec![
-                    (0.0, 0),
-                    (0.9, 1),
-                    (0.99, 2),
-                    (0.999, 3),
-                    (0.9999, 4),
-                    (0.99999, 5),
-                ];
-                let iv = find_value(&lst, rand::random::<f32>().into());
+
+                let iv = find_value(rand::random::<f32>().into());
                 insert_embedding(
                     vec_store.clone(),
                     vec_emb,
@@ -96,17 +91,26 @@ pub async fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<Vec<f32>>) -> Ve
         .await
 }
 
-fn find_value(lst: &[(f64, i32)], x: f64) -> i32 {
-    let reversed_list = lst.iter().rev();
-    match reversed_list.clone().find(|(value, _)| x >= *value) {
-        Some((_, index)) => *index,
-        None => panic!("No matching element found"),
-    }
-}
+pub async fn ann_vector_query(
+    vec_store: Arc<VectorStore>,
+    query: NumericVector,
+) -> Option<Vec<(VectorHash, f32)>> {
+    let vector_store = vec_store.clone();
+    let vec_hash = hash_float_vec(query.clone());
+    let rhash = &vector_store.root_vec.0;
 
-fn lookup_vector_store(name: &str) -> Option<Vec<f32>> {
-    // Placeholder for looking up vector store
-    None
+    let vec_emb = VectorEmbedding {
+        raw_vec: Arc::new(query),
+        hash_vec: vec_hash,
+    };
+    let results = ann_search(
+        vec_store.clone(),
+        vec_emb,
+        rhash.to_vec(),
+        vec_store.max_cache_level,
+    )
+    .await;
+    return results;
 }
 
 fn calculate_statistics(_: &[i32]) -> Option<Statistics> {

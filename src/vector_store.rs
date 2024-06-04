@@ -8,6 +8,91 @@ use waco::models::common::*;
 
 use crate::models::types::*;
 
+pub async fn ann_search(
+    vec_store: Arc<VectorStore>,
+    vector_emb: VectorEmbedding,
+    cur_entry: VectorHash,
+    cur_level: i8,
+) -> Option<Vec<(VectorHash, f32)>> {
+    if cur_level == -1 {
+        return Some(vec![]);
+    }
+    let maybe_res = vec_store
+        .cache
+        .clone()
+        .get(&(cur_level, cur_entry.clone()))
+        .map(|res| {
+            let fvec = vector_emb.raw_vec.clone();
+            let vthm_mv = res.value().clone();
+            (fvec, vthm_mv)
+        });
+    if let Some((fvec, vthm_mv)) = maybe_res {
+        if let Some(vthm) = vthm_mv {
+            let vtm = vthm.clone();
+            let skipm = Arc::new(DashMap::new());
+            let z = traverse_find_nearest(
+                vec_store.clone(),
+                vtm.clone(),
+                fvec.clone(),
+                vector_emb.hash_vec.clone(),
+                0,
+                skipm.clone(),
+                cur_level,
+            )
+            .await;
+
+            let y = cosine_similarity(&fvec, &vtm.vector_list);
+            let z = if z.is_empty() {
+                vec![(cur_entry.clone(), y)]
+            } else {
+                z
+            };
+
+            let recursive_call = Box::pin(async move {
+                let x = ann_search(
+                    vec_store.clone(),
+                    vector_emb.clone(),
+                    z[0].0.clone(),
+                    cur_level - 1,
+                )
+                .await;
+                return x;
+            });
+            let result = recursive_call.await;
+            return result;
+        } else {
+            if cur_level > vec_store.max_cache_level {
+                let xvtm = get_vector_from_db(&vec_store.database_name, cur_entry.clone()).await;
+                if let Some(vtm) = xvtm {
+                    let skipm = Arc::new(DashMap::new());
+                    let z = traverse_find_nearest(
+                        vec_store.clone(),
+                        vtm.clone(),
+                        fvec.clone(),
+                        vector_emb.hash_vec.clone(),
+                        0,
+                        skipm.clone(),
+                        cur_level,
+                    )
+                    .await;
+                    return Some(z);
+                } else {
+                    eprintln!(
+                        "Error case, should have been found: {} {:?}",
+                        cur_level, xvtm
+                    );
+                    return Some(vec![]);
+                }
+            } else {
+                eprintln!("Error case, should not happen: {} ", cur_level);
+                return Some(vec![]);
+            }
+        }
+    } else {
+        eprintln!("Error case, should not happen: {}", cur_level);
+        return Some(vec![]);
+    }
+}
 
 pub async fn insert_embedding(
     vec_store: Arc<VectorStore>,
@@ -31,7 +116,7 @@ pub async fn insert_embedding(
         });
 
     if let Some((fvec, vthm_mv)) = maybe_res {
-        if let Some(vthm) = vthm_mv { 
+        if let Some(vthm) = vthm_mv {
             let vtm = vthm.clone();
             let skipm = Arc::new(DashMap::new());
             let z = traverse_find_nearest(

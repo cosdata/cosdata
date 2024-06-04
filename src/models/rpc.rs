@@ -2,6 +2,8 @@ use crate::models::user::{AddUserResp, AuthResp, Statistics, User};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
+use super::types::VectorHash;
+
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 
 pub struct Authenticate {
@@ -23,8 +25,8 @@ pub struct AddUser {
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 
 pub struct VectorANN {
-    vector_db_name: String,
-    vector: Vec<f32>,
+    pub vector_db_name: String,
+    pub vector: Vec<f32>,
 }
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 
@@ -47,6 +49,6 @@ pub enum RPCResponseBody {
     AuthenticateResp { auth: AuthResp },
     RespAddUser { add_user: AddUserResp },
     RespUpsertVectors { insert_stats: Option<Statistics> },
-    RespVectorKNN { knn: Vec<(i8, i8, String, f64)> },
+    RespVectorKNN { knn: Option<Vec<(VectorHash, f32)>> },
     RespCreateVectorDb { result: bool },
 }

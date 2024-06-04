@@ -26,7 +26,6 @@ pub struct VectorTreeNode {
     pub neighbors: Vec<(VectorHash, f32)>,
 }
 
-
 type VectorStoreMap = DashMap<String, VectorStore>;
 type UserDataCache = DashMap<String, (String, i32, i32, std::time::SystemTime, Vec<String>)>;
 
