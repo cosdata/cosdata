@@ -5,377 +5,12 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use thiserror::Error;
-use tokio::task; // Import the Error trait for custom error handling
-                 // type NumericValue = Vec<Vec<i32>>; // Two-dimensional vector
+use tokio::task;
+use waco::models::common::*;
 
-// type VectorHash = String; // Assuming VectorHash is a String, replace with appropriate type if different
+use crate::models::types::*;
 
-// #[derive(Debug, Clone, PartialEq)]
-// pub struct VectorTreeNode {
-//     vector_list: NumericValue,         // Two-dimensional vector
-//     neighbors: Vec<(VectorHash, f64)>, // neighbor, cosine distance
-// }
-
-// #[derive(Debug, Clone)]
-// pub struct VectorStore {
-//     database_name: String,
-//     root_vec: (VectorHash, NumericValue), // Two-dimensional vector
-//     cache: HashMap<(i8, VectorHash), (Option<VectorTreeNode>, Arc<Mutex<()>>)>, // (level, vector), map prefixnorm hash
-//     max_cache_level: i8,
-// }
-
-// #[derive(Debug, Clone)]
-// pub struct VectorEmbedding {
-//     raw_vec: NumericValue, // Two-dimensional vector
-//     hash_vec: VectorHash,
-// }
-
-pub struct CosResult {
-    pub dotprod: i32,
-    pub premag_a: i32,
-    pub premag_b: i32,
-}
-
-// Function to convert a sequence of bits to an integer value
-fn bits_to_integer(bits: &[i32], size: usize) -> u32 {
-    let mut result: u32 = 0;
-    for i in 0..size {
-        result = (result << 1) | (bits[i] as u32);
-    }
-    result
-}
-
-fn x_function(value: u32) -> i32 {
-    match value {
-        0 => 0,
-        1 => 1,
-        2 => 1,
-        3 => 2,
-        4 => 1,
-        5 => 2,
-        6 => 2,
-        7 => 3,
-        8 => 1,
-        9 => 2,
-        10 => 2,
-        11 => 3,
-        12 => 2,
-        13 => 3,
-        14 => 3,
-        15 => 4,
-        _ => -1, // Invalid input
-    }
-}
-
-fn shift_and_accumulate(value: u32) -> i32 {
-    let mut result: i32 = 0;
-    result += x_function(15 & (value >> 0));
-    result += x_function(15 & (value >> 4));
-    result += x_function(15 & (value >> 8));
-    result += x_function(15 & (value >> 12));
-    result
-}
-
-fn dot_product(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b.iter()).map(|(&x, &y)| x * y).sum()
-}
-
-fn magnitude(vec: &[f32]) -> f32 {
-    vec.iter().map(|&x| x * x).sum::<f32>().sqrt()
-}
-
-pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    let cs = dot_product(a, b) / (magnitude(a) * magnitude(b));
-    println!("cs: {:?}", cs);
-    cs
-}
-
-pub fn compute_cosine_similarity(a: &[i32], b: &[i32], size: usize) -> CosResult {
-    let value1 = bits_to_integer(a, size);
-    let value2 = bits_to_integer(b, size);
-
-    let dotprod = shift_and_accumulate(value1 & value2);
-    let premag_a = shift_and_accumulate(value1);
-    let premag_b = shift_and_accumulate(value2);
-
-    CosResult {
-        dotprod,
-        premag_a,
-        premag_b,
-    }
-}
-
-pub fn cosine_coalesce(x: &[Vec<i32>], y: &[Vec<i32>]) -> f64 {
-    if x.len() != y.len() {
-        panic!("Input vectors must have the same length");
-    }
-
-    let mut results = Vec::new();
-
-    for (sub_x, sub_y) in x.iter().zip(y.iter()) {
-        let cs = compute_cosine_similarity(sub_x, sub_y, 16);
-        results.push(cs);
-    }
-
-    let summed = sum_components(&results);
-
-    f64::from(summed.dotprod)
-        / (f64::sqrt(f64::from(summed.premag_a)) * f64::sqrt(f64::from(summed.premag_b)))
-}
-
-pub fn cosine_sim_unsigned(x: &Vec<u32>, y: &Vec<u32>) -> f64 {
-    let mut acc = CosResult {
-        dotprod: 0,
-        premag_a: 0,
-        premag_b: 0,
-    };
-    for (value1, value2) in x.iter().zip(y.iter()) {
-        let dotprod = shift_and_accumulate(value1 & value2);
-        let premag_a = shift_and_accumulate(*value1);
-        let premag_b = shift_and_accumulate(*value2);
-
-        acc.dotprod += dotprod;
-        acc.premag_a += premag_a;
-        acc.premag_b += premag_b;
-    }
-
-    f64::from(acc.dotprod)
-        / (f64::sqrt(f64::from(acc.premag_a)) * f64::sqrt(f64::from(acc.premag_b)))
-}
-
-fn sum_components(results: &[CosResult]) -> CosResult {
-    let mut acc = CosResult {
-        dotprod: 0,
-        premag_a: 0,
-        premag_b: 0,
-    };
-
-    for res in results {
-        acc.dotprod += res.dotprod;
-        acc.premag_a += res.premag_a;
-        acc.premag_b += res.premag_b;
-    }
-
-    acc
-}
-
-fn to_float_flag(x: f32) -> i32 {
-    if x >= 0.0 {
-        1
-    } else {
-        0
-    }
-}
-
-pub fn floats_to_bits(floats: &[f32]) -> Vec<u32> {
-    let mut result = vec![0; (floats.len() + 31) / 32];
-
-    for (i, &f) in floats.iter().enumerate() {
-        if f >= 0.0 {
-            result[i / 32] |= 1 << (i % 32);
-        }
-    }
-
-    result
-}
-
-pub fn quantize(fins: &[f32]) -> Vec<Vec<i32>> {
-    let mut quantized = Vec::with_capacity((fins.len() + 15) / 16);
-    let mut chunk = Vec::with_capacity(16);
-
-    for &f in fins {
-        chunk.push(to_float_flag(f));
-        if chunk.len() == 16 {
-            quantized.push(chunk.clone());
-            chunk.clear();
-        }
-    }
-
-    if !chunk.is_empty() {
-        quantized.push(chunk);
-    }
-
-    quantized
-}
-
-#[derive(Debug, Error)]
-pub enum CustomError {
-    #[error("Failed to create the database")]
-    CreateDatabaseFailed,
-
-    #[error("Failed to upsert vectors")]
-    UpsertFailed,
-}
-
-// #[derive(Debug, Clone)]
-// enum NumericValue {
-//     U32(Vec<u32>),
-//     F32(Vec<f32>),
-// }
-
-type NumericValue = Vec<f32>;
-type VectorHash = Vec<u8>;
-
-type CacheType = DashMap<(i8, VectorHash), Option<(VectorTreeNode, Arc<()>)>>;
-
-#[derive(Debug, Clone)]
-pub struct VectorStore {
-    cache: Arc<CacheType>,
-    max_cache_level: i8,
-    database_name: String,
-    root_vec: (VectorHash, NumericValue),
-}
-
-#[derive(Debug, Clone)]
-pub struct VectorEmbedding {
-    raw_vec: NumericValue,
-    hash_vec: VectorHash,
-}
-
-#[derive(Debug, Clone)]
-pub struct VectorTreeNode {
-    vector_list: NumericValue,
-    neighbors: Vec<(VectorHash, f32)>,
-}
-
-type VectorStoreMap = DashMap<String, VectorStore>;
-type UserDataCache = DashMap<String, (String, i32, i32, std::time::SystemTime, Vec<String>)>;
-
-// Define the AppEnv struct
-pub struct AppEnv {
-    pub user_data_cache: UserDataCache,
-    pub vector_store_map: VectorStoreMap,
-}
-// Initialize the AppEnv with once_cell
-use once_cell::sync::OnceCell;
-static AIN_ENV: OnceCell<Arc<AppEnv>> = OnceCell::new();
-
-pub fn get_app_env() -> Arc<AppEnv> {
-    AIN_ENV
-        .get_or_init(|| {
-            Arc::new(AppEnv {
-                user_data_cache: DashMap::new(),
-                vector_store_map: DashMap::new(),
-            })
-        })
-        .clone()
-}
-
-fn hash_float_vec(vec: Vec<f32>) -> Vec<u8> {
-    // Create a new hasher instance
-    let mut hasher = Sha256::new();
-
-    // Convert the Vec<f32> to a byte representation
-    for &num in &vec {
-        // Convert each f32 to its byte representation and update the hasher
-        hasher.update(&num.to_le_bytes());
-    }
-
-    // Finalize the hash and return the result as a Vec<u8>
-    hasher.finalize().to_vec()
-}
-
-pub async fn init_vector_store(
-    name: String,
-    size: usize,
-    lower_bound: Option<f32>,
-    upper_bound: Option<f32>,
-    max_cache_level: i8,
-) -> Result<(), CustomError> {
-    if name.is_empty() {
-        return Err(CustomError::CreateDatabaseFailed);
-    }
-    let ain_env = get_app_env();
-    let vec = (0..size)
-        .map(|_| {
-            rand::random::<f32>() * (upper_bound.unwrap_or(1.0) - lower_bound.unwrap_or(-1.0))
-                + lower_bound.unwrap_or(-1.0)
-        })
-        .collect::<Vec<f32>>();
-
-    let vec_hash = hash_float_vec(vec.clone());
-
-    let root = (vec_hash.clone(), vec.clone());
-
-    let cache = Arc::new(DashMap::new());
-
-    for l in 0..=max_cache_level {
-        let mv = Arc::new(());
-        cache.insert(
-            (l, vec_hash.clone()),
-            Some((
-                VectorTreeNode {
-                    vector_list: vec.clone(),
-                    neighbors: vec![],
-                },
-                mv,
-            )),
-        );
-    }
-
-    let vec_store = VectorStore {
-        cache,
-        max_cache_level,
-        database_name: name.clone(),
-        root_vec: root,
-    };
-
-    ain_env
-        .vector_store_map
-        .insert(name.clone(), vec_store.clone());
-    println!(
-        "vector store map: {:?}",
-        ain_env.vector_store_map.clone().len()
-    );
-    Ok(())
-}
-
-pub async fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<Vec<f32>>) -> Vec<()> {
-    use futures::stream::{self, StreamExt};
-
-    stream::iter(vecxx)
-        .map(|vec| {
-            let vec_store = vec_store.clone();
-            async move {
-                let rhash = &vec_store.root_vec.0;
-                let vec_hash = hash_float_vec(vec.clone());
-                let vec_emb = VectorEmbedding {
-                    raw_vec: vec,
-                    hash_vec: vec_hash,
-                };
-                let lst = vec![
-                    (0.0, 0),
-                    (0.9, 1),
-                    (0.99, 2),
-                    (0.999, 3),
-                    (0.9999, 4),
-                    (0.99999, 5),
-                ];
-                let iv = find_value(&lst, rand::random::<f32>().into());
-                insert_embedding(
-                    vec_store.clone(),
-                    vec_emb,
-                    rhash.clone(),
-                    vec_store.max_cache_level,
-                    iv.try_into().unwrap(),
-                )
-                .await;
-            }
-        })
-        .buffer_unordered(10)
-        .collect::<Vec<_>>()
-        .await
-}
-
-fn find_value(lst: &[(f64, i32)], x: f64) -> i32 {
-    let reversed_list = lst.iter().rev();
-    match reversed_list.clone().find(|(value, _)| x >= *value) {
-        Some((_, index)) => *index,
-        None => panic!("No matching element found"),
-    }
-}
-
-async fn insert_embedding(
+pub async fn insert_embedding(
     vec_store: Arc<VectorStore>,
     vector_emb: VectorEmbedding,
     cur_entry: VectorHash,
@@ -495,7 +130,6 @@ async fn insert_embedding(
     }
 }
 
-
 async fn insert_node_create_edges(
     vec_store: Arc<VectorStore>,
     fvec: NumericValue,
@@ -513,39 +147,38 @@ async fn insert_node_create_edges(
         .cache
         .insert((cur_level, hs.clone()), Some((nv, em.clone())));
 
-    let tasks: Vec<_> =
-        nbs.into_iter()
-            .map(|(nb, cs)| {
-                let vec_store = vec_store.clone();
-                let hs = hs.clone();
-                let cur_level = cur_level;
-                task::spawn(async move {
-                    vec_store
-                        .cache
-                        .alter(&(cur_level.clone(), nb.clone()).clone(), |_,  existing_value| {
-                            match existing_value {
-                                Some(res) => {
-                                    let ((vthm, mv)) = res;
-                                    let mut ng = vthm.neighbors.clone();
-                                    ng.push((hs.clone(), cs));
-                                    ng.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-                                    ng.dedup_by(|a, b| a.0 == b.0);
-                                    let ng = ng.into_iter().take(2).collect::<Vec<_>>();
+    let tasks: Vec<_> = nbs
+        .into_iter()
+        .map(|(nb, cs)| {
+            let vec_store = vec_store.clone();
+            let hs = hs.clone();
+            let cur_level = cur_level;
+            task::spawn(async move {
+                vec_store.cache.alter(
+                    &(cur_level.clone(), nb.clone()).clone(),
+                    |_, existing_value| match existing_value {
+                        Some(res) => {
+                            let ((vthm, mv)) = res;
+                            let mut ng = vthm.neighbors.clone();
+                            ng.push((hs.clone(), cs));
+                            ng.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+                            ng.dedup_by(|a, b| a.0 == b.0);
+                            let ng = ng.into_iter().take(2).collect::<Vec<_>>();
 
-                                    let nv = VectorTreeNode {
-                                        vector_list: vthm.vector_list.clone(),
-                                        neighbors: ng,
-                                    };
-                                    return Some((nv, mv.clone()));
-                                }
-                                None => {
-                                    return existing_value.clone();
-                                }
-                            }
-                        });
-                })
+                            let nv = VectorTreeNode {
+                                vector_list: vthm.vector_list.clone(),
+                                neighbors: ng,
+                            };
+                            return Some((nv, mv.clone()));
+                        }
+                        None => {
+                            return existing_value.clone();
+                        }
+                    },
+                );
             })
-            .collect();
+        })
+        .collect();
 
     join_all(tasks).await;
 }
@@ -574,7 +207,6 @@ fn traverse_find_nearest_inner(
     cur_level: i8,
 ) -> BoxFuture<'static, Vec<(VectorHash, f32)>> {
     async move {
-
         let tasks: Vec<_> = vtm
             .neighbors
             .clone()

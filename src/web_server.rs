@@ -1,4 +1,3 @@
-use crate::{models::rpc::*, vector_store::*};
 use actix_cors::Cors;
 use actix_files::Files;
 use actix_web::{
@@ -10,10 +9,10 @@ use log::debug;
 use rustls::{pki_types::PrivateKeyDer, ServerConfig};
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use serde::{Deserialize, Serialize};
-use std::ops::Deref;
 use std::{fs::File, io::BufReader};
-use waco::models::rpc::Authenticate;
-use waco::models::rpc::CreateVectorDb;
+
+use crate::models::rpc::*;
+use crate::{api_service::*, models::types::*};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct MyObj {

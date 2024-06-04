@@ -1,8 +1,7 @@
-mod vector_store;
-//mod api_service;
 mod models;
+mod vector_store;
 mod web_server;
-
+mod api_service;
 use async_std::task;
 use lazy_static::lazy_static;
 use rand::Rng;
@@ -11,13 +10,11 @@ use std::sync::{Arc, Mutex};
 use web_server::run_actix_server;
 
 lazy_static! {
-    static ref random_numbers_a: Vec<f32> = generate_random_vector();
-    static ref random_numbers_b: Vec<f32> = generate_random_vector();
+    static ref RANDOM_NUMBERS_A: Vec<f32> = generate_random_vector();
+    static ref RANDOM_NUMBERS_B: Vec<f32> = generate_random_vector();
 }
-use vector_store::{
-    compute_cosine_similarity, cosine_coalesce, cosine_sim_unsigned, cosine_similarity,
-    floats_to_bits, quantize, VectorEmbedding, VectorStore, VectorTreeNode,
-};
+
+use waco::models::common::*;
 
 // Function to generate a vector of 1024 f32 random numbers in the range -1.0 to 1.0
 fn generate_random_vector() -> Vec<f32> {
@@ -36,8 +33,8 @@ fn generate_random_vector() -> Vec<f32> {
 }
 
 fn run_quantized_cs() -> f64 {
-    let quantized_values_x = quantize(&random_numbers_a);
-    let quantized_values_y = quantize(&random_numbers_b);
+    let quantized_values_x = quantize(&RANDOM_NUMBERS_A);
+    let quantized_values_y = quantize(&RANDOM_NUMBERS_B);
 
     // Call cosine_coalesce function with the pair of quantized values
     let similarity = cosine_coalesce(&quantized_values_x, &quantized_values_y);
@@ -46,13 +43,13 @@ fn run_quantized_cs() -> f64 {
 }
 
 fn run_cs() -> f32 {
-    let similarity = cosine_similarity(&random_numbers_a, &random_numbers_b);
+    let similarity = cosine_similarity(&RANDOM_NUMBERS_A, &RANDOM_NUMBERS_B);
     return similarity;
 }
 
 fn run_cs_new() -> f64 {
-    let x = floats_to_bits(&random_numbers_a);
-    let y = floats_to_bits(&random_numbers_b);
+    let x = floats_to_bits(&RANDOM_NUMBERS_A);
+    let y = floats_to_bits(&RANDOM_NUMBERS_B);
 
     let similarity = cosine_sim_unsigned(&x, &y);
     return similarity;
