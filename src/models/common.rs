@@ -213,3 +213,18 @@ pub fn find_value(x: f64) -> i32 {
         None => panic!("No matching element found"),
     }
 }
+
+pub fn add_option_vecs(
+    a: &Option<Vec<(Vec<u8>, f32)>>,
+    b: &Option<Vec<(Vec<u8>, f32)>>
+) -> Option<Vec<(Vec<u8>, f32)>> {
+    match (a, b) {
+        (None, None) => None,
+        (Some(vec), None) | (None, Some(vec)) => Some(vec.clone()),
+        (Some(vec1), Some(vec2)) => {
+            let mut combined = vec1.clone();
+            combined.extend(vec2.iter().cloned());
+            Some(combined)
+        }
+    }
+}

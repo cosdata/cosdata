@@ -38,6 +38,16 @@ def upsert_vector(vector_db_name, vector):
     response = requests.post(url, headers=headers, data=json.dumps(data), verify=False)
     return response.json()
 
+# Function to upsert vectors
+def ann_vector(vector_db_name, vector):
+    url = f"{base_url}/search"
+    data = {
+        "vector_db_name": vector_db_name,
+        "vector": vector
+    }
+    response = requests.post(url, headers=headers, data=json.dumps(data), verify=False)
+    return response.json()
+
 # Function to generate a random vector with given constraints
 def generate_random_vector(rows, dimensions, min_val, max_val):
     return np.random.uniform(min_val, max_val, (rows, dimensions)).tolist()
@@ -57,7 +67,7 @@ if __name__ == "__main__":
     # Upsert vectors concurrently
     with ThreadPoolExecutor(max_workers=32) as executor:
         futures = []
-        for i in range(100):
+        for i in range(10):
             vector = generate_random_vector(rows, dimensions, min_val, max_val)
             futures.append(executor.submit(upsert_vector, vector_db_name, vector))
 
@@ -67,3 +77,18 @@ if __name__ == "__main__":
                 print(f"Upsert Vector Response {i+1}:", upsert_response)
             except Exception as e:
                 print(f"Error in upsert vector {i+1}: {e}")
+
+    # Search vector concurrently
+    search_vector = generate_random_vector(1, dimensions, min_val, max_val)[0]
+
+    with ThreadPoolExecutor(max_workers=32) as executor:
+        futures = []
+        for i in range(1):
+            futures.append(executor.submit(ann_vector, vector_db_name, search_vector))
+
+        for i, future in enumerate(as_completed(futures)):
+            try:
+                ann_response = future.result()
+                print(f"ANN Vector Response {i+1}:", ann_response)
+            except Exception as e:
+                print(f"Error in ANN vector {i+1}: {e}")

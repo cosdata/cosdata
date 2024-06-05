@@ -47,7 +47,7 @@ pub async fn ann_search(
             } else {
                 z
             };
-
+            let cloned_z = z.clone();
             let recursive_call = Box::pin(async move {
                 let x = ann_search(
                     vec_store.clone(),
@@ -59,7 +59,7 @@ pub async fn ann_search(
                 return x;
             });
             let result = recursive_call.await;
-            return result;
+            return add_option_vecs(&result , &Some(cloned_z));
         } else {
             if cur_level > vec_store.max_cache_level {
                 let xvtm = get_vector_from_db(&vec_store.database_name, cur_entry.clone()).await;
