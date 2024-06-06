@@ -2,7 +2,6 @@ use async_std::stream::Cloned;
 use dashmap::DashMap;
 use futures::future::{join_all, BoxFuture, FutureExt};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::task;
@@ -178,7 +177,7 @@ pub fn quantize(fins: &[f32]) -> Vec<Vec<i32>> {
     quantized
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone)]
 pub enum WaCustomError {
     #[error("Failed to create the database")]
     CreateDatabaseFailed (String),

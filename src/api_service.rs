@@ -2,13 +2,10 @@ use crate::models::common::*;
 use crate::models::rpc::VectorIdValue;
 use crate::models::types::*;
 use crate::models::user::{AuthResp, Statistics};
-use crate::vector_store;
 use crate::vector_store::*;
-use chrono::prelude::*;
 use dashmap::DashMap;
 use log::info;
 use serde::{Deserialize, Serialize};
-use std::f64::consts::E;
 use std::sync::{Arc, Mutex, RwLock};
 
 pub async fn init_vector_store(
@@ -21,7 +18,7 @@ pub async fn init_vector_store(
     if name.is_empty() {
         return Err(WaCustomError::InvalidParams);
     }
-    let ain_env = get_app_env();
+
     let vec = (0..size)
         .map(|_| {
             rand::random::<f32>() * (upper_bound.unwrap_or(1.0) - lower_bound.unwrap_or(-1.0))
@@ -51,15 +48,27 @@ pub async fn init_vector_store(
         database_name: name.clone(),
         root_vec: root,
     };
+    let result = match get_app_env() {
+        Ok(ain_env) => {
+            ain_env
+                .vector_store_map
+                .insert(name.clone(), vec_store.clone());
+            let rs = ain_env.persist.lock().unwrap().create_cf_family("main"); // create the default CF for main index
+            match rs {
+                Ok(__) => {
+                    println!(
+                        "vector store map: {:?}",
+                        ain_env.vector_store_map.clone().len()
+                    );
+                    Ok(())
+                }
+                Err(e) => Err(WaCustomError::CreateCFFailed(e.to_string())),
+            }
+        }
 
-    ain_env
-        .vector_store_map
-        .insert(name.clone(), vec_store.clone());
-    println!(
-        "vector store map: {:?}",
-        ain_env.vector_store_map.clone().len()
-    );
-    Ok(())
+        Err(e) => Err(WaCustomError::CFReadWriteFailed(e.to_string())),
+    };
+    return result;
 }
 
 pub async fn run_upload(
