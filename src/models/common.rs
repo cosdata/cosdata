@@ -181,10 +181,22 @@ pub fn quantize(fins: &[f32]) -> Vec<Vec<i32>> {
 #[derive(Debug, Error)]
 pub enum WaCustomError {
     #[error("Failed to create the database")]
-    CreateDatabaseFailed,
+    CreateDatabaseFailed (String),
+
+    #[error("Failed to create the Column family")]
+    CreateCFFailed (String),
+
+    #[error("column family read/write failed")]
+    CFReadWriteFailed (String),
 
     #[error("Failed to upsert vectors")]
     UpsertFailed,
+
+    #[error("ColumnFamily not found")]
+    CFNotFound,
+
+    #[error("Invalid params in request")]
+    InvalidParams, 
 }
 
 pub fn hash_float_vec(vec: Vec<f32>) -> Vec<u8> {

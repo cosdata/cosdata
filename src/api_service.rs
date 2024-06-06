@@ -19,7 +19,7 @@ pub async fn init_vector_store(
     max_cache_level: i8,
 ) -> Result<(), WaCustomError> {
     if name.is_empty() {
-        return Err(WaCustomError::CreateDatabaseFailed);
+        return Err(WaCustomError::InvalidParams);
     }
     let ain_env = get_app_env();
     let vec = (0..size)
