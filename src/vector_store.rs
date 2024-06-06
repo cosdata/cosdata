@@ -1,19 +1,19 @@
+use crate::models::common::*;
 use dashmap::DashMap;
 use futures::future::{join_all, BoxFuture, FutureExt};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::task;
-use waco::models::common::*;
 
 use crate::models::types::*;
 
 pub async fn ann_search(
     vec_store: Arc<VectorStore>,
     vector_emb: VectorEmbedding,
-    cur_entry: VectorHash,
+    cur_entry: VectorId,
     cur_level: i8,
-) -> Option<Vec<(VectorHash, f32)>> {
+) -> Option<Vec<(VectorId, f32)>> {
     if cur_level == -1 {
         return Some(vec![]);
     }
@@ -59,7 +59,7 @@ pub async fn ann_search(
                 return x;
             });
             let result = recursive_call.await;
-            return add_option_vecs(&result , &Some(cloned_z));
+            return add_option_vecs(&result, &Some(cloned_z));
         } else {
             if cur_level > vec_store.max_cache_level {
                 let xvtm = get_vector_from_db(&vec_store.database_name, cur_entry.clone()).await;
@@ -97,7 +97,7 @@ pub async fn ann_search(
 pub async fn insert_embedding(
     vec_store: Arc<VectorStore>,
     vector_emb: VectorEmbedding,
-    cur_entry: VectorHash,
+    cur_entry: VectorId,
     cur_level: i8,
     max_insert_level: i8,
 ) {
@@ -215,8 +215,8 @@ pub async fn insert_embedding(
 async fn insert_node_create_edges(
     vec_store: Arc<VectorStore>,
     fvec: Arc<NumericVector>,
-    hs: VectorHash,
-    nbs: Vec<(VectorHash, f32)>,
+    hs: VectorId,
+    nbs: Vec<(VectorId, f32)>,
     cur_level: i8,
 ) {
     let nv = Arc::new(VectorTreeNode {
@@ -266,11 +266,11 @@ async fn traverse_find_nearest(
     vec_store: Arc<VectorStore>,
     vtm: Arc<VectorTreeNode>,
     fvec: Arc<NumericVector>,
-    hs: VectorHash,
+    hs: VectorId,
     hops: i8,
-    skipm: Arc<DashMap<VectorHash, ()>>,
+    skipm: Arc<DashMap<VectorId, ()>>,
     cur_level: i8,
-) -> Vec<(VectorHash, f32)> {
+) -> Vec<(VectorId, f32)> {
     traverse_find_nearest_inner(vec_store, vtm, fvec, hs, hops, skipm, cur_level).await
 }
 
@@ -278,11 +278,11 @@ fn traverse_find_nearest_inner(
     vec_store: Arc<VectorStore>,
     vtm: Arc<VectorTreeNode>,
     fvec: Arc<NumericVector>,
-    hs: VectorHash,
+    hs: VectorId,
     hops: i8,
-    skipm: Arc<DashMap<VectorHash, ()>>,
+    skipm: Arc<DashMap<VectorId, ()>>,
     cur_level: i8,
-) -> BoxFuture<'static, Vec<(VectorHash, f32)>> {
+) -> BoxFuture<'static, Vec<(VectorId, f32)>> {
     async move {
         let tasks: Vec<_> = vtm
             .neighbors
@@ -336,7 +336,7 @@ fn traverse_find_nearest_inner(
             })
             .collect();
 
-        let results: Vec<Result<Vec<(VectorHash, f32)>, task::JoinError>> = join_all(tasks).await;
+        let results: Vec<Result<Vec<(VectorId, f32)>, task::JoinError>> = join_all(tasks).await;
         let mut nn: Vec<_> = results
             .into_iter()
             .filter_map(Result::ok) // Filter out the errors
@@ -350,7 +350,7 @@ fn traverse_find_nearest_inner(
     .boxed()
 }
 
-async fn get_vector_from_db(db_name: &str, entry: VectorHash) -> Option<Arc<VectorTreeNode>> {
+async fn get_vector_from_db(db_name: &str, entry: VectorId) -> Option<Arc<VectorTreeNode>> {
     // Your implementation to get vector from the database
     unimplemented!()
 }

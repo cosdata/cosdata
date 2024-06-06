@@ -4,26 +4,32 @@ use std::sync::Arc;
 pub type NumericVector = Vec<f32>;
 pub type VectorHash = Vec<u8>;
 
-type CacheType = DashMap<(i8, VectorHash), Option<Arc<(VectorTreeNode)>>>;
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub enum VectorId {
+    Str(String),
+    Int(i32),
+}
+
+type CacheType = DashMap<(i8, VectorId), Option<Arc<(VectorTreeNode)>>>;
 
 #[derive(Debug, Clone)]
 pub struct VectorStore {
     pub cache: Arc<CacheType>,
     pub max_cache_level: i8,
     pub database_name: String,
-    pub root_vec: (VectorHash, NumericVector),
+    pub root_vec: (VectorId, NumericVector),
 }
 
 #[derive(Debug, Clone)]
 pub struct VectorEmbedding {
     pub raw_vec: Arc<NumericVector>,
-    pub hash_vec: VectorHash,
+    pub hash_vec: VectorId,
 }
 
 #[derive(Debug, Clone)]
 pub struct VectorTreeNode {
     pub vector_list: Arc<NumericVector>,
-    pub neighbors: Vec<(VectorHash, f32)>,
+    pub neighbors: Vec<(VectorId, f32)>,
 }
 
 type VectorStoreMap = DashMap<String, VectorStore>;

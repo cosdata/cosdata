@@ -7,6 +7,9 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::task;
 
+use super::rpc::{Vector, VectorIdValue};
+use super::types::VectorId;
+
 pub struct CosResult {
     pub dotprod: i32,
     pub premag_a: i32,
@@ -215,9 +218,9 @@ pub fn find_value(x: f64) -> i32 {
 }
 
 pub fn add_option_vecs(
-    a: &Option<Vec<(Vec<u8>, f32)>>,
-    b: &Option<Vec<(Vec<u8>, f32)>>
-) -> Option<Vec<(Vec<u8>, f32)>> {
+    a: &Option<Vec<(VectorId, f32)>>,
+    b: &Option<Vec<(VectorId, f32)>>,
+) -> Option<Vec<(VectorId, f32)>> {
     match (a, b) {
         (None, None) => None,
         (Some(vec), None) | (None, Some(vec)) => Some(vec.clone()),
@@ -227,4 +230,41 @@ pub fn add_option_vecs(
             Some(combined)
         }
     }
+}
+
+// Function to convert VectorIdValue to VectorId
+pub fn convert_value(id_value: VectorIdValue) -> VectorId {
+    match id_value {
+        VectorIdValue::StringValue(s) => VectorId::Str(s),
+        VectorIdValue::IntValue(i) => VectorId::Int(i),
+    }
+}
+
+// Function to convert VectorId to VectorIdValue
+fn convert_id(id: VectorId) -> VectorIdValue {
+    match id {
+        VectorId::Str(s) => VectorIdValue::StringValue(s),
+        VectorId::Int(i) => VectorIdValue::IntValue(i),
+    }
+}
+
+// Function to convert the Option<Vec<(VectorId, _)>> to Option<Vec<(VectorIdValue, _)>>
+pub fn convert_option_vec(
+    input: Option<Vec<(VectorId, f32)>>,
+) -> Option<Vec<(VectorIdValue, f32)>> {
+    input.map(|vec| {
+        vec.into_iter()
+            .map(|(id, value)| (convert_id(id), value))
+            .collect()
+    })
+}
+
+
+
+// Function to convert Vec<Vector> to Vec<(VectorIdValue, Vec<f32>)>
+pub fn convert_vectors(vectors: Vec<Vector>) -> Vec<(VectorIdValue, Vec<f32>)> {
+    vectors
+        .into_iter()
+        .map(|vector| (vector.id.clone(), vector.values))
+        .collect()
 }

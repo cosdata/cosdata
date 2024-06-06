@@ -12,6 +12,8 @@ use rustls_pemfile::{certs, pkcs8_private_keys};
 use serde::{Deserialize, Serialize};
 use std::{fs::File, io::BufReader};
 
+use crate::convert_vectors;
+use crate::models::common::convert_option_vec;
 use crate::models::rpc::*;
 use crate::{api_service::*, models::types::*};
 
@@ -29,13 +31,11 @@ async fn validator(
     Ok(req)
 }
 
- 
 async fn authenticate(item: web::Json<Authenticate>) -> HttpResponse {
     println!("model: {:?}", &item);
     HttpResponse::Ok().json(item.0) // <- send response
 }
 
- 
 async fn create_vector_db(item: web::Json<CreateVectorDb>) -> HttpResponse {
     // Extract values from the JSON request
     let vector_db_name = &item.vector_db_name;
@@ -58,11 +58,11 @@ async fn create_vector_db(item: web::Json<CreateVectorDb>) -> HttpResponse {
         Err(e) => HttpResponse::NotAcceptable().body(format!("Error: {}", e)),
     }
 }
- 
+
 async fn upsert_vector_db(item: web::Json<UpsertVectors>) -> HttpResponse {
     // Extract values from the JSON request
     let vector_db_name = &item.vector_db_name;
-    let vector = item.vector.clone(); // Clone the vector for async usage
+    let vectors = item.vectors.clone(); // Clone the vector for async usage
 
     let ain_env = get_app_env();
 
@@ -76,15 +76,14 @@ async fn upsert_vector_db(item: web::Json<UpsertVectors>) -> HttpResponse {
     };
 
     // Call run_upload with the extracted parameters
-    let __result = run_upload(vec_store.clone().into(), vector).await;
+    let __result = run_upload(vec_store.clone().into(), convert_vectors(vectors)).await;
 
     let response_data = RPCResponseBody::RespUpsertVectors { insert_stats: None }; //
     let response = HttpResponse::Ok().json(response_data);
 
-    response  
+    response
 }
 
- 
 async fn search_vector_db(item: web::Json<VectorANN>) -> HttpResponse {
     println!("model: {:?}", &item);
     let vector_db_name = &item.vector_db_name;
@@ -103,10 +102,12 @@ async fn search_vector_db(item: web::Json<VectorANN>) -> HttpResponse {
 
     let result = ann_vector_query(vec_store.clone().into(), vector).await;
 
-    let response_data = RPCResponseBody::RespVectorKNN { knn: result }; //
+    let response_data = RPCResponseBody::RespVectorKNN {
+        knn: convert_option_vec(result),
+    }; //
     let response = HttpResponse::Ok().json(response_data);
 
-    response 
+    response
 }
 
 async fn extract_item(item: web::Json<MyObj>, req: HttpRequest) -> HttpResponse {
@@ -140,7 +141,7 @@ pub async fn run_actix_server() -> std::io::Result<()> {
             // add headers to error responses
             .wrap(Cors::permissive())
             // register simple handler, handle all methods
-            .app_data(web::JsonConfig::default().limit(4 * 1048576)) // <- 4 mb limit size of the payload (global configuration)
+            .app_data(web::JsonConfig::default().limit( 4 * 1048576)) // <- 4  mb limit size of the payload (global configuration)
             .service(
                 web::scope("/auth")
                     .service(web::resource("/gettoken").route(web::post().to(authenticate))),

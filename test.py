@@ -29,12 +29,21 @@ def create_db(vector_db_name, dimensions, max_val, min_val):
     return response.json()
 
 # Function to upsert vectors
-def upsert_vector(vector_db_name, vector):
+def upsert_vector(vector_db_name, vectors):
+    
     url = f"{base_url}/upsert"
     data = {
         "vector_db_name": vector_db_name,
-        "vector": vector
+        "vectors": vectors
     }
+    # Convert data to JSON string
+    # json_str = json.dumps(data)
+
+    # # Get the size of the JSON string
+    # size_in_bytes = len(json_str)
+    # # Convert bytes to megabytes
+    # size_in_mb = size_in_bytes / (1024 * 1024)
+    # print("Size of JSON string:", size_in_mb, "MB")
     response = requests.post(url, headers=headers, data=json.dumps(data), verify=False)
     return response.json()
 
@@ -52,6 +61,10 @@ def ann_vector(vector_db_name, vector):
 def generate_random_vector(rows, dimensions, min_val, max_val):
     return np.random.uniform(min_val, max_val, (rows, dimensions)).tolist()
 
+def generate_random_vector_with_id (id, length):
+    values = np.random.rand(length).astype(float).tolist()
+    return {"id": id, "values": values}
+
 # Example usage
 if __name__ == "__main__":
     # Create database
@@ -65,11 +78,16 @@ if __name__ == "__main__":
     print("Create DB Response:", create_response)
 
     # Upsert vectors concurrently
+    
     with ThreadPoolExecutor(max_workers=32) as executor:
         futures = []
-        for i in range(10):
-            vector = generate_random_vector(rows, dimensions, min_val, max_val)
-            futures.append(executor.submit(upsert_vector, vector_db_name, vector))
+        for req_ct in range(100):
+            final_list = []
+            # vector = generate_random_vector(rows, dimensions, min_val, max_val)
+            for row_ct in range(rows):
+                vector = generate_random_vector_with_id((req_ct* rows) + row_ct, dimensions)  # Generate a vector of length 8 for each id
+                final_list.append(vector)
+            futures.append(executor.submit(upsert_vector, vector_db_name, final_list))
 
         for i, future in enumerate(as_completed(futures)):
             try:

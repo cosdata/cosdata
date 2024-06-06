@@ -1,4 +1,5 @@
 use crate::models::common::*;
+use crate::models::rpc::VectorIdValue;
 use crate::models::types::*;
 use crate::models::user::{AuthResp, Statistics};
 use crate::vector_store;
@@ -28,7 +29,7 @@ pub async fn init_vector_store(
         })
         .collect::<Vec<f32>>();
 
-    let vec_hash = hash_float_vec(vec.clone());
+    let vec_hash = VectorId::Str("waco_default_hidden_root".to_string());
 
     let root = (vec_hash.clone(), vec.clone());
 
@@ -61,15 +62,18 @@ pub async fn init_vector_store(
     Ok(())
 }
 
-pub async fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<Vec<f32>>) -> Vec<()> {
+pub async fn run_upload(
+    vec_store: Arc<VectorStore>,
+    vecxx: Vec<(VectorIdValue, Vec<f32>)>,
+) -> Vec<()> {
     use futures::stream::{self, StreamExt};
 
     stream::iter(vecxx)
-        .map(|vec| {
+        .map(|(id, vec)| {
             let vec_store = vec_store.clone();
             async move {
                 let rhash = &vec_store.root_vec.0;
-                let vec_hash = hash_float_vec(vec.clone());
+                let vec_hash = convert_value(id);
                 let vec_emb = VectorEmbedding {
                     raw_vec: Arc::new(vec),
                     hash_vec: vec_hash,
@@ -94,9 +98,9 @@ pub async fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<Vec<f32>>) -> Ve
 pub async fn ann_vector_query(
     vec_store: Arc<VectorStore>,
     query: NumericVector,
-) -> Option<Vec<(VectorHash, f32)>> {
+) -> Option<Vec<(VectorId, f32)>> {
     let vector_store = vec_store.clone();
-    let vec_hash = hash_float_vec(query.clone());
+    let vec_hash = VectorId::Str("query".to_string());
     let rhash = &vector_store.root_vec.0;
 
     let vec_emb = VectorEmbedding {
@@ -106,7 +110,7 @@ pub async fn ann_vector_query(
     let results = ann_search(
         vec_store.clone(),
         vec_emb,
-        rhash.to_vec(),
+        rhash.clone(),
         vec_store.max_cache_level,
     )
     .await;

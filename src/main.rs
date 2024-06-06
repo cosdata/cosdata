@@ -1,7 +1,7 @@
+mod api_service;
 mod models;
 mod vector_store;
 mod web_server;
-mod api_service;
 use async_std::task;
 use lazy_static::lazy_static;
 use rand::Rng;
@@ -14,7 +14,7 @@ lazy_static! {
     static ref RANDOM_NUMBERS_B: Vec<f32> = generate_random_vector();
 }
 
-use waco::models::common::*;
+use crate::models::common::*;
 
 // Function to generate a vector of 1024 f32 random numbers in the range -1.0 to 1.0
 fn generate_random_vector() -> Vec<f32> {

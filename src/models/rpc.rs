@@ -1,4 +1,4 @@
-use super::types::VectorHash;
+use super::types::VectorId;
 use crate::models::user::{AddUserResp, AuthResp, Statistics, User};
 use rayon::iter::WhileSome;
 use serde::{Deserialize, Serialize};
@@ -31,11 +31,11 @@ pub struct VectorANN {
     pub nn_count: Option<i32>,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 
 pub struct UpsertVectors {
     pub vector_db_name: String,
-    pub vector: Vec<Vec<f32>>,
+    pub vectors: Vec<Vector>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -49,12 +49,42 @@ pub struct CreateVectorDb {
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub enum RPCResponseBody {
-    AuthenticateResp { auth: AuthResp },
-    RespAddUser { add_user: AddUserResp },
-    RespUpsertVectors { insert_stats: Option<Statistics> },
-    RespVectorKNN { knn: Option<Vec<(VectorHash, f32)>> },
-    RespCreateVectorDb { result: bool },
+    AuthenticateResp {
+        auth: AuthResp,
+    },
+    RespAddUser {
+        add_user: AddUserResp,
+    },
+    RespUpsertVectors {
+        insert_stats: Option<Statistics>,
+    },
+    RespVectorKNN {
+        knn: Option<Vec<(VectorIdValue, f32)>>,
+    },
+    RespCreateVectorDb {
+        result: bool,
+    },
 }
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(untagged)]
+pub enum VectorIdValue {
+    StringValue(String),
+    IntValue(i32),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Vector {
+    pub id: VectorIdValue,
+    pub values: Vec<f32>,
+}
+
+// #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+// pub struct VectorList {
+//     pub vectors: Vec<Vector>,
+// }
+
+
 pub type Single = MetadataColumnValue;
 pub type Multiple = Vec<MetadataColumnValue>;
 
@@ -65,7 +95,6 @@ pub enum MetadataColumnValue {
     StringValue(String),
     IntValue(i32),
     FloatValue(f64),
-    // Add other types as needed
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -93,7 +122,6 @@ pub enum ComparisonOperator {
 
     #[serde(rename = "$nin")]
     Nin(Multiple),
-    // Add other operators as needed
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -103,7 +131,6 @@ pub enum LogicalOperator {
 
     #[serde(rename = "$or")]
     Or(Vec<Filter>),
-    // Add other logical operators as needed
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
