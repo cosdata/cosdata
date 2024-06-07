@@ -1,11 +1,12 @@
 use dashmap::DashMap;
 use rocksdb::{ColumnFamily, Error, Options, DB};
 use std::sync::{Arc, Mutex};
-
+use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 pub type NumericVector = Vec<f32>;
 pub type VectorHash = Vec<u8>;
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum VectorId {
     Str(String),
     Int(i32),
@@ -64,3 +65,24 @@ pub fn get_app_env() -> Result<Arc<AppEnv> , WaCustomError>{
         })
         .clone()
 }
+
+// impl PartialEq for VectorId {
+//     fn eq(&self, other: &Self) -> bool {
+//         match (self, other) {
+//             (VectorId::Str(s1), VectorId::Str(s2)) => s1 == s2,
+//             (VectorId::Int(i1), VectorId::Int(i2)) => i1 == i2,
+//             _ => false,
+//         }
+//     }
+// }
+
+// impl Eq for VectorId {}
+
+// impl Hash for VectorId {
+//     fn hash<H: Hasher>(&self, state: &mut H) {
+//         match self {
+//             VectorId::Str(s) => s.hash(state),
+//             VectorId::Int(i) => i.hash(state),
+//         }
+//     }
+// }

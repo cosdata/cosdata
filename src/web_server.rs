@@ -144,11 +144,12 @@ pub async fn run_actix_server() -> std::io::Result<()> {
         App::new()
             // enable logger
             .wrap(middleware::Logger::default())
-            // ensure the CORS middleware is wrapped around the httpauth middleware so it is able to
-            // add headers to error responses
+            // ensure the CORS middleware is wrapped around the httpauth middleware 
+            // so it is able to add headers to error responses
             .wrap(Cors::permissive())
             // register simple handler, handle all methods
-            .app_data(web::JsonConfig::default().limit(4 * 1048576)) // <- 4  mb limit size of the payload (global configuration)
+            .app_data(web::JsonConfig::default().limit(4 * 1048576)) 
+            // <- 4  mb limit size of the payload (global configuration)
             .service(
                 web::scope("/auth")
                     .service(web::resource("/gettoken").route(web::post().to(authenticate))),
@@ -163,7 +164,8 @@ pub async fn run_actix_server() -> std::io::Result<()> {
         // .service(web::resource("/index").route(web::post().to(index)))
         // .service(
         //     web::resource("/extractor")
-        //         .app_data(web::JsonConfig::default().limit(1024)) // <- limit size of the payload (resource level)
+        //         .app_data(web::JsonConfig::default().limit(1024)) 
+        // <- limit size of the payload (resource level)
         //         .route(web::post().to(extract_item)),
         // )
         // .service(web::resource("/manual").route(web::post().to(index_manual)))

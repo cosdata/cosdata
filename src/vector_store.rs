@@ -242,7 +242,11 @@ async fn insert_node_create_edges(
                             ng.push((hs.clone(), cs));
                             ng.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
                             ng.dedup_by(|a, b| a.0 == b.0);
-                            let ng = ng.into_iter().take(2).collect::<Vec<_>>();
+                            // ---------------------------
+                            // -- TODO number of neighbors
+                            // ---------------------------
+
+                            let ng = ng.into_iter().take(4).collect::<Vec<_>>();
 
                             let nv = Arc::new(VectorTreeNode {
                                 vector_list: vthm.vector_list.clone(),
@@ -307,7 +311,11 @@ fn traverse_find_nearest_inner(
 
                         if let Some(Some(vthm)) = maybe_res {
                             let cs = cosine_similarity(&fvec, &vthm.vector_list);
-                            if hops < 4 {
+                            // ---------------------------
+                            // -- TODO number of hops
+                            // ---------------------------
+
+                            if hops < 5 {
                                 let mut z = traverse_find_nearest_inner(
                                     vec_store.clone(),
                                     vthm.clone(),
@@ -342,6 +350,10 @@ fn traverse_find_nearest_inner(
             .filter_map(Result::ok) // Filter out the errors
             .flat_map(|inner_vec| inner_vec) // Flatten the inner vectors
             .collect();
+        // ---------------------------
+        // -- TODO number of closest to make edges
+        // ---------------------------
+
         nn.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
         let mut seen = HashSet::new();
         nn.retain(|(vec_u8, _)| seen.insert(vec_u8.clone()));

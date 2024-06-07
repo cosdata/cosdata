@@ -5,7 +5,8 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::task;
-
+use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 use super::rpc::{Vector, VectorIdValue};
 use super::types::VectorId;
 
@@ -278,4 +279,27 @@ pub fn convert_vectors(vectors: Vec<Vector>) -> Vec<(VectorIdValue, Vec<f32>)> {
         .into_iter()
         .map(|vector| (vector.id.clone(), vector.values))
         .collect()
+}
+
+pub fn remove_duplicates_and_filter(input: Option<Vec<(VectorId, f32)>>) -> Option<Vec<(VectorId, f32)>> {
+    if let Some(vec) = input {
+        let mut seen = HashSet::new();
+        let mut unique_vec = Vec::new();
+
+        for item in vec {
+            if let VectorId::Str(ref s) = item.0 {
+                if s == "waco_default_hidden_root" {
+                    continue;
+                }
+            }
+
+            if seen.insert(item.0.clone()) {
+                unique_vec.push(item);
+            }
+        }
+
+        Some(unique_vec)
+    } else {
+        None
+    }
 }

@@ -7,6 +7,7 @@ use dashmap::DashMap;
 use log::info;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, RwLock};
+use rand::Rng;
 
 pub async fn init_vector_store(
     name: String,
@@ -21,8 +22,13 @@ pub async fn init_vector_store(
 
     let vec = (0..size)
         .map(|_| {
-            rand::random::<f32>() * (upper_bound.unwrap_or(1.0) - lower_bound.unwrap_or(-1.0))
-                + lower_bound.unwrap_or(-1.0)
+            
+                let min = lower_bound.unwrap_or(-1.0);
+                let max = upper_bound.unwrap_or(1.0);
+                let mut rng = rand::thread_rng();
+
+                let random_number:f32 = rng.gen_range(min..max);
+                random_number
         })
         .collect::<Vec<f32>>();
 
@@ -123,7 +129,8 @@ pub async fn ann_vector_query(
         vec_store.max_cache_level,
     )
     .await;
-    return results;
+    let output = remove_duplicates_and_filter(results);
+    return output;
 }
 
 fn calculate_statistics(_: &[i32]) -> Option<Statistics> {

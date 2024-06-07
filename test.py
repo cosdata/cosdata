@@ -11,10 +11,8 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # Define your dynamic variables
 token = "8cf11a8cb97b0e002b31197c5808d13e3b18e488234a61946690668db5c5fece"
 base_url = "https://127.0.0.1:8443/vectordb"
-headers = {
-    "Authorization": f"Bearer {token}",
-    "Content-type": "application/json"
-}
+headers = {"Authorization": f"Bearer {token}", "Content-type": "application/json"}
+
 
 # Function to create database
 def create_db(vector_db_name, dimensions, max_val, min_val):
@@ -23,90 +21,119 @@ def create_db(vector_db_name, dimensions, max_val, min_val):
         "vector_db_name": vector_db_name,
         "dimensions": dimensions,
         "max_val": max_val,
-        "min_val": min_val
+        "min_val": min_val,
     }
     response = requests.post(url, headers=headers, data=json.dumps(data), verify=False)
     return response.json()
+
 
 # Function to upsert vectors
 def upsert_vector(vector_db_name, vectors):
-    
     url = f"{base_url}/upsert"
-    data = {
-        "vector_db_name": vector_db_name,
-        "vectors": vectors
-    }
-    # Convert data to JSON string
-    # json_str = json.dumps(data)
-
-    # # Get the size of the JSON string
-    # size_in_bytes = len(json_str)
-    # # Convert bytes to megabytes
-    # size_in_mb = size_in_bytes / (1024 * 1024)
-    # print("Size of JSON string:", size_in_mb, "MB")
+    data = {"vector_db_name": vector_db_name, "vectors": vectors}
     response = requests.post(url, headers=headers, data=json.dumps(data), verify=False)
     return response.json()
 
-# Function to upsert vectors
+
+# Function to search vector
 def ann_vector(vector_db_name, vector):
     url = f"{base_url}/search"
-    data = {
-        "vector_db_name": vector_db_name,
-        "vector": vector
-    }
+    data = {"vector_db_name": vector_db_name, "vector": vector}
     response = requests.post(url, headers=headers, data=json.dumps(data), verify=False)
     return response.json()
+
 
 # Function to generate a random vector with given constraints
 def generate_random_vector(rows, dimensions, min_val, max_val):
     return np.random.uniform(min_val, max_val, (rows, dimensions)).tolist()
 
-def generate_random_vector_with_id (id, length):
+
+def generate_random_vector_with_id(id, length):
     values = np.random.rand(length).astype(float).tolist()
     return {"id": id, "values": values}
+
+
+# Function to apply perturbations to vectors
+def perturb_vector(vector, perturbation_degree):
+    perturbation = np.random.uniform(
+        -perturbation_degree, perturbation_degree, len(vector["values"])
+    )
+    vector["values"] = (np.array(vector["values"]) + perturbation).tolist()
+    return vector
+
 
 # Example usage
 if __name__ == "__main__":
     # Create database
     vector_db_name = "testdb"
-    dimensions = 1024
+    dimensions = 96
     max_val = 1.0
     min_val = 0.0
     rows = 100
+    perturbation_degree = 0.1  # Degree of perturbation
 
     create_response = create_db(vector_db_name, dimensions, max_val, min_val)
     print("Create DB Response:", create_response)
 
+    shortlisted_vectors = []
+
     # Upsert vectors concurrently
-    
     with ThreadPoolExecutor(max_workers=32) as executor:
         futures = []
         for req_ct in range(100):
-            final_list = []
-            # vector = generate_random_vector(rows, dimensions, min_val, max_val)
-            for row_ct in range(rows):
-                vector = generate_random_vector_with_id((req_ct* rows) + row_ct, dimensions)  # Generate a vector of length 8 for each id
-                final_list.append(vector)
+            base_vector = generate_random_vector_with_id(req_ct * rows, dimensions)
+            # Generate a single random vector
+            final_list = [base_vector]
+            for row_ct in range(1, rows):
+                perturbed_vector = perturb_vector(
+                    generate_random_vector_with_id(
+                        (req_ct * rows) + row_ct, dimensions
+                    ),
+                    perturbation_degree,
+                )
+                final_list.append(perturbed_vector)
+                if np.random.rand() < 0.01:  # 1 in 100 probability
+                    shortlisted_vectors.append(perturbed_vector)
             futures.append(executor.submit(upsert_vector, vector_db_name, final_list))
 
         for i, future in enumerate(as_completed(futures)):
             try:
                 upsert_response = future.result()
-                print(f"Upsert Vector Response {i+1}:", upsert_response)
+                print(f"Upsert Vector Response {i + 1}:", upsert_response)
             except Exception as e:
-                print(f"Error in upsert vector {i+1}: {e}")
+                print(f"Error in upsert vector {i + 1}: {e}")
 
-    # Search vector concurrently
-    search_vector = generate_random_vector(1, dimensions, min_val, max_val)[0]
+    # Apply perturbations to shortlisted vectors
+    for i in range(len(shortlisted_vectors)):
+        shortlisted_vectors[i] = perturb_vector(
+            shortlisted_vectors[i], perturbation_degree
+        )
 
+    # Search vector concurrently using perturbed vectors
+    best_matches = []
     with ThreadPoolExecutor(max_workers=32) as executor:
         futures = []
-        for i in range(1):
-            futures.append(executor.submit(ann_vector, vector_db_name, search_vector))
+        for vector in shortlisted_vectors:
+            futures.append(
+                executor.submit(ann_vector, vector_db_name, vector["values"])
+            )
 
         for i, future in enumerate(as_completed(futures)):
             try:
                 ann_response = future.result()
-                print(f"ANN Vector Response {i+1}:", ann_response)
+                print(f"ANN Vector Response {i + 1}:", ann_response)
+                if (
+                    "RespVectorKNN" in ann_response
+                    and "knn" in ann_response["RespVectorKNN"]
+                ):
+                    best_matches.append(
+                        ann_response["RespVectorKNN"]["knn"][0][1]
+                    )  # Collect the second item in the knn list
             except Exception as e:
-                print(f"Error in ANN vector {i+1}: {e}")
+                print(f"Error in ANN vector {i + 1}: {e}")
+
+    if best_matches:
+        best_match_average = sum(best_matches) / len(best_matches)
+        print(f"\n\nBest Match Average: {best_match_average}")
+    else:
+        print("No valid matches found.")
