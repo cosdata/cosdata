@@ -213,17 +213,9 @@ pub fn hash_float_vec(vec: Vec<f32>) -> Vec<u8> {
     hasher.finalize().to_vec()
 }
 
-pub fn find_value(x: f64) -> i32 {
-    let lst = vec![
-        (0.0, 0),
-        (0.9, 1),
-        (0.99, 2),
-        (0.999, 3),
-        (0.9999, 4),
-        (0.99999, 5),
-    ];
-    let reversed_list = lst.iter().rev();
-    match reversed_list.clone().find(|(value, _)| x >= *value) {
+pub fn get_max_insert_level(x: f64, levels: Arc<Vec<(f64, i32)>>) -> i32 {
+    let lst = levels.iter();
+    match lst.clone().find(|(value, _)| x >= *value) {
         Some((_, index)) => *index,
         None => panic!("No matching element found"),
     }
@@ -302,4 +294,14 @@ pub fn remove_duplicates_and_filter(input: Option<Vec<(VectorId, f32)>>) -> Opti
     } else {
         None
     }
+}
+
+pub fn generate_tuples(x: f64) -> Vec<(f64, i32)> {
+    let mut result = Vec::new();
+    for n in 0..20 {
+        let first_item = 1.0 - x.powi(-(n as i32));
+        let second_item = n as i32;
+        result.push((first_item, second_item));
+    }
+    result
 }

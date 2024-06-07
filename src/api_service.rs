@@ -5,9 +5,9 @@ use crate::models::user::{AuthResp, Statistics};
 use crate::vector_store::*;
 use dashmap::DashMap;
 use log::info;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, RwLock};
-use rand::Rng;
 
 pub async fn init_vector_store(
     name: String,
@@ -22,13 +22,12 @@ pub async fn init_vector_store(
 
     let vec = (0..size)
         .map(|_| {
-            
-                let min = lower_bound.unwrap_or(-1.0);
-                let max = upper_bound.unwrap_or(1.0);
-                let mut rng = rand::thread_rng();
+            let min = lower_bound.unwrap_or(-1.0);
+            let max = upper_bound.unwrap_or(1.0);
+            let mut rng = rand::thread_rng();
 
-                let random_number:f32 = rng.gen_range(min..max);
-                random_number
+            let random_number: f32 = rng.gen_range(min..max);
+            random_number
         })
         .collect::<Vec<f32>>();
 
@@ -47,12 +46,14 @@ pub async fn init_vector_store(
             })),
         );
     }
-
+    let factor_levels = 5.0;
+    let lp = Arc::new(generate_tuples(factor_levels).into_iter().rev().collect());
     let vec_store = VectorStore {
         cache,
         max_cache_level,
         database_name: name.clone(),
         root_vec: root,
+        levels_prob: lp,
     };
     let result = match get_app_env() {
         Ok(ain_env) => {
@@ -93,8 +94,8 @@ pub async fn run_upload(
                     raw_vec: Arc::new(vec),
                     hash_vec: vec_hash,
                 };
-
-                let iv = find_value(rand::random::<f32>().into());
+                let lp = &vec_store.levels_prob;
+                let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
                 insert_embedding(
                     vec_store.clone(),
                     vec_emb,

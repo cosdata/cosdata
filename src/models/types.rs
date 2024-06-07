@@ -20,6 +20,7 @@ pub struct VectorStore {
     pub max_cache_level: i8,
     pub database_name: String,
     pub root_vec: (VectorId, NumericVector),
+    pub levels_prob: Arc<Vec<(f64, i32)>>,
 }
 
 #[derive(Debug, Clone)]

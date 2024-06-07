@@ -77,6 +77,9 @@ if __name__ == "__main__":
 
     shortlisted_vectors = []
 
+    # Start time
+    start_time = time.time()
+
     # Upsert vectors concurrently
     with ThreadPoolExecutor(max_workers=32) as executor:
         futures = []
@@ -132,8 +135,17 @@ if __name__ == "__main__":
             except Exception as e:
                 print(f"Error in ANN vector {i + 1}: {e}")
 
+    # End time
+    end_time = time.time()
+
     if best_matches:
         best_match_average = sum(best_matches) / len(best_matches)
         print(f"\n\nBest Match Average: {best_match_average}")
     else:
         print("No valid matches found.")
+
+    # Calculate elapsed time
+    elapsed_time = end_time - start_time
+
+    # Print elapsed time
+    print(f"Elapsed time: {elapsed_time} seconds")
