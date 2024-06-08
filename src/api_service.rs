@@ -46,7 +46,7 @@ pub async fn init_vector_store(
             })),
         );
     }
-    let factor_levels = 5.0;
+    let factor_levels = 20.0;
     let lp = Arc::new(generate_tuples(factor_levels).into_iter().rev().collect());
     let vec_store = VectorStore {
         cache,

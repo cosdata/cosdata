@@ -315,7 +315,7 @@ fn traverse_find_nearest_inner(
                             // -- TODO number of hops
                             // ---------------------------
 
-                            if hops < 16 {
+                            if hops < 25 {
                                 let mut z = traverse_find_nearest_inner(
                                     vec_store.clone(),
                                     vthm.clone(),

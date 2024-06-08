@@ -48,7 +48,7 @@ async fn create_vector_db(item: web::Json<CreateVectorDb>) -> HttpResponse {
     let size = dimensions as usize;
     let lower_bound = min_val;
     let upper_bound = max_val;
-    let max_cache_level = 8;
+    let max_cache_level = 6;
 
     // Call init_vector_store using web::block
     let result = init_vector_store(name, size, lower_bound, upper_bound, max_cache_level).await;
