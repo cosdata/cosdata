@@ -1,10 +1,12 @@
+use bincode;
 use dashmap::DashMap;
 use rocksdb::{ColumnFamily, Error, Options, DB};
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum VectorW {
     QuantizedVector {
         mag: f64,
@@ -16,12 +18,31 @@ pub enum VectorW {
 
 pub type VectorHash = Vec<u8>;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum VectorId {
     Str(String),
     Int(i32),
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VectorTreeNode {
+    pub vector_list: Arc<VectorW>,
+    pub neighbors: Vec<(VectorId, f32)>,
+}
+
+impl VectorTreeNode {
+    // Serialize the VectorTreeNode to a byte vector
+    pub fn serialize(&self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        let serialized = bincode::serialize(self)?;
+        Ok(serialized)
+    }
+
+    // Deserialize a byte vector to a VectorTreeNode
+    pub fn deserialize(bytes: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
+        let deserialized = bincode::deserialize(bytes)?;
+        Ok(deserialized)
+    }
+}
 type CacheType = DashMap<(i8, VectorId), Option<Arc<(VectorTreeNode)>>>;
 
 #[derive(Debug, Clone)]
@@ -37,12 +58,6 @@ pub struct VectorStore {
 pub struct VectorEmbedding {
     pub raw_vec: Arc<VectorW>,
     pub hash_vec: VectorId,
-}
-
-#[derive(Debug, Clone)]
-pub struct VectorTreeNode {
-    pub vector_list: Arc<VectorW>,
-    pub neighbors: Vec<(VectorId, f32)>,
 }
 
 type VectorStoreMap = DashMap<String, VectorStore>;

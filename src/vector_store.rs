@@ -1,12 +1,14 @@
 use crate::models::common::*;
+use crate::models::persist::Persist;
+use crate::models::types::*;
+use bincode;
 use dashmap::DashMap;
 use futures::future::{join_all, BoxFuture, FutureExt};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::task;
-
-use crate::models::types::*;
 
 pub async fn ann_search(
     vec_store: Arc<VectorStore>,
@@ -95,6 +97,7 @@ pub async fn ann_search(
 }
 
 pub async fn insert_embedding(
+    persist: Arc<Mutex<Persist>>,
     vec_store: Arc<VectorStore>,
     vector_emb: VectorEmbedding,
     cur_entry: VectorId,
@@ -140,10 +143,12 @@ pub async fn insert_embedding(
             let vec_store_clone = vec_store.clone();
             let vector_emb_clone = vector_emb.clone();
             let z_clone = z.clone();
+            let persist_clone = persist.clone();
 
             if cur_level <= max_insert_level {
                 let recursive_call = Box::pin(async move {
                     insert_embedding(
+                        persist_clone,
                         vec_store.clone(),
                         vector_emb.clone(),
                         z[0].0.clone(),
@@ -154,6 +159,7 @@ pub async fn insert_embedding(
                 });
                 recursive_call.await;
                 insert_node_create_edges(
+                    persist.clone(),
                     vec_store_clone,
                     fvec,
                     vector_emb_clone.hash_vec.clone(),
@@ -164,6 +170,7 @@ pub async fn insert_embedding(
             } else {
                 let recursive_call = Box::pin(async move {
                     insert_embedding(
+                        persist.clone(),
                         vec_store.clone(),
                         vector_emb.clone(),
                         z[0].0.clone(),
@@ -190,6 +197,7 @@ pub async fn insert_embedding(
                     )
                     .await;
                     insert_node_create_edges(
+                        persist.clone(),
                         vec_store.clone(),
                         fvec,
                         vector_emb.hash_vec.clone(),
@@ -213,18 +221,26 @@ pub async fn insert_embedding(
 }
 
 async fn insert_node_create_edges(
+    persist: Arc<Mutex<Persist>>,
     vec_store: Arc<VectorStore>,
     fvec: Arc<VectorW>,
     hs: VectorId,
     nbs: Vec<(VectorId, f32)>,
     cur_level: i8,
 ) {
-    let nv = Arc::new(VectorTreeNode {
+    let nn = VectorTreeNode {
         vector_list: fvec.clone(),
         neighbors: nbs.clone(),
-    });
+    };
+    let nv = Arc::new(nn.clone());
 
     vec_store.cache.insert((cur_level, hs.clone()), Some(nv));
+
+    // Serialize the vector_node
+    let ser_vec = nn.serialize().unwrap();
+    let ser_hs = bincode::serialize(&hs).unwrap();
+
+    let _ = persist.lock().unwrap().put_cf("main", &ser_hs, &ser_vec);
 
     let tasks: Vec<_> = nbs
         .into_iter()

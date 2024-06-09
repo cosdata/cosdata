@@ -12,10 +12,10 @@ use rustls_pemfile::{certs, pkcs8_private_keys};
 use serde::{Deserialize, Serialize};
 use std::{fs::File, io::BufReader};
 
+use crate::convert_vectors;
 use crate::models::common::convert_option_vec;
 use crate::models::rpc::*;
 use crate::{api_service::*, models::types::*};
-use crate::convert_vectors;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct MyObj {
@@ -74,8 +74,14 @@ async fn upsert_vector_db(item: web::Json<UpsertVectors>) -> HttpResponse {
                     return HttpResponse::InternalServerError().body("Vector store not found");
                 }
             };
+
             // Call run_upload with the extracted parameters
-            let __result = run_upload(vec_store.clone().into(), convert_vectors(vectors)).await;
+            let __result = run_upload(
+                ain_env.persist.clone(),
+                vec_store.clone().into(),
+                convert_vectors(vectors),
+            )
+            .await;
 
             let response_data = RPCResponseBody::RespUpsertVectors { insert_stats: None }; //
             let response = HttpResponse::Ok().json(response_data);
@@ -144,11 +150,11 @@ pub async fn run_actix_server() -> std::io::Result<()> {
         App::new()
             // enable logger
             .wrap(middleware::Logger::default())
-            // ensure the CORS middleware is wrapped around the httpauth middleware 
+            // ensure the CORS middleware is wrapped around the httpauth middleware
             // so it is able to add headers to error responses
             .wrap(Cors::permissive())
             // register simple handler, handle all methods
-            .app_data(web::JsonConfig::default().limit(4 * 1048576)) 
+            .app_data(web::JsonConfig::default().limit(4 * 1048576))
             // <- 4  mb limit size of the payload (global configuration)
             .service(
                 web::scope("/auth")
@@ -164,7 +170,7 @@ pub async fn run_actix_server() -> std::io::Result<()> {
         // .service(web::resource("/index").route(web::post().to(index)))
         // .service(
         //     web::resource("/extractor")
-        //         .app_data(web::JsonConfig::default().limit(1024)) 
+        //         .app_data(web::JsonConfig::default().limit(1024))
         // <- limit size of the payload (resource level)
         //         .route(web::post().to(extract_item)),
         // )

@@ -1,7 +1,8 @@
+use crate::models::persist::Persist;
 use crate::models::rpc::VectorIdValue;
-use crate::models::types::*;
 use crate::models::user::{AuthResp, Statistics};
 use crate::models::{self, common::*};
+use crate::models::{persist, types::*};
 use crate::vector_store::*;
 use dashmap::DashMap;
 use log::info;
@@ -88,6 +89,7 @@ pub async fn init_vector_store(
 }
 
 pub async fn run_upload(
+    persist: Arc<Mutex<Persist>>,
     vec_store: Arc<VectorStore>,
     vecxx: Vec<(VectorIdValue, Vec<f32>)>,
 ) -> Vec<()> {
@@ -96,12 +98,14 @@ pub async fn run_upload(
     stream::iter(vecxx)
         .map(|(id, vec)| {
             let vec_store = vec_store.clone();
+            let persist = persist.clone();
             async move {
                 let rhash = &vec_store.root_vec.0;
                 let vec_hash = convert_value(id);
 
                 let quantized_values: Vec<Vec<u8>> = quantize_to_u8_bits(&vec.clone());
-                let mpq: (f64, Vec<u32>) = get_magnitude_plus_quantized_vec(quantized_values.to_vec());
+                let mpq: (f64, Vec<u32>) =
+                    get_magnitude_plus_quantized_vec(quantized_values.to_vec());
                 let vector_list = VectorW::QuantizedVector {
                     mag: mpq.0,
                     quant_vec: mpq.1,
@@ -115,6 +119,7 @@ pub async fn run_upload(
                 let lp = &vec_store.levels_prob;
                 let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
                 insert_embedding(
+                    persist,
                     vec_store.clone(),
                     vec_emb,
                     rhash.clone(),
