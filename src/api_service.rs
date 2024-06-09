@@ -1,7 +1,7 @@
-use crate::models::common::*;
 use crate::models::rpc::VectorIdValue;
 use crate::models::types::*;
 use crate::models::user::{AuthResp, Statistics};
+use crate::models::{self, common::*};
 use crate::vector_store::*;
 use dashmap::DashMap;
 use log::info;
@@ -33,20 +33,29 @@ pub async fn init_vector_store(
 
     let vec_hash = VectorId::Str("waco_default_hidden_root".to_string());
 
-    let root = (vec_hash.clone(), vec.clone());
-
     let cache = Arc::new(DashMap::new());
+
+    let quantized_values: Vec<Vec<u8>> = quantize_to_u8_bits(&vec.clone());
+    let mpq: (f64, Vec<u32>) = get_magnitude_plus_quantized_vec(quantized_values.to_vec());
+    let vector_list = VectorW::QuantizedVector {
+        mag: mpq.0,
+        quant_vec: mpq.1,
+        resolution: 1,
+    };
+
+    let root = (vec_hash.clone(), vector_list.clone());
+    let vl_arc = Arc::new(vector_list);
 
     for l in 0..=max_cache_level {
         cache.insert(
             (l, vec_hash.clone()),
             Some(Arc::new(VectorTreeNode {
-                vector_list: Arc::new(vec.clone()),
                 neighbors: vec![],
+                vector_list: vl_arc.clone(),
             })),
         );
     }
-    let factor_levels = 20.0;
+    let factor_levels = 16.0;
     let lp = Arc::new(generate_tuples(factor_levels).into_iter().rev().collect());
     let vec_store = VectorStore {
         cache,
@@ -90,8 +99,17 @@ pub async fn run_upload(
             async move {
                 let rhash = &vec_store.root_vec.0;
                 let vec_hash = convert_value(id);
+
+                let quantized_values: Vec<Vec<u8>> = quantize_to_u8_bits(&vec.clone());
+                let mpq: (f64, Vec<u32>) = get_magnitude_plus_quantized_vec(quantized_values.to_vec());
+                let vector_list = VectorW::QuantizedVector {
+                    mag: mpq.0,
+                    quant_vec: mpq.1,
+                    resolution: 1,
+                };
+
                 let vec_emb = VectorEmbedding {
-                    raw_vec: Arc::new(vec),
+                    raw_vec: Arc::new(vector_list),
                     hash_vec: vec_hash,
                 };
                 let lp = &vec_store.levels_prob;
@@ -113,14 +131,22 @@ pub async fn run_upload(
 
 pub async fn ann_vector_query(
     vec_store: Arc<VectorStore>,
-    query: NumericVector,
+    query: Vec<f32>,
 ) -> Option<Vec<(VectorId, f32)>> {
     let vector_store = vec_store.clone();
     let vec_hash = VectorId::Str("query".to_string());
     let rhash = &vector_store.root_vec.0;
 
+    let quantized_values: Vec<Vec<u8>> = quantize_to_u8_bits(&query.clone());
+    let mpq: (f64, Vec<u32>) = get_magnitude_plus_quantized_vec(quantized_values.to_vec());
+    let vector_list = VectorW::QuantizedVector {
+        mag: mpq.0,
+        quant_vec: mpq.1,
+        resolution: 1,
+    };
+
     let vec_emb = VectorEmbedding {
-        raw_vec: Arc::new(query),
+        raw_vec: Arc::new(vector_list),
         hash_vec: vec_hash,
     };
     let results = ann_search(

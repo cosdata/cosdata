@@ -41,7 +41,7 @@ pub async fn ann_search(
             )
             .await;
 
-            let y = cosine_similarity(&fvec, &vtm.vector_list);
+            let y = cosine_coalesce(&fvec, &vtm.vector_list);
             let z = if z.is_empty() {
                 vec![(cur_entry.clone(), y)]
             } else {
@@ -130,7 +130,7 @@ pub async fn insert_embedding(
             )
             .await;
 
-            let y = cosine_similarity(&fvec, &vtm.vector_list);
+            let y = cosine_coalesce(&fvec, &vtm.vector_list);
             let z = if z.is_empty() {
                 vec![(cur_entry.clone(), y)]
             } else {
@@ -214,7 +214,7 @@ pub async fn insert_embedding(
 
 async fn insert_node_create_edges(
     vec_store: Arc<VectorStore>,
-    fvec: Arc<NumericVector>,
+    fvec: Arc<VectorW>,
     hs: VectorId,
     nbs: Vec<(VectorId, f32)>,
     cur_level: i8,
@@ -269,7 +269,7 @@ async fn insert_node_create_edges(
 async fn traverse_find_nearest(
     vec_store: Arc<VectorStore>,
     vtm: Arc<VectorTreeNode>,
-    fvec: Arc<NumericVector>,
+    fvec: Arc<VectorW>,
     hs: VectorId,
     hops: i8,
     skipm: Arc<DashMap<VectorId, ()>>,
@@ -281,7 +281,7 @@ async fn traverse_find_nearest(
 fn traverse_find_nearest_inner(
     vec_store: Arc<VectorStore>,
     vtm: Arc<VectorTreeNode>,
-    fvec: Arc<NumericVector>,
+    fvec: Arc<VectorW>,
     hs: VectorId,
     hops: i8,
     skipm: Arc<DashMap<VectorId, ()>>,
@@ -310,12 +310,12 @@ fn traverse_find_nearest_inner(
                         });
 
                         if let Some(Some(vthm)) = maybe_res {
-                            let cs = cosine_similarity(&fvec, &vthm.vector_list);
+                            let cs = cosine_coalesce(&fvec, &vthm.vector_list);
                             // ---------------------------
                             // -- TODO number of hops
                             // ---------------------------
 
-                            if hops < 25 {
+                            if hops < 24 {
                                 let mut z = traverse_find_nearest_inner(
                                     vec_store.clone(),
                                     vthm.clone(),

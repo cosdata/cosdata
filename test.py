@@ -66,7 +66,7 @@ def perturb_vector(vector, perturbation_degree):
 if __name__ == "__main__":
     # Create database
     vector_db_name = "testdb"
-    dimensions = 96
+    dimensions = 1024
     max_val = 1.0
     min_val = 0.0
     rows = 100
@@ -83,7 +83,10 @@ if __name__ == "__main__":
     # Upsert vectors concurrently
     with ThreadPoolExecutor(max_workers=32) as executor:
         futures = []
-        for req_ct in range(100):
+        #
+        # number of upsert calls
+        #
+        for req_ct in range(1000):
             base_vector = generate_random_vector_with_id(req_ct * rows, dimensions)
             # Generate a single random vector
             final_list = [base_vector]

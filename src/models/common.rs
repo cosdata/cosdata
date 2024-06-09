@@ -1,14 +1,16 @@
+use crate::models::types::VectorW;
+use crate::models::rpc::Vector;
+use super::rpc::VectorIdValue;
+use super::types::VectorId;
 use async_std::stream::Cloned;
 use dashmap::DashMap;
 use futures::future::{join_all, BoxFuture, FutureExt};
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::task;
-use std::collections::HashSet;
-use std::hash::{Hash, Hasher};
-use super::rpc::{Vector, VectorIdValue};
-use super::types::VectorId;
 
 pub struct CosResult {
     pub dotprod: i32,
@@ -17,15 +19,11 @@ pub struct CosResult {
 }
 
 // Function to convert a sequence of bits to an integer value
-fn bits_to_integer(bits: &[i32], size: usize) -> u32 {
-    let mut result: u32 = 0;
-    for i in 0..size {
-        result = (result << 1) | (bits[i] as u32);
-    }
-    result
+pub fn bits_to_integer(bits: &[u8], size: usize) -> u32 {
+    bits.iter().fold(0, |acc, &bit| (acc << 1) | (bit as u32))
 }
 
-fn x_function(value: u32) -> i32 {
+fn x_function(value: u32) -> u32 {
     match value {
         0 => 0,
         1 => 1,
@@ -43,16 +41,21 @@ fn x_function(value: u32) -> i32 {
         13 => 3,
         14 => 3,
         15 => 4,
-        _ => -1, // Invalid input
+        _ => 0, // Invalid input
     }
 }
 
-fn shift_and_accumulate(value: u32) -> i32 {
-    let mut result: i32 = 0;
+fn shift_and_accumulate(value: u32) -> u32 {
+    let mut result: u32 = 0;
     result += x_function(15 & (value >> 0));
     result += x_function(15 & (value >> 4));
     result += x_function(15 & (value >> 8));
     result += x_function(15 & (value >> 12));
+    result += x_function(15 & (value >> 16));
+    result += x_function(15 & (value >> 20));
+    result += x_function(15 & (value >> 24));
+    result += x_function(15 & (value >> 28));
+
     result
 }
 
@@ -65,81 +68,52 @@ fn magnitude(vec: &[f32]) -> f32 {
 }
 
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    let cs = dot_product(a, b) / (magnitude(a) * magnitude(b));
-    // println!("cs: {:?}", cs);
-    cs
+    dot_product(a, b) / (magnitude(a) * magnitude(b))
 }
 
-pub fn compute_cosine_similarity(a: &[i32], b: &[i32], size: usize) -> CosResult {
-    let value1 = bits_to_integer(a, size);
-    let value2 = bits_to_integer(b, size);
-
-    let dotprod = shift_and_accumulate(value1 & value2);
-    let premag_a = shift_and_accumulate(value1);
-    let premag_b = shift_and_accumulate(value2);
-
-    CosResult {
-        dotprod,
-        premag_a,
-        premag_b,
-    }
+pub fn get_magnitude_plus_quantized_vec(bits: Vec<Vec<u8>>) -> (f64, Vec<u32>) {
+    let quant_vec: Vec<u32> = bits
+        .iter()
+        .map(|bit_vec| bits_to_integer(bit_vec, 32))
+        .collect();
+    let premag: u32 = quant_vec
+        .iter()
+        .fold(0, |acc, val| acc + shift_and_accumulate(*val));
+    let mag = f64::sqrt(f64::from(premag));
+    println!("{} {:?}", mag, quant_vec);
+    return (mag, quant_vec);
 }
 
-pub fn cosine_coalesce(x: &[Vec<i32>], y: &[Vec<i32>]) -> f64 {
-    if x.len() != y.len() {
-        panic!("Input vectors must have the same length");
-    }
+pub fn cosine_coalesce(x: &VectorW, y: &VectorW) -> f32 {
+    match (x, y) {
+        (
+            crate::models::types::VectorW::QuantizedVector {
+                mag: xm,
+                quant_vec: xv,
+                resolution: _,
+            },
+            crate::models::types::VectorW::QuantizedVector {
+                mag: ym,
+                quant_vec: yv,
+                resolution: _,
+            },
+        ) => {
+            let zipped: Vec<_> = xv.iter().zip(yv.iter()).collect();
 
-    let mut results = Vec::new();
+            let dot_prod = zipped
+                .iter()
+                .fold(0, |acc, (a, b)| acc + shift_and_accumulate(*a & *b));
 
-    for (sub_x, sub_y) in x.iter().zip(y.iter()) {
-        let cs = compute_cosine_similarity(sub_x, sub_y, 16);
-        results.push(cs);
-    }
-
-    let summed = sum_components(&results);
-
-    f64::from(summed.dotprod)
-        / (f64::sqrt(f64::from(summed.premag_a)) * f64::sqrt(f64::from(summed.premag_b)))
-}
-
-pub fn cosine_sim_unsigned(x: &Vec<u32>, y: &Vec<u32>) -> f64 {
-    let mut acc = CosResult {
-        dotprod: 0,
-        premag_a: 0,
-        premag_b: 0,
+            println!("dot prod {}", dot_prod);
+            let res = f64::from(dot_prod) / (xm * ym);
+            return res as f32;
+        }
+        _ => -9999.0,
     };
-    for (value1, value2) in x.iter().zip(y.iter()) {
-        let dotprod = shift_and_accumulate(value1 & value2);
-        let premag_a = shift_and_accumulate(*value1);
-        let premag_b = shift_and_accumulate(*value2);
-
-        acc.dotprod += dotprod;
-        acc.premag_a += premag_a;
-        acc.premag_b += premag_b;
-    }
-
-    f64::from(acc.dotprod)
-        / (f64::sqrt(f64::from(acc.premag_a)) * f64::sqrt(f64::from(acc.premag_b)))
+    -9999.0
 }
 
-fn sum_components(results: &[CosResult]) -> CosResult {
-    let mut acc = CosResult {
-        dotprod: 0,
-        premag_a: 0,
-        premag_b: 0,
-    };
-
-    for res in results {
-        acc.dotprod += res.dotprod;
-        acc.premag_a += res.premag_a;
-        acc.premag_b += res.premag_b;
-    }
-
-    acc
-}
-
-fn to_float_flag(x: f32) -> i32 {
+fn to_float_flag(x: f32) -> u8 {
     if x >= 0.0 {
         1
     } else {
@@ -147,25 +121,13 @@ fn to_float_flag(x: f32) -> i32 {
     }
 }
 
-pub fn floats_to_bits(floats: &[f32]) -> Vec<u32> {
-    let mut result = vec![0; (floats.len() + 31) / 32];
-
-    for (i, &f) in floats.iter().enumerate() {
-        if f >= 0.0 {
-            result[i / 32] |= 1 << (i % 32);
-        }
-    }
-
-    result
-}
-
-pub fn quantize(fins: &[f32]) -> Vec<Vec<i32>> {
-    let mut quantized = Vec::with_capacity((fins.len() + 15) / 16);
-    let mut chunk = Vec::with_capacity(16);
+pub fn quantize_to_u8_bits(fins: &[f32]) -> Vec<Vec<u8>> {
+    let mut quantized: Vec<Vec<u8>> = Vec::with_capacity((fins.len() + 31) / 32);
+    let mut chunk: Vec<u8> = Vec::with_capacity(32);
 
     for &f in fins {
         chunk.push(to_float_flag(f));
-        if chunk.len() == 16 {
+        if chunk.len() == 32 {
             quantized.push(chunk.clone());
             chunk.clear();
         }
@@ -174,20 +136,20 @@ pub fn quantize(fins: &[f32]) -> Vec<Vec<i32>> {
     if !chunk.is_empty() {
         quantized.push(chunk);
     }
-
+    println!("{:?}", quantized);
     quantized
 }
 
 #[derive(Debug, Error, Clone)]
 pub enum WaCustomError {
     #[error("Failed to create the database")]
-    CreateDatabaseFailed (String),
+    CreateDatabaseFailed(String),
 
     #[error("Failed to create the Column family")]
-    CreateCFFailed (String),
+    CreateCFFailed(String),
 
     #[error("column family read/write failed")]
-    CFReadWriteFailed (String),
+    CFReadWriteFailed(String),
 
     #[error("Failed to upsert vectors")]
     UpsertFailed,
@@ -196,7 +158,7 @@ pub enum WaCustomError {
     CFNotFound,
 
     #[error("Invalid params in request")]
-    InvalidParams, 
+    InvalidParams,
 }
 
 pub fn hash_float_vec(vec: Vec<f32>) -> Vec<u8> {
@@ -263,8 +225,6 @@ pub fn convert_option_vec(
     })
 }
 
-
-
 // Function to convert Vec<Vector> to Vec<(VectorIdValue, Vec<f32>)>
 pub fn convert_vectors(vectors: Vec<Vector>) -> Vec<(VectorIdValue, Vec<f32>)> {
     vectors
@@ -273,7 +233,9 @@ pub fn convert_vectors(vectors: Vec<Vector>) -> Vec<(VectorIdValue, Vec<f32>)> {
         .collect()
 }
 
-pub fn remove_duplicates_and_filter(input: Option<Vec<(VectorId, f32)>>) -> Option<Vec<(VectorId, f32)>> {
+pub fn remove_duplicates_and_filter(
+    input: Option<Vec<(VectorId, f32)>>,
+) -> Option<Vec<(VectorId, f32)>> {
     if let Some(vec) = input {
         let mut seen = HashSet::new();
         let mut unique_vec = Vec::new();

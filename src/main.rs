@@ -12,6 +12,10 @@ use web_server::run_actix_server;
 lazy_static! {
     static ref RANDOM_NUMBERS_A: Vec<f32> = generate_random_vector();
     static ref RANDOM_NUMBERS_B: Vec<f32> = generate_random_vector();
+    static ref QUANTIZED_VALUES_A: Vec<Vec<u8>> = quantize_to_u8_bits(&RANDOM_NUMBERS_A);
+    static ref QUANTIZED_VALUES_B: Vec<Vec<u8>> = quantize_to_u8_bits(&RANDOM_NUMBERS_B);
+    static ref MPQ_A: (f64, Vec<u32>) = get_magnitude_plus_quantized_vec(QUANTIZED_VALUES_A.to_vec());
+    static ref MPQ_B: (f64, Vec<u32>) = get_magnitude_plus_quantized_vec(QUANTIZED_VALUES_B.to_vec());
 }
 
 use crate::models::common::*;
@@ -32,28 +36,12 @@ fn generate_random_vector() -> Vec<f32> {
     numbers
 }
 
-fn run_quantized_cs() -> f64 {
-    let quantized_values_x = quantize(&RANDOM_NUMBERS_A);
-    let quantized_values_y = quantize(&RANDOM_NUMBERS_B);
-
-    // Call cosine_coalesce function with the pair of quantized values
-    let similarity = cosine_coalesce(&quantized_values_x, &quantized_values_y);
-    // println!("{:.8}", similarity);
-    return similarity;
-}
-
 fn run_cs() -> f32 {
     let similarity = cosine_similarity(&RANDOM_NUMBERS_A, &RANDOM_NUMBERS_B);
     return similarity;
 }
 
-fn run_cs_new() -> f64 {
-    let x = floats_to_bits(&RANDOM_NUMBERS_A);
-    let y = floats_to_bits(&RANDOM_NUMBERS_B);
 
-    let similarity = cosine_sim_unsigned(&x, &y);
-    return similarity;
-}
 
 fn main() {
     async_std::task::block_on(async {
@@ -61,7 +49,7 @@ fn main() {
             .map(|_| {
                 let (sender, receiver) = async_channel::bounded(1);
                 task::spawn(async move {
-                    let similarity = run_cs_new();
+                    let similarity = run_cs();
                     sender
                         .send(similarity)
                         .await
