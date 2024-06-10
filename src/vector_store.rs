@@ -130,7 +130,7 @@ pub async fn insert_embedding(
                 fvec.clone(),
                 vector_emb.hash_vec.clone(),
                 0,
-                skipm.clone(),
+                skipm,
                 cur_level,
             )
             .await;
@@ -194,7 +194,7 @@ pub async fn insert_embedding(
                         fvec.clone(),
                         vector_emb.hash_vec.clone(),
                         0,
-                        skipm.clone(),
+                        skipm,
                         cur_level,
                     )
                     .await;
@@ -355,7 +355,7 @@ fn traverse_find_nearest_inner(
                                     fvec.clone(),
                                     hs.clone(),
                                     hops + 1,
-                                    skipm.clone(),
+                                    skipm,
                                     cur_level,
                                 )
                                 .await;

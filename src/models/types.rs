@@ -4,7 +4,7 @@ use rocksdb::{ColumnFamily, Error, Options, DB};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum VectorW {
@@ -69,11 +69,9 @@ pub struct AppEnv {
     pub vector_store_map: VectorStoreMap,
     pub persist: Arc<Mutex<Persist>>,
 }
-// Initialize the AppEnv with once_cell
-use once_cell::sync::OnceCell;
 
 use super::{common::WaCustomError, persist::Persist};
-static AIN_ENV: OnceCell<Result<Arc<AppEnv>, WaCustomError>> = OnceCell::new();
+static AIN_ENV: OnceLock<Result<Arc<AppEnv>, WaCustomError>> = OnceLock::new();
 
 pub fn get_app_env() -> Result<Arc<AppEnv>, WaCustomError> {
     AIN_ENV
