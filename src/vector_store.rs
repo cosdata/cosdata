@@ -6,7 +6,9 @@ use dashmap::DashMap;
 use futures::future::{join_all, BoxFuture, FutureExt};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 use tokio::task;
 
@@ -248,6 +250,7 @@ async fn insert_node_create_edges(
             let vec_store = vec_store.clone();
             let hs = hs.clone();
             let cur_level = cur_level;
+            let persist = persist.clone();
             task::spawn(async move {
                 vec_store.cache.alter(
                     &(cur_level.clone(), nb.clone()).clone(),
@@ -255,6 +258,10 @@ async fn insert_node_create_edges(
                         Some(res) => {
                             let vthm = res;
                             let mut ng = vthm.neighbors.clone();
+
+                            // Extract and hash the original VectorId values
+                            let original_hash = calculate_hash(&extract_ids(&ng));
+
                             ng.push((hs.clone(), cs));
                             ng.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
                             ng.dedup_by(|a, b| a.0 == b.0);
@@ -264,10 +271,20 @@ async fn insert_node_create_edges(
 
                             let ng = ng.into_iter().take(6).collect::<Vec<_>>();
 
-                            let nv = Arc::new(VectorTreeNode {
+                            // Extract and hash the modified VectorId values
+                            let new_hash = calculate_hash(&extract_ids(&ng));
+                            let nn = VectorTreeNode {
                                 vector_list: vthm.vector_list.clone(),
                                 neighbors: ng,
-                            });
+                            };
+                            let nv = Arc::new(nn.clone());
+
+                            if original_hash != new_hash {
+                                // Serialize the vector_node
+                                let ser_vec = nn.serialize().unwrap();
+                                let ser_nb = bincode::serialize(&nb).unwrap();
+                                let _ = persist.lock().unwrap().put_cf("main", &ser_nb, &ser_vec);
+                            }
                             return Some(nv);
                         }
                         None => {

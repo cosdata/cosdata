@@ -11,6 +11,8 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::task;
+use std::collections::hash_map::DefaultHasher;
+
 
 pub struct CosResult {
     pub dotprod: i32,
@@ -266,4 +268,15 @@ pub fn generate_tuples(x: f64) -> Vec<(f64, i32)> {
         result.push((first_item, second_item));
     }
     result
+}
+
+pub fn calculate_hash<T: Hash>(t: &T) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    t.hash(&mut hasher);
+    hasher.finish()
+}
+
+// Extract VectorId values for hashing purposes
+pub fn extract_ids(neighbors: &[(VectorId, f32)]) -> Vec<VectorId> {
+    neighbors.iter().map(|(id, _)| id.clone()).collect()
 }
