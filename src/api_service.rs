@@ -122,7 +122,7 @@ pub async fn run_upload(
                     persist,
                     vec_store.clone(),
                     vec_emb,
-                    rhash.clone(),
+                    vec![rhash.clone()],
                     vec_store.max_cache_level,
                     iv.try_into().unwrap(),
                 );

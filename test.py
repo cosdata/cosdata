@@ -109,10 +109,10 @@ if __name__ == "__main__":
                 print(f"Error in upsert vector {i + 1}: {e}")
 
     # Apply perturbations to shortlisted vectors
-    for i in range(len(shortlisted_vectors)):
-        shortlisted_vectors[i] = perturb_vector(
-            shortlisted_vectors[i], perturbation_degree
-        )
+    # for i in range(len(shortlisted_vectors)):
+    #     shortlisted_vectors[i] = perturb_vector(
+    #         shortlisted_vectors[i], perturbation_degree
+    #     )
 
     # Search vector concurrently using perturbed vectors
     best_matches = []

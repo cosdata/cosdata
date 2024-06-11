@@ -19,7 +19,20 @@ pub fn ann_search(
     if cur_level == -1 {
         return Some(vec![]);
     }
+    let size = vec_store.cache.clone().len();
+    println!("SIZE {}", size);
 
+    let xx = vec_store.cache.clone();
+    for i in 0..101 {
+        let key = (0 as i8, VectorId::Int(i));
+        let val = xx.get(&key);
+        match val {
+            Some(vv) => {
+                println!("{:?} {:?}", i, vv.value());
+            }
+            None => {}
+        }
+    }
     let maybe_res = vec_store
         .cache
         .clone()
@@ -94,7 +107,7 @@ pub fn insert_embedding(
     persist: Arc<Mutex<Persist>>,
     vec_store: Arc<VectorStore>,
     vector_emb: VectorEmbedding,
-    cur_entry: VectorId,
+    cur_entries: Vec<VectorId>,
     cur_level: i8,
     max_insert_level: i8,
 ) {
@@ -102,77 +115,47 @@ pub fn insert_embedding(
         return;
     }
 
-    let maybe_res = vec_store
-        .cache
-        .clone()
-        .get(&(cur_level, cur_entry.clone()))
-        .map(|res| {
-            let fvec = vector_emb.raw_vec.clone();
-            let vthm_mv = res.value().clone();
-            (fvec, vthm_mv)
-        });
+    for cur_entry in cur_entries.iter() {
+        let maybe_res = vec_store
+            .cache
+            .clone()
+            .get(&(cur_level, cur_entry.clone()))
+            .map(|res| {
+                let fvec = vector_emb.raw_vec.clone();
+                let vthm_mv = res.value().clone();
+                (fvec, vthm_mv)
+            });
 
-    if let Some((fvec, vthm_mv)) = maybe_res {
-        if let Some(vthm) = vthm_mv {
-            let vtm = vthm.clone();
-            let skipm = Arc::new(DashMap::new());
-            let z = traverse_find_nearest(
-                vec_store.clone(),
-                vtm.clone(),
-                fvec.clone(),
-                vector_emb.hash_vec.clone(),
-                0,
-                skipm,
-                cur_level,
-            );
-
-            let y = cosine_coalesce(&fvec, &vtm.vector_list);
-            let z = if z.is_empty() {
-                vec![(cur_entry.clone(), y)]
-            } else {
-                z
-            };
-
-            if cur_level <= max_insert_level {
-                insert_embedding(
-                    persist.clone(),
+        if let Some((fvec, vthm_mv)) = maybe_res {
+            if let Some(vthm) = vthm_mv {
+                let vtm = vthm.clone();
+                let skipm = Arc::new(DashMap::new());
+                let z = traverse_find_nearest(
                     vec_store.clone(),
-                    vector_emb.clone(),
-                    z[0].0.clone(),
-                    cur_level - 1,
-                    max_insert_level,
-                );
-                insert_node_create_edges(
-                    persist.clone(),
-                    vec_store.clone(),
-                    fvec,
+                    vtm.clone(),
+                    fvec.clone(),
                     vector_emb.hash_vec.clone(),
-                    z,
+                    0,
+                    skipm,
                     cur_level,
                 );
-            } else {
-                insert_embedding(
-                    persist.clone(),
-                    vec_store.clone(),
-                    vector_emb.clone(),
-                    z[0].0.clone(),
-                    cur_level - 1,
-                    max_insert_level,
-                );
-            }
-        } else {
-            if cur_level > vec_store.max_cache_level {
-                let xvtm = get_vector_from_db(&vec_store.database_name, cur_entry.clone());
-                if let Some(vtm) = xvtm {
-                    let skipm = Arc::new(DashMap::new());
-                    let z = traverse_find_nearest(
+
+                let y = cosine_coalesce(&fvec, &vtm.vector_list);
+                let z = if z.is_empty() {
+                    vec![(cur_entry.clone(), y)]
+                } else {
+                    z
+                };
+                let z_clone: Vec<_> = z.iter().take(2).map(|(first, _)| first.clone()).collect();
+
+                if cur_level <= max_insert_level {
+                    insert_embedding(
+                        persist.clone(),
                         vec_store.clone(),
-                        vtm.clone(),
-                        fvec.clone(),
-                        vector_emb.hash_vec.clone(),
-                        0,
-                        skipm,
-                        cur_level,
+                        vector_emb.clone(),
+                        z_clone.clone(),
+                        cur_level - 1,
+                        max_insert_level,
                     );
                     insert_node_create_edges(
                         persist.clone(),
@@ -183,17 +166,53 @@ pub fn insert_embedding(
                         cur_level,
                     );
                 } else {
-                    eprintln!(
-                        "Error case, should have been found: {} {:?}",
-                        cur_level, xvtm
+                    let z_clone: Vec<_> =
+                        z.iter().take(2).map(|(first, _)| first.clone()).collect();
+
+                    insert_embedding(
+                        persist.clone(),
+                        vec_store.clone(),
+                        vector_emb.clone(),
+                        z_clone.clone(),
+                        cur_level - 1,
+                        max_insert_level,
                     );
                 }
             } else {
-                eprintln!("Error case, should not happen: {} ", cur_level);
+                if cur_level > vec_store.max_cache_level {
+                    let xvtm = get_vector_from_db(&vec_store.database_name, cur_entry.clone());
+                    if let Some(vtm) = xvtm {
+                        let skipm = Arc::new(DashMap::new());
+                        let z = traverse_find_nearest(
+                            vec_store.clone(),
+                            vtm.clone(),
+                            fvec.clone(),
+                            vector_emb.hash_vec.clone(),
+                            0,
+                            skipm,
+                            cur_level,
+                        );
+                        insert_node_create_edges(
+                            persist.clone(),
+                            vec_store.clone(),
+                            fvec,
+                            vector_emb.hash_vec.clone(),
+                            z,
+                            cur_level,
+                        );
+                    } else {
+                        eprintln!(
+                            "Error case, should have been found: {} {:?}",
+                            cur_level, xvtm
+                        );
+                    }
+                } else {
+                    eprintln!("Error case, should not happen: {} ", cur_level);
+                }
             }
+        } else {
+            eprintln!("Error case, should not happen: {}", cur_level);
         }
-    } else {
-        eprintln!("Error case, should not happen: {}", cur_level);
     }
 }
 
@@ -234,7 +253,7 @@ fn insert_node_create_edges(
                     ng.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
                     ng.dedup_by(|a, b| a.0 == b.0);
 
-                    let ng = ng.into_iter().take(6).collect::<Vec<_>>();
+                    let ng = ng.into_iter().take(10).collect::<Vec<_>>();
 
                     // Extract and hash the modified VectorId values
                     let new_hash = calculate_hash(&extract_ids(&ng));
@@ -260,19 +279,9 @@ fn insert_node_create_edges(
     }
 }
 
-fn traverse_find_nearest(
-    vec_store: Arc<VectorStore>,
-    vtm: Arc<VectorTreeNode>,
-    fvec: Arc<VectorW>,
-    hs: VectorId,
-    hops: i8,
-    skipm: Arc<DashMap<VectorId, ()>>,
-    cur_level: i8,
-) -> Vec<(VectorId, f32)> {
-    traverse_find_nearest_inner(vec_store, vtm, fvec, hs, hops, skipm, cur_level)
-}
 
-fn traverse_find_nearest_inner(
+
+fn traverse_find_nearest(
     vec_store: Arc<VectorStore>,
     vtm: Arc<VectorTreeNode>,
     fvec: Arc<VectorW>,
@@ -305,7 +314,7 @@ fn traverse_find_nearest_inner(
             if let Some(Some(vthm)) = maybe_res {
                 let cs = cosine_coalesce(&fvec, &vthm.vector_list);
                 if hops < 32 {
-                    let mut z = traverse_find_nearest_inner(
+                    let mut z = traverse_find_nearest(
                         vec_store.clone(),
                         vthm.clone(),
                         fvec.clone(),
