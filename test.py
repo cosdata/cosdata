@@ -36,9 +36,17 @@ def upsert_vector(vector_db_name, vectors):
 
 
 # Function to search vector
-def ann_vector(vector_db_name, vector):
+def ann_vector(idd, vector_db_name, vector):
     url = f"{base_url}/search"
     data = {"vector_db_name": vector_db_name, "vector": vector}
+    response = requests.post(url, headers=headers, data=json.dumps(data), verify=False)
+    return (idd, response.json())
+
+
+# Function to fetch vector
+def fetch_vector(vector_db_name, vector_id):
+    url = f"{base_url}/fetch"
+    data = {"vector_db_name": vector_db_name, "vector_id": vector_id}
     response = requests.post(url, headers=headers, data=json.dumps(data), verify=False)
     return response.json()
 
@@ -52,14 +60,34 @@ def generate_random_vector_with_id(id, length):
     values = np.random.uniform(-1, 1, length).tolist()
     return {"id": id, "values": values}
 
+
 def perturb_vector(vector, perturbation_degree):
     # Generate the perturbation
-    perturbation = np.random.uniform(-perturbation_degree, perturbation_degree, len(vector["values"]))
+    perturbation = np.random.uniform(
+        -perturbation_degree, perturbation_degree, len(vector["values"])
+    )
     # Apply the perturbation and clamp the values within the range of -1 to 1
     perturbed_values = np.array(vector["values"]) + perturbation
     clamped_values = np.clip(perturbed_values, -1, 1)
     vector["values"] = clamped_values.tolist()
     return vector
+
+def dot_product(vec1, vec2):
+    return sum(v1 * v2 for v1, v2 in zip(vec1, vec2))
+
+def magnitude(vec):
+    return np.sqrt(sum(v ** 2 for v in vec))
+
+def cosine_similarity(vec1, vec2):
+    dot_prod = dot_product(vec1, vec2)
+    magnitude_vec1 = magnitude(vec1)
+    magnitude_vec2 = magnitude(vec2)
+    
+    if magnitude_vec1 == 0 or magnitude_vec2 == 0:
+        return 0.0  # Handle the case where one or both vectors are zero vectors
+    
+    return dot_prod / (magnitude_vec1 * magnitude_vec2)
+
 
 # Example usage
 if __name__ == "__main__":
@@ -67,9 +95,9 @@ if __name__ == "__main__":
     vector_db_name = "testdb"
     dimensions = 1024
     max_val = 1.0
-    min_val = 0.0
+    min_val = -1.0
     rows = 100
-    perturbation_degree = 0.1  # Degree of perturbation
+    perturbation_degree = 0.5  # Degree of perturbation
 
     create_response = create_db(vector_db_name, dimensions, max_val, min_val)
     print("Create DB Response:", create_response)
@@ -80,31 +108,43 @@ if __name__ == "__main__":
     start_time = time.time()
 
     # Upsert vectors concurrently
-    with ThreadPoolExecutor(max_workers=32) as executor:
+    with ThreadPoolExecutor(max_workers=1) as executor:
         futures = []
         #
         # number of upsert calls
         #
-        for req_ct in range(200):
+        for req_ct in range(100):
             base_vector = generate_random_vector_with_id(req_ct * rows, dimensions)
+
             # Generate a single random vector
             final_list = [base_vector]
             for row_ct in range(1, rows):
-                perturbed_vector = perturb_vector(
-                    generate_random_vector_with_id(
-                        (req_ct * rows) + row_ct, dimensions
-                    ),
-                    perturbation_degree,
-                )
+                idd = (req_ct * rows) + row_ct
+                    # Generate the perturbation
+                perturbation = np.random.uniform( -perturbation_degree, perturbation_degree, dimensions)
+                
+                # Apply the perturbation and clamp the values within the range of -1 to 1
+                perturbed_values = base_vector["values"] + perturbation
+                clamped_values = np.clip(perturbed_values, -1, 1)
+                perturbed_vector = {}
+                perturbed_vector["values"] = clamped_values.tolist()
+                perturbed_vector["id"] = idd
+
+                # print(base_vector["values"][:10])
+                # print( perturbed_vector["values"][:10] )
+                cs = cosine_similarity(base_vector["values"], perturbed_vector["values"] )
+                # print ("cosine similarity of perturbed vec: ", row_ct, cs)
                 final_list.append(perturbed_vector)
-                if np.random.rand() < 0.01:  # 1 in 100 probability
-                    shortlisted_vectors.append(perturbed_vector)
+                # if np.random.rand() < 0.01:  # 1 in 100 probability
+                #     shortlisted_vectors.append(perturbed_vector)
+            shortlisted_vectors.append((idd - (rows - 1), base_vector))
+
             futures.append(executor.submit(upsert_vector, vector_db_name, final_list))
 
         for i, future in enumerate(as_completed(futures)):
             try:
                 upsert_response = future.result()
-                print(f"Upsert Vector Response {i + 1}:", upsert_response)
+                print(f"Upsert Vector Response {i + 1}: ", upsert_response)
             except Exception as e:
                 print(f"Error in upsert vector {i + 1}: {e}")
 
@@ -118,15 +158,15 @@ if __name__ == "__main__":
     best_matches = []
     with ThreadPoolExecutor(max_workers=32) as executor:
         futures = []
-        for vector in shortlisted_vectors:
+        for idd, vector in shortlisted_vectors:
             futures.append(
-                executor.submit(ann_vector, vector_db_name, vector["values"])
+                executor.submit(ann_vector, idd, vector_db_name, vector["values"])
             )
 
         for i, future in enumerate(as_completed(futures)):
             try:
-                ann_response = future.result()
-                print(f"ANN Vector Response {i + 1}:", ann_response)
+                (idr, ann_response) = future.result()
+                print(f"ANN Vector Response <<< {idr} >>>:", ann_response)
                 if (
                     "RespVectorKNN" in ann_response
                     and "knn" in ann_response["RespVectorKNN"]
@@ -136,6 +176,19 @@ if __name__ == "__main__":
                     )  # Collect the second item in the knn list
             except Exception as e:
                 print(f"Error in ANN vector {i + 1}: {e}")
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        futures = []
+        for idd, vector in shortlisted_vectors:
+            futures.append(executor.submit(fetch_vector, vector_db_name, vector["id"]))
+
+        for i, future in enumerate(as_completed(futures)):
+            try:
+                fetch_response = future.result()
+                print(f"Fetch Vector Response {i + 1}:", fetch_response)
+
+            except Exception as e:
+                print(f"Error in Fetch vector {i + 1}: {e}")
 
     # End time
     end_time = time.time()

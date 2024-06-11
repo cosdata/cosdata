@@ -10,6 +10,31 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
+pub fn vector_fetch(
+    vec_store: Arc<VectorStore>,
+    vector_id: VectorId,
+) -> Option<(VectorId, Vec<(VectorId, f32)>)> {
+    let maybe_res = vec_store
+        .cache
+        .clone()
+        .get(&(0, vector_id.clone()))
+        .map(|res| {
+            let vthmm = res.value().clone();
+            vthmm
+        });
+
+    if let Some(vthm) = maybe_res {
+        if let Some(vth) = vthm {
+            let ne = vth.neighbors.clone();
+            return Some((vector_id, ne));
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
 pub fn ann_search(
     vec_store: Arc<VectorStore>,
     vector_emb: VectorEmbedding,
@@ -146,7 +171,7 @@ pub fn insert_embedding(
                 } else {
                     z
                 };
-                let z_clone: Vec<_> = z.iter().take(2).map(|(first, _)| first.clone()).collect();
+                let z_clone: Vec<_> = z.iter().take(1).map(|(first, _)| first.clone()).collect();
 
                 if cur_level <= max_insert_level {
                     insert_embedding(
@@ -167,7 +192,7 @@ pub fn insert_embedding(
                     );
                 } else {
                     let z_clone: Vec<_> =
-                        z.iter().take(2).map(|(first, _)| first.clone()).collect();
+                        z.iter().take(1).map(|(first, _)| first.clone()).collect();
 
                     insert_embedding(
                         persist.clone(),
@@ -253,7 +278,7 @@ fn insert_node_create_edges(
                     ng.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
                     ng.dedup_by(|a, b| a.0 == b.0);
 
-                    let ng = ng.into_iter().take(10).collect::<Vec<_>>();
+                    let ng = ng.into_iter().take(30).collect::<Vec<_>>();
 
                     // Extract and hash the modified VectorId values
                     let new_hash = calculate_hash(&extract_ids(&ng));
@@ -279,8 +304,6 @@ fn insert_node_create_edges(
     }
 }
 
-
-
 fn traverse_find_nearest(
     vec_store: Arc<VectorStore>,
     vtm: Arc<VectorTreeNode>,
@@ -292,12 +315,15 @@ fn traverse_find_nearest(
 ) -> Vec<(VectorId, f32)> {
     let mut tasks = vec![];
 
-    for (nb, _) in vtm
+    for (index,(nb, _)) in vtm
         .neighbors
         .clone()
         .into_iter()
-        .filter(|(nb, _)| *nb != hs)
+        .filter(|(nb, _)| *nb != hs).enumerate()
     {
+        if index % 2 == 0 {
+            continue; // Skip this iteration if the index is even
+        }
         let skipm = skipm.clone();
         let vec_store = vec_store.clone();
         let fvec = fvec.clone();
@@ -313,7 +339,7 @@ fn traverse_find_nearest(
 
             if let Some(Some(vthm)) = maybe_res {
                 let cs = cosine_coalesce(&fvec, &vthm.vector_list);
-                if hops < 32 {
+                if hops < 40 {
                     let mut z = traverse_find_nearest(
                         vec_store.clone(),
                         vthm.clone(),
@@ -342,7 +368,7 @@ fn traverse_find_nearest(
     nn.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
     let mut seen = HashSet::new();
     nn.retain(|(vec_u8, _)| seen.insert(vec_u8.clone()));
-    nn.into_iter().take(4).collect()
+    nn.into_iter().take(6).collect()
 }
 
 fn get_vector_from_db(db_name: &str, entry: VectorId) -> Option<Arc<VectorTreeNode>> {

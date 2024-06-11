@@ -108,6 +108,7 @@ pub fn cosine_coalesce(x: &VectorW, y: &VectorW) -> f32 {
 
             //println!("dot prod {}", dot_prod);
             let res = f64::from(dot_prod) / (xm * ym);
+            //print!("cosine coalesce {}", res);
             return res as f32;
         }
         _ => -9999.0,
@@ -243,8 +244,8 @@ pub fn remove_duplicates_and_filter(
         let mut unique_vec = Vec::new();
 
         for item in vec {
-            if let VectorId::Str(ref s) = item.0 {
-                if s == "waco_default_hidden_root" {
+            if let VectorId::Int(ref s) = item.0 {
+                if *s == -1 {
                     continue;
                 }
             }
@@ -279,4 +280,25 @@ pub fn calculate_hash<T: Hash>(t: &T) -> u64 {
 // Extract VectorId values for hashing purposes
 pub fn extract_ids(neighbors: &[(VectorId, f32)]) -> Vec<VectorId> {
     neighbors.iter().map(|(id, _)| id.clone()).collect()
+}
+
+
+// Optional: Implement From trait for more idiomatic conversion
+
+impl From<VectorId> for VectorIdValue {
+    fn from(vector_id: VectorId) -> Self {
+        match vector_id {
+            VectorId::Str(s) => VectorIdValue::StringValue(s),
+            VectorId::Int(i) => VectorIdValue::IntValue(i),
+        }
+    }
+}
+
+impl From<VectorIdValue> for VectorId {
+    fn from(vector_id_value: VectorIdValue) -> Self {
+        match vector_id_value {
+            VectorIdValue::StringValue(s) => VectorId::Str(s),
+            VectorIdValue::IntValue(i) => VectorId::Int(i),
+        }
+    }
 }

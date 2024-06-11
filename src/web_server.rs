@@ -48,7 +48,7 @@ async fn create_vector_db(item: web::Json<CreateVectorDb>) -> HttpResponse {
     let size = dimensions as usize;
     let lower_bound = min_val;
     let upper_bound = max_val;
-    let max_cache_level = 5;
+    let max_cache_level = 6;
 
     // Call init_vector_store using web::block
     let result = init_vector_store(name, size, lower_bound, upper_bound, max_cache_level).await;
@@ -123,6 +123,51 @@ async fn search_vector_db(item: web::Json<VectorANN>) -> HttpResponse {
     result
 }
 
+async fn fetch_vector_db(item: web::Json<FetchNeighbors>) -> HttpResponse {
+    println!("model: {:?}", &item);
+    let vector_db_name = &item.vector_db_name;
+    let vector_id = item.vector_id.clone(); // Clone the vector for async usage
+
+    let result = match get_app_env() {
+        Ok(ain_env) => {
+            // Try to get the vector store from the environment
+            let vec_store = match ain_env.vector_store_map.get(vector_db_name) {
+                Some(store) => store,
+                None => {
+                    // Vector store not found, return an error response
+                    return HttpResponse::InternalServerError().body("Vector store not found");
+                }
+            };
+            let fvid = VectorId::from(vector_id);
+
+            let result = fetch_vector_neighbors(vec_store.clone().into(), fvid).await;
+
+            match result {
+                Some((vect, neig)) => {
+                    let nvid = VectorIdValue::from(vect);
+                    let response_data = RPCResponseBody::RespFetchNeighbors {
+                        neighbors: neig
+                            .iter()
+                            .map(|(vid, x)| (VectorIdValue::from(vid.clone()), x.clone()))
+                            .collect(),
+                        vector: Vector {
+                            id: nvid,
+                            values: vec![],
+                        },
+                    };
+                    let response = HttpResponse::Ok().json(response_data);
+
+                    response
+                }
+                None => return HttpResponse::InternalServerError().body("Vector store not found"),
+            }
+            //
+        }
+        Err(e) => return HttpResponse::InternalServerError().body("Vector store not found"),
+    };
+    result
+}
+
 async fn extract_item(item: web::Json<MyObj>, req: HttpRequest) -> HttpResponse {
     println!("request: {req:?}");
     println!("model: {item:?}");
@@ -165,7 +210,8 @@ pub async fn run_actix_server() -> std::io::Result<()> {
                     .wrap(auth.clone())
                     .service(web::resource("/createdb").route(web::post().to(create_vector_db)))
                     .service(web::resource("/upsert").route(web::post().to(upsert_vector_db)))
-                    .service(web::resource("/search").route(web::post().to(search_vector_db))),
+                    .service(web::resource("/search").route(web::post().to(search_vector_db)))
+                    .service(web::resource("/fetch").route(web::post().to(fetch_vector_db))),
             )
         // .service(web::resource("/index").route(web::post().to(index)))
         // .service(

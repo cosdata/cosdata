@@ -31,6 +31,12 @@ pub struct VectorANN {
     pub nn_count: Option<i32>,
 }
 
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub struct FetchNeighbors {
+    pub vector_db_name: String,
+    pub vector_id: VectorIdValue,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 
 pub struct UpsertVectors {
@@ -61,6 +67,10 @@ pub enum RPCResponseBody {
     RespVectorKNN {
         knn: Option<Vec<(VectorIdValue, f32)>>,
     },
+    RespFetchNeighbors {
+        vector: Vector,
+        neighbors: Vec<(VectorIdValue, f32)>,
+    },
     RespCreateVectorDb {
         result: bool,
     },
@@ -83,7 +93,6 @@ pub struct Vector {
 // pub struct VectorList {
 //     pub vectors: Vec<Vector>,
 // }
-
 
 pub type Single = MetadataColumnValue;
 pub type Multiple = Vec<MetadataColumnValue>;

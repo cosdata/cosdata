@@ -5,9 +5,9 @@ use crate::models::{self, common::*};
 use crate::models::{persist, types::*};
 use crate::vector_store::*;
 use dashmap::DashMap;
+use futures::stream::{self, StreamExt};
 use log::info;
 use rand::Rng;
-use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, RwLock};
 
 pub async fn init_vector_store(
@@ -20,19 +20,18 @@ pub async fn init_vector_store(
     if name.is_empty() {
         return Err(WaCustomError::InvalidParams);
     }
-
+    let min = lower_bound.unwrap_or(-1.0);
+    let max = upper_bound.unwrap_or(1.0);
     let vec = (0..size)
         .map(|_| {
-            let min = lower_bound.unwrap_or(-1.0);
-            let max = upper_bound.unwrap_or(1.0);
             let mut rng = rand::thread_rng();
 
             let random_number: f32 = rng.gen_range(min..max);
             random_number
         })
         .collect::<Vec<f32>>();
-
-    let vec_hash = VectorId::Str("waco_default_hidden_root".to_string());
+    //println!( " root vecccc {:?}", vec );
+    let vec_hash = VectorId::Int(-1);
 
     let cache = Arc::new(DashMap::new());
 
@@ -56,7 +55,7 @@ pub async fn init_vector_store(
             })),
         );
     }
-    let factor_levels = 20.0;
+    let factor_levels = 24.0;
     let lp = Arc::new(generate_tuples(factor_levels).into_iter().rev().collect());
     let vec_store = VectorStore {
         cache,
@@ -93,8 +92,6 @@ pub async fn run_upload(
     vec_store: Arc<VectorStore>,
     vecxx: Vec<(VectorIdValue, Vec<f32>)>,
 ) -> Vec<()> {
-    use futures::stream::{self, StreamExt};
-
     stream::iter(vecxx)
         .map(|(id, vec)| {
             let vec_store = vec_store.clone();
@@ -161,6 +158,16 @@ pub async fn ann_vector_query(
     );
     let output = remove_duplicates_and_filter(results);
     return output;
+}
+
+pub async fn fetch_vector_neighbors(
+    vec_store: Arc<VectorStore>,
+    vector_id: VectorId,
+) -> Option<(VectorId, Vec<(VectorId, f32)>)> {
+    let vector_store = vec_store.clone();
+
+    let results = vector_fetch(vec_store.clone(), vector_id);
+    return results;
 }
 
 fn calculate_statistics(_: &[i32]) -> Option<Statistics> {
