@@ -49,18 +49,17 @@ def generate_random_vector(rows, dimensions, min_val, max_val):
 
 
 def generate_random_vector_with_id(id, length):
-    values = np.random.rand(length).astype(float).tolist()
+    values = np.random.uniform(-1, 1, length).tolist()
     return {"id": id, "values": values}
 
-
-# Function to apply perturbations to vectors
 def perturb_vector(vector, perturbation_degree):
-    perturbation = np.random.uniform(
-        -perturbation_degree, perturbation_degree, len(vector["values"])
-    )
-    vector["values"] = (np.array(vector["values"]) + perturbation).tolist()
+    # Generate the perturbation
+    perturbation = np.random.uniform(-perturbation_degree, perturbation_degree, len(vector["values"]))
+    # Apply the perturbation and clamp the values within the range of -1 to 1
+    perturbed_values = np.array(vector["values"]) + perturbation
+    clamped_values = np.clip(perturbed_values, -1, 1)
+    vector["values"] = clamped_values.tolist()
     return vector
-
 
 # Example usage
 if __name__ == "__main__":
@@ -86,7 +85,7 @@ if __name__ == "__main__":
         #
         # number of upsert calls
         #
-        for req_ct in range(1000):
+        for req_ct in range(200):
             base_vector = generate_random_vector_with_id(req_ct * rows, dimensions)
             # Generate a single random vector
             final_list = [base_vector]

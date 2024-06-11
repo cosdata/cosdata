@@ -56,7 +56,7 @@ pub async fn init_vector_store(
             })),
         );
     }
-    let factor_levels = 16.0;
+    let factor_levels = 20.0;
     let lp = Arc::new(generate_tuples(factor_levels).into_iter().rev().collect());
     let vec_store = VectorStore {
         cache,
@@ -125,8 +125,7 @@ pub async fn run_upload(
                     rhash.clone(),
                     vec_store.max_cache_level,
                     iv.try_into().unwrap(),
-                )
-                .await;
+                );
             }
         })
         .buffer_unordered(10)
@@ -159,8 +158,7 @@ pub async fn ann_vector_query(
         vec_emb,
         rhash.clone(),
         vec_store.max_cache_level,
-    )
-    .await;
+    );
     let output = remove_duplicates_and_filter(results);
     return output;
 }

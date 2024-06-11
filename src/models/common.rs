@@ -82,7 +82,7 @@ pub fn get_magnitude_plus_quantized_vec(bits: Vec<Vec<u8>>) -> (f64, Vec<u32>) {
         .iter()
         .fold(0, |acc, val| acc + shift_and_accumulate(*val));
     let mag = f64::sqrt(f64::from(premag));
-    println!("{} {:?}", mag, quant_vec);
+    //println!("{} {:?}", mag, quant_vec);
     return (mag, quant_vec);
 }
 
@@ -106,7 +106,7 @@ pub fn cosine_coalesce(x: &VectorW, y: &VectorW) -> f32 {
                 .iter()
                 .fold(0, |acc, (a, b)| acc + shift_and_accumulate(*a & *b));
 
-            println!("dot prod {}", dot_prod);
+            //println!("dot prod {}", dot_prod);
             let res = f64::from(dot_prod) / (xm * ym);
             return res as f32;
         }
@@ -138,7 +138,7 @@ pub fn quantize_to_u8_bits(fins: &[f32]) -> Vec<Vec<u8>> {
     if !chunk.is_empty() {
         quantized.push(chunk);
     }
-    println!("{:?}", quantized);
+    //println!("{:?}", quantized);
     quantized
 }
 
