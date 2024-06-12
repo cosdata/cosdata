@@ -85,27 +85,24 @@ pub fn get_magnitude_plus_quantized_vec(bits: Vec<Vec<u8>>) -> (f64, Vec<u32>) {
     return (mag, quant_vec);
 }
 
-pub fn cosine_coalesce(x: &VectorW, y: &VectorW) -> f32 {
+pub fn cosine_coalesce(x: &VectorW, y: &VectorW,  length: usize) -> f32 {
     match (x, y) {
         (
-            crate::models::types::VectorW::QuantizedVector {
+            VectorW::QuantizedVector {
                 mag: xm,
                 quant_vec: xv,
                 resolution: _,
             },
-            crate::models::types::VectorW::QuantizedVector {
+            VectorW::QuantizedVector {
                 mag: ym,
                 quant_vec: yv,
                 resolution: _,
             },
         ) => {
-            let zipped: Vec<_> = xv.iter().zip(yv.iter()).collect();
-
-            let dot_prod = zipped
-                .iter()
-                .fold(0, |acc, (a, b)| acc + shift_and_accumulate(*a & *b));
-
-            //println!("dot prod {}", dot_prod);
+            let mut dot_prod = 0;
+            for i in 0..length {
+                dot_prod += shift_and_accumulate(xv[i] & yv[i]);
+            }
             let res = f64::from(dot_prod) / (xm * ym);
             //print!("cosine coalesce {}", res);
             return res as f32;
@@ -317,16 +314,16 @@ pub fn tapered_total_hops(hops: i8, cur_level: i8, max_level: i8) -> i8 {
     }
 }
 
-//typically skips is 1 while near 
+//typically skips is 1 while near
 pub fn tapered_skips(skips: i8, cur_distance: i8, max_distance: i8) -> i8 {
     // Calculate the distance ratio (0.0 to 1.0)
     let distance_ratio = cur_distance as f32 / max_distance as f32;
-  
+
     // Use match expression for efficient logic based on distance ratio
     match distance_ratio {
-      ratio if ratio < 0.25 => skips,
-      ratio if ratio < 0.5 => skips * 2,
-      ratio if ratio < 0.75 => skips * 3,
-      _ => skips * 4, // Distance ratio >= 0.75
+        ratio if ratio < 0.25 => skips,
+        ratio if ratio < 0.5 => skips * 2,
+        ratio if ratio < 0.75 => skips * 3,
+        _ => skips * 4, // Distance ratio >= 0.75
     }
-  }
+}

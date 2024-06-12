@@ -92,7 +92,7 @@ pub fn ann_search(
                 false,
             );
 
-            let y = cosine_coalesce(&fvec, &vtm.vector_list);
+            let y = cosine_coalesce(&fvec, &vtm.vector_list, vec_store.quant_dim);
             let z = if z.is_empty() {
                 vec![(cur_entry.clone(), y)]
             } else {
@@ -177,7 +177,7 @@ pub fn insert_embedding(
                     true,
                 );
 
-                let y = cosine_coalesce(&fvec, &vtm.vector_list);
+                let y = cosine_coalesce(&fvec, &vtm.vector_list, vec_store.quant_dim);
                 let z = if z.is_empty() {
                     vec![(cur_entry.clone(), y)]
                 } else {
@@ -359,7 +359,7 @@ fn traverse_find_nearest(
             });
 
             if let Some(Some(vthm)) = maybe_res {
-                let cs = cosine_coalesce(&fvec, &vthm.vector_list);
+                let cs = cosine_coalesce(&fvec, &vthm.vector_list, vec_store.quant_dim);
 
                 // ---------------------------
                 // -- TODO number of hops

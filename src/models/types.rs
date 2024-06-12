@@ -52,6 +52,7 @@ pub struct VectorStore {
     pub database_name: String,
     pub root_vec: (VectorId, VectorW),
     pub levels_prob: Arc<Vec<(f64, i32)>>,
+    pub quant_dim: usize,
 }
 
 #[derive(Debug, Clone)]

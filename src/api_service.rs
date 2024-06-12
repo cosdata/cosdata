@@ -65,6 +65,7 @@ pub async fn init_vector_store(
         database_name: name.clone(),
         root_vec: root,
         levels_prob: lp,
+        quant_dim: (size / 32) as usize,
     };
     let result = match get_app_env() {
         Ok(ain_env) => {
