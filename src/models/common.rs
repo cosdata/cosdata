@@ -304,3 +304,29 @@ impl From<VectorIdValue> for VectorId {
 pub fn cat_maybes<T>(iter: impl Iterator<Item = Option<T>>) -> Vec<T> {
     iter.flat_map(|maybe| maybe).collect()
 }
+
+pub fn tapered_total_hops(hops: i8, cur_level: i8, max_level: i8) -> i8 {
+    if cur_level > max_level / 2 {
+        hops
+    } else {
+        // Linear tapering calculation
+        let max_reduction = (hops) / 2; // maximum reduction of hops
+        let reduction =
+            (max_reduction as f64 * (1.0 - (cur_level as f64 / (max_level / 2) as f64))) as i8;
+        hops - reduction
+    }
+}
+
+//typically skips is 1 while near 
+pub fn tapered_skips(skips: i8, cur_distance: i8, max_distance: i8) -> i8 {
+    // Calculate the distance ratio (0.0 to 1.0)
+    let distance_ratio = cur_distance as f32 / max_distance as f32;
+  
+    // Use match expression for efficient logic based on distance ratio
+    match distance_ratio {
+      ratio if ratio < 0.25 => skips,
+      ratio if ratio < 0.5 => skips * 2,
+      ratio if ratio < 0.75 => skips * 3,
+      _ => skips * 4, // Distance ratio >= 0.75
+    }
+  }

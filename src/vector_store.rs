@@ -14,7 +14,6 @@ pub fn vector_fetch(
     vec_store: Arc<VectorStore>,
     vector_id: VectorId,
 ) -> Vec<Option<(VectorId, Vec<(VectorId, f32)>)>> {
-
     let mut results: Vec<Option<(VectorId, Vec<(VectorId, f32)>)>> = Vec::new();
 
     let vector_id = vector_id.clone();
@@ -90,6 +89,7 @@ pub fn ann_search(
                 0,
                 skipm.clone(),
                 cur_level,
+                false,
             );
 
             let y = cosine_coalesce(&fvec, &vtm.vector_list);
@@ -118,6 +118,7 @@ pub fn ann_search(
                         0,
                         skipm.clone(),
                         cur_level,
+                        false,
                     );
                     return Some(z);
                 } else {
@@ -173,6 +174,7 @@ pub fn insert_embedding(
                     0,
                     skipm,
                     cur_level,
+                    true,
                 );
 
                 let y = cosine_coalesce(&fvec, &vtm.vector_list);
@@ -226,6 +228,7 @@ pub fn insert_embedding(
                             0,
                             skipm,
                             cur_level,
+                            true,
                         );
                         insert_node_create_edges(
                             persist.clone(),
@@ -325,6 +328,7 @@ fn traverse_find_nearest(
     hops: i8,
     skipm: Arc<DashMap<VectorId, ()>>,
     cur_level: i8,
+    skip_hop: bool,
 ) -> Vec<(VectorId, f32)> {
     let mut tasks = vec![];
 
@@ -335,9 +339,12 @@ fn traverse_find_nearest(
         .filter(|(nb, _)| *nb != hs)
         .enumerate()
     {
-        if index % 2 != 0 {
+        //let skips = tapered_skips(1, index as i8, 20);
+
+        if index % 2 != 0 && skip_hop && index > 4 {
             continue; // Skip this iteration if the index is odd
         }
+
         let skipm = skipm.clone();
         let vec_store = vec_store.clone();
         let fvec = fvec.clone();
@@ -357,8 +364,8 @@ fn traverse_find_nearest(
                 // ---------------------------
                 // -- TODO number of hops
                 // ---------------------------
-
-                if hops < 10 {
+                let full_hops = 30;
+                if hops <= tapered_total_hops(full_hops, cur_level, vec_store.max_cache_level) {
                     let mut z = traverse_find_nearest(
                         vec_store.clone(),
                         vthm.clone(),
@@ -367,6 +374,7 @@ fn traverse_find_nearest(
                         hops + 1,
                         skipm.clone(),
                         cur_level,
+                        skip_hop,
                     );
                     z.push((nb.clone(), cs));
                     tasks.push(z);
