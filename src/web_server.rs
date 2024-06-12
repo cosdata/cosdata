@@ -12,10 +12,10 @@ use rustls_pemfile::{certs, pkcs8_private_keys};
 use serde::{Deserialize, Serialize};
 use std::{fs::File, io::BufReader};
 
-use crate::convert_vectors;
 use crate::models::common::convert_option_vec;
 use crate::models::rpc::*;
 use crate::{api_service::*, models::types::*};
+use crate::{cat_maybes, convert_vectors};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct MyObj {
@@ -27,12 +27,12 @@ async fn validator(
     req: ServiceRequest,
     credentials: BearerAuth,
 ) -> Result<ServiceRequest, (Error, ServiceRequest)> {
-    println!("cred: {credentials:?}");
+    // println!("cred: {credentials:?}");
     Ok(req)
 }
 
 async fn authenticate(item: web::Json<Authenticate>) -> HttpResponse {
-    println!("model: {:?}", &item);
+    // println!("model: {:?}", &item);
     HttpResponse::Ok().json(item.0) // <- send response
 }
 
@@ -48,7 +48,10 @@ async fn create_vector_db(item: web::Json<CreateVectorDb>) -> HttpResponse {
     let size = dimensions as usize;
     let lower_bound = min_val;
     let upper_bound = max_val;
-    let max_cache_level = 6;
+    // ---------------------------
+    // -- TODO Maximum cache level
+    // ---------------------------
+    let max_cache_level = 5;
 
     // Call init_vector_store using web::block
     let result = init_vector_store(name, size, lower_bound, upper_bound, max_cache_level).await;
@@ -94,7 +97,7 @@ async fn upsert_vector_db(item: web::Json<UpsertVectors>) -> HttpResponse {
 }
 
 async fn search_vector_db(item: web::Json<VectorANN>) -> HttpResponse {
-    println!("model: {:?}", &item);
+    // println!("model: {:?}", &item);
     let vector_db_name = &item.vector_db_name;
     let vector = item.vector.clone(); // Clone the vector for async usage
 
@@ -124,7 +127,7 @@ async fn search_vector_db(item: web::Json<VectorANN>) -> HttpResponse {
 }
 
 async fn fetch_vector_db(item: web::Json<FetchNeighbors>) -> HttpResponse {
-    println!("model: {:?}", &item);
+    // println!("model: {:?}", &item);
     let vector_db_name = &item.vector_db_name;
     let vector_id = item.vector_id.clone(); // Clone the vector for async usage
 
@@ -142,26 +145,33 @@ async fn fetch_vector_db(item: web::Json<FetchNeighbors>) -> HttpResponse {
 
             let result = fetch_vector_neighbors(vec_store.clone().into(), fvid).await;
 
-            match result {
-                Some((vect, neig)) => {
-                    let nvid = VectorIdValue::from(vect);
-                    let response_data = RPCResponseBody::RespFetchNeighbors {
-                        neighbors: neig
-                            .iter()
-                            .map(|(vid, x)| (VectorIdValue::from(vid.clone()), x.clone()))
-                            .collect(),
-                        vector: Vector {
-                            id: nvid,
-                            values: vec![],
-                        },
-                    };
-                    let response = HttpResponse::Ok().json(response_data);
+            let mut xx: Vec<Option<RPCResponseBody>> = result
+                .iter()
+                .map(|res_item| match res_item {
+                    Some((vect, neig)) => {
+                        let nvid = VectorIdValue::from(vect.clone());
+                        let response_data = RPCResponseBody::RespFetchNeighbors {
+                            neighbors: neig
+                                .iter()
+                                .map(|(vid, x)| (VectorIdValue::from(vid.clone()), x.clone()))
+                                .collect(),
+                            vector: Vector {
+                                id: nvid,
+                                values: vec![],
+                            },
+                        };
+                        return Some(response_data);
+                    }
+                    None => return None,
+                })
+                .collect();
+            // Filter out any None values (optional)
+            xx.retain(|x| x.is_some());
+            let rs: Vec<RPCResponseBody> = xx.into_iter().map(|x| x.unwrap()).collect();
+            let response = HttpResponse::Ok().json(rs);
+            response
 
-                    response
-                }
-                None => return HttpResponse::InternalServerError().body("Vector store not found"),
-            }
-            //
+
         }
         Err(e) => return HttpResponse::InternalServerError().body("Vector store not found"),
     };
@@ -169,8 +179,8 @@ async fn fetch_vector_db(item: web::Json<FetchNeighbors>) -> HttpResponse {
 }
 
 async fn extract_item(item: web::Json<MyObj>, req: HttpRequest) -> HttpResponse {
-    println!("request: {req:?}");
-    println!("model: {item:?}");
+    // println!("request: {req:?}");
+    // println!("model: {item:?}");
 
     HttpResponse::Ok().json(item.0) // <- send json response
 }

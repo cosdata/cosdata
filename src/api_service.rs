@@ -30,7 +30,6 @@ pub async fn init_vector_store(
             random_number
         })
         .collect::<Vec<f32>>();
-    //println!( " root vecccc {:?}", vec );
     let vec_hash = VectorId::Int(-1);
 
     let cache = Arc::new(DashMap::new());
@@ -55,7 +54,10 @@ pub async fn init_vector_store(
             })),
         );
     }
-    let factor_levels = 24.0;
+     // ---------------------------
+    // -- TODO level entry ratio
+    // ---------------------------
+    let factor_levels = 10.0;
     let lp = Arc::new(generate_tuples(factor_levels).into_iter().rev().collect());
     let vec_store = VectorStore {
         cache,
@@ -69,7 +71,8 @@ pub async fn init_vector_store(
             ain_env
                 .vector_store_map
                 .insert(name.clone(), vec_store.clone());
-            let rs = ain_env.persist.lock().unwrap().create_cf_family("main"); // create the default CF for main index
+            let rs = ain_env.persist.lock().unwrap().create_cf_family("main"); 
+            // create the default CF for main index
             match rs {
                 Ok(__) => {
                     println!(
@@ -163,7 +166,7 @@ pub async fn ann_vector_query(
 pub async fn fetch_vector_neighbors(
     vec_store: Arc<VectorStore>,
     vector_id: VectorId,
-) -> Option<(VectorId, Vec<(VectorId, f32)>)> {
+) -> Vec<Option<(VectorId, Vec<(VectorId, f32)>)>> {
     let vector_store = vec_store.clone();
 
     let results = vector_fetch(vec_store.clone(), vector_id);

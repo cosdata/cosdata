@@ -1,18 +1,17 @@
-use crate::models::types::VectorW;
-use crate::models::rpc::Vector;
 use super::rpc::VectorIdValue;
 use super::types::VectorId;
+use crate::models::rpc::Vector;
+use crate::models::types::VectorW;
 use async_std::stream::Cloned;
 use dashmap::DashMap;
 use futures::future::{join_all, BoxFuture, FutureExt};
 use sha2::{Digest, Sha256};
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::task;
-use std::collections::hash_map::DefaultHasher;
-
 
 pub struct CosResult {
     pub dotprod: i32,
@@ -282,7 +281,6 @@ pub fn extract_ids(neighbors: &[(VectorId, f32)]) -> Vec<VectorId> {
     neighbors.iter().map(|(id, _)| id.clone()).collect()
 }
 
-
 // Optional: Implement From trait for more idiomatic conversion
 
 impl From<VectorId> for VectorIdValue {
@@ -301,4 +299,8 @@ impl From<VectorIdValue> for VectorId {
             VectorIdValue::IntValue(i) => VectorId::Int(i),
         }
     }
+}
+
+pub fn cat_maybes<T>(iter: impl Iterator<Item = Option<T>>) -> Vec<T> {
+    iter.flat_map(|maybe| maybe).collect()
 }

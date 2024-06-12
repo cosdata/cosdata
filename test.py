@@ -108,12 +108,12 @@ if __name__ == "__main__":
     start_time = time.time()
 
     # Upsert vectors concurrently
-    with ThreadPoolExecutor(max_workers=1) as executor:
+    with ThreadPoolExecutor(max_workers=32) as executor:
         futures = []
         #
         # number of upsert calls
         #
-        for req_ct in range(100):
+        for req_ct in range(1000):
             base_vector = generate_random_vector_with_id(req_ct * rows, dimensions)
 
             # Generate a single random vector
@@ -147,6 +147,10 @@ if __name__ == "__main__":
                 print(f"Upsert Vector Response {i + 1}: ", upsert_response)
             except Exception as e:
                 print(f"Error in upsert vector {i + 1}: {e}")
+
+
+    # End time
+    end_time = time.time()
 
     # Apply perturbations to shortlisted vectors
     # for i in range(len(shortlisted_vectors)):
@@ -190,8 +194,7 @@ if __name__ == "__main__":
             except Exception as e:
                 print(f"Error in Fetch vector {i + 1}: {e}")
 
-    # End time
-    end_time = time.time()
+
 
     if best_matches:
         best_match_average = sum(best_matches) / len(best_matches)
