@@ -85,7 +85,7 @@ pub fn get_magnitude_plus_quantized_vec(bits: Vec<Vec<u8>>) -> (f64, Vec<u32>) {
     return (mag, quant_vec);
 }
 
-pub fn cosine_coalesce(x: &VectorW, y: &VectorW,  length: usize) -> f32 {
+pub fn cosine_coalesce(x: &VectorW, y: &VectorW, length: usize) -> f32 {
     match (x, y) {
         (
             VectorW::QuantizedVector {
@@ -302,7 +302,7 @@ pub fn cat_maybes<T>(iter: impl Iterator<Item = Option<T>>) -> Vec<T> {
     iter.flat_map(|maybe| maybe).collect()
 }
 
-pub fn tapered_total_hops(hops: i8, cur_level: i8, max_level: i8) -> i8 {
+pub fn tapered_total_hops22(hops: i8, cur_level: i8, max_level: i8) -> i8 {
     if cur_level > max_level / 2 {
         hops
     } else {
@@ -314,6 +314,19 @@ pub fn tapered_total_hops(hops: i8, cur_level: i8, max_level: i8) -> i8 {
     }
 }
 
+pub fn tapered_total_hops(hops: i8, cur_level: i8, max_level: i8) -> i8 {
+    //div by 2
+    if cur_level > max_level >> 1 {
+        return hops;
+    } else {
+        // div by 4
+        if cur_level > max_level >> 2 {
+            return 3 * (hops >> 2); // 3/4
+        } else {
+            return hops >> 1; // 1/2
+        }
+    }
+}
 //typically skips is 1 while near
 pub fn tapered_skips(skips: i8, cur_distance: i8, max_distance: i8) -> i8 {
     // Calculate the distance ratio (0.0 to 1.0)

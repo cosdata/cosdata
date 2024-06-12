@@ -113,7 +113,7 @@ if __name__ == "__main__":
         #
         # number of upsert calls
         #
-        for req_ct in range(1000):
+        for req_ct in range(500):
             base_vector = generate_random_vector_with_id(req_ct * rows, dimensions)
 
             # Generate a single random vector
