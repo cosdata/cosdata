@@ -7,16 +7,11 @@ use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex, OnceLock};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum VectorW {
-    QuantizedVector {
-        mag: f64,
-        quant_vec: Vec<u32>,
-        resolution: u8,
-    },
-    NaturalVector(Vec<f32>),
+pub struct VectorQt {
+    pub mag: f64,
+    pub quant_vec: Vec<u32>,
+    pub resolution: u8,
 }
-
-pub type VectorHash = Vec<u8>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum VectorId {
@@ -26,7 +21,7 @@ pub enum VectorId {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VectorTreeNode {
-    pub vector_list: Arc<VectorW>,
+    pub vector_list: Arc<VectorQt>,
     pub neighbors: Vec<(VectorId, f32)>,
 }
 
@@ -50,14 +45,14 @@ pub struct VectorStore {
     pub cache: Arc<CacheType>,
     pub max_cache_level: i8,
     pub database_name: String,
-    pub root_vec: (VectorId, VectorW),
+    pub root_vec: (VectorId, VectorQt),
     pub levels_prob: Arc<Vec<(f64, i32)>>,
     pub quant_dim: usize,
 }
 
 #[derive(Debug, Clone)]
 pub struct VectorEmbedding {
-    pub raw_vec: Arc<VectorW>,
+    pub raw_vec: Arc<VectorQt>,
     pub hash_vec: VectorId,
 }
 

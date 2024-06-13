@@ -97,7 +97,7 @@ if __name__ == "__main__":
     max_val = 1.0
     min_val = -1.0
     rows = 100
-    perturbation_degree = 0.5  # Degree of perturbation
+    perturbation_degree = 0.25  # Degree of perturbation
 
     create_response = create_db(vector_db_name, dimensions, max_val, min_val)
     print("Create DB Response:", create_response)
@@ -120,7 +120,7 @@ if __name__ == "__main__":
             final_list = [base_vector]
             for row_ct in range(1, rows):
                 idd = (req_ct * rows) + row_ct
-                    # Generate the perturbation
+                # Generate the perturbation
                 perturbation = np.random.uniform( -perturbation_degree, perturbation_degree, dimensions)
                 
                 # Apply the perturbation and clamp the values within the range of -1 to 1

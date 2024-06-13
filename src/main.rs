@@ -14,8 +14,8 @@ lazy_static! {
     static ref RANDOM_NUMBERS_B: Vec<f32> = generate_random_vector();
     static ref QUANTIZED_VALUES_A: Vec<Vec<u8>> = quantize_to_u8_bits(&RANDOM_NUMBERS_A);
     static ref QUANTIZED_VALUES_B: Vec<Vec<u8>> = quantize_to_u8_bits(&RANDOM_NUMBERS_B);
-    static ref MPQ_A: (f64, Vec<u32>) = get_magnitude_plus_quantized_vec(QUANTIZED_VALUES_A.to_vec());
-    static ref MPQ_B: (f64, Vec<u32>) = get_magnitude_plus_quantized_vec(QUANTIZED_VALUES_B.to_vec());
+    static ref MPQ_A: (f64, Vec<u32>) = get_magnitude_plus_quantized_vec(QUANTIZED_VALUES_A.to_vec(), 32);
+    static ref MPQ_B: (f64, Vec<u32>) = get_magnitude_plus_quantized_vec(QUANTIZED_VALUES_B.to_vec(), 32);
 }
 
 use crate::models::common::*;

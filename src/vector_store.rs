@@ -5,6 +5,7 @@ use bincode;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use smallvec::SmallVec;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -80,14 +81,15 @@ pub fn ann_search(
     if let Some((fvec, vthm_mv)) = maybe_res {
         if let Some(vthm) = vthm_mv {
             let vtm = vthm.clone();
-            let skipm = Arc::new(DashMap::new());
+            let mut skipm = HashSet::new();
+            skipm.insert(vector_emb.hash_vec.clone());
             let z = traverse_find_nearest(
                 vec_store.clone(),
                 vtm.clone(),
                 fvec.clone(),
                 vector_emb.hash_vec.clone(),
                 0,
-                skipm.clone(),
+                &mut skipm,
                 cur_level,
                 false,
             );
@@ -109,14 +111,15 @@ pub fn ann_search(
             if cur_level > vec_store.max_cache_level {
                 let xvtm = get_vector_from_db(&vec_store.database_name, cur_entry.clone());
                 if let Some(vtm) = xvtm {
-                    let skipm = Arc::new(DashMap::new());
+                    let mut skipm = HashSet::new();
+                    skipm.insert(vector_emb.hash_vec.clone());
                     let z = traverse_find_nearest(
                         vec_store.clone(),
                         vtm.clone(),
                         fvec.clone(),
                         vector_emb.hash_vec.clone(),
                         0,
-                        skipm.clone(),
+                        &mut skipm,
                         cur_level,
                         false,
                     );
@@ -165,14 +168,15 @@ pub fn insert_embedding(
         if let Some((fvec, vthm_mv)) = maybe_res {
             if let Some(vthm) = vthm_mv {
                 let vtm = vthm.clone();
-                let skipm = Arc::new(DashMap::new());
+                let mut skipm = HashSet::new();
+                skipm.insert(vector_emb.hash_vec.clone());
                 let z = traverse_find_nearest(
                     vec_store.clone(),
                     vtm.clone(),
                     fvec.clone(),
                     vector_emb.hash_vec.clone(),
                     0,
-                    skipm,
+                    &mut skipm,
                     cur_level,
                     true,
                 );
@@ -219,14 +223,15 @@ pub fn insert_embedding(
                 if cur_level > vec_store.max_cache_level {
                     let xvtm = get_vector_from_db(&vec_store.database_name, cur_entry.clone());
                     if let Some(vtm) = xvtm {
-                        let skipm = Arc::new(DashMap::new());
+                        let mut skipm = HashSet::new();
+                        skipm.insert(vector_emb.hash_vec.clone());
                         let z = traverse_find_nearest(
                             vec_store.clone(),
                             vtm.clone(),
                             fvec.clone(),
                             vector_emb.hash_vec.clone(),
                             0,
-                            skipm,
+                            &mut skipm,
                             cur_level,
                             true,
                         );
@@ -257,7 +262,7 @@ pub fn insert_embedding(
 fn insert_node_create_edges(
     persist: Arc<Mutex<Persist>>,
     vec_store: Arc<VectorStore>,
-    fvec: Arc<VectorW>,
+    fvec: Arc<VectorQt>,
     hs: VectorId,
     nbs: Vec<(VectorId, f32)>,
     cur_level: i8,
@@ -323,36 +328,27 @@ fn insert_node_create_edges(
 fn traverse_find_nearest(
     vec_store: Arc<VectorStore>,
     vtm: Arc<VectorTreeNode>,
-    fvec: Arc<VectorW>,
+    fvec: Arc<VectorQt>,
     hs: VectorId,
     hops: i8,
-    skipm: Arc<DashMap<VectorId, ()>>,
+    skipm: &mut HashSet<VectorId>,
     cur_level: i8,
     skip_hop: bool,
 ) -> Vec<(VectorId, f32)> {
-    let mut tasks = vec![];
+    let mut tasks: SmallVec<[Vec<(VectorId, f32)>; 24]> = SmallVec::new();
 
-    for (index, (nb, _)) in vtm
-        .neighbors
-        .clone()
-        .into_iter()
-        .filter(|(nb, _)| *nb != hs)
-        .enumerate()
-    {
+    for (index, (nb, _)) in vtm.neighbors.clone().into_iter().enumerate() {
         //let skips = tapered_skips(1, index as i8, 20);
 
         if index % 2 != 0 && skip_hop && index > 4 {
             continue; // Skip this iteration if the index is odd
         }
 
-        let skipm = skipm.clone();
         let vec_store = vec_store.clone();
         let fvec = fvec.clone();
         let hs = hs.clone();
 
-        if !skipm.contains_key(&nb) {
-            skipm.insert(nb.clone(), ());
-
+        if skipm.insert(nb.clone()) {
             let maybe_res = vec_store.cache.get(&(cur_level, nb.clone())).map(|res| {
                 let value = res.value().clone();
                 value
@@ -372,7 +368,7 @@ fn traverse_find_nearest(
                         fvec.clone(),
                         hs.clone(),
                         hops + 1,
-                        skipm.clone(),
+                        skipm,
                         cur_level,
                         skip_hop,
                     );

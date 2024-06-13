@@ -3,7 +3,7 @@ use crate::models::rpc::VectorIdValue;
 use crate::models::user::{AuthResp, Statistics};
 use crate::models::{self, common::*};
 use crate::models::{persist, types::*};
-use crate::vector_store::*;
+use crate::vector_store::{self, *};
 use dashmap::DashMap;
 use futures::stream::{self, StreamExt};
 use log::info;
@@ -34,12 +34,16 @@ pub async fn init_vector_store(
 
     let cache = Arc::new(DashMap::new());
 
+    let resolution = 1 as u8;
+    let quant_dim = (size * resolution as usize / 32);
     let quantized_values: Vec<Vec<u8>> = quantize_to_u8_bits(&vec.clone());
-    let mpq: (f64, Vec<u32>) = get_magnitude_plus_quantized_vec(quantized_values.to_vec());
-    let vector_list = VectorW::QuantizedVector {
+    let mpq: (f64, Vec<u32>) =
+        get_magnitude_plus_quantized_vec(quantized_values.to_vec(), quant_dim);
+
+    let vector_list = VectorQt {
         mag: mpq.0,
         quant_vec: mpq.1,
-        resolution: 1,
+        resolution: resolution,
     };
 
     let root = (vec_hash.clone(), vector_list.clone());
@@ -54,7 +58,7 @@ pub async fn init_vector_store(
             })),
         );
     }
-     // ---------------------------
+    // ---------------------------
     // -- TODO level entry ratio
     // ---------------------------
     let factor_levels = 10.0;
@@ -72,7 +76,7 @@ pub async fn init_vector_store(
             ain_env
                 .vector_store_map
                 .insert(name.clone(), vec_store.clone());
-            let rs = ain_env.persist.lock().unwrap().create_cf_family("main"); 
+            let rs = ain_env.persist.lock().unwrap().create_cf_family("main");
             // create the default CF for main index
             match rs {
                 Ok(__) => {
@@ -105,9 +109,12 @@ pub async fn run_upload(
                 let vec_hash = convert_value(id);
 
                 let quantized_values: Vec<Vec<u8>> = quantize_to_u8_bits(&vec.clone());
-                let mpq: (f64, Vec<u32>) =
-                    get_magnitude_plus_quantized_vec(quantized_values.to_vec());
-                let vector_list = VectorW::QuantizedVector {
+                let mpq: (f64, Vec<u32>) = get_magnitude_plus_quantized_vec(
+                    quantized_values.to_vec(),
+                    vec_store.quant_dim,
+                );
+
+                let vector_list = VectorQt {
                     mag: mpq.0,
                     quant_vec: mpq.1,
                     resolution: 1,
@@ -143,8 +150,9 @@ pub async fn ann_vector_query(
     let rhash = &vector_store.root_vec.0;
 
     let quantized_values: Vec<Vec<u8>> = quantize_to_u8_bits(&query.clone());
-    let mpq: (f64, Vec<u32>) = get_magnitude_plus_quantized_vec(quantized_values.to_vec());
-    let vector_list = VectorW::QuantizedVector {
+    let mpq: (f64, Vec<u32>) =
+        get_magnitude_plus_quantized_vec(quantized_values.to_vec(), vec_store.quant_dim);
+    let vector_list = VectorQt {
         mag: mpq.0,
         quant_vec: mpq.1,
         resolution: 1,

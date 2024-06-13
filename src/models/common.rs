@@ -1,7 +1,7 @@
 use super::rpc::VectorIdValue;
 use super::types::VectorId;
 use crate::models::rpc::Vector;
-use crate::models::types::VectorW;
+use crate::models::types::VectorQt;
 use async_std::stream::Cloned;
 use dashmap::DashMap;
 use futures::future::{join_all, BoxFuture, FutureExt};
@@ -72,44 +72,31 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     dot_product(a, b) / (magnitude(a) * magnitude(b))
 }
 
-pub fn get_magnitude_plus_quantized_vec(bits: Vec<Vec<u8>>) -> (f64, Vec<u32>) {
-    let quant_vec: Vec<u32> = bits
-        .iter()
-        .map(|bit_vec| bits_to_integer(bit_vec, 32))
-        .collect();
+pub fn get_magnitude_plus_quantized_vec(bits: Vec<Vec<u8>>, size: usize) -> (f64, Vec<u32>) {
+    // Create the quant_vec with the capacity equal to the length of bits
+    let mut quant_vec: Vec<u32> = Vec::with_capacity(size);
+
+    // Fill the quant_vec using a loop or iterator
+    for bit_vec in &bits {
+        quant_vec.push(bits_to_integer(bit_vec, 32));
+    }
+
     let premag: u32 = quant_vec
         .iter()
         .fold(0, |acc, val| acc + shift_and_accumulate(*val));
     let mag = f64::sqrt(f64::from(premag));
-    //println!("{} {:?}", mag, quant_vec);
+
     return (mag, quant_vec);
 }
 
-pub fn cosine_coalesce(x: &VectorW, y: &VectorW, length: usize) -> f32 {
-    match (x, y) {
-        (
-            VectorW::QuantizedVector {
-                mag: xm,
-                quant_vec: xv,
-                resolution: _,
-            },
-            VectorW::QuantizedVector {
-                mag: ym,
-                quant_vec: yv,
-                resolution: _,
-            },
-        ) => {
-            let mut dot_prod = 0;
-            for i in 0..length {
-                dot_prod += shift_and_accumulate(xv[i] & yv[i]);
-            }
-            let res = f64::from(dot_prod) / (xm * ym);
-            //print!("cosine coalesce {}", res);
-            return res as f32;
-        }
-        _ => -9999.0,
-    };
-    -9999.0
+pub fn cosine_coalesce(x: &VectorQt, y: &VectorQt, length: usize) -> f32 {
+    let mut dot_prod = 0;
+    for i in 0..length {
+        dot_prod += shift_and_accumulate(x.quant_vec[i] & y.quant_vec[i]);
+    }
+    let res = f64::from(dot_prod) / (x.mag * y.mag);
+    //print!("cosine coalesce {}", res);
+    return res as f32;
 }
 
 fn to_float_flag(x: f32) -> u8 {

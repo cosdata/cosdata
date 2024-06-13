@@ -30,6 +30,7 @@ rustls-pemfile = "2.1.2"
 serde = { version = "1.0.203", features = ["derive", "rc"] }
 serde_json = "1.0.117"
 sha2 = "0.10.8"
+smallvec = "1.13.2"
 thiserror = "1.0.61"
 tokio = "1.37.0"
 tokio-rustls =  {version="0.26.0" , default-features = false }
