@@ -4,3 +4,4 @@ pub mod rpc;
 pub mod types;
 pub mod user;
 pub mod persist;
+pub mod file_persist;

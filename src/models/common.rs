@@ -145,6 +145,9 @@ pub enum WaCustomError {
 
     #[error("Invalid params in request")]
     InvalidParams,
+
+    #[error("Could not load Node")]
+    NodeNotFound(String),
 }
 
 pub fn hash_float_vec(vec: Vec<f32>) -> Vec<u8> {

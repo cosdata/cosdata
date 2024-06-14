@@ -2,9 +2,60 @@ use bincode;
 use dashmap::DashMap;
 use rocksdb::{ColumnFamily, Error, Options, DB};
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock};
+
+pub type HNSWLevel = u8;
+
+pub type NodeRef = Arc<Node>;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum NeighbourRef {
+    Done(NodeRef),
+    Pending(NodeFileRef),
+}
+
+type NodeFileRef = (u32, u32); // (file_number, offset)
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeProp {
+    pub id: VectorId,
+    pub value: VectorQt,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Node {
+    pub prop: Arc<NodeProp>,
+    pub location: NodeFileRef,
+    pub neighbors: Vec<NeighbourRef>,
+}
+
+impl NodeProp {
+    pub fn new(id: VectorId, value: VectorQt) -> Arc<NodeProp> {
+        Arc::new(NodeProp { id, value })
+    }
+}
+
+impl Node {
+    pub fn new(prop: Arc<NodeProp>, loc: NodeFileRef) -> NodeRef {
+        Arc::new(Node {
+            prop,
+            neighbors: Vec::new(),
+            location: loc,
+        })
+    }
+
+    pub fn add_neighbor(&mut self, neighbor: NeighbourRef) {
+        self.neighbors.push(neighbor);
+    }
+
+    pub fn get_neighbors(&self) -> Vec<NeighbourRef> {
+        self.neighbors.clone()
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VectorQt {
@@ -38,7 +89,7 @@ impl VectorTreeNode {
         Ok(deserialized)
     }
 }
-type CacheType = DashMap<(i8, VectorId), Option<Arc<(VectorTreeNode)>>>;
+type CacheType = DashMap<(HNSWLevel, NodeFileRef), NodeRef>;
 
 #[derive(Debug, Clone)]
 pub struct VectorStore {
