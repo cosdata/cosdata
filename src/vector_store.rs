@@ -30,13 +30,10 @@ pub fn vector_fetch(
                 vthmm
             });
 
-        results.push(if let Some(vthm) = maybe_res {
-            if let Some(vth) = vthm {
+        results.push(if let Some(vth) = maybe_res {
                 let ne = vth.neighbors.clone();
                 Some((vector_id, ne))
-            } else {
-                None
-            }
+           
         } else {
             None
         });

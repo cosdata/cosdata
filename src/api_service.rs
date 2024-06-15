@@ -15,7 +15,7 @@ pub async fn init_vector_store(
     size: usize,
     lower_bound: Option<f32>,
     upper_bound: Option<f32>,
-    max_cache_level: i8,
+    max_cache_level: u8,
 ) -> Result<(), WaCustomError> {
     if name.is_empty() {
         return Err(WaCustomError::InvalidParams);
@@ -47,16 +47,10 @@ pub async fn init_vector_store(
     };
 
     let root = (vec_hash.clone(), vector_list.clone());
-    let vl_arc = Arc::new(vector_list);
 
     for l in 0..=max_cache_level {
-        cache.insert(
-            (l, vec_hash.clone()),
-            Some(Arc::new(VectorTreeNode {
-                neighbors: vec![],
-                vector_list: vl_arc.clone(),
-            })),
-        );
+        let prop = NodeProp::new(vec_hash.clone(), vector_list.clone());
+        cache.insert((l, vec_hash.clone()), Node::new(prop, (0, 0)));
     }
     // ---------------------------
     // -- TODO level entry ratio
@@ -131,7 +125,7 @@ pub async fn run_upload(
                     vec_store.clone(),
                     vec_emb,
                     vec![rhash.clone()],
-                    vec_store.max_cache_level,
+                    vec_store.max_cache_level.try_into().unwrap(),
                     iv.try_into().unwrap(),
                 );
             }
@@ -166,7 +160,7 @@ pub async fn ann_vector_query(
         vec_store.clone(),
         vec_emb,
         rhash.clone(),
-        vec_store.max_cache_level,
+        vec_store.max_cache_level.try_into().unwrap(),
     );
     let output = remove_duplicates_and_filter(results);
     return output;

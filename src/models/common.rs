@@ -148,6 +148,9 @@ pub enum WaCustomError {
 
     #[error("Could not load Node")]
     NodeNotFound(String),
+
+    #[error("Pending neighbor encountered")]
+    PendingNeighborEncountered(String),
 }
 
 pub fn hash_float_vec(vec: Vec<f32>) -> Vec<u8> {

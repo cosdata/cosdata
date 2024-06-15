@@ -14,7 +14,10 @@ pub type NodeRef = Arc<Node>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum NeighbourRef {
-    Done(NodeRef),
+    Done {
+        node: NodeRef,
+        cosine_similarity: f32,
+    },
     Pending(NodeFileRef),
 }
 
@@ -89,12 +92,12 @@ impl VectorTreeNode {
         Ok(deserialized)
     }
 }
-type CacheType = DashMap<(HNSWLevel, NodeFileRef), NodeRef>;
+type CacheType = DashMap<(HNSWLevel, VectorId), NodeRef>;
 
 #[derive(Debug, Clone)]
 pub struct VectorStore {
     pub cache: Arc<CacheType>,
-    pub max_cache_level: i8,
+    pub max_cache_level: u8,
     pub database_name: String,
     pub root_vec: (VectorId, VectorQt),
     pub levels_prob: Arc<Vec<(f64, i32)>>,
