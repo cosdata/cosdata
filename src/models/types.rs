@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 pub type HNSWLevel = u8;
 
@@ -14,7 +14,7 @@ pub type NodeRef = Arc<Node>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum NeighbourRef {
-    Done {
+    Ready {
         node: NodeRef,
         cosine_similarity: f32,
     },
@@ -26,18 +26,20 @@ type NodeFileRef = (u32, u32); // (file_number, offset)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeProp {
     pub id: VectorId,
-    pub value: VectorQt,
+    pub value: Arc<VectorQt>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Node {
     pub prop: Arc<NodeProp>,
     pub location: NodeFileRef,
-    pub neighbors: Vec<NeighbourRef>,
+    pub neighbors: Arc<RwLock<Vec<NeighbourRef>>>,
+    pub parent: Arc<RwLock<Option<NodeRef>>>,
+    pub child: Arc<RwLock<Option<NodeRef>>>,
 }
 
 impl NodeProp {
-    pub fn new(id: VectorId, value: VectorQt) -> Arc<NodeProp> {
+    pub fn new(id: VectorId, value: Arc<VectorQt>) -> Arc<NodeProp> {
         Arc::new(NodeProp { id, value })
     }
 }
@@ -46,17 +48,54 @@ impl Node {
     pub fn new(prop: Arc<NodeProp>, loc: NodeFileRef) -> NodeRef {
         Arc::new(Node {
             prop,
-            neighbors: Vec::new(),
+            neighbors: Arc::new(RwLock::new(Vec::new())),
             location: loc,
+            parent: Arc::new(RwLock::new(None)),
+            child: Arc::new(RwLock::new(None)),
         })
     }
 
-    pub fn add_neighbor(&mut self, neighbor: NeighbourRef) {
-        self.neighbors.push(neighbor);
+    pub fn add_ready_neighbor(&self, neighbor: NodeRef, cosine_similarity: f32) {
+        let mut neighbors = self.neighbors.write().unwrap();
+        neighbors.push(NeighbourRef::Ready {
+            node: neighbor,
+            cosine_similarity,
+        });
+    }
+
+    pub fn add_ready_neighbors(&self, neighbors_list: Vec<(NodeRef, f32)>) {
+        let mut neighbors = self.neighbors.write().unwrap();
+        for (neighbor, cosine_similarity) in neighbors_list.iter() {
+            neighbors.push(NeighbourRef::Ready {
+                node: neighbor.clone(),
+                cosine_similarity: *cosine_similarity,
+            });
+        }
     }
 
     pub fn get_neighbors(&self) -> Vec<NeighbourRef> {
-        self.neighbors.clone()
+        let neighbors = self.neighbors.read().unwrap();
+        neighbors.clone()
+    }
+
+    pub fn add_parent(&self, parent: NodeRef) {
+        let mut parent_lock = self.parent.write().unwrap();
+        *parent_lock = Some(parent);
+    }
+
+    pub fn add_child(&self, child: NodeRef) {
+        let mut child_lock = self.child.write().unwrap();
+        *child_lock = Some(child);
+    }
+
+    pub fn get_parent(&self) -> Option<NodeRef> {
+        let parent_lock = self.parent.read().unwrap();
+        parent_lock.clone()
+    }
+
+    pub fn get_child(&self) -> Option<NodeRef> {
+        let child_lock = self.child.read().unwrap();
+        child_lock.clone()
     }
 }
 

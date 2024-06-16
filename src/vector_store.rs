@@ -1,14 +1,20 @@
 use crate::models::common::*;
+use crate::models::file_persist::{
+    convert_node_to_node_persist, write_prop_to_file, NodePersistProp,
+};
 use crate::models::persist::Persist;
 use crate::models::types::*;
 use bincode;
 use dashmap::DashMap;
+use futures::stream::Collect;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use smallvec::SmallVec;
+use std::borrow::{Borrow, BorrowMut};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
 pub fn vector_fetch(
@@ -30,16 +36,28 @@ pub fn vector_fetch(
                 vthmm
             });
 
-        results.push(if let Some(vth) = maybe_res {
-                let ne = vth.neighbors.clone();
-                Some((vector_id, ne))
-           
+        let neighbors = if let Some(vth) = maybe_res {
+            let nes: Vec<(VectorId, f32)> = vth
+                .neighbors
+                .clone()
+                .into_iter()
+                .filter_map(|ne| match ne {
+                    NeighbourRef::Ready {
+                        node,
+                        cosine_similarity,
+                    } => Some((node.prop.id.clone(), cosine_similarity)),
+                    NeighbourRef::Pending(_) => None,
+                })
+                .collect();
+            Some((vector_id, nes))
         } else {
             None
-        });
+        };
+
+        results.push(neighbors);
     }
 
-    return results;
+    results
 }
 
 pub fn ann_search(
@@ -56,7 +74,7 @@ pub fn ann_search(
 
     let xx = vec_store.cache.clone();
     for i in 0..101 {
-        let key = (0 as i8, VectorId::Int(i));
+        let key = (0 as u8, VectorId::Int(i));
         let val = xx.get(&key);
         match val {
             Some(vv) => {
@@ -68,71 +86,47 @@ pub fn ann_search(
     let maybe_res = vec_store
         .cache
         .clone()
-        .get(&(cur_level, cur_entry.clone()))
+        .get(&(cur_level as u8, cur_entry.clone()))
         .map(|res| {
             let fvec = vector_emb.raw_vec.clone();
             let vthm_mv = res.value().clone();
             (fvec, vthm_mv)
         });
 
-    if let Some((fvec, vthm_mv)) = maybe_res {
-        if let Some(vthm) = vthm_mv {
-            let vtm = vthm.clone();
-            let mut skipm = HashSet::new();
-            skipm.insert(vector_emb.hash_vec.clone());
-            let z = traverse_find_nearest(
-                vec_store.clone(),
-                vtm.clone(),
-                fvec.clone(),
-                vector_emb.hash_vec.clone(),
-                0,
-                &mut skipm,
-                cur_level,
-                false,
-            );
-
-            let y = cosine_coalesce(&fvec, &vtm.vector_list, vec_store.quant_dim);
-            let z = if z.is_empty() {
-                vec![(cur_entry.clone(), y)]
-            } else {
-                z
-            };
-            let result = ann_search(
-                vec_store.clone(),
-                vector_emb.clone(),
-                z[0].0.clone(),
-                cur_level - 1,
-            );
-            return add_option_vecs(&result, &Some(z));
-        } else {
-            if cur_level > vec_store.max_cache_level {
-                let xvtm = get_vector_from_db(&vec_store.database_name, cur_entry.clone());
-                if let Some(vtm) = xvtm {
-                    let mut skipm = HashSet::new();
-                    skipm.insert(vector_emb.hash_vec.clone());
-                    let z = traverse_find_nearest(
-                        vec_store.clone(),
-                        vtm.clone(),
-                        fvec.clone(),
-                        vector_emb.hash_vec.clone(),
-                        0,
-                        &mut skipm,
-                        cur_level,
-                        false,
-                    );
-                    return Some(z);
-                } else {
-                    eprintln!(
-                        "Error case, should have been found: {} {:?}",
-                        cur_level, xvtm
-                    );
-                    return Some(vec![]);
-                }
-            } else {
-                eprintln!("Error case, should not happen: {} ", cur_level);
-                return Some(vec![]);
-            }
+    if let Some((fvec, vtm)) = maybe_res {
+        let mut skipm = HashSet::new();
+        skipm.insert(vector_emb.hash_vec.clone());
+        match vtm {
+            NeighbourRef::Ready {
+                node,
+                cosine_similarity,
+            } => Some((node.prop.id.clone(), cosine_similarity)),
+            NeighbourRef::Pending(_) => None,
         }
+        let z = traverse_find_nearest(
+            vec_store.clone(),
+            vtm.clone(),
+            fvec.clone(),
+            vector_emb.hash_vec.clone(),
+            0,
+            &mut skipm,
+            cur_level,
+            false,
+        );
+
+        let y = cosine_coalesce(&fvec, &vtm.vector_list, vec_store.quant_dim);
+        let z = if z.is_empty() {
+            vec![(cur_entry.clone(), y)]
+        } else {
+            z
+        };
+        let result = ann_search(
+            vec_store.clone(),
+            vector_emb.clone(),
+            z[0].0.clone(),
+            cur_level - 1,
+        );
+        return add_option_vecs(&result, &Some(z));
     } else {
         eprintln!("Error case, should not happen: {}", cur_level);
         return Some(vec![]);
@@ -143,7 +137,7 @@ pub fn insert_embedding(
     persist: Arc<Mutex<Persist>>,
     vec_store: Arc<VectorStore>,
     vector_emb: VectorEmbedding,
-    cur_entries: Vec<VectorId>,
+    cur_entry: NodeRef,
     cur_level: i8,
     max_insert_level: i8,
 ) {
@@ -151,108 +145,56 @@ pub fn insert_embedding(
         return;
     }
 
-    for cur_entry in cur_entries.iter() {
-        let maybe_res = vec_store
-            .cache
-            .clone()
-            .get(&(cur_level, cur_entry.clone()))
-            .map(|res| {
-                let fvec = vector_emb.raw_vec.clone();
-                let vthm_mv = res.value().clone();
-                (fvec, vthm_mv)
-            });
+    let fvec = vector_emb.raw_vec.clone();
+    let mut skipm = HashSet::new();
+    skipm.insert(vector_emb.hash_vec.clone());
+    let z = traverse_find_nearest(
+        vec_store.clone(),
+        cur_entry.clone(),
+        fvec.clone(),
+        vector_emb.hash_vec.clone(),
+        0,
+        &mut skipm,
+        cur_level,
+        true,
+    );
 
-        if let Some((fvec, vthm_mv)) = maybe_res {
-            if let Some(vthm) = vthm_mv {
-                let vtm = vthm.clone();
-                let mut skipm = HashSet::new();
-                skipm.insert(vector_emb.hash_vec.clone());
-                let z = traverse_find_nearest(
-                    vec_store.clone(),
-                    vtm.clone(),
-                    fvec.clone(),
-                    vector_emb.hash_vec.clone(),
-                    0,
-                    &mut skipm,
-                    cur_level,
-                    true,
-                );
+    let cs = cosine_coalesce(&fvec, &cur_entry.prop.value, vec_store.quant_dim);
+    let z = if z.is_empty() {
+        vec![(cur_entry.clone(), cs)]
+    } else {
+        z
+    };
+    let z_clone: Vec<_> = z.iter().map(|(first, _)| first.clone()).collect();
 
-                let y = cosine_coalesce(&fvec, &vtm.vector_list, vec_store.quant_dim);
-                let z = if z.is_empty() {
-                    vec![(cur_entry.clone(), y)]
-                } else {
-                    z
-                };
-                let z_clone: Vec<_> = z.iter().take(1).map(|(first, _)| first.clone()).collect();
+    if cur_level <= max_insert_level {
+        insert_embedding(
+            persist.clone(),
+            vec_store.clone(),
+            vector_emb.clone(),
+            z_clone[0].clone(),
+            cur_level - 1,
+            max_insert_level,
+        );
+        insert_node_create_edges(
+            persist.clone(),
+            vec_store.clone(),
+            fvec,
+            vector_emb.hash_vec.clone(),
+            z,
+            cur_level,
+        );
+    } else {
+        let z_clone: Vec<_> = z.iter().map(|(first, _)| first.clone()).collect();
 
-                if cur_level <= max_insert_level {
-                    insert_embedding(
-                        persist.clone(),
-                        vec_store.clone(),
-                        vector_emb.clone(),
-                        z_clone.clone(),
-                        cur_level - 1,
-                        max_insert_level,
-                    );
-                    insert_node_create_edges(
-                        persist.clone(),
-                        vec_store.clone(),
-                        fvec,
-                        vector_emb.hash_vec.clone(),
-                        z,
-                        cur_level,
-                    );
-                } else {
-                    let z_clone: Vec<_> =
-                        z.iter().take(1).map(|(first, _)| first.clone()).collect();
-
-                    insert_embedding(
-                        persist.clone(),
-                        vec_store.clone(),
-                        vector_emb.clone(),
-                        z_clone.clone(),
-                        cur_level - 1,
-                        max_insert_level,
-                    );
-                }
-            } else {
-                if cur_level > vec_store.max_cache_level {
-                    let xvtm = get_vector_from_db(&vec_store.database_name, cur_entry.clone());
-                    if let Some(vtm) = xvtm {
-                        let mut skipm = HashSet::new();
-                        skipm.insert(vector_emb.hash_vec.clone());
-                        let z = traverse_find_nearest(
-                            vec_store.clone(),
-                            vtm.clone(),
-                            fvec.clone(),
-                            vector_emb.hash_vec.clone(),
-                            0,
-                            &mut skipm,
-                            cur_level,
-                            true,
-                        );
-                        insert_node_create_edges(
-                            persist.clone(),
-                            vec_store.clone(),
-                            fvec,
-                            vector_emb.hash_vec.clone(),
-                            z,
-                            cur_level,
-                        );
-                    } else {
-                        eprintln!(
-                            "Error case, should have been found: {} {:?}",
-                            cur_level, xvtm
-                        );
-                    }
-                } else {
-                    eprintln!("Error case, should not happen: {} ", cur_level);
-                }
-            }
-        } else {
-            eprintln!("Error case, should not happen: {}", cur_level);
-        }
+        insert_embedding(
+            persist.clone(),
+            vec_store.clone(),
+            vector_emb.clone(),
+            z_clone[0].clone(),
+            cur_level - 1,
+            max_insert_level,
+        );
     }
 }
 
@@ -261,126 +203,131 @@ fn insert_node_create_edges(
     vec_store: Arc<VectorStore>,
     fvec: Arc<VectorQt>,
     hs: VectorId,
-    nbs: Vec<(VectorId, f32)>,
+    nbs: Vec<(NodeRef, f32)>,
     cur_level: i8,
 ) {
-    let nn = VectorTreeNode {
-        vector_list: fvec.clone(),
-        neighbors: nbs.clone(),
+    let nd_p = NodeProp::new(hs.clone(), fvec.clone());
+    let prop = NodePersistProp::new(hs, fvec.clone());
+    let offset = write_prop_to_file(&prop, "prop.data");
+
+    let mut nn = Node::new(nd_p, offset);
+    nn.add_ready_neighbors(nbs.clone());
+
+    let nd_persist = convert_node_to_node_persist(nn, prop, cur_level as u8);
+
+    let mut nd_persist = match nd_persist {
+        Ok(node_persist) => node_persist,
+        Err(e) => {
+            eprintln!("Failed to convert node to node persist: {}", e);
+            return;
+        }
     };
-    let nv = Arc::new(nn.clone());
+    nd_persist.location = offset;
 
-    vec_store.cache.insert((cur_level, hs.clone()), Some(nv));
-
-    // Serialize the vector_node
-    let ser_vec = nn.serialize().unwrap();
-    let ser_hs = bincode::serialize(&hs).unwrap();
-
-    let _ = persist.lock().unwrap().put_cf("main", &ser_hs, &ser_vec);
-
-    for (nb, cs) in nbs.into_iter() {
-        vec_store.cache.alter(
-            &(cur_level.clone(), nb.clone()).clone(),
-            |_, existing_value| match existing_value {
-                Some(res) => {
-                    let vthm = res;
-                    let mut ng = vthm.neighbors.clone();
-
-                    // Extract and hash the original VectorId values
-                    let original_hash = calculate_hash(&extract_ids(&ng));
-
-                    ng.push((hs.clone(), cs));
-                    ng.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-                    ng.dedup_by(|a, b| a.0 == b.0);
-
-                    // ---------------------------
-                    // -- TODO number of neighbors
-                    // ---------------------------
-                    let ng = ng.into_iter().take(20).collect::<Vec<_>>();
-
-                    // Extract and hash the modified VectorId values
-                    let new_hash = calculate_hash(&extract_ids(&ng));
-                    let nn = VectorTreeNode {
-                        vector_list: vthm.vector_list.clone(),
-                        neighbors: ng,
-                    };
-                    let nv = Arc::new(nn.clone());
-
-                    if original_hash != new_hash {
-                        // Serialize the vector_node
-                        let ser_vec = nn.serialize().unwrap();
-                        let ser_nb = bincode::serialize(&nb).unwrap();
-                        let _ = persist.lock().unwrap().put_cf("main", &ser_nb, &ser_vec);
-                    }
-                    return Some(nv);
+    for (nbr1, cs) in nbs.into_iter() {
+        let mut neighbor_list: Vec<(NodeRef, f32)> = nbr1
+            .neighbors
+            .read()
+            .unwrap()
+            .iter()
+            .filter_map(|nbr2| {
+                if let NeighbourRef::Ready {
+                    node: nodex,
+                    cosine_similarity,
+                } = nbr2
+                {
+                    Some((nodex.clone(), *cosine_similarity))
+                } else {
+                    None
                 }
-                None => {
-                    return existing_value.clone();
-                }
-            },
-        );
+            })
+            .collect();
+
+        // Add the current (nbr1, cs) to the list
+        neighbor_list.push((nbr1.clone(), cs));
+
+        // Sort by cosine similarity in descending order
+        neighbor_list.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
+        // Deduplicate and take the first 20 items
+        let mut seen = HashSet::new();
+        neighbor_list.retain(|(node, _)| seen.insert(Arc::as_ptr(node) as *const _));
+        neighbor_list.truncate(20);
+
+        // Update nbr1's neighbors
+        let mut locked_neighbors = nbr1.neighbors.write().unwrap();
+        *locked_neighbors = neighbor_list
+            .into_iter()
+            .map(|(node, cosine_similarity)| NeighbourRef::Ready {
+                node,
+                cosine_similarity,
+            })
+            .collect();
     }
 }
 
 fn traverse_find_nearest(
     vec_store: Arc<VectorStore>,
-    vtm: Arc<VectorTreeNode>,
+    vtm: NodeRef,
     fvec: Arc<VectorQt>,
     hs: VectorId,
-    hops: i8,
+    hops: u8,
     skipm: &mut HashSet<VectorId>,
     cur_level: i8,
     skip_hop: bool,
-) -> Vec<(VectorId, f32)> {
-    let mut tasks: SmallVec<[Vec<(VectorId, f32)>; 24]> = SmallVec::new();
+) -> Vec<(NodeRef, f32)> {
+    let mut tasks: SmallVec<[Vec<(NodeRef, f32)>; 24]> = SmallVec::new();
 
-    for (index, (nb, _)) in vtm.neighbors.clone().into_iter().enumerate() {
-        //let skips = tapered_skips(1, index as i8, 20);
+    // Lock the neighbors Mutex to access the neighbors
+    let neighbors_lock = vtm.neighbors.read().unwrap();
 
-        if index % 2 != 0 && skip_hop && index > 4 {
-            continue; // Skip this iteration if the index is odd
-        }
-
-        let vec_store = vec_store.clone();
-        let fvec = fvec.clone();
-        let hs = hs.clone();
-
-        if skipm.insert(nb.clone()) {
-            let maybe_res = vec_store.cache.get(&(cur_level, nb.clone())).map(|res| {
-                let value = res.value().clone();
-                value
-            });
-
-            if let Some(Some(vthm)) = maybe_res {
-                let cs = cosine_coalesce(&fvec, &vthm.vector_list, vec_store.quant_dim);
-
-                // ---------------------------
-                // -- TODO number of hops
-                // ---------------------------
-                let full_hops = 30;
-                if hops <= tapered_total_hops(full_hops, cur_level, vec_store.max_cache_level) {
-                    let mut z = traverse_find_nearest(
-                        vec_store.clone(),
-                        vthm.clone(),
-                        fvec.clone(),
-                        hs.clone(),
-                        hops + 1,
-                        skipm,
-                        cur_level,
-                        skip_hop,
-                    );
-                    z.push((nb.clone(), cs));
-                    tasks.push(z);
-                } else {
-                    tasks.push(vec![(nb.clone(), cs)]);
+    for (index, nref) in neighbors_lock.iter().enumerate() {
+        match nref {
+            NeighbourRef::Ready {
+                node: nbr,
+                cosine_similarity,
+            } => {
+                let nb = nbr.prop.id.clone();
+                if index % 2 != 0 && skip_hop && index > 4 {
+                    continue; // Skip this iteration if the index is odd
                 }
-            } else {
-                eprintln!(
-                    "Error case, should not happen: {} key {:?}",
-                    cur_level,
-                    (cur_level, nb)
-                );
+
+                let vec_store = vec_store.clone();
+                let fvec = fvec.clone();
+                let hs = hs.clone();
+
+                if skipm.insert(nb.clone()) {
+                    let cs = cosine_coalesce(&fvec, &nbr.prop.value, vec_store.quant_dim);
+
+                    // ---------------------------
+                    // -- TODO number of hops
+                    // ---------------------------
+                    let full_hops = 30;
+                    if hops
+                        <= tapered_total_hops(full_hops, cur_level as u8, vec_store.max_cache_level)
+                    {
+                        let mut z = traverse_find_nearest(
+                            vec_store.clone(),
+                            nbr.clone(),
+                            fvec.clone(),
+                            hs.clone(),
+                            hops + 1,
+                            skipm,
+                            cur_level,
+                            skip_hop,
+                        );
+                        z.push((nbr.clone(), cs));
+                        tasks.push(z);
+                    } else {
+                        tasks.push(vec![(nbr.clone(), cs)]);
+                    }
+                }
             }
+            NeighbourRef::Pending(_) => eprintln!(
+                "Error case, should not happen: {} key {:?}",
+                cur_level,
+                (cur_level)
+            ),
         }
     }
 

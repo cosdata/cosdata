@@ -49,7 +49,7 @@ pub async fn init_vector_store(
     let root = (vec_hash.clone(), vector_list.clone());
 
     for l in 0..=max_cache_level {
-        let prop = NodeProp::new(vec_hash.clone(), vector_list.clone());
+        let prop = NodeProp::new(vec_hash.clone(), vector_list.clone().into());
         cache.insert((l, vec_hash.clone()), Node::new(prop, (0, 0)));
     }
     // ---------------------------

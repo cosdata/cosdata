@@ -295,19 +295,9 @@ pub fn cat_maybes<T>(iter: impl Iterator<Item = Option<T>>) -> Vec<T> {
     iter.flat_map(|maybe| maybe).collect()
 }
 
-pub fn tapered_total_hops22(hops: i8, cur_level: i8, max_level: i8) -> i8 {
-    if cur_level > max_level / 2 {
-        hops
-    } else {
-        // Linear tapering calculation
-        let max_reduction = (hops) / 2; // maximum reduction of hops
-        let reduction =
-            (max_reduction as f64 * (1.0 - (cur_level as f64 / (max_level / 2) as f64))) as i8;
-        hops - reduction
-    }
-}
 
-pub fn tapered_total_hops(hops: i8, cur_level: i8, max_level: i8) -> i8 {
+
+pub fn tapered_total_hops(hops: u8, cur_level: u8, max_level: u8) -> u8 {
     //div by 2
     if cur_level > max_level >> 1 {
         return hops;
