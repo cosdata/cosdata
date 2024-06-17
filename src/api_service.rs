@@ -50,7 +50,7 @@ pub async fn init_vector_store(
 
     for l in 0..=max_cache_level {
         let prop = NodeProp::new(vec_hash.clone(), vector_list.clone().into());
-        cache.insert((l, vec_hash.clone()), Node::new(prop, (0, 0)));
+        cache.insert((l, vec_hash.clone()), Node::new(prop, None));
     }
     // ---------------------------
     // -- TODO level entry ratio
@@ -115,16 +115,19 @@ pub async fn run_upload(
                 };
 
                 let vec_emb = VectorEmbedding {
-                    raw_vec: Arc::new(vector_list),
-                    hash_vec: vec_hash,
+                    raw_vec: Arc::new(vector_list.clone()),
+                    hash_vec: vec_hash.clone(),
                 };
                 let lp = &vec_store.levels_prob;
                 let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
+                let prop = NodeProp::new(vec_hash.clone(), vector_list.clone().into());
+
+                let nn = Node::new(prop, None);
                 insert_embedding(
                     persist,
                     vec_store.clone(),
                     vec_emb,
-                    vec![rhash.clone()],
+                    nn,
                     vec_store.max_cache_level.try_into().unwrap(),
                     iv.try_into().unwrap(),
                 );
@@ -153,13 +156,18 @@ pub async fn ann_vector_query(
     };
 
     let vec_emb = VectorEmbedding {
-        raw_vec: Arc::new(vector_list),
-        hash_vec: vec_hash,
+        raw_vec: Arc::new(vector_list.clone()),
+        hash_vec: vec_hash.clone(),
     };
+
+    let prop = NodeProp::new(vec_hash.clone(), vector_list.clone().into());
+
+    let nn = Node::new(prop, None);
+
     let results = ann_search(
         vec_store.clone(),
         vec_emb,
-        rhash.clone(),
+        nn,
         vec_store.max_cache_level.try_into().unwrap(),
     );
     let output = remove_duplicates_and_filter(results);

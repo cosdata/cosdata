@@ -10,7 +10,6 @@ use futures::stream::Collect;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use smallvec::SmallVec;
-use std::borrow::{Borrow, BorrowMut};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -40,12 +39,14 @@ pub fn vector_fetch(
             let nes: Vec<(VectorId, f32)> = vth
                 .neighbors
                 .clone()
-                .into_iter()
+                .read() // Locking the RwLock for reading
+                .unwrap() // Handle the possibility of a poisoned lock
+                .iter() // Iterate over the Vec
                 .filter_map(|ne| match ne {
                     NeighbourRef::Ready {
                         node,
                         cosine_similarity,
-                    } => Some((node.prop.id.clone(), cosine_similarity)),
+                    } => Some((node.prop.id.clone(), *cosine_similarity)),
                     NeighbourRef::Pending(_) => None,
                 })
                 .collect();
@@ -63,74 +64,41 @@ pub fn vector_fetch(
 pub fn ann_search(
     vec_store: Arc<VectorStore>,
     vector_emb: VectorEmbedding,
-    cur_entry: VectorId,
+    cur_entry: NodeRef,
     cur_level: i8,
-) -> Option<Vec<(VectorId, f32)>> {
+) -> Option<Vec<(NodeRef, f32)>> {
     if cur_level == -1 {
         return Some(vec![]);
     }
-    let size = vec_store.cache.clone().len();
-    println!("SIZE {}", size);
+    let fvec = vector_emb.raw_vec.clone();
 
-    let xx = vec_store.cache.clone();
-    for i in 0..101 {
-        let key = (0 as u8, VectorId::Int(i));
-        let val = xx.get(&key);
-        match val {
-            Some(vv) => {
-                println!("{:?} {:?}", i, vv.value());
-            }
-            None => {}
-        }
-    }
-    let maybe_res = vec_store
-        .cache
-        .clone()
-        .get(&(cur_level as u8, cur_entry.clone()))
-        .map(|res| {
-            let fvec = vector_emb.raw_vec.clone();
-            let vthm_mv = res.value().clone();
-            (fvec, vthm_mv)
-        });
+    let mut skipm = HashSet::new();
+    skipm.insert(vector_emb.hash_vec.clone());
 
-    if let Some((fvec, vtm)) = maybe_res {
-        let mut skipm = HashSet::new();
-        skipm.insert(vector_emb.hash_vec.clone());
-        match vtm {
-            NeighbourRef::Ready {
-                node,
-                cosine_similarity,
-            } => Some((node.prop.id.clone(), cosine_similarity)),
-            NeighbourRef::Pending(_) => None,
-        }
-        let z = traverse_find_nearest(
-            vec_store.clone(),
-            vtm.clone(),
-            fvec.clone(),
-            vector_emb.hash_vec.clone(),
-            0,
-            &mut skipm,
-            cur_level,
-            false,
-        );
+    let z = traverse_find_nearest(
+        vec_store.clone(),
+        cur_entry.clone(),
+        fvec.clone(),
+        vector_emb.hash_vec.clone(),
+        0,
+        &mut skipm,
+        cur_level,
+        false,
+    );
 
-        let y = cosine_coalesce(&fvec, &vtm.vector_list, vec_store.quant_dim);
-        let z = if z.is_empty() {
-            vec![(cur_entry.clone(), y)]
-        } else {
-            z
-        };
-        let result = ann_search(
-            vec_store.clone(),
-            vector_emb.clone(),
-            z[0].0.clone(),
-            cur_level - 1,
-        );
-        return add_option_vecs(&result, &Some(z));
+    let cs = cosine_coalesce(&fvec, &cur_entry.prop.value, vec_store.quant_dim);
+    let z = if z.is_empty() {
+        vec![(cur_entry.clone(), cs)]
     } else {
-        eprintln!("Error case, should not happen: {}", cur_level);
-        return Some(vec![]);
-    }
+        z
+    };
+    let result = ann_search(
+        vec_store.clone(),
+        vector_emb.clone(),
+        z[0].0.clone(),
+        cur_level - 1,
+    );
+    return add_option_vecs(&result, &Some(z));
 }
 
 pub fn insert_embedding(
@@ -210,7 +178,7 @@ fn insert_node_create_edges(
     let prop = NodePersistProp::new(hs, fvec.clone());
     let offset = write_prop_to_file(&prop, "prop.data");
 
-    let mut nn = Node::new(nd_p, offset);
+    let mut nn = Node::new(nd_p, Some(offset));
     nn.add_ready_neighbors(nbs.clone());
 
     let nd_persist = convert_node_to_node_persist(nn, prop, cur_level as u8);
@@ -334,7 +302,7 @@ fn traverse_find_nearest(
     let mut nn: Vec<_> = tasks.into_iter().flatten().collect();
     nn.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
     let mut seen = HashSet::new();
-    nn.retain(|(vec_u8, _)| seen.insert(vec_u8.clone()));
+    nn.retain(|(vec_u8, _)| seen.insert(vec_u8.clone().prop.id.clone()));
 
     // ---------------------------
     // -- TODO number of closest to make edges

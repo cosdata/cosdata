@@ -1,5 +1,5 @@
 use super::rpc::VectorIdValue;
-use super::types::VectorId;
+use super::types::{NodeRef, VectorId};
 use crate::models::rpc::Vector;
 use crate::models::types::VectorQt;
 use async_std::stream::Cloned;
@@ -176,9 +176,9 @@ pub fn get_max_insert_level(x: f64, levels: Arc<Vec<(f64, i32)>>) -> i32 {
 }
 
 pub fn add_option_vecs(
-    a: &Option<Vec<(VectorId, f32)>>,
-    b: &Option<Vec<(VectorId, f32)>>,
-) -> Option<Vec<(VectorId, f32)>> {
+    a: &Option<Vec<(NodeRef, f32)>>,
+    b: &Option<Vec<(NodeRef, f32)>>,
+) -> Option<Vec<(NodeRef, f32)>> {
     match (a, b) {
         (None, None) => None,
         (Some(vec), None) | (None, Some(vec)) => Some(vec.clone()),
@@ -226,21 +226,21 @@ pub fn convert_vectors(vectors: Vec<Vector>) -> Vec<(VectorIdValue, Vec<f32>)> {
 }
 
 pub fn remove_duplicates_and_filter(
-    input: Option<Vec<(VectorId, f32)>>,
+    input: Option<Vec<(NodeRef, f32)>>,
 ) -> Option<Vec<(VectorId, f32)>> {
     if let Some(vec) = input {
         let mut seen = HashSet::new();
         let mut unique_vec = Vec::new();
 
         for item in vec {
-            if let VectorId::Int(ref s) = item.0 {
+            if let VectorId::Int(ref s) = item.0.prop.id {
                 if *s == -1 {
                     continue;
                 }
             }
 
-            if seen.insert(item.0.clone()) {
-                unique_vec.push(item);
+            if seen.insert(item.0.prop.id.clone()) {
+                unique_vec.push((item.0.prop.id.clone(), item.1));
             }
         }
 

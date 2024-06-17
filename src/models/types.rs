@@ -32,7 +32,7 @@ pub struct NodeProp {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Node {
     pub prop: Arc<NodeProp>,
-    pub location: NodeFileRef,
+    pub location: Option<NodeFileRef>,
     pub neighbors: Arc<RwLock<Vec<NeighbourRef>>>,
     pub parent: Arc<RwLock<Option<NodeRef>>>,
     pub child: Arc<RwLock<Option<NodeRef>>>,
@@ -45,7 +45,7 @@ impl NodeProp {
 }
 
 impl Node {
-    pub fn new(prop: Arc<NodeProp>, loc: NodeFileRef) -> NodeRef {
+    pub fn new(prop: Arc<NodeProp>, loc: Option<NodeFileRef>) -> NodeRef {
         Arc::new(Node {
             prop,
             neighbors: Arc::new(RwLock::new(Vec::new())),

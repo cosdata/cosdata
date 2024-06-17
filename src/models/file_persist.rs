@@ -89,10 +89,15 @@ pub fn convert_node_to_node_persist(
             NeighbourRef::Ready {
                 node: nodex,
                 cosine_similarity,
-            } => Ok(NeighbourPersist {
-                node: nodex.location,
-                cosine_similarity: *cosine_similarity,
-            }),
+            } => match nodex.location {
+                Some(loca) => Ok(NeighbourPersist {
+                    node: loca,
+                    cosine_similarity: *cosine_similarity,
+                }),
+                None => Err(WaCustomError::PendingNeighborEncountered(
+                    "Invalid location neighbor encountered".to_owned(),
+                )),
+            },
             NeighbourRef::Pending(_) => Err(WaCustomError::PendingNeighborEncountered(
                 "Pending neighbor encountered".to_owned(),
             )),
@@ -108,23 +113,32 @@ pub fn convert_node_to_node_persist(
         .read()
         .unwrap()
         .as_ref()
-        .map(|parent_node| parent_node.location);
+        .map(|parent_node| parent_node.location.unwrap());
     let child = node
         .child
         .read()
         .unwrap()
         .as_ref()
-        .map(|child_node| child_node.location);
+        .map(|child_node| child_node.location.unwrap());
 
-    // Create NodePersist
-    Ok(NodePersist {
-        prop,
-        hnsw_level,
-        location: node.location,
-        neighbors,
-        parent,
-        child,
-    })
+    let result = match node.location {
+        Some(loca) =>
+        // Create NodePersist
+        {
+            Ok(NodePersist {
+                prop,
+                hnsw_level,
+                location: loca,
+                neighbors,
+                parent,
+                child,
+            })
+        }
+        None => Err(WaCustomError::PendingNeighborEncountered(
+            "Invalid location neighbor encountered".to_owned(),
+        )),
+    };
+    result
 }
 
 pub fn map_node_persist_ref_to_node(
@@ -193,7 +207,7 @@ pub fn load_node_from_node_persist(vec_store: VectorStore, node_persist: NodePer
     // Create and return NodeRef
     Arc::new(Node {
         prop,
-        location: node_persist.location,
+        location: Some(node_persist.location),
         neighbors,
         parent,
         child,
