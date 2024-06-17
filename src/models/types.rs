@@ -4,6 +4,7 @@ use rocksdb::{ColumnFamily, Error, Options, DB};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashSet;
+use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
@@ -21,7 +22,7 @@ pub enum NeighbourRef {
     Pending(NodeFileRef),
 }
 
-type NodeFileRef = (u32, u32); // (file_number, offset)
+pub type NodeFileRef = (u32, u32); // (file_number, offset)
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeProp {
@@ -110,6 +111,16 @@ pub struct VectorQt {
 pub enum VectorId {
     Str(String),
     Int(i32),
+}
+
+// Implementing the std::fmt::Display trait for VectorId
+impl fmt::Display for VectorId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            VectorId::Str(s) => write!(f, "{}", s),
+            VectorId::Int(i) => write!(f, "{}", i),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

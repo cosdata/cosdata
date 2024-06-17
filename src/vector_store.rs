@@ -1,7 +1,5 @@
 use crate::models::common::*;
-use crate::models::file_persist::{
-    convert_node_to_node_persist, write_prop_to_file, NodePersistProp,
-};
+use crate::models::file_persist::{persist_node};
 use crate::models::persist::Persist;
 use crate::models::types::*;
 use bincode;
@@ -175,22 +173,18 @@ fn insert_node_create_edges(
     cur_level: i8,
 ) {
     let nd_p = NodeProp::new(hs.clone(), fvec.clone());
-    let prop = NodePersistProp::new(hs, fvec.clone());
-    let offset = write_prop_to_file(&prop, "prop.data");
 
-    let mut nn = Node::new(nd_p, Some(offset));
+    let nn = Node::new(nd_p.clone(), None);
+
     nn.add_ready_neighbors(nbs.clone());
 
-    let nd_persist = convert_node_to_node_persist(nn, prop, cur_level as u8);
-
-    let mut nd_persist = match nd_persist {
+    match persist_node(nn, nd_p, cur_level as u8) {
         Ok(node_persist) => node_persist,
         Err(e) => {
-            eprintln!("Failed to convert node to node persist: {}", e);
+            eprintln!("Failed node persist: {}", e);
             return;
         }
     };
-    nd_persist.location = offset;
 
     for (nbr1, cs) in nbs.into_iter() {
         let mut neighbor_list: Vec<(NodeRef, f32)> = nbr1

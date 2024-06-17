@@ -20,6 +20,7 @@ pub async fn init_vector_store(
     if name.is_empty() {
         return Err(WaCustomError::InvalidParams);
     }
+
     let min = lower_bound.unwrap_or(-1.0);
     let max = upper_bound.unwrap_or(1.0);
     let vec = (0..size)
@@ -52,6 +53,7 @@ pub async fn init_vector_store(
         let prop = NodeProp::new(vec_hash.clone(), vector_list.clone().into());
         cache.insert((l, vec_hash.clone()), Node::new(prop, None));
     }
+
     // ---------------------------
     // -- TODO level entry ratio
     // ---------------------------
@@ -65,6 +67,7 @@ pub async fn init_vector_store(
         levels_prob: lp,
         quant_dim: (size / 32) as usize,
     };
+
     let result = match get_app_env() {
         Ok(ain_env) => {
             ain_env
@@ -86,6 +89,7 @@ pub async fn init_vector_store(
 
         Err(e) => Err(WaCustomError::CFReadWriteFailed(e.to_string())),
     };
+
     return result;
 }
 

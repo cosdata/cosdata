@@ -1,6 +1,6 @@
-use super::common::WaCustomError;
+use super::common::{tuple_to_string, WaCustomError};
 use super::types::{
-    HNSWLevel, NeighbourRef, Node, NodeProp, NodeRef, VectorId, VectorQt, VectorStore,
+    HNSWLevel, NeighbourRef, Node, NodeFileRef, NodeProp, NodeRef, VectorId, VectorQt, VectorStore,
 };
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -8,6 +8,7 @@ use serde_cbor;
 use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::collections::HashSet;
+use std::fmt::Debug;
 use std::fs::OpenOptions;
 use std::hash::{Hash, Hasher};
 use std::io::{Seek, SeekFrom, Write};
@@ -32,8 +33,8 @@ pub struct NodePersist {
     // prop is not serialized in this context
     #[serde(skip_serializing)]
     pub prop: NodePersistProp,
+    pub prop_location: NodePersistRef,
     pub hnsw_level: HNSWLevel,
-    pub location: NodePersistRef,
     pub neighbors: Vec<NeighbourPersist>,
     pub parent: Option<NodePersistRef>,
     pub child: Option<NodePersistRef>,
@@ -63,24 +64,27 @@ impl NodePersist {
         NodePersist {
             prop,
             hnsw_level,
-            location,
             neighbors,
             parent,
             child,
+            prop_location: location,
         }
     }
 }
 
-pub fn convert_node_to_node_persist(
+pub fn persist_node(
     node: NodeRef,
-    prop: NodePersistProp,
+    prop: Arc<NodeProp>,
     hnsw_level: HNSWLevel,
-) -> Result<NodePersist, WaCustomError> {
+) -> Result<(), WaCustomError> {
+    let pers_prop = NodePersistProp::new(prop.id.clone(), prop.value.clone());
+    let prop_location = write_prop_to_file(&pers_prop, "/home/nithin/waco/prop.data");
+
     // Lock the Mutex to access the neighbors
     let neighbors_lock = node
         .neighbors
         .read()
-        .map_err(|_| WaCustomError::PendingNeighborEncountered("Mutex poisoned".to_owned()))?;
+        .map_err(|_| WaCustomError::MutexPoisoned("convert_node_to_node_persist".to_owned()))?;
 
     // Convert neighbors from NodeRef to NodePersistRef
     let neighbors: Result<Vec<NeighbourPersist>, _> = neighbors_lock
@@ -94,12 +98,13 @@ pub fn convert_node_to_node_persist(
                     node: loca,
                     cosine_similarity: *cosine_similarity,
                 }),
-                None => Err(WaCustomError::PendingNeighborEncountered(
-                    "Invalid location neighbor encountered".to_owned(),
+                None => Err(WaCustomError::InvalidLocationNeighborEncountered(
+                    "neighbours loop".to_owned(),
+                    nodex.prop.id.clone(),
                 )),
             },
-            NeighbourRef::Pending(_) => Err(WaCustomError::PendingNeighborEncountered(
-                "Pending neighbor encountered".to_owned(),
+            NeighbourRef::Pending(x) => Err(WaCustomError::PendingNeighborEncountered(
+                tuple_to_string(*x),
             )),
         })
         .collect();
@@ -121,24 +126,17 @@ pub fn convert_node_to_node_persist(
         .as_ref()
         .map(|child_node| child_node.location.unwrap());
 
-    let result = match node.location {
-        Some(loca) =>
-        // Create NodePersist
-        {
-            Ok(NodePersist {
-                prop,
-                hnsw_level,
-                location: loca,
-                neighbors,
-                parent,
-                child,
-            })
-        }
-        None => Err(WaCustomError::PendingNeighborEncountered(
-            "Invalid location neighbor encountered".to_owned(),
-        )),
+    let mut nprst = NodePersist {
+        prop: pers_prop,
+        hnsw_level,
+        neighbors,
+        parent,
+        child,
+        prop_location,
     };
-    result
+
+    write_node_to_file(&mut nprst, "/home/nithin/waco/index.0");
+    return Ok(());
 }
 
 pub fn map_node_persist_ref_to_node(
@@ -161,7 +159,11 @@ pub fn map_node_persist_ref_to_node(
     };
 }
 
-pub fn load_node_from_node_persist(vec_store: VectorStore, node_persist: NodePersist) -> NodeRef {
+pub fn load_node_from_node_persist(
+    vec_store: VectorStore,
+    node_persist: NodePersist,
+    persist_loc: NodeFileRef,
+) -> NodeRef {
     // Convert NodePersistProp to NodeProp
     let prop = NodeProp::new(node_persist.prop.id, node_persist.prop.vector.clone());
 
@@ -207,7 +209,7 @@ pub fn load_node_from_node_persist(vec_store: VectorStore, node_persist: NodePer
     // Create and return NodeRef
     Arc::new(Node {
         prop,
-        location: Some(node_persist.location),
+        location: Some(persist_loc),
         neighbors,
         parent,
         child,

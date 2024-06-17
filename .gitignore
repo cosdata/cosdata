@@ -5,3 +5,6 @@ rr
 flamegraph.svg
 perf.data
 perf.data.old
+prop.data
+prop.json
+index.0

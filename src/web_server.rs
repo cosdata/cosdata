@@ -37,6 +37,7 @@ async fn authenticate(item: web::Json<Authenticate>) -> HttpResponse {
 }
 
 async fn create_vector_db(item: web::Json<CreateVectorDb>) -> HttpResponse {
+    println!("here {}", 0);
     // Extract values from the JSON request
     let vector_db_name = &item.vector_db_name;
     let dimensions = item.dimensions;

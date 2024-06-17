@@ -8,6 +8,7 @@ use futures::future::{join_all, BoxFuture, FutureExt};
 use sha2::{Digest, Sha256};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
+use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use thiserror::Error;
@@ -126,31 +127,48 @@ pub fn quantize_to_u8_bits(fins: &[f32]) -> Vec<Vec<u8>> {
     quantized
 }
 
-#[derive(Debug, Error, Clone)]
+#[derive(Debug, Clone)]
 pub enum WaCustomError {
-    #[error("Failed to create the database")]
     CreateDatabaseFailed(String),
-
-    #[error("Failed to create the Column family")]
     CreateCFFailed(String),
-
-    #[error("column family read/write failed")]
     CFReadWriteFailed(String),
-
-    #[error("Failed to upsert vectors")]
     UpsertFailed,
-
-    #[error("ColumnFamily not found")]
     CFNotFound,
-
-    #[error("Invalid params in request")]
     InvalidParams,
-
-    #[error("Could not load Node")]
     NodeNotFound(String),
-
-    #[error("Pending neighbor encountered")]
     PendingNeighborEncountered(String),
+    InvalidLocationNeighborEncountered(String, VectorId),
+    MutexPoisoned(String),
+}
+
+// Implementing the std::fmt::Display trait for WaCustomError
+impl fmt::Display for WaCustomError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            WaCustomError::CreateDatabaseFailed(msg) => {
+                write!(f, "Failed to create the database: {}", msg)
+            }
+            WaCustomError::CreateCFFailed(msg) => {
+                write!(f, "Failed to create the Column family: {}", msg)
+            }
+            WaCustomError::CFReadWriteFailed(msg) => {
+                write!(f, "Column family read/write failed: {}", msg)
+            }
+            WaCustomError::UpsertFailed => write!(f, "Failed to upsert vectors"),
+            WaCustomError::CFNotFound => write!(f, "ColumnFamily not found"),
+            WaCustomError::InvalidParams => write!(f, "Invalid params in request"),
+            WaCustomError::NodeNotFound(msg) => write!(f, "Could not load Node: {}", msg),
+            WaCustomError::PendingNeighborEncountered(msg) => {
+                write!(f, "Pending neighbor encountered: {}", msg)
+            }
+            WaCustomError::InvalidLocationNeighborEncountered(mark, msg) => {
+                write!(f, "Invalid location neighbor encountered {} {}", mark, msg)
+            }            
+            WaCustomError::MutexPoisoned(msg) => {
+                write!(f, "Mutex Poisoned here: {}", msg)
+            }
+        }
+    }
 }
 
 pub fn hash_float_vec(vec: Vec<f32>) -> Vec<u8> {
@@ -295,8 +313,6 @@ pub fn cat_maybes<T>(iter: impl Iterator<Item = Option<T>>) -> Vec<T> {
     iter.flat_map(|maybe| maybe).collect()
 }
 
-
-
 pub fn tapered_total_hops(hops: u8, cur_level: u8, max_level: u8) -> u8 {
     //div by 2
     if cur_level > max_level >> 1 {
@@ -322,4 +338,8 @@ pub fn tapered_skips(skips: i8, cur_distance: i8, max_distance: i8) -> i8 {
         ratio if ratio < 0.75 => skips * 3,
         _ => skips * 4, // Distance ratio >= 0.75
     }
+}
+
+pub fn tuple_to_string(tuple: (u32, u32)) -> String {
+    format!("{}_{}", tuple.0, tuple.1)
 }
