@@ -1,3 +1,4 @@
+use crate::models::file_persist::*;
 use crate::models::persist::Persist;
 use crate::models::rpc::VectorIdValue;
 use crate::models::user::{AuthResp, Statistics};
@@ -47,11 +48,24 @@ pub async fn init_vector_store(
         resolution: resolution,
     };
 
-    let root = (vec_hash.clone(), vector_list.clone());
+    
+    let mut root: Option<NodeRef> = None; 
 
     for l in 0..=max_cache_level {
         let prop = NodeProp::new(vec_hash.clone(), vector_list.clone().into());
-        cache.insert((l, vec_hash.clone()), Node::new(prop, None));
+
+        let nn = Node::new(prop.clone(), None);
+
+        match persist_node_update_loc(nn.clone(), prop, l as u8) {
+            Ok(_) => {
+                if l == 0 {
+                    root = Some(nn.clone());
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed node persist: {}", e);
+            }
+        };
     }
 
     // ---------------------------
@@ -63,7 +77,7 @@ pub async fn init_vector_store(
         cache,
         max_cache_level,
         database_name: name.clone(),
-        root_vec: root,
+        root_vec: root.unwrap(),
         levels_prob: lp,
         quant_dim: (size / 32) as usize,
     };
@@ -103,7 +117,7 @@ pub async fn run_upload(
             let vec_store = vec_store.clone();
             let persist = persist.clone();
             async move {
-                let rhash = &vec_store.root_vec.0;
+                let root = &vec_store.root_vec;
                 let vec_hash = convert_value(id);
 
                 let quantized_values: Vec<Vec<u8>> = quantize_to_u8_bits(&vec.clone());
@@ -124,14 +138,12 @@ pub async fn run_upload(
                 };
                 let lp = &vec_store.levels_prob;
                 let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
-                let prop = NodeProp::new(vec_hash.clone(), vector_list.clone().into());
 
-                let nn = Node::new(prop, None);
                 insert_embedding(
                     persist,
                     vec_store.clone(),
                     vec_emb,
-                    nn,
+                    root.clone(),
                     vec_store.max_cache_level.try_into().unwrap(),
                     iv.try_into().unwrap(),
                 );
@@ -148,7 +160,7 @@ pub async fn ann_vector_query(
 ) -> Option<Vec<(VectorId, f32)>> {
     let vector_store = vec_store.clone();
     let vec_hash = VectorId::Str("query".to_string());
-    let rhash = &vector_store.root_vec.0;
+    let root = &vector_store.root_vec;
 
     let quantized_values: Vec<Vec<u8>> = quantize_to_u8_bits(&query.clone());
     let mpq: (f64, Vec<u32>) =
@@ -164,14 +176,12 @@ pub async fn ann_vector_query(
         hash_vec: vec_hash.clone(),
     };
 
-    let prop = NodeProp::new(vec_hash.clone(), vector_list.clone().into());
 
-    let nn = Node::new(prop, None);
 
     let results = ann_search(
         vec_store.clone(),
         vec_emb,
-        nn,
+        root.clone(),
         vec_store.max_cache_level.try_into().unwrap(),
     );
     let output = remove_duplicates_and_filter(results);
@@ -182,8 +192,6 @@ pub async fn fetch_vector_neighbors(
     vec_store: Arc<VectorStore>,
     vector_id: VectorId,
 ) -> Vec<Option<(VectorId, Vec<(VectorId, f32)>)>> {
-    let vector_store = vec_store.clone();
-
     let results = vector_fetch(vec_store.clone(), vector_id);
     return results;
 }

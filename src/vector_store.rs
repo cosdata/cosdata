@@ -1,5 +1,5 @@
 use crate::models::common::*;
-use crate::models::file_persist::{persist_node};
+use crate::models::file_persist::*;
 use crate::models::persist::Persist;
 use crate::models::types::*;
 use bincode;
@@ -172,13 +172,14 @@ fn insert_node_create_edges(
     nbs: Vec<(NodeRef, f32)>,
     cur_level: i8,
 ) {
+    println!("xxx id:{} nei-len:{}", hs, nbs.len());
     let nd_p = NodeProp::new(hs.clone(), fvec.clone());
 
     let nn = Node::new(nd_p.clone(), None);
 
     nn.add_ready_neighbors(nbs.clone());
 
-    match persist_node(nn, nd_p, cur_level as u8) {
+    match persist_node_update_loc(nn.clone(), nd_p, cur_level as u8) {
         Ok(node_persist) => node_persist,
         Err(e) => {
             eprintln!("Failed node persist: {}", e);
@@ -205,8 +206,8 @@ fn insert_node_create_edges(
             })
             .collect();
 
-        // Add the current (nbr1, cs) to the list
-        neighbor_list.push((nbr1.clone(), cs));
+        // Add the current (nn, cs) to the list
+        neighbor_list.push((nn.clone(), cs));
 
         // Sort by cosine similarity in descending order
         neighbor_list.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
@@ -217,6 +218,8 @@ fn insert_node_create_edges(
         neighbor_list.truncate(20);
 
         // Update nbr1's neighbors
+        println!("zzz id:{} nei-len:{:?}", nbr1.prop.id, neighbor_list.len());
+
         let mut locked_neighbors = nbr1.neighbors.write().unwrap();
         *locked_neighbors = neighbor_list
             .into_iter()
@@ -247,18 +250,22 @@ fn traverse_find_nearest(
         match nref {
             NeighbourRef::Ready {
                 node: nbr,
-                cosine_similarity,
+                cosine_similarity: _,
             } => {
+
                 let nb = nbr.prop.id.clone();
                 if index % 2 != 0 && skip_hop && index > 4 {
+                    //println!("skipping {} at hop {} ", index, hops);
                     continue; // Skip this iteration if the index is odd
                 }
+                //println!("traverse index:{}  nref:{} hop:{} ", index, nbr.prop.id, hops);
 
                 let vec_store = vec_store.clone();
                 let fvec = fvec.clone();
                 let hs = hs.clone();
 
                 if skipm.insert(nb.clone()) {
+                    //println!("processing {} at hop {} ", index, hops);
                     let cs = cosine_coalesce(&fvec, &nbr.prop.value, vec_store.quant_dim);
 
                     // ---------------------------

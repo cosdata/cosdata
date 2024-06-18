@@ -72,7 +72,7 @@ impl NodePersist {
     }
 }
 
-pub fn persist_node(
+pub fn persist_node_update_loc(
     node: NodeRef,
     prop: Arc<NodeProp>,
     hnsw_level: HNSWLevel,
@@ -93,7 +93,7 @@ pub fn persist_node(
             NeighbourRef::Ready {
                 node: nodex,
                 cosine_similarity,
-            } => match nodex.location {
+            } => match nodex.get_location() {
                 Some(loca) => Ok(NeighbourPersist {
                     node: loca,
                     cosine_similarity: *cosine_similarity,
@@ -118,13 +118,13 @@ pub fn persist_node(
         .read()
         .unwrap()
         .as_ref()
-        .map(|parent_node| parent_node.location.unwrap());
+        .map(|parent_node| parent_node.get_location().unwrap());
     let child = node
         .child
         .read()
         .unwrap()
         .as_ref()
-        .map(|child_node| child_node.location.unwrap());
+        .map(|child_node| child_node.get_location().unwrap());
 
     let mut nprst = NodePersist {
         prop: pers_prop,
@@ -135,7 +135,8 @@ pub fn persist_node(
         prop_location,
     };
 
-    write_node_to_file(&mut nprst, "/home/nithin/waco/index.0");
+    let file_loc = write_node_to_file(&mut nprst, "/home/nithin/waco/index.0");
+    node.set_location(file_loc);
     return Ok(());
 }
 
@@ -209,7 +210,7 @@ pub fn load_node_from_node_persist(
     // Create and return NodeRef
     Arc::new(Node {
         prop,
-        location: Some(persist_loc),
+        location: Arc::new(RwLock::new(Some(persist_loc))),
         neighbors,
         parent,
         child,
@@ -248,7 +249,7 @@ pub fn write_node_to_file(node: &mut NodePersist, filename: &str) -> (u32, u32) 
     // Create a vector of dummy entries
     let dummy = NeighbourPersist {
         node: (0, 0),
-        cosine_similarity: -999.0,
+        cosine_similarity: -999.999,
     };
     let mut padding = vec![dummy; pad_size];
 
@@ -286,7 +287,7 @@ pub fn write_node_to_file_at_offset(
     // Create a vector of dummy entries
     let dummy = NeighbourPersist {
         node: (0, 0),
-        cosine_similarity: -999.0,
+        cosine_similarity: -999.999,
     };
     let mut padding = vec![dummy; pad_size];
 

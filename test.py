@@ -96,7 +96,7 @@ if __name__ == "__main__":
     dimensions = 1024
     max_val = 1.0
     min_val = -1.0
-    rows = 100
+    rows = 10
     perturbation_degree = 0.25  # Degree of perturbation
 
     create_response = create_db(vector_db_name, dimensions, max_val, min_val)
@@ -113,7 +113,7 @@ if __name__ == "__main__":
         #
         # number of upsert calls
         #
-        for req_ct in range(500):
+        for req_ct in range(1):
             base_vector = generate_random_vector_with_id(req_ct * rows, dimensions)
 
             # Generate a single random vector
@@ -151,6 +151,7 @@ if __name__ == "__main__":
 
     # End time
     end_time = time.time()
+    exit()
 
     # Apply perturbations to shortlisted vectors
     # for i in range(len(shortlisted_vectors)):

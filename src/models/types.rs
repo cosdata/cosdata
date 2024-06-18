@@ -33,7 +33,7 @@ pub struct NodeProp {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Node {
     pub prop: Arc<NodeProp>,
-    pub location: Option<NodeFileRef>,
+    pub location: Arc<RwLock<Option<NodeFileRef>>>,
     pub neighbors: Arc<RwLock<Vec<NeighbourRef>>>,
     pub parent: Arc<RwLock<Option<NodeRef>>>,
     pub child: Arc<RwLock<Option<NodeRef>>>,
@@ -50,7 +50,7 @@ impl Node {
         Arc::new(Node {
             prop,
             neighbors: Arc::new(RwLock::new(Vec::new())),
-            location: loc,
+            location: Arc::new(RwLock::new(loc)),
             parent: Arc::new(RwLock::new(None)),
             child: Arc::new(RwLock::new(None)),
         })
@@ -97,6 +97,16 @@ impl Node {
     pub fn get_child(&self) -> Option<NodeRef> {
         let child_lock = self.child.read().unwrap();
         child_lock.clone()
+    }
+
+    pub fn set_location(&self, new_location: NodeFileRef) {
+        let mut location_write = self.location.write().unwrap();
+        *location_write = Some(new_location);
+    }
+
+    pub fn get_location(&self) -> Option<NodeFileRef> {
+        let location_read = self.location.read().unwrap();
+        *location_read
     }
 }
 
@@ -149,7 +159,7 @@ pub struct VectorStore {
     pub cache: Arc<CacheType>,
     pub max_cache_level: u8,
     pub database_name: String,
-    pub root_vec: (VectorId, VectorQt),
+    pub root_vec: NodeRef , 
     pub levels_prob: Arc<Vec<(f64, i32)>>,
     pub quant_dim: usize,
 }
