@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fmt;
+use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
@@ -34,6 +35,7 @@ pub struct NodeProp {
 pub struct Node {
     pub prop: Arc<NodeProp>,
     pub location: Arc<RwLock<Option<NodeFileRef>>>,
+    pub prop_location: Arc<RwLock<Option<NodeFileRef>>>,
     pub neighbors: Arc<RwLock<Vec<NeighbourRef>>>,
     pub parent: Arc<RwLock<Option<NodeRef>>>,
     pub child: Arc<RwLock<Option<NodeRef>>>,
@@ -49,8 +51,9 @@ impl Node {
     pub fn new(prop: Arc<NodeProp>, loc: Option<NodeFileRef>) -> NodeRef {
         Arc::new(Node {
             prop,
-            neighbors: Arc::new(RwLock::new(Vec::new())),
             location: Arc::new(RwLock::new(loc)),
+            prop_location: Arc::new(RwLock::new(loc)),
+            neighbors: Arc::new(RwLock::new(Vec::new())),
             parent: Arc::new(RwLock::new(None)),
             child: Arc::new(RwLock::new(None)),
         })
@@ -108,6 +111,16 @@ impl Node {
         let location_read = self.location.read().unwrap();
         *location_read
     }
+
+    pub fn set_prop_location(&self, new_location: NodeFileRef) {
+        let mut location_write = self.prop_location.write().unwrap();
+        *location_write = Some(new_location);
+    }
+
+    pub fn get_prop_location(&self) -> Option<NodeFileRef> {
+        let location_read = self.prop_location.read().unwrap();
+        *location_read
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,9 +172,11 @@ pub struct VectorStore {
     pub cache: Arc<CacheType>,
     pub max_cache_level: u8,
     pub database_name: String,
-    pub root_vec: NodeRef , 
+    pub root_vec: NodeRef,
     pub levels_prob: Arc<Vec<(f64, i32)>>,
     pub quant_dim: usize,
+    pub prop_file: Arc<File>,
+    pub wal_file: Arc<File>,
 }
 
 #[derive(Debug, Clone)]

@@ -9,6 +9,7 @@ use dashmap::DashMap;
 use futures::stream::{self, StreamExt};
 use log::info;
 use rand::Rng;
+use std::fs::OpenOptions;
 use std::sync::{Arc, Mutex, RwLock};
 
 pub async fn init_vector_store(
@@ -48,22 +49,38 @@ pub async fn init_vector_store(
         resolution: resolution,
     };
 
-    
-    let mut root: Option<NodeRef> = None; 
+    // Note that setting .write(true).append(true) has the same effect
+    // as setting only .append(true)
+    let prop_file = Arc::new(
+        OpenOptions::new()
+            .append(true)
+            .open("prop.data")
+            .expect("Failed to open file for writing"),
+    );
+
+    let wal_file = Arc::new(
+        OpenOptions::new()
+            .append(true)
+            .open("index.0")
+            .expect("Failed to open file for writing"),
+    );
+
+    let mut root: Option<NodeRef> = None;
+    let mut prop_location: NodeFileRef = (0, 0);
 
     for l in 0..=max_cache_level {
         let prop = NodeProp::new(vec_hash.clone(), vector_list.clone().into());
 
         let nn = Node::new(prop.clone(), None);
 
-        match persist_node_update_loc(nn.clone(), prop, l as u8) {
-            Ok(_) => {
-                if l == 0 {
-                    root = Some(nn.clone());
-                }
-            }
+        if l == 0 {
+            root = Some(nn.clone());
+            prop_location = write_prop_to_file(&prop, &prop_file);
+        }
+        match persist_node_update_loc(prop_location, wal_file.clone(), nn, l) {
+            Ok(_) => (),
             Err(e) => {
-                eprintln!("Failed node persist: {}", e);
+                eprintln!("Failed node persist (init): {}", e);
             }
         };
     }
@@ -73,6 +90,7 @@ pub async fn init_vector_store(
     // ---------------------------
     let factor_levels = 10.0;
     let lp = Arc::new(generate_tuples(factor_levels).into_iter().rev().collect());
+
     let vec_store = VectorStore {
         cache,
         max_cache_level,
@@ -80,6 +98,8 @@ pub async fn init_vector_store(
         root_vec: root.unwrap(),
         levels_prob: lp,
         quant_dim: (size / 32) as usize,
+        prop_file,
+        wal_file,
     };
 
     let result = match get_app_env() {
@@ -175,8 +195,6 @@ pub async fn ann_vector_query(
         raw_vec: Arc::new(vector_list.clone()),
         hash_vec: vec_hash.clone(),
     };
-
-
 
     let results = ann_search(
         vec_store.clone(),

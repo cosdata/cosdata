@@ -9,7 +9,7 @@ use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fmt::Debug;
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::hash::{Hash, Hasher};
 use std::io::{Seek, SeekFrom, Write};
 use std::rc::Rc;
@@ -31,8 +31,8 @@ pub struct NeighbourPersist {
 #[derive(Serialize, Deserialize)]
 pub struct NodePersist {
     // prop is not serialized in this context
-    #[serde(skip_serializing)]
-    pub prop: NodePersistProp,
+    // #[serde(skip_serializing)]
+    // pub prop: Arc<NodeProp>,
     pub prop_location: NodePersistRef,
     pub hnsw_level: HNSWLevel,
     pub neighbors: Vec<NeighbourPersist>,
@@ -40,21 +40,8 @@ pub struct NodePersist {
     pub child: Option<NodePersistRef>,
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct NodePersistProp {
-    pub id: VectorId,
-    pub vector: Arc<VectorQt>,
-}
-
-impl NodePersistProp {
-    pub fn new(id: VectorId, vector: Arc<VectorQt>) -> NodePersistProp {
-        NodePersistProp { id, vector }
-    }
-}
-
 impl NodePersist {
     pub fn new(
-        prop: NodePersistProp,
         hnsw_level: HNSWLevel,
         location: NodePersistRef,
         neighbors: Vec<NeighbourPersist>,
@@ -62,7 +49,7 @@ impl NodePersist {
         child: Option<NodePersistRef>,
     ) -> NodePersist {
         NodePersist {
-            prop,
+            // prop,
             hnsw_level,
             neighbors,
             parent,
@@ -72,15 +59,26 @@ impl NodePersist {
     }
 }
 
-pub fn persist_node_update_loc(
+pub fn persist_node_prop_update_loc(
+    prop_file: Arc<File>,
+    wal_file: Arc<File>,
     node: NodeRef,
     prop: Arc<NodeProp>,
     hnsw_level: HNSWLevel,
 ) -> Result<(), WaCustomError> {
-    let pers_prop = NodePersistProp::new(prop.id.clone(), prop.value.clone());
-    let prop_location = write_prop_to_file(&pers_prop, "/home/nithin/waco/prop.data");
+    let prop_location = write_prop_to_file(&prop, &prop_file);
 
+    persist_node_update_loc(prop_location, wal_file, node, hnsw_level)
+}
+
+pub fn persist_node_update_loc(
+    prop_location: NodeFileRef,
+    wal_file: Arc<File>,
+    node: NodeRef,
+    hnsw_level: HNSWLevel,
+) -> Result<(), WaCustomError> {
     // Lock the Mutex to access the neighbors
+    println!(" while Node {} having nie {:?}", node.prop.id, node.neighbors);
     let neighbors_lock = node
         .neighbors
         .read()
@@ -127,7 +125,6 @@ pub fn persist_node_update_loc(
         .map(|child_node| child_node.get_location().unwrap());
 
     let mut nprst = NodePersist {
-        prop: pers_prop,
         hnsw_level,
         neighbors,
         parent,
@@ -135,7 +132,8 @@ pub fn persist_node_update_loc(
         prop_location,
     };
 
-    let file_loc = write_node_to_file(&mut nprst, "/home/nithin/waco/index.0");
+    let file_loc = write_node_to_file(&mut nprst, &wal_file);
+    node.set_prop_location(prop_location);
     node.set_location(file_loc);
     return Ok(());
 }
@@ -164,10 +162,8 @@ pub fn load_node_from_node_persist(
     vec_store: VectorStore,
     node_persist: NodePersist,
     persist_loc: NodeFileRef,
+    prop: Arc<NodeProp>,
 ) -> NodeRef {
-    // Convert NodePersistProp to NodeProp
-    let prop = NodeProp::new(node_persist.prop.id, node_persist.prop.vector.clone());
-
     // Convert neighbors from NodePersistRef to NeighbourRef
     let neighbors_result: Vec<NeighbourRef> = node_persist
         .neighbors
@@ -211,53 +207,34 @@ pub fn load_node_from_node_persist(
     Arc::new(Node {
         prop,
         location: Arc::new(RwLock::new(Some(persist_loc))),
+        prop_location: Arc::new(RwLock::new(Some(node_persist.prop_location))),
         neighbors,
         parent,
         child,
     })
 }
 
-pub fn write_prop_to_file(prop: &NodePersistProp, filename: &str) -> (u32, u32) {
+pub fn write_prop_to_file(prop: &NodeProp, mut file: &File) -> (u32, u32) {
     let mut prop_bytes = Vec::new();
     //let result = encode(&prop);
     let result = serde_cbor::to_vec(&prop).unwrap();
 
     prop_bytes.extend_from_slice(result.as_ref());
 
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .append(true)
-        .open(filename)
-        .expect("Failed to open file for writing");
     file.write_all(&prop_bytes)
         .expect("Failed to write to file");
     let offset = file.metadata().unwrap().len() - prop_bytes.len() as u64;
     (offset as u32, prop_bytes.len() as u32)
 }
 
-fn write_to_end_of_file(file_path: &str, data: &[u8]) -> std::io::Result<(u64, usize)> {
-    let mut file = OpenOptions::new().append(true).open(file_path)?;
-    let offset = file.seek(SeekFrom::End(0))?;
-    file.write_all(data)?;
-    Ok((offset, data.len()))
-}
+// fn write_to_end_of_file(file_path: &str, data: &[u8]) -> std::io::Result<(u64, usize)> {
+//     let mut file = OpenOptions::new().append(true).open(file_path)?;
+//     let offset = file.seek(SeekFrom::End(0))?;
+//     file.write_all(data)?;
+//     Ok((offset, data.len()))
+// }
 
-pub fn write_node_to_file(node: &mut NodePersist, filename: &str) -> (u32, u32) {
-    // Check if neighbors vector needs padding
-    let pad_size = MAX_NEIGHBORS.saturating_sub(node.neighbors.len());
-
-    // Create a vector of dummy entries
-    let dummy = NeighbourPersist {
-        node: (0, 0),
-        cosine_similarity: -999.999,
-    };
-    let mut padding = vec![dummy; pad_size];
-
-    // Combine neighbors and padding
-    let mut neighbors = node.neighbors.clone();
-    neighbors.append(&mut padding);
-
-    node.neighbors = neighbors;
+pub fn write_node_to_file(node: &mut NodePersist, mut file: &File) -> (u32, u32) {
     let mut node_bytes = Vec::new();
     let result = serde_cbor::to_vec(&node);
     if let Err(err) = result {
@@ -265,11 +242,6 @@ pub fn write_node_to_file(node: &mut NodePersist, filename: &str) -> (u32, u32) 
     }
     node_bytes.extend_from_slice(result.unwrap().as_ref());
 
-    let mut file = OpenOptions::new()
-        .write(true)
-        .append(true)
-        .open(filename)
-        .expect("Failed to open file for writing");
     file.write_all(&node_bytes)
         .expect("Failed to write to file");
     let offset = file.metadata().unwrap().len() - node_bytes.len() as u64;
@@ -281,22 +253,6 @@ pub fn write_node_to_file_at_offset(
     filename: &str,
     offset: u64,
 ) -> (u32, u32) {
-    // Check if neighbors vector needs padding
-    let pad_size = MAX_NEIGHBORS.saturating_sub(node.neighbors.len());
-
-    // Create a vector of dummy entries
-    let dummy = NeighbourPersist {
-        node: (0, 0),
-        cosine_similarity: -999.999,
-    };
-    let mut padding = vec![dummy; pad_size];
-
-    // Combine neighbors and padding
-    let mut neighbors = node.neighbors.clone();
-    neighbors.append(&mut padding);
-
-    node.neighbors = neighbors;
-
     let mut node_bytes = Vec::new();
     let result = serde_cbor::to_vec(&node);
     if let Err(err) = result {

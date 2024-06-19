@@ -143,7 +143,6 @@ pub fn insert_embedding(
             max_insert_level,
         );
         insert_node_create_edges(
-            persist.clone(),
             vec_store.clone(),
             fvec,
             vector_emb.hash_vec.clone(),
@@ -165,7 +164,6 @@ pub fn insert_embedding(
 }
 
 fn insert_node_create_edges(
-    persist: Arc<Mutex<Persist>>,
     vec_store: Arc<VectorStore>,
     fvec: Arc<VectorQt>,
     hs: VectorId,
@@ -179,8 +177,14 @@ fn insert_node_create_edges(
 
     nn.add_ready_neighbors(nbs.clone());
 
-    match persist_node_update_loc(nn.clone(), nd_p, cur_level as u8) {
-        Ok(node_persist) => node_persist,
+    match persist_node_prop_update_loc(
+        vec_store.prop_file.clone(),
+        vec_store.wal_file.clone(),
+        nn.clone(),
+        nd_p,
+        cur_level as u8,
+    ) {
+        Ok(_) => (),
         Err(e) => {
             eprintln!("Failed node persist: {}", e);
             return;
@@ -216,11 +220,11 @@ fn insert_node_create_edges(
         let mut seen = HashSet::new();
         neighbor_list.retain(|(node, _)| seen.insert(Arc::as_ptr(node) as *const _));
         neighbor_list.truncate(20);
-
         // Update nbr1's neighbors
         println!("zzz id:{} nei-len:{:?}", nbr1.prop.id, neighbor_list.len());
 
         let mut locked_neighbors = nbr1.neighbors.write().unwrap();
+
         *locked_neighbors = neighbor_list
             .into_iter()
             .map(|(node, cosine_similarity)| NeighbourRef::Ready {
@@ -228,6 +232,19 @@ fn insert_node_create_edges(
                 cosine_similarity,
             })
             .collect();
+
+        match persist_node_update_loc(
+            nbr1.get_prop_location().unwrap(),
+            vec_store.wal_file.clone(),
+            nbr1.clone(),
+            cur_level as u8,
+        ) {
+            Ok(_) => (),
+            Err(e) => {
+                eprintln!("Failed node persist(nbr1): {}", e);
+                return;
+            }
+        };
     }
 }
 
@@ -252,7 +269,6 @@ fn traverse_find_nearest(
                 node: nbr,
                 cosine_similarity: _,
             } => {
-
                 let nb = nbr.prop.id.clone();
                 if index % 2 != 0 && skip_hop && index > 4 {
                     //println!("skipping {} at hop {} ", index, hops);
