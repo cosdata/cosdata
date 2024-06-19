@@ -15,10 +15,6 @@ use std::io::{Seek, SeekFrom, Write};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
-// Assuming the fixed size for neighbors and quant_vec
-const MAX_NEIGHBORS: usize = 10; // Adjust as needed
-const MAX_QUANT_VEC: usize = 10; // Adjust as needed
-
 // persist structures
 
 type NodePersistRef = (u32, u32); // (file_number, offset)
@@ -78,7 +74,7 @@ pub fn persist_node_update_loc(
     hnsw_level: HNSWLevel,
 ) -> Result<(), WaCustomError> {
     // Lock the Mutex to access the neighbors
-    println!(" while Node {} having nie {:?}", node.prop.id, node.neighbors);
+    println!(" For node {} ", node);
     let neighbors_lock = node
         .neighbors
         .read()

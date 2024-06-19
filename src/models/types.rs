@@ -123,6 +123,29 @@ impl Node {
     }
 }
 
+impl std::fmt::Display for Node {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Node {{ id: {:?},", self.prop.id)?; // Include self ID
+
+        // Get references to inner data with locking (assuming RAII pattern)
+        let parent_id = self.parent.read().unwrap().as_ref().map(|p| p.prop.id.clone());
+        let child_id = self.child.read().unwrap().as_ref().map(|c| c.prop.id.clone());
+        let neighbor_ids = self.neighbors.read().unwrap()
+            .iter()
+            .filter_map(|n| match n {
+                NeighbourRef::Ready { node, .. } => Some(node.prop.id.clone()),
+                _ => None,
+            })
+            .collect::<Vec<VectorId>>();
+
+        // Write data using write! or formatting options
+        write!(f, " parent: {:?}, child: {:?}, neighbors: {:?}", parent_id, child_id, neighbor_ids)?;
+
+        write!(f, " }}")
+    }
+}
+
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VectorQt {
     pub mag: f64,

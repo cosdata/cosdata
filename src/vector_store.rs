@@ -223,15 +223,17 @@ fn insert_node_create_edges(
         // Update nbr1's neighbors
         println!("zzz id:{} nei-len:{:?}", nbr1.prop.id, neighbor_list.len());
 
-        let mut locked_neighbors = nbr1.neighbors.write().unwrap();
+        {
+            let mut locked_neighbors = nbr1.neighbors.write().unwrap();
 
-        *locked_neighbors = neighbor_list
-            .into_iter()
-            .map(|(node, cosine_similarity)| NeighbourRef::Ready {
-                node,
-                cosine_similarity,
-            })
-            .collect();
+            *locked_neighbors = neighbor_list
+                .into_iter()
+                .map(|(node, cosine_similarity)| NeighbourRef::Ready {
+                    node,
+                    cosine_similarity,
+                })
+                .collect();
+        } // Scope ends, write lock is released
 
         match persist_node_update_loc(
             nbr1.get_prop_location().unwrap(),
