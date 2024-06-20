@@ -1,6 +1,6 @@
 use super::common::{tuple_to_string, WaCustomError};
 use super::types::{
-    HNSWLevel, NeighbourRef, Node, NodeFileRef, NodeProp, NodeRef, VectorId, VectorQt, VectorStore,
+    HNSWLevel, NeighbourRef, Node, NodeFileRef, NodeProp, NodeRef, VectorId, VectorQt, VectorStore, VersionId,
 };
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -26,9 +26,8 @@ pub struct NeighbourPersist {
 }
 #[derive(Serialize, Deserialize)]
 pub struct NodePersist {
-    // prop is not serialized in this context
-    // #[serde(skip_serializing)]
-    // pub prop: Arc<NodeProp>,
+    pub version_id: VersionId,
+    pub next_version: Option<NodePersistRef>,
     pub prop_location: NodePersistRef,
     pub hnsw_level: HNSWLevel,
     pub neighbors: Vec<NeighbourPersist>,
@@ -43,32 +42,22 @@ impl NodePersist {
         neighbors: Vec<NeighbourPersist>,
         parent: Option<NodePersistRef>,
         child: Option<NodePersistRef>,
+        next_version: Option<NodePersistRef>,
+        version_id: VersionId
     ) -> NodePersist {
         NodePersist {
-            // prop,
             hnsw_level,
             neighbors,
             parent,
             child,
             prop_location: location,
+            next_version,
+            version_id,
         }
     }
 }
 
-pub fn persist_node_prop_update_loc(
-    prop_file: Arc<File>,
-    wal_file: Arc<File>,
-    node: NodeRef,
-    prop: Arc<NodeProp>,
-    hnsw_level: HNSWLevel,
-) -> Result<(), WaCustomError> {
-    let prop_location = write_prop_to_file(&prop, &prop_file);
-
-    persist_node_update_loc(prop_location, wal_file, node, hnsw_level)
-}
-
 pub fn persist_node_update_loc(
-    prop_location: NodeFileRef,
     wal_file: Arc<File>,
     node: NodeRef,
     hnsw_level: HNSWLevel,
@@ -107,30 +96,23 @@ pub fn persist_node_update_loc(
     let neighbors = neighbors?;
 
     // Convert parent and child
-    let parent = node
-        .parent
-        .read()
-        .unwrap()
-        .as_ref()
-        .map(|parent_node| parent_node.get_location().unwrap());
-    let child = node
-        .child
-        .read()
-        .unwrap()
-        .as_ref()
-        .map(|child_node| child_node.get_location().unwrap());
+    let parent = node.get_parent().unwrap().get_location();
+    let child = node.get_child().unwrap().get_location();
 
     let mut nprst = NodePersist {
         hnsw_level,
         neighbors,
         parent,
         child,
-        prop_location,
+        prop_location: node.get_location().unwrap(),
+        next_version: None,
+        version_id: node.version_id + 1,
     };
 
     let file_loc = write_node_to_file(&mut nprst, &wal_file);
-    node.set_prop_location(prop_location);
     node.set_location(file_loc);
+    //TODO: update the previous node_persist with the new location in its next field
+    // only needs to update the tuple
     return Ok(());
 }
 
@@ -143,10 +125,10 @@ pub fn map_node_persist_ref_to_node(
 ) -> NeighbourRef {
     // logic to map NodePersistRef to Node
     //
-    match vec_store.cache.get(&(vec_level, vec_id)) {
+    match load_neighbor_persist_ref(vec_level, node_ref) {
         Some(nodex) => {
             return NeighbourRef::Ready {
-                node: nodex.value().clone(),
+                node: nodex,
                 cosine_similarity,
             }
         }
@@ -180,20 +162,14 @@ pub fn load_node_from_node_persist(
 
     // Convert parent and child
     let parent = if let Some(parent_ref) = node_persist.parent {
-        vec_store
-            .cache
-            .get(&(node_persist.hnsw_level, prop.id.clone()))
-            .map(|node| node.value().clone())
+        load_neighbor_persist_ref(node_persist.hnsw_level, node_persist.parent.unwrap())
     } else {
         None
     };
     let parent = Arc::new(RwLock::new(parent));
 
     let child = if let Some(child_ref) = node_persist.child {
-        vec_store
-            .cache
-            .get(&(node_persist.hnsw_level, prop.id.clone()))
-            .map(|node| node.value().clone())
+        load_neighbor_persist_ref(node_persist.hnsw_level, node_persist.child.unwrap())
     } else {
         None
     };
@@ -207,6 +183,8 @@ pub fn load_node_from_node_persist(
         neighbors,
         parent,
         child,
+        previous: Some(persist_loc),
+        version_id: node_persist.version_id,
     })
 }
 
@@ -269,4 +247,12 @@ pub fn write_node_to_file_at_offset(
         .expect("Failed to write to file");
     let written_bytes = node_bytes.len() as u32;
     (offset as u32, written_bytes)
+}
+
+pub fn load_vector_id_lsmdb(level: HNSWLevel, vector_id: VectorId) -> Option<NodeRef> {
+    return None;
+}
+
+pub fn load_neighbor_persist_ref(level: HNSWLevel, node_file_ref: (u32, u32)) -> Option<NodeRef> {
+    return None;
 }

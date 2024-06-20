@@ -31,8 +31,12 @@ pub struct NodeProp {
     pub value: Arc<VectorQt>,
 }
 
+pub type VersionId = u32;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Node {
+    pub version_id: VersionId,
+    pub previous: Option<NodeFileRef>,
     pub prop: Arc<NodeProp>,
     pub location: Arc<RwLock<Option<NodeFileRef>>>,
     pub prop_location: Arc<RwLock<Option<NodeFileRef>>>,
@@ -48,7 +52,12 @@ impl NodeProp {
 }
 
 impl Node {
-    pub fn new(prop: Arc<NodeProp>, loc: Option<NodeFileRef>) -> NodeRef {
+    pub fn new(
+        prop: Arc<NodeProp>,
+        loc: Option<NodeFileRef>,
+        previous: Option<NodeFileRef>,
+        version_id: VersionId,
+    ) -> NodeRef {
         Arc::new(Node {
             prop,
             location: Arc::new(RwLock::new(loc)),
@@ -56,6 +65,8 @@ impl Node {
             neighbors: Arc::new(RwLock::new(Vec::new())),
             parent: Arc::new(RwLock::new(None)),
             child: Arc::new(RwLock::new(None)),
+            version_id,
+            previous,
         })
     }
 
@@ -128,9 +139,22 @@ impl std::fmt::Display for Node {
         write!(f, "Node {{ id: {:?},", self.prop.id)?; // Include self ID
 
         // Get references to inner data with locking (assuming RAII pattern)
-        let parent_id = self.parent.read().unwrap().as_ref().map(|p| p.prop.id.clone());
-        let child_id = self.child.read().unwrap().as_ref().map(|c| c.prop.id.clone());
-        let neighbor_ids = self.neighbors.read().unwrap()
+        let parent_id = self
+            .parent
+            .read()
+            .unwrap()
+            .as_ref()
+            .map(|p| p.prop.id.clone());
+        let child_id = self
+            .child
+            .read()
+            .unwrap()
+            .as_ref()
+            .map(|c| c.prop.id.clone());
+        let neighbor_ids = self
+            .neighbors
+            .read()
+            .unwrap()
             .iter()
             .filter_map(|n| match n {
                 NeighbourRef::Ready { node, .. } => Some(node.prop.id.clone()),
@@ -139,12 +163,15 @@ impl std::fmt::Display for Node {
             .collect::<Vec<VectorId>>();
 
         // Write data using write! or formatting options
-        write!(f, " parent: {:?}, child: {:?}, neighbors: {:?}", parent_id, child_id, neighbor_ids)?;
+        write!(
+            f,
+            " parent: {:?}, child: {:?}, neighbors: {:?}",
+            parent_id, child_id, neighbor_ids
+        )?;
 
         write!(f, " }}")
     }
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VectorQt {
@@ -188,11 +215,17 @@ impl VectorTreeNode {
         Ok(deserialized)
     }
 }
-type CacheType = DashMap<(HNSWLevel, VectorId), NodeRef>;
+
+pub type SizeBytes = u32;
+
+// needed to flatten and get uniques
+pub type ExecQueueUpdateNeighbors = Arc<DashMap<(HNSWLevel, VectorId), (NodeRef, SizeBytes)>>;
+pub type ExecQueueInsertNodes = Vec<NodeRef>;
 
 #[derive(Debug, Clone)]
 pub struct VectorStore {
-    pub cache: Arc<CacheType>,
+    pub exec_queue_neighbors: ExecQueueUpdateNeighbors,
+    pub exec_queue_nodes: ExecQueueInsertNodes,
     pub max_cache_level: u8,
     pub database_name: String,
     pub root_vec: NodeRef,

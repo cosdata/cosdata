@@ -35,7 +35,7 @@ pub async fn init_vector_store(
         .collect::<Vec<f32>>();
     let vec_hash = VectorId::Int(-1);
 
-    let cache = Arc::new(DashMap::new());
+    let exec_queue_neighbors = Arc::new(DashMap::new());
 
     let resolution = 1 as u8;
     let quant_dim = (size * resolution as usize / 32);
@@ -71,13 +71,15 @@ pub async fn init_vector_store(
     for l in 0..=max_cache_level {
         let prop = NodeProp::new(vec_hash.clone(), vector_list.clone().into());
 
-        let nn = Node::new(prop.clone(), None);
+        let nn = Node::new(prop.clone(), None, None, 0);
 
         if l == 0 {
             root = Some(nn.clone());
             prop_location = write_prop_to_file(&prop, &prop_file);
+            nn.set_location(prop_location);
+
         }
-        match persist_node_update_loc(prop_location, wal_file.clone(), nn, l) {
+        match persist_node_update_loc( wal_file.clone(), nn, l) {
             Ok(_) => (),
             Err(e) => {
                 eprintln!("Failed node persist (init): {}", e);
@@ -90,9 +92,9 @@ pub async fn init_vector_store(
     // ---------------------------
     let factor_levels = 10.0;
     let lp = Arc::new(generate_tuples(factor_levels).into_iter().rev().collect());
+    let exec_queue_nodes = vec![];
 
     let vec_store = VectorStore {
-        cache,
         max_cache_level,
         database_name: name.clone(),
         root_vec: root.unwrap(),
@@ -100,6 +102,8 @@ pub async fn init_vector_store(
         quant_dim: (size / 32) as usize,
         prop_file,
         wal_file,
+        exec_queue_neighbors,
+        exec_queue_nodes,
     };
 
     let result = match get_app_env() {

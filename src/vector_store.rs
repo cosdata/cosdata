@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use smallvec::SmallVec;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
+use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
@@ -24,14 +25,7 @@ pub fn vector_fetch(
     // Loop through all cache levels
     for lev in 0..vec_store.max_cache_level {
         let vector_id = vector_id.clone();
-        let maybe_res = vec_store
-            .cache
-            .clone()
-            .get(&(lev, vector_id.clone()))
-            .map(|res| {
-                let vthmm = res.value().clone();
-                vthmm
-            });
+        let maybe_res = load_vector_id_lsmdb(lev, vector_id.clone());
 
         let neighbors = if let Some(vth) = maybe_res {
             let nes: Vec<(VectorId, f32)> = vth
@@ -163,6 +157,81 @@ pub fn insert_embedding(
     }
 }
 
+pub fn queue_node_prop_exec(
+    prop_file: Arc<File>,
+    exec_queue_update_neighbors: ExecQueueUpdateNeighbors,
+    exec_queue_nodes: &mut ExecQueueInsertNodes,
+    node: NodeRef,
+    hnsw_level: HNSWLevel,
+) -> Result<(), WaCustomError> {
+    let prop_location = write_prop_to_file(&node.prop, &prop_file);
+    node.set_prop_location(prop_location);
+    exec_queue_nodes.push((node.clone()));
+
+    let _ = node.neighbors.read().unwrap().iter().map(|nbr| match nbr {
+        NeighbourRef::Ready {
+            node: nbrx,
+            cosine_similarity: _,
+        } => {
+            // TODO# calculate with specialized serialization formula
+            let result = serde_cbor::to_vec(&nbrx);
+            let size = result.unwrap().len();
+
+            exec_queue_update_neighbors.insert(
+                (hnsw_level, nbrx.prop.id.clone()),
+                (nbrx.clone(), size as u32),
+            );
+        }
+        NeighbourRef::Pending(_) => todo!(),
+    });
+    Ok(())
+}
+
+pub fn finalize_transaction(
+    vec_store: Arc<VectorStore>,
+    exec_queue_update_neighbors: ExecQueueUpdateNeighbors,
+    exec_queue_nodes: &mut ExecQueueInsertNodes,
+    hnsw_level: HNSWLevel,
+) {
+    // Calculate the total sum of SizeBytes
+    let total_size_bytes: SizeBytes = exec_queue_update_neighbors
+        .iter()
+        .map(|entry| entry.value().1) // Extract the SizeBytes
+        .sum();
+    let mut delta_offset: u32 = 0;
+
+    for node in exec_queue_nodes.clone() {
+        // TODO# calculate with specialized serialization formula
+        let result = serde_cbor::to_vec(&node);
+        let size = result.unwrap().len();
+        delta_offset += size as u32;
+
+        let new_offset = total_size_bytes + delta_offset;
+        node.set_location((new_offset, size as u32));
+    }
+
+    for item in exec_queue_update_neighbors.iter() {
+        let nbr = item.value().0.clone();
+        match persist_node_update_loc(vec_store.wal_file.clone(), nbr, hnsw_level as u8) {
+            Ok(_) => (),
+            Err(e) => {
+                eprintln!("Failed node persist(nbr1): {}", e);
+                return;
+            }
+        };
+    }
+
+    for node in exec_queue_nodes {
+        match persist_node_update_loc(vec_store.wal_file.clone(), node.clone(), hnsw_level as u8) {
+            Ok(_) => (),
+            Err(e) => {
+                eprintln!("Failed node persist(nbr1): {}", e);
+                return;
+            }
+        };
+    }
+}
+
 fn insert_node_create_edges(
     vec_store: Arc<VectorStore>,
     fvec: Arc<VectorQt>,
@@ -173,23 +242,10 @@ fn insert_node_create_edges(
     println!("xxx id:{} nei-len:{}", hs, nbs.len());
     let nd_p = NodeProp::new(hs.clone(), fvec.clone());
 
-    let nn = Node::new(nd_p.clone(), None);
+    let nn = Node::new(nd_p.clone(), None, None,0);
 
     nn.add_ready_neighbors(nbs.clone());
 
-    match persist_node_prop_update_loc(
-        vec_store.prop_file.clone(),
-        vec_store.wal_file.clone(),
-        nn.clone(),
-        nd_p,
-        cur_level as u8,
-    ) {
-        Ok(_) => (),
-        Err(e) => {
-            eprintln!("Failed node persist: {}", e);
-            return;
-        }
-    };
 
     for (nbr1, cs) in nbs.into_iter() {
         let mut neighbor_list: Vec<(NodeRef, f32)> = nbr1
@@ -234,20 +290,21 @@ fn insert_node_create_edges(
                 })
                 .collect();
         } // Scope ends, write lock is released
-
-        match persist_node_update_loc(
-            nbr1.get_prop_location().unwrap(),
-            vec_store.wal_file.clone(),
-            nbr1.clone(),
-            cur_level as u8,
-        ) {
-            Ok(_) => (),
-            Err(e) => {
-                eprintln!("Failed node persist(nbr1): {}", e);
-                return;
-            }
-        };
     }
+
+    match queue_node_prop_exec(
+        vec_store.prop_file.clone(),
+        vec_store.exec_queue_neighbors.clone(),
+        &mut vec_store.exec_queue_nodes.clone(),
+        nn,
+        cur_level as u8,
+    ) {
+        Ok(_) => (),
+        Err(e) => {
+            eprintln!("Failed node persist(nbr1): {}", e);
+            return;
+        }
+    };
 }
 
 fn traverse_find_nearest(
