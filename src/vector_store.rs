@@ -242,10 +242,9 @@ fn insert_node_create_edges(
     println!("xxx id:{} nei-len:{}", hs, nbs.len());
     let nd_p = NodeProp::new(hs.clone(), fvec.clone());
 
-    let nn = Node::new(nd_p.clone(), None, None,0);
+    let nn = Node::new(nd_p.clone(), None, None, 0);
 
     nn.add_ready_neighbors(nbs.clone());
-
 
     for (nbr1, cs) in nbs.into_iter() {
         let mut neighbor_list: Vec<(NodeRef, f32)> = nbr1

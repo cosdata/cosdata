@@ -1,14 +1,10 @@
 use super::common::{tuple_to_string, WaCustomError};
 use super::types::{
-    HNSWLevel, NeighbourRef, Node, NodeFileRef, NodeProp, NodeRef, VectorId, VectorQt, VectorStore, VersionId,
+    HNSWLevel, NeighbourRef, Node, NodeFileRef, NodeProp, NodeRef, VectorId, VectorQt, VectorStore,
+    VersionId,
 };
-use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use serde_cbor;
-use std::borrow::Borrow;
-use std::cell::RefCell;
-use std::collections::HashSet;
-use std::fmt::Debug;
 use std::fs::{File, OpenOptions};
 use std::hash::{Hash, Hasher};
 use std::io::{Seek, SeekFrom, Write};
@@ -43,7 +39,7 @@ impl NodePersist {
         parent: Option<NodePersistRef>,
         child: Option<NodePersistRef>,
         next_version: Option<NodePersistRef>,
-        version_id: VersionId
+        version_id: VersionId,
     ) -> NodePersist {
         NodePersist {
             hnsw_level,
