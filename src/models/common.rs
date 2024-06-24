@@ -20,11 +20,7 @@ pub struct CosResult {
     pub premag_b: i32,
 }
 
-// Function to convert a sequence of bits to an integer value
-pub fn bits_to_integer(bits: &[u8], size: usize) -> u32 {
-    bits.iter().fold(0, |acc, &bit| (acc << 1) | (bit as u32))
-}
-
+#[inline]
 fn x_function(value: u32) -> u32 {
     match value {
         0 => 0,
@@ -47,6 +43,7 @@ fn x_function(value: u32) -> u32 {
     }
 }
 
+#[inline]
 fn shift_and_accumulate(value: u32) -> u32 {
     let mut result: u32 = 0;
     result += x_function(15 & (value >> 0));
@@ -73,21 +70,30 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     dot_product(a, b) / (magnitude(a) * magnitude(b))
 }
 
-pub fn get_magnitude_plus_quantized_vec(bits: Vec<Vec<u8>>, size: usize) -> (f64, Vec<u32>) {
-    // Create the quant_vec with the capacity equal to the length of bits
-    let mut quant_vec: Vec<u32> = Vec::with_capacity(size);
+pub fn get_magnitude_plus_quantized_vec111(quant_vec: Vec<Vec<u32>>, _size: usize) -> Vec<u32> {
+    let mut result = Vec::with_capacity(quant_vec.len());
 
-    // Fill the quant_vec using a loop or iterator
-    for bit_vec in &bits {
-        quant_vec.push(bits_to_integer(bit_vec, 32));
+    for vecx in quant_vec {
+        let premag: u32 = vecx
+            .iter()
+            .fold(0, |acc, &val| acc + shift_and_accumulate(val));
+        result.push(premag);
     }
 
-    let premag: u32 = quant_vec
-        .iter()
-        .fold(0, |acc, val| acc + shift_and_accumulate(*val));
-    let mag = f64::sqrt(f64::from(premag));
+    result
+}
 
-    return (mag, quant_vec);
+pub fn get_magnitude_plus_quantized_vec(quant_vec: &[Vec<u32>], _size: usize) -> Vec<usize> {
+    let mut result = Vec::with_capacity(quant_vec.len());
+
+    for vecx in quant_vec {
+        let premag: usize = vecx
+            .iter()
+            .fold(0, |acc, &val| acc + shift_and_accumulate(val) as usize);
+        result.push(premag);
+    }
+
+    result
 }
 
 pub fn cosine_coalesce(x: &VectorQt, y: &VectorQt, length: usize) -> f32 {
@@ -99,33 +105,59 @@ pub fn cosine_coalesce(x: &VectorQt, y: &VectorQt, length: usize) -> f32 {
     //print!("cosine coalesce {}", res);
     return res as f32;
 }
+//////
+#[inline]
 
-fn to_float_flag(x: f32) -> u8 {
-    if x >= 0.0 {
-        1
-    } else {
-        0
+fn to_float_flag(x: f32, bits_per_value: usize, step: f32) -> Vec<bool> {
+    let mut n = ((x + 1.0) / step).floor() as usize;
+    let mut result = vec![false; bits_per_value];
+    // Fill the vector with bits from the least significant to the most significant
+    for i in (0..bits_per_value).rev() {
+        result[i] = (n & 1) == 1;
+        n >>= 1;
     }
+
+    result
 }
 
-pub fn quantize_to_u8_bits(fins: &[f32]) -> Vec<Vec<u8>> {
-    let mut quantized: Vec<Vec<u8>> = Vec::with_capacity((fins.len() + 31) / 32);
-    let mut chunk: Vec<u8> = Vec::with_capacity(32);
+pub fn quantize_to_u32_bits(fins: &[f32], resolution: u8) -> Vec<Vec<u32>> {
+    let bits_per_value = resolution as usize;
+    let parts = 2_usize.pow(bits_per_value as u32);
+    let step = 2.0 / parts as f32;
+    let u32s_per_value = (fins.len() + 31) / 32;
+    let mut quantized: Vec<Vec<u32>> = vec![Vec::with_capacity(u32s_per_value); bits_per_value];
+
+    let mut current_u32s: Vec<u32> = vec![0; bits_per_value];
+    let mut bit_index: usize = 0;
 
     for &f in fins {
-        chunk.push(to_float_flag(f));
-        if chunk.len() == 32 {
-            quantized.push(chunk.clone());
-            chunk.clear();
+        let flags = to_float_flag(f, bits_per_value, step);
+
+        for bit_position in 0..bits_per_value {
+            if flags[bit_position] {
+                current_u32s[bit_position] |= 1 << bit_index;
+            }
+        }
+        bit_index += 1;
+
+        if bit_index == 32 {
+            for bit_position in 0..bits_per_value {
+                quantized[bit_position].push(current_u32s[bit_position]);
+                current_u32s[bit_position] = 0;
+            }
+            bit_index = 0;
         }
     }
 
-    if !chunk.is_empty() {
-        quantized.push(chunk);
+    if bit_index > 0 {
+        for bit_position in 0..bits_per_value {
+            quantized[bit_position].push(current_u32s[bit_position]);
+        }
     }
-    //println!("{:?}", quantized);
+
     quantized
 }
+/////
 
 #[derive(Debug, Clone)]
 pub enum WaCustomError {
@@ -163,7 +195,7 @@ impl fmt::Display for WaCustomError {
             }
             WaCustomError::InvalidLocationNeighborEncountered(mark, msg) => {
                 write!(f, "Invalid location neighbor encountered {} {}", mark, msg)
-            }            
+            }
             WaCustomError::MutexPoisoned(msg) => {
                 write!(f, "Mutex Poisoned here: {}", msg)
             }

@@ -39,7 +39,7 @@ pub async fn init_vector_store(
 
     let resolution = 1 as u8;
     let quant_dim = (size * resolution as usize / 32);
-    let quantized_values: Vec<Vec<u8>> = quantize_to_u8_bits(&vec.clone());
+    let quantized_values: Vec<Vec<u32>> = quantize_to_u32_bits(&vec.clone(), 1);
     let mpq: (f64, Vec<u32>) =
         get_magnitude_plus_quantized_vec(quantized_values.to_vec(), quant_dim);
 
@@ -77,9 +77,8 @@ pub async fn init_vector_store(
             root = Some(nn.clone());
             prop_location = write_prop_to_file(&prop, &prop_file);
             nn.set_location(prop_location);
-
         }
-        match persist_node_update_loc( wal_file.clone(), nn, l) {
+        match persist_node_update_loc(wal_file.clone(), nn, l) {
             Ok(_) => (),
             Err(e) => {
                 eprintln!("Failed node persist (init): {}", e);
@@ -144,7 +143,7 @@ pub async fn run_upload(
                 let root = &vec_store.root_vec;
                 let vec_hash = convert_value(id);
 
-                let quantized_values: Vec<Vec<u8>> = quantize_to_u8_bits(&vec.clone());
+                let quantized_values: Vec<Vec<u32>> = quantize_to_u32_bits(&vec.clone(), 1);
                 let mpq: (f64, Vec<u32>) = get_magnitude_plus_quantized_vec(
                     quantized_values.to_vec(),
                     vec_store.quant_dim,
@@ -186,7 +185,7 @@ pub async fn ann_vector_query(
     let vec_hash = VectorId::Str("query".to_string());
     let root = &vector_store.root_vec;
 
-    let quantized_values: Vec<Vec<u8>> = quantize_to_u8_bits(&query.clone());
+    let quantized_values: Vec<Vec<u32>> = quantize_to_u32_bits(&query.clone(), 1);
     let mpq: (f64, Vec<u32>) =
         get_magnitude_plus_quantized_vec(quantized_values.to_vec(), vec_store.quant_dim);
     let vector_list = VectorQt {
