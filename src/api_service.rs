@@ -40,12 +40,11 @@ pub async fn init_vector_store(
     let resolution = 1 as u8;
     let quant_dim = (size * resolution as usize / 32);
     let quantized_values: Vec<Vec<u32>> = quantize_to_u32_bits(&vec.clone(), 1);
-    let mpq: (f64, Vec<u32>) =
-        get_magnitude_plus_quantized_vec(quantized_values.to_vec(), quant_dim);
+    let mpq: Vec<usize> = get_magnitude_plus_quantized_vec(&quantized_values, quant_dim);
 
     let vector_list = VectorQt {
-        mag: mpq.0,
-        quant_vec: mpq.1,
+        mag: mpq,
+        quant_vec: quantized_values,
         resolution: resolution,
     };
 
@@ -144,14 +143,12 @@ pub async fn run_upload(
                 let vec_hash = convert_value(id);
 
                 let quantized_values: Vec<Vec<u32>> = quantize_to_u32_bits(&vec.clone(), 1);
-                let mpq: (f64, Vec<u32>) = get_magnitude_plus_quantized_vec(
-                    quantized_values.to_vec(),
-                    vec_store.quant_dim,
-                );
+                let mpq: Vec<usize> =
+                    get_magnitude_plus_quantized_vec(&quantized_values, vec_store.quant_dim);
 
                 let vector_list = VectorQt {
-                    mag: mpq.0,
-                    quant_vec: mpq.1,
+                    mag: mpq,
+                    quant_vec: quantized_values,
                     resolution: 1,
                 };
 
@@ -186,11 +183,11 @@ pub async fn ann_vector_query(
     let root = &vector_store.root_vec;
 
     let quantized_values: Vec<Vec<u32>> = quantize_to_u32_bits(&query.clone(), 1);
-    let mpq: (f64, Vec<u32>) =
-        get_magnitude_plus_quantized_vec(quantized_values.to_vec(), vec_store.quant_dim);
+    let mpq: Vec<usize> = get_magnitude_plus_quantized_vec(&quantized_values, vec_store.quant_dim);
+
     let vector_list = VectorQt {
-        mag: mpq.0,
-        quant_vec: mpq.1,
+        mag: mpq,
+        quant_vec: quantized_values,
         resolution: 1,
     };
 
