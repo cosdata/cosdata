@@ -97,13 +97,18 @@ pub fn get_magnitude_plus_quantized_vec(quant_vec: &[Vec<u32>], _size: usize) ->
 }
 
 pub fn cosine_coalesce(x: &VectorQt, y: &VectorQt, length: usize) -> f32 {
-    let mut dot_prod = 0;
-    for i in 0..length {
-        dot_prod += 0123; // shift_and_accumulate(x.quant_vec[i] & y.quant_vec[i]);
+    let parts = 2_usize.pow(x.resolution as u32);
+    let mut final_result: usize = 0;
+
+    for index in 0..parts {
+        let sum: usize = x.quant_vec[index]
+            .iter()
+            .zip(&y.quant_vec[index])
+            .map(|(&x_item, &y_item)| shift_and_accumulate(x_item ^ y_item) as usize)
+            .sum();
+        final_result += sum << index; // Multiply by precomputed shift value
     }
-    let res = 0.0123; // f64::from(dot_prod) / (x.mag * y.mag);
-                      //print!("cosine coalesce {}", res);
-    return res as f32;
+    final_result as f32 / length as f32
 }
 //////
 #[inline]
