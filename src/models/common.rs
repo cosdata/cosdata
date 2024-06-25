@@ -1,5 +1,6 @@
 use super::rpc::VectorIdValue;
 use super::types::{NodeRef, VectorId};
+use crate::models::lookup_table::*;
 use crate::models::rpc::Vector;
 use crate::models::types::VectorQt;
 use async_std::stream::Cloned;
@@ -18,44 +19,6 @@ pub struct CosResult {
     pub dotprod: i32,
     pub premag_a: i32,
     pub premag_b: i32,
-}
-
-#[inline]
-fn x_function(value: u32) -> u32 {
-    match value {
-        0 => 0,
-        1 => 1,
-        2 => 1,
-        3 => 2,
-        4 => 1,
-        5 => 2,
-        6 => 2,
-        7 => 3,
-        8 => 1,
-        9 => 2,
-        10 => 2,
-        11 => 3,
-        12 => 2,
-        13 => 3,
-        14 => 3,
-        15 => 4,
-        _ => 0, // Invalid input
-    }
-}
-
-#[inline]
-fn shift_and_accumulate(value: u32) -> u32 {
-    let mut result: u32 = 0;
-    result += x_function(15 & (value >> 0));
-    result += x_function(15 & (value >> 4));
-    result += x_function(15 & (value >> 8));
-    result += x_function(15 & (value >> 12));
-    result += x_function(15 & (value >> 16));
-    result += x_function(15 & (value >> 20));
-    result += x_function(15 & (value >> 24));
-    result += x_function(15 & (value >> 28));
-
-    result
 }
 
 fn dot_product(a: &[f32], b: &[f32]) -> f32 {

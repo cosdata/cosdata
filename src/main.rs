@@ -10,8 +10,12 @@ use std::sync::{Arc, Mutex};
 use web_server::run_actix_server;
 
 use crate::models::common::*;
+use crate::models::lookup_table::*;
 
 fn main() {
-    let _x = run_actix_server();
+    // Initialize the lookup table once
+    initialize_u16_lookup_table();
+
+    let _ = run_actix_server();
     ()
 }
