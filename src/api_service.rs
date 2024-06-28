@@ -41,7 +41,8 @@ pub async fn init_vector_store(
     let quant_dim = (size * resolution as usize / 32);
     let quantized_values: Vec<Vec<u32>> = quantize_to_u32_bits(&vec.clone(), 1);
     //let mpq: Vec<usize> = get_magnitude_plus_quantized_vec(&quantized_values, quant_dim);
-
+    // magnitude will need to be reintroduced in VectorQt,
+    // besides we can emperically test end to end how the hamming similarity does for embeddings trained on cosine sim
     let vector_list = VectorQt {
         //mag: mpq,
         quant_vec: quantized_values,
