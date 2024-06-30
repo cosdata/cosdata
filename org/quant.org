@@ -165,7 +165,7 @@ fn main() {
 
    
 #+BEGIN_SRC rust :tangle "src/main.rs"
-    fn quaternary_multiply_u8(a0: u8, a1: u8, b0: u8, b1: u8) -> u8 {
+    fn quaternary_multiply_u8(a0: u8, a1: u8, b0: u8, b1: u8) -> u16 {
       // Calculate intermediate products
       let p0 = a0 & b0; // a0 * b0
       let p1 = (a0 & b1) ^ (a1 & b0); // (a0 * b1) ^ (a1 * b0)
@@ -176,7 +176,7 @@ fn main() {
       result
      }
 
-    fn senary_multiply_u8(a0: u8, a1: u8, a2: u8, b0: u8, b1: u8, b2: u8) -> u32 {
+    fn senary_multiply_u8(a0: u8, a1: u8, a2: u8, b0: u8, b1: u8, b2: u8) -> u16 {
       // Calculate intermediate products
       let p0 = a0 & b0;
       let p1 = (a0 & b1) ^ (a1 & b0);
@@ -193,7 +193,7 @@ fn main() {
 
 *** Precompute values 
 
-Create a 2 dimensional lookup table of 256x256, each representing u8 type. Similar to  ~shift_and_accumulate~ and ~shift_and_accumulate_u16~ create two new functions for Quaternary & Senary, these functions will accept two u32 input args and will do shift operations and extract u8 at a time and use the lookup table to get the answer and collate them.
+Create a 2 dimensional lookup table of 256x256 containing ~u16~ values, each row/col representing ~u8~ type. Similar to  ~shift_and_accumulate~ and ~shift_and_accumulate_u16~ create two new functions for Quaternary & Senary, these functions will accept two ~u32~ input args and will do shift operations and extract ~u8~ at a time and use the lookup table to get the answer and collate them.
  - ~quaternary_multiply(x: u32, y: u32) -> u64~
  - ~senary_multiply(x: u32, y: u32, z: u32) -> u64~
 
