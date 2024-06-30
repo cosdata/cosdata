@@ -65,7 +65,7 @@ fn main() {
     println!("done");
 
     let size = 64;
-    let min = 0.0;
+    let min = -1.0;
     let max = 1.0;
     let vec1 = (0..size)
         .map(|_| {
@@ -109,6 +109,30 @@ fn main() {
     println!("scalar_quant_cs : {}", scalar_quant_cs);
 }
 
+fn quaternary_multiply_u8(a0: u8, a1: u8, b0: u8, b1: u8) -> u8 {
+    // Calculate intermediate products
+    let p0 = a0 & b0; // a0 * b0
+    let p1 = (a0 & b1) ^ (a1 & b0); // (a0 * b1) ^ (a1 * b0)
+    let p2 = a1 & b1; // a1 * b1
+
+    // Combine intermediate products to form the final result
+    let result = (p2 << 2) | (p1 << 1) | p0;
+    result
+   }
+
+  fn senary_multiply_u8(a0: u8, a1: u8, a2: u8, b0: u8, b1: u8, b2: u8) -> u32 {
+    // Calculate intermediate products
+    let p0 = a0 & b0;
+    let p1 = (a0 & b1) ^ (a1 & b0);
+    let p2 = (a0 & b2) ^ (a1 & b1) ^ (a2 & b0);
+    let p3 = (a1 & b2) ^ (a2 & b1);
+    let p4 = a2 & b2;
+
+    // Combine intermediate products to form the final result
+    let result = (p4 << 4) | (p3 << 3) | (p2 << 2) | (p1 << 1) | p0;
+    result
+}
+
 pub fn cosine_coalesce(x: &VectorQt, y: &VectorQt, length: usize) -> f32 {
     let parts = 2_usize.pow(x.resolution as u32);
     let mut final_result: usize = 0;
@@ -130,28 +154,33 @@ pub fn cosine_coalesce(x: &VectorQt, y: &VectorQt, length: usize) -> f32 {
 }
 
 fn cosine_similarity_new(x: &VectorQt, y: &VectorQt) -> f32 {
-    let and_val = 0.22;
-    let or_val = 0.09;
+    let and_val = 0.12;
+    let or_val = 0.12;
+    let xor_val = 1.0;
+
     let vec1 = &x.quant_vec;
     let vec2 = &y.quant_vec;
     let vec1_len = vec1.len();
 
     let mut dot_product: f32 = 0.0;
-    let mut dot_product_and_count: u32 = 0;   // can even have a vec for each level b/w MSB and LSB.
-    let mut dot_product_or_count: u32 = 0;
+    let mut dot_product_and_count: i32 = 0;   // can even have a vec for each level b/w MSB and LSB.
+    let mut dot_product_or_count: i32 = 0;
+    //let mut dot_product_xor_count: i32 = 0;
 
     for index in 0..vec1_len {
         let inner_product_len = vec1[0].len();
         for i in 0..inner_product_len {
-            dot_product_and_count += shift_and_accumulate(vec1[index][i] & vec2[index][i]);
-            dot_product_or_count += shift_and_accumulate(vec1[index][i] | vec2[index][i]);
+            dot_product_and_count += ((shift_and_accumulate(vec1[index][i] & vec2[index][i])) << index ) as i32 - 16;
+            //dot_product_or_count += ((shift_and_accumulate(vec1[index][i] | vec2[index][i])) ) as i32 - 16;
+            //dot_product_xor_count += shift_and_accumulate(vec1[index][i] ^ vec2[index][i]) as i32 - 16;
             println!(
                 "debug : and {} | or {} | {} {}",
                 dot_product_and_count, dot_product_or_count, vec1[index][i], vec2[index][i]
             );
         }
     }
-    dot_product = (or_val * dot_product_or_count as f32) + (and_val * dot_product_and_count as f32);
+     dot_product = (or_val * dot_product_or_count as f32) + (and_val * dot_product_and_count as f32);
+     // dot_product = and_val * dot_product_and_count as f32;
 
     let mut premag1: f32 = 0.0;
     for (_index, vec) in vec1.iter().enumerate() {
@@ -188,7 +217,7 @@ fn cosine_similarity_new(x: &VectorQt, y: &VectorQt) -> f32 {
 }
 
 fn to_float_flag(x: f32, bits_per_value: usize, step: f32) -> Vec<bool> {
-    let mut num = ((x) / step).floor() as usize;
+    let mut num = ((x + 1.0) / step).floor() as usize;
     println!("bits_per_value : {} | step {} | x {} | num {}", bits_per_value, step, x, num);
 
     let mut result = vec![];
@@ -204,7 +233,7 @@ fn to_float_flag(x: f32, bits_per_value: usize, step: f32) -> Vec<bool> {
 pub fn quantize_to_u32_bits(fins: &[f32], resolution: u8) -> Vec<Vec<u32>> {
     let bits_per_value = resolution as usize;
     let parts = 2_usize.pow(bits_per_value as u32);
-    let step = 1.0 / parts as f32;
+    let step = 2.0 / parts as f32;
 
     let u32s_per_value = fins.len() / 32;
     let mut quantized: Vec<Vec<u32>> = vec![Vec::with_capacity(u32s_per_value); bits_per_value];
