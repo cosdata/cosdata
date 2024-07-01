@@ -7,9 +7,12 @@ use crate::models::{persist, types::*};
 use crate::vector_store::{self, *};
 use dashmap::DashMap;
 use futures::stream::{self, StreamExt};
+use lmdb::{Database, Environment, Transaction, WriteFlags};
 use log::info;
 use rand::Rng;
 use std::fs::OpenOptions;
+use std::fs::*;
+use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 
 pub async fn init_vector_store(
@@ -71,7 +74,7 @@ pub async fn init_vector_store(
     for l in 0..=max_cache_level {
         let prop = NodeProp::new(vec_hash.clone(), vector_list.clone().into());
 
-        let nn = Node::new(prop.clone(), None, None, 0);
+        let nn = Node::new(prop.clone(), None, 0);
 
         if l == 0 {
             root = Some(nn.clone());
@@ -92,6 +95,18 @@ pub async fn init_vector_store(
     let factor_levels = 10.0;
     let lp = Arc::new(generate_tuples(factor_levels).into_iter().rev().collect());
     let exec_queue_nodes = vec![];
+    // Define the database path
+    let path = Path::new("./versions"); // TODO: prefix the customer & database name
+
+    // Ensure the directory exists
+    create_dir_all(&path).map_err(|e| WaCustomError::CreateDatabaseFailed(e.to_string()))?;
+    // TODO: make an entry in the rocks meta db
+    // Initialize the environment
+    let env = Environment::new()
+        .set_max_dbs(1)
+        .set_map_size(10485760) // Set the maximum size of the database to 10MB
+        .open(&path)
+        .map_err(|e| WaCustomError::CreateDatabaseFailed(e.to_string()))?;
 
     let vec_store = VectorStore {
         max_cache_level,
@@ -103,6 +118,7 @@ pub async fn init_vector_store(
         wal_file,
         exec_queue_neighbors,
         exec_queue_nodes,
+        version_lmdb: Arc::new(Mutex::new(env)),
     };
 
     let result = match get_app_env() {

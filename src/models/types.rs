@@ -1,12 +1,14 @@
 use bincode;
 use dashmap::DashMap;
+use lmdb::{Database, Environment, Transaction, WriteFlags};
 use rocksdb::{ColumnFamily, Error, Options, DB};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fmt;
-use std::fs::File;
+use std::fs::*;
 use std::hash::{Hash, Hasher};
+use std::path::Path;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
@@ -36,7 +38,7 @@ pub type VersionId = u32;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Node {
     pub version_id: VersionId,
-    pub previous: Option<NodeFileRef>,
+    // pub previous: Option<NodeFileRef>,
     pub prop: Arc<NodeProp>,
     pub location: Arc<RwLock<Option<NodeFileRef>>>,
     pub prop_location: Arc<RwLock<Option<NodeFileRef>>>,
@@ -55,7 +57,7 @@ impl Node {
     pub fn new(
         prop: Arc<NodeProp>,
         loc: Option<NodeFileRef>,
-        previous: Option<NodeFileRef>,
+        //previous: Option<NodeFileRef>,
         version_id: VersionId,
     ) -> NodeRef {
         Arc::new(Node {
@@ -66,7 +68,7 @@ impl Node {
             parent: Arc::new(RwLock::new(None)),
             child: Arc::new(RwLock::new(None)),
             version_id,
-            previous,
+            //previous,
         })
     }
 
@@ -233,6 +235,7 @@ pub struct VectorStore {
     pub quant_dim: usize,
     pub prop_file: Arc<File>,
     pub wal_file: Arc<File>,
+    pub version_lmdb: Arc<Mutex<Environment>>,
 }
 
 #[derive(Debug, Clone)]

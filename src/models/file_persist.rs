@@ -23,7 +23,7 @@ pub struct NeighbourPersist {
 #[derive(Serialize, Deserialize)]
 pub struct NodePersist {
     pub version_id: VersionId,
-    pub next_version: Option<NodePersistRef>,
+    //pub next_version: Option<NodePersistRef>,
     pub prop_location: NodePersistRef,
     pub hnsw_level: HNSWLevel,
     pub neighbors: Vec<NeighbourPersist>,
@@ -38,7 +38,7 @@ impl NodePersist {
         neighbors: Vec<NeighbourPersist>,
         parent: Option<NodePersistRef>,
         child: Option<NodePersistRef>,
-        next_version: Option<NodePersistRef>,
+        //next_version: Option<NodePersistRef>,
         version_id: VersionId,
     ) -> NodePersist {
         NodePersist {
@@ -47,7 +47,7 @@ impl NodePersist {
             parent,
             child,
             prop_location: location,
-            next_version,
+            //next_version,
             version_id,
         }
     }
@@ -101,7 +101,7 @@ pub fn persist_node_update_loc(
         parent,
         child,
         prop_location: node.get_location().unwrap(),
-        next_version: None,
+        //next_version: None,
         version_id: node.version_id + 1,
     };
 
@@ -179,7 +179,7 @@ pub fn load_node_from_node_persist(
         neighbors,
         parent,
         child,
-        previous: Some(persist_loc),
+        //previous: Some(persist_loc),
         version_id: node_persist.version_id,
     })
 }
