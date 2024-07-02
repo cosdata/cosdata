@@ -12,21 +12,21 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 // persist structures
-
 type NodePersistRef = (u32, u32); // (file_number, offset)
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct NeighbourPersist {
     pub node: NodePersistRef,
     pub cosine_similarity: f32,
 }
+
 #[derive(Serialize, Deserialize)]
 pub struct NodePersist {
     pub version_id: VersionId,
     //pub next_version: Option<NodePersistRef>,
     pub prop_location: NodePersistRef,
     pub hnsw_level: HNSWLevel,
-    pub neighbors: Vec<NeighbourPersist>,
+    pub neighbors: [Option<NeighbourPersist>; 20], // Bounded array of size 20
     pub parent: Option<NodePersistRef>,
     pub child: Option<NodePersistRef>,
 }
@@ -41,9 +41,14 @@ impl NodePersist {
         //next_version: Option<NodePersistRef>,
         version_id: VersionId,
     ) -> NodePersist {
+        let mut fixed_neighbors = [None; 20];
+        for (index, neighbor) in neighbors.iter().enumerate().take(20) {
+            fixed_neighbors[index] = Some(neighbor.clone());
+        }
+
         NodePersist {
             hnsw_level,
-            neighbors,
+            neighbors: fixed_neighbors,
             parent,
             child,
             prop_location: location,
@@ -66,30 +71,31 @@ pub fn persist_node_update_loc(
         .map_err(|_| WaCustomError::MutexPoisoned("convert_node_to_node_persist".to_owned()))?;
 
     // Convert neighbors from NodeRef to NodePersistRef
-    let neighbors: Result<Vec<NeighbourPersist>, _> = neighbors_lock
-        .iter()
-        .map(|neighbor| match neighbor {
+    let mut fixed_neighbors = [None; 20];
+    for (index, neighbor) in neighbors_lock.iter().enumerate().take(20) {
+        fixed_neighbors[index] = match neighbor {
             NeighbourRef::Ready {
                 node: nodex,
                 cosine_similarity,
             } => match nodex.get_location() {
-                Some(loca) => Ok(NeighbourPersist {
+                Some(loca) => Some(NeighbourPersist {
                     node: loca,
                     cosine_similarity: *cosine_similarity,
                 }),
-                None => Err(WaCustomError::InvalidLocationNeighborEncountered(
-                    "neighbours loop".to_owned(),
-                    nodex.prop.id.clone(),
-                )),
+                None => {
+                    return Err(WaCustomError::InvalidLocationNeighborEncountered(
+                        "neighbours loop".to_owned(),
+                        nodex.prop.id.clone(),
+                    ));
+                }
             },
-            NeighbourRef::Pending(x) => Err(WaCustomError::PendingNeighborEncountered(
-                tuple_to_string(*x),
-            )),
-        })
-        .collect();
-
-    // Handle the Result of the neighbors conversion
-    let neighbors = neighbors?;
+            NeighbourRef::Pending(x) => {
+                return Err(WaCustomError::PendingNeighborEncountered(tuple_to_string(
+                    *x,
+                )));
+            }
+        };
+    }
 
     // Convert parent and child
     let parent = node.get_parent().unwrap().get_location();
@@ -97,7 +103,7 @@ pub fn persist_node_update_loc(
 
     let mut nprst = NodePersist {
         hnsw_level,
-        neighbors,
+        neighbors: fixed_neighbors,
         parent,
         child,
         prop_location: node.get_location().unwrap(),
@@ -105,13 +111,21 @@ pub fn persist_node_update_loc(
         version_id: node.version_id + 1,
     };
 
-    let file_loc = write_node_to_file(&mut nprst, &wal_file);
-    node.set_location(file_loc);
+    let mut location = node.location.write().unwrap();
+    if let Some(loc) = *location {
+        let file_loc = write_node_to_file_at_offset(&mut nprst, &wal_file, loc.0.into());
+        *location = Some(file_loc);
+    } else {
+        let file_loc = write_node_to_file(&mut nprst, &wal_file);
+        *location = Some(file_loc);
+    }
+
     //TODO: update the previous node_persist with the new location in its next field
     // only needs to update the tuple
-    return Ok(());
+    Ok(())
 }
 
+//////
 pub fn map_node_persist_ref_to_node(
     vec_store: VectorStore,
     node_ref: NodePersistRef,
@@ -142,17 +156,20 @@ pub fn load_node_from_node_persist(
     let neighbors_result: Vec<NeighbourRef> = node_persist
         .neighbors
         .iter()
-        .map(|nref| {
-            map_node_persist_ref_to_node(
-                vec_store.clone(),
-                nref.node,
-                nref.cosine_similarity,
-                node_persist.hnsw_level,
-                prop.id.clone(),
-            )
+        .filter_map(|nref| {
+            if let Some(nref) = nref {
+                Some(map_node_persist_ref_to_node(
+                    vec_store.clone(),
+                    nref.node,
+                    nref.cosine_similarity,
+                    node_persist.hnsw_level,
+                    prop.id.clone(),
+                ))
+            } else {
+                None
+            }
         })
         .collect();
-
     // Wrap neighbors in Arc<Mutex<Vec<NeighbourRef>>>
     let neighbors = Arc::new(RwLock::new(neighbors_result));
 
@@ -220,7 +237,7 @@ pub fn write_node_to_file(node: &mut NodePersist, mut file: &File) -> (u32, u32)
 
 pub fn write_node_to_file_at_offset(
     node: &mut NodePersist,
-    filename: &str,
+    mut file: &File,
     offset: u64,
 ) -> (u32, u32) {
     let mut node_bytes = Vec::new();
@@ -229,11 +246,6 @@ pub fn write_node_to_file_at_offset(
         panic!("Failed to CBOR encode NodePersist: {}", err);
     }
     node_bytes.extend_from_slice(result.unwrap().as_ref());
-
-    let mut file = OpenOptions::new()
-        .write(true)
-        .open(filename)
-        .expect("Failed to open file for writing");
 
     // Seek to the specified offset before writing
     file.seek(SeekFrom::Start(offset as u64))
