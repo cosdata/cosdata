@@ -11,6 +11,7 @@ use std::io::{Seek, SeekFrom, Write};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
+//start
 // persist structures
 type NodePersistRef = (u32, u32); // (file_number, offset)
 
@@ -26,7 +27,7 @@ pub struct NodePersist {
     //pub next_version: Option<NodePersistRef>,
     pub prop_location: NodePersistRef,
     pub hnsw_level: HNSWLevel,
-    pub neighbors: [Option<NeighbourPersist>; 20], // Bounded array of size 20
+    pub neighbors: [NeighbourPersist; 20], // Bounded array of size 20
     pub parent: Option<NodePersistRef>,
     pub child: Option<NodePersistRef>,
 }
@@ -41,9 +42,12 @@ impl NodePersist {
         //next_version: Option<NodePersistRef>,
         version_id: VersionId,
     ) -> NodePersist {
-        let mut fixed_neighbors = [None; 20];
+        let mut fixed_neighbors = [NeighbourPersist {
+            node: (0, 0),
+            cosine_similarity: 0.0,
+        }; 20];
         for (index, neighbor) in neighbors.iter().enumerate().take(20) {
-            fixed_neighbors[index] = Some(neighbor.clone());
+            fixed_neighbors[index] = neighbor.clone();
         }
 
         NodePersist {
@@ -71,17 +75,20 @@ pub fn persist_node_update_loc(
         .map_err(|_| WaCustomError::MutexPoisoned("convert_node_to_node_persist".to_owned()))?;
 
     // Convert neighbors from NodeRef to NodePersistRef
-    let mut fixed_neighbors = [None; 20];
+    let mut fixed_neighbors = [NeighbourPersist {
+        node: (0, 0),
+        cosine_similarity: 0.0,
+    }; 20];
     for (index, neighbor) in neighbors_lock.iter().enumerate().take(20) {
         fixed_neighbors[index] = match neighbor {
             NeighbourRef::Ready {
                 node: nodex,
                 cosine_similarity,
             } => match nodex.get_location() {
-                Some(loca) => Some(NeighbourPersist {
+                Some(loca) => NeighbourPersist {
                     node: loca,
                     cosine_similarity: *cosine_similarity,
-                }),
+                },
                 None => {
                     return Err(WaCustomError::InvalidLocationNeighborEncountered(
                         "neighbours loop".to_owned(),
@@ -98,15 +105,21 @@ pub fn persist_node_update_loc(
     }
 
     // Convert parent and child
-    let parent = node.get_parent().unwrap().get_location();
-    let child = node.get_child().unwrap().get_location();
+    let parent = node
+        .get_parent()
+        .and_then(|p| p.get_location())
+        .unwrap_or((0, 0));
+    let child = node
+        .get_child()
+        .and_then(|c| c.get_location())
+        .unwrap_or((0, 0));
 
     let mut nprst = NodePersist {
         hnsw_level,
         neighbors: fixed_neighbors,
-        parent,
-        child,
-        prop_location: node.get_location().unwrap(),
+        parent: Some(parent),
+        child: Some(child),
+        prop_location: node.get_location().unwrap_or((0, 0)),
         //next_version: None,
         version_id: node.version_id + 1,
     };
@@ -125,7 +138,8 @@ pub fn persist_node_update_loc(
     Ok(())
 }
 
-//////
+// end
+
 pub fn map_node_persist_ref_to_node(
     vec_store: VectorStore,
     node_ref: NodePersistRef,
@@ -157,7 +171,7 @@ pub fn load_node_from_node_persist(
         .neighbors
         .iter()
         .filter_map(|nref| {
-            if let Some(nref) = nref {
+            if nref.node != (0, 0) {
                 Some(map_node_persist_ref_to_node(
                     vec_store.clone(),
                     nref.node,
