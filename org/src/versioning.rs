@@ -1,4 +1,4 @@
-
+    
 use std::sync::{Arc, Mutex};
 
 fn largest_power_of_4_below(n: u32) -> u32 {
@@ -19,7 +19,6 @@ pub fn power_of_4_with_index(x: u32) -> Option<usize> {
     if x == 0 {
         return None;
     }
-
     // Check if x is in the list of powers of 4 and return its index
     match POWERS_OF_4.iter().position(|&power| power == x) {
         Some(index) => Some(index),
@@ -43,49 +42,28 @@ impl VersionNode {
         }
     }
 
-    fn add_pointer(&mut self, node: Arc<Mutex<VersionNode>>) {
-        self.pointers.push(Some(node));
-    }
-
     fn insert_node(&mut self, target_version: Arc<Mutex<VersionNode>>) {
         let target_version_lock = target_version.lock().unwrap();
-        println!(
-            "self.ver {} | target.ver {:?} | largest below {} ",
-            self.version,
-            target_version_lock.version,
-            largest_power_of_4_below(target_version_lock.version)
-        );
+        let delta = largest_power_of_4_below(target_version_lock.version - self.version);
 
-        let mut delta = 0;
-        if largest_power_of_4_below(target_version_lock.version) > self.version {
-            delta = largest_power_of_4_below(target_version_lock.version) - self.version
-        } else {
-            delta = 1
-        }
-
-        drop(target_version_lock); // Drop the lock here to avoid deadlock
 
         if let Some(index) = power_of_4_with_index(delta) {
-            println!("{} is a power of 4 at index {}", delta, index);
-            if let Some(ref p) = self.pointers[index] {
-                println!("aaa");
-                p.lock().unwrap().insert_node(target_version.clone());
+            println!(
+                "self.ver {} | target.ver {} | delta {} | index {}",
+                self.version, target_version_lock.version, delta, index
+            );
+
+            drop(target_version_lock); // Drop the lock here to avoid deadlock
+
+            if let Some(p) = self.pointers[index].clone() {
+                let mut p_lock = p.lock().unwrap();
+                p_lock.insert_node(target_version.clone());
             } else {
                 self.pointers[index] = Some(target_version.clone());
-                println!("bbb {:?}", self.pointers);
+                println!("{}'s pointers {:?}", self.version, self.pointers);
             }
         } else {
-            let nd = largest_power_of_4_below(delta);
-            println!("delta {} | nd {} ", delta, nd);
-            if let Some(ind) = power_of_4_with_index(nd) {
-                if let Some(ref p) = self.pointers[ind] {
-                    println!("ccc");
-                    p.lock().unwrap().insert_node(target_version.clone());
-                } else {
-                    self.pointers[ind] = Some(target_version.clone());
-                    println!("ddd");
-                }
-            }
+            println!("error, cant happen {}", delta);
         }
     }
 
@@ -125,7 +103,7 @@ impl VersionControl {
         }
 
         let current = self.root.clone();
-        println!("Version {} ", version);
+        println!("\n \n \n ====> Version {} <====", version);
         if let Some(node) = current {
             node.lock().unwrap().insert_node(new_node);
         } else {
@@ -155,11 +133,20 @@ fn main() {
     vc.add_version(7, true);
     vc.add_version(8, true);
     vc.add_version(9, true);
+    vc.add_version(10, true);
+    vc.add_version(11, true);
+    vc.add_version(12, true);
+    vc.add_version(13, true);
     vc.add_version(16, true);
     vc.add_version(17, true);
     vc.add_version(64, true);
+    vc.add_version(65, true);
+
     vc.add_version(128, true);
-    vc.add_version(198, true);
+    vc.add_version(129, true);
+    vc.add_version(191, true);
+    vc.add_version(192, true);
+    vc.add_version(193, true);
     vc.add_version(256, true);
     vc.add_version(512, true);
     vc.add_version(768, true);
