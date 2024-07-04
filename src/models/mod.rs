@@ -1,3 +1,4 @@
+pub mod cache_loader;
 pub mod common;
 pub mod encoding_format;
 pub mod file_persist;
