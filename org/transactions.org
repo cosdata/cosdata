@@ -1,0 +1,116 @@
+#+TITLE: Transaction as a Resource in RESTful APIs
+#+AUTHOR: Nithin Mani
+#+DATE: 2024-07-06
+
+* Transaction as a Resource
+In the world of RESTful APIs, the concept of treating transactions as resources can streamline the implementation of transactional operations without requiring the addition of new HTTP headers, verbs, or complex mechanisms. This approach can be particularly useful in scenarios where a database transaction can span accross multiple HTTP requests, like one implemented in our vector database and needs to handle transactions efficiently. The need could arise either for MVCC or versioning capability offered by the database.
+
+One effective way to achieve this is by creating a special transaction resource. This resource can be managed using standard HTTP methods and can provide a straightforward way to implement transactions. Here’s a general outline of how this can be done.
+
+* Creating a Transaction Resource
+To begin a transaction, the client performs a POST request to a predefined endpoint, such as =/vectordb/transactions=. This request generates a new transaction, returning a unique identifier (a 128-bit hash encoded as a base64 string) for the transaction. This identifier will be used in subsequent operations within the transaction.
+
+- Request
+#+BEGIN_SRC http
+POST /vectordb/transactions
+Content-Type: application/json
+
+#+END_SRC
+
+- Response 
+#+BEGIN_SRC http
+{
+  "transaction_id": "dGhpc2lzYX"
+}
+#+END_SRC
+
+* Working with the Transaction
+Once the transaction is created and the unique identifier is received, the client can perform various database operations within the context of this transaction. Each operation is directed to a URL that includes the transaction’s unique identifier.
+
+** Upserting Data
+To upsert data within the transaction, the client sends a request to the =/vectordb/transactions/dGhpc2lzYX/upsert= endpoint. This allows the client to insert or update data within the transaction context.
+
+#+BEGIN_SRC http
+POST /vectordb/transactions/dGhpc2lzYX/upsert
+Content-Type: application/json
+
+{
+  "vectors": [
+    {
+      "id": "A", 
+      "values": [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+    },
+    {
+      "id": "B", 
+      "values": [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2]
+    },
+    {
+      "id": "C", 
+      "values": [0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3]
+    },
+    {
+      "id": "D", 
+      "values": [0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4]
+    }
+  ]
+}
+#+END_SRC
+
+** Updating Data
+For updating existing data, the client uses the  =/vectordb/transactions/dGhpc2lzYX/update= endpoint.
+
+#+BEGIN_SRC http
+POST /vectordb/transactions/dGhpc2lzYX/update
+Content-Type: application/json
+
+{
+  "vectors": [
+    {
+      "id": "A", 
+      "values": [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+    },
+    {
+      "id": "B", 
+      "values": [0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6]
+    }
+  ]
+}
+#+END_SRC
+
+** Deleting Data
+To delete data within the transaction, the client sends a request to the =/vectordb/transactions/dGhpc2lzYX/delete= endpoint.
+
+#+BEGIN_SRC http
+POST /vectordb/transactions/dGhpc2lzYX/delete
+Content-Type: application/json
+
+{
+  "vectors": [
+    {
+      "id": "D"
+    }
+  ]
+}
+#+END_SRC
+
+* Committing the Transaction
+After performing all desired operations, the client can commit the transaction by sending a POST request to the transaction’s unique URL.
+
+#+BEGIN_SRC http
+POST /vectordb/transactions/dGhpc2lzYX/commit
+#+END_SRC
+
+* Benefits and Considerations
+This approach has several benefits:
+
+*** Simplicity: Transactions are managed using standard HTTP methods and URLs.
+*** Flexibility: No need to add custom HTTP headers or verbs.
+*** Isolation: Each transaction operates within its unique context.
+
+However, it is important to manage the potential issue of multiple URLs for the same resource. One way to handle this is by using HTTP 301 redirects to point clients to the canonical resource URL if they attempt to access a resource outside of the transaction context. But this should not be a concern as only one transaction will be processed at a time in the MVP as every vector being inserted potentially affects numerous other records in the vector store due to the neighbor relationships
+
+By treating transactions as resources, RESTful APIs can provide a clean and efficient way to handle transactional operations, enhancing both the design and usability of the API.
+
+* Conclusion
+Implementing transactions as resources in RESTful APIs can offer a RESTful way to manage transactional operations without complicating the API with new HTTP constructs. This method aligns with the principles of REST and provides a straightforward mechanism to handle complex transactional requirements.
+

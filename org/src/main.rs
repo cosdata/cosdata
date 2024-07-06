@@ -8,6 +8,7 @@ static mut U16_LOOKUP_TABLE: [u32; U16_TABLE_SIZE] = [0; U16_TABLE_SIZE];
 #[derive(Debug, Clone)]
 pub struct VectorQt {
     pub quant_vec: Vec<Vec<u32>>,
+    pub magnitude: usize,
     pub resolution: u8,
 }
 
@@ -65,7 +66,7 @@ fn main() {
     println!("done");
 
     let size = 64;
-    let min = -1.0;
+    let min = 0.0;
     let max = 1.0;
     let vec1 = (0..size)
         .map(|_| {
@@ -86,7 +87,7 @@ fn main() {
     println!("raw vec A :{:?}", vec1);
     println!("raw vec B :{:?}", vec2);
 
-    let resolution = 2 as u8;
+    let resolution = 1 as u8;
     let quantized_values1: Vec<Vec<u32>> = quantize_to_u32_bits(&vec1.clone(), resolution);
     let quantized_values2: Vec<Vec<u32>> = quantize_to_u32_bits(&vec2.clone(), resolution);
 
@@ -109,7 +110,36 @@ fn main() {
     println!("scalar_quant_cs : {}", scalar_quant_cs);
 }
 
-fn quaternary_multiply_u8(a0: u8, a1: u8, b0: u8, b1: u8) -> u8 {
+fn precompute_lookup_table() -> [[u8; 16]; 16] {
+    let mut table = [[0; 16]; 16];
+    for i in 0..16 {
+        for j in 0..16 {
+            table[i][j] = (i * j) as u8;
+        }
+    }
+    table
+}
+
+fn multiply_quantized_vectors(a: &[u8], b: &[u8], lookup_table: &[[u8; 16]; 16]) -> Vec<u8> {
+    let len = a.len().min(b.len());
+    let mut result = Vec::with_capacity(len);
+
+    for i in 0..len {
+        let a_even = (a[i] >> 4) & 0x0F;
+        let a_odd = a[i] & 0x0F;
+        let b_even = (b[i] >> 4) & 0x0F;
+        let b_odd = b[i] & 0x0F;
+
+        let prod_even = lookup_table[a_even as usize][b_even as usize];
+        let prod_odd = lookup_table[a_odd as usize][b_odd as usize];
+
+        result.push((prod_even << 4) | prod_odd);
+    }
+
+    result
+}
+
+fn quaternary_multiply_u8(a0: u8, a1: u8, b0: u8, b1: u8) -> u16 {
     // Calculate intermediate products
     let p0 = a0 & b0; // a0 * b0
     let p1 = (a0 & b1) ^ (a1 & b0); // (a0 * b1) ^ (a1 * b0)
@@ -120,7 +150,7 @@ fn quaternary_multiply_u8(a0: u8, a1: u8, b0: u8, b1: u8) -> u8 {
     result
    }
 
-  fn senary_multiply_u8(a0: u8, a1: u8, a2: u8, b0: u8, b1: u8, b2: u8) -> u32 {
+  fn senary_multiply_u8(a0: u8, a1: u8, a2: u8, b0: u8, b1: u8, b2: u8) -> u16 {
     // Calculate intermediate products
     let p0 = a0 & b0;
     let p1 = (a0 & b1) ^ (a1 & b0);
@@ -135,22 +165,22 @@ fn quaternary_multiply_u8(a0: u8, a1: u8, b0: u8, b1: u8) -> u8 {
 
 pub fn cosine_coalesce(x: &VectorQt, y: &VectorQt, length: usize) -> f32 {
     let parts = 2_usize.pow(x.resolution as u32);
-    let mut final_result: usize = 0;
+    let mut dot_product: usize = 0;
     let quant_len = length >> 5;
     for index in 0..parts {
         let mut sum = 0;
         for jj in 0..quant_len {
             let x_item = x.quant_vec[index][jj];
             let y_item = y.quant_vec[index][jj];
-            let xor_result = x_item ^ y_item;
-            println!("x {} {:032b} | y {} {:032b} | xor {:032b}", x_item, x_item, y_item, y_item, xor_result);
-            sum += shift_and_accumulate(xor_result) as usize;
+            let and_result = x_item & y_item;
+            println!("x {} {:032b} | y {} {:032b} | xor {:032b}", x_item, x_item, y_item, y_item, and_result);
+            sum += shift_and_accumulate(and_result) as usize;
             println!("sum cumulative: {}", sum);
         }
-        final_result += sum;
+        dot_product += sum;
     }
-    println!("final_result {} div by {}", final_result, (length * parts as usize));
-    1.0 - (final_result as f32 / (length * parts as usize) as f32)
+    let final_result = dot_product /x.magnitude * y.magnitude;
+    final_result
 }
 
 fn cosine_similarity_new(x: &VectorQt, y: &VectorQt) -> f32 {
@@ -214,6 +244,28 @@ fn cosine_similarity_new(x: &VectorQt, y: &VectorQt) -> f32 {
     }
 
     dot_product / (magnitude_vec1 * magnitude_vec2)
+}
+
+fn quantize_to_u8(vec: &[f32], u32: length) -> Vec<u8> {
+    let mut quantized_vec = Vec::with_capacity(length);
+
+    for &x in vec {
+        quantized_vec.push((x * 255.0).round() as u8);
+    }
+
+    quantized_vec
+}
+
+fn quantize_and_combine(vec: &[f32], u32 length) -> Vec<u8> {
+    let mut result = Vec::with_capacity(length >> 1);
+
+    for i in (0..len).step_by(2) {
+        let even = ((vec[i] * 15.0).round() as u8) << 4;
+        let odd =  ((vec[i + 1] * 15.0).round() as u8);
+        result.push(even | odd);
+    }
+
+    result
 }
 
 fn to_float_flag(x: f32, bits_per_value: usize, step: f32) -> Vec<bool> {
