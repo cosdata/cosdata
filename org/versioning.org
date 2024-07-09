@@ -1,0 +1,87 @@
+
+* Versioning and branches
+
+
+
+[[file:./branches.png]]
+
+
+
+* Hierarchical Hashing Scheme Using SipHash
+
+This document describes a scheme for converting integer levels into SipHash base64 values in a hierarchical structure where levels are consecutive integers. Branches can occur at any arbitrary level, generating a deterministic hash based on the parent and a prefix. The hashes must be deterministic and not random.
+
+** Basic Level Hashing
+Each level in the hierarchy is represented by an integer. The integer is converted to a SipHash value and encoded in base64.
+
+** Branch Hashing
+A branch has a deterministic prefix that pairs with the parent node's hash to generate a new branch hash.
+
+** Rust Implementation
+
+The following Rust code demonstrates the implementation of this hashing scheme:
+
+#+begin_src rust :tangle yes
+extern crate siphasher;
+extern crate base64;
+
+use siphasher::sip::SipHasher13;
+use std::hash::Hasher;
+use base64::{encode};
+
+const SIPHASH_KEY: (u64, u64) = (0x0123456789ABCDEF, 0xFEDCBA9876543210);
+
+fn int_to_siphash_base64(level: u64) -> String {
+    let mut hasher = SipHasher13::new_with_keys(SIPHASH_KEY.0, SIPHASH_KEY.1);
+    hasher.write_u64(level);
+    let hash = hasher.finish().to_be_bytes();
+    encode(&hash)
+}
+
+fn branch_from_parent(parent_hash_base64: &str, branch_prefix: &str) -> String {
+    let parent_hash = base64::decode(parent_hash_base64).expect("Invalid base64 string");
+    let branch_input = [parent_hash, branch_prefix.as_bytes().to_vec()].concat();
+    let mut hasher = SipHasher13::new_with_keys(SIPHASH_KEY.0, SIPHASH_KEY.1);
+    hasher.write(&branch_input);
+    let hash = hasher.finish().to_be_bytes();
+    encode(&hash)
+}
+
+fn main() {
+    // Generate hash for levels
+    let level_0_hash = int_to_siphash_base64(0);
+    println!("Level 0 Hash: {}", level_0_hash);
+
+    let level_1_hash = int_to_siphash_base64(1);
+    println!("Level 1 Hash: {}", level_1_hash);
+
+    // Branch from level 1
+    let branch_prefix = "branchA";
+    let branch_hash = branch_from_parent(&level_1_hash, branch_prefix);
+    println!("Branch Hash: {}", branch_hash);
+
+    // Continue with next level
+    let level_2_hash = int_to_siphash_base64(2);
+    println!("Level 2 Hash: {}", level_2_hash);
+}
+#+end_src
+
+** Explanation
+
+1. **int_to_siphash_base64**:
+    - Converts an integer level to a SipHash value.
+    - Encodes the resulting hash in base64.
+
+2. **branch_from_parent**:
+    - Takes a base64 encoded parent hash and a branch prefix.
+    - Decodes the parent hash from base64.
+    - Concatenates the decoded parent hash with the branch prefix.
+    - Computes a new SipHash for the concatenated value.
+    - Encodes the new hash in base64.
+
+** Deterministic Hierarchical Hashing
+
+- **Basic Levels**: Consecutive integer levels are converted directly to SipHash values, ensuring a simple, deterministic progression.
+- **Branches**: When a branch is needed, the parent’s hash and a deterministic prefix are combined to produce a new, unique, and deterministic hash for the branch.
+
+This approach ensures that each level and each branch in your hierarchy will have a unique, deterministic SipHash base64 value. It maintains a clear distinction between regular levels and branches, allowing for straightforward and predictable hash generation.
