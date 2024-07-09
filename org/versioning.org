@@ -1,5 +1,10 @@
 
-* Versioning and branches
+#+TITLE: Hierarchical Version Hashing System Design
+#+AUTHOR: Nithin Mani
+#+DATE: [2024-07-09 Tue]
+
+
+* Versioning and branches illustration
 
 
 
@@ -7,81 +12,247 @@
 
 
 
-* Hierarchical Hashing Scheme Using SipHash
+* Overview
 
-This document describes a scheme for converting integer levels into SipHash base64 values in a hierarchical structure where levels are consecutive integers. Branches can occur at any arbitrary level, generating a deterministic hash based on the parent and a prefix. The hashes must be deterministic and not random.
+This system generates unique, deterministic hashes for version numbers across different branches in a hierarchical structure. It uses SipHash-2-4 as the hashing algorithm and represents the final hash in base64 format. The system includes detailed information about parent branches.
 
-** Basic Level Hashing
-Each level in the hierarchy is represented by an integer. The integer is converted to a SipHash value and encoded in base64.
+** Illustration of Version and Branch Hierarchy (Ubuntu-style with Sequential Versioning)
 
-** Branch Hashing
-A branch has a deterministic prefix that pairs with the parent node's hash to generate a new branch hash.
+#+BEGIN_SRC ascii
+jammy (main)
+|
+|-- v1 (hash: Tz7m1cznF9E=)
+|
+|-- v2 (hash: X3kP2qnvGfA=)
+|   |
+|   +-- kinetic
+|   |   |
+|   |   |-- v1 (hash: Y5bQ3rnwHgB=)
+|   |   |
+|   |   |-- v2 (hash: Z7dS4tnxIhC=)
+|   |   |
+|   |   +-- v3 (hash: A9fU5vnzJiD=)
+|   |
+|   +-- lunar
+|       |
+|       +-- v1 (hash: B1hW6xn0KjE=)
+|
+|-- v3 (hash: C3jY7zn1LkF=)
+|
+|-- v4 (hash: D5lA8Bn2MlG=)
+    |
+    +-- mantic
+        |
+        |-- v1 (hash: E7nC9Dn3NmH=)
+        |
+        +-- v2 (hash: F9pE0Fn4OnI=)
+            |
+            +-- noble
+                |
+                +-- v1 (hash: G1rG1Hn5PnJ=)
+#+END_SRC
 
-** Rust Implementation
+** Example Branch and Version Details
 
-The following Rust code demonstrates the implementation of this hashing scheme:
+*** Jammy (Main Branch)
+- v1: ~Tz7m1cznF9E=~
+- v2: ~X3kP2qnvGfA=~
+- v3: ~C3jY7zn1LkF=~
+- v4: ~D5lA8Bn2MlG=~
 
-#+begin_src rust :tangle yes
-extern crate siphasher;
-extern crate base64;
+*** Kinetic
+- Parent: Jammy v2
+- v1: ~Y5bQ3rnwHgB=~
+- v2: ~Z7dS4tnxIhC=~
+- v3: ~A9fU5vnzJiD=~
 
-use siphasher::sip::SipHasher13;
-use std::hash::Hasher;
-use base64::{encode};
+*** Lunar
+- Parent: Jammy v2
+- v1: ~B1hW6xn0KjE=~
 
-const SIPHASH_KEY: (u64, u64) = (0x0123456789ABCDEF, 0xFEDCBA9876543210);
+*** Mantic
+- Parent: Jammy v4
+- v1: ~E7nC9Dn3NmH=~
+- v2: ~F9pE0Fn4OnI=~
 
-fn int_to_siphash_base64(level: u64) -> String {
-    let mut hasher = SipHasher13::new_with_keys(SIPHASH_KEY.0, SIPHASH_KEY.1);
-    hasher.write_u64(level);
-    let hash = hasher.finish().to_be_bytes();
-    encode(&hash)
+*** Noble
+- Parent: Mantic v2
+- v1: ~G1rG1Hn5PnJ=~
+
+* Core Components
+
+** VersionHash
+
+A structure to represent a version hash:
+
+#+BEGIN_SRC rust
+struct VersionHash {
+    branch: String,
+    version: u64,
+    hash: String,
+}
+#+END_SRC
+
+** BranchInfo
+
+A structure to hold detailed information about a branch:
+
+#+BEGIN_SRC rust
+struct BranchInfo {
+    current_hash: String,
+    parent_branch: String,
+    parent_hash: String,
+    parent_version: u64,
+}
+#+END_SRC
+
+** VersionHasher
+
+The main struct responsible for generating and managing hashes:
+
+#+BEGIN_SRC rust
+use std::collections::HashMap;
+
+struct VersionHasher {
+    branches: HashMap<String, BranchInfo>,
 }
 
-fn branch_from_parent(parent_hash_base64: &str, branch_prefix: &str) -> String {
-    let parent_hash = base64::decode(parent_hash_base64).expect("Invalid base64 string");
-    let branch_input = [parent_hash, branch_prefix.as_bytes().to_vec()].concat();
-    let mut hasher = SipHasher13::new_with_keys(SIPHASH_KEY.0, SIPHASH_KEY.1);
-    hasher.write(&branch_input);
-    let hash = hasher.finish().to_be_bytes();
-    encode(&hash)
-}
+impl VersionHasher {
+    fn new() -> Self {
+        let mut branches = HashMap::new();
+        branches.insert("main".to_string(), BranchInfo {
+            current_hash: String::new(),
+            parent_branch: String::new(),
+            parent_hash: String::new(),
+            parent_version: 0,
+        });
+        Self { branches }
+    }
 
+    fn generate_hash(&mut self, branch: &str, version: u64, parent_branch: Option<&str>, parent_version: Option<u64>) -> VersionHash {
+        // Implementation details below
+    }
+}
+#+END_SRC
+
+* Hash Generation Algorithm
+
+The ~generate_hash~ function is the core of the system:
+
+#+BEGIN_SRC rust
+fn generate_hash(&mut self, branch: &str, version: u64, parent_branch: Option<&str>, parent_version: Option<u64>) -> VersionHash {
+    let (parent_hash, parent_branch, parent_version) = if let Some(branch_info) = self.branches.get(branch) {
+        (
+            branch_info.current_hash.clone(),
+            branch_info.parent_branch.clone(),
+            branch_info.parent_version,
+        )
+    } else {
+        let parent_branch = parent_branch.unwrap_or("main").to_string();
+        let parent_info = self.branches.get(&parent_branch).unwrap();
+        (
+            parent_info.current_hash.clone(),
+            parent_branch,
+            parent_version.unwrap_or(0),
+        )
+    };
+
+    let input = format!("{}{}{}", parent_hash, branch, version);
+
+    let mut hasher = SipHasher24::new();
+    hasher.write(input.as_bytes());
+    let hash = hasher.finish();
+
+    let hash_base64 = general_purpose::STANDARD.encode(hash.to_be_bytes());
+    
+    self.branches.insert(branch.to_string(), BranchInfo {
+        current_hash: hash_base64.clone(),
+        parent_branch,
+        parent_hash,
+        parent_version,
+    });
+
+    VersionHash {
+        branch: branch.to_string(),
+        version,
+        hash: hash_base64,
+    }
+}
+#+END_SRC
+
+* Key Processes
+
+** Hash Generation
+
+1. Check if the branch exists in the branches map.
+2. If it's a new branch:
+   - Use the provided parent branch (default to "main" if not provided).
+   - Retrieve the parent branch's information.
+3. If it's an existing branch:
+   - Use the branch's own information as the parent info.
+4. Concatenate the parent hash, branch name, and version number.
+5. Create a new SipHasher24 instance.
+6. Write the concatenated input to the hasher.
+7. Finalize the hash.
+8. Encode the resulting hash in base64 format.
+9. Store the new BranchInfo in the branches map for future reference.
+10. Return a VersionHash object with the branch, version, and hash.
+
+** Branch Management
+
+- The "main" branch is implicitly created with empty parent information.
+- New branches store their parent branch information when created.
+- The system supports creating branches at any level of the hierarchy.
+
+* Data Structures
+
+** Branches HashMap
+
+- Key: Branch name (String)
+- Value: BranchInfo structure
+
+This structure allows quick lookup of branch information, including parent details, when generating new hashes for child branches or new versions of existing branches.
+
+* External Dependencies
+
+1. SipHash-2-4 implementation (siphash crate)
+2. Base64 encoding library (base64 crate)
+
+* Usage Example
+
+#+BEGIN_SRC rust
 fn main() {
-    // Generate hash for levels
-    let level_0_hash = int_to_siphash_base64(0);
-    println!("Level 0 Hash: {}", level_0_hash);
+    let mut hasher = VersionHasher::new();
 
-    let level_1_hash = int_to_siphash_base64(1);
-    println!("Level 1 Hash: {}", level_1_hash);
+    // Generate hashes for main branch
+    let main_v1 = hasher.generate_hash("main", 1, None, None);
+    let main_v2 = hasher.generate_hash("main", 2, None, None);
 
-    // Branch from level 1
-    let branch_prefix = "branchA";
-    let branch_hash = branch_from_parent(&level_1_hash, branch_prefix);
-    println!("Branch Hash: {}", branch_hash);
+    // Generate hashes for a feature branch
+    let feature_v1 = hasher.generate_hash("feature/new-ui", 1, Some("main"), Some(2));
+    let feature_v2 = hasher.generate_hash("feature/new-ui", 2, None, None);
 
-    // Continue with next level
-    let level_2_hash = int_to_siphash_base64(2);
-    println!("Level 2 Hash: {}", level_2_hash);
+    // Generate hash for a bugfix branch
+    let bugfix_v1 = hasher.generate_hash("bugfix/critical", 1, Some("feature/new-ui"), Some(1));
+
+    println!("Main branch v1: {}", main_v1.hash);
+    println!("Feature branch v2: {}", feature_v2.hash);
+    println!("Bugfix branch v1: {}", bugfix_v1.hash);
 }
-#+end_src
+#+END_SRC
 
-** Explanation
+* Considerations and Constraints
 
-1. **int_to_siphash_base64**:
-    - Converts an integer level to a SipHash value.
-    - Encodes the resulting hash in base64.
+1. The system assumes that version numbers are consecutive integers within each branch.
+2. Branch names should be unique across the entire hierarchy.
+3. The system now stores parent branch information, allowing for better tracking of the branch hierarchy.
+4. The hash generation is deterministic, ensuring consistency across different runs or systems.
+5. When creating a new branch, the parent branch and version must be provided.
 
-2. **branch_from_parent**:
-    - Takes a base64 encoded parent hash and a branch prefix.
-    - Decodes the parent hash from base64.
-    - Concatenates the decoded parent hash with the branch prefix.
-    - Computes a new SipHash for the concatenated value.
-    - Encodes the new hash in base64.
+* Potential Enhancements
 
-** Deterministic Hierarchical Hashing
-
-- **Basic Levels**: Consecutive integer levels are converted directly to SipHash values, ensuring a simple, deterministic progression.
-- **Branches**: When a branch is needed, the parent’s hash and a deterministic prefix are combined to produce a new, unique, and deterministic hash for the branch.
-
-This approach ensures that each level and each branch in your hierarchy will have a unique, deterministic SipHash base64 value. It maintains a clear distinction between regular levels and branches, allowing for straightforward and predictable hash generation.
+1. Implement branch merging logic.
+2. Add support for non-consecutive version numbers.
+3. Implement a caching mechanism for frequently accessed hashes.
+4. Add functionality to reconstruct the full branch hierarchy from the stored information.
+5. Implement validation to ensure parent branch exists when creating a new branch.

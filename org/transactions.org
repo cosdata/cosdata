@@ -3,7 +3,7 @@
 #+DATE: 2024-07-06
 
 * Transaction as a Resource
-In the world of RESTful APIs, the concept of treating transactions as resources can streamline the implementation of transactional operations without requiring the addition of new HTTP headers, verbs, or complex mechanisms. This approach can be particularly useful in scenarios where a database transaction can span accross multiple HTTP requests, like one implemented in our vector database and needs to handle transactions efficiently. The need could arise either for MVCC or versioning capability offered by the database.
+In the world of RESTful APIs, the concept of treating transactions as resources can streamline the implementation of transactional operations without requiring the addition of new HTTP headers, verbs, or complex mechanisms. This approach can be particularly useful in scenarios where a database transaction can span across multiple HTTP requests, like one implemented in our vector database and needs to handle transactions efficiently. The need could arise either for MVCC or versioning capability offered by the database.
 
 One effective way to achieve this is by creating a special transaction resource. This resource can be managed using standard HTTP methods and can provide a straightforward way to implement transactions. Here’s a general outline of how this can be done.
 
@@ -112,5 +112,4 @@ However, it is important to manage the potential issue of multiple URLs for the 
 By treating transactions as resources, RESTful APIs can provide a clean and efficient way to handle transactional operations, enhancing both the design and usability of the API.
 
 * Conclusion
-Implementing transactions as resources in RESTful APIs can offer a RESTful way to manage transactional operations without complicating the API with new HTTP constructs. This method aligns with the principles of REST and provides a straightforward mechanism to handle complex transactional requirements.
-
+Implementing transactions as resources in RESTful APIs can offer a RESTful way to manage transactional operations without complicating the API with new HTTP constructs. This method aligns with the principles of REST and provides a straightforward mechanism to handle complex transactional requirements. 
