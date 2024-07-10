@@ -53,25 +53,36 @@ fn write_random_bytes(
 }
 
 fn benchmark_writes(c: &mut Criterion) {
-    let file_size = 100 * 1024 * 1024; // 10 MB
+    let file_size = 100 * 1024 * 1024; // 100 MB
     let file_path = "test_file.bin";
+    // Create file outside of the benchmark
+    let file = create_file(file_path, file_size).unwrap();
 
     let mut group = c.benchmark_group("Random Writes");
 
-    group.bench_function("1000 iterations of 128 bytes", |b| {
+    group.bench_function("1000 iterations of 128 bytes on 100MB file", |b| {
         b.iter(|| {
-            let mut file = create_file(file_path, file_size).unwrap();
+            // Reopen the file for each iteration to ensure consistent starting state
+            let mut file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(file_path)
+                .unwrap();
             write_random_bytes(&mut file, 1000, 128, file_size).unwrap();
         });
     });
 
-    group.bench_function("100 iterations of 1280 bytes", |b| {
+    group.bench_function("100 iterations of 1280 bytes on 100MB file", |b| {
         b.iter(|| {
-            let mut file = create_file(file_path, file_size).unwrap();
+            // Reopen the file for each iteration to ensure consistent starting state
+            let mut file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(file_path)
+                .unwrap();
             write_random_bytes(&mut file, 100, 1280, file_size).unwrap();
         });
     });
-
     group.finish();
 
     // Clean up the test file
