@@ -13,6 +13,7 @@ async-std = "1.12.0"
 bincode = "1.3.3"
 cbor = "0.4.1"
 chrono = "0.4.38"
+criterion = "0.5.1"
 dashmap = "5.5.3"
 env_logger = "0.11.3"
 futures = "0.3.30"
@@ -44,4 +45,16 @@ tracing = "0.1.40"
 
 
 
+#[features]
+#bench_group1 = []
+#bench_group2 = []
 
+[[bench]]
+name = "write_benchmark"
+harness = false
+#required-features = ["bench_group1"]
+
+#[[bench]]
+#name = "benchmark2"
+#harness = false
+#required-features = ["bench_group2"]
