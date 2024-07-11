@@ -171,8 +171,6 @@ async fn fetch_vector_db(item: web::Json<FetchNeighbors>) -> HttpResponse {
             let rs: Vec<RPCResponseBody> = xx.into_iter().map(|x| x.unwrap()).collect();
             let response = HttpResponse::Ok().json(rs);
             response
-
-
         }
         Err(e) => return HttpResponse::InternalServerError().body("Vector store not found"),
     };

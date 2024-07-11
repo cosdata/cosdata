@@ -58,3 +58,12 @@ harness = false
 name = "write_concurrent_benchmark"
 harness = false
 #required-features = ["bench_group2"]
+
+[[bench]]
+name = "cosine_similarity_benchmark"
+harness = false
+
+[[bench]]
+name = "dot_product_benchmark"
+harness = false
+#

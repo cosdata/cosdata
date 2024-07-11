@@ -7,6 +7,7 @@ use async_std::stream::Cloned;
 use dashmap::DashMap;
 use futures::future::{join_all, BoxFuture, FutureExt};
 use sha2::{Digest, Sha256};
+use std::arch::x86_64::*;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
 use std::fmt;
@@ -15,10 +16,159 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::task;
 
+pub fn dot_product_u8_avx2_fma(a: &[u8], b: &[u8]) -> u64 {
+    assert_eq!(a.len(), b.len());
+
+    let mut dot_product: u64 = 0;
+
+    // Process 32 elements at a time
+    let mut i = 0;
+    while i + 32 <= a.len() {
+        unsafe {
+            // Load 32 elements from each array into AVX2 registers
+            let va1 = _mm256_loadu_si256(a[i..].as_ptr() as *const __m256i);
+            let vb1 = _mm256_loadu_si256(b[i..].as_ptr() as *const __m256i);
+
+            // Unpack to 16-bit integers
+            let va1_lo = _mm256_unpacklo_epi8(va1, _mm256_setzero_si256());
+            let vb1_lo = _mm256_unpacklo_epi8(vb1, _mm256_setzero_si256());
+            let prod1_lo = _mm256_madd_epi16(va1_lo, vb1_lo);
+
+            let va1_hi = _mm256_unpackhi_epi8(va1, _mm256_setzero_si256());
+            let vb1_hi = _mm256_unpackhi_epi8(vb1, _mm256_setzero_si256());
+            let prod1_hi = _mm256_madd_epi16(va1_hi, vb1_hi);
+
+            // Horizontal add within 256-bit registers
+            let sum1 = _mm256_add_epi32(prod1_lo, prod1_hi);
+            let sum2 = _mm256_permute4x64_epi64(sum1, 0b11011000); // permute for horizontal add
+            let sum3 = _mm256_hadd_epi32(sum2, sum2);
+            let sum4 = _mm256_hadd_epi32(sum3, sum3);
+
+            // Extract result to scalar
+            dot_product += _mm256_extract_epi64(sum4, 0) as u64;
+        }
+        i += 32;
+    }
+
+    // Handle remaining elements
+    while i < a.len() {
+        dot_product += a[i] as u64 * b[i] as u64;
+        i += 1;
+    }
+
+    dot_product
+}
+
 pub struct CosResult {
     pub dotprod: i32,
     pub premag_a: i32,
     pub premag_b: i32,
+}
+pub fn dot_product_u8_xxx(src: &[(u8, u8)], dst: &mut [u64]) {
+    let dst_known_bounds = &mut dst[0..src.len()];
+    let size = 8;
+    let len = src.len();
+    // Process chunks of 8
+    let mut i = 0;
+    while i + size <= len {
+        dst_known_bounds[i] = ((src[0].0) * (src[0].1)) as u64;
+        dst_known_bounds[i + 1] = ((src[i + 1].0) * (src[i + 1].1)) as u64;
+        dst_known_bounds[i + 2] = ((src[i + 1].0) * (src[i + 1].1)) as u64;
+        dst_known_bounds[i + 3] = ((src[i + 1].0) * (src[i + 1].1)) as u64;
+        dst_known_bounds[i + 4] = ((src[i + 1].0) * (src[i + 1].1)) as u64;
+        dst_known_bounds[i + 5] = ((src[i + 1].0) * (src[i + 1].1)) as u64;
+        dst_known_bounds[i + 6] = ((src[i + 1].0) * (src[i + 1].1)) as u64;
+        dst_known_bounds[i + 7] = ((src[i + 1].0) * (src[i + 1].1)) as u64;
+        i += size;
+    }
+    // Handle remaining elements
+    while i < len {
+        dst_known_bounds[i] = (src[i].0 as u64) * (src[i].1 as u64);
+        i += 1;
+    }
+}
+pub fn dot_product_f32_xxx(src: &[(f32, f32)], dst: &mut [f32]) {
+    let dst_known_bounds = &mut dst[0..src.len()];
+    let size = 4;
+    let len = src.len();
+    // Process chunks of 8
+    let mut i = 0;
+    while i + size <= len {
+        dst_known_bounds[i] = ((src[0].0) * (src[0].1));
+        dst_known_bounds[i + 1] = ((src[i + 1].0) * (src[i + 1].1));
+        dst_known_bounds[i + 2] = ((src[i + 1].0) * (src[i + 1].1));
+        dst_known_bounds[i + 3] = ((src[i + 1].0) * (src[i + 1].1));
+        i += size;
+    }
+    // Handle remaining elements
+    while i < len {
+        dst_known_bounds[i] = (src[i].0) * (src[i].1);
+        i += 1;
+    }
+}
+
+pub fn dot_product_f32_chunk(src: &[(f32, f32)], dst: &mut [f32]) -> f32 {
+    let mut d: f32 = 0.0;
+    let size = 4;
+
+    // Process chunks of 4
+    for chunk in src.chunks_exact(size) {
+        let mut local_sum: f32 = 0.0;
+        local_sum += chunk[0].0 * chunk[0].1;
+        local_sum += chunk[1].0 * chunk[1].1;
+        local_sum += chunk[2].0 * chunk[2].1;
+        local_sum += chunk[3].0 * chunk[3].1;
+        d += local_sum;
+    }
+
+    // Handle remaining elements
+    for &(a, b) in src.chunks_exact(size).remainder() {
+        d += a * b;
+    }
+
+    d
+}
+pub fn dot_product_u8_chunk(src: &[(u8, u8)]) -> u64 {
+    let mut d: u64 = 0;
+    let size = 8;
+
+    // Process chunks of 8
+    for chunk in src.chunks_exact(size) {
+        let mut local_sum: u64 = 0;
+        local_sum += (chunk[0].0 as u64) * (chunk[0].1 as u64);
+        local_sum += (chunk[1].0 as u64) * (chunk[1].1 as u64);
+        local_sum += (chunk[2].0 as u64) * (chunk[2].1 as u64);
+        local_sum += (chunk[3].0 as u64) * (chunk[3].1 as u64);
+        local_sum += (chunk[4].0 as u64) * (chunk[4].1 as u64);
+        local_sum += (chunk[5].0 as u64) * (chunk[5].1 as u64);
+        local_sum += (chunk[6].0 as u64) * (chunk[6].1 as u64);
+        local_sum += (chunk[7].0 as u64) * (chunk[7].1 as u64);
+        d += local_sum;
+    }
+
+    // Handle remaining elements
+    for &(a, b) in src.chunks_exact(size).remainder() {
+        d += (a as u64) * (b as u64);
+    }
+
+    d
+}
+pub fn dot_product_a(src: &[(f32, f32)], dst: &mut [f32]) -> f32 {
+    let mut d: f32 = 0.0;
+    for (dst_sample, src_sample) in dst.iter_mut().zip(src.iter()) {
+        d += (src_sample.0 * src_sample.1);
+    }
+    d
+}
+
+pub fn dot_product_b(src: &[(f32, f32)], dst: &mut [f32]) {
+    for (dst_sample, src_sample) in dst.iter_mut().zip(src.iter()) {
+        *dst_sample = (src_sample.0 * src_sample.1);
+    }
+}
+
+pub fn dot_product_u8(src: &[(u8, u8)]) -> u64 {
+    src.iter().map(|&(a, b)| (a as u64) * (b as u64)).sum()
 }
 
 fn dot_product(a: &[f32], b: &[f32]) -> f32 {
