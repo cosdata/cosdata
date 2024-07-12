@@ -1,5 +1,6 @@
 pub mod cache_loader;
 pub mod common;
+pub mod dot_product;
 pub mod encoding_format;
 pub mod file_persist;
 pub mod lookup_table;
