@@ -1,3 +1,4 @@
+use super::dot_product::dot_product_u8_avx2;
 use super::rpc::VectorIdValue;
 use super::types::{NodeRef, VectorId};
 use crate::models::lookup_table::*;
@@ -210,18 +211,8 @@ pub fn get_magnitude_plus_quantized_vec(quant_vec: &[Vec<u32>], _size: usize) ->
 }
 
 pub fn cosine_coalesce(x: &VectorQt, y: &VectorQt, length: usize) -> f32 {
-    let parts = 2_usize.pow(x.resolution as u32);
-    let mut final_result: usize = 0;
-
-    for index in 0..parts {
-        let sum: usize = x.quant_vec[index]
-            .iter()
-            .zip(&y.quant_vec[index])
-            .map(|(&x_item, &y_item)| shift_and_accumulate(x_item ^ y_item) as usize)
-            .sum();
-        final_result += sum << index; // Multiply by precomputed shift value
-    }
-    final_result as f32 / length as f32
+    let dot_product = unsafe { dot_product_u8_avx2(&x.quant_vec, &y.quant_vec) };
+    dot_product as f32 / length as f32
 }
 //////
 #[inline]
@@ -236,6 +227,10 @@ fn to_float_flag(x: f32, bits_per_value: usize, step: f32) -> Vec<bool> {
     }
 
     result
+}
+
+pub fn simp_quant(v: &[f32]) -> Vec<u8> {
+    v.iter().map(|&x| (x * 255.0).round() as u8).collect()
 }
 
 pub fn quantize_to_u32_bits(fins: &[f32], resolution: u8) -> Vec<Vec<u32>> {

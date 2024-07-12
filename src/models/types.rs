@@ -178,8 +178,8 @@ impl std::fmt::Display for Node {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VectorQt {
     //pub mag: Vec<usize>,
-    pub quant_vec: Vec<Vec<u32>>,
-    pub resolution: u8,
+    pub quant_vec: Vec<u8>,
+    // pub resolution: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

@@ -4,6 +4,7 @@ use crate::models::rpc::VectorIdValue;
 use crate::models::user::{AuthResp, Statistics};
 use crate::models::{self, common::*};
 use crate::models::{persist, types::*};
+use crate::simp_quant;
 use crate::vector_store::{self, *};
 use dashmap::DashMap;
 use futures::stream::{self, StreamExt};
@@ -40,16 +41,13 @@ pub async fn init_vector_store(
 
     let exec_queue_neighbors = Arc::new(DashMap::new());
 
-    let resolution = 1 as u8;
-    let quant_dim = (size * resolution as usize / 32);
-    let quantized_values: Vec<Vec<u32>> = quantize_to_u32_bits(&vec.clone(), 1);
+    let quantized_values = simp_quant(&vec);
     //let mpq: Vec<usize> = get_magnitude_plus_quantized_vec(&quantized_values, quant_dim);
     // magnitude will need to be reintroduced in VectorQt,
     // besides we can emperically test end to end how the hamming similarity does for embeddings trained on cosine sim
     let vector_list = VectorQt {
         //mag: mpq,
         quant_vec: quantized_values,
-        resolution: resolution,
     };
 
     // Note that setting .write(true).append(true) has the same effect
@@ -159,14 +157,13 @@ pub async fn run_upload(
                 let root = &vec_store.root_vec;
                 let vec_hash = convert_value(id);
 
-                let quantized_values: Vec<Vec<u32>> = quantize_to_u32_bits(&vec.clone(), 1);
+                let quantized_values = simp_quant(&vec);
                 //let mpq: Vec<usize> =
                 // get_magnitude_plus_quantized_vec(&quantized_values, vec_store.quant_dim);
 
                 let vector_list = VectorQt {
                     //mag: mpq,
                     quant_vec: quantized_values,
-                    resolution: 1,
                 };
 
                 let vec_emb = VectorEmbedding {
@@ -199,12 +196,10 @@ pub async fn ann_vector_query(
     let vec_hash = VectorId::Str("query".to_string());
     let root = &vector_store.root_vec;
 
-    let quantized_values: Vec<Vec<u32>> = quantize_to_u32_bits(&query.clone(), 1);
-    let mpq: Vec<usize> = get_magnitude_plus_quantized_vec(&quantized_values, vec_store.quant_dim);
+    let quantized_values = simp_quant(&query.clone());
 
     let vector_list = VectorQt {
         quant_vec: quantized_values,
-        resolution: 1,
     };
 
     let vec_emb = VectorEmbedding {
