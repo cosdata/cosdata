@@ -233,6 +233,10 @@ pub fn simp_quant(v: &[f32]) -> Vec<u8> {
     v.iter().map(|&x| (x * 255.0).round() as u8).collect()
 }
 
+pub fn mag_square_u8(vec: &[u8]) -> u32 {
+    vec.iter().map(|&x| x as u32 * x as u32).sum()
+}
+
 pub fn quantize_to_u32_bits(fins: &[f32], resolution: u8) -> Vec<Vec<u32>> {
     let bits_per_value = resolution as usize;
     let parts = 2_usize.pow(bits_per_value as u32);

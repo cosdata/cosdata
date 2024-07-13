@@ -15,6 +15,7 @@ use std::fs::OpenOptions;
 use std::fs::*;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
+use waco::models::common::mag_square_u8;
 
 pub async fn init_vector_store(
     name: String,
@@ -41,14 +42,9 @@ pub async fn init_vector_store(
 
     let exec_queue_neighbors = Arc::new(DashMap::new());
 
-    let quantized_values = simp_quant(&vec);
-    //let mpq: Vec<usize> = get_magnitude_plus_quantized_vec(&quantized_values, quant_dim);
-    // magnitude will need to be reintroduced in VectorQt,
-    // besides we can emperically test end to end how the hamming similarity does for embeddings trained on cosine sim
-    let vector_list = VectorQt {
-        //mag: mpq,
-        quant_vec: quantized_values,
-    };
+    let quant_vec = simp_quant(&vec);
+    let mag = mag_square_u8(&quant_vec);
+    let vector_list = VectorQt { mag, quant_vec };
 
     // Note that setting .write(true).append(true) has the same effect
     // as setting only .append(true)
@@ -157,14 +153,9 @@ pub async fn run_upload(
                 let root = &vec_store.root_vec;
                 let vec_hash = convert_value(id);
 
-                let quantized_values = simp_quant(&vec);
-                //let mpq: Vec<usize> =
-                // get_magnitude_plus_quantized_vec(&quantized_values, vec_store.quant_dim);
-
-                let vector_list = VectorQt {
-                    //mag: mpq,
-                    quant_vec: quantized_values,
-                };
+                let quant_vec = simp_quant(&vec);
+                let mag = mag_square_u8(&quant_vec);
+                let vector_list = VectorQt { mag, quant_vec };
 
                 let vec_emb = VectorEmbedding {
                     raw_vec: Arc::new(vector_list.clone()),
@@ -196,11 +187,10 @@ pub async fn ann_vector_query(
     let vec_hash = VectorId::Str("query".to_string());
     let root = &vector_store.root_vec;
 
-    let quantized_values = simp_quant(&query.clone());
+    let quant_vec = simp_quant(&query.clone());
+    let mag = mag_square_u8(&quant_vec);
 
-    let vector_list = VectorQt {
-        quant_vec: quantized_values,
-    };
+    let vector_list = VectorQt { mag, quant_vec };
 
     let vec_emb = VectorEmbedding {
         raw_vec: Arc::new(vector_list.clone()),
