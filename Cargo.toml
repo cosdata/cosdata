@@ -66,4 +66,7 @@ harness = false
 [[bench]]
 name = "dot_product_benchmark"
 harness = false
-#
+
+[[bench]]
+name = "lookup_table_benchmark"
+harness = false
