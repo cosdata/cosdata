@@ -210,9 +210,9 @@ pub fn get_magnitude_plus_quantized_vec(quant_vec: &[Vec<u32>], _size: usize) ->
     result
 }
 
-pub fn cosine_coalesce(x: &VectorQt, y: &VectorQt, length: usize) -> f32 {
+pub fn cosine_coalesce(x: &VectorQt, y: &VectorQt) -> f32 {
     let dot_product = unsafe { dot_product_u8_avx2(&x.quant_vec, &y.quant_vec) };
-    dot_product as f32 / length as f32
+    dot_product as f32 / ((x.mag as f32).sqrt() * (y.mag as f32).sqrt())
 }
 //////
 #[inline]

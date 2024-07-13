@@ -78,7 +78,7 @@ pub fn ann_search(
         false,
     );
 
-    let cs = cosine_coalesce(&fvec, &cur_entry.prop.value, vec_store.quant_dim);
+    let cs = cosine_coalesce(&fvec, &cur_entry.prop.value);
     let z = if z.is_empty() {
         vec![(cur_entry.clone(), cs)]
     } else {
@@ -119,7 +119,7 @@ pub fn insert_embedding(
         true,
     );
 
-    let cs = cosine_coalesce(&fvec, &cur_entry.prop.value, vec_store.quant_dim);
+    let cs = cosine_coalesce(&fvec, &cur_entry.prop.value);
     let z = if z.is_empty() {
         vec![(cur_entry.clone(), cs)]
     } else {
@@ -340,7 +340,7 @@ fn traverse_find_nearest(
 
                 if skipm.insert(nb.clone()) {
                     //println!("processing {} at hop {} ", index, hops);
-                    let cs = cosine_coalesce(&fvec, &nbr.prop.value, vec_store.quant_dim);
+                    let cs = cosine_coalesce(&fvec, &nbr.prop.value);
 
                     // ---------------------------
                     // -- TODO number of hops
