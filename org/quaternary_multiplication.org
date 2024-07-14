@@ -1,0 +1,80 @@
+
+* Quaternary Multiplication Using Bitwise Operations
+
+** Introduction
+This document describes the process of performing 2-bit quaternary multiplication using bitwise operations (AND, OR, XOR, SHIFT) without directly using the multiplication operator.
+
+** Problem Statement
+Given two 2-bit quaternary numbers, we need to multiply them using only bitwise operations.
+
+** Representation
+Quaternary numbers are represented in binary form:
+- 2 in quaternary is 10 in binary
+- 3 in quaternary is 11 in binary
+
+** Steps for Multiplication
+1. Extract the lower and higher bits from each quaternary number.
+2. Compute the partial products using bitwise AND operations.
+3. Shift the partial products accordingly.
+4. Combine the partial products using bitwise XOR operations to include carries.
+
+** Detailed Example
+
+*** Example: Multiply quaternary numbers 2 (10 in binary) and 3 (11 in binary)
+
+1. Convert quaternary to binary:
+   - 2 in quaternary is 10 in binary.
+   - 3 in quaternary is 11 in binary.
+
+2. Define binary numbers ~A~ and ~B~:
+   - ~A = 0b10~ (2 in binary)
+   - ~B = 0b11~ (3 in binary)
+
+3. Extract the bits:
+   - ~a0 = A & 0b11 = 0b10 & 0b11 = 0b10 = 2~
+   - ~a1 = (A >> 2) & 0b11 = (0b10 >> 2) & 0b11 = 0~
+   - ~b0 = B & 0b11 = 0b11 & 0b11 = 0b11 = 3~
+   - ~b1 = (B >> 2) & 0b11 = (0b11 >> 2) & 0b11 = 0~
+
+4. Compute the partial products using AND and shifts:
+   - ~P0 = (a0 & 0b01) & (b0 & 0b01) = (10 & 01) & (11 & 01) = 00~
+   - ~P1 = ((a0 & 0b10) >> 1) & (b0 & 0b01) = ((10 & 10) >> 1) & (11 & 01) = (10 >> 1) & 01 = 01 & 01 = 01~
+   - ~P2 = (a0 & 0b01) & ((b0 & 0b10) >> 1) = (10 & 01) & ((11 & 10) >> 1) = 00 & (10 >> 1) = 00 & 01 = 00~
+   - ~P3 = ((a0 & 0b10) >> 1) & ((b0 & 0b10) >> 1) = ((10 & 10) >> 1) & ((11 & 10) >> 1) = (10 >> 1) & (10 >> 1) = 01 & 01 = 01~
+
+5. Shift the results accordingly:
+   - ~result1 = P1 << 1 = 0b01 << 1 = 0b10~
+   - ~result2 = P2 << 1 = 0b00 << 1 = 0b00~
+   - ~result3 = P3 << 2 = 0b01 << 2 = 0b100~
+
+6. Combine all the results using XOR to include carries:
+   - ~P = P0 ^ result1 ^ result2 ^ result3 = 0b00 ^ 0b10 ^ 0b00 ^ 0b100 = 0b110 = 6 in decimal~
+
+** Result
+The result of multiplying 2 (10) by 3 (11) in quaternary using bitwise operations is 6 in decimal.
+
+** Pseudocode
+#+begin_src python
+def quaternary_multiply(A, B):
+    a0 = A & 0b11
+    a1 = (A >> 2) & 0b11
+    b0 = B & 0b11
+    b1 = (B >> 2) & 0b11
+
+    P0 = (a0 & 0b01) & (b0 & 0b01)
+    P1 = ((a0 & 0b10) >> 1) & (b0 & 0b01)
+    P2 = (a0 & 0b01) & ((b0 & 0b10) >> 1)
+    P3 = ((a0 & 0b10) >> 1) & ((b0 & 0b10) >> 1)
+
+    result1 = P1 << 1
+    result2 = P2 << 1
+    result3 = P3 << 2
+
+    return P0 ^ result1 ^ result2 ^ result3
+
+# Example usage
+A = 0b10
+B = 0b11
+result = quaternary_multiply(A, B)
+print(result)  # Output: 6
+#+end_src
