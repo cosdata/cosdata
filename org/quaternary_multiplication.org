@@ -1,80 +1,53 @@
 
 * Quaternary Multiplication Using Bitwise Operations
 
+* Binary Multiplication of 2-bit Numbers
+
 ** Introduction
-This document describes the process of performing 2-bit quaternary multiplication using bitwise operations (AND, OR, XOR, SHIFT) without directly using the multiplication operator.
+This document describes the process of performing binary multiplication of two 2-bit numbers. It highlights the steps involved, including calculating partial products and summing them, taking into account the necessary bit positions and carries.
 
 ** Problem Statement
-Given two 2-bit quaternary numbers, we need to multiply them using only bitwise operations.
+Given two 2-bit binary numbers, we need to multiply them using bitwise operations and properly align and sum the partial products.
 
 ** Representation
-Quaternary numbers are represented in binary form:
-- 2 in quaternary is 10 in binary
-- 3 in quaternary is 11 in binary
+Let’s denote the two 2-bit numbers as ~a~ and ~b~, where:
+- ~a = a_1a_0~ (with ~a1~ and ~a0~ being the MSB and LSB of ~a~, respectively)
+- ~b = b_1b_0~ (with ~b1~ and ~b0~ being the MSB and LSB of ~b~, respectively)
 
 ** Steps for Multiplication
-1. Extract the lower and higher bits from each quaternary number.
+1. Extract the bits from each 2-bit number.
 2. Compute the partial products using bitwise AND operations.
-3. Shift the partial products accordingly.
-4. Combine the partial products using bitwise XOR operations to include carries.
+3. Align the partial products according to their bit positions.
+4. Sum the aligned partial products to produce the final result.
 
-** Detailed Example
+** Detailed Steps
 
-*** Example: Multiply quaternary numbers 2 (10 in binary) and 3 (11 in binary)
+1. Extract the Bits:
+   - ~a0 = a & 0b01~
+   - ~a1 = (a >> 1) & 0b01~
+   - ~b0 = b & 0b01~
+   - ~b1 = (b >> 1) & 0b01~
 
-1. Convert quaternary to binary:
-   - 2 in quaternary is 10 in binary.
-   - 3 in quaternary is 11 in binary.
+2. Calculate Partial Products:
 
-2. Define binary numbers ~A~ and ~B~:
-   - ~A = 0b10~ (2 in binary)
-   - ~B = 0b11~ (3 in binary)
+   #+tblname: partial-products
+   |       | b1 | b0 |
+   |-------+----+----|
+   | a1    | a1b1 | a1b0 |
+   | a0    | a0b1 | a0b0 |
 
-3. Extract the bits:
-   - ~a0 = A & 0b11 = 0b10 & 0b11 = 0b10 = 2~
-   - ~a1 = (A >> 2) & 0b11 = (0b10 >> 2) & 0b11 = 0~
-   - ~b0 = B & 0b11 = 0b11 & 0b11 = 0b11 = 3~
-   - ~b1 = (B >> 2) & 0b11 = (0b11 >> 2) & 0b11 = 0~
+3. Align Partial Products:
 
-4. Compute the partial products using AND and shifts:
-   - ~P0 = (a0 & 0b01) & (b0 & 0b01) = (10 & 01) & (11 & 01) = 00~
-   - ~P1 = ((a0 & 0b10) >> 1) & (b0 & 0b01) = ((10 & 10) >> 1) & (11 & 01) = (10 >> 1) & 01 = 01 & 01 = 01~
-   - ~P2 = (a0 & 0b01) & ((b0 & 0b10) >> 1) = (10 & 01) & ((11 & 10) >> 1) = 00 & (10 >> 1) = 00 & 01 = 00~
-   - ~P3 = ((a0 & 0b10) >> 1) & ((b0 & 0b10) >> 1) = ((10 & 10) >> 1) & ((11 & 10) >> 1) = (10 >> 1) & (10 >> 1) = 01 & 01 = 01~
+   #+tblname: aligned-products
+   |      |      | a1b1 | a1b0 |
+   |------+------+------+------|
+   | a0b1 | a0b0 |      |      |
 
-5. Shift the results accordingly:
-   - ~result1 = P1 << 1 = 0b01 << 1 = 0b10~
-   - ~result2 = P2 << 1 = 0b00 << 1 = 0b00~
-   - ~result3 = P3 << 2 = 0b01 << 2 = 0b100~
-
-6. Combine all the results using XOR to include carries:
-   - ~P = P0 ^ result1 ^ result2 ^ result3 = 0b00 ^ 0b10 ^ 0b00 ^ 0b100 = 0b110 = 6 in decimal~
+4. Sum Partial Products:
+   \[
+   a_1b_1 \cdot 2^2 + (a_1b_0 + a_0b_1) \cdot 2^1 + a_0b_0 \cdot 2^0
+   \]
 
 ** Result
-The result of multiplying 2 (10) by 3 (11) in quaternary using bitwise operations is 6 in decimal.
+By summing the aligned partial products, the final result of the binary multiplication is obtained. This process involves careful alignment and addition to ensure that all carries are appropriately handled.
 
-** Pseudocode
-#+begin_src python
-def quaternary_multiply(A, B):
-    a0 = A & 0b11
-    a1 = (A >> 2) & 0b11
-    b0 = B & 0b11
-    b1 = (B >> 2) & 0b11
-
-    P0 = (a0 & 0b01) & (b0 & 0b01)
-    P1 = ((a0 & 0b10) >> 1) & (b0 & 0b01)
-    P2 = (a0 & 0b01) & ((b0 & 0b10) >> 1)
-    P3 = ((a0 & 0b10) >> 1) & ((b0 & 0b10) >> 1)
-
-    result1 = P1 << 1
-    result2 = P2 << 1
-    result3 = P3 << 2
-
-    return P0 ^ result1 ^ result2 ^ result3
-
-# Example usage
-A = 0b10
-B = 0b11
-result = quaternary_multiply(A, B)
-print(result)  # Output: 6
-#+end_src
