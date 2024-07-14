@@ -1,26 +1,28 @@
 
 * Quaternary Multiplication Using Bitwise Operations
 
-* Binary Multiplication of 2-bit Numbers
+** Objective:
+   Compute weighted products efficiently using lookup tables and bitwise operations.
 
-** Introduction
+
+**  Partial products table (actual or notional)
 This document describes the process of performing binary multiplication of two 2-bit numbers. It highlights the steps involved, including calculating partial products and summing them, taking into account the necessary bit positions and carries.
 
-** Problem Statement
+*** Problem Statement
 Given two 2-bit binary numbers, we need to multiply them using bitwise operations and properly align and sum the partial products.
 
-** Representation
+*** Representation
 Let’s denote the two 2-bit numbers as ~a~ and ~b~, where:
 - ~a = a_1a_0~ (with ~a1~ and ~a0~ being the MSB and LSB of ~a~, respectively)
 - ~b = b_1b_0~ (with ~b1~ and ~b0~ being the MSB and LSB of ~b~, respectively)
 
-** Steps for Multiplication
+*** Steps for Multiplication
 1. Extract the bits from each 2-bit number.
 2. Compute the partial products using bitwise AND operations.
 3. Align the partial products according to their bit positions.
 4. Sum the aligned partial products to produce the final result.
 
-** Detailed Steps
+*** Detailed Steps
 
 1. Extract the Bits:
    - ~a0 = a & 0b01~
@@ -46,5 +48,50 @@ Let’s denote the two 2-bit numbers as ~a~ and ~b~, where:
    
    a_1 b_1 \cdot 2^2 + (a_1 b_0 + a_0 b_1) \cdot 2^1 + a_0 b_0 \cdot 2^0
 
-** Result
+*** Result
 By summing the aligned partial products, the final result of the binary multiplication is obtained. This process involves careful alignment and addition to ensure that all carries are appropriately handled.
+
+
+*** Partial products (actual or notional)
+
+|-------+---------+---------+---------+---------|
+| K     | b_0 b_0   | b_0 b_1   | b_1 b_0   | b_1 b_1   |
+|-------+---------+---------+---------+---------|
+| a_0 a_0 | _00 _00 | _00 _01 | _00 _10 | _00 _11 |
+| a_0 a_1 | _01 _00 | _01 _01 | _01 _10 | _01 _11 |
+| a_1 a_0 | _10 _00 | _10 _01 | _10 _10 | _10 _11 |
+| a_1 a_1 | _11 _00 | _11 _01 | _11 _10 | _11 _11 |
+
+
+*** Look up table for weights             
+|---+-----+-----+-----+-----|
+| K | 0   | 1   | 2   | 3   |
+|---+-----+-----+-----+-----|
+| 0 | w_00 | w_01 | w_02 | w_03 |
+| 1 | w_10 | w_11 | w_12 | w_13 |
+| 2 | w_20 | w_21 | w_22 | w_23 |
+| 3 | w_30 | w_31 | w_32 | w_33 |
+
+** Lookup Tables:
+   -
+   - Weights lookup table
+
+** Methods:
+
+***  SIMD Lookup Approach:
+       - Use SIMD instructions for parallel lookups in the tables.
+       - Refer to the AVX2 vectorized 256-bit lookup table method for 32 unsigned chars 
+         (Stack Overflow question 43791161).
+       - Note: This method is limited to byte-sized or larger elements.
+
+*** Accumulation Approach:
+       a. Process the entire vector embedding:
+          - Use bitwise operations to generate unique indexes for each partial product.
+          - Accumulate counts of these indexes instead of computing actual products.
+       b. After processing the full embedding:
+          - Perform scalar multiplication with weights from the lookup table.
+
+** Optimization Techniques:
+   - Avoid actual multiplication operations where possible.
+   - Use bitwise operations to ensure unique indexes for lookup.
+   - For sub-byte sizes, prefer the accumulation approach as SIMD is not applicable.
