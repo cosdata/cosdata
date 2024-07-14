@@ -31,23 +31,20 @@ Let’s denote the two 2-bit numbers as ~a~ and ~b~, where:
 2. Calculate Partial Products:
 
    #+tblname: partial-products
-   |       | b1 | b0 |
-   |-------+----+----|
-   | a1    | a1b1 | a1b0 |
-   | a0    | a0b1 | a0b0 |
+   |    | b_1    | b_0    |
+   |----+-------+-------|
+   | a_1 | a_1 b_1 | a_1 b_0 |
+   | a_0 | a_0 b_1 | a_0 b_0 |
 
 3. Align Partial Products:
 
    #+tblname: aligned-products
-   |      |      | a1b1 | a1b0 |
-   |------+------+------+------|
-   | a0b1 | a0b0 |      |      |
+   |       | a_1 b_1 | a_1 b_0 |
+   | a_0 b_1 | a_0 b_0 |       |
 
 4. Sum Partial Products:
-   \[
-   a_1b_1 \cdot 2^2 + (a_1b_0 + a_0b_1) \cdot 2^1 + a_0b_0 \cdot 2^0
-   \]
+   
+   a_1 b_1 \cdot 2^2 + (a_1 b_0 + a_0 b_1) \cdot 2^1 + a_0 b_0 \cdot 2^0
 
 ** Result
 By summing the aligned partial products, the final result of the binary multiplication is obtained. This process involves careful alignment and addition to ensure that all carries are appropriately handled.
-
