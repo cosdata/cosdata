@@ -174,44 +174,36 @@ impl std::fmt::Display for Node {
         write!(f, " }}")
     }
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum VectorQt {
-    Scalar(VectorQtScalar),
-    Binary(VectorQtBinary),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VectorQtScalar {
-    pub mag: u32,
-    pub quant_vec: Vec<u8>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VectorQtBinary {
-    // pub mag: Vec<usize>,
-    pub quant_vec: Vec<Vec<u32>>,
-    pub resolution: u8,
+    UnsignedByte {
+        mag: u32,
+        quant_vec: Vec<u8>,
+    },
+    SubByte {
+        mag: u32,
+        quant_vec: Vec<Vec<u32>>,
+        resolution: u8,
+    },
 }
 
 impl VectorQt {
-    pub fn scalar(vec: &[f32]) -> Self {
+    pub fn unsigned_byte(vec: &[f32]) -> Self {
         let quant_vec = simp_quant(vec);
         let mag = mag_square_u8(&quant_vec);
-
-        Self::Scalar(VectorQtScalar { mag, quant_vec })
+        Self::UnsignedByte { mag, quant_vec }
     }
 
-    pub fn binary(vec: &[f32], resolution: u8) -> Self {
+    pub fn sub_byte(vec: &[f32], resolution: u8) -> Self {
         let quant_vec = quantize_to_u32_bits(vec, resolution);
-
-        Self::Binary(VectorQtBinary {
+        let mag = 0; //implement a proper magnitude calculation
+        Self::SubByte {
+            mag,
             quant_vec,
             resolution,
-        })
+        }
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum VectorId {
     Str(String),

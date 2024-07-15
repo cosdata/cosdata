@@ -1,3 +1,4 @@
+use crate::models::common::mag_square_u8;
 use crate::models::file_persist::*;
 use crate::models::persist::Persist;
 use crate::models::rpc::VectorIdValue;
@@ -15,7 +16,6 @@ use std::fs::OpenOptions;
 use std::fs::*;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
-use waco::models::common::mag_square_u8;
 
 pub async fn init_vector_store(
     name: String,
@@ -41,8 +41,7 @@ pub async fn init_vector_store(
     let vec_hash = VectorId::Int(-1);
 
     let exec_queue_neighbors = Arc::new(DashMap::new());
-    let vector_list = VectorQt::scalar(&vec);
-
+    let vector_list = VectorQt::unsigned_byte(&vec);
     // Note that setting .write(true).append(true) has the same effect
     // as setting only .append(true)
     let prop_file = Arc::new(
@@ -149,8 +148,7 @@ pub async fn run_upload(
             async move {
                 let root = &vec_store.root_vec;
                 let vec_hash = convert_value(id);
-                let vector_list = VectorQt::scalar(&vec);
-
+                let vector_list = VectorQt::unsigned_byte(&vec);
                 let vec_emb = VectorEmbedding {
                     raw_vec: Arc::new(vector_list.clone()),
                     hash_vec: vec_hash.clone(),
@@ -181,7 +179,7 @@ pub async fn ann_vector_query(
     let vector_store = vec_store.clone();
     let vec_hash = VectorId::Str("query".to_string());
     let root = &vector_store.root_vec;
-    let vector_list = VectorQt::scalar(&query);
+    let vector_list = VectorQt::unsigned_byte(&query);
 
     let vec_emb = VectorEmbedding {
         raw_vec: Arc::new(vector_list.clone()),
