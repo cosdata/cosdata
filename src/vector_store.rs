@@ -58,9 +58,9 @@ pub fn ann_search(
     vector_emb: VectorEmbedding,
     cur_entry: NodeRef,
     cur_level: i8,
-) -> Option<Vec<(NodeRef, f32)>> {
+) -> Result<Option<Vec<(NodeRef, f32)>>, WaCustomError> {
     if cur_level == -1 {
-        return Some(vec![]);
+        return Ok(Some(vec![]));
     }
     let fvec = vector_emb.raw_vec.clone();
 
@@ -76,9 +76,9 @@ pub fn ann_search(
         &mut skipm,
         cur_level,
         false,
-    );
+    )?;
 
-    let cs = cosine_coalesce(&fvec, &cur_entry.prop.value, vec_store.quant_dim);
+    let cs = cosine_similarity_qt(&fvec, &cur_entry.prop.value, vec_store.quant_dim)?;
     let z = if z.is_empty() {
         vec![(cur_entry.clone(), cs)]
     } else {
@@ -89,8 +89,8 @@ pub fn ann_search(
         vector_emb.clone(),
         z[0].0.clone(),
         cur_level - 1,
-    );
-    return add_option_vecs(&result, &Some(z));
+    )?;
+    Ok(add_option_vecs(&result, &Some(z)))
 }
 
 pub fn insert_embedding(
@@ -100,9 +100,9 @@ pub fn insert_embedding(
     cur_entry: NodeRef,
     cur_level: i8,
     max_insert_level: i8,
-) {
+) -> Result<(), WaCustomError> {
     if cur_level == -1 {
-        return;
+        return Ok(());
     }
 
     let fvec = vector_emb.raw_vec.clone();
@@ -117,9 +117,9 @@ pub fn insert_embedding(
         &mut skipm,
         cur_level,
         true,
-    );
+    )?;
 
-    let cs = cosine_coalesce(&fvec, &cur_entry.prop.value, vec_store.quant_dim);
+    let cs = cosine_similarity_qt(&fvec, &cur_entry.prop.value, vec_store.quant_dim)?;
     let z = if z.is_empty() {
         vec![(cur_entry.clone(), cs)]
     } else {
@@ -135,7 +135,7 @@ pub fn insert_embedding(
             z_clone[0].clone(),
             cur_level - 1,
             max_insert_level,
-        );
+        )?;
         insert_node_create_edges(
             vec_store.clone(),
             fvec,
@@ -153,8 +153,10 @@ pub fn insert_embedding(
             z_clone[0].clone(),
             cur_level - 1,
             max_insert_level,
-        );
+        )?;
     }
+
+    Ok(())
 }
 
 pub fn queue_node_prop_exec(
@@ -315,7 +317,7 @@ fn traverse_find_nearest(
     skipm: &mut HashSet<VectorId>,
     cur_level: i8,
     skip_hop: bool,
-) -> Vec<(NodeRef, f32)> {
+) -> Result<Vec<(NodeRef, f32)>, WaCustomError> {
     let mut tasks: SmallVec<[Vec<(NodeRef, f32)>; 24]> = SmallVec::new();
 
     // Lock the neighbors Mutex to access the neighbors
@@ -340,7 +342,7 @@ fn traverse_find_nearest(
 
                 if skipm.insert(nb.clone()) {
                     //println!("processing {} at hop {} ", index, hops);
-                    let cs = cosine_coalesce(&fvec, &nbr.prop.value, vec_store.quant_dim);
+                    let cs = cosine_similarity_qt(&fvec, &nbr.prop.value, vec_store.quant_dim)?;
 
                     // ---------------------------
                     // -- TODO number of hops
@@ -358,7 +360,7 @@ fn traverse_find_nearest(
                             skipm,
                             cur_level,
                             skip_hop,
-                        );
+                        )?;
                         z.push((nbr.clone(), cs));
                         tasks.push(z);
                     } else {
@@ -383,7 +385,7 @@ fn traverse_find_nearest(
     // -- TODO number of closest to make edges
     // ---------------------------
 
-    nn.into_iter().take(5).collect()
+    Ok(nn.into_iter().take(5).collect())
 }
 
 fn get_vector_from_db(db_name: &str, entry: VectorId) -> Option<Arc<VectorTreeNode>> {

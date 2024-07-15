@@ -176,10 +176,40 @@ impl std::fmt::Display for Node {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VectorQt {
-    //pub mag: Vec<usize>,
+pub enum VectorQt {
+    Scalar(VectorQtScalar),
+    Binary(VectorQtBinary),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VectorQtScalar {
+    pub mag: u32,
+    pub quant_vec: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VectorQtBinary {
+    // pub mag: Vec<usize>,
     pub quant_vec: Vec<Vec<u32>>,
     pub resolution: u8,
+}
+
+impl VectorQt {
+    pub fn scalar(vec: &[f32]) -> Self {
+        let quant_vec = simp_quant(vec);
+        let mag = mag_square_u8(&quant_vec);
+
+        Self::Scalar(VectorQtScalar { mag, quant_vec })
+    }
+
+    pub fn binary(vec: &[f32], resolution: u8) -> Self {
+        let quant_vec = quantize_to_u32_bits(vec, resolution);
+
+        Self::Binary(VectorQtBinary {
+            quant_vec,
+            resolution,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -254,6 +284,9 @@ pub struct AppEnv {
     pub persist: Arc<Mutex<Persist>>,
 }
 
+use super::common::mag_square_u8;
+use super::common::quantize_to_u32_bits;
+use super::common::simp_quant;
 use super::{common::WaCustomError, persist::Persist};
 static AIN_ENV: OnceLock<Result<Arc<AppEnv>, WaCustomError>> = OnceLock::new();
 

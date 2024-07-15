@@ -4,6 +4,7 @@ use crate::models::rpc::VectorIdValue;
 use crate::models::user::{AuthResp, Statistics};
 use crate::models::{self, common::*};
 use crate::models::{persist, types::*};
+use crate::simp_quant;
 use crate::vector_store::{self, *};
 use dashmap::DashMap;
 use futures::stream::{self, StreamExt};
@@ -14,6 +15,7 @@ use std::fs::OpenOptions;
 use std::fs::*;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
+use waco::models::common::mag_square_u8;
 
 pub async fn init_vector_store(
     name: String,
@@ -39,18 +41,7 @@ pub async fn init_vector_store(
     let vec_hash = VectorId::Int(-1);
 
     let exec_queue_neighbors = Arc::new(DashMap::new());
-
-    let resolution = 1 as u8;
-    let quant_dim = (size * resolution as usize / 32);
-    let quantized_values: Vec<Vec<u32>> = quantize_to_u32_bits(&vec.clone(), 1);
-    //let mpq: Vec<usize> = get_magnitude_plus_quantized_vec(&quantized_values, quant_dim);
-    // magnitude will need to be reintroduced in VectorQt,
-    // besides we can emperically test end to end how the hamming similarity does for embeddings trained on cosine sim
-    let vector_list = VectorQt {
-        //mag: mpq,
-        quant_vec: quantized_values,
-        resolution: resolution,
-    };
+    let vector_list = VectorQt::scalar(&vec);
 
     // Note that setting .write(true).append(true) has the same effect
     // as setting only .append(true)
@@ -158,16 +149,7 @@ pub async fn run_upload(
             async move {
                 let root = &vec_store.root_vec;
                 let vec_hash = convert_value(id);
-
-                let quantized_values: Vec<Vec<u32>> = quantize_to_u32_bits(&vec.clone(), 1);
-                //let mpq: Vec<usize> =
-                // get_magnitude_plus_quantized_vec(&quantized_values, vec_store.quant_dim);
-
-                let vector_list = VectorQt {
-                    //mag: mpq,
-                    quant_vec: quantized_values,
-                    resolution: 1,
-                };
+                let vector_list = VectorQt::scalar(&vec);
 
                 let vec_emb = VectorEmbedding {
                     raw_vec: Arc::new(vector_list.clone()),
@@ -176,6 +158,7 @@ pub async fn run_upload(
                 let lp = &vec_store.levels_prob;
                 let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
 
+                // TODO: handle the error
                 insert_embedding(
                     persist,
                     vec_store.clone(),
@@ -194,18 +177,11 @@ pub async fn run_upload(
 pub async fn ann_vector_query(
     vec_store: Arc<VectorStore>,
     query: Vec<f32>,
-) -> Option<Vec<(VectorId, f32)>> {
+) -> Result<Option<Vec<(VectorId, f32)>>, WaCustomError> {
     let vector_store = vec_store.clone();
     let vec_hash = VectorId::Str("query".to_string());
     let root = &vector_store.root_vec;
-
-    let quantized_values: Vec<Vec<u32>> = quantize_to_u32_bits(&query.clone(), 1);
-    let mpq: Vec<usize> = get_magnitude_plus_quantized_vec(&quantized_values, vec_store.quant_dim);
-
-    let vector_list = VectorQt {
-        quant_vec: quantized_values,
-        resolution: 1,
-    };
+    let vector_list = VectorQt::scalar(&query);
 
     let vec_emb = VectorEmbedding {
         raw_vec: Arc::new(vector_list.clone()),
@@ -217,9 +193,9 @@ pub async fn ann_vector_query(
         vec_emb,
         root.clone(),
         vec_store.max_cache_level.try_into().unwrap(),
-    );
+    )?;
     let output = remove_duplicates_and_filter(results);
-    return output;
+    Ok(output)
 }
 
 pub async fn fetch_vector_neighbors(

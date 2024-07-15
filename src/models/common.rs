@@ -1,5 +1,6 @@
+use super::dot_product::dot_product_u8_avx2;
 use super::rpc::VectorIdValue;
-use super::types::{NodeRef, VectorId};
+use super::types::{NodeRef, VectorId, VectorQtBinary, VectorQtScalar};
 use crate::models::lookup_table::*;
 use crate::models::rpc::Vector;
 use crate::models::types::VectorQt;
@@ -209,7 +210,7 @@ pub fn get_magnitude_plus_quantized_vec(quant_vec: &[Vec<u32>], _size: usize) ->
     result
 }
 
-pub fn cosine_coalesce(x: &VectorQt, y: &VectorQt, length: usize) -> f32 {
+pub fn cosine_coalesce(x: &VectorQtBinary, y: &VectorQtBinary, length: usize) -> f32 {
     let parts = 2_usize.pow(x.resolution as u32);
     let mut final_result: usize = 0;
 
@@ -221,8 +222,27 @@ pub fn cosine_coalesce(x: &VectorQt, y: &VectorQt, length: usize) -> f32 {
             .sum();
         final_result += sum << index; // Multiply by precomputed shift value
     }
+
     final_result as f32 / length as f32
 }
+
+pub fn cosine_similarity_scalar_u8(x: &VectorQtScalar, y: &VectorQtScalar) -> f32 {
+    let dot_product = unsafe { dot_product_u8_avx2(&x.quant_vec, &y.quant_vec) };
+    dot_product as f32 / ((x.mag as f32).sqrt() * (y.mag as f32).sqrt())
+}
+
+pub fn cosine_similarity_qt(
+    x: &VectorQt,
+    y: &VectorQt,
+    length: usize,
+) -> Result<f32, WaCustomError> {
+    match (x, y) {
+        (VectorQt::Binary(x), VectorQt::Binary(y)) => Ok(cosine_coalesce(x, y, length)),
+        (VectorQt::Scalar(x), VectorQt::Scalar(y)) => Ok(cosine_similarity_scalar_u8(x, y)),
+        _ => Err(WaCustomError::QuantizationMismatch),
+    }
+}
+
 //////
 #[inline]
 
@@ -236,6 +256,14 @@ fn to_float_flag(x: f32, bits_per_value: usize, step: f32) -> Vec<bool> {
     }
 
     result
+}
+
+pub fn simp_quant(v: &[f32]) -> Vec<u8> {
+    v.iter().map(|&x| (x * 255.0).round() as u8).collect()
+}
+
+pub fn mag_square_u8(vec: &[u8]) -> u32 {
+    vec.iter().map(|&x| x as u32 * x as u32).sum()
 }
 
 pub fn quantize_to_u32_bits(fins: &[f32], resolution: u8) -> Vec<Vec<u32>> {
@@ -289,6 +317,7 @@ pub enum WaCustomError {
     PendingNeighborEncountered(String),
     InvalidLocationNeighborEncountered(String, VectorId),
     MutexPoisoned(String),
+    QuantizationMismatch,
 }
 
 // Implementing the std::fmt::Display trait for WaCustomError
@@ -317,6 +346,7 @@ impl fmt::Display for WaCustomError {
             WaCustomError::MutexPoisoned(msg) => {
                 write!(f, "Mutex Poisoned here: {}", msg)
             }
+            WaCustomError::QuantizationMismatch => write!(f, "Quantization mismatch"),
         }
     }
 }

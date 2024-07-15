@@ -114,7 +114,10 @@ async fn search_vector_db(item: web::Json<VectorANN>) -> HttpResponse {
                 }
             };
 
-            let result = ann_vector_query(vec_store.clone().into(), vector).await;
+            let result = match ann_vector_query(vec_store.clone().into(), vector).await {
+                Ok(result) => result,
+                Err(err) => return HttpResponse::InternalServerError().body(err.to_string()),
+            };
 
             let response_data = RPCResponseBody::RespVectorKNN {
                 knn: convert_option_vec(result),
