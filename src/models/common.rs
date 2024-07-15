@@ -1,6 +1,6 @@
 use super::dot_product::dot_product_u8_avx2;
 use super::rpc::VectorIdValue;
-use super::types::{NodeRef, VectorId};
+use super::types::{NodeRef, VectorId, VectorQtBinary, VectorQtScalar};
 use crate::models::lookup_table::*;
 use crate::models::rpc::Vector;
 use crate::models::types::VectorQt;
@@ -210,10 +210,39 @@ pub fn get_magnitude_plus_quantized_vec(quant_vec: &[Vec<u32>], _size: usize) ->
     result
 }
 
-pub fn cosine_coalesce(x: &VectorQt, y: &VectorQt) -> f32 {
+pub fn cosine_coalesce(x: &VectorQtBinary, y: &VectorQtBinary, length: usize) -> f32 {
+    let parts = 2_usize.pow(x.resolution as u32);
+    let mut final_result: usize = 0;
+
+    for index in 0..parts {
+        let sum: usize = x.quant_vec[index]
+            .iter()
+            .zip(&y.quant_vec[index])
+            .map(|(&x_item, &y_item)| shift_and_accumulate(x_item ^ y_item) as usize)
+            .sum();
+        final_result += sum << index; // Multiply by precomputed shift value
+    }
+
+    final_result as f32 / length as f32
+}
+
+pub fn cosine_similarity_scalar_u8(x: &VectorQtScalar, y: &VectorQtScalar) -> f32 {
     let dot_product = unsafe { dot_product_u8_avx2(&x.quant_vec, &y.quant_vec) };
     dot_product as f32 / ((x.mag as f32).sqrt() * (y.mag as f32).sqrt())
 }
+
+pub fn cosine_similarity_qt(
+    x: &VectorQt,
+    y: &VectorQt,
+    length: usize,
+) -> Result<f32, WaCustomError> {
+    match (x, y) {
+        (VectorQt::Binary(x), VectorQt::Binary(y)) => Ok(cosine_coalesce(x, y, length)),
+        (VectorQt::Scalar(x), VectorQt::Scalar(y)) => Ok(cosine_similarity_scalar_u8(x, y)),
+        _ => Err(WaCustomError::QuantizationMismatch),
+    }
+}
+
 //////
 #[inline]
 
@@ -288,6 +317,7 @@ pub enum WaCustomError {
     PendingNeighborEncountered(String),
     InvalidLocationNeighborEncountered(String, VectorId),
     MutexPoisoned(String),
+    QuantizationMismatch,
 }
 
 // Implementing the std::fmt::Display trait for WaCustomError
@@ -316,6 +346,7 @@ impl fmt::Display for WaCustomError {
             WaCustomError::MutexPoisoned(msg) => {
                 write!(f, "Mutex Poisoned here: {}", msg)
             }
+            WaCustomError::QuantizationMismatch => write!(f, "Quantization mismatch"),
         }
     }
 }
