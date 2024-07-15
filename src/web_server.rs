@@ -16,6 +16,7 @@ use crate::models::common::convert_option_vec;
 use crate::models::rpc::*;
 use crate::{api_service::*, models::types::*};
 use crate::{cat_maybes, convert_vectors};
+use std::env;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct MyObj {
@@ -243,11 +244,73 @@ fn load_rustls_config() -> rustls::ServerConfig {
         .unwrap();
 
     // init server config builder with safe defaults
-    let config = ServerConfig::builder().with_no_client_auth();
+    let mut config = ServerConfig::builder().with_no_client_auth();
+
+    let key = "SSL_CERT_DIR";
+    let ssl_cert_dir = match env::var_os(key) {
+        Some(val) => val.into_string().unwrap_or_else(|_| {
+            eprintln!("{key} is not a valid UTF-8 string.");
+            std::process::exit(1);
+        }),
+        None => {
+            eprintln!("{key} is not defined in the environment.");
+            std::process::exit(1);
+        }
+    };
+
+    let cert_file_path = format!("{}/certs/example.crt", ssl_cert_dir);
+    let key_file_path = format!("{}/private/example.key", ssl_cert_dir);
 
     // load TLS key/cert files
-    let cert_file = &mut BufReader::new(File::open("/home/nithin/example.crt").unwrap());
-    let key_file = &mut BufReader::new(File::open("/home/nithin/example.key").unwrap());
+    let cert_file = &mut BufReader::new(File::open(&cert_file_path).unwrap_or_else(|_| {
+        eprintln!("Failed to open certificate file: {}", cert_file_path);
+        std::process::exit(1);
+    }));
+    let key_file = &mut BufReader::new(File::open(&key_file_path).unwrap_or_else(|_| {
+        eprintln!("Failed to open key file: {}", key_file_path);
+        std::process::exit(1);
+    }));
+
+    // convert files to key/cert objects
+    let cert_chain = certs(cert_file)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap_or_else(|_| {
+            eprintln!("Failed to parse certificate chain.");
+            std::process::exit(1);
+        });
+    let mut keys = pkcs8_private_keys(key_file)
+        .map(|key| key.map(PrivateKeyDer::Pkcs8))
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap_or_else(|_| {
+            eprintln!("Failed to parse private keys.");
+            std::process::exit(1);
+        });
+
+    // exit if no keys could be parsed
+    if keys.is_empty() {
+        eprintln!("Could not locate PKCS 8 private keys.");
+        std::process::exit(1);
+    }
+
+    config.with_single_cert(cert_chain, keys.remove(0)).unwrap()
+}
+
+fn old_load_rustls_config() -> rustls::ServerConfig {
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .unwrap();
+
+    // init server config builder with safe defaults
+    let config = ServerConfig::builder().with_no_client_auth();
+
+    let key = "SSL_CERT_DIR";
+    match env::var_os(key) {
+        Some(val) => println!("{key}: {val:?}"),
+        None => println!("{key} is not defined in the environment."),
+    }
+    // load TLS key/cert files
+    let cert_file = &mut BufReader::new(File::open("~/example.crt").unwrap());
+    let key_file = &mut BufReader::new(File::open("~/example.key").unwrap());
 
     // convert files to key/cert objects
     let cert_chain = certs(cert_file).collect::<Result<Vec<_>, _>>().unwrap();

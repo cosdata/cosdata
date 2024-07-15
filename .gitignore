@@ -1,4 +1,5 @@
 /target
+/versions
 Cargo.lock
 rr
 /xdb

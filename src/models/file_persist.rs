@@ -20,11 +20,15 @@ pub struct NeighbourPersist {
     pub node: NodePersistRef,
     pub cosine_similarity: f32,
 }
-
+#[derive(Clone, Copy, Serialize, Deserialize)]
+pub struct VersionRef {
+    versions: [NodePersistRef; 4],
+    next: NodePersistRef,
+}
 #[derive(Serialize, Deserialize)]
 pub struct NodePersist {
     pub version_id: VersionId,
-    //pub next_version: Option<NodePersistRef>,
+    pub version_ref: Option<VersionRef>,
     pub prop_location: NodePersistRef,
     pub hnsw_level: HNSWLevel,
     pub neighbors: [NeighbourPersist; 20], // Bounded array of size 20
@@ -39,7 +43,7 @@ impl NodePersist {
         neighbors: Vec<NeighbourPersist>,
         parent: Option<NodePersistRef>,
         child: Option<NodePersistRef>,
-        //next_version: Option<NodePersistRef>,
+        version_ref: Option<VersionRef>,
         version_id: VersionId,
     ) -> NodePersist {
         let mut fixed_neighbors = [NeighbourPersist {
@@ -56,7 +60,7 @@ impl NodePersist {
             parent,
             child,
             prop_location: location,
-            //next_version,
+            version_ref,
             version_id,
         }
     }
@@ -120,7 +124,7 @@ pub fn persist_node_update_loc(
         parent: Some(parent),
         child: Some(child),
         prop_location: node.get_location().unwrap_or((0, 0)),
-        //next_version: None,
+        version_ref: None,
         version_id: node.version_id + 1,
     };
 

@@ -880,6 +880,50 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06ea2b9bc92be3c2baa9334a323ebca2d6f074ff852cd1d7b11064035cd3868f"
 
 [[package]]
+name = "cosdata"
+version = "0.1.0"
+dependencies = [
+ "actix-cors",
+ "actix-files",
+ "actix-web",
+ "actix-web-httpauth",
+ "async-channel 2.3.1",
+ "async-std",
+ "bincode",
+ "cbor",
+ "chrono",
+ "criterion",
+ "dashmap",
+ "env_logger",
+ "futures",
+ "futures-util",
+ "http 1.1.0",
+ "http-body-util",
+ "lazy_static",
+ "lmdb",
+ "log",
+ "once_cell",
+ "probabilistic-collections",
+ "rancor",
+ "rand 0.8.5",
+ "rayon",
+ "regex",
+ "rocksdb",
+ "rustls",
+ "rustls-pemfile",
+ "serde",
+ "serde_cbor",
+ "serde_json",
+ "sha2",
+ "smallvec",
+ "thiserror",
+ "tokio",
+ "tokio-rustls",
+ "tower-service",
+ "tracing",
+]
+
+[[package]]
 name = "cpufeatures"
 version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2753,50 +2797,6 @@ name = "version_check"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
-
-[[package]]
-name = "waco"
-version = "0.1.0"
-dependencies = [
- "actix-cors",
- "actix-files",
- "actix-web",
- "actix-web-httpauth",
- "async-channel 2.3.1",
- "async-std",
- "bincode",
- "cbor",
- "chrono",
- "criterion",
- "dashmap",
- "env_logger",
- "futures",
- "futures-util",
- "http 1.1.0",
- "http-body-util",
- "lazy_static",
- "lmdb",
- "log",
- "once_cell",
- "probabilistic-collections",
- "rancor",
- "rand 0.8.5",
- "rayon",
- "regex",
- "rocksdb",
- "rustls",
- "rustls-pemfile",
- "serde",
- "serde_cbor",
- "serde_json",
- "sha2",
- "smallvec",
- "thiserror",
- "tokio",
- "tokio-rustls",
- "tower-service",
- "tracing",
-]
 
 [[package]]
 name = "waker-fn"
