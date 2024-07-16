@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 //start
 // persist structures
-type NodePersistRef = (u32, u32); // (file_number, offset)
+pub type NodePersistRef = (u32, u32); // (file_number, offset)
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct NeighbourPersist {
@@ -22,8 +22,8 @@ pub struct NeighbourPersist {
 }
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct VersionRef {
-    versions: [NodePersistRef; 4],
-    next: NodePersistRef,
+    pub versions: [NodePersistRef; 4],
+    pub next: NodePersistRef,
 }
 #[derive(Serialize, Deserialize)]
 pub struct NodePersist {

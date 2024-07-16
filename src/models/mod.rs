@@ -6,5 +6,6 @@ pub mod file_persist;
 pub mod lookup_table;
 pub mod persist;
 pub mod rpc;
+pub mod serializer;
 pub mod types;
 pub mod user;

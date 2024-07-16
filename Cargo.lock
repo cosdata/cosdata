@@ -890,6 +890,7 @@ dependencies = [
  "async-channel 2.3.1",
  "async-std",
  "bincode",
+ "byteorder 1.5.0",
  "cbor",
  "chrono",
  "criterion",
