@@ -169,8 +169,8 @@ pub fn queue_node_prop_exec(
     let prop_location = write_prop_to_file(&node.prop, &prop_file);
     node.set_prop_location(prop_location);
 
-    // TODO# calculate with specialized serialization formula
-    let size = 128;
+    // calculated with custom serialization
+    let size = 150;
     let mut offset = 0;
 
     exec_queue_update.insert((hnsw_level, node.prop.id.clone()), (node.clone(), offset));
@@ -209,7 +209,7 @@ pub fn auto_commit_transaction(
     // exec_queue_nodes: &mut ExecQueueInsertNodes,
 ) -> Result<(), WaCustomError> {
     let mut offset = 0;
-    let serialized_size = 128; //todo get the proper "specialized serialization" size
+    let serialized_size = 150; //specialized serialization
     for item in exec_queue_update.iter() {
         let nbr = item.value().0.clone();
         let level = item.key().0.clone();

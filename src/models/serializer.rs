@@ -1,6 +1,7 @@
 use crate::models::file_persist::*;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{Read, Write};
+use std::mem::{size_of, transmute};
 
 pub trait CustomSerialize {
     fn serialize<W: Write>(&self, writer: &mut W) -> std::io::Result<()>;
@@ -11,117 +12,103 @@ pub trait CustomSerialize {
 
 impl CustomSerialize for NodePersistRef {
     fn serialize<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        writer.write_u32::<LittleEndian>(self.0)?;
-        writer.write_u32::<LittleEndian>(self.1)?;
-        Ok(())
+        writer.write_all(unsafe { transmute::<_, &[u8; 8]>(self) })
     }
 
     fn deserialize<R: Read>(reader: &mut R) -> std::io::Result<Self> {
-        let file_number = reader.read_u32::<LittleEndian>()?;
-        let offset = reader.read_u32::<LittleEndian>()?;
-        Ok((file_number, offset))
+        let mut buf = [0u8; 8];
+        reader.read_exact(&mut buf)?;
+        Ok(unsafe { transmute(buf) })
     }
 }
 
 impl CustomSerialize for NeighbourPersist {
     fn serialize<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        self.node.serialize(writer)?;
-        writer.write_f32::<LittleEndian>(self.cosine_similarity)?;
-        Ok(())
+        writer.write_all(unsafe { transmute::<_, &[u8; 12]>(self) })
     }
 
     fn deserialize<R: Read>(reader: &mut R) -> std::io::Result<Self> {
-        let node = NodePersistRef::deserialize(reader)?;
-        let cosine_similarity = reader.read_f32::<LittleEndian>()?;
-        Ok(NeighbourPersist {
-            node,
-            cosine_similarity,
-        })
+        let mut buf = [0u8; 12];
+        reader.read_exact(&mut buf)?;
+        Ok(unsafe { transmute(buf) })
     }
 }
 
 impl CustomSerialize for VersionRef {
     fn serialize<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        for version in &self.versions {
-            version.serialize(writer)?;
-        }
-        self.next.serialize(writer)?;
-        Ok(())
+        writer.write_all(unsafe { transmute::<_, &[u8; 40]>(self) })
     }
 
     fn deserialize<R: Read>(reader: &mut R) -> std::io::Result<Self> {
-        let mut versions = [NodePersistRef::default(); 4];
-        for version in &mut versions {
-            *version = NodePersistRef::deserialize(reader)?;
-        }
-        let next = NodePersistRef::deserialize(reader)?;
-        Ok(VersionRef { versions, next })
+        let mut buf = [0u8; 40];
+        reader.read_exact(&mut buf)?;
+        Ok(unsafe { transmute(buf) })
     }
 }
 
 impl CustomSerialize for NodePersist {
     fn serialize<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
         writer.write_u32::<LittleEndian>(self.version_id)?;
-        match &self.version_ref {
-            Some(ver_ref) => {
-                writer.write_u8(1)?;
-                ver_ref.serialize(writer)?;
-            }
-            None => writer.write_u8(0)?,
+
+        let flags = (self.version_ref.is_some() as u8)
+            | ((self.parent.is_some() as u8) << 1)
+            | ((self.child.is_some() as u8) << 2);
+        writer.write_u8(flags)?;
+
+        if let Some(ver_ref) = &self.version_ref {
+            ver_ref.serialize(writer)?;
         }
+
         self.prop_location.serialize(writer)?;
         writer.write_u8(self.hnsw_level)?;
-        for neighbor in &self.neighbors {
-            neighbor.serialize(writer)?;
+
+        // Serialize neighbors as a single block
+        writer.write_all(unsafe {
+            transmute::<_, &[u8; 10 * size_of::<NeighbourPersist>()]>(&self.neighbors)
+        })?;
+
+        if let Some(parent) = &self.parent {
+            parent.serialize(writer)?;
         }
-        match &self.parent {
-            Some(parent) => {
-                writer.write_u8(1)?;
-                parent.serialize(writer)?;
-            }
-            None => writer.write_u8(0)?,
-        }
-        match &self.child {
-            Some(child) => {
-                writer.write_u8(1)?;
-                child.serialize(writer)?;
-            }
-            None => writer.write_u8(0)?,
+        if let Some(child) = &self.child {
+            child.serialize(writer)?;
         }
         Ok(())
     }
 
     fn deserialize<R: Read>(reader: &mut R) -> std::io::Result<Self> {
         let version_id = reader.read_u32::<LittleEndian>()?;
-        let version_ref = if reader.read_u8()? == 1 {
+        let flags = reader.read_u8()?;
+
+        let version_ref = if flags & 1 != 0 {
             Some(VersionRef::deserialize(reader)?)
         } else {
             None
         };
+
         let prop_location = NodePersistRef::deserialize(reader)?;
         let hnsw_level = reader.read_u8()?;
 
-        let mut neighbors = Vec::with_capacity(20);
-        for _ in 0..20 {
-            neighbors.push(NeighbourPersist::deserialize(reader)?);
-        }
-        let neighbors: [NeighbourPersist; 20] = neighbors.try_into().map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Failed to create neighbors array",
-            )
+        let mut neighbors = [NeighbourPersist {
+            node: (0, 0),
+            cosine_similarity: 0.0,
+        }; 10];
+        reader.read_exact(unsafe {
+            transmute::<_, &mut [u8; 10 * size_of::<NeighbourPersist>()]>(&mut neighbors)
         })?;
 
-        let parent = if reader.read_u8()? == 1 {
+        let parent = if flags & 2 != 0 {
             Some(NodePersistRef::deserialize(reader)?)
         } else {
             None
         };
-        let child = if reader.read_u8()? == 1 {
+
+        let child = if flags & 4 != 0 {
             Some(NodePersistRef::deserialize(reader)?)
         } else {
             None
         };
+
         Ok(NodePersist {
             version_id,
             version_ref,
@@ -133,20 +120,3 @@ impl CustomSerialize for NodePersist {
         })
     }
 }
-
-// use std::io::Cursor;
-
-// fn test() -> std::io::Result<()> {
-//     let node = NodePersist {
-//         // ... initialize fields ...
-//     };
-
-//     let mut buffer = Vec::new();
-//     node.serialize(&mut buffer)?;
-
-//     // Deserialize
-//     let mut cursor = Cursor::new(buffer);
-//     let deserialized_node = NodePersist::deserialize(&mut cursor)?;
-
-//     Ok(())
-// }

@@ -3,35 +3,34 @@ use super::types::{
     HNSWLevel, NeighbourRef, Node, NodeFileRef, NodeProp, NodeRef, VectorId, VectorQt, VectorStore,
     VersionId,
 };
-use serde::{Deserialize, Serialize};
-use serde_cbor;
+//use serde::{Deserialize, Serialize};
+//use serde_cbor;
+use crate::models::serializer::*;
 use std::fs::{File, OpenOptions};
 use std::hash::{Hash, Hasher};
 use std::io::{Seek, SeekFrom, Write};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
-
 //start
 // persist structures
 pub type NodePersistRef = (u32, u32); // (file_number, offset)
 
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy)]
 pub struct NeighbourPersist {
     pub node: NodePersistRef,
     pub cosine_similarity: f32,
 }
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy)]
 pub struct VersionRef {
     pub versions: [NodePersistRef; 4],
     pub next: NodePersistRef,
 }
-#[derive(Serialize, Deserialize)]
 pub struct NodePersist {
     pub version_id: VersionId,
     pub version_ref: Option<VersionRef>,
     pub prop_location: NodePersistRef,
     pub hnsw_level: HNSWLevel,
-    pub neighbors: [NeighbourPersist; 20], // Bounded array of size 20
+    pub neighbors: [NeighbourPersist; 10], // Bounded array of size 10
     pub parent: Option<NodePersistRef>,
     pub child: Option<NodePersistRef>,
 }
@@ -49,8 +48,8 @@ impl NodePersist {
         let mut fixed_neighbors = [NeighbourPersist {
             node: (0, 0),
             cosine_similarity: 0.0,
-        }; 20];
-        for (index, neighbor) in neighbors.iter().enumerate().take(20) {
+        }; 10];
+        for (index, neighbor) in neighbors.iter().enumerate().take(10) {
             fixed_neighbors[index] = neighbor.clone();
         }
 
@@ -82,8 +81,8 @@ pub fn persist_node_update_loc(
     let mut fixed_neighbors = [NeighbourPersist {
         node: (0, 0),
         cosine_similarity: 0.0,
-    }; 20];
-    for (index, neighbor) in neighbors_lock.iter().enumerate().take(20) {
+    }; 10];
+    for (index, neighbor) in neighbors_lock.iter().enumerate().take(10) {
         fixed_neighbors[index] = match neighbor {
             NeighbourRef::Ready {
                 node: nodex,
@@ -241,17 +240,18 @@ pub fn write_prop_to_file(prop: &NodeProp, mut file: &File) -> (u32, u32) {
 // }
 
 pub fn write_node_to_file(node: &mut NodePersist, mut file: &File) -> (u32, u32) {
-    let mut node_bytes = Vec::new();
-    let result = serde_cbor::to_vec(&node);
-    if let Err(err) = result {
-        panic!("Failed to CBOR encode NodePersist: {}", err);
-    }
-    node_bytes.extend_from_slice(result.unwrap().as_ref());
+    // Serialize
+    let mut buffer = Vec::new();
 
-    file.write_all(&node_bytes)
-        .expect("Failed to write to file");
-    let offset = file.metadata().unwrap().len() - node_bytes.len() as u64;
-    (offset as u32, node_bytes.len() as u32)
+    let result = node.serialize(&mut buffer);
+    if let Err(err) = result {
+        panic!("Failed encode NodePersist: {}", err);
+    }
+    println!("Serialized size: {} bytes", buffer.len());
+
+    file.write_all(&buffer).expect("Failed to write to file");
+    let offset = file.metadata().unwrap().len() - buffer.len() as u64;
+    (offset as u32, buffer.len() as u32)
 }
 
 pub fn write_node_to_file_at_offset(
@@ -259,20 +259,21 @@ pub fn write_node_to_file_at_offset(
     mut file: &File,
     offset: u64,
 ) -> (u32, u32) {
-    let mut node_bytes = Vec::new();
-    let result = serde_cbor::to_vec(&node);
+    // Serialize
+    let mut buffer = Vec::new();
+
+    let result = node.serialize(&mut buffer);
     if let Err(err) = result {
-        panic!("Failed to CBOR encode NodePersist: {}", err);
+        panic!("Failed encode NodePersist: {}", err);
     }
-    node_bytes.extend_from_slice(result.unwrap().as_ref());
+    println!("Serialized size: {} bytes", buffer.len());
 
     // Seek to the specified offset before writing
     file.seek(SeekFrom::Start(offset as u64))
         .expect("Failed to seek in file");
 
-    file.write_all(&node_bytes)
-        .expect("Failed to write to file");
-    let written_bytes = node_bytes.len() as u32;
+    file.write_all(&buffer).expect("Failed to write to file");
+    let written_bytes = buffer.len() as u32;
     (offset as u32, written_bytes)
 }
 
