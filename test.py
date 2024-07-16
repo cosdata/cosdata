@@ -96,7 +96,7 @@ if __name__ == "__main__":
     dimensions = 1024
     max_val = 1.0
     min_val = -1.0
-    rows = 10
+    rows = 100
     perturbation_degree = 0.25  # Degree of perturbation
 
     create_response = create_db(vector_db_name, dimensions, max_val, min_val)

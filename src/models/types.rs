@@ -163,12 +163,12 @@ impl std::fmt::Display for Node {
                 _ => None,
             })
             .collect::<Vec<VectorId>>();
-
+        let location = self.location.read().unwrap();
         // Write data using write! or formatting options
         write!(
             f,
-            " parent: {:?}, child: {:?}, neighbors: {:?}",
-            parent_id, child_id, neighbor_ids
+            " parent: {:?}, child: {:?}, neighbors: {:?}, location: {:?}",
+            parent_id, child_id, neighbor_ids, location
         )?;
 
         write!(f, " }}")
@@ -243,13 +243,11 @@ impl VectorTreeNode {
 pub type SizeBytes = u32;
 
 // needed to flatten and get uniques
-pub type ExecQueueUpdateNeighbors = Arc<DashMap<(HNSWLevel, VectorId), (NodeRef, SizeBytes)>>;
-pub type ExecQueueInsertNodes = Vec<NodeRef>;
+pub type ExecQueueUpdate = Arc<DashMap<(HNSWLevel, VectorId), (NodeRef, SizeBytes)>>;
 
 #[derive(Debug, Clone)]
 pub struct VectorStore {
-    pub exec_queue_neighbors: ExecQueueUpdateNeighbors,
-    pub exec_queue_nodes: ExecQueueInsertNodes,
+    pub exec_queue_nodes: ExecQueueUpdate,
     pub max_cache_level: u8,
     pub database_name: String,
     pub root_vec: NodeRef,
@@ -298,24 +296,3 @@ pub fn get_app_env() -> Result<Arc<AppEnv>, WaCustomError> {
         })
         .clone()
 }
-
-// impl PartialEq for VectorId {
-//     fn eq(&self, other: &Self) -> bool {
-//         match (self, other) {
-//             (VectorId::Str(s1), VectorId::Str(s2)) => s1 == s2,
-//             (VectorId::Int(i1), VectorId::Int(i2)) => i1 == i2,
-//             _ => false,
-//         }
-//     }
-// }
-
-// impl Eq for VectorId {}
-
-// impl Hash for VectorId {
-//     fn hash<H: Hasher>(&self, state: &mut H) {
-//         match self {
-//             VectorId::Str(s) => s.hash(state),
-//             VectorId::Int(i) => i.hash(state),
-//         }
-//     }
-// }

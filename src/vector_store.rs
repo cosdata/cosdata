@@ -13,6 +13,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
+use std::sync::RwLock;
 use std::sync::{Arc, Mutex};
 
 pub fn vector_fetch(
@@ -161,79 +162,88 @@ pub fn insert_embedding(
 
 pub fn queue_node_prop_exec(
     prop_file: Arc<File>,
-    exec_queue_update_neighbors: ExecQueueUpdateNeighbors,
-    exec_queue_nodes: &mut ExecQueueInsertNodes,
+    exec_queue_update: ExecQueueUpdate,
     node: NodeRef,
     hnsw_level: HNSWLevel,
 ) -> Result<(), WaCustomError> {
     let prop_location = write_prop_to_file(&node.prop, &prop_file);
     node.set_prop_location(prop_location);
-    exec_queue_nodes.push((node.clone()));
+
+    // TODO# calculate with specialized serialization formula
+    let size = 128;
+    let mut offset = 0;
+
+    exec_queue_update.insert((hnsw_level, node.prop.id.clone()), (node.clone(), offset));
+    offset = offset + size;
+    node.set_location((offset, size)); //preemptively setting, important
 
     let _ = node.neighbors.read().unwrap().iter().map(|nbr| match nbr {
         NeighbourRef::Ready {
             node: nbrx,
             cosine_similarity: _,
         } => {
-            // TODO# calculate with specialized serialization formula
-            let result = serde_cbor::to_vec(&nbrx);
-            let size = result.unwrap().len();
-
-            exec_queue_update_neighbors.insert(
-                (hnsw_level, nbrx.prop.id.clone()),
-                (nbrx.clone(), size as u32),
-            );
+            if let Some(mut entry) = exec_queue_update.get_mut(&(hnsw_level, nbrx.prop.id.clone()))
+            {
+                let loc = entry.1;
+                *entry.value_mut() = (nbrx.clone(), loc);
+            } else {
+                exec_queue_update
+                    .insert((hnsw_level, nbrx.prop.id.clone()), (nbrx.clone(), offset));
+                offset = offset + size;
+                println!(" map length {:?}", exec_queue_update.len());
+                nbrx.set_location((offset, size)); //preemptively setting, important
+            }
         }
         NeighbourRef::Pending(_) => todo!(),
     });
     Ok(())
 }
 
-pub fn finalize_transaction(
-    vec_store: Arc<VectorStore>,
-    exec_queue_update_neighbors: ExecQueueUpdateNeighbors,
-    exec_queue_nodes: &mut ExecQueueInsertNodes,
-    hnsw_level: HNSWLevel,
-) {
-    // Calculate the total sum of SizeBytes
-    let total_size_bytes: SizeBytes = exec_queue_update_neighbors
-        .iter()
-        .map(|entry| entry.value().1) // Extract the SizeBytes
-        .sum();
-    let mut delta_offset: u32 = 0;
-
-    for node in exec_queue_nodes.clone() {
-        // TODO# calculate with specialized serialization formula
-        let result = serde_cbor::to_vec(&node);
-        let size = result.unwrap().len();
-        delta_offset += size as u32;
-
-        let new_offset = total_size_bytes + delta_offset;
-        node.set_location((new_offset, size as u32));
-    }
-
-    for item in exec_queue_update_neighbors.iter() {
-        let nbr = item.value().0.clone();
-        match persist_node_update_loc(vec_store.wal_file.clone(), nbr, hnsw_level as u8) {
-            Ok(_) => (),
-            Err(e) => {
-                eprintln!("Failed node persist(nbr1): {}", e);
-                return;
-            }
-        };
-    }
-
-    for node in exec_queue_nodes {
-        match persist_node_update_loc(vec_store.wal_file.clone(), node.clone(), hnsw_level as u8) {
-            Ok(_) => (),
-            Err(e) => {
-                eprintln!("Failed node persist(nbr1): {}", e);
-                return;
-            }
-        };
-    }
+pub fn link_prev_version(prev_loc: Option<(u32, u32)>, offset: u32) {
+    // todo , needs to happen in file persist
 }
 
+pub fn auto_commit_transaction(
+    vec_store: Arc<VectorStore>,
+    exec_queue_update: ExecQueueUpdate,
+    // exec_queue_nodes: &mut ExecQueueInsertNodes,
+) -> Result<(), WaCustomError> {
+    let mut offset = 0;
+    let serialized_size = 128; //todo get the proper "specialized serialization" size
+    for item in exec_queue_update.iter() {
+        let nbr = item.value().0.clone();
+        let level = item.key().0.clone();
+        // let mut location_guard = nbr.location.write().unwrap();
+        // link_prev_version(*location_guard, offset);
+        // offset = offset + serialized_size;
+        // *location_guard = Some((offset, serialized_size));
+
+        let loc = nbr.get_location();
+        link_prev_version(loc, offset);
+        offset = offset + serialized_size;
+        nbr.set_location((offset, serialized_size));
+
+        match persist_node_update_loc(vec_store.wal_file.clone(), nbr.clone(), level as u8) {
+            Ok(_) => (),
+            Err(e) => {
+                eprintln!("Failed node persist(nbr1): {}", e);
+            }
+        };
+    }
+    // {
+    //     let queue = exec_queue_nodes.lock().unwrap();
+    //     for (node, level) in queue.iter() {
+    //         match persist_node_update_loc(vec_store.wal_file.clone(), node.clone(), level.clone()) {
+    //             Ok(_) => (),
+    //             Err(e) => {
+    //                 eprintln!("Failed node persist(nbr1): {}", e);
+    //             }
+    //         };
+    //     }
+    //     return Ok(());
+    // }
+    return Ok(());
+}
 fn insert_node_create_edges(
     vec_store: Arc<VectorStore>,
     fvec: Arc<VectorQt>,
@@ -295,8 +305,7 @@ fn insert_node_create_edges(
 
     match queue_node_prop_exec(
         vec_store.prop_file.clone(),
-        vec_store.exec_queue_neighbors.clone(),
-        &mut vec_store.exec_queue_nodes.clone(),
+        vec_store.exec_queue_nodes.clone(),
         nn,
         cur_level as u8,
     ) {

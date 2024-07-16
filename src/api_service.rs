@@ -40,7 +40,7 @@ pub async fn init_vector_store(
         .collect::<Vec<f32>>();
     let vec_hash = VectorId::Int(-1);
 
-    let exec_queue_neighbors = Arc::new(DashMap::new());
+    let exec_queue_nodes = Arc::new(DashMap::new());
     let vector_list = VectorQt::unsigned_byte(&vec);
     // Note that setting .write(true).append(true) has the same effect
     // as setting only .append(true)
@@ -71,12 +71,13 @@ pub async fn init_vector_store(
             prop_location = write_prop_to_file(&prop, &prop_file);
             nn.set_location(prop_location);
         }
-        match persist_node_update_loc(wal_file.clone(), nn, l) {
+        match persist_node_update_loc(wal_file.clone(), nn.clone(), l) {
             Ok(_) => (),
             Err(e) => {
                 eprintln!("Failed node persist (init): {}", e);
             }
         };
+        println!("sssss: {}", nn.clone());
     }
 
     // ---------------------------
@@ -84,7 +85,6 @@ pub async fn init_vector_store(
     // ---------------------------
     let factor_levels = 10.0;
     let lp = Arc::new(generate_tuples(factor_levels).into_iter().rev().collect());
-    let exec_queue_nodes = vec![];
     // Define the database path
     let path = Path::new("./versions"); // TODO: prefix the customer & database name
 
@@ -106,7 +106,6 @@ pub async fn init_vector_store(
         quant_dim: (size / 32) as usize,
         prop_file,
         wal_file,
-        exec_queue_neighbors,
         exec_queue_nodes,
         version_lmdb: Arc::new(Mutex::new(env)),
     };
@@ -140,7 +139,7 @@ pub async fn run_upload(
     persist: Arc<Mutex<Persist>>,
     vec_store: Arc<VectorStore>,
     vecxx: Vec<(VectorIdValue, Vec<f32>)>,
-) -> Vec<()> {
+) -> () {
     stream::iter(vecxx)
         .map(|(id, vec)| {
             let vec_store = vec_store.clone();
@@ -169,7 +168,14 @@ pub async fn run_upload(
         })
         .buffer_unordered(10)
         .collect::<Vec<_>>()
-        .await
+        .await;
+    match auto_commit_transaction(vec_store.clone(), vec_store.exec_queue_nodes.clone()) {
+        Ok(_) => (),
+        Err(e) => {
+            eprintln!("Failed node persist(nbr1): {}", e);
+        }
+    };
+    ()
 }
 
 pub async fn ann_vector_query(

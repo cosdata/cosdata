@@ -94,6 +94,7 @@ pub fn persist_node_update_loc(
                     cosine_similarity: *cosine_similarity,
                 },
                 None => {
+                    println!(" issue in node location {} ", nodex);
                     return Err(WaCustomError::InvalidLocationNeighborEncountered(
                         "neighbours loop".to_owned(),
                         nodex.prop.id.clone(),
