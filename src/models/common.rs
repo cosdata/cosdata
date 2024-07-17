@@ -340,8 +340,9 @@ pub fn quantize_to_u32_bits(fins: &[f32], resolution: u8) -> Vec<Vec<u32>> {
 #[derive(Debug, Clone)]
 pub enum WaCustomError {
     CreateDatabaseFailed(String),
-    CreateCFFailed(String),
-    CFReadWriteFailed(String),
+    LmdbError(String),
+    SerializationError(String),
+    DeserializationError(String),
     UpsertFailed,
     CFNotFound,
     InvalidParams,
@@ -359,12 +360,16 @@ impl fmt::Display for WaCustomError {
             WaCustomError::CreateDatabaseFailed(msg) => {
                 write!(f, "Failed to create the database: {}", msg)
             }
-            WaCustomError::CreateCFFailed(msg) => {
-                write!(f, "Failed to create the Column family: {}", msg)
+            WaCustomError::LmdbError(msg) => {
+                write!(f, "LMDB error: {}", msg)
             }
-            WaCustomError::CFReadWriteFailed(msg) => {
-                write!(f, "Column family read/write failed: {}", msg)
+            WaCustomError::SerializationError(msg) => {
+                write!(f, "Serialization error: {}", msg)
             }
+            WaCustomError::DeserializationError(msg) => {
+                write!(f, "Deserialization error: {}", msg)
+            }
+
             WaCustomError::UpsertFailed => write!(f, "Failed to upsert vectors"),
             WaCustomError::CFNotFound => write!(f, "ColumnFamily not found"),
             WaCustomError::InvalidParams => write!(f, "Invalid params in request"),

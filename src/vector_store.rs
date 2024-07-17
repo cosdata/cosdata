@@ -1,6 +1,6 @@
 use crate::models::common::*;
 use crate::models::file_persist::*;
-use crate::models::persist::Persist;
+use crate::models::meta_persist::*;
 use crate::models::types::*;
 use bincode;
 use dashmap::DashMap;
@@ -95,7 +95,6 @@ pub fn ann_search(
 }
 
 pub fn insert_embedding(
-    persist: Arc<Mutex<Persist>>,
     vec_store: Arc<VectorStore>,
     vector_emb: VectorEmbedding,
     cur_entry: NodeRef,
@@ -130,7 +129,6 @@ pub fn insert_embedding(
 
     if cur_level <= max_insert_level {
         insert_embedding(
-            persist.clone(),
             vec_store.clone(),
             vector_emb.clone(),
             z_clone[0].clone(),
@@ -148,7 +146,6 @@ pub fn insert_embedding(
         let z_clone: Vec<_> = z.iter().map(|(first, _)| first.clone()).collect();
 
         insert_embedding(
-            persist.clone(),
             vec_store.clone(),
             vector_emb.clone(),
             z_clone[0].clone(),
@@ -213,11 +210,6 @@ pub fn auto_commit_transaction(
     for item in exec_queue_update.iter() {
         let nbr = item.value().0.clone();
         let level = item.key().0.clone();
-        // let mut location_guard = nbr.location.write().unwrap();
-        // link_prev_version(*location_guard, offset);
-        // offset = offset + serialized_size;
-        // *location_guard = Some((offset, serialized_size));
-
         let loc = nbr.get_location();
         link_prev_version(loc, offset);
         offset = offset + serialized_size;
@@ -230,18 +222,11 @@ pub fn auto_commit_transaction(
             }
         };
     }
-    // {
-    //     let queue = exec_queue_nodes.lock().unwrap();
-    //     for (node, level) in queue.iter() {
-    //         match persist_node_update_loc(vec_store.wal_file.clone(), node.clone(), level.clone()) {
-    //             Ok(_) => (),
-    //             Err(e) => {
-    //                 eprintln!("Failed node persist(nbr1): {}", e);
-    //             }
-    //         };
-    //     }
-    //     return Ok(());
-    // }
+    let ver = vec_store.get_current_version().unwrap().unwrap();
+    let new_ver = ver.version + 1;
+    let vec_hash = store_current_version(vec_store.clone(), "main".to_string(), new_ver)
+        .expect("Failed to read current version");
+    vec_store.set_current_version(Some(vec_hash));
     return Ok(());
 }
 fn insert_node_create_edges(

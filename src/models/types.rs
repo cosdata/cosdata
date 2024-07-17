@@ -1,17 +1,15 @@
+use crate::models::common::*;
+use crate::models::versioning::VersionHash;
 use bincode;
 use dashmap::DashMap;
+use http::Version;
 use lmdb::{Database, Environment, Transaction, WriteFlags};
-use rocksdb::{ColumnFamily, Error, Options, DB};
 use serde::{Deserialize, Serialize};
-use std::cell::RefCell;
-use std::collections::HashSet;
 use std::fmt;
 use std::fs::*;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
-use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
-
 pub type HNSWLevel = u8;
 
 pub type NodeRef = Arc<Node>;
@@ -38,7 +36,6 @@ pub type VersionId = u32;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Node {
     pub version_id: VersionId,
-    // pub previous: Option<NodeFileRef>,
     pub prop: Arc<NodeProp>,
     pub location: Arc<RwLock<Option<NodeFileRef>>>,
     pub prop_location: Arc<RwLock<Option<NodeFileRef>>>,
@@ -54,12 +51,7 @@ impl NodeProp {
 }
 
 impl Node {
-    pub fn new(
-        prop: Arc<NodeProp>,
-        loc: Option<NodeFileRef>,
-        //previous: Option<NodeFileRef>,
-        version_id: VersionId,
-    ) -> NodeRef {
+    pub fn new(prop: Arc<NodeProp>, loc: Option<NodeFileRef>, version_id: VersionId) -> NodeRef {
         Arc::new(Node {
             prop,
             location: Arc::new(RwLock::new(loc)),
@@ -68,7 +60,6 @@ impl Node {
             parent: Arc::new(RwLock::new(None)),
             child: Arc::new(RwLock::new(None)),
             version_id,
-            //previous,
         })
     }
 
@@ -246,6 +237,11 @@ pub type SizeBytes = u32;
 pub type ExecQueueUpdate = Arc<DashMap<(HNSWLevel, VectorId), (NodeRef, SizeBytes)>>;
 
 #[derive(Debug, Clone)]
+pub struct MetaDb {
+    pub env: Arc<Environment>,
+    pub db: Arc<Database>,
+}
+#[derive(Debug, Clone)]
 pub struct VectorStore {
     pub exec_queue_nodes: ExecQueueUpdate,
     pub max_cache_level: u8,
@@ -255,44 +251,69 @@ pub struct VectorStore {
     pub quant_dim: usize,
     pub prop_file: Arc<File>,
     pub wal_file: Arc<File>,
-    pub version_lmdb: Arc<Mutex<Environment>>,
+    pub version_lmdb: MetaDb,
+    pub current_version: Arc<RwLock<Option<VersionHash>>>,
 }
+impl VectorStore {
+    // Get method
+    pub fn get_current_version(
+        &self,
+    ) -> Result<
+        Option<VersionHash>,
+        std::sync::PoisonError<std::sync::RwLockReadGuard<'_, Option<VersionHash>>>,
+    > {
+        self.current_version.read().map(|guard| guard.clone())
+    }
 
+    // Set method
+    pub fn set_current_version(
+        &self,
+        new_version: Option<VersionHash>,
+    ) -> Result<(), std::sync::PoisonError<std::sync::RwLockWriteGuard<'_, Option<VersionHash>>>>
+    {
+        let mut write_guard = self.current_version.write()?;
+        *write_guard = new_version;
+        Ok(())
+    }
+}
 #[derive(Debug, Clone)]
 pub struct VectorEmbedding {
     pub raw_vec: Arc<VectorQt>,
     pub hash_vec: VectorId,
 }
 
-type VectorStoreMap = DashMap<String, VectorStore>;
+type VectorStoreMap = DashMap<String, Arc<VectorStore>>;
 type UserDataCache = DashMap<String, (String, i32, i32, std::time::SystemTime, Vec<String>)>;
 
 // Define the AppEnv struct
 pub struct AppEnv {
     pub user_data_cache: UserDataCache,
     pub vector_store_map: VectorStoreMap,
-    pub persist: Arc<Mutex<Persist>>,
+    pub persist: Arc<Environment>,
 }
 
-use super::common::mag_square_u8;
-use super::common::quantize_to_u32_bits;
-use super::common::simp_quant;
-use super::{common::WaCustomError, persist::Persist};
 static AIN_ENV: OnceLock<Result<Arc<AppEnv>, WaCustomError>> = OnceLock::new();
 
 pub fn get_app_env() -> Result<Arc<AppEnv>, WaCustomError> {
     AIN_ENV
         .get_or_init(|| {
-            let path = "./xdb/"; // Change this to your desired path
-            let result = match Persist::new(path) {
-                Ok(value) => Ok(Arc::new(AppEnv {
-                    user_data_cache: DashMap::new(),
-                    vector_store_map: DashMap::new(),
-                    persist: Arc::new(Mutex::new(value)),
-                })),
-                Err(e) => Err(WaCustomError::CreateDatabaseFailed(e.to_string())),
-            };
-            result
+            let path = Path::new("./_mdb"); // TODO: prefix the customer & database name
+
+            // Ensure the directory exists
+            create_dir_all(&path)
+                .map_err(|e| WaCustomError::CreateDatabaseFailed(e.to_string()))?;
+            // Initialize the environment
+            let env = Environment::new()
+                .set_max_dbs(1)
+                .set_map_size(10485760) // Set the maximum size of the database to 10MB
+                .open(&path)
+                .map_err(|e| WaCustomError::CreateDatabaseFailed(e.to_string()))?;
+
+            Ok(Arc::new(AppEnv {
+                user_data_cache: DashMap::new(),
+                vector_store_map: DashMap::new(),
+                persist: Arc::new(env),
+            }))
         })
         .clone()
 }

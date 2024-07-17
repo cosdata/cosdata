@@ -81,12 +81,7 @@ async fn upsert_vector_db(item: web::Json<UpsertVectors>) -> HttpResponse {
             };
 
             // Call run_upload with the extracted parameters
-            let __result = run_upload(
-                ain_env.persist.clone(),
-                vec_store.clone().into(),
-                convert_vectors(vectors),
-            )
-            .await;
+            let __result = run_upload(vec_store.clone(), convert_vectors(vectors)).await;
 
             let response_data = RPCResponseBody::RespUpsertVectors { insert_stats: None }; //
             let response = HttpResponse::Ok().json(response_data);

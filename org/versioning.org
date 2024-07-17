@@ -85,7 +85,7 @@ jammy (main)
 
 A structure to represent a version hash:
 
-#+BEGIN_SRC rust
+#+BEGIN_SRC rust :tangle yes
 struct VersionHash {
     branch: String,
     version: u64,
@@ -97,7 +97,7 @@ struct VersionHash {
 
 A structure to hold detailed information about a branch:
 
-#+BEGIN_SRC rust
+#+BEGIN_SRC rust :tangle yes
 struct BranchInfo {
     current_hash: String,
     parent_branch: String,
@@ -110,7 +110,7 @@ struct BranchInfo {
 
 The main struct responsible for generating and managing hashes:
 
-#+BEGIN_SRC rust
+#+BEGIN_SRC rust :tangle yes
 use std::collections::HashMap;
 
 struct VersionHasher {
@@ -139,7 +139,7 @@ impl VersionHasher {
 
 The ~generate_hash~ function is the core of the system:
 
-#+BEGIN_SRC rust
+#+BEGIN_SRC rust :tangle yes
 fn generate_hash(&mut self, branch: &str, version: u64, parent_branch: Option<&str>, parent_version: Option<u64>) -> VersionHash {
     let (parent_hash, parent_branch, parent_version) = if let Some(branch_info) = self.branches.get(branch) {
         (

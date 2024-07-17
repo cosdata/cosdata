@@ -1,22 +1,18 @@
-use crate::models::common::mag_square_u8;
 use crate::models::file_persist::*;
-use crate::models::persist::Persist;
+use crate::models::meta_persist::*;
 use crate::models::rpc::VectorIdValue;
+use crate::models::types::*;
 use crate::models::user::{AuthResp, Statistics};
 use crate::models::{self, common::*};
-use crate::models::{persist, types::*};
-use crate::simp_quant;
 use crate::vector_store::{self, *};
 use dashmap::DashMap;
 use futures::stream::{self, StreamExt};
-use lmdb::{Database, Environment, Transaction, WriteFlags};
-use log::info;
+use lmdb::{Database, DatabaseFlags, Environment, Error as LmdbError, Transaction, WriteFlags};
 use rand::Rng;
+use serde::{Deserialize, Serialize};
+use std::borrow::BorrowMut;
 use std::fs::OpenOptions;
-use std::fs::*;
-use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
-
 pub async fn init_vector_store(
     name: String,
     size: usize,
@@ -85,65 +81,55 @@ pub async fn init_vector_store(
     // ---------------------------
     let factor_levels = 10.0;
     let lp = Arc::new(generate_tuples(factor_levels).into_iter().rev().collect());
-    // Define the database path
-    let path = Path::new("./versions"); // TODO: prefix the customer & database name
-
-    // Ensure the directory exists
-    create_dir_all(&path).map_err(|e| WaCustomError::CreateDatabaseFailed(e.to_string()))?;
-    // TODO: make an entry in the rocks meta db
-    // Initialize the environment
-    let env = Environment::new()
-        .set_max_dbs(1)
-        .set_map_size(10485760) // Set the maximum size of the database to 10MB
-        .open(&path)
-        .map_err(|e| WaCustomError::CreateDatabaseFailed(e.to_string()))?;
-
-    let vec_store = VectorStore {
-        max_cache_level,
-        database_name: name.clone(),
-        root_vec: root.unwrap(),
-        levels_prob: lp,
-        quant_dim: (size / 32) as usize,
-        prop_file,
-        wal_file,
-        exec_queue_nodes,
-        version_lmdb: Arc::new(Mutex::new(env)),
-    };
 
     let result = match get_app_env() {
         Ok(ain_env) => {
-            ain_env
-                .vector_store_map
-                .insert(name.clone(), vec_store.clone());
-            let rs = ain_env.persist.lock().unwrap().create_cf_family("main");
-            // create the default CF for main index
-            match rs {
-                Ok(__) => {
-                    println!(
-                        "vector store map: {:?}",
-                        ain_env.vector_store_map.clone().len()
-                    );
+            let denv = ain_env.persist.clone();
+
+            let db_result = denv.create_db(None, DatabaseFlags::empty());
+            match (db_result) {
+                Ok(db) => {
+                    let vec_store = Arc::new(VectorStore {
+                        max_cache_level,
+                        database_name: name.clone(),
+                        root_vec: root.unwrap(),
+                        levels_prob: lp,
+                        quant_dim: (size / 32) as usize,
+                        prop_file,
+                        wal_file,
+                        exec_queue_nodes,
+                        version_lmdb: MetaDb {
+                            env: denv.clone(),
+                            db: Arc::new(db.clone()),
+                        },
+                        current_version: Arc::new(RwLock::new(None)),
+                    });
+                    ain_env
+                        .vector_store_map
+                        .insert(name.clone(), vec_store.clone());
+
+                    let result = store_current_version(vec_store.clone(), "main".to_string(), 0);
+                    let version_hash = result.expect("Failed to get VersionHash");
+                    vec_store.set_current_version(Some(version_hash));
+
                     Ok(())
                 }
-                Err(e) => Err(WaCustomError::CreateCFFailed(e.to_string())),
+                Err(e) => {
+                    eprintln!("Failed node persist(nbr1): {}", e);
+                    Err(WaCustomError::LmdbError(e.to_string()))
+                }
             }
         }
 
-        Err(e) => Err(WaCustomError::CFReadWriteFailed(e.to_string())),
+        Err(e) => Err(WaCustomError::LmdbError(e.to_string())),
     };
-
     return result;
 }
 
-pub async fn run_upload(
-    persist: Arc<Mutex<Persist>>,
-    vec_store: Arc<VectorStore>,
-    vecxx: Vec<(VectorIdValue, Vec<f32>)>,
-) -> () {
+pub async fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<(VectorIdValue, Vec<f32>)>) -> () {
     stream::iter(vecxx)
         .map(|(id, vec)| {
             let vec_store = vec_store.clone();
-            let persist = persist.clone();
             async move {
                 let root = &vec_store.root_vec;
                 let vec_hash = convert_value(id);
@@ -157,7 +143,6 @@ pub async fn run_upload(
 
                 // TODO: handle the error
                 insert_embedding(
-                    persist,
                     vec_store.clone(),
                     vec_emb,
                     root.clone(),
