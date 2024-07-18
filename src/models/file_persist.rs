@@ -12,24 +12,32 @@ use std::io::{Seek, SeekFrom, Write};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 //start
-// persist structures
-pub type NodePersistRef = (u32, u32); // (file_number, offset)
+pub type NodePersistRef = u32; // (offset )
+pub type PropPersistRef = (u32, u32); // (offset , bytes length)
 
 #[derive(Clone, Copy)]
 pub struct NeighbourPersist {
     pub node: NodePersistRef,
     pub cosine_similarity: f32,
 }
-#[derive(Clone, Copy)]
-pub struct VersionRef {
-    pub versions: [NodePersistRef; 4],
-    pub next: NodePersistRef,
+
+#[derive(Clone)]
+pub enum VersionRef {
+    Reference(Box<Versions>),
+    Invalid(u32),
 }
+
+#[derive(Clone)]
+pub struct Versions {
+    pub versions: [NodePersistRef; 4],
+    pub next: VersionRef,
+}
+
 pub struct NodePersist {
-    pub version_id: VersionId,
-    pub version_ref: Option<VersionRef>,
-    pub prop_location: NodePersistRef,
-    pub hnsw_level: HNSWLevel,
+    pub version_id: u32, // Assuming VersionId is a type alias for u32
+    pub prop_location: PropPersistRef,
+    pub hnsw_level: u8, // Assuming HNSWLevel is a type alias for u8
+    pub version_ref: VersionRef,
     pub neighbors: [NeighbourPersist; 10], // Bounded array of size 10
     pub parent: Option<NodePersistRef>,
     pub child: Option<NodePersistRef>,
@@ -37,30 +45,29 @@ pub struct NodePersist {
 
 impl NodePersist {
     pub fn new(
+        version_id: VersionId,
+        prop_location: PropPersistRef,
         hnsw_level: HNSWLevel,
-        location: NodePersistRef,
+        version_ref: VersionRef,
         neighbors: Vec<NeighbourPersist>,
         parent: Option<NodePersistRef>,
         child: Option<NodePersistRef>,
-        version_ref: Option<VersionRef>,
-        version_id: VersionId,
     ) -> NodePersist {
         let mut fixed_neighbors = [NeighbourPersist {
-            node: (0, 0),
+            node: 0,
             cosine_similarity: 0.0,
         }; 10];
         for (index, neighbor) in neighbors.iter().enumerate().take(10) {
-            fixed_neighbors[index] = neighbor.clone();
+            fixed_neighbors[index] = *neighbor;
         }
-
         NodePersist {
+            version_id,
+            prop_location,
             hnsw_level,
+            version_ref,
             neighbors: fixed_neighbors,
             parent,
             child,
-            prop_location: location,
-            version_ref,
-            version_id,
         }
     }
 }
@@ -79,7 +86,7 @@ pub fn persist_node_update_loc(
 
     // Convert neighbors from NodeRef to NodePersistRef
     let mut fixed_neighbors = [NeighbourPersist {
-        node: (0, 0),
+        node: (0),
         cosine_similarity: 0.0,
     }; 10];
     for (index, neighbor) in neighbors_lock.iter().enumerate().take(10) {
@@ -101,9 +108,7 @@ pub fn persist_node_update_loc(
                 }
             },
             NeighbourRef::Pending(x) => {
-                return Err(WaCustomError::PendingNeighborEncountered(tuple_to_string(
-                    *x,
-                )));
+                return Err(WaCustomError::PendingNeighborEncountered(x.to_string()));
             }
         };
     }
@@ -112,25 +117,22 @@ pub fn persist_node_update_loc(
     let parent = node
         .get_parent()
         .and_then(|p| p.get_location())
-        .unwrap_or((0, 0));
-    let child = node
-        .get_child()
-        .and_then(|c| c.get_location())
-        .unwrap_or((0, 0));
+        .unwrap_or(0);
+    let child = node.get_child().and_then(|c| c.get_location()).unwrap_or(0);
 
     let mut nprst = NodePersist {
         hnsw_level,
         neighbors: fixed_neighbors,
         parent: Some(parent),
         child: Some(child),
-        prop_location: node.get_location().unwrap_or((0, 0)),
-        version_ref: None,
+        prop_location: node.get_prop_location().unwrap_or((0, 0)),
+        version_ref: VersionRef::Invalid(0),
         version_id: node.version_id + 1,
     };
 
     let mut location = node.location.write().unwrap();
     if let Some(loc) = *location {
-        let file_loc = write_node_to_file_at_offset(&mut nprst, &wal_file, loc.0.into());
+        let file_loc = write_node_to_file_at_offset(&mut nprst, &wal_file, loc.into());
         *location = Some(file_loc);
     } else {
         let file_loc = write_node_to_file(&mut nprst, &wal_file);
@@ -175,7 +177,7 @@ pub fn load_node_from_node_persist(
         .neighbors
         .iter()
         .filter_map(|nref| {
-            if nref.node != (0, 0) {
+            if nref.node != 0 {
                 Some(map_node_persist_ref_to_node(
                     vec_store.clone(),
                     nref.node,
@@ -239,48 +241,32 @@ pub fn write_prop_to_file(prop: &NodeProp, mut file: &File) -> (u32, u32) {
 //     Ok((offset, data.len()))
 // }
 
-pub fn write_node_to_file(node: &mut NodePersist, mut file: &File) -> (u32, u32) {
+pub fn write_node_to_file(node: &mut NodePersist, mut file: &File) -> u32 {
+    file.seek(SeekFrom::End(0)).expect("Seek failed"); // Explicitly move to the end
+
     // Serialize
-    let mut buffer = Vec::new();
+    let result = node.serialize(&mut file);
 
-    let result = node.serialize(&mut buffer);
-    if let Err(err) = result {
-        panic!("Failed encode NodePersist: {}", err);
-    }
-    println!("Serialized size: {} bytes", buffer.len());
-
-    file.write_all(&buffer).expect("Failed to write to file");
-    let offset = file.metadata().unwrap().len() - buffer.len() as u64;
-    (offset as u32, buffer.len() as u32)
+    let offset = result.expect("Failed to serialize NodePersist & write to file");
+    offset as u32
 }
 
-pub fn write_node_to_file_at_offset(
-    node: &mut NodePersist,
-    mut file: &File,
-    offset: u64,
-) -> (u32, u32) {
-    // Serialize
-    let mut buffer = Vec::new();
-
-    let result = node.serialize(&mut buffer);
-    if let Err(err) = result {
-        panic!("Failed encode NodePersist: {}", err);
-    }
-    println!("Serialized size: {} bytes", buffer.len());
-
+pub fn write_node_to_file_at_offset(node: &mut NodePersist, mut file: &File, offset: u64) -> u32 {
     // Seek to the specified offset before writing
-    file.seek(SeekFrom::Start(offset as u64))
+    file.seek(SeekFrom::Start(offset))
         .expect("Failed to seek in file");
 
-    file.write_all(&buffer).expect("Failed to write to file");
-    let written_bytes = buffer.len() as u32;
-    (offset as u32, written_bytes)
+    // Serialize
+    let result = node.serialize(&mut file);
+
+    let offset = result.expect("Failed to serialize NodePersist & write to file");
+    offset as u32
 }
 
 pub fn load_vector_id_lsmdb(level: HNSWLevel, vector_id: VectorId) -> Option<NodeRef> {
     return None;
 }
 
-pub fn load_neighbor_persist_ref(level: HNSWLevel, node_file_ref: (u32, u32)) -> Option<NodeRef> {
+pub fn load_neighbor_persist_ref(level: HNSWLevel, node_file_ref: u32) -> Option<NodeRef> {
     return None;
 }

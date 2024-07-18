@@ -23,7 +23,8 @@ pub enum NeighbourRef {
     Pending(NodeFileRef),
 }
 
-pub type NodeFileRef = (u32, u32); // (file_number, offset)
+pub type NodeFileRef = u32; // (offset)
+pub type PropFileRef = (u32, u32); // (offset)
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeProp {
@@ -38,7 +39,7 @@ pub struct Node {
     pub version_id: VersionId,
     pub prop: Arc<NodeProp>,
     pub location: Arc<RwLock<Option<NodeFileRef>>>,
-    pub prop_location: Arc<RwLock<Option<NodeFileRef>>>,
+    pub prop_location: Arc<RwLock<Option<PropFileRef>>>,
     pub neighbors: Arc<RwLock<Vec<NeighbourRef>>>,
     pub parent: Arc<RwLock<Option<NodeRef>>>,
     pub child: Arc<RwLock<Option<NodeRef>>>,
@@ -51,11 +52,16 @@ impl NodeProp {
 }
 
 impl Node {
-    pub fn new(prop: Arc<NodeProp>, loc: Option<NodeFileRef>, version_id: VersionId) -> NodeRef {
+    pub fn new(
+        prop: Arc<NodeProp>,
+        loc: Option<NodeFileRef>,
+        prop_loc: Option<PropFileRef>,
+        version_id: VersionId,
+    ) -> NodeRef {
         Arc::new(Node {
             prop,
             location: Arc::new(RwLock::new(loc)),
-            prop_location: Arc::new(RwLock::new(loc)),
+            prop_location: Arc::new(RwLock::new(prop_loc)),
             neighbors: Arc::new(RwLock::new(Vec::new())),
             parent: Arc::new(RwLock::new(None)),
             child: Arc::new(RwLock::new(None)),
@@ -116,12 +122,12 @@ impl Node {
         *location_read
     }
 
-    pub fn set_prop_location(&self, new_location: NodeFileRef) {
+    pub fn set_prop_location(&self, new_location: PropFileRef) {
         let mut location_write = self.prop_location.write().unwrap();
         *location_write = Some(new_location);
     }
 
-    pub fn get_prop_location(&self) -> Option<NodeFileRef> {
+    pub fn get_prop_location(&self) -> Option<PropFileRef> {
         let location_read = self.prop_location.read().unwrap();
         *location_read
     }

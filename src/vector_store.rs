@@ -12,6 +12,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::hash::{Hash, Hasher};
+use std::io::{Seek, SeekFrom, Write};
 use std::ops::Deref;
 use std::sync::RwLock;
 use std::sync::{Arc, Mutex};
@@ -158,6 +159,7 @@ pub fn insert_embedding(
 }
 
 pub fn queue_node_prop_exec(
+    wal_file: Arc<File>,
     prop_file: Arc<File>,
     exec_queue_update: ExecQueueUpdate,
     node: NodeRef,
@@ -167,12 +169,15 @@ pub fn queue_node_prop_exec(
     node.set_prop_location(prop_location);
 
     // calculated with custom serialization
-    let size = 150;
-    let mut offset = 0;
+    let size = 150; //Todo: need to be adjusted based on Optional fields in NodePersist
+    let mut offset = wal_file
+        .as_ref()
+        .seek(SeekFrom::End(0))
+        .expect("Seek failed") as u32; // Explicitly move to the end
 
     exec_queue_update.insert((hnsw_level, node.prop.id.clone()), (node.clone(), offset));
     offset = offset + size;
-    node.set_location((offset, size)); //preemptively setting, important
+    node.set_location(offset); //preemptively setting, important
 
     let _ = node.neighbors.read().unwrap().iter().map(|nbr| match nbr {
         NeighbourRef::Ready {
@@ -182,13 +187,13 @@ pub fn queue_node_prop_exec(
             if let Some(mut entry) = exec_queue_update.get_mut(&(hnsw_level, nbrx.prop.id.clone()))
             {
                 let loc = entry.1;
-                *entry.value_mut() = (nbrx.clone(), loc);
+                *entry.value_mut() = (nbrx.clone(), loc); // updated neighbor mutated with old location
             } else {
                 exec_queue_update
                     .insert((hnsw_level, nbrx.prop.id.clone()), (nbrx.clone(), offset));
                 offset = offset + size;
                 println!(" map length {:?}", exec_queue_update.len());
-                nbrx.set_location((offset, size)); //preemptively setting, important
+                nbrx.set_location(offset); //preemptively setting, important
             }
         }
         NeighbourRef::Pending(_) => todo!(),
@@ -196,7 +201,7 @@ pub fn queue_node_prop_exec(
     Ok(())
 }
 
-pub fn link_prev_version(prev_loc: Option<(u32, u32)>, offset: u32) {
+pub fn link_prev_version(prev_loc: Option<u32>, offset: u32) {
     // todo , needs to happen in file persist
 }
 
@@ -205,15 +210,16 @@ pub fn auto_commit_transaction(
     exec_queue_update: ExecQueueUpdate,
     // exec_queue_nodes: &mut ExecQueueInsertNodes,
 ) -> Result<(), WaCustomError> {
-    let mut offset = 0;
-    let serialized_size = 150; //specialized serialization
+    // let mut offset = 0;
+    // let serialized_size = 150; //specialized serialization
     for item in exec_queue_update.iter() {
         let nbr = item.value().0.clone();
         let level = item.key().0.clone();
         let loc = nbr.get_location();
+        let offset = item.value().1;
         link_prev_version(loc, offset);
-        offset = offset + serialized_size;
-        nbr.set_location((offset, serialized_size));
+        // offset = offset + serialized_size;
+        // nbr.set_location((offset, serialized_size));
 
         match persist_node_update_loc(vec_store.wal_file.clone(), nbr.clone(), level as u8) {
             Ok(_) => (),
@@ -229,6 +235,7 @@ pub fn auto_commit_transaction(
     vec_store.set_current_version(Some(vec_hash));
     return Ok(());
 }
+
 fn insert_node_create_edges(
     vec_store: Arc<VectorStore>,
     fvec: Arc<VectorQt>,
@@ -236,10 +243,10 @@ fn insert_node_create_edges(
     nbs: Vec<(NodeRef, f32)>,
     cur_level: i8,
 ) {
-    println!("xxx id:{} nei-len:{}", hs, nbs.len());
+    //println!("xxx id:{} nei-len:{}", hs, nbs.len());
     let nd_p = NodeProp::new(hs.clone(), fvec.clone());
 
-    let nn = Node::new(nd_p.clone(), None, 0);
+    let nn = Node::new(nd_p.clone(), None, None, 0);
 
     nn.add_ready_neighbors(nbs.clone());
 
@@ -273,7 +280,7 @@ fn insert_node_create_edges(
         neighbor_list.retain(|(node, _)| seen.insert(Arc::as_ptr(node) as *const _));
         neighbor_list.truncate(20);
         // Update nbr1's neighbors
-        println!("zzz id:{} nei-len:{:?}", nbr1.prop.id, neighbor_list.len());
+        //println!("zzz id:{} nei-len:{:?}", nbr1.prop.id, neighbor_list.len());
 
         {
             let mut locked_neighbors = nbr1.neighbors.write().unwrap();
@@ -289,6 +296,7 @@ fn insert_node_create_edges(
     }
 
     match queue_node_prop_exec(
+        vec_store.wal_file.clone(),
         vec_store.prop_file.clone(),
         vec_store.exec_queue_nodes.clone(),
         nn,

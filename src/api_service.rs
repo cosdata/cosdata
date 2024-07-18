@@ -55,17 +55,15 @@ pub async fn init_vector_store(
     );
 
     let mut root: Option<NodeRef> = None;
-    let mut prop_location: NodeFileRef = (0, 0);
 
     for l in 0..=max_cache_level {
         let prop = NodeProp::new(vec_hash.clone(), vector_list.clone().into());
 
-        let nn = Node::new(prop.clone(), None, 0);
+        let nn = Node::new(prop.clone(), None, None, 0);
 
         if l == 0 {
             root = Some(nn.clone());
-            prop_location = write_prop_to_file(&prop, &prop_file);
-            nn.set_location(prop_location);
+            nn.set_prop_location(write_prop_to_file(&prop, &prop_file));
         }
         match persist_node_update_loc(wal_file.clone(), nn.clone(), l) {
             Ok(_) => (),
