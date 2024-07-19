@@ -5,17 +5,22 @@ use actix_web::{
     HttpResponse, HttpServer,
 };
 use actix_web_httpauth::{extractors::bearer::BearerAuth, middleware::HttpAuthentication};
+use dashmap::DashMap;
+use lmdb::Environment;
 use log::debug;
 use rayon::result;
 use rustls::{pki_types::PrivateKeyDer, ServerConfig};
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use serde::{Deserialize, Serialize};
+use std::fs::create_dir_all;
+use std::path::Path;
+use std::sync::Arc;
 use std::{fs::File, io::BufReader};
 
 use crate::models::common::convert_option_vec;
 use crate::models::rpc::*;
 use crate::{api_service::*, models::types::*};
-use crate::{cat_maybes, convert_vectors};
+use crate::{cat_maybes, convert_vectors, WaCustomError};
 use std::env;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -37,7 +42,7 @@ async fn authenticate(item: web::Json<Authenticate>) -> HttpResponse {
     HttpResponse::Ok().json(item.0) // <- send response
 }
 
-async fn create_vector_db(item: web::Json<CreateVectorDb>) -> HttpResponse {
+async fn create_vector_db(env: web::Data<AppEnv>, item: web::Json<CreateVectorDb>) -> HttpResponse {
     println!("here {}", 0);
     // Extract values from the JSON request
     let vector_db_name = &item.vector_db_name;
@@ -56,7 +61,8 @@ async fn create_vector_db(item: web::Json<CreateVectorDb>) -> HttpResponse {
     let max_cache_level = 5;
 
     // Call init_vector_store using web::block
-    let result = init_vector_store(name, size, lower_bound, upper_bound, max_cache_level).await;
+    let result =
+        init_vector_store(&env, name, size, lower_bound, upper_bound, max_cache_level).await;
 
     match result {
         Ok(__) => HttpResponse::Ok().json(RPCResponseBody::RespCreateVectorDb { result: true }),
@@ -64,116 +70,93 @@ async fn create_vector_db(item: web::Json<CreateVectorDb>) -> HttpResponse {
     }
 }
 
-async fn upsert_vector_db(item: web::Json<UpsertVectors>) -> HttpResponse {
+async fn upsert_vector_db(env: web::Data<AppEnv>, item: web::Json<UpsertVectors>) -> HttpResponse {
     // Extract values from the JSON request
     let vector_db_name = &item.vector_db_name;
     let vectors = item.vectors.clone(); // Clone the vector for async usage
 
-    let result = match get_app_env() {
-        Ok(ain_env) => {
-            // Try to get the vector store from the environment
-            let vec_store = match ain_env.vector_store_map.get(vector_db_name) {
-                Some(store) => store,
-                None => {
-                    // Vector store not found, return an error response
-                    return HttpResponse::InternalServerError().body("Vector store not found");
-                }
-            };
-
-            // Call run_upload with the extracted parameters
-            let __result = run_upload(vec_store.clone(), convert_vectors(vectors)).await;
-
-            let response_data = RPCResponseBody::RespUpsertVectors { insert_stats: None }; //
-            let response = HttpResponse::Ok().json(response_data);
-            response
+    // Try to get the vector store from the environment
+    let vec_store = match env.vector_store_map.get(vector_db_name) {
+        Some(store) => store,
+        None => {
+            // Vector store not found, return an error response
+            return HttpResponse::InternalServerError().body("Vector store not found");
         }
-        Err(e) => return HttpResponse::InternalServerError().body("Vector store not found"),
     };
 
-    result
+    // Call run_upload with the extracted parameters
+    let __result = run_upload(vec_store.clone(), convert_vectors(vectors)).await;
+
+    let response_data = RPCResponseBody::RespUpsertVectors { insert_stats: None }; //
+    HttpResponse::Ok().json(response_data)
 }
 
-async fn search_vector_db(item: web::Json<VectorANN>) -> HttpResponse {
+async fn search_vector_db(env: web::Data<AppEnv>, item: web::Json<VectorANN>) -> HttpResponse {
     // println!("model: {:?}", &item);
     let vector_db_name = &item.vector_db_name;
     let vector = item.vector.clone(); // Clone the vector for async usage
 
-    let result = match get_app_env() {
-        Ok(ain_env) => {
-            // Try to get the vector store from the environment
-            let vec_store = match ain_env.vector_store_map.get(vector_db_name) {
-                Some(store) => store,
-                None => {
-                    // Vector store not found, return an error response
-                    return HttpResponse::InternalServerError().body("Vector store not found");
-                }
-            };
-
-            let result = match ann_vector_query(vec_store.clone().into(), vector).await {
-                Ok(result) => result,
-                Err(err) => return HttpResponse::InternalServerError().body(err.to_string()),
-            };
-
-            let response_data = RPCResponseBody::RespVectorKNN {
-                knn: convert_option_vec(result),
-            }; //
-            let response = HttpResponse::Ok().json(response_data);
-
-            response
+    // Try to get the vector store from the environment
+    let vec_store = match env.vector_store_map.get(vector_db_name) {
+        Some(store) => store,
+        None => {
+            // Vector store not found, return an error response
+            return HttpResponse::InternalServerError().body("Vector store not found");
         }
-        Err(e) => return HttpResponse::InternalServerError().body("Vector store not found"),
     };
-    result
+
+    let result = match ann_vector_query(vec_store.clone().into(), vector).await {
+        Ok(result) => result,
+        Err(err) => return HttpResponse::InternalServerError().body(err.to_string()),
+    };
+
+    let response_data = RPCResponseBody::RespVectorKNN {
+        knn: convert_option_vec(result),
+    }; //
+    HttpResponse::Ok().json(response_data)
 }
 
-async fn fetch_vector_db(item: web::Json<FetchNeighbors>) -> HttpResponse {
+async fn fetch_vector_db(env: web::Data<AppEnv>, item: web::Json<FetchNeighbors>) -> HttpResponse {
     // println!("model: {:?}", &item);
     let vector_db_name = &item.vector_db_name;
     let vector_id = item.vector_id.clone(); // Clone the vector for async usage
 
-    let result = match get_app_env() {
-        Ok(ain_env) => {
-            // Try to get the vector store from the environment
-            let vec_store = match ain_env.vector_store_map.get(vector_db_name) {
-                Some(store) => store,
-                None => {
-                    // Vector store not found, return an error response
-                    return HttpResponse::InternalServerError().body("Vector store not found");
-                }
-            };
-            let fvid = VectorId::from(vector_id);
-
-            let result = fetch_vector_neighbors(vec_store.clone().into(), fvid).await;
-
-            let mut xx: Vec<Option<RPCResponseBody>> = result
-                .iter()
-                .map(|res_item| match res_item {
-                    Some((vect, neig)) => {
-                        let nvid = VectorIdValue::from(vect.clone());
-                        let response_data = RPCResponseBody::RespFetchNeighbors {
-                            neighbors: neig
-                                .iter()
-                                .map(|(vid, x)| (VectorIdValue::from(vid.clone()), x.clone()))
-                                .collect(),
-                            vector: Vector {
-                                id: nvid,
-                                values: vec![],
-                            },
-                        };
-                        return Some(response_data);
-                    }
-                    None => return None,
-                })
-                .collect();
-            // Filter out any None values (optional)
-            xx.retain(|x| x.is_some());
-            let rs: Vec<RPCResponseBody> = xx.into_iter().map(|x| x.unwrap()).collect();
-            let response = HttpResponse::Ok().json(rs);
-            response
+    // Try to get the vector store from the environment
+    let vec_store = match env.vector_store_map.get(vector_db_name) {
+        Some(store) => store,
+        None => {
+            // Vector store not found, return an error response
+            return HttpResponse::InternalServerError().body("Vector store not found");
         }
-        Err(e) => return HttpResponse::InternalServerError().body("Vector store not found"),
     };
-    result
+    let fvid = VectorId::from(vector_id);
+
+    let result = fetch_vector_neighbors(vec_store.clone().into(), fvid).await;
+
+    let mut xx: Vec<Option<RPCResponseBody>> = result
+        .iter()
+        .map(|res_item| match res_item {
+            Some((vect, neig)) => {
+                let nvid = VectorIdValue::from(vect.clone());
+                let response_data = RPCResponseBody::RespFetchNeighbors {
+                    neighbors: neig
+                        .iter()
+                        .map(|(vid, x)| (VectorIdValue::from(vid.clone()), x.clone()))
+                        .collect(),
+                    vector: Vector {
+                        id: nvid,
+                        values: vec![],
+                    },
+                };
+                return Some(response_data);
+            }
+            None => return None,
+        })
+        .collect();
+    // Filter out any None values (optional)
+    xx.retain(|x| x.is_some());
+    let rs: Vec<RPCResponseBody> = xx.into_iter().map(|x| x.unwrap()).collect();
+    HttpResponse::Ok().json(rs)
 }
 
 async fn extract_item(item: web::Json<MyObj>, req: HttpRequest) -> HttpResponse {
@@ -190,15 +173,30 @@ async fn index_manual(body: web::Bytes) -> Result<HttpResponse, Error> {
     Ok(HttpResponse::Ok().json(obj)) // <- send response
 }
 
+type VectorStoreMap = DashMap<String, Arc<VectorStore>>;
+type UserDataCache = DashMap<String, (String, i32, i32, std::time::SystemTime, Vec<String>)>;
+
+// Define the AppEnv struct
+pub struct AppEnv {
+    pub user_data_cache: Arc<UserDataCache>,
+    pub vector_store_map: Arc<VectorStoreMap>,
+    pub persist: Arc<Environment>,
+}
+
 #[actix_web::main]
 pub async fn run_actix_server() -> std::io::Result<()> {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
 
     let config = load_rustls_config();
+    // TODO: proper error handling
+    let env = load_env().unwrap();
+    let user_data_cache = Arc::new(DashMap::new());
+    let vector_store_map = Arc::new(DashMap::new());
+    let persist = Arc::new(env);
 
     log::info!("starting HTTPS server at https://localhost:8443");
 
-    HttpServer::new(|| {
+    HttpServer::new(move || {
         let auth = HttpAuthentication::bearer(validator);
         App::new()
             // enable logger
@@ -208,6 +206,12 @@ pub async fn run_actix_server() -> std::io::Result<()> {
             .wrap(Cors::permissive())
             // register simple handler, handle all methods
             .app_data(web::JsonConfig::default().limit(4 * 1048576))
+            .app_data(web::Data::new(AppEnv {
+                // the clone method used here only clones pointer the actual data inside `Arc`
+                user_data_cache: user_data_cache.clone(),
+                vector_store_map: vector_store_map.clone(),
+                persist: persist.clone(),
+            }))
             // <- 4  mb limit size of the payload (global configuration)
             .service(
                 web::scope("/auth")
@@ -324,4 +328,17 @@ fn old_load_rustls_config() -> rustls::ServerConfig {
     }
 
     config.with_single_cert(cert_chain, keys.remove(0)).unwrap()
+}
+
+fn load_env() -> Result<Environment, WaCustomError> {
+    let path = Path::new("./_mdb"); // TODO: prefix the customer & database name
+
+    // Ensure the directory exists
+    create_dir_all(&path).map_err(|e| WaCustomError::CreateDatabaseFailed(e.to_string()))?;
+    // Initialize the environment
+    Environment::new()
+        .set_max_dbs(1)
+        .set_map_size(10485760) // Set the maximum size of the database to 10MB
+        .open(&path)
+        .map_err(|e| WaCustomError::CreateDatabaseFailed(e.to_string()))
 }
