@@ -9,10 +9,9 @@ use dashmap::DashMap;
 use futures::stream::{self, StreamExt};
 use lmdb::{Database, DatabaseFlags, Environment, Error as LmdbError, Transaction, WriteFlags};
 use rand::Rng;
-use serde::{Deserialize, Serialize};
-use std::borrow::BorrowMut;
 use std::fs::OpenOptions;
 use std::sync::{Arc, Mutex, RwLock};
+
 pub async fn init_vector_store(
     name: String,
     size: usize,
@@ -38,10 +37,12 @@ pub async fn init_vector_store(
 
     let exec_queue_nodes = Arc::new(DashMap::new());
     let vector_list = VectorQt::unsigned_byte(&vec);
+
     // Note that setting .write(true).append(true) has the same effect
     // as setting only .append(true)
     let prop_file = Arc::new(
         OpenOptions::new()
+            .create(true)
             .append(true)
             .open("prop.data")
             .expect("Failed to open file for writing"),
@@ -49,23 +50,31 @@ pub async fn init_vector_store(
 
     let wal_file = Arc::new(
         OpenOptions::new()
+            .create(true)
             .append(true)
             .open("index.0")
             .expect("Failed to open file for writing"),
     );
 
     let mut root: Option<NodeRef> = None;
+    let mut prev: Option<NodeRef> = None;
 
     for l in 0..=max_cache_level {
         let prop = NodeProp::new(vec_hash.clone(), vector_list.clone().into());
 
         let nn = Node::new(prop.clone(), None, None, 0);
 
+        if let Some(ref mut p) = prev {
+            nn.set_parent(p.clone());
+            p.set_child(nn.clone());
+        }
+
+        prev = Some(nn.clone());
         if l == 0 {
             root = Some(nn.clone());
             nn.set_prop_location(write_prop_to_file(&prop, &prop_file));
         }
-        match persist_node_update_loc(wal_file.clone(), nn.clone(), l) {
+        match persist_node_update_loc(wal_file.clone(), nn.clone(), l, true) {
             Ok(_) => (),
             Err(e) => {
                 eprintln!("Failed node persist (init): {}", e);
@@ -85,7 +94,7 @@ pub async fn init_vector_store(
             let denv = ain_env.persist.clone();
 
             let db_result = denv.create_db(None, DatabaseFlags::empty());
-            match (db_result) {
+            match db_result {
                 Ok(db) => {
                     let vec_store = Arc::new(VectorStore {
                         max_cache_level,
@@ -108,7 +117,9 @@ pub async fn init_vector_store(
 
                     let result = store_current_version(vec_store.clone(), "main".to_string(), 0);
                     let version_hash = result.expect("Failed to get VersionHash");
-                    vec_store.set_current_version(Some(version_hash));
+                    vec_store
+                        .set_current_version(Some(version_hash))
+                        .expect("failed to store version");
 
                     Ok(())
                 }
@@ -146,7 +157,8 @@ pub async fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<(VectorIdValue, 
                     root.clone(),
                     vec_store.max_cache_level.try_into().unwrap(),
                     iv.try_into().unwrap(),
-                );
+                )
+                .expect("Failed inserting embedding");
             }
         })
         .buffer_unordered(10)

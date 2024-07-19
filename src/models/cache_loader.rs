@@ -61,3 +61,18 @@ fn load_object_from_file(key: &VectorId) -> Option<NodeRef> {
         VectorId::Int(i) => None, //format!("Object loaded for {}", i),
     }
 }
+
+pub fn load_cache() {
+    use std::fs::OpenOptions;
+
+    let mut file = OpenOptions::new()
+        .read(true)
+        .open("index.0")
+        .expect("failed to open");
+
+    let offset = 0;
+    match read_node_from_file(&mut file, offset) {
+        Ok(_) => println!("Successfully read and printed node from offset {}", offset),
+        Err(e) => println!("Failed to read node: {}", e),
+    }
+}

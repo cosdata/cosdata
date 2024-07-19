@@ -3,36 +3,42 @@ use super::types::{
     HNSWLevel, NeighbourRef, Node, NodeFileRef, NodeProp, NodeRef, VectorId, VectorQt, VectorStore,
     VersionId,
 };
-//use serde::{Deserialize, Serialize};
-//use serde_cbor;
 use crate::models::serializer::*;
 use std::fs::{File, OpenOptions};
-use std::hash::{Hash, Hasher};
 use std::io::{Seek, SeekFrom, Write};
-use std::rc::Rc;
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
-//start
-pub type NodePersistRef = u32; // (offset )
-pub type PropPersistRef = (u32, u32); // (offset , bytes length)
+use std::sync::{Arc, RwLock};
 
-#[derive(Clone, Copy)]
+pub type FileOffset = u32;
+pub type BytesToRead = u32;
+
+#[derive(Debug, Clone)]
+pub enum NodePersistRef {
+    Reference(Box<NodePersist>),
+    DerefPending(FileOffset),
+    Invalid,
+}
+
+pub type PropPersistRef = (FileOffset, BytesToRead);
+
+#[derive(Debug, Clone)]
 pub struct NeighbourPersist {
     pub node: NodePersistRef,
     pub cosine_similarity: f32,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum VersionRef {
     Reference(Box<Versions>),
-    Invalid(u32),
+    Invalid,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Versions {
     pub versions: [NodePersistRef; 4],
     pub next: VersionRef,
 }
 
+#[derive(Debug, Clone)]
 pub struct NodePersist {
     pub version_id: u32, // Assuming VersionId is a type alias for u32
     pub prop_location: PropPersistRef,
@@ -53,13 +59,23 @@ impl NodePersist {
         parent: Option<NodePersistRef>,
         child: Option<NodePersistRef>,
     ) -> NodePersist {
-        let mut fixed_neighbors = [NeighbourPersist {
-            node: 0,
-            cosine_similarity: 0.0,
-        }; 10];
-        for (index, neighbor) in neighbors.iter().enumerate().take(10) {
-            fixed_neighbors[index] = *neighbor;
+        // Create a vector with default values
+        let mut fixed_neighbors = vec![
+            NeighbourPersist {
+                node: NodePersistRef::Invalid,
+                cosine_similarity: 0.0,
+            };
+            10
+        ];
+
+        // Copy over the provided neighbors
+        for (index, neighbor) in neighbors.into_iter().enumerate().take(10) {
+            fixed_neighbors[index] = neighbor;
         }
+
+        // Convert the vector to an array
+        let fixed_neighbors: [NeighbourPersist; 10] = fixed_neighbors.try_into().unwrap();
+
         NodePersist {
             version_id,
             prop_location,
@@ -72,61 +88,126 @@ impl NodePersist {
     }
 }
 
+use std::fmt;
+
+impl fmt::Display for NodePersist {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "NodePersist {{")?;
+        writeln!(f, "    version_id: {},", self.version_id)?;
+        writeln!(f, "    prop_location: {:?},", self.prop_location)?;
+        writeln!(f, "    hnsw_level: {},", self.hnsw_level)?;
+        writeln!(f, "    version_ref: {:?},", self.version_ref)?;
+        writeln!(f, "    neighbors: [")?;
+        for (i, neighbor) in self.neighbors.iter().enumerate() {
+            writeln!(
+                f,
+                "        {}: {{ node: {:?}, cosine_similarity: {} }},",
+                i, neighbor.node, neighbor.cosine_similarity
+            )?;
+        }
+        writeln!(f, "    ],")?;
+        writeln!(f, "    parent: {:?},", self.parent)?;
+        writeln!(f, "    child: {:?}", self.child)?;
+        write!(f, "}}")
+    }
+}
+
+pub fn read_node_from_file(file: &mut File, offset: u32) -> std::io::Result<NodePersist> {
+    // Seek to the specified offset
+    file.seek(SeekFrom::Start(offset as u64))?;
+
+    // Deserialize the NodePersist from the current position
+    let node = NodePersist::deserialize(file, offset)?;
+
+    // Pretty print the node
+    println!("Read NodePersist from offset {}:", offset);
+    println!("{}", node);
+
+    Ok(node)
+}
+// end
 pub fn persist_node_update_loc(
     wal_file: Arc<File>,
     node: NodeRef,
     hnsw_level: HNSWLevel,
+    create_vrefs_flag: bool,
 ) -> Result<(), WaCustomError> {
-    // Lock the Mutex to access the neighbors
     println!(" For node {} ", node);
     let neighbors_lock = node
         .neighbors
         .read()
         .map_err(|_| WaCustomError::MutexPoisoned("convert_node_to_node_persist".to_owned()))?;
 
-    // Convert neighbors from NodeRef to NodePersistRef
-    let mut fixed_neighbors = [NeighbourPersist {
-        node: (0),
-        cosine_similarity: 0.0,
-    }; 10];
-    for (index, neighbor) in neighbors_lock.iter().enumerate().take(10) {
-        fixed_neighbors[index] = match neighbor {
+    // Create a vector to hold neighbors
+    let mut fixed_neighbors = Vec::with_capacity(10);
+
+    for neighbor in neighbors_lock.iter().take(10) {
+        match neighbor {
             NeighbourRef::Ready {
                 node: nodex,
                 cosine_similarity,
-            } => match nodex.get_location() {
-                Some(loca) => NeighbourPersist {
-                    node: loca,
-                    cosine_similarity: *cosine_similarity,
-                },
-                None => {
+            } => {
+                if let Some(loca) = nodex.get_location() {
+                    fixed_neighbors.push(NeighbourPersist {
+                        node: NodePersistRef::DerefPending(loca),
+                        cosine_similarity: *cosine_similarity,
+                    });
+                } else {
                     println!(" issue in node location {} ", nodex);
                     return Err(WaCustomError::InvalidLocationNeighborEncountered(
                         "neighbours loop".to_owned(),
                         nodex.prop.id.clone(),
                     ));
                 }
-            },
+            }
             NeighbourRef::Pending(x) => {
                 return Err(WaCustomError::PendingNeighborEncountered(x.to_string()));
             }
         };
     }
 
+    // Pad the vector with default values if needed
+    while fixed_neighbors.len() < 10 {
+        fixed_neighbors.push(NeighbourPersist {
+            node: NodePersistRef::Invalid,
+            cosine_similarity: 0.0,
+        });
+    }
+
+    // Convert the vector to an array
+    let fixed_neighbors: [NeighbourPersist; 10] = fixed_neighbors.try_into().unwrap();
+
     // Convert parent and child
     let parent = node
         .get_parent()
         .and_then(|p| p.get_location())
-        .unwrap_or(0);
-    let child = node.get_child().and_then(|c| c.get_location()).unwrap_or(0);
+        .map(NodePersistRef::DerefPending);
+    let child = node
+        .get_child()
+        .and_then(|c| c.get_location())
+        .map(NodePersistRef::DerefPending);
+
+    let vref = if create_vrefs_flag {
+        VersionRef::Reference(Box::new(Versions {
+            versions: [
+                NodePersistRef::Invalid,
+                NodePersistRef::Invalid,
+                NodePersistRef::Invalid,
+                NodePersistRef::Invalid,
+            ],
+            next: VersionRef::Invalid,
+        }))
+    } else {
+        VersionRef::Invalid
+    };
 
     let mut nprst = NodePersist {
         hnsw_level,
         neighbors: fixed_neighbors,
-        parent: Some(parent),
-        child: Some(child),
+        parent,
+        child,
         prop_location: node.get_prop_location().unwrap_or((0, 0)),
-        version_ref: VersionRef::Invalid(0),
+        version_ref: vref,
         version_id: node.version_id + 1,
     };
 
@@ -139,87 +220,83 @@ pub fn persist_node_update_loc(
         *location = Some(file_loc);
     }
 
-    //TODO: update the previous node_persist with the new location in its next field
-    // only needs to update the tuple
     Ok(())
 }
 
-// end
+// pub fn map_node_persist_ref_to_node(
+//     vec_store: VectorStore,
+//     node_ref: NodePersistRef,
+//     cosine_similarity: f32,
+//     vec_level: HNSWLevel,
+//     vec_id: VectorId,
+// ) -> NeighbourRef {
+//     // logic to map NodePersistRef to Node
+//     //
+//     match load_neighbor_persist_ref(vec_level, node_ref) {
+//         Some(nodex) => {
+//             return NeighbourRef::Ready {
+//                 node: nodex,
+//                 cosine_similarity,
+//             }
+//         }
+//         None => return NeighbourRef::Pending(node_ref),
+//     };
+// }
 
-pub fn map_node_persist_ref_to_node(
-    vec_store: VectorStore,
-    node_ref: NodePersistRef,
-    cosine_similarity: f32,
-    vec_level: HNSWLevel,
-    vec_id: VectorId,
-) -> NeighbourRef {
-    // logic to map NodePersistRef to Node
-    //
-    match load_neighbor_persist_ref(vec_level, node_ref) {
-        Some(nodex) => {
-            return NeighbourRef::Ready {
-                node: nodex,
-                cosine_similarity,
-            }
-        }
-        None => return NeighbourRef::Pending(node_ref),
-    };
-}
+// pub fn load_node_from_node_persist(
+//     vec_store: VectorStore,
+//     node_persist: NodePersist,
+//     persist_loc: NodeFileRef,
+//     prop: Arc<NodeProp>,
+// ) -> NodeRef {
+//     // Convert neighbors from NodePersistRef to NeighbourRef
+//     let neighbors_result: Vec<NeighbourRef> = node_persist
+//         .neighbors
+//         .iter()
+//         .filter_map(|nref| {
+//             if nref.node != 0 {
+//                 Some(map_node_persist_ref_to_node(
+//                     vec_store.clone(),
+//                     nref.node,
+//                     nref.cosine_similarity,
+//                     node_persist.hnsw_level,
+//                     prop.id.clone(),
+//                 ))
+//             } else {
+//                 None
+//             }
+//         })
+//         .collect();
+//     // Wrap neighbors in Arc<Mutex<Vec<NeighbourRef>>>
+//     let neighbors = Arc::new(RwLock::new(neighbors_result));
 
-pub fn load_node_from_node_persist(
-    vec_store: VectorStore,
-    node_persist: NodePersist,
-    persist_loc: NodeFileRef,
-    prop: Arc<NodeProp>,
-) -> NodeRef {
-    // Convert neighbors from NodePersistRef to NeighbourRef
-    let neighbors_result: Vec<NeighbourRef> = node_persist
-        .neighbors
-        .iter()
-        .filter_map(|nref| {
-            if nref.node != 0 {
-                Some(map_node_persist_ref_to_node(
-                    vec_store.clone(),
-                    nref.node,
-                    nref.cosine_similarity,
-                    node_persist.hnsw_level,
-                    prop.id.clone(),
-                ))
-            } else {
-                None
-            }
-        })
-        .collect();
-    // Wrap neighbors in Arc<Mutex<Vec<NeighbourRef>>>
-    let neighbors = Arc::new(RwLock::new(neighbors_result));
+//     // Convert parent and child
+//     let parent = if let Some(parent_ref) = node_persist.parent {
+//         load_neighbor_persist_ref(node_persist.hnsw_level, node_persist.parent.unwrap())
+//     } else {
+//         None
+//     };
+//     let parent = Arc::new(RwLock::new(parent));
 
-    // Convert parent and child
-    let parent = if let Some(parent_ref) = node_persist.parent {
-        load_neighbor_persist_ref(node_persist.hnsw_level, node_persist.parent.unwrap())
-    } else {
-        None
-    };
-    let parent = Arc::new(RwLock::new(parent));
+//     let child = if let Some(child_ref) = node_persist.child {
+//         load_neighbor_persist_ref(node_persist.hnsw_level, node_persist.child.unwrap())
+//     } else {
+//         None
+//     };
+//     let child = Arc::new(RwLock::new(child));
 
-    let child = if let Some(child_ref) = node_persist.child {
-        load_neighbor_persist_ref(node_persist.hnsw_level, node_persist.child.unwrap())
-    } else {
-        None
-    };
-    let child = Arc::new(RwLock::new(child));
-
-    // Create and return NodeRef
-    Arc::new(Node {
-        prop,
-        location: Arc::new(RwLock::new(Some(persist_loc))),
-        prop_location: Arc::new(RwLock::new(Some(node_persist.prop_location))),
-        neighbors,
-        parent,
-        child,
-        //previous: Some(persist_loc),
-        version_id: node_persist.version_id,
-    })
-}
+//     // Create and return NodeRef
+//     Arc::new(Node {
+//         prop,
+//         location: Arc::new(RwLock::new(Some(persist_loc))),
+//         prop_location: Arc::new(RwLock::new(Some(node_persist.prop_location))),
+//         neighbors,
+//         parent,
+//         child,
+//         //previous: Some(persist_loc),
+//         version_id: node_persist.version_id,
+//     })
+// }
 
 pub fn write_prop_to_file(prop: &NodeProp, mut file: &File) -> (u32, u32) {
     let mut prop_bytes = Vec::new();
@@ -233,13 +310,6 @@ pub fn write_prop_to_file(prop: &NodeProp, mut file: &File) -> (u32, u32) {
     let offset = file.metadata().unwrap().len() - prop_bytes.len() as u64;
     (offset as u32, prop_bytes.len() as u32)
 }
-
-// fn write_to_end_of_file(file_path: &str, data: &[u8]) -> std::io::Result<(u64, usize)> {
-//     let mut file = OpenOptions::new().append(true).open(file_path)?;
-//     let offset = file.seek(SeekFrom::End(0))?;
-//     file.write_all(data)?;
-//     Ok((offset, data.len()))
-// }
 
 pub fn write_node_to_file(node: &mut NodePersist, mut file: &File) -> u32 {
     file.seek(SeekFrom::End(0)).expect("Seek failed"); // Explicitly move to the end

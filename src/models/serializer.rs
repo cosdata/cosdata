@@ -1,7 +1,7 @@
 use crate::models::file_persist::*;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::mem::{size_of, transmute};
+use std::mem::transmute;
 
 pub trait CustomSerialize {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32>;
@@ -13,7 +13,19 @@ pub trait CustomSerialize {
 impl CustomSerialize for NodePersistRef {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
         let offset = writer.stream_position()? as u32;
-        writer.write_all(unsafe { transmute::<_, &[u8; 4]>(self) })?;
+        match self {
+            NodePersistRef::Reference(node) => {
+                let node_offset = node.serialize(writer)?;
+                writer.seek(SeekFrom::Start(offset as u64))?;
+                writer.write_all(unsafe { transmute::<u32, [u8; 4]>(node_offset).as_ref() })?;
+            }
+            NodePersistRef::DerefPending(ptr) => {
+                writer.write_all(unsafe { transmute::<u32, [u8; 4]>(*ptr).as_ref() })?;
+            }
+            NodePersistRef::Invalid => {
+                writer.write_all(unsafe { transmute::<u32, [u8; 4]>(u32::MAX).as_ref() })?;
+            }
+        }
         Ok(offset)
     }
 
@@ -21,7 +33,14 @@ impl CustomSerialize for NodePersistRef {
         reader.seek(SeekFrom::Start(offset as u64))?;
         let mut buf = [0u8; 4];
         reader.read_exact(&mut buf)?;
-        Ok(unsafe { transmute(buf) })
+        let value: u32 = unsafe { transmute(buf) };
+        if value == u32::MAX {
+            Ok(NodePersistRef::Invalid)
+        } else {
+            Ok(NodePersistRef::Reference(Box::new(
+                NodePersist::deserialize(reader, value)?,
+            )))
+        }
     }
 }
 
@@ -40,19 +59,25 @@ impl CustomSerialize for PropPersistRef {
         Ok((prop_offset, prop_length))
     }
 }
-
 impl CustomSerialize for NeighbourPersist {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
         let offset = writer.stream_position()? as u32;
-        writer.write_all(unsafe { transmute::<_, &[u8; 8]>(self) })?;
+        self.node.serialize(writer)?;
+        writer.write_all(unsafe { transmute::<f32, [u8; 4]>(self.cosine_similarity).as_ref() })?;
         Ok(offset)
     }
 
     fn deserialize<R: Read + Seek>(reader: &mut R, offset: u32) -> std::io::Result<Self> {
         reader.seek(SeekFrom::Start(offset as u64))?;
-        let mut buf = [0u8; 8];
+        let node_offset = reader.stream_position()? as u32;
+        let node = NodePersistRef::deserialize(reader, node_offset)?;
+        let mut buf = [0u8; 4];
         reader.read_exact(&mut buf)?;
-        Ok(unsafe { transmute(buf) })
+        let cosine_similarity: f32 = unsafe { transmute(buf) };
+        Ok(NeighbourPersist {
+            node,
+            cosine_similarity,
+        })
     }
 }
 
@@ -67,7 +92,7 @@ impl CustomSerialize for VersionRef {
                 writer.write_u32::<LittleEndian>(versions_offset)?;
                 writer.seek(SeekFrom::End(0))?;
             }
-            VersionRef::Invalid(_) => writer.write_u32::<LittleEndian>(std::u32::MAX)?,
+            VersionRef::Invalid => writer.write_u32::<LittleEndian>(std::u32::MAX)?,
         };
         Ok(offset)
     }
@@ -76,7 +101,7 @@ impl CustomSerialize for VersionRef {
         reader.seek(SeekFrom::Start(offset as u64))?;
         let value = reader.read_u32::<LittleEndian>()?;
         if value == std::u32::MAX {
-            Ok(VersionRef::Invalid(0))
+            Ok(VersionRef::Invalid)
         } else {
             Ok(VersionRef::Reference(Box::new(Versions::deserialize(
                 reader, value,
@@ -84,106 +109,142 @@ impl CustomSerialize for VersionRef {
         }
     }
 }
-
 impl CustomSerialize for Versions {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
         let offset = writer.stream_position()? as u32;
-        writer.write_all(unsafe { transmute::<_, &[u8; 16]>(&self.versions) })?;
-        let next_offset_pos = writer.stream_position()? as u32;
-        writer.write_u32::<LittleEndian>(0)?;
-
-        match &self.next {
-            VersionRef::Reference(versions) => {
-                let next_offset = versions.serialize(writer)?;
-                writer.seek(SeekFrom::Start(next_offset_pos as u64))?;
-                writer.write_u32::<LittleEndian>(next_offset)?;
-                writer.seek(SeekFrom::End(0))?;
-            }
-            VersionRef::Invalid(_) => {
-                writer.seek(SeekFrom::Start(next_offset_pos as u64))?;
-                writer.write_u32::<LittleEndian>(std::u32::MAX)?;
-                writer.seek(SeekFrom::End(0))?;
-            }
+        for version in &self.versions {
+            version.serialize(writer)?;
         }
+        self.next.serialize(writer)?;
         Ok(offset)
     }
 
     fn deserialize<R: Read + Seek>(reader: &mut R, offset: u32) -> std::io::Result<Self> {
         reader.seek(SeekFrom::Start(offset as u64))?;
-        let mut versions = [0; 4];
-        reader.read_exact(unsafe { transmute::<_, &mut [u8; 16]>(&mut versions) })?;
-        let next_offset = reader.read_u32::<LittleEndian>()?;
-        let next = if next_offset == std::u32::MAX {
-            VersionRef::Invalid(0)
-        } else {
-            VersionRef::Reference(Box::new(Versions::deserialize(reader, next_offset)?))
-        };
+
+        // Get all offsets first
+        let offsets = [
+            reader.stream_position()? as u32,
+            reader.stream_position()? as u32,
+            reader.stream_position()? as u32,
+            reader.stream_position()? as u32,
+        ];
+
+        // Now deserialize using the offsets
+        let versions = [
+            NodePersistRef::deserialize(reader, offsets[0])?,
+            NodePersistRef::deserialize(reader, offsets[1])?,
+            NodePersistRef::deserialize(reader, offsets[2])?,
+            NodePersistRef::deserialize(reader, offsets[3])?,
+        ];
+
+        let next_offset = reader.stream_position()? as u32;
+        let next = VersionRef::deserialize(reader, next_offset)?;
+
         Ok(Versions { versions, next })
     }
 }
-
 impl CustomSerialize for NodePersist {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
         let offset = writer.stream_position()? as u32;
+
+        // Serialize version_id
         writer.write_u32::<LittleEndian>(self.version_id)?;
+
+        // Serialize prop_location
         self.prop_location.serialize(writer)?;
+
+        // Serialize hnsw_level
         writer.write_u8(self.hnsw_level)?;
+
+        // Serialize version_ref
         self.version_ref.serialize(writer)?;
 
-        writer.write_all(unsafe { transmute::<_, &[u8; 80]>(&self.neighbors) })?;
+        // Serialize neighbors
+        for neighbor in &self.neighbors {
+            neighbor.serialize(writer)?;
+        }
 
-        let mut flags = 0u8;
+        // Combine parent and child indicators into a single byte
+        let mut indicator: u8 = 0;
         if self.parent.is_some() {
-            flags |= 1;
+            indicator |= 0b01;
         }
         if self.child.is_some() {
-            flags |= 2;
+            indicator |= 0b10;
         }
-        writer.write_u8(flags)?;
+        writer.write_u8(indicator)?;
 
-        if let Some(parent) = self.parent {
+        // Serialize parent if present
+        if let Some(parent) = &self.parent {
             parent.serialize(writer)?;
         }
-        if let Some(child) = self.child {
+
+        // Serialize child if present
+        if let Some(child) = &self.child {
             child.serialize(writer)?;
         }
 
         Ok(offset)
     }
+
     fn deserialize<R: Read + Seek>(reader: &mut R, offset: u32) -> std::io::Result<Self> {
+        println!("Starting deserialization at offset: {}", offset);
         reader.seek(SeekFrom::Start(offset as u64))?;
+
         let version_id = reader.read_u32::<LittleEndian>()?;
+        println!("Read version_id: {}", version_id);
 
         let prop_location_offset = reader.stream_position()? as u32;
+        println!("Prop location offset: {}", prop_location_offset);
         let prop_location = PropPersistRef::deserialize(reader, prop_location_offset)?;
+        println!("Deserialized prop_location");
 
         let hnsw_level = reader.read_u8()?;
+        println!("Read hnsw_level: {}", hnsw_level);
 
         let version_ref_offset = reader.stream_position()? as u32;
+        println!("Version ref offset: {}", version_ref_offset);
         let version_ref = VersionRef::deserialize(reader, version_ref_offset)?;
+        println!("Deserialized version_ref");
 
-        let mut neighbors = [NeighbourPersist {
-            node: 0,
-            cosine_similarity: 0.0,
-        }; 10];
-        reader.read_exact(unsafe { transmute::<_, &mut [u8; 80]>(&mut neighbors) })?;
+        // Deserialize neighbors
+        println!("Starting to deserialize neighbors");
+        let mut neighbors = Vec::with_capacity(10);
+        for i in 0..10 {
+            let neighbor_offset = reader.stream_position()? as u32;
+            println!(
+                "Deserializing neighbor {} at offset: {}",
+                i, neighbor_offset
+            );
+            neighbors.push(NeighbourPersist::deserialize(reader, neighbor_offset)?);
+        }
+        let neighbors: [NeighbourPersist; 10] = neighbors.try_into().unwrap();
+        println!("Finished deserializing neighbors");
 
-        let flags = reader.read_u8()?;
+        // Read the combined indicator byte
+        let indicator = reader.read_u8()?;
+        println!("Read indicator byte: {:08b}", indicator);
 
-        let parent = if flags & 1 != 0 {
+        let parent = if indicator & 0b01 != 0 {
             let parent_offset = reader.stream_position()? as u32;
+            println!("Deserializing parent at offset: {}", parent_offset);
             Some(NodePersistRef::deserialize(reader, parent_offset)?)
         } else {
+            println!("No parent present");
             None
         };
 
-        let child = if flags & 2 != 0 {
+        let child = if indicator & 0b10 != 0 {
             let child_offset = reader.stream_position()? as u32;
+            println!("Deserializing child at offset: {}", child_offset);
             Some(NodePersistRef::deserialize(reader, child_offset)?)
         } else {
+            println!("No child present");
             None
         };
 
+        println!("Deserialization completed successfully");
         Ok(NodePersist {
             version_id,
             prop_location,

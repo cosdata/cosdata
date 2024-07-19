@@ -24,7 +24,7 @@ pub enum NeighbourRef {
 }
 
 pub type NodeFileRef = u32; // (offset)
-pub type PropFileRef = (u32, u32); // (offset)
+pub type PropFileRef = (u32, u32); // (offset, size)
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeProp {
@@ -92,12 +92,12 @@ impl Node {
         neighbors.clone()
     }
 
-    pub fn add_parent(&self, parent: NodeRef) {
+    pub fn set_parent(&self, parent: NodeRef) {
         let mut parent_lock = self.parent.write().unwrap();
         *parent_lock = Some(parent);
     }
 
-    pub fn add_child(&self, child: NodeRef) {
+    pub fn set_child(&self, child: NodeRef) {
         let mut child_lock = self.child.write().unwrap();
         *child_lock = Some(child);
     }
