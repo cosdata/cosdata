@@ -1,14 +1,10 @@
 use actix_cors::Cors;
-use actix_files::Files;
 use actix_web::{
-    dev::ServiceRequest, http::header::ContentType, middleware, web, App, Error, HttpRequest,
-    HttpResponse, HttpServer,
+    dev::ServiceRequest, middleware, web, App, Error, HttpRequest, HttpResponse, HttpServer,
 };
 use actix_web_httpauth::{extractors::bearer::BearerAuth, middleware::HttpAuthentication};
 use dashmap::DashMap;
 use lmdb::Environment;
-use log::debug;
-use rayon::result;
 use rustls::{pki_types::PrivateKeyDer, ServerConfig};
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use serde::{Deserialize, Serialize};
@@ -17,10 +13,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::{fs::File, io::BufReader};
 
-use crate::models::common::convert_option_vec;
-use crate::models::rpc::*;
-use crate::{api_service::*, models::types::*};
-use crate::{cat_maybes, convert_vectors, WaCustomError};
+use crate::models::types::*;
+use crate::{api, WaCustomError};
 use std::env;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -35,128 +29,6 @@ async fn validator(
 ) -> Result<ServiceRequest, (Error, ServiceRequest)> {
     // println!("cred: {credentials:?}");
     Ok(req)
-}
-
-async fn authenticate(item: web::Json<Authenticate>) -> HttpResponse {
-    // println!("model: {:?}", &item);
-    HttpResponse::Ok().json(item.0) // <- send response
-}
-
-async fn create_vector_db(env: web::Data<AppEnv>, item: web::Json<CreateVectorDb>) -> HttpResponse {
-    println!("here {}", 0);
-    // Extract values from the JSON request
-    let vector_db_name = &item.vector_db_name;
-    let dimensions = item.dimensions;
-    let max_val = item.max_val;
-    let min_val = item.min_val;
-
-    // Define the parameters for init_vector_store
-    let name = vector_db_name.clone();
-    let size = dimensions as usize;
-    let lower_bound = min_val;
-    let upper_bound = max_val;
-    // ---------------------------
-    // -- TODO Maximum cache level
-    // ---------------------------
-    let max_cache_level = 5;
-
-    // Call init_vector_store using web::block
-    let result =
-        init_vector_store(&env, name, size, lower_bound, upper_bound, max_cache_level).await;
-
-    match result {
-        Ok(__) => HttpResponse::Ok().json(RPCResponseBody::RespCreateVectorDb { result: true }),
-        Err(e) => HttpResponse::NotAcceptable().body(format!("Error: {}", e)),
-    }
-}
-
-async fn upsert_vector_db(env: web::Data<AppEnv>, item: web::Json<UpsertVectors>) -> HttpResponse {
-    // Extract values from the JSON request
-    let vector_db_name = &item.vector_db_name;
-    let vectors = item.vectors.clone(); // Clone the vector for async usage
-
-    // Try to get the vector store from the environment
-    let vec_store = match env.vector_store_map.get(vector_db_name) {
-        Some(store) => store,
-        None => {
-            // Vector store not found, return an error response
-            return HttpResponse::InternalServerError().body("Vector store not found");
-        }
-    };
-
-    // Call run_upload with the extracted parameters
-    let __result = run_upload(vec_store.clone(), convert_vectors(vectors)).await;
-
-    let response_data = RPCResponseBody::RespUpsertVectors { insert_stats: None }; //
-    HttpResponse::Ok().json(response_data)
-}
-
-async fn search_vector_db(env: web::Data<AppEnv>, item: web::Json<VectorANN>) -> HttpResponse {
-    // println!("model: {:?}", &item);
-    let vector_db_name = &item.vector_db_name;
-    let vector = item.vector.clone(); // Clone the vector for async usage
-
-    // Try to get the vector store from the environment
-    let vec_store = match env.vector_store_map.get(vector_db_name) {
-        Some(store) => store,
-        None => {
-            // Vector store not found, return an error response
-            return HttpResponse::InternalServerError().body("Vector store not found");
-        }
-    };
-
-    let result = match ann_vector_query(vec_store.clone().into(), vector).await {
-        Ok(result) => result,
-        Err(err) => return HttpResponse::InternalServerError().body(err.to_string()),
-    };
-
-    let response_data = RPCResponseBody::RespVectorKNN {
-        knn: convert_option_vec(result),
-    }; //
-    HttpResponse::Ok().json(response_data)
-}
-
-async fn fetch_vector_db(env: web::Data<AppEnv>, item: web::Json<FetchNeighbors>) -> HttpResponse {
-    // println!("model: {:?}", &item);
-    let vector_db_name = &item.vector_db_name;
-    let vector_id = item.vector_id.clone(); // Clone the vector for async usage
-
-    // Try to get the vector store from the environment
-    let vec_store = match env.vector_store_map.get(vector_db_name) {
-        Some(store) => store,
-        None => {
-            // Vector store not found, return an error response
-            return HttpResponse::InternalServerError().body("Vector store not found");
-        }
-    };
-    let fvid = VectorId::from(vector_id);
-
-    let result = fetch_vector_neighbors(vec_store.clone().into(), fvid).await;
-
-    let mut xx: Vec<Option<RPCResponseBody>> = result
-        .iter()
-        .map(|res_item| match res_item {
-            Some((vect, neig)) => {
-                let nvid = VectorIdValue::from(vect.clone());
-                let response_data = RPCResponseBody::RespFetchNeighbors {
-                    neighbors: neig
-                        .iter()
-                        .map(|(vid, x)| (VectorIdValue::from(vid.clone()), x.clone()))
-                        .collect(),
-                    vector: Vector {
-                        id: nvid,
-                        values: vec![],
-                    },
-                };
-                return Some(response_data);
-            }
-            None => return None,
-        })
-        .collect();
-    // Filter out any None values (optional)
-    xx.retain(|x| x.is_some());
-    let rs: Vec<RPCResponseBody> = xx.into_iter().map(|x| x.unwrap()).collect();
-    HttpResponse::Ok().json(rs)
 }
 
 async fn extract_item(item: web::Json<MyObj>, req: HttpRequest) -> HttpResponse {
@@ -189,7 +61,7 @@ pub async fn run_actix_server() -> std::io::Result<()> {
 
     let config = load_rustls_config();
     // TODO: proper error handling
-    let env = load_env().unwrap();
+    let env = load_lmdb_env().unwrap();
     let user_data_cache = Arc::new(DashMap::new());
     let vector_store_map = Arc::new(DashMap::new());
     let persist = Arc::new(env);
@@ -212,18 +84,19 @@ pub async fn run_actix_server() -> std::io::Result<()> {
                 vector_store_map: vector_store_map.clone(),
                 persist: persist.clone(),
             }))
-            // <- 4  mb limit size of the payload (global configuration)
-            .service(
-                web::scope("/auth")
-                    .service(web::resource("/gettoken").route(web::post().to(authenticate))),
+            .route(
+                "/auth/gettoken",
+                web::post().to(crate::api::auth::get_token),
             )
             .service(
                 web::scope("/vectordb")
                     .wrap(auth.clone())
-                    .service(web::resource("/createdb").route(web::post().to(create_vector_db)))
-                    .service(web::resource("/upsert").route(web::post().to(upsert_vector_db)))
-                    .service(web::resource("/search").route(web::post().to(search_vector_db)))
-                    .service(web::resource("/fetch").route(web::post().to(fetch_vector_db))),
+                    .service(
+                        web::resource("/createdb").route(web::post().to(api::vectordb::create)),
+                    )
+                    .service(web::resource("/upsert").route(web::post().to(api::vectordb::upsert)))
+                    .service(web::resource("/search").route(web::post().to(api::vectordb::search)))
+                    .service(web::resource("/fetch").route(web::post().to(api::vectordb::fetch))),
             )
         // .service(web::resource("/index").route(web::post().to(index)))
         // .service(
@@ -330,7 +203,7 @@ fn old_load_rustls_config() -> rustls::ServerConfig {
     config.with_single_cert(cert_chain, keys.remove(0)).unwrap()
 }
 
-fn load_env() -> Result<Environment, WaCustomError> {
+fn load_lmdb_env() -> Result<Environment, WaCustomError> {
     let path = Path::new("./_mdb"); // TODO: prefix the customer & database name
 
     // Ensure the directory exists
