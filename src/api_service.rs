@@ -127,6 +127,7 @@ pub async fn init_vector_store(
                             db: Arc::new(db.clone()),
                         },
                         current_version: Arc::new(RwLock::new(None)),
+                        current_open_transaction: Arc::new(RwLock::new(None)),
                     });
                     ain_env
                         .vector_store_map
