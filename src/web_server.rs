@@ -98,7 +98,7 @@ pub async fn run_actix_server() -> std::io::Result<()> {
                     .service(web::resource("/search").route(web::post().to(api::vectordb::search)))
                     .service(web::resource("/fetch").route(web::post().to(api::vectordb::fetch)))
                     .service(
-                        web::scope("/transactions")
+                        web::scope("{database_name}/transactions")
                             .route("/", web::post().to(api::vectordb::transactions::create))
                             .route(
                                 "/{transaction_id}/upsert",
