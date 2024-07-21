@@ -34,7 +34,7 @@ pub struct NodeProp {
     pub value: Arc<VectorQt>,
 }
 
-pub type VersionId = u32;
+pub type VersionId = u16;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Node {

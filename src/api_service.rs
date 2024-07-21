@@ -12,6 +12,7 @@ use lmdb::{Database, DatabaseFlags, Environment, Error as LmdbError, Transaction
 use rand::Rng;
 use std::cell::RefCell;
 use std::fs::OpenOptions;
+use std::io::Write;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -58,36 +59,48 @@ pub async fn init_vector_store(
             .open("0.index")
             .expect("Failed to open file for writing"),
     ));
+
+    let mut writer =
+        CustomBufferedWriter::new(ver_file.clone()).expect("Failed opening custom buffer");
+
     let mut root: Option<NodeRef> = None;
     let mut prev: Option<NodeRef> = None;
 
+    let mut nodes = Vec::new();
+
+    let size = 150; //Todo: need to be adjusted based on Optional fields in NodePersist
+    let mut offset = 0;
+
     for l in 0..=max_cache_level {
         let prop = NodeProp::new(vec_hash.clone(), vector_list.clone().into());
-
         let nn = Node::new(prop.clone(), None, None, 0);
-
         if let Some(ref mut p) = prev {
             nn.set_parent(p.clone());
             p.set_child(nn.clone());
         }
-
+        nn.set_location(offset); //preemptively setting, important
+        offset = offset + size;
         prev = Some(nn.clone());
         if l == 0 {
             root = Some(nn.clone());
             nn.set_prop_location(write_prop_to_file(&prop, &prop_file));
         }
-        let mut writer =
-            CustomBufferedWriter::new(ver_file.clone()).expect("Failed opening custom buffer");
+        nodes.push(nn.clone());
+        println!("sssss: {}", nn.clone());
+    }
 
-        match persist_node_update_loc(&mut writer, nn.clone(), l, true) {
+    for (l, nn) in nodes.iter().enumerate() {
+        match persist_node_update_loc(&mut writer, nn.clone(), l as u8, true) {
             Ok(_) => (),
             Err(e) => {
                 eprintln!("Failed node persist (init): {}", e);
             }
         };
-        println!("sssss: {}", nn.clone());
     }
 
+    writer
+        .flush()
+        .expect("Final Custom Buffered Writer flush failed ");
     // ---------------------------
     // -- TODO level entry ratio
     // ---------------------------

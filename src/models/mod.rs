@@ -2,6 +2,7 @@ pub mod cache_loader;
 pub mod common;
 pub mod cos_buffered_writer;
 pub mod dot_product;
+pub mod dry_run_writer;
 pub mod encoding_format;
 pub mod file_persist;
 pub mod lookup_table;

@@ -4,8 +4,10 @@ use super::types::{
     VersionId,
 };
 use crate::models::cos_buffered_writer::*;
+use crate::models::dry_run_writer::DryRunWriter;
 use crate::models::serializer::*;
 use std::cell::RefCell;
+use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::rc::Rc;
@@ -43,7 +45,7 @@ pub struct Versions {
 
 #[derive(Debug, Clone)]
 pub struct NodePersist {
-    pub version_id: u32, // Assuming VersionId is a type alias for u32
+    pub version_id: VersionId,
     pub prop_location: PropPersistRef,
     pub hnsw_level: u8, // Assuming HNSWLevel is a type alias for u8
     pub version_ref: VersionRef,
@@ -66,7 +68,7 @@ impl NodePersist {
         let mut fixed_neighbors = vec![
             NeighbourPersist {
                 node: NodePersistRef::Invalid,
-                cosine_similarity: 0.0,
+                cosine_similarity: 999.999,
             };
             10
         ];
@@ -91,7 +93,13 @@ impl NodePersist {
     }
 }
 
-use std::fmt;
+impl NodePersist {
+    pub fn calculate_serialized_size(&self) -> std::io::Result<u64> {
+        let mut writer = DryRunWriter::new();
+        self.serialize(&mut writer)?;
+        Ok(writer.bytes_written())
+    }
+}
 
 impl fmt::Display for NodePersist {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -169,7 +177,7 @@ pub fn prepare_node_update(
     while fixed_neighbors.len() < 10 {
         fixed_neighbors.push(NeighbourPersist {
             node: NodePersistRef::Invalid,
-            cosine_similarity: 0.0,
+            cosine_similarity: 999.999,
         });
     }
 
@@ -184,7 +192,7 @@ pub fn prepare_node_update(
         .and_then(|c| c.get_location())
         .map(NodePersistRef::DerefPending);
 
-    let vref = if create_vrefs_flag {
+    let version_ref = if create_vrefs_flag {
         VersionRef::Reference(Box::new(Versions {
             versions: [
                 NodePersistRef::Invalid,
@@ -204,7 +212,7 @@ pub fn prepare_node_update(
         parent,
         child,
         prop_location: node.get_prop_location().unwrap_or((0, 0)),
-        version_ref: vref,
+        version_ref,
         version_id: node.version_id + 1,
     };
 
