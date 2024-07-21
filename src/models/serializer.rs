@@ -86,8 +86,12 @@ impl CustomSerialize for VersionRef {
         let offset = writer.stream_position()? as u32;
         match self {
             VersionRef::Reference(versions) => {
-                writer.write_u32::<LittleEndian>(0)?;
+                writer.write_u32::<LittleEndian>(7)?;
                 let versions_offset = versions.serialize(writer)?;
+                println!(
+                    "Versions | offset: {}, versions_offset: {}",
+                    offset, versions_offset
+                );
                 writer.seek(SeekFrom::Start(offset as u64))?;
                 writer.write_u32::<LittleEndian>(versions_offset)?;
                 writer.seek(SeekFrom::End(0))?;
@@ -100,6 +104,7 @@ impl CustomSerialize for VersionRef {
     fn deserialize<R: Read + Seek>(reader: &mut R, offset: u32) -> std::io::Result<Self> {
         reader.seek(SeekFrom::Start(offset as u64))?;
         let value = reader.read_u32::<LittleEndian>()?;
+        println!("Version ref value: {}", value);
         if value == std::u32::MAX {
             Ok(VersionRef::Invalid)
         } else {
@@ -112,6 +117,7 @@ impl CustomSerialize for VersionRef {
 impl CustomSerialize for Versions {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
         let offset = writer.stream_position()? as u32;
+        println!("Versions @@ offset: {}", offset);
         for version in &self.versions {
             version.serialize(writer)?;
         }
@@ -130,6 +136,7 @@ impl CustomSerialize for Versions {
             reader.stream_position()? as u32,
         ];
 
+        println!("Versions offsets: {:?}", offsets);
         // Now deserialize using the offsets
         let versions = [
             NodePersistRef::deserialize(reader, offsets[0])?,

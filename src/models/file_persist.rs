@@ -3,9 +3,12 @@ use super::types::{
     HNSWLevel, NeighbourRef, Node, NodeFileRef, NodeProp, NodeRef, VectorId, VectorQt, VectorStore,
     VersionId,
 };
+use crate::models::cos_buffered_writer::*;
 use crate::models::serializer::*;
+use std::cell::RefCell;
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
+use std::rc::Rc;
 use std::sync::{Arc, RwLock};
 
 pub type FileOffset = u32;
@@ -126,21 +129,18 @@ pub fn read_node_from_file(file: &mut File, offset: u32) -> std::io::Result<Node
     Ok(node)
 }
 // end
-pub fn persist_node_update_loc(
-    wal_file: Arc<File>,
+pub fn prepare_node_update(
     node: NodeRef,
     hnsw_level: HNSWLevel,
     create_vrefs_flag: bool,
-) -> Result<(), WaCustomError> {
+) -> Result<NodePersist, WaCustomError> {
     println!(" For node {} ", node);
     let neighbors_lock = node
         .neighbors
         .read()
         .map_err(|_| WaCustomError::MutexPoisoned("convert_node_to_node_persist".to_owned()))?;
 
-    // Create a vector to hold neighbors
     let mut fixed_neighbors = Vec::with_capacity(10);
-
     for neighbor in neighbors_lock.iter().take(10) {
         match neighbor {
             NeighbourRef::Ready {
@@ -166,7 +166,6 @@ pub fn persist_node_update_loc(
         };
     }
 
-    // Pad the vector with default values if needed
     while fixed_neighbors.len() < 10 {
         fixed_neighbors.push(NeighbourPersist {
             node: NodePersistRef::Invalid,
@@ -174,10 +173,8 @@ pub fn persist_node_update_loc(
         });
     }
 
-    // Convert the vector to an array
     let fixed_neighbors: [NeighbourPersist; 10] = fixed_neighbors.try_into().unwrap();
 
-    // Convert parent and child
     let parent = node
         .get_parent()
         .and_then(|p| p.get_location())
@@ -201,7 +198,7 @@ pub fn persist_node_update_loc(
         VersionRef::Invalid
     };
 
-    let mut nprst = NodePersist {
+    let nprst = NodePersist {
         hnsw_level,
         neighbors: fixed_neighbors,
         parent,
@@ -211,18 +208,37 @@ pub fn persist_node_update_loc(
         version_id: node.version_id + 1,
     };
 
-    let mut location = node.location.write().unwrap();
-    if let Some(loc) = *location {
-        let file_loc = write_node_to_file_at_offset(&mut nprst, &wal_file, loc.into());
-        *location = Some(file_loc);
+    Ok(nprst)
+}
+
+pub fn write_node_update(
+    ver_file: &mut CustomBufferedWriter,
+    mut nprst: NodePersist,
+    current_location: Option<u64>,
+) -> Result<u64, WaCustomError> {
+    if let Some(loc) = current_location {
+        Ok(write_node_to_file_at_offset(&mut nprst, ver_file, loc) as u64)
     } else {
-        let file_loc = write_node_to_file(&mut nprst, &wal_file);
-        *location = Some(file_loc);
+        Ok(write_node_to_file(&mut nprst, ver_file) as u64)
     }
+}
+
+pub fn persist_node_update_loc(
+    ver_file: &mut CustomBufferedWriter,
+    node: NodeRef,
+    hnsw_level: HNSWLevel,
+    create_vrefs_flag: bool,
+) -> Result<(), WaCustomError> {
+    let nprst = prepare_node_update(node.clone(), hnsw_level, create_vrefs_flag)?;
+
+    let mut location = node.location.write().unwrap();
+    let current_location = location.map(u64::from);
+
+    let file_loc = write_node_update(ver_file, nprst, current_location)?;
+    *location = Some(file_loc as u32);
 
     Ok(())
 }
-
 // pub fn map_node_persist_ref_to_node(
 //     vec_store: VectorStore,
 //     node_ref: NodePersistRef,
@@ -311,24 +327,25 @@ pub fn write_prop_to_file(prop: &NodeProp, mut file: &File) -> (u32, u32) {
     (offset as u32, prop_bytes.len() as u32)
 }
 
-pub fn write_node_to_file(node: &mut NodePersist, mut file: &File) -> u32 {
-    file.seek(SeekFrom::End(0)).expect("Seek failed"); // Explicitly move to the end
-
+pub fn write_node_to_file(node: &mut NodePersist, writer: &mut CustomBufferedWriter) -> u32 {
+    // Assume CustomBufferWriter already handles seeking to the end
     // Serialize
-    let result = node.serialize(&mut file);
-
+    let result = node.serialize(writer);
     let offset = result.expect("Failed to serialize NodePersist & write to file");
     offset as u32
 }
 
-pub fn write_node_to_file_at_offset(node: &mut NodePersist, mut file: &File, offset: u64) -> u32 {
+pub fn write_node_to_file_at_offset(
+    node: &mut NodePersist,
+    writer: &mut CustomBufferedWriter,
+    offset: u64,
+) -> u32 {
     // Seek to the specified offset before writing
-    file.seek(SeekFrom::Start(offset))
+    writer
+        .seek(SeekFrom::Start(offset))
         .expect("Failed to seek in file");
-
     // Serialize
-    let result = node.serialize(&mut file);
-
+    let result = node.serialize(writer);
     let offset = result.expect("Failed to serialize NodePersist & write to file");
     offset as u32
 }

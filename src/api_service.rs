@@ -1,3 +1,4 @@
+use crate::models::cos_buffered_writer::CustomBufferedWriter;
 use crate::models::file_persist::*;
 use crate::models::meta_persist::*;
 use crate::models::rpc::VectorIdValue;
@@ -9,7 +10,9 @@ use dashmap::DashMap;
 use futures::stream::{self, StreamExt};
 use lmdb::{Database, DatabaseFlags, Environment, Error as LmdbError, Transaction, WriteFlags};
 use rand::Rng;
+use std::cell::RefCell;
 use std::fs::OpenOptions;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex, RwLock};
 
 pub async fn init_vector_store(
@@ -48,14 +51,13 @@ pub async fn init_vector_store(
             .expect("Failed to open file for writing"),
     );
 
-    let wal_file = Arc::new(
+    let ver_file = Rc::new(RefCell::new(
         OpenOptions::new()
             .create(true)
             .append(true)
-            .open("index.0")
+            .open("0.index")
             .expect("Failed to open file for writing"),
-    );
-
+    ));
     let mut root: Option<NodeRef> = None;
     let mut prev: Option<NodeRef> = None;
 
@@ -74,7 +76,10 @@ pub async fn init_vector_store(
             root = Some(nn.clone());
             nn.set_prop_location(write_prop_to_file(&prop, &prop_file));
         }
-        match persist_node_update_loc(wal_file.clone(), nn.clone(), l, true) {
+        let mut writer =
+            CustomBufferedWriter::new(ver_file.clone()).expect("Failed opening custom buffer");
+
+        match persist_node_update_loc(&mut writer, nn.clone(), l, true) {
             Ok(_) => (),
             Err(e) => {
                 eprintln!("Failed node persist (init): {}", e);
@@ -103,7 +108,6 @@ pub async fn init_vector_store(
                         levels_prob: lp,
                         quant_dim: (size / 32) as usize,
                         prop_file,
-                        wal_file,
                         exec_queue_nodes,
                         version_lmdb: MetaDb {
                             env: denv.clone(),

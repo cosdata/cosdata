@@ -5,10 +5,12 @@ use dashmap::DashMap;
 use http::Version;
 use lmdb::{Database, Environment, Transaction, WriteFlags};
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::fmt;
 use std::fs::*;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 pub type HNSWLevel = u8;
 
@@ -256,7 +258,6 @@ pub struct VectorStore {
     pub levels_prob: Arc<Vec<(f64, i32)>>,
     pub quant_dim: usize,
     pub prop_file: Arc<File>,
-    pub wal_file: Arc<File>,
     pub version_lmdb: MetaDb,
     pub current_version: Arc<RwLock<Option<VersionHash>>>,
 }
