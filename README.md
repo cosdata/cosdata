@@ -19,18 +19,6 @@ Before installing Cosdata, ensure you have the following:
 
 ### Installation Steps
 
-#### RocksDB dependencies:
-
-```
-sudo apt install libgflags-dev libsnappy-dev liblz4-dev libzstd-dev
-```
-
-#### Install RocksDB:
-
-```
-sudo apt install librocksdb-dev
-```
-
 #### Building Cosdata
 
 Clone the Cosdata repository:
