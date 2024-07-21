@@ -1,4 +1,4 @@
-use super::dot_product::dot_product_u8_avx2;
+use super::dot_product::x86_64::dot_product_u8_avx2;
 use super::rpc::VectorIdValue;
 use super::types::{NodeRef, VectorId};
 use crate::models::lookup_table::*;
