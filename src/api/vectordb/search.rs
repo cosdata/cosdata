@@ -3,15 +3,18 @@ use actix_web::{web, HttpResponse};
 use crate::{
     api_service::ann_vector_query,
     convert_option_vec,
-    models::rpc::{RPCResponseBody, VectorANN},
-    web_server::AppEnv,
+    models::{
+        rpc::{RPCResponseBody, VectorANN},
+        types::get_app_env,
+    },
 };
 
 // Route: `/vectordb/search`
-pub(crate) async fn search(
-    env: web::Data<AppEnv>,
-    web::Json(body): web::Json<VectorANN>,
-) -> HttpResponse {
+pub(crate) async fn search(web::Json(body): web::Json<VectorANN>) -> HttpResponse {
+    let env = match get_app_env() {
+        Ok(env) => env,
+        Err(_) => return HttpResponse::InternalServerError().body("Env initialization error"),
+    };
     // Try to get the vector store from the environment
     let vec_store = match env.vector_store_map.get(&body.vector_db_name) {
         Some(store) => store,

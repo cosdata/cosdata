@@ -75,7 +75,7 @@ fn main() {
             random_number
         })
         .collect::<Vec<f32>>();
-       
+
     let vec2 = (0..size)
         .map(|_| {
             let mut rng = rand::thread_rng();
@@ -148,9 +148,9 @@ fn quaternary_multiply_u8(a0: u8, a1: u8, b0: u8, b1: u8) -> u16 {
     // Combine intermediate products to form the final result
     let result = (p2 << 2) | (p1 << 1) | p0;
     result
-   }
+}
 
-  fn senary_multiply_u8(a0: u8, a1: u8, a2: u8, b0: u8, b1: u8, b2: u8) -> u16 {
+fn senary_multiply_u8(a0: u8, a1: u8, a2: u8, b0: u8, b1: u8, b2: u8) -> u16 {
     // Calculate intermediate products
     let p0 = a0 & b0;
     let p1 = (a0 & b1) ^ (a1 & b0);
@@ -173,13 +173,16 @@ pub fn cosine_coalesce(x: &VectorQt, y: &VectorQt, length: usize) -> f32 {
             let x_item = x.quant_vec[index][jj];
             let y_item = y.quant_vec[index][jj];
             let and_result = x_item & y_item;
-            println!("x {} {:032b} | y {} {:032b} | xor {:032b}", x_item, x_item, y_item, y_item, and_result);
+            println!(
+                "x {} {:032b} | y {} {:032b} | xor {:032b}",
+                x_item, x_item, y_item, y_item, and_result
+            );
             sum += shift_and_accumulate(and_result) as usize;
             println!("sum cumulative: {}", sum);
         }
         dot_product += sum;
     }
-    let final_result = dot_product /x.magnitude * y.magnitude;
+    let final_result = dot_product / x.magnitude * y.magnitude;
     final_result
 }
 
@@ -193,14 +196,15 @@ fn cosine_similarity_new(x: &VectorQt, y: &VectorQt) -> f32 {
     let vec1_len = vec1.len();
 
     let mut dot_product: f32 = 0.0;
-    let mut dot_product_and_count: i32 = 0;   // can even have a vec for each level b/w MSB and LSB.
+    let mut dot_product_and_count: i32 = 0; // can even have a vec for each level b/w MSB and LSB.
     let mut dot_product_or_count: i32 = 0;
     //let mut dot_product_xor_count: i32 = 0;
 
     for index in 0..vec1_len {
         let inner_product_len = vec1[0].len();
         for i in 0..inner_product_len {
-            dot_product_and_count += ((shift_and_accumulate(vec1[index][i] & vec2[index][i])) << index ) as i32 - 16;
+            dot_product_and_count +=
+                ((shift_and_accumulate(vec1[index][i] & vec2[index][i])) << index) as i32 - 16;
             //dot_product_or_count += ((shift_and_accumulate(vec1[index][i] | vec2[index][i])) ) as i32 - 16;
             //dot_product_xor_count += shift_and_accumulate(vec1[index][i] ^ vec2[index][i]) as i32 - 16;
             println!(
@@ -209,15 +213,18 @@ fn cosine_similarity_new(x: &VectorQt, y: &VectorQt) -> f32 {
             );
         }
     }
-     dot_product = (or_val * dot_product_or_count as f32) + (and_val * dot_product_and_count as f32);
-     // dot_product = and_val * dot_product_and_count as f32;
+    dot_product = (or_val * dot_product_or_count as f32) + (and_val * dot_product_and_count as f32);
+    // dot_product = and_val * dot_product_and_count as f32;
 
     let mut premag1: f32 = 0.0;
     for (_index, vec) in vec1.iter().enumerate() {
         premag1 += vec
             .iter()
             .enumerate()
-            .map(|(_, a)| (or_val * shift_and_accumulate(a | a) as f32) + (and_val * shift_and_accumulate(a & a) as f32))
+            .map(|(_, a)| {
+                (or_val * shift_and_accumulate(a | a) as f32)
+                    + (and_val * shift_and_accumulate(a & a) as f32)
+            })
             .sum::<f32>();
 
         println!("premag1 : {} {:?}", premag1, vec);
@@ -228,7 +235,10 @@ fn cosine_similarity_new(x: &VectorQt, y: &VectorQt) -> f32 {
         premag2 += vec
             .iter()
             .enumerate()
-            .map(|(_, a)| (or_val * shift_and_accumulate(a | a) as f32) + (and_val * shift_and_accumulate(a & a) as f32))
+            .map(|(_, a)| {
+                (or_val * shift_and_accumulate(a | a) as f32)
+                    + (and_val * shift_and_accumulate(a & a) as f32)
+            })
             .sum::<f32>();
         println!("premag2 : {} {:?}", premag2, vec);
     }
@@ -256,12 +266,12 @@ fn quantize_to_u8(vec: &[f32], u32: length) -> Vec<u8> {
     quantized_vec
 }
 
-fn quantize_and_combine(vec: &[f32], u32 length) -> Vec<u8> {
+fn quantize_and_combine(vec: &[f32], u32: length) -> Vec<u8> {
     let mut result = Vec::with_capacity(length >> 1);
 
     for i in (0..len).step_by(2) {
         let even = ((vec[i] * 15.0).round() as u8) << 4;
-        let odd =  ((vec[i + 1] * 15.0).round() as u8);
+        let odd = ((vec[i + 1] * 15.0).round() as u8);
         result.push(even | odd);
     }
 
@@ -270,7 +280,10 @@ fn quantize_and_combine(vec: &[f32], u32 length) -> Vec<u8> {
 
 fn to_float_flag(x: f32, bits_per_value: usize, step: f32) -> Vec<bool> {
     let mut num = ((x + 1.0) / step).floor() as usize;
-    println!("bits_per_value : {} | step {} | x {} | num {}", bits_per_value, step, x, num);
+    println!(
+        "bits_per_value : {} | step {} | x {} | num {}",
+        bits_per_value, step, x, num
+    );
 
     let mut result = vec![];
     for i in (0..bits_per_value).rev() {
@@ -305,7 +318,10 @@ pub fn quantize_to_u32_bits(fins: &[f32], resolution: u8) -> Vec<Vec<u32>> {
 
         if bit_index == 32 {
             for bit_position in 0..bits_per_value {
-                println!("{:032b}, {} ", current_u32s[bit_position], current_u32s[bit_position]);
+                println!(
+                    "{:032b}, {} ",
+                    current_u32s[bit_position], current_u32s[bit_position]
+                );
                 quantized[bit_position].push(current_u32s[bit_position]);
                 current_u32s[bit_position] = 0;
             }

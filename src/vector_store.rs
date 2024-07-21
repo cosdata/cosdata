@@ -1,4 +1,5 @@
 use crate::models::common::*;
+use crate::models::cos_buffered_writer::CustomBufferedWriter;
 use crate::models::file_persist::*;
 use crate::models::meta_persist::*;
 use crate::models::types::*;
@@ -8,12 +9,15 @@ use futures::stream::Collect;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use smallvec::SmallVec;
+use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
+use std::fs::OpenOptions;
 use std::hash::{Hash, Hasher};
 use std::io::{Seek, SeekFrom, Write};
 use std::ops::Deref;
+use std::rc::Rc;
 use std::sync::RwLock;
 use std::sync::{Arc, Mutex};
 
@@ -159,7 +163,6 @@ pub fn insert_embedding(
 }
 
 pub fn queue_node_prop_exec(
-    wal_file: Arc<File>,
     prop_file: Arc<File>,
     exec_queue_update: ExecQueueUpdate,
     node: NodeRef,
@@ -170,10 +173,7 @@ pub fn queue_node_prop_exec(
 
     // calculated with custom serialization
     let size = 150; //Todo: need to be adjusted based on Optional fields in NodePersist
-    let mut offset = wal_file
-        .as_ref()
-        .seek(SeekFrom::End(0))
-        .expect("Seek failed") as u32; // Explicitly move to the end
+    let mut offset = 0;
 
     exec_queue_update.insert((hnsw_level, node.prop.id.clone()), (node.clone(), offset));
     offset = offset + size;
@@ -210,26 +210,34 @@ pub fn auto_commit_transaction(
     exec_queue_update: ExecQueueUpdate,
     // exec_queue_nodes: &mut ExecQueueInsertNodes,
 ) -> Result<(), WaCustomError> {
-    // let mut offset = 0;
-    // let serialized_size = 150; //specialized serialization
+    let ver = vec_store.get_current_version().unwrap().unwrap();
+    let new_ver = ver.version + 1;
+    let file_name = format!("{}.index", new_ver);
+
+    let ver_file = Rc::new(RefCell::new(
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&file_name)
+            .expect("Failed to open file for writing"),
+    ));
+    let mut writer =
+        CustomBufferedWriter::new(ver_file.clone()).expect("Failed opening custom buffer");
+
     for item in exec_queue_update.iter() {
         let nbr = item.value().0.clone();
         let level = item.key().0.clone();
         let loc = nbr.get_location();
         let offset = item.value().1;
         link_prev_version(loc, offset);
-        // offset = offset + serialized_size;
-        // nbr.set_location((offset, serialized_size));
 
-        match persist_node_update_loc(vec_store.wal_file.clone(), nbr.clone(), level as u8, false) {
+        match persist_node_update_loc(&mut writer, nbr.clone(), level as u8, false) {
             Ok(_) => (),
             Err(e) => {
                 eprintln!("Failed node persist(nbr1): {}", e);
             }
         };
     }
-    let ver = vec_store.get_current_version().unwrap().unwrap();
-    let new_ver = ver.version + 1;
     let vec_hash = store_current_version(vec_store.clone(), "main".to_string(), new_ver)
         .expect("Failed to read current version");
     vec_store.set_current_version(Some(vec_hash));
@@ -296,7 +304,6 @@ fn insert_node_create_edges(
     }
 
     match queue_node_prop_exec(
-        vec_store.wal_file.clone(),
         vec_store.prop_file.clone(),
         vec_store.exec_queue_nodes.clone(),
         nn,

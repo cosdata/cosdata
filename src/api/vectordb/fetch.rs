@@ -2,17 +2,17 @@ use crate::{
     api_service::fetch_vector_neighbors,
     models::{
         rpc::{FetchNeighbors, RPCResponseBody, Vector, VectorIdValue},
-        types::VectorId,
+        types::{get_app_env, VectorId},
     },
-    web_server::AppEnv,
 };
 use actix_web::{web, HttpResponse};
 
 // Route: `/vectordb/fetch`
-pub(crate) async fn fetch(
-    env: web::Data<AppEnv>,
-    web::Json(body): web::Json<FetchNeighbors>,
-) -> HttpResponse {
+pub(crate) async fn fetch(web::Json(body): web::Json<FetchNeighbors>) -> HttpResponse {
+    let env = match get_app_env() {
+        Ok(env) => env,
+        Err(_) => return HttpResponse::InternalServerError().body("Env initialization error"),
+    };
     // Try to get the vector store from the environment
     let vec_store = match env.vector_store_map.get(&body.vector_db_name) {
         Some(store) => store,
