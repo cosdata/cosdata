@@ -45,26 +45,11 @@ async fn index_manual(body: web::Bytes) -> Result<HttpResponse, Error> {
     Ok(HttpResponse::Ok().json(obj)) // <- send response
 }
 
-type VectorStoreMap = DashMap<String, Arc<VectorStore>>;
-type UserDataCache = DashMap<String, (String, i32, i32, std::time::SystemTime, Vec<String>)>;
-
-// Define the AppEnv struct
-pub struct AppEnv {
-    pub user_data_cache: Arc<UserDataCache>,
-    pub vector_store_map: Arc<VectorStoreMap>,
-    pub persist: Arc<Environment>,
-}
-
 #[actix_web::main]
 pub async fn run_actix_server() -> std::io::Result<()> {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
 
     let config = load_rustls_config();
-    // TODO: proper error handling
-    let env = load_lmdb_env().unwrap();
-    let user_data_cache = Arc::new(DashMap::new());
-    let vector_store_map = Arc::new(DashMap::new());
-    let persist = Arc::new(env);
 
     log::info!("starting HTTPS server at https://localhost:8443");
 
@@ -78,12 +63,6 @@ pub async fn run_actix_server() -> std::io::Result<()> {
             .wrap(Cors::permissive())
             // register simple handler, handle all methods
             .app_data(web::JsonConfig::default().limit(4 * 1048576))
-            .app_data(web::Data::new(AppEnv {
-                // the clone method used here only clones pointer the actual data inside `Arc`
-                user_data_cache: user_data_cache.clone(),
-                vector_store_map: vector_store_map.clone(),
-                persist: persist.clone(),
-            }))
             .route(
                 "/auth/gettoken",
                 web::post().to(crate::api::auth::get_token),
@@ -201,17 +180,4 @@ fn old_load_rustls_config() -> rustls::ServerConfig {
     }
 
     config.with_single_cert(cert_chain, keys.remove(0)).unwrap()
-}
-
-fn load_lmdb_env() -> Result<Environment, WaCustomError> {
-    let path = Path::new("./_mdb"); // TODO: prefix the customer & database name
-
-    // Ensure the directory exists
-    create_dir_all(&path).map_err(|e| WaCustomError::CreateDatabaseFailed(e.to_string()))?;
-    // Initialize the environment
-    Environment::new()
-        .set_max_dbs(1)
-        .set_map_size(10485760) // Set the maximum size of the database to 10MB
-        .open(&path)
-        .map_err(|e| WaCustomError::CreateDatabaseFailed(e.to_string()))
 }

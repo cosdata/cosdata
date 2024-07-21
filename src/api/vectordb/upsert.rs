@@ -3,15 +3,18 @@ use actix_web::{web, HttpResponse};
 use crate::{
     api_service::run_upload,
     convert_vectors,
-    models::rpc::{RPCResponseBody, UpsertVectors},
-    web_server::AppEnv,
+    models::{
+        rpc::{RPCResponseBody, UpsertVectors},
+        types::get_app_env,
+    },
 };
 
 // Route: `/vectordb/upsert`
-pub(crate) async fn upsert(
-    env: web::Data<AppEnv>,
-    web::Json(body): web::Json<UpsertVectors>,
-) -> HttpResponse {
+pub(crate) async fn upsert(web::Json(body): web::Json<UpsertVectors>) -> HttpResponse {
+    let env = match get_app_env() {
+        Ok(env) => env,
+        Err(_) => return HttpResponse::InternalServerError().body("Env initialization error"),
+    };
     // Try to get the vector store from the environment
     let vec_store = match env.vector_store_map.get(&body.vector_db_name) {
         Some(store) => store,

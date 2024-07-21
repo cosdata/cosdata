@@ -6,7 +6,6 @@ use crate::models::types::*;
 use crate::models::user::{AuthResp, Statistics};
 use crate::models::{self, common::*};
 use crate::vector_store::{self, *};
-use crate::web_server::AppEnv;
 use dashmap::DashMap;
 use futures::stream::{self, StreamExt};
 use lmdb::{Database, DatabaseFlags, Environment, Error as LmdbError, Transaction, WriteFlags};
@@ -18,7 +17,6 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex, RwLock};
 
 pub async fn init_vector_store(
-    env: &AppEnv,
     name: String,
     size: usize,
     lower_bound: Option<f32>,
@@ -147,13 +145,14 @@ pub async fn init_vector_store(
                     Err(WaCustomError::LmdbError(e.to_string()))
                 }
             }
-
         }
         Err(e) => {
             eprintln!("Failed node persist(nbr1): {}", e);
             Err(WaCustomError::LmdbError(e.to_string()))
         }
-    }
+    };
+
+    result
 }
 
 pub async fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<(VectorIdValue, Vec<f32>)>) -> () {
