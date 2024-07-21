@@ -5,6 +5,7 @@ use crate::models::types::*;
 use crate::models::user::{AuthResp, Statistics};
 use crate::models::{self, common::*};
 use crate::vector_store::{self, *};
+use crate::web_server::AppEnv;
 use dashmap::DashMap;
 use futures::stream::{self, StreamExt};
 use lmdb::{Database, DatabaseFlags, Environment, Error as LmdbError, Transaction, WriteFlags};
@@ -13,6 +14,7 @@ use std::fs::OpenOptions;
 use std::sync::{Arc, Mutex, RwLock};
 
 pub async fn init_vector_store(
+    env: &AppEnv,
     name: String,
     size: usize,
     lower_bound: Option<f32>,
@@ -89,50 +91,39 @@ pub async fn init_vector_store(
     let factor_levels = 10.0;
     let lp = Arc::new(generate_tuples(factor_levels).into_iter().rev().collect());
 
-    let result = match get_app_env() {
-        Ok(ain_env) => {
-            let denv = ain_env.persist.clone();
+    let db_result = env.persist.create_db(None, DatabaseFlags::empty());
+    match db_result {
+        Ok(db) => {
+            let vec_store = Arc::new(VectorStore {
+                max_cache_level,
+                database_name: name.clone(),
+                root_vec: root.unwrap(),
+                levels_prob: lp,
+                quant_dim: (size / 32) as usize,
+                prop_file,
+                wal_file,
+                exec_queue_nodes,
+                version_lmdb: MetaDb {
+                    env: env.persist.clone(),
+                    db: Arc::new(db.clone()),
+                },
+                current_version: Arc::new(RwLock::new(None)),
+            });
+            env.vector_store_map.insert(name.clone(), vec_store.clone());
 
-            let db_result = denv.create_db(None, DatabaseFlags::empty());
-            match db_result {
-                Ok(db) => {
-                    let vec_store = Arc::new(VectorStore {
-                        max_cache_level,
-                        database_name: name.clone(),
-                        root_vec: root.unwrap(),
-                        levels_prob: lp,
-                        quant_dim: (size / 32) as usize,
-                        prop_file,
-                        wal_file,
-                        exec_queue_nodes,
-                        version_lmdb: MetaDb {
-                            env: denv.clone(),
-                            db: Arc::new(db.clone()),
-                        },
-                        current_version: Arc::new(RwLock::new(None)),
-                    });
-                    ain_env
-                        .vector_store_map
-                        .insert(name.clone(), vec_store.clone());
+            let result = store_current_version(vec_store.clone(), "main".to_string(), 0);
+            let version_hash = result.expect("Failed to get VersionHash");
+            vec_store
+                .set_current_version(Some(version_hash))
+                .expect("failed to store version");
 
-                    let result = store_current_version(vec_store.clone(), "main".to_string(), 0);
-                    let version_hash = result.expect("Failed to get VersionHash");
-                    vec_store
-                        .set_current_version(Some(version_hash))
-                        .expect("failed to store version");
-
-                    Ok(())
-                }
-                Err(e) => {
-                    eprintln!("Failed node persist(nbr1): {}", e);
-                    Err(WaCustomError::LmdbError(e.to_string()))
-                }
-            }
+            Ok(())
         }
-
-        Err(e) => Err(WaCustomError::LmdbError(e.to_string())),
-    };
-    return result;
+        Err(e) => {
+            eprintln!("Failed node persist(nbr1): {}", e);
+            Err(WaCustomError::LmdbError(e.to_string()))
+        }
+    }
 }
 
 pub async fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<(VectorIdValue, Vec<f32>)>) -> () {
