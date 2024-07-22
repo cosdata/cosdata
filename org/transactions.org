@@ -12,7 +12,7 @@ To begin a transaction, the client performs a POST request to a predefined endpo
 
 - Request
 #+BEGIN_SRC http
-POST /vectordb/transactions
+POST /vectordb/db_name/transactions
 Content-Type: application/json
 
 #+END_SRC
@@ -31,7 +31,7 @@ Once the transaction is created and the unique identifier is received, the clien
 To upsert data within the transaction, the client sends a request to the =/vectordb/transactions/dGhpc2lzYX/upsert= endpoint. This allows the client to insert or update data within the transaction context.
 
 #+BEGIN_SRC http
-POST /vectordb/transactions/dGhpc2lzYX/upsert
+POST /vectordb/db_name/transactions/dGhpc2lzYX/upsert
 Content-Type: application/json
 
 {
@@ -60,7 +60,7 @@ Content-Type: application/json
 For updating existing data, the client uses the  =/vectordb/transactions/dGhpc2lzYX/update= endpoint.
 
 #+BEGIN_SRC http
-POST /vectordb/transactions/dGhpc2lzYX/update
+POST /vectordb/db_name/transactions/dGhpc2lzYX/update
 Content-Type: application/json
 
 {
@@ -81,7 +81,7 @@ Content-Type: application/json
 To delete data within the transaction, the client sends a request to the =/vectordb/transactions/dGhpc2lzYX/delete= endpoint.
 
 #+BEGIN_SRC http
-POST /vectordb/transactions/dGhpc2lzYX/delete
+POST /vectordb/db_name/transactions/dGhpc2lzYX/delete
 Content-Type: application/json
 
 {
@@ -97,7 +97,7 @@ Content-Type: application/json
 After performing all desired operations, the client can commit the transaction by sending a POST request to the transaction’s unique URL.
 
 #+BEGIN_SRC http
-POST /vectordb/transactions/dGhpc2lzYX/commit
+POST /vectordb/db_name/transactions/dGhpc2lzYX/commit
 #+END_SRC
 
 * Benefits and Considerations
