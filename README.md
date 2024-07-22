@@ -8,7 +8,6 @@ This guide provides step-by-step instructions for installing Cosdata on Linux sy
 
 ### Prerequisites
 
-
 Before installing Cosdata, ensure you have the following:
 
 - Git
@@ -22,12 +21,62 @@ Before installing Cosdata, ensure you have the following:
 #### Building Cosdata
 
 Clone the Cosdata repository:
-``` 
+
+```
 git clone https://github.com/cosdata/cosdata.git
 cd cosdata
 ```
 
 Build the project:
+
 ```
 cargo build --release
+```
+
+### Self Signed Cerficates
+
+While developing Cosdata, you can use self-signed certificates for testing the APIs, this sections mentions how you can generate and setup them.
+
+#### Generate Certificates
+
+Run the following commands in sequence to get the private key and certificate
+
+```bash
+openssl req -newkey rsa:2048 -nodes -keyout private_key.pem -x509 -days 365 -out self_signed_certificate.crt
+
+# Convert the private key to PKCS#8 format
+openssl pkcs8 -topk8 -inform PEM -outform PEM -in private_key.pem -out private_key_pkcs8.pem -nocrypt
+```
+
+#### Setup Certificates
+
+Set the `SSL_CERT_DIR` enviroment variable to the folder where you're gonna store the certificates:
+
+```bash
+export SSL_CERT_DIR="/etc/ssl"
+```
+
+Move certificates to appropriate folders and set permissions:
+
+```bash
+# Create directories if don't exist
+sudo mkdir -p $SSL_CERT_DIR
+sudo mkdir -p $SSL_CERT_DIR/certs
+sudo mkdir -p $SSL_CERT_DIR/private
+
+# Move certificates
+sudo mv self_signed_certificate.crt $SSL_CERT_DIR/certs/cosdata-ssl.crt
+sudo mv private_key_pkcs8.pem $SSL_CERT_DIR/private/cosdata-ssl.key
+
+# Change private key file permissions
+sudo chgrp ssl-cert $SSL_CERT_DIR/private/cosdata-ssl.key
+sudo chmod 640 $SSL_CERT_DIR/private/cosdata-ssl.key
+sudo usermod -aG ssl-cert $USER
+
+# Change private key folder permissions
+sudo chmod 750 $SSL_CERT_DIR/private
+sudo chgrp ssl-cert $SSL_CERT_DIR/private
+
+# Add yourself to ssl-cert group (you may need to re-login after this)
+newgrp ssl-cert
 ```

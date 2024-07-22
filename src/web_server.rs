@@ -136,8 +136,8 @@ fn load_rustls_config() -> rustls::ServerConfig {
         }
     };
 
-    let cert_file_path = format!("{}/certs/example.crt", ssl_cert_dir);
-    let key_file_path = format!("{}/private/example.key", ssl_cert_dir);
+    let cert_file_path = format!("{}/certs/cosdata-ssl.crt", ssl_cert_dir);
+    let key_file_path = format!("{}/private/cosdata-ssl.key", ssl_cert_dir);
 
     // load TLS key/cert files
     let cert_file = &mut BufReader::new(File::open(&cert_file_path).unwrap_or_else(|_| {
