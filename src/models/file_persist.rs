@@ -1,6 +1,6 @@
 use super::common::{tuple_to_string, WaCustomError};
 use super::types::{
-    HNSWLevel, NeighbourRef, Node, NodeFileRef, NodeProp, NodeRef, VectorId, VectorQt, VectorStore,
+    HNSWLevel, MergedNode, Neighbour, NodeFileRef, NodeProp, VectorId, VectorQt, VectorStore,
     VersionId,
 };
 use crate::models::serializer::*;
@@ -40,9 +40,9 @@ pub struct Versions {
 
 #[derive(Debug, Clone)]
 pub struct NodePersist {
-    pub version_id: u32, // Assuming VersionId is a type alias for u32
+    pub version_id: VersionId,
     pub prop_location: PropPersistRef,
-    pub hnsw_level: u8, // Assuming HNSWLevel is a type alias for u8
+    pub hnsw_level: HNSWLevel,
     pub version_ref: VersionRef,
     pub neighbors: [NeighbourPersist; 10], // Bounded array of size 10
     pub parent: Option<NodePersistRef>,
@@ -128,7 +128,7 @@ pub fn read_node_from_file(file: &mut File, offset: u32) -> std::io::Result<Node
 // end
 pub fn persist_node_update_loc(
     wal_file: Arc<File>,
-    node: NodeRef,
+    node: Arc<Node>,
     hnsw_level: HNSWLevel,
     create_vrefs_flag: bool,
 ) -> Result<(), WaCustomError> {
@@ -222,82 +222,6 @@ pub fn persist_node_update_loc(
 
     Ok(())
 }
-
-// pub fn map_node_persist_ref_to_node(
-//     vec_store: VectorStore,
-//     node_ref: NodePersistRef,
-//     cosine_similarity: f32,
-//     vec_level: HNSWLevel,
-//     vec_id: VectorId,
-// ) -> NeighbourRef {
-//     // logic to map NodePersistRef to Node
-//     //
-//     match load_neighbor_persist_ref(vec_level, node_ref) {
-//         Some(nodex) => {
-//             return NeighbourRef::Ready {
-//                 node: nodex,
-//                 cosine_similarity,
-//             }
-//         }
-//         None => return NeighbourRef::Pending(node_ref),
-//     };
-// }
-
-// pub fn load_node_from_node_persist(
-//     vec_store: VectorStore,
-//     node_persist: NodePersist,
-//     persist_loc: NodeFileRef,
-//     prop: Arc<NodeProp>,
-// ) -> NodeRef {
-//     // Convert neighbors from NodePersistRef to NeighbourRef
-//     let neighbors_result: Vec<NeighbourRef> = node_persist
-//         .neighbors
-//         .iter()
-//         .filter_map(|nref| {
-//             if nref.node != 0 {
-//                 Some(map_node_persist_ref_to_node(
-//                     vec_store.clone(),
-//                     nref.node,
-//                     nref.cosine_similarity,
-//                     node_persist.hnsw_level,
-//                     prop.id.clone(),
-//                 ))
-//             } else {
-//                 None
-//             }
-//         })
-//         .collect();
-//     // Wrap neighbors in Arc<Mutex<Vec<NeighbourRef>>>
-//     let neighbors = Arc::new(RwLock::new(neighbors_result));
-
-//     // Convert parent and child
-//     let parent = if let Some(parent_ref) = node_persist.parent {
-//         load_neighbor_persist_ref(node_persist.hnsw_level, node_persist.parent.unwrap())
-//     } else {
-//         None
-//     };
-//     let parent = Arc::new(RwLock::new(parent));
-
-//     let child = if let Some(child_ref) = node_persist.child {
-//         load_neighbor_persist_ref(node_persist.hnsw_level, node_persist.child.unwrap())
-//     } else {
-//         None
-//     };
-//     let child = Arc::new(RwLock::new(child));
-
-//     // Create and return NodeRef
-//     Arc::new(Node {
-//         prop,
-//         location: Arc::new(RwLock::new(Some(persist_loc))),
-//         prop_location: Arc::new(RwLock::new(Some(node_persist.prop_location))),
-//         neighbors,
-//         parent,
-//         child,
-//         //previous: Some(persist_loc),
-//         version_id: node_persist.version_id,
-//     })
-// }
-
 pub fn write_prop_to_file(prop: &NodeProp, mut file: &File) -> (u32, u32) {
     let mut prop_bytes = Vec::new();
     //let result = encode(&prop);

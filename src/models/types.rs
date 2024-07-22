@@ -1,8 +1,8 @@
+use crate::models::chunked_list::*;
 use crate::models::common::*;
 use crate::models::versioning::VersionHash;
 use bincode;
 use dashmap::DashMap;
-use http::Version;
 use lmdb::{Database, Environment, Transaction, WriteFlags};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -10,104 +10,168 @@ use std::fs::*;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
+
 pub type HNSWLevel = u8;
+pub type FileOffset = u32;
+pub type BytesToRead = u32;
+pub type VersionId = u16;
+pub type CosineSimilarity = f32;
 
-pub type NodeRef = Arc<Node>;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum NeighbourRef {
-    Ready {
-        node: NodeRef,
-        cosine_similarity: f32,
-    },
-    Pending(NodeFileRef),
+#[derive(Debug, Clone)]
+pub struct Neighbour {
+    node: Arc<MergedNode>,
+    cosine_similarity: CosineSimilarity,
 }
 
-pub type NodeFileRef = u32; // (offset)
-pub type PropFileRef = (u32, u32); // (offset, size)
+pub type PropPersistRef = (FileOffset, BytesToRead);
+pub type NodeFileRef = FileOffset;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct NodeProp {
     pub id: VectorId,
     pub value: Arc<VectorQt>,
+    pub location: Option<PropPersistRef>,
 }
 
-pub type VersionId = u32;
+#[derive(Debug, Clone)]
+pub enum PropState {
+    Ready(Arc<NodeProp>),
+    Pending(PropPersistRef),
+}
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Node {
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum VectorId {
+    Str(String),
+    Int(i32),
+}
+#[derive(Debug, Clone)]
+pub struct MergedNode {
     pub version_id: VersionId,
-    pub prop: Arc<NodeProp>,
-    pub location: Arc<RwLock<Option<NodeFileRef>>>,
-    pub prop_location: Arc<RwLock<Option<PropFileRef>>>,
-    pub neighbors: Arc<RwLock<Vec<NeighbourRef>>>,
-    pub parent: Arc<RwLock<Option<NodeRef>>>,
-    pub child: Arc<RwLock<Option<NodeRef>>>,
+    pub hnsw_level: HNSWLevel,
+    pub prop: Arc<RwLock<PropState>>,
+    pub location: Arc<RwLock<Option<FileOffset>>>,
+    pub neighbors: Arc<RwLock<ItemListRef<Neighbour>>>,
+    pub parent: Arc<RwLock<Option<Arc<MergedNode>>>>,
+    pub child: Arc<RwLock<Option<Arc<MergedNode>>>>,
+    pub version_ref: Arc<RwLock<ItemListRef<MergedNode>>>,
 }
 
-impl NodeProp {
-    pub fn new(id: VectorId, value: Arc<VectorQt>) -> Arc<NodeProp> {
-        Arc::new(NodeProp { id, value })
+impl Locatable for Neighbour {
+    fn get_location(&self) -> Option<u32> {
+        self.node.get_location()
+    }
+
+    fn set_location(&mut self, location: u32) {
+        self.node.set_location(location);
+    }
+
+    fn mark_for_persistence(&mut self) {
+        self.needs_persistence = true;
+    }
+
+    fn needs_persistence(&self) -> bool {
+        self.needs_persistence
     }
 }
 
-impl Node {
-    pub fn new(
-        prop: Arc<NodeProp>,
-        loc: Option<NodeFileRef>,
-        prop_loc: Option<PropFileRef>,
-        version_id: VersionId,
-    ) -> NodeRef {
-        Arc::new(Node {
-            prop,
-            location: Arc::new(RwLock::new(loc)),
-            prop_location: Arc::new(RwLock::new(prop_loc)),
-            neighbors: Arc::new(RwLock::new(Vec::new())),
+// Implementing the std::fmt::Display trait for VectorId
+impl fmt::Display for VectorId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            VectorId::Str(s) => write!(f, "{}", s),
+            VectorId::Int(i) => write!(f, "{}", i),
+        }
+    }
+}
+
+impl MergedNode {
+    pub fn new(version_id: VersionId, hnsw_level: HNSWLevel, chunk_size: usize) -> Self {
+        MergedNode {
+            version_id,
+            hnsw_level,
+            prop: Arc::new(RwLock::new(PropState::Pending((0, 0)))),
+            location: Arc::new(RwLock::new(None)),
+            neighbors: Arc::new(RwLock::new(ItemListRef::Invalid)),
             parent: Arc::new(RwLock::new(None)),
             child: Arc::new(RwLock::new(None)),
-            version_id,
-        })
-    }
-
-    pub fn add_ready_neighbor(&self, neighbor: NodeRef, cosine_similarity: f32) {
-        let mut neighbors = self.neighbors.write().unwrap();
-        neighbors.push(NeighbourRef::Ready {
-            node: neighbor,
-            cosine_similarity,
-        });
-    }
-
-    pub fn add_ready_neighbors(&self, neighbors_list: Vec<(NodeRef, f32)>) {
-        let mut neighbors = self.neighbors.write().unwrap();
-        for (neighbor, cosine_similarity) in neighbors_list.iter() {
-            neighbors.push(NeighbourRef::Ready {
-                node: neighbor.clone(),
-                cosine_similarity: *cosine_similarity,
-            });
+            version_ref: Arc::new(RwLock::new(ItemListRef::Invalid)),
         }
     }
 
-    pub fn get_neighbors(&self) -> Vec<NeighbourRef> {
-        let neighbors = self.neighbors.read().unwrap();
-        neighbors.clone()
+    pub fn get_prop(&self) -> PropState {
+        self.prop.read().unwrap().clone()
     }
 
-    pub fn set_parent(&self, parent: NodeRef) {
+    pub fn set_prop_pending(&self, prop_ref: PropPersistRef) {
+        let mut prop = self.prop.write().unwrap();
+        *prop = PropState::Pending(prop_ref);
+    }
+
+    pub fn set_prop_ready(&self, node_prop: Arc<NodeProp>) {
+        let mut prop = self.prop.write().unwrap();
+        *prop = PropState::Ready(node_prop);
+    }
+
+    pub fn add_ready_neighbor(&self, neighbor: Arc<MergedNode>, cosine_similarity: f32) {
+        let mut neighbors = self.neighbors.write().unwrap();
+        let neighbor_ref = Arc::new(Neighbour {
+            node: neighbor,
+            cosine_similarity,
+        });
+        neighbors.add(ItemRef::InMemory(neighbor_ref));
+    }
+
+    pub fn add_ready_neighbors(&self, neighbors_list: Vec<(Arc<MergedNode>, f32)>) {
+        let mut neighbors = self.neighbors.write().unwrap();
+        for (neighbor, cosine_similarity) in neighbors_list {
+            let neighbor_ref = Arc::new(Neighbour {
+                node: neighbor,
+                cosine_similarity,
+            });
+            neighbors.add(ItemRef::InMemory(neighbor_ref));
+        }
+    }
+
+    pub fn get_neighbors(&self) -> Vec<ItemRef<Neighbour>> {
+        let neighbors = self.neighbors.read().unwrap();
+        neighbors.get_all()
+    }
+
+    pub fn set_neighbors(&self, new_neighbors: Vec<Neighbour>) {
+        let mut neighbors = self.neighbors.write().unwrap();
+        let new_neighbors_refs = new_neighbors
+            .into_iter()
+            .map(|nr| ItemRef::InMemory(Arc::new(nr)))
+            .collect();
+        neighbors.set_all(new_neighbors_refs);
+    }
+
+    pub fn add_version(&self, version: Arc<MergedNode>) {
+        let mut versions = self.version_ref.write().unwrap();
+        versions.add(ItemRef::InMemory(version));
+    }
+
+    pub fn get_versions(&self) -> Vec<ItemRef<MergedNode>> {
+        let versions = self.version_ref.read().unwrap();
+        versions.get_all()
+    }
+
+    pub fn set_parent(&self, parent: Arc<MergedNode>) {
         let mut parent_lock = self.parent.write().unwrap();
         *parent_lock = Some(parent);
     }
 
-    pub fn set_child(&self, child: NodeRef) {
+    pub fn set_child(&self, child: Arc<MergedNode>) {
         let mut child_lock = self.child.write().unwrap();
         *child_lock = Some(child);
     }
 
-    pub fn get_parent(&self) -> Option<NodeRef> {
+    pub fn get_parent(&self) -> Option<Arc<MergedNode>> {
         let parent_lock = self.parent.read().unwrap();
         parent_lock.clone()
     }
 
-    pub fn get_child(&self) -> Option<NodeRef> {
+    pub fn get_child(&self) -> Option<Arc<MergedNode>> {
         let child_lock = self.child.read().unwrap();
         child_lock.clone()
     }
@@ -122,53 +186,31 @@ impl Node {
         *location_read
     }
 
-    pub fn set_prop_location(&self, new_location: PropFileRef) {
-        let mut location_write = self.prop_location.write().unwrap();
-        *location_write = Some(new_location);
+    pub fn set_prop_location(&self, new_location: PropPersistRef) {
+        let mut location_write = self.prop.write().unwrap();
+        *location_write = PropState::Pending(new_location);
     }
 
-    pub fn get_prop_location(&self) -> Option<PropFileRef> {
-        let location_read = self.prop_location.read().unwrap();
-        *location_read
+    pub fn get_prop_location(&self) -> Option<PropPersistRef> {
+        let location_read = self.prop.read().unwrap();
+        match location_read.clone() {
+            PropState::Ready(x) => x.clone().location,
+            PropState::Pending(x) => Some(x),
+        }
     }
 }
-
-impl std::fmt::Display for Node {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Node {{ id: {:?},", self.prop.id)?; // Include self ID
-
-        // Get references to inner data with locking (assuming RAII pattern)
-        let parent_id = self
-            .parent
-            .read()
-            .unwrap()
-            .as_ref()
-            .map(|p| p.prop.id.clone());
-        let child_id = self
-            .child
-            .read()
-            .unwrap()
-            .as_ref()
-            .map(|c| c.prop.id.clone());
-        let neighbor_ids = self
-            .neighbors
-            .read()
-            .unwrap()
-            .iter()
-            .filter_map(|n| match n {
-                NeighbourRef::Ready { node, .. } => Some(node.prop.id.clone()),
-                _ => None,
-            })
-            .collect::<Vec<VectorId>>();
-        let location = self.location.read().unwrap();
-        // Write data using write! or formatting options
-        write!(
-            f,
-            " parent: {:?}, child: {:?}, neighbors: {:?}, location: {:?}",
-            parent_id, child_id, neighbor_ids, location
-        )?;
-
-        write!(f, " }}")
+impl fmt::Display for MergedNode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "MergedNode {{ version_id: {}, hnsw_level: {}, prop: {:?}, location: {:?}, neighbors: {:?}, parent: {:?}, child: {:?}, version_ref: {:?} }}",
+            self.version_id,
+            self.hnsw_level,
+            self.prop.read().unwrap(),
+            self.location.read().unwrap(),
+            self.neighbors.read().unwrap(),
+            self.parent.read().unwrap(),
+            self.child.read().unwrap(),
+            self.version_ref.read().unwrap()
+        )
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -201,21 +243,6 @@ impl VectorQt {
         }
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum VectorId {
-    Str(String),
-    Int(i32),
-}
-
-// Implementing the std::fmt::Display trait for VectorId
-impl fmt::Display for VectorId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            VectorId::Str(s) => write!(f, "{}", s),
-            VectorId::Int(i) => write!(f, "{}", i),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VectorTreeNode {
@@ -240,7 +267,7 @@ impl VectorTreeNode {
 pub type SizeBytes = u32;
 
 // needed to flatten and get uniques
-pub type ExecQueueUpdate = Arc<DashMap<(HNSWLevel, VectorId), (NodeRef, SizeBytes)>>;
+pub type ExecQueueUpdate = Arc<DashMap<(HNSWLevel, VectorId), (Arc<MergedNode>, SizeBytes)>>;
 
 #[derive(Debug, Clone)]
 pub struct MetaDb {
@@ -252,7 +279,7 @@ pub struct VectorStore {
     pub exec_queue_nodes: ExecQueueUpdate,
     pub max_cache_level: u8,
     pub database_name: String,
-    pub root_vec: NodeRef,
+    pub root_vec: Arc<MergedNode>,
     pub levels_prob: Arc<Vec<(f64, i32)>>,
     pub quant_dim: usize,
     pub prop_file: Arc<File>,

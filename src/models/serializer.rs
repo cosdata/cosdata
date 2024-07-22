@@ -1,4 +1,6 @@
+use crate::models::chunked_list::*;
 use crate::models::file_persist::*;
+use crate::models::types::*;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::mem::transmute;
@@ -254,5 +256,185 @@ impl CustomSerialize for NodePersist {
             parent,
             child,
         })
+    }
+}
+
+impl<T: Clone + Locatable + CustomSerialize> CustomSerialize for ItemRef<T> {
+    fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
+        let offset = writer.stream_position()? as u32;
+
+        match self {
+            ItemRef::InMemory(item) => {
+                let location = item.get_location();
+                writer.write_u32::<LittleEndian>(location)?;
+
+                if item.needs_persistence() {
+                    item.serialize(writer)?;
+                }
+            }
+            ItemRef::Persistent(file_offset) => {
+                writer.write_u32::<LittleEndian>(*file_offset)?;
+            }
+            ItemRef::Invalid => {
+                writer.write_u32::<LittleEndian>(u32::MAX)?;
+            }
+        }
+
+        Ok(offset)
+    }
+    fn deserialize<R: Read + Seek>(reader: &mut R, offset: u32) -> std::io::Result<Self> {
+        reader.seek(SeekFrom::Start(offset as u64))?;
+
+        let location = reader.read_u32::<LittleEndian>()?;
+
+        if location == u32::MAX {
+            Ok(ItemRef::Invalid)
+        } else {
+            // We're not reading the actual T here, just its location
+            Ok(ItemRef::Persistent(location))
+        }
+    }
+}
+
+impl<T: Clone + Locatable + CustomSerialize> CustomSerialize for Items<T> {
+    fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
+        let offset = writer.stream_position()? as u32;
+
+        for item in &self.items {
+            item.serialize(writer)?;
+        }
+
+        self.next.serialize(writer)?;
+
+        Ok(offset)
+    }
+
+    fn deserialize<R: Read + Seek>(reader: &mut R, offset: u32) -> std::io::Result<Self> {
+        reader.seek(SeekFrom::Start(offset as u64))?;
+
+        // Read all offsets first
+        let offset1 = reader.stream_position()? as u32;
+        reader.seek(SeekFrom::Current(4))?; // Assuming each ItemRef is 4 bytes
+        let offset2 = reader.stream_position()? as u32;
+        reader.seek(SeekFrom::Current(4))?;
+        let offset3 = reader.stream_position()? as u32;
+        reader.seek(SeekFrom::Current(4))?;
+        let offset4 = reader.stream_position()? as u32;
+        reader.seek(SeekFrom::Current(4))?;
+        let next_offset = reader.stream_position()? as u32;
+
+        // Now deserialize using the offsets
+        let items = [
+            ItemRef::deserialize(reader, offset1)?,
+            ItemRef::deserialize(reader, offset2)?,
+            ItemRef::deserialize(reader, offset3)?,
+            ItemRef::deserialize(reader, offset4)?,
+        ];
+
+        let next = ItemListRef::deserialize(reader, next_offset)?;
+
+        Ok(Items { items, next })
+    }
+}
+
+impl<T: Clone + Locatable + CustomSerialize> CustomSerialize for ItemListRef<T> {
+    fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
+        let offset = writer.stream_position()? as u32;
+
+        match self {
+            ItemListRef::Ref(items) => {
+                writer.write_u32::<LittleEndian>(offset + 4)?; // Point to the next 4 bytes
+                items.serialize(writer)?;
+            }
+            ItemListRef::Invalid => {
+                writer.write_u32::<LittleEndian>(u32::MAX)?;
+            }
+        }
+
+        Ok(offset)
+    }
+
+    fn deserialize<R: Read + Seek>(reader: &mut R, offset: u32) -> std::io::Result<Self> {
+        reader.seek(SeekFrom::Start(offset as u64))?;
+
+        let next_offset = reader.read_u32::<LittleEndian>()?;
+
+        if next_offset == u32::MAX {
+            Ok(ItemListRef::Invalid)
+        } else {
+            // Deserialize Items directly here
+            let items = Items::deserialize(reader, next_offset)?;
+            Ok(ItemListRef::Ref(Box::new(items)))
+        }
+    }
+}
+
+impl CustomSerialize for VectorQt {
+    fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
+        let offset = writer.stream_position()? as u32;
+
+        match self {
+            VectorQt::UnsignedByte { mag, quant_vec } => {
+                writer.write_u8(0)?; // 0 for UnsignedByte
+                writer.write_u32::<LittleEndian>(*mag)?;
+                writer.write_u32::<LittleEndian>(quant_vec.len() as u32)?;
+                writer.write_all(quant_vec)?;
+            }
+            VectorQt::SubByte {
+                mag,
+                quant_vec,
+                resolution,
+            } => {
+                writer.write_u8(1)?; // 1 for SubByte
+                writer.write_u32::<LittleEndian>(*mag)?;
+                writer.write_u32::<LittleEndian>(quant_vec.len() as u32)?;
+                for inner_vec in quant_vec {
+                    writer.write_u32::<LittleEndian>(inner_vec.len() as u32)?;
+                    for &value in inner_vec {
+                        writer.write_u32::<LittleEndian>(value)?;
+                    }
+                }
+                writer.write_u8(*resolution)?;
+            }
+        }
+
+        Ok(offset)
+    }
+
+    fn deserialize<R: Read + Seek>(reader: &mut R, offset: u32) -> std::io::Result<Self> {
+        reader.seek(SeekFrom::Start(offset as u64))?;
+
+        match reader.read_u8()? {
+            0 => {
+                let mag = reader.read_u32::<LittleEndian>()?;
+                let len = reader.read_u32::<LittleEndian>()? as usize;
+                let mut quant_vec = vec![0u8; len];
+                reader.read_exact(&mut quant_vec)?;
+                Ok(VectorQt::UnsignedByte { mag, quant_vec })
+            }
+            1 => {
+                let mag = reader.read_u32::<LittleEndian>()?;
+                let outer_len = reader.read_u32::<LittleEndian>()? as usize;
+                let mut quant_vec = Vec::with_capacity(outer_len);
+                for _ in 0..outer_len {
+                    let inner_len = reader.read_u32::<LittleEndian>()? as usize;
+                    let mut inner_vec = Vec::with_capacity(inner_len);
+                    for _ in 0..inner_len {
+                        inner_vec.push(reader.read_u32::<LittleEndian>()?);
+                    }
+                    quant_vec.push(inner_vec);
+                }
+                let resolution = reader.read_u8()?;
+                Ok(VectorQt::SubByte {
+                    mag,
+                    quant_vec,
+                    resolution,
+                })
+            }
+            _ => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Invalid VectorQt",
+            )),
+        }
     }
 }
