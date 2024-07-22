@@ -12,5 +12,22 @@ pub(crate) async fn commit(path_data: web::Path<(String, String)>) -> HttpRespon
         return HttpResponse::NotFound().body("Vector store not found");
     };
 
-    todo!()
+    {
+        let gaurd = vec_store.current_open_transaction.read().unwrap();
+        let Some(transaction) = gaurd.as_ref() else {
+            return HttpResponse::NotFound().body("Transaction not found");
+        };
+
+        if transaction.hash != transaction_id {
+            return HttpResponse::NotFound().body("Transaction not found");
+        }
+    }
+
+    // `Option::take` method returns its current value and sets the value to `None`
+    *vec_store.current_version.write().unwrap() =
+        vec_store.current_open_transaction.write().unwrap().take();
+
+    // TODO: update the data (nodes) in memory
+
+    HttpResponse::Ok().finish()
 }
