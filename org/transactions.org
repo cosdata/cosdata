@@ -100,6 +100,13 @@ After performing all desired operations, the client can commit the transaction b
 POST /vectordb/db_name/transactions/dGhpc2lzYX/commit
 #+END_SRC
 
+* Aborting the transaction
+To discard the changes made in a transaction, the client can abort the transaction by sending a POST request to the transaction’s unique URL.
+
+#+BEGIN_SRC http
+POST /vectordb/db_name/transactions/dGhpc2lzYX/abort
+#+END_SRC
+
 * Benefits and Considerations
 This approach has several benefits:
 
