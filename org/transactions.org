@@ -8,7 +8,7 @@ In the world of RESTful APIs, the concept of treating transactions as resources 
 One effective way to achieve this is by creating a special transaction resource. This resource can be managed using standard HTTP methods and can provide a straightforward way to implement transactions. Here’s a general outline of how this can be done.
 
 * Creating a Transaction Resource
-To begin a transaction, the client performs a POST request to a predefined endpoint, such as =/vectordb/transactions=. This request generates a new transaction, returning a unique identifier (a 128-bit hash encoded as a base64 string) for the transaction. This identifier will be used in subsequent operations within the transaction.
+To begin a transaction, the client performs a POST request to a predefined endpoint, such as =/vectordb/db_name/transactions=. This request generates a new transaction, returning a unique identifier (a 128-bit hash encoded as a base64 string) for the transaction. This identifier will be used in subsequent operations within the transaction.
 
 - Request
 #+BEGIN_SRC http
@@ -28,7 +28,7 @@ Content-Type: application/json
 Once the transaction is created and the unique identifier is received, the client can perform various database operations within the context of this transaction. Each operation is directed to a URL that includes the transaction’s unique identifier.
 
 ** Upserting Data
-To upsert data within the transaction, the client sends a request to the =/vectordb/transactions/dGhpc2lzYX/upsert= endpoint. This allows the client to insert or update data within the transaction context.
+To upsert data within the transaction, the client sends a request to the =/vectordb/db_name/transactions/dGhpc2lzYX/upsert= endpoint. This allows the client to insert or update data within the transaction context.
 
 #+BEGIN_SRC http
 POST /vectordb/db_name/transactions/dGhpc2lzYX/upsert
@@ -57,7 +57,7 @@ Content-Type: application/json
 #+END_SRC
 
 ** Updating Data
-For updating existing data, the client uses the  =/vectordb/transactions/dGhpc2lzYX/update= endpoint.
+For updating existing data, the client uses the  =/vectordb/db_name/transactions/dGhpc2lzYX/update= endpoint.
 
 #+BEGIN_SRC http
 POST /vectordb/db_name/transactions/dGhpc2lzYX/update
@@ -78,7 +78,7 @@ Content-Type: application/json
 #+END_SRC
 
 ** Deleting Data
-To delete data within the transaction, the client sends a request to the =/vectordb/transactions/dGhpc2lzYX/delete= endpoint.
+To delete data within the transaction, the client sends a request to the =/vectordb/db_name/transactions/dGhpc2lzYX/delete= endpoint.
 
 #+BEGIN_SRC http
 POST /vectordb/db_name/transactions/dGhpc2lzYX/delete
