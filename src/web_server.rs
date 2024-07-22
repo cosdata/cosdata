@@ -94,6 +94,10 @@ pub async fn run_actix_server() -> std::io::Result<()> {
                             .route(
                                 "/{transaction_id}/commit",
                                 web::post().to(api::vectordb::transactions::commit),
+                            )
+                            .route(
+                                "/{transaction_id}/abort",
+                                web::post().to(api::vectordb::transactions::abort),
                             ),
                     ),
             )
