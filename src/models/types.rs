@@ -251,11 +251,6 @@ pub struct MetaDb {
 }
 
 #[derive(Debug, Clone)]
-pub struct Transaction {
-    pub hash: Arc<RwLock<VersionHash>>,
-}
-
-#[derive(Debug, Clone)]
 pub struct VectorStore {
     pub exec_queue_nodes: ExecQueueUpdate,
     pub max_cache_level: u8,
