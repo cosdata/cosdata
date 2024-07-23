@@ -127,41 +127,42 @@ impl CustomSerialize for MergedNode {
             // The actual state will be determined when the prop is accessed
             PropState::Pending((offset, length))
         };
-        // Read parent and child offsets
+
+        // we just take the offset
+        let location = offset;
+        // Read offsets for neighbors, parent, child, and version_ref
+        let neighbors_offset = reader.read_u32::<LittleEndian>()?;
         let parent_offset = reader.read_u32::<LittleEndian>()?;
         let child_offset = reader.read_u32::<LittleEndian>()?;
+        let version_ref_offset = reader.read_u32::<LittleEndian>()?;
 
-        // Create LazyItems for parent and child
         let parent = if parent_offset == u32::MAX {
             LazyItem::Null
         } else {
             LazyItem::LazyLoad(parent_offset)
         };
-
         let child = if child_offset == u32::MAX {
             LazyItem::Null
         } else {
             LazyItem::LazyLoad(child_offset)
         };
 
-        // we just take the offset
-        let location = offset;
-
         // Deserialize neighbors
-        let neighbors = ItemListRef::deserialize(reader, reader.stream_position()? as u32)?;
+        let neighbors = ItemListRef::deserialize(reader, neighbors_offset)?;
 
         // Deserialize version_ref
-        let version_ref = ItemListRef::deserialize(reader, reader.stream_position()? as u32)?;
+        let version_ref = ItemListRef::deserialize(reader, version_ref_offset)?;
 
         Ok(MergedNode {
             version_id,
             hnsw_level,
             prop: Arc::new(RwLock::new(prop)),
-            location: Arc::new(RwLock::new(location)),
+            location: Arc::new(RwLock::new(Some(location))),
             neighbors: Arc::new(RwLock::new(neighbors)),
             parent: Arc::new(RwLock::new(parent)),
             child: Arc::new(RwLock::new(child)),
             version_ref: Arc::new(RwLock::new(version_ref)),
+            persist_flag: Arc::new(RwLock::new(true)),
         })
     }
 }
@@ -172,7 +173,8 @@ impl<T: Clone + Locatable + CustomSerialize> CustomSerialize for LazyItem<T> {
 
         match self {
             LazyItem::Ready(item) => {
-                let location = item.get_file_offset();
+                let location = item.get_file_offset().unwrap_or(u32::MAX);
+
                 writer.write_u32::<LittleEndian>(location)?;
 
                 if item.needs_persistence() {

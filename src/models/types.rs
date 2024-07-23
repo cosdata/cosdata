@@ -26,7 +26,7 @@ pub struct Neighbour {
 pub type PropPersistRef = (FileOffset, BytesToRead);
 pub type NodeFileRef = FileOffset;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeProp {
     pub id: VectorId,
     pub value: Arc<VectorQt>,
@@ -39,7 +39,7 @@ pub enum PropState {
     Pending(PropPersistRef),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum VectorId {
     Str(String),
     Int(i32),
@@ -55,7 +55,7 @@ pub struct MergedNode {
     pub parent: Arc<RwLock<LazyItem<MergedNode>>>,
     pub child: Arc<RwLock<LazyItem<MergedNode>>>,
     pub version_ref: Arc<RwLock<ItemListRef<MergedNode>>>,
-    persist_flag: Arc<RwLock<bool>>,
+    pub persist_flag: Arc<RwLock<bool>>,
 }
 
 impl Locatable for MergedNode {
@@ -116,8 +116,8 @@ impl MergedNode {
             prop: Arc::new(RwLock::new(PropState::Pending((0, 0)))),
             location: Arc::new(RwLock::new(None)),
             neighbors: Arc::new(RwLock::new(ItemListRef::Null)),
-            parent: Arc::new(RwLock::new(None)),
-            child: Arc::new(RwLock::new(None)),
+            parent: Arc::new(RwLock::new(LazyItem::Null)),
+            child: Arc::new(RwLock::new(LazyItem::Null)),
             version_ref: Arc::new(RwLock::new(ItemListRef::Null)),
             persist_flag: Arc::new(RwLock::new(true)),
         }
@@ -183,20 +183,20 @@ impl MergedNode {
 
     pub fn set_parent(&self, parent: Arc<MergedNode>) {
         let mut parent_lock = self.parent.write().unwrap();
-        *parent_lock = Some(parent);
+        *parent_lock = LazyItem::Ready(parent);
     }
 
     pub fn set_child(&self, child: Arc<MergedNode>) {
         let mut child_lock = self.child.write().unwrap();
-        *child_lock = Some(child);
+        *child_lock = LazyItem::Ready(child);
     }
 
-    pub fn get_parent(&self) -> Option<Arc<MergedNode>> {
+    pub fn get_parent(&self) -> LazyItem<MergedNode> {
         let parent_lock = self.parent.read().unwrap();
         parent_lock.clone()
     }
 
-    pub fn get_child(&self) -> Option<Arc<MergedNode>> {
+    pub fn get_child(&self) -> LazyItem<MergedNode> {
         let child_lock = self.child.read().unwrap();
         child_lock.clone()
     }
@@ -269,26 +269,6 @@ impl VectorQt {
     }
 }
 
-// #[derive(Debug, Clone)]
-// pub struct VectorTreeNode {
-//     pub vector_list: Arc<VectorQt>,
-//     pub neighbors: Vec<(VectorId, f32)>,
-// }
-
-// impl VectorTreeNode {
-//     // Serialize the VectorTreeNode to a byte vector
-//     pub fn serialize(&self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-//         let serialized = bincode::serialize(self)?;
-//         Ok(serialized)
-//     }
-
-//     // Deserialize a byte vector to a VectorTreeNode
-//     pub fn deserialize(bytes: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
-//         let deserialized = bincode::deserialize(bytes)?;
-//         Ok(deserialized)
-//     }
-// }
-
 pub type SizeBytes = u32;
 
 // needed to flatten and get uniques
@@ -304,11 +284,10 @@ pub struct VectorStore {
     pub exec_queue_nodes: ExecQueueUpdate,
     pub max_cache_level: u8,
     pub database_name: String,
-    pub root_vec: Arc<MergedNode>,
+    pub root_vec: LazyItem<MergedNode>,
     pub levels_prob: Arc<Vec<(f64, i32)>>,
     pub quant_dim: usize,
     pub prop_file: Arc<File>,
-    pub wal_file: Arc<File>,
     pub version_lmdb: MetaDb,
     pub current_version: Arc<RwLock<Option<VersionHash>>>,
 }

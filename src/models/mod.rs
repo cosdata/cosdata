@@ -1,6 +1,7 @@
 pub mod cache_loader;
 pub mod chunked_list;
 pub mod common;
+pub mod custom_buffered_writer;
 pub mod dot_product;
 pub mod encoding_format;
 pub mod file_persist;

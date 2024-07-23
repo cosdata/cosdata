@@ -30,6 +30,26 @@ pub enum LazyItem<T: Clone + Locatable> {
 
 pub type FileOffset = u32;
 
+impl<T: Clone + Locatable> LazyItem<T> {
+    fn get_offset(&self) -> Option<u32> {
+        match self {
+            LazyItem::LazyLoad(offset) => Some(*offset),
+            LazyItem::Ready(item) => item.get_file_offset(),
+            LazyItem::Null => None,
+        }
+    }
+}
+
+impl<T: Clone + Locatable> LazyItem<T> {
+    pub fn new_lazy(offset: FileOffset) -> Self {
+        if offset == u32::MAX {
+            LazyItem::Null
+        } else {
+            LazyItem::LazyLoad(offset)
+        }
+    }
+}
+
 impl<T: Clone + Locatable> Items<T> {
     pub fn new() -> Self {
         Items {

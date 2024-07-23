@@ -1,3 +1,6 @@
+use crate::models::chunked_list::ItemListRef;
+use crate::models::chunked_list::LazyItem;
+use crate::models::custom_buffered_writer::CustomBufferedWriter;
 use crate::models::file_persist::*;
 use crate::models::meta_persist::*;
 use crate::models::rpc::VectorIdValue;
@@ -9,7 +12,10 @@ use dashmap::DashMap;
 use futures::stream::{self, StreamExt};
 use lmdb::{Database, DatabaseFlags, Environment, Error as LmdbError, Transaction, WriteFlags};
 use rand::Rng;
+use std::cell::RefCell;
 use std::fs::OpenOptions;
+use std::io::Write;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex, RwLock};
 
 pub async fn init_vector_store(
@@ -48,39 +54,66 @@ pub async fn init_vector_store(
             .expect("Failed to open file for writing"),
     );
 
-    let wal_file = Arc::new(
+    let ver_file = Rc::new(RefCell::new(
         OpenOptions::new()
             .create(true)
             .append(true)
-            .open("index.0")
+            .open("0.index")
             .expect("Failed to open file for writing"),
-    );
+    ));
 
-    let mut root: Option<NodeRef> = None;
-    let mut prev: Option<NodeRef> = None;
+    let mut writer =
+        CustomBufferedWriter::new(ver_file.clone()).expect("Failed opening custom buffer");
 
+    let mut root: LazyItem<MergedNode> = LazyItem::Null;
+    let mut prev: LazyItem<MergedNode> = LazyItem::Null;
+
+    let mut nodes = Vec::new();
     for l in 0..=max_cache_level {
-        let prop = NodeProp::new(vec_hash.clone(), vector_list.clone().into());
+        let prop = Arc::new(NodeProp {
+            id: vec_hash.clone(),
+            value: vector_list.clone().into(),
+            location: Some((0, 0)),
+        });
 
-        let nn = Node::new(prop.clone(), None, None, 0);
+        let nn = LazyItem::Ready(Arc::new(MergedNode {
+            version_id: 0, // Initialize with appropriate version ID
+            hnsw_level: l as u8,
+            prop: Arc::new(RwLock::new(PropState::Ready(prop.clone()))),
+            location: Arc::new(RwLock::new(None)),
+            neighbors: Arc::new(RwLock::new(ItemListRef::new())),
+            parent: Arc::new(RwLock::new(LazyItem::Null)),
+            child: Arc::new(RwLock::new(LazyItem::Null)),
+            version_ref: Arc::new(RwLock::new(ItemListRef::new())),
+            persist_flag: Arc::new(RwLock::new(true)),
+        }));
 
-        if let Some(ref mut p) = prev {
-            nn.set_parent(p.clone());
-            p.set_child(nn.clone());
+        if let (LazyItem::Ready(current_node), LazyItem::Ready(prev_node)) = (&nn, &prev) {
+            current_node.set_parent(prev_node.clone());
+            prev_node.set_child(current_node.clone());
         }
+        prev = nn.clone();
 
-        prev = Some(nn.clone());
         if l == 0 {
-            root = Some(nn.clone());
-            nn.set_prop_location(write_prop_to_file(&prop, &prop_file));
+            root = nn.clone();
+            if let LazyItem::Ready(ref mut root_node) = root {
+                let prop_location = write_prop_to_file(&prop, &prop_file);
+                let root_node_mut = Arc::make_mut(root_node);
+                root_node_mut.set_prop_ready(prop);
+            }
         }
-        match persist_node_update_loc(wal_file.clone(), nn.clone(), l, true) {
+
+        nodes.push(nn.clone());
+        println!("sssss: {:?}", nn);
+    }
+
+    for (l, nn) in nodes.iter_mut().enumerate() {
+        match persist_node_update_loc(&mut writer, nn) {
             Ok(_) => (),
             Err(e) => {
                 eprintln!("Failed node persist (init): {}", e);
             }
         };
-        println!("sssss: {}", nn.clone());
     }
 
     // ---------------------------
@@ -99,11 +132,10 @@ pub async fn init_vector_store(
                     let vec_store = Arc::new(VectorStore {
                         max_cache_level,
                         database_name: name.clone(),
-                        root_vec: root.unwrap(),
+                        root_vec: root,
                         levels_prob: lp,
                         quant_dim: (size / 32) as usize,
                         prop_file,
-                        wal_file,
                         exec_queue_nodes,
                         version_lmdb: MetaDb {
                             env: denv.clone(),

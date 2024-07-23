@@ -1,8 +1,10 @@
+use super::chunked_list::LazyItem;
 use super::dot_product::dot_product_u8_avx2;
 use super::rpc::VectorIdValue;
-use super::types::{NodeRef, VectorId};
+use super::types::{MergedNode, VectorId};
 use crate::models::lookup_table::*;
 use crate::models::rpc::Vector;
+use crate::models::types::PropState;
 use crate::models::types::VectorQt;
 use async_std::stream::Cloned;
 use dashmap::DashMap;
@@ -351,6 +353,7 @@ pub enum WaCustomError {
     InvalidLocationNeighborEncountered(String, VectorId),
     MutexPoisoned(String),
     QuantizationMismatch,
+    LazyLoadingError(String),
 }
 
 // Implementing the std::fmt::Display trait for WaCustomError
@@ -384,6 +387,7 @@ impl fmt::Display for WaCustomError {
                 write!(f, "Mutex Poisoned here: {}", msg)
             }
             WaCustomError::QuantizationMismatch => write!(f, "Quantization mismatch"),
+            WaCustomError::LazyLoadingError(msg) => write!(f, "Lazy loading error: {}", msg),
         }
     }
 }
@@ -411,9 +415,9 @@ pub fn get_max_insert_level(x: f64, levels: Arc<Vec<(f64, i32)>>) -> i32 {
 }
 
 pub fn add_option_vecs(
-    a: &Option<Vec<(NodeRef, f32)>>,
-    b: &Option<Vec<(NodeRef, f32)>>,
-) -> Option<Vec<(NodeRef, f32)>> {
+    a: &Option<Vec<(LazyItem<MergedNode>, f32)>>,
+    b: &Option<Vec<(LazyItem<MergedNode>, f32)>>,
+) -> Option<Vec<(LazyItem<MergedNode>, f32)>> {
     match (a, b) {
         (None, None) => None,
         (Some(vec), None) | (None, Some(vec)) => Some(vec.clone()),
@@ -461,28 +465,34 @@ pub fn convert_vectors(vectors: Vec<Vector>) -> Vec<(VectorIdValue, Vec<f32>)> {
 }
 
 pub fn remove_duplicates_and_filter(
-    input: Option<Vec<(NodeRef, f32)>>,
+    input: Option<Vec<(LazyItem<MergedNode>, f32)>>,
 ) -> Option<Vec<(VectorId, f32)>> {
-    if let Some(vec) = input {
+    input.map(|vec| {
         let mut seen = HashSet::new();
-        let mut unique_vec = Vec::new();
-
-        for item in vec {
-            if let VectorId::Int(ref s) = item.0.prop.id {
-                if *s == -1 {
-                    continue;
+        vec.into_iter()
+            .filter_map(|(lazy_item, similarity)| {
+                if let LazyItem::Ready(node) = lazy_item {
+                    if let PropState::Ready(node_prop) = &*node.prop.read().unwrap() {
+                        let id = &node_prop.id;
+                        if let VectorId::Int(s) = id {
+                            if *s == -1 {
+                                return None;
+                            }
+                        }
+                        if seen.insert(id.clone()) {
+                            Some((id.clone(), similarity))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None // PropState is Pending
+                    }
+                } else {
+                    None // LazyItem is not Ready
                 }
-            }
-
-            if seen.insert(item.0.prop.id.clone()) {
-                unique_vec.push((item.0.prop.id.clone(), item.1));
-            }
-        }
-
-        Some(unique_vec)
-    } else {
-        None
-    }
+            })
+            .collect()
+    })
 }
 
 pub fn generate_tuples(x: f64) -> Vec<(f64, i32)> {
