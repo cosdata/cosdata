@@ -4,7 +4,6 @@ pub mod common;
 pub mod dot_product;
 pub mod encoding_format;
 pub mod file_persist;
-pub mod locatable;
 pub mod lookup_table;
 pub mod meta_persist;
 pub mod rpc;

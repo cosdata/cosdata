@@ -19,8 +19,8 @@ pub type CosineSimilarity = f32;
 
 #[derive(Debug, Clone)]
 pub struct Neighbour {
-    node: Arc<MergedNode>,
-    cosine_similarity: CosineSimilarity,
+    pub node: Arc<MergedNode>,
+    pub cosine_similarity: CosineSimilarity,
 }
 
 pub type PropPersistRef = (FileOffset, BytesToRead);
@@ -39,11 +39,12 @@ pub enum PropState {
     Pending(PropPersistRef),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum VectorId {
     Str(String),
     Int(i32),
 }
+
 #[derive(Debug, Clone)]
 pub struct MergedNode {
     pub version_id: VersionId,
@@ -51,26 +52,49 @@ pub struct MergedNode {
     pub prop: Arc<RwLock<PropState>>,
     pub location: Arc<RwLock<Option<FileOffset>>>,
     pub neighbors: Arc<RwLock<ItemListRef<Neighbour>>>,
-    pub parent: Arc<RwLock<Option<Arc<MergedNode>>>>,
-    pub child: Arc<RwLock<Option<Arc<MergedNode>>>>,
+    pub parent: Arc<RwLock<LazyItem<MergedNode>>>,
+    pub child: Arc<RwLock<LazyItem<MergedNode>>>,
     pub version_ref: Arc<RwLock<ItemListRef<MergedNode>>>,
+    persist_flag: Arc<RwLock<bool>>,
 }
 
-impl Locatable for Neighbour {
-    fn get_location(&self) -> Option<u32> {
-        self.node.get_location()
+impl Locatable for MergedNode {
+    fn get_file_offset(&self) -> Option<u32> {
+        self.get_location()
     }
 
-    fn set_location(&mut self, location: u32) {
-        self.node.set_location(location);
+    fn set_file_offset(&mut self, location: u32) {
+        self.set_location(location);
     }
 
-    fn mark_for_persistence(&mut self) {
-        self.needs_persistence = true;
+    fn set_persistence(&mut self, flag: bool) {
+        let mut fl = self.persist_flag.write().unwrap();
+        *fl = flag;
     }
 
     fn needs_persistence(&self) -> bool {
-        self.needs_persistence
+        let fl = self.persist_flag.read().unwrap();
+        *fl
+    }
+}
+
+impl Locatable for Neighbour {
+    fn get_file_offset(&self) -> Option<u32> {
+        self.node.get_location()
+    }
+
+    fn set_file_offset(&mut self, location: u32) {
+        self.node.set_location(location);
+    }
+
+    fn set_persistence(&mut self, flag: bool) {
+        let mut fl = self.node.persist_flag.write().unwrap();
+        *fl = flag;
+    }
+
+    fn needs_persistence(&self) -> bool {
+        let fl = self.node.persist_flag.read().unwrap();
+        *fl
     }
 }
 
@@ -85,16 +109,17 @@ impl fmt::Display for VectorId {
 }
 
 impl MergedNode {
-    pub fn new(version_id: VersionId, hnsw_level: HNSWLevel, chunk_size: usize) -> Self {
+    pub fn new(version_id: VersionId, hnsw_level: HNSWLevel) -> Self {
         MergedNode {
             version_id,
             hnsw_level,
             prop: Arc::new(RwLock::new(PropState::Pending((0, 0)))),
             location: Arc::new(RwLock::new(None)),
-            neighbors: Arc::new(RwLock::new(ItemListRef::Invalid)),
+            neighbors: Arc::new(RwLock::new(ItemListRef::Null)),
             parent: Arc::new(RwLock::new(None)),
             child: Arc::new(RwLock::new(None)),
-            version_ref: Arc::new(RwLock::new(ItemListRef::Invalid)),
+            version_ref: Arc::new(RwLock::new(ItemListRef::Null)),
+            persist_flag: Arc::new(RwLock::new(true)),
         }
     }
 
@@ -118,7 +143,7 @@ impl MergedNode {
             node: neighbor,
             cosine_similarity,
         });
-        neighbors.add(ItemRef::InMemory(neighbor_ref));
+        neighbors.add(LazyItem::Ready(neighbor_ref));
     }
 
     pub fn add_ready_neighbors(&self, neighbors_list: Vec<(Arc<MergedNode>, f32)>) {
@@ -128,11 +153,11 @@ impl MergedNode {
                 node: neighbor,
                 cosine_similarity,
             });
-            neighbors.add(ItemRef::InMemory(neighbor_ref));
+            neighbors.add(LazyItem::Ready(neighbor_ref));
         }
     }
 
-    pub fn get_neighbors(&self) -> Vec<ItemRef<Neighbour>> {
+    pub fn get_neighbors(&self) -> Vec<LazyItem<Neighbour>> {
         let neighbors = self.neighbors.read().unwrap();
         neighbors.get_all()
     }
@@ -141,17 +166,17 @@ impl MergedNode {
         let mut neighbors = self.neighbors.write().unwrap();
         let new_neighbors_refs = new_neighbors
             .into_iter()
-            .map(|nr| ItemRef::InMemory(Arc::new(nr)))
+            .map(|nr| LazyItem::Ready(Arc::new(nr)))
             .collect();
         neighbors.set_all(new_neighbors_refs);
     }
 
     pub fn add_version(&self, version: Arc<MergedNode>) {
         let mut versions = self.version_ref.write().unwrap();
-        versions.add(ItemRef::InMemory(version));
+        versions.add(LazyItem::Ready(version));
     }
 
-    pub fn get_versions(&self) -> Vec<ItemRef<MergedNode>> {
+    pub fn get_versions(&self) -> Vec<LazyItem<MergedNode>> {
         let versions = self.version_ref.read().unwrap();
         versions.get_all()
     }
@@ -244,25 +269,25 @@ impl VectorQt {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VectorTreeNode {
-    pub vector_list: Arc<VectorQt>,
-    pub neighbors: Vec<(VectorId, f32)>,
-}
+// #[derive(Debug, Clone)]
+// pub struct VectorTreeNode {
+//     pub vector_list: Arc<VectorQt>,
+//     pub neighbors: Vec<(VectorId, f32)>,
+// }
 
-impl VectorTreeNode {
-    // Serialize the VectorTreeNode to a byte vector
-    pub fn serialize(&self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-        let serialized = bincode::serialize(self)?;
-        Ok(serialized)
-    }
+// impl VectorTreeNode {
+//     // Serialize the VectorTreeNode to a byte vector
+//     pub fn serialize(&self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+//         let serialized = bincode::serialize(self)?;
+//         Ok(serialized)
+//     }
 
-    // Deserialize a byte vector to a VectorTreeNode
-    pub fn deserialize(bytes: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
-        let deserialized = bincode::deserialize(bytes)?;
-        Ok(deserialized)
-    }
-}
+//     // Deserialize a byte vector to a VectorTreeNode
+//     pub fn deserialize(bytes: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
+//         let deserialized = bincode::deserialize(bytes)?;
+//         Ok(deserialized)
+//     }
+// }
 
 pub type SizeBytes = u32;
 

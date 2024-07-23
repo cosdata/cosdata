@@ -5,6 +5,7 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::mem::transmute;
 
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 pub trait CustomSerialize {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32>;
     fn deserialize<R: Read + Seek>(reader: &mut R, offset: u32) -> std::io::Result<Self>
@@ -12,270 +13,176 @@ pub trait CustomSerialize {
         Self: Sized;
 }
 
-impl CustomSerialize for NodePersistRef {
+impl CustomSerialize for Neighbour {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
         let offset = writer.stream_position()? as u32;
-        match self {
-            NodePersistRef::Reference(node) => {
-                let node_offset = node.serialize(writer)?;
-                writer.seek(SeekFrom::Start(offset as u64))?;
-                writer.write_all(unsafe { transmute::<u32, [u8; 4]>(node_offset).as_ref() })?;
-            }
-            NodePersistRef::DerefPending(ptr) => {
-                writer.write_all(unsafe { transmute::<u32, [u8; 4]>(*ptr).as_ref() })?;
-            }
-            NodePersistRef::Invalid => {
-                writer.write_all(unsafe { transmute::<u32, [u8; 4]>(u32::MAX).as_ref() })?;
-            }
-        }
-        Ok(offset)
-    }
 
-    fn deserialize<R: Read + Seek>(reader: &mut R, offset: u32) -> std::io::Result<Self> {
-        reader.seek(SeekFrom::Start(offset as u64))?;
-        let mut buf = [0u8; 4];
-        reader.read_exact(&mut buf)?;
-        let value: u32 = unsafe { transmute(buf) };
-        if value == u32::MAX {
-            Ok(NodePersistRef::Invalid)
-        } else {
-            Ok(NodePersistRef::Reference(Box::new(
-                NodePersist::deserialize(reader, value)?,
-            )))
-        }
-    }
-}
-
-impl CustomSerialize for PropPersistRef {
-    fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
-        let offset = writer.stream_position()? as u32;
-        writer.write_u32::<LittleEndian>(self.0)?; // Write offset
-        writer.write_u32::<LittleEndian>(self.1)?; // Write length
-        Ok(offset)
-    }
-
-    fn deserialize<R: Read + Seek>(reader: &mut R, offset: u32) -> std::io::Result<Self> {
-        reader.seek(SeekFrom::Start(offset as u64))?;
-        let prop_offset = reader.read_u32::<LittleEndian>()?;
-        let prop_length = reader.read_u32::<LittleEndian>()?;
-        Ok((prop_offset, prop_length))
-    }
-}
-impl CustomSerialize for NeighbourPersist {
-    fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
-        let offset = writer.stream_position()? as u32;
+        // Serialize the node
         self.node.serialize(writer)?;
-        writer.write_all(unsafe { transmute::<f32, [u8; 4]>(self.cosine_similarity).as_ref() })?;
+
+        // Serialize the cosine similarity
+        writer.write_f32::<LittleEndian>(self.cosine_similarity)?;
+
         Ok(offset)
     }
-
     fn deserialize<R: Read + Seek>(reader: &mut R, offset: u32) -> std::io::Result<Self> {
         reader.seek(SeekFrom::Start(offset as u64))?;
-        let node_offset = reader.stream_position()? as u32;
-        let node = NodePersistRef::deserialize(reader, node_offset)?;
-        let mut buf = [0u8; 4];
-        reader.read_exact(&mut buf)?;
-        let cosine_similarity: f32 = unsafe { transmute(buf) };
-        Ok(NeighbourPersist {
-            node,
+
+        // Deserialize the node
+        let node = MergedNode::deserialize(reader, offset)?;
+
+        // Deserialize the cosine similarity
+        let cosine_similarity = reader.read_f32::<LittleEndian>()?;
+
+        Ok(Neighbour {
+            node: Arc::new(node),
             cosine_similarity,
         })
     }
 }
 
-impl CustomSerialize for VersionRef {
-    fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
-        let offset = writer.stream_position()? as u32;
-        match self {
-            VersionRef::Reference(versions) => {
-                writer.write_u32::<LittleEndian>(0)?;
-                let versions_offset = versions.serialize(writer)?;
-                writer.seek(SeekFrom::Start(offset as u64))?;
-                writer.write_u32::<LittleEndian>(versions_offset)?;
-                writer.seek(SeekFrom::End(0))?;
-            }
-            VersionRef::Invalid => writer.write_u32::<LittleEndian>(std::u32::MAX)?,
-        };
-        Ok(offset)
-    }
-
-    fn deserialize<R: Read + Seek>(reader: &mut R, offset: u32) -> std::io::Result<Self> {
-        reader.seek(SeekFrom::Start(offset as u64))?;
-        let value = reader.read_u32::<LittleEndian>()?;
-        if value == std::u32::MAX {
-            Ok(VersionRef::Invalid)
-        } else {
-            Ok(VersionRef::Reference(Box::new(Versions::deserialize(
-                reader, value,
-            )?)))
-        }
-    }
-}
-impl CustomSerialize for Versions {
-    fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
-        let offset = writer.stream_position()? as u32;
-        for version in &self.versions {
-            version.serialize(writer)?;
-        }
-        self.next.serialize(writer)?;
-        Ok(offset)
-    }
-
-    fn deserialize<R: Read + Seek>(reader: &mut R, offset: u32) -> std::io::Result<Self> {
-        reader.seek(SeekFrom::Start(offset as u64))?;
-
-        // Get all offsets first
-        let offsets = [
-            reader.stream_position()? as u32,
-            reader.stream_position()? as u32,
-            reader.stream_position()? as u32,
-            reader.stream_position()? as u32,
-        ];
-
-        // Now deserialize using the offsets
-        let versions = [
-            NodePersistRef::deserialize(reader, offsets[0])?,
-            NodePersistRef::deserialize(reader, offsets[1])?,
-            NodePersistRef::deserialize(reader, offsets[2])?,
-            NodePersistRef::deserialize(reader, offsets[3])?,
-        ];
-
-        let next_offset = reader.stream_position()? as u32;
-        let next = VersionRef::deserialize(reader, next_offset)?;
-
-        Ok(Versions { versions, next })
-    }
-}
-impl CustomSerialize for NodePersist {
+impl CustomSerialize for MergedNode {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
         let offset = writer.stream_position()? as u32;
 
-        // Serialize version_id
-        writer.write_u32::<LittleEndian>(self.version_id)?;
-
-        // Serialize prop_location
-        self.prop_location.serialize(writer)?;
-
-        // Serialize hnsw_level
+        writer.write_u16::<LittleEndian>(self.version_id)?;
         writer.write_u8(self.hnsw_level)?;
 
-        // Serialize version_ref
-        self.version_ref.serialize(writer)?;
+        // Serialize PropState
+        match &*self.prop.read().unwrap() {
+            PropState::Ready(node_prop) => {
+                if let Some(location) = node_prop.location {
+                    writer.write_u32::<LittleEndian>(location.0)?;
+                    writer.write_u32::<LittleEndian>(location.1)?;
+                } else {
+                    // Handle the case where location is None
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Ready PropState has no location",
+                    ));
+                }
+            }
+            PropState::Pending(prop_ref) => {
+                writer.write_u32::<LittleEndian>(prop_ref.0)?;
+                writer.write_u32::<LittleEndian>(prop_ref.1)?;
+            }
+        }
+
+        // Skip Serializing location , redundant cyclic
+
+        // Write placeholders for parent and child offsets
+        let parent_placeholder_pos = writer.stream_position()? as u32;
+        match &*self.parent.read().unwrap() {
+            LazyItem::Null => writer.write_u32::<LittleEndian>(u32::MAX)?,
+            _ => writer.write_u32::<LittleEndian>(0)?, // Temporary placeholder
+        }
+
+        let child_placeholder_pos = writer.stream_position()? as u32;
+        match &*self.child.read().unwrap() {
+            LazyItem::Null => writer.write_u32::<LittleEndian>(u32::MAX)?,
+            _ => writer.write_u32::<LittleEndian>(0)?, // Temporary placeholder
+        }
+
+        // Queue parent and child for serialization
+        let mut serialization_queue = Vec::new();
+        if let LazyItem::Ready(parent) = &*self.parent.read().unwrap() {
+            serialization_queue.push((parent_placeholder_pos, Arc::clone(parent)));
+        }
+        if let LazyItem::Ready(child) = &*self.child.read().unwrap() {
+            serialization_queue.push((child_placeholder_pos, Arc::clone(child)));
+        }
 
         // Serialize neighbors
-        for neighbor in &self.neighbors {
-            neighbor.serialize(writer)?;
-        }
+        self.neighbors.read().unwrap().serialize(writer)?;
 
-        // Combine parent and child indicators into a single byte
-        let mut indicator: u8 = 0;
-        if self.parent.is_some() {
-            indicator |= 0b01;
-        }
-        if self.child.is_some() {
-            indicator |= 0b10;
-        }
-        writer.write_u8(indicator)?;
+        // Serialize version_ref
+        self.version_ref.read().unwrap().serialize(writer)?;
 
-        // Serialize parent if present
-        if let Some(parent) = &self.parent {
-            parent.serialize(writer)?;
-        }
+        // Serialize queued nodes and update placeholders
+        for (placeholder_pos, node) in serialization_queue {
+            let node_offset = node.serialize(writer)?;
 
-        // Serialize child if present
-        if let Some(child) = &self.child {
-            child.serialize(writer)?;
+            // Update placeholder
+            let end_pos = writer.stream_position()?;
+            writer.seek(SeekFrom::Start(placeholder_pos as u64))?;
+            writer.write_u32::<LittleEndian>(node_offset)?;
+            writer.seek(SeekFrom::Start(end_pos))?;
         }
 
         Ok(offset)
     }
 
     fn deserialize<R: Read + Seek>(reader: &mut R, offset: u32) -> std::io::Result<Self> {
-        println!("Starting deserialization at offset: {}", offset);
         reader.seek(SeekFrom::Start(offset as u64))?;
 
-        let version_id = reader.read_u32::<LittleEndian>()?;
-        println!("Read version_id: {}", version_id);
-
-        let prop_location_offset = reader.stream_position()? as u32;
-        println!("Prop location offset: {}", prop_location_offset);
-        let prop_location = PropPersistRef::deserialize(reader, prop_location_offset)?;
-        println!("Deserialized prop_location");
-
+        let version_id = reader.read_u16::<LittleEndian>()?;
         let hnsw_level = reader.read_u8()?;
-        println!("Read hnsw_level: {}", hnsw_level);
 
-        let version_ref_offset = reader.stream_position()? as u32;
-        println!("Version ref offset: {}", version_ref_offset);
-        let version_ref = VersionRef::deserialize(reader, version_ref_offset)?;
-        println!("Deserialized version_ref");
+        // Deserialize PropState
+        let prop = {
+            let offset = reader.read_u32::<LittleEndian>()?;
+            let length = reader.read_u32::<LittleEndian>()?;
+
+            // We don't know if it's Ready or Pending at this point, so we'll assume Pending
+            // The actual state will be determined when the prop is accessed
+            PropState::Pending((offset, length))
+        };
+        // Read parent and child offsets
+        let parent_offset = reader.read_u32::<LittleEndian>()?;
+        let child_offset = reader.read_u32::<LittleEndian>()?;
+
+        // Create LazyItems for parent and child
+        let parent = if parent_offset == u32::MAX {
+            LazyItem::Null
+        } else {
+            LazyItem::LazyLoad(parent_offset)
+        };
+
+        let child = if child_offset == u32::MAX {
+            LazyItem::Null
+        } else {
+            LazyItem::LazyLoad(child_offset)
+        };
+
+        // we just take the offset
+        let location = offset;
 
         // Deserialize neighbors
-        println!("Starting to deserialize neighbors");
-        let mut neighbors = Vec::with_capacity(10);
-        for i in 0..10 {
-            let neighbor_offset = reader.stream_position()? as u32;
-            println!(
-                "Deserializing neighbor {} at offset: {}",
-                i, neighbor_offset
-            );
-            neighbors.push(NeighbourPersist::deserialize(reader, neighbor_offset)?);
-        }
-        let neighbors: [NeighbourPersist; 10] = neighbors.try_into().unwrap();
-        println!("Finished deserializing neighbors");
+        let neighbors = ItemListRef::deserialize(reader, reader.stream_position()? as u32)?;
 
-        // Read the combined indicator byte
-        let indicator = reader.read_u8()?;
-        println!("Read indicator byte: {:08b}", indicator);
+        // Deserialize version_ref
+        let version_ref = ItemListRef::deserialize(reader, reader.stream_position()? as u32)?;
 
-        let parent = if indicator & 0b01 != 0 {
-            let parent_offset = reader.stream_position()? as u32;
-            println!("Deserializing parent at offset: {}", parent_offset);
-            Some(NodePersistRef::deserialize(reader, parent_offset)?)
-        } else {
-            println!("No parent present");
-            None
-        };
-
-        let child = if indicator & 0b10 != 0 {
-            let child_offset = reader.stream_position()? as u32;
-            println!("Deserializing child at offset: {}", child_offset);
-            Some(NodePersistRef::deserialize(reader, child_offset)?)
-        } else {
-            println!("No child present");
-            None
-        };
-
-        println!("Deserialization completed successfully");
-        Ok(NodePersist {
+        Ok(MergedNode {
             version_id,
-            prop_location,
             hnsw_level,
-            version_ref,
-            neighbors,
-            parent,
-            child,
+            prop: Arc::new(RwLock::new(prop)),
+            location: Arc::new(RwLock::new(location)),
+            neighbors: Arc::new(RwLock::new(neighbors)),
+            parent: Arc::new(RwLock::new(parent)),
+            child: Arc::new(RwLock::new(child)),
+            version_ref: Arc::new(RwLock::new(version_ref)),
         })
     }
 }
 
-impl<T: Clone + Locatable + CustomSerialize> CustomSerialize for ItemRef<T> {
+impl<T: Clone + Locatable + CustomSerialize> CustomSerialize for LazyItem<T> {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
         let offset = writer.stream_position()? as u32;
 
         match self {
-            ItemRef::InMemory(item) => {
-                let location = item.get_location();
+            LazyItem::Ready(item) => {
+                let location = item.get_file_offset();
                 writer.write_u32::<LittleEndian>(location)?;
 
                 if item.needs_persistence() {
                     item.serialize(writer)?;
                 }
             }
-            ItemRef::Persistent(file_offset) => {
+            LazyItem::LazyLoad(file_offset) => {
                 writer.write_u32::<LittleEndian>(*file_offset)?;
             }
-            ItemRef::Invalid => {
+            LazyItem::Null => {
                 writer.write_u32::<LittleEndian>(u32::MAX)?;
             }
         }
@@ -288,10 +195,10 @@ impl<T: Clone + Locatable + CustomSerialize> CustomSerialize for ItemRef<T> {
         let location = reader.read_u32::<LittleEndian>()?;
 
         if location == u32::MAX {
-            Ok(ItemRef::Invalid)
+            Ok(LazyItem::Null)
         } else {
             // We're not reading the actual T here, just its location
-            Ok(ItemRef::Persistent(location))
+            Ok(LazyItem::LazyLoad(location))
         }
     }
 }
@@ -314,7 +221,7 @@ impl<T: Clone + Locatable + CustomSerialize> CustomSerialize for Items<T> {
 
         // Read all offsets first
         let offset1 = reader.stream_position()? as u32;
-        reader.seek(SeekFrom::Current(4))?; // Assuming each ItemRef is 4 bytes
+        reader.seek(SeekFrom::Current(4))?; // Assuming each LazyItem is 4 bytes
         let offset2 = reader.stream_position()? as u32;
         reader.seek(SeekFrom::Current(4))?;
         let offset3 = reader.stream_position()? as u32;
@@ -325,10 +232,10 @@ impl<T: Clone + Locatable + CustomSerialize> CustomSerialize for Items<T> {
 
         // Now deserialize using the offsets
         let items = [
-            ItemRef::deserialize(reader, offset1)?,
-            ItemRef::deserialize(reader, offset2)?,
-            ItemRef::deserialize(reader, offset3)?,
-            ItemRef::deserialize(reader, offset4)?,
+            LazyItem::deserialize(reader, offset1)?,
+            LazyItem::deserialize(reader, offset2)?,
+            LazyItem::deserialize(reader, offset3)?,
+            LazyItem::deserialize(reader, offset4)?,
         ];
 
         let next = ItemListRef::deserialize(reader, next_offset)?;
@@ -346,7 +253,7 @@ impl<T: Clone + Locatable + CustomSerialize> CustomSerialize for ItemListRef<T> 
                 writer.write_u32::<LittleEndian>(offset + 4)?; // Point to the next 4 bytes
                 items.serialize(writer)?;
             }
-            ItemListRef::Invalid => {
+            ItemListRef::Null => {
                 writer.write_u32::<LittleEndian>(u32::MAX)?;
             }
         }
@@ -360,7 +267,7 @@ impl<T: Clone + Locatable + CustomSerialize> CustomSerialize for ItemListRef<T> 
         let next_offset = reader.read_u32::<LittleEndian>()?;
 
         if next_offset == u32::MAX {
-            Ok(ItemListRef::Invalid)
+            Ok(ItemListRef::Null)
         } else {
             // Deserialize Items directly here
             let items = Items::deserialize(reader, next_offset)?;
@@ -433,7 +340,7 @@ impl CustomSerialize for VectorQt {
             }
             _ => Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "Invalid VectorQt",
+                "Null VectorQt",
             )),
         }
     }

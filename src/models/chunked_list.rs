@@ -1,29 +1,31 @@
 use std::sync::{Arc, RwLock};
 
 pub trait Locatable {
-    fn get_location(&self) -> Option<u32>;
-    fn set_location(&mut self, location: u32);
-    fn mark_for_persistence(&mut self);
+    fn get_file_offset(&self) -> Option<u32>;
+    fn set_file_offset(&mut self, location: u32);
+    fn set_persistence(&mut self, flag: bool);
     fn needs_persistence(&self) -> bool;
+    // fn include_items(&self) -> bool;
+    // fn set_include_items(&mut self, value: bool);
 }
 
 #[derive(Debug, Clone)]
 pub enum ItemListRef<T: Clone + Locatable> {
     Ref(Box<Items<T>>),
-    Invalid,
+    Null,
 }
 
 #[derive(Debug, Clone)]
 pub struct Items<T: Clone + Locatable> {
-    pub items: [ItemRef<T>; 4],
+    pub items: [LazyItem<T>; 4],
     pub next: ItemListRef<T>,
 }
 
 #[derive(Debug, Clone)]
-pub enum ItemRef<T: Clone + Locatable> {
-    InMemory(Arc<T>),
-    Persistent(FileOffset),
-    Invalid,
+pub enum LazyItem<T: Clone + Locatable> {
+    Ready(Arc<T>),
+    LazyLoad(FileOffset),
+    Null,
 }
 
 pub type FileOffset = u32;
@@ -32,25 +34,25 @@ impl<T: Clone + Locatable> Items<T> {
     pub fn new() -> Self {
         Items {
             items: [
-                ItemRef::Invalid,
-                ItemRef::Invalid,
-                ItemRef::Invalid,
-                ItemRef::Invalid,
+                LazyItem::Null,
+                LazyItem::Null,
+                LazyItem::Null,
+                LazyItem::Null,
             ],
-            next: ItemListRef::Invalid,
+            next: ItemListRef::Null,
         }
     }
 
-    pub fn add(&mut self, item: ItemRef<T>) {
+    pub fn add(&mut self, item: LazyItem<T>) {
         for i in 0..self.items.len() {
-            if matches!(self.items[i], ItemRef::Invalid) {
+            if matches!(self.items[i], LazyItem::Null) {
                 self.items[i] = item;
                 return;
             }
         }
 
         match &mut self.next {
-            ItemListRef::Invalid => {
+            ItemListRef::Null => {
                 self.next = ItemListRef::Ref(Box::new(Items::new()));
             }
             ItemListRef::Ref(next_items) => {
@@ -59,13 +61,13 @@ impl<T: Clone + Locatable> Items<T> {
         }
     }
 
-    pub fn get_all(&self) -> Vec<ItemRef<T>> {
+    pub fn get_all(&self) -> Vec<LazyItem<T>> {
         let mut result = Vec::new();
         self.collect_items(&mut result);
         result
     }
 
-    fn collect_items(&self, result: &mut Vec<ItemRef<T>>) {
+    fn collect_items(&self, result: &mut Vec<LazyItem<T>>) {
         for item in &self.items {
             result.push(item.clone());
         }
@@ -75,14 +77,14 @@ impl<T: Clone + Locatable> Items<T> {
         }
     }
 
-    pub fn set_all(&mut self, new_items: Vec<ItemRef<T>>) {
+    pub fn set_all(&mut self, new_items: Vec<LazyItem<T>>) {
         let mut item_iter = new_items.into_iter();
         self.set_items(&mut item_iter);
     }
 
-    fn set_items(&mut self, item_iter: &mut std::vec::IntoIter<ItemRef<T>>) {
+    fn set_items(&mut self, item_iter: &mut std::vec::IntoIter<LazyItem<T>>) {
         for i in 0..self.items.len() {
-            self.items[i] = item_iter.next().unwrap_or(ItemRef::Invalid);
+            self.items[i] = item_iter.next().unwrap_or(LazyItem::Null);
         }
 
         if let ItemListRef::Ref(next_items) = &mut self.next {
@@ -94,11 +96,24 @@ impl<T: Clone + Locatable> Items<T> {
             }
         }
     }
+
+    pub fn mark_all_persistence(&mut self, flag: bool) {
+        for item in &mut self.items {
+            if let LazyItem::Ready(arc) = item {
+                if let Some(inner) = Arc::get_mut(arc) {
+                    inner.set_persistence(flag);
+                }
+            }
+        }
+        if let ItemListRef::Ref(next_items) = &mut self.next {
+            next_items.mark_all_persistence(flag);
+        }
+    }
 }
 
 impl<T: Default + Clone + Locatable> Default for ItemListRef<T> {
     fn default() -> Self {
-        ItemListRef::Invalid
+        ItemListRef::Null
     }
 }
 
@@ -107,10 +122,10 @@ impl<T: Clone + Locatable> ItemListRef<T> {
         ItemListRef::Ref(Box::new(Items::new()))
     }
 
-    pub fn add(&mut self, item: ItemRef<T>) {
+    pub fn add(&mut self, item: LazyItem<T>) {
         match self {
             ItemListRef::Ref(items) => items.add(item),
-            ItemListRef::Invalid => {
+            ItemListRef::Null => {
                 *self = ItemListRef::Ref(Box::new(Items::new()));
                 if let ItemListRef::Ref(items) = self {
                     items.add(item);
@@ -119,17 +134,17 @@ impl<T: Clone + Locatable> ItemListRef<T> {
         }
     }
 
-    pub fn get_all(&self) -> Vec<ItemRef<T>> {
+    pub fn get_all(&self) -> Vec<LazyItem<T>> {
         match self {
             ItemListRef::Ref(items) => items.get_all(),
-            ItemListRef::Invalid => Vec::new(),
+            ItemListRef::Null => Vec::new(),
         }
     }
 
-    pub fn set_all(&mut self, new_items: Vec<ItemRef<T>>) {
+    pub fn set_all(&mut self, new_items: Vec<LazyItem<T>>) {
         match self {
             ItemListRef::Ref(items) => items.set_all(new_items),
-            ItemListRef::Invalid => {
+            ItemListRef::Null => {
                 if !new_items.is_empty() {
                     *self = ItemListRef::Ref(Box::new(Items::new()));
                     if let ItemListRef::Ref(items) = self {
@@ -137,6 +152,12 @@ impl<T: Clone + Locatable> ItemListRef<T> {
                     }
                 }
             }
+        }
+    }
+
+    pub fn mark_all_persistence(&mut self, flag: bool) {
+        if let ItemListRef::Ref(items) = self {
+            items.mark_all_persistence(flag);
         }
     }
 }
