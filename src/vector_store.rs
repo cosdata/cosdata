@@ -221,7 +221,7 @@ pub fn auto_commit_transaction(
         // offset = offset + serialized_size;
         // nbr.set_location((offset, serialized_size));
 
-        match persist_node_update_loc(vec_store.wal_file.clone(), nbr.clone(), level as u8, false) {
+        match persist_node_update_loc(vec_store.wal_file.clone(), nbr.clone()) {
             Ok(_) => (),
             Err(e) => {
                 eprintln!("Failed node persist(nbr1): {}", e);

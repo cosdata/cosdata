@@ -1,0 +1,87 @@
+#+TITLE: LazyItems Serialization Structure
+#+AUTHOR: Nithin
+#+DATE: [2023-05-11 Thu]
+
+* LazyItems File Structure
+
+#+BEGIN_SRC
+File Layout:
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│ LazyItems Start                                                                     │
+├─────────────┬───────────────────────────────────────────────┬───────────────────────┤
+│ Item Count  │ Chunk 1                                       │ Chunk 2               │
+│ (4 bytes)   │                                               │                       │
+├─────────────┼───────────────────────┬───────────────────────┼───────────────────────┤
+│    7        │ Placeholders + Link   │ Items                 │ Placeholders + Link   │
+│             │ (6 * 4 bytes)         │                       │ (6 * 4 bytes)         │
+├─────────────┼───────┬───────┬───────┼───────┬───────┬───────┼───────┬───────┬───────┤
+│             │ PH1   │ ...   │ Next  │ Item1 │ ...   │ Item5 │ PH6   │ PH7   │ Next  │
+│             │       │       │ Chunk │       │       │       │       │       │ Chunk │
+└─────────────┴───────┴───────┴───────┴───────┴───────┴───────┴───────┴───────┴───────┘
+
+PH = Placeholder (4 bytes each)
+Next Chunk = Offset to the next chunk (4 bytes)
+#+END_SRC
+
+* Detailed Breakdown
+
+** 1. Item Count (4 bytes)
+
+#+BEGIN_SRC
+┌────────┐
+│   7    │ (32-bit integer)
+└────────┘
+#+END_SRC
+
+** 2. Chunk 1
+
+#+BEGIN_SRC
+┌────────┬────────┬────────┬────────┬────────┬────────┐
+│  PH1   │  PH2   │  PH3   │  PH4   │  PH5   │  Next  │ (Placeholders + Next Chunk Link, each 4 bytes)
+└────────┴────────┴────────┴────────┴────────┴────────┘
+┌──────────────┐┌──────────────┐┌──────────────┐┌──────────────┐┌──────────────┐
+│    Item 1    ││    Item 2    ││    Item 3    ││    Item 4    ││    Item 5    │ (Variable size)
+└──────────────┘└──────────────┘└──────────────┘└──────────────┘└──────────────┘
+#+END_SRC
+
+** 3. Chunk 2
+
+#+BEGIN_SRC
+┌────────┬────────┬────────┬────────┬────────┬────────┐
+│  PH6   │  PH7   │  0xFFFFFFFF     │  0xFFFFFFFF     │ (Placeholders + Next Chunk Link, each 4 bytes)
+└────────┴────────┴────────┴────────┴────────┴────────┘
+┌──────────────┐┌──────────────┐
+│    Item 6    ││    Item 7    │ (Variable size)
+└──────────────┘└──────────────┘
+#+END_SRC
+
+* Notes
+
+- Each placeholder (PH) is a 32-bit integer offset pointing to the start of its corresponding item.
+- Items are serialized immediately after their chunk's placeholders and next chunk link.
+- Unused placeholders in the last chunk are filled with ~u32::MAX~ (0xFFFFFFFF).
+- The "Next Chunk" link in the last chunk is also set to ~u32::MAX~.
+- The actual size of each serialized item may vary.
+- ~CHUNK_SIZE~ is set to 5 in this example.
+
+* Serialization Process
+
+1. Write the total item count (7 in this case).
+2. For each chunk:
+   a. Write placeholders (initially all ~u32::MAX~).
+   b. Write the next chunk link (initially ~u32::MAX~).
+   c. Serialize each item, updating its placeholder with the actual offset.
+   d. Update the next chunk link with the offset of the next chunk (or leave as ~u32::MAX~ if it's the last chunk).
+
+* Deserialization Process
+
+1. Read the item count.
+2. Start with the first chunk:
+   a. Read placeholders and next chunk link.
+   b. For each non-~u32::MAX~ placeholder:
+      - Deserialize the item from that offset.
+   c. If there are more items to read and the next chunk link is not ~u32::MAX~:
+      - Move to the next chunk and repeat from step 2a.
+   d. If all items have been read or the next chunk link is ~u32::MAX~, stop.
+
+This structure allows for efficient random access and skipping of chunks, while still supporting lazy loading and updates to individual items without rewriting the entire structure.

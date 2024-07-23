@@ -46,13 +46,12 @@ pub fn persist_node_update_loc(
     node: &mut LazyItem<MergedNode>,
 ) -> Result<(), WaCustomError> {
     match node {
-        LazyItem::Ready(arc_node) => {
+        LazyItem::Ready(arc_node, loc) => {
             let mut_node = Arc::make_mut(arc_node);
             // Get a mutable reference to the MergedNode
-            let current_location = mut_node.get_location();
+            let current_location = loc;
 
-            let file_loc = write_node_update(ver_file, mut_node, current_location)?;
-            mut_node.set_location(file_loc as u32);
+            let file_loc = write_node_update(ver_file, mut_node, loc)?;
             Ok(())
         }
         LazyItem::LazyLoad(offset) => {

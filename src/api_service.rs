@@ -76,19 +76,21 @@ pub async fn init_vector_store(
             location: Some((0, 0)),
         });
 
-        let nn = LazyItem::Ready(Arc::new(MergedNode {
-            version_id: 0, // Initialize with appropriate version ID
-            hnsw_level: l as u8,
-            prop: Arc::new(RwLock::new(PropState::Ready(prop.clone()))),
-            location: Arc::new(RwLock::new(None)),
-            neighbors: Arc::new(RwLock::new(ItemListRef::new())),
-            parent: Arc::new(RwLock::new(LazyItem::Null)),
-            child: Arc::new(RwLock::new(LazyItem::Null)),
-            version_ref: Arc::new(RwLock::new(ItemListRef::new())),
-            persist_flag: Arc::new(RwLock::new(true)),
-        }));
+        let nn = LazyItem::Ready(
+            Arc::new(MergedNode {
+                version_id: 0, // Initialize with appropriate version ID
+                hnsw_level: l as u8,
+                prop: Arc::new(RwLock::new(PropState::Ready(prop.clone()))),
+                neighbors: Arc::new(RwLock::new(ItemListRef::new())),
+                parent: Arc::new(RwLock::new(LazyItem::Null)),
+                child: Arc::new(RwLock::new(LazyItem::Null)),
+                versions: Arc::new(RwLock::new(ItemListRef::new())),
+                persist_flag: Arc::new(RwLock::new(true)),
+            }),
+            None,
+        );
 
-        if let (LazyItem::Ready(current_node), LazyItem::Ready(prev_node)) = (&nn, &prev) {
+        if let (LazyItem::Ready(current_node, _), LazyItem::Ready(prev_node, _)) = (&nn, &prev) {
             current_node.set_parent(prev_node.clone());
             prev_node.set_child(current_node.clone());
         }
@@ -96,7 +98,7 @@ pub async fn init_vector_store(
 
         if l == 0 {
             root = nn.clone();
-            if let LazyItem::Ready(ref mut root_node) = root {
+            if let LazyItem::Ready(ref mut root_node, _) = root {
                 let prop_location = write_prop_to_file(&prop, &prop_file);
                 let root_node_mut = Arc::make_mut(root_node);
                 root_node_mut.set_prop_ready(prop);

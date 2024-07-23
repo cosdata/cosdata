@@ -50,23 +50,14 @@ pub struct MergedNode {
     pub version_id: VersionId,
     pub hnsw_level: HNSWLevel,
     pub prop: Arc<RwLock<PropState>>,
-    pub location: Arc<RwLock<Option<FileOffset>>>,
-    pub neighbors: Arc<RwLock<ItemListRef<Neighbour>>>,
+    pub neighbors: Arc<RwLock<LazyItems<Neighbour>>>,
     pub parent: Arc<RwLock<LazyItem<MergedNode>>>,
     pub child: Arc<RwLock<LazyItem<MergedNode>>>,
-    pub version_ref: Arc<RwLock<ItemListRef<MergedNode>>>,
+    pub versions: Arc<RwLock<LazyItems<MergedNode>>>,
     pub persist_flag: Arc<RwLock<bool>>,
 }
 
-impl Locatable for MergedNode {
-    fn get_file_offset(&self) -> Option<u32> {
-        self.get_location()
-    }
-
-    fn set_file_offset(&mut self, location: u32) {
-        self.set_location(location);
-    }
-
+impl SyncPersist for MergedNode {
     fn set_persistence(&mut self, flag: bool) {
         let mut fl = self.persist_flag.write().unwrap();
         *fl = flag;
@@ -78,15 +69,7 @@ impl Locatable for MergedNode {
     }
 }
 
-impl Locatable for Neighbour {
-    fn get_file_offset(&self) -> Option<u32> {
-        self.node.get_location()
-    }
-
-    fn set_file_offset(&mut self, location: u32) {
-        self.node.set_location(location);
-    }
-
+impl SyncPersist for Neighbour {
     fn set_persistence(&mut self, flag: bool) {
         let mut fl = self.node.persist_flag.write().unwrap();
         *fl = flag;
@@ -114,11 +97,10 @@ impl MergedNode {
             version_id,
             hnsw_level,
             prop: Arc::new(RwLock::new(PropState::Pending((0, 0)))),
-            location: Arc::new(RwLock::new(None)),
-            neighbors: Arc::new(RwLock::new(ItemListRef::Null)),
+            neighbors: Arc::new(RwLock::new(LazyItems::new())),
             parent: Arc::new(RwLock::new(LazyItem::Null)),
             child: Arc::new(RwLock::new(LazyItem::Null)),
-            version_ref: Arc::new(RwLock::new(ItemListRef::Null)),
+            versions: Arc::new(RwLock::new(LazyItems::new())),
             persist_flag: Arc::new(RwLock::new(true)),
         }
     }
@@ -143,7 +125,7 @@ impl MergedNode {
             node: neighbor,
             cosine_similarity,
         });
-        neighbors.add(LazyItem::Ready(neighbor_ref));
+        neighbors.push(LazyItem::Ready(neighbor_ref, None));
     }
 
     pub fn add_ready_neighbors(&self, neighbors_list: Vec<(Arc<MergedNode>, f32)>) {
@@ -153,42 +135,41 @@ impl MergedNode {
                 node: neighbor,
                 cosine_similarity,
             });
-            neighbors.add(LazyItem::Ready(neighbor_ref));
+            neighbors.push(LazyItem::Ready(neighbor_ref, None));
         }
     }
 
     pub fn get_neighbors(&self) -> Vec<LazyItem<Neighbour>> {
         let neighbors = self.neighbors.read().unwrap();
-        neighbors.get_all()
-    }
 
-    pub fn set_neighbors(&self, new_neighbors: Vec<Neighbour>) {
+        neighbors.items.clone()
+    }
+    pub fn set_neighbors(&self, new_neighbors: Vec<LazyItem<Neighbour>>) {
         let mut neighbors = self.neighbors.write().unwrap();
-        let new_neighbors_refs = new_neighbors
-            .into_iter()
-            .map(|nr| LazyItem::Ready(Arc::new(nr)))
-            .collect();
-        neighbors.set_all(new_neighbors_refs);
+
+        *neighbors = LazyItems {
+            items: new_neighbors,
+        };
     }
 
     pub fn add_version(&self, version: Arc<MergedNode>) {
-        let mut versions = self.version_ref.write().unwrap();
-        versions.add(LazyItem::Ready(version));
+        let mut versions = self.versions.write().unwrap();
+        versions.push(LazyItem::Ready(version, None));
     }
 
     pub fn get_versions(&self) -> Vec<LazyItem<MergedNode>> {
-        let versions = self.version_ref.read().unwrap();
-        versions.get_all()
+        let versions = self.versions.read().unwrap();
+        versions.items.clone()
     }
 
     pub fn set_parent(&self, parent: Arc<MergedNode>) {
         let mut parent_lock = self.parent.write().unwrap();
-        *parent_lock = LazyItem::Ready(parent);
+        *parent_lock = LazyItem::Ready(parent, None);
     }
 
     pub fn set_child(&self, child: Arc<MergedNode>) {
         let mut child_lock = self.child.write().unwrap();
-        *child_lock = LazyItem::Ready(child);
+        *child_lock = LazyItem::Ready(child, None);
     }
 
     pub fn get_parent(&self) -> LazyItem<MergedNode> {
@@ -199,16 +180,6 @@ impl MergedNode {
     pub fn get_child(&self) -> LazyItem<MergedNode> {
         let child_lock = self.child.read().unwrap();
         child_lock.clone()
-    }
-
-    pub fn set_location(&self, new_location: NodeFileRef) {
-        let mut location_write = self.location.write().unwrap();
-        *location_write = Some(new_location);
-    }
-
-    pub fn get_location(&self) -> Option<NodeFileRef> {
-        let location_read = self.location.read().unwrap();
-        *location_read
     }
 
     pub fn set_prop_location(&self, new_location: PropPersistRef) {
@@ -226,15 +197,14 @@ impl MergedNode {
 }
 impl fmt::Display for MergedNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "MergedNode {{ version_id: {}, hnsw_level: {}, prop: {:?}, location: {:?}, neighbors: {:?}, parent: {:?}, child: {:?}, version_ref: {:?} }}",
+        write!(f, "MergedNode {{ version_id: {}, hnsw_level: {}, prop: {:?}, neighbors: {:?}, parent: {:?}, child: {:?}, version_ref: {:?} }}",
             self.version_id,
             self.hnsw_level,
             self.prop.read().unwrap(),
-            self.location.read().unwrap(),
             self.neighbors.read().unwrap(),
             self.parent.read().unwrap(),
             self.child.read().unwrap(),
-            self.version_ref.read().unwrap()
+            self.versions.read().unwrap()
         )
     }
 }
