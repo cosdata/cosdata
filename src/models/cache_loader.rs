@@ -1,3 +1,4 @@
+use super::chunked_list::LazyItem;
 use super::file_persist::*;
 use super::types::*;
 use dashmap::DashMap;
@@ -8,7 +9,7 @@ use std::sync::RwLock;
 
 struct NodeRegistry {
     cuckoo_filter: RwLock<CuckooFilter<VectorId>>,
-    registry: DashMap<VectorId, NodeRef>,
+    registry: DashMap<VectorId, LazyItem<MergedNode>>,
 }
 
 impl NodeRegistry {
@@ -21,9 +22,9 @@ impl NodeRegistry {
         }
     }
 
-    pub fn get_object<F>(&self, key: VectorId, load_function: F) -> NodeRef
+    pub fn get_object<F>(&self, key: VectorId, load_function: F) -> LazyItem<MergedNode>
     where
-        F: Fn(&VectorId) -> NodeRef,
+        F: Fn(&VectorId) -> LazyItem<MergedNode>,
     {
         {
             let cuckoo_filter = self.cuckoo_filter.read().unwrap();
@@ -55,10 +56,10 @@ impl NodeRegistry {
     }
 }
 
-fn load_object_from_file(key: &VectorId) -> Option<NodeRef> {
+fn load_object_from_file(key: &VectorId) -> LazyItem<MergedNode> {
     match key {
-        VectorId::Str(s) => None, //  format!("Object loaded for {}", s),
-        VectorId::Int(i) => None, //format!("Object loaded for {}", i),
+        VectorId::Str(s) => LazyItem::Null, //  format!("Object loaded for {}", s),
+        VectorId::Int(i) => LazyItem::Null, //format!("Object loaded for {}", i),
     }
 }
 
