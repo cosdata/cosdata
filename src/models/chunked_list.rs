@@ -3,7 +3,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::Arc;
 
 pub trait SyncPersist {
-    fn set_persistence(&mut self, flag: bool);
+    fn set_persistence(&self, flag: bool);
     fn needs_persistence(&self) -> bool;
 }
 

@@ -58,7 +58,7 @@ pub struct MergedNode {
 }
 
 impl SyncPersist for MergedNode {
-    fn set_persistence(&mut self, flag: bool) {
+    fn set_persistence(&self, flag: bool) {
         let mut fl = self.persist_flag.write().unwrap();
         *fl = flag;
     }
@@ -70,7 +70,7 @@ impl SyncPersist for MergedNode {
 }
 
 impl SyncPersist for Neighbour {
-    fn set_persistence(&mut self, flag: bool) {
+    fn set_persistence(&self, flag: bool) {
         let mut fl = self.node.persist_flag.write().unwrap();
         *fl = flag;
     }
@@ -242,7 +242,7 @@ impl VectorQt {
 pub type SizeBytes = u32;
 
 // needed to flatten and get uniques
-pub type ExecQueueUpdate = Arc<DashMap<(HNSWLevel, VectorId), (Arc<MergedNode>, SizeBytes)>>;
+pub type ExecQueueUpdate = Arc<RwLock<Vec<LazyItem<MergedNode>>>>;
 
 #[derive(Debug, Clone)]
 pub struct MetaDb {
@@ -307,14 +307,13 @@ pub fn get_app_env() -> Result<Arc<AppEnv>, WaCustomError> {
             let path = Path::new("./_mdb"); // TODO: prefix the customer & database name
 
             // Ensure the directory exists
-            create_dir_all(&path)
-                .map_err(|e| WaCustomError::CreateDatabaseFailed(e.to_string()))?;
+            create_dir_all(&path).map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
             // Initialize the environment
             let env = Environment::new()
                 .set_max_dbs(1)
                 .set_map_size(10485760) // Set the maximum size of the database to 10MB
                 .open(&path)
-                .map_err(|e| WaCustomError::CreateDatabaseFailed(e.to_string()))?;
+                .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
             Ok(Arc::new(AppEnv {
                 user_data_cache: DashMap::new(),

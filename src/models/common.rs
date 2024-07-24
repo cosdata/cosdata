@@ -337,61 +337,38 @@ pub fn quantize_to_u32_bits(fins: &[f32], resolution: u8) -> Vec<Vec<u32>> {
 
     quantized
 }
-/////
 
 #[derive(Debug, Clone)]
 pub enum WaCustomError {
-    CreateDatabaseFailed(String),
-    LmdbError(String),
+    DatabaseError(String),
     SerializationError(String),
-    DeserializationError(String),
     UpsertFailed,
-    CFNotFound,
     InvalidParams,
-    NodeNotFound(String),
-    PendingNeighborEncountered(String),
-    InvalidLocationNeighborEncountered(String, VectorId),
-    MutexPoisoned(String),
+    NodeError(String),
+    NeighborError(String, Option<VectorId>),
+    LockError(String),
     QuantizationMismatch,
     LazyLoadingError(String),
 }
 
-// Implementing the std::fmt::Display trait for WaCustomError
 impl fmt::Display for WaCustomError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            WaCustomError::CreateDatabaseFailed(msg) => {
-                write!(f, "Failed to create the database: {}", msg)
-            }
-            WaCustomError::LmdbError(msg) => {
-                write!(f, "LMDB error: {}", msg)
-            }
-            WaCustomError::SerializationError(msg) => {
-                write!(f, "Serialization error: {}", msg)
-            }
-            WaCustomError::DeserializationError(msg) => {
-                write!(f, "Deserialization error: {}", msg)
-            }
-
+            WaCustomError::DatabaseError(msg) => write!(f, "Database error: {}", msg),
+            WaCustomError::SerializationError(msg) => write!(f, "Serialization error: {}", msg),
             WaCustomError::UpsertFailed => write!(f, "Failed to upsert vectors"),
-            WaCustomError::CFNotFound => write!(f, "ColumnFamily not found"),
             WaCustomError::InvalidParams => write!(f, "Invalid params in request"),
-            WaCustomError::NodeNotFound(msg) => write!(f, "Could not load Node: {}", msg),
-            WaCustomError::PendingNeighborEncountered(msg) => {
-                write!(f, "Pending neighbor encountered: {}", msg)
-            }
-            WaCustomError::InvalidLocationNeighborEncountered(mark, msg) => {
-                write!(f, "Invalid location neighbor encountered {} {}", mark, msg)
-            }
-            WaCustomError::MutexPoisoned(msg) => {
-                write!(f, "Mutex Poisoned here: {}", msg)
-            }
+            WaCustomError::NodeError(msg) => write!(f, "Node error: {}", msg),
+            WaCustomError::NeighborError(msg, id) => match id {
+                Some(vec_id) => write!(f, "Neighbor error: {} for ID {}", msg, vec_id),
+                None => write!(f, "Neighbor error: {}", msg),
+            },
+            WaCustomError::LockError(msg) => write!(f, "Lock error: {}", msg),
             WaCustomError::QuantizationMismatch => write!(f, "Quantization mismatch"),
             WaCustomError::LazyLoadingError(msg) => write!(f, "Lazy loading error: {}", msg),
         }
     }
 }
-
 pub fn hash_float_vec(vec: Vec<f32>) -> Vec<u8> {
     // Create a new hasher instance
     let mut hasher = Sha256::new();
@@ -471,7 +448,7 @@ pub fn remove_duplicates_and_filter(
         let mut seen = HashSet::new();
         vec.into_iter()
             .filter_map(|(lazy_item, similarity)| {
-                if let LazyItem::Ready(node) = lazy_item {
+                if let LazyItem::Ready(node, _) = lazy_item {
                     if let PropState::Ready(node_prop) = &*node.prop.read().unwrap() {
                         let id = &node_prop.id;
                         if let VectorId::Int(s) = id {

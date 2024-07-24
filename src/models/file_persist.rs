@@ -8,7 +8,7 @@ use crate::models::custom_buffered_writer::*;
 use crate::models::serializer::*;
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 // pub type FileOffset = u32;
 // pub type BytesToRead = u32;
@@ -48,18 +48,15 @@ pub fn persist_node_update_loc(
     match node {
         LazyItem::Ready(arc_node, loc) => {
             let mut_node = Arc::make_mut(arc_node);
-            // Get a mutable reference to the MergedNode
-            let current_location = loc;
+            let current_location = (*loc).clone();
 
-            let file_loc = write_node_update(ver_file, mut_node, loc)?;
+            let file_loc = write_node_update(ver_file, mut_node, current_location)?;
+            *loc = Some(file_loc as u32);
             Ok(())
         }
-        LazyItem::LazyLoad(offset) => {
-            // If it's a lazy load, we might want to load the node first
-            Err(WaCustomError::LazyLoadingError(
-                "Cannot update location of LazyLoad node".to_string(),
-            ))
-        }
+        LazyItem::LazyLoad(offset) => Err(WaCustomError::LazyLoadingError(
+            "Cannot update location of Lazy node".to_string(),
+        )),
         LazyItem::Null => Err(WaCustomError::LazyLoadingError(
             "Cannot update location of Null node".to_string(),
         )),
@@ -89,8 +86,8 @@ pub fn write_node_to_file_at_offset(
     offset as u32
 }
 //
-pub fn load_vector_id_lsmdb(level: HNSWLevel, vector_id: VectorId) -> Option<MergedNode> {
-    return None;
+pub fn load_vector_id_lsmdb(level: HNSWLevel, vector_id: VectorId) -> LazyItem<MergedNode> {
+    return LazyItem::Null;
 }
 
 pub fn load_neighbor_persist_ref(level: HNSWLevel, node_file_ref: u32) -> Option<MergedNode> {

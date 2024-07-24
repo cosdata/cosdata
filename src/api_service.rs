@@ -1,5 +1,5 @@
-use crate::models::chunked_list::ItemListRef;
 use crate::models::chunked_list::LazyItem;
+use crate::models::chunked_list::*;
 use crate::models::custom_buffered_writer::CustomBufferedWriter;
 use crate::models::file_persist::*;
 use crate::models::meta_persist::*;
@@ -41,7 +41,7 @@ pub async fn init_vector_store(
         .collect::<Vec<f32>>();
     let vec_hash = VectorId::Int(-1);
 
-    let exec_queue_nodes = Arc::new(DashMap::new());
+    let exec_queue_nodes: ExecQueueUpdate = Arc::new(RwLock::new(Vec::new()));
     let vector_list = VectorQt::unsigned_byte(&vec);
 
     // Note that setting .write(true).append(true) has the same effect
@@ -81,10 +81,10 @@ pub async fn init_vector_store(
                 version_id: 0, // Initialize with appropriate version ID
                 hnsw_level: l as u8,
                 prop: Arc::new(RwLock::new(PropState::Ready(prop.clone()))),
-                neighbors: Arc::new(RwLock::new(ItemListRef::new())),
+                neighbors: Arc::new(RwLock::new(LazyItems::new())),
                 parent: Arc::new(RwLock::new(LazyItem::Null)),
                 child: Arc::new(RwLock::new(LazyItem::Null)),
-                versions: Arc::new(RwLock::new(ItemListRef::new())),
+                versions: Arc::new(RwLock::new(LazyItems::new())),
                 persist_flag: Arc::new(RwLock::new(true)),
             }),
             None,
@@ -159,12 +159,12 @@ pub async fn init_vector_store(
                 }
                 Err(e) => {
                     eprintln!("Failed node persist(nbr1): {}", e);
-                    Err(WaCustomError::LmdbError(e.to_string()))
+                    Err(WaCustomError::DatabaseError(e.to_string()))
                 }
             }
         }
 
-        Err(e) => Err(WaCustomError::LmdbError(e.to_string())),
+        Err(e) => Err(WaCustomError::DatabaseError(e.to_string())),
     };
     return result;
 }
@@ -198,7 +198,30 @@ pub async fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<(VectorIdValue, 
         .buffer_unordered(10)
         .collect::<Vec<_>>()
         .await;
-    match auto_commit_transaction(vec_store.clone(), vec_store.exec_queue_nodes.clone()) {
+
+    // Update version
+    let ver = vec_store
+        .get_current_version()
+        .unwrap()
+        .expect("No current version found");
+    let new_ver = ver.version + 1;
+
+    // Create new version file
+    let ver_file = Rc::new(RefCell::new(
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(format!("{}.index", new_ver))
+            .map_err(|e| {
+                WaCustomError::DatabaseError(format!("Failed to open new version file: {}", e))
+            })
+            .unwrap(),
+    ));
+
+    let mut writer =
+        CustomBufferedWriter::new(ver_file.clone()).expect("Failed opening custom buffer");
+
+    match auto_commit_transaction(vec_store.clone(), &mut writer) {
         Ok(_) => (),
         Err(e) => {
             eprintln!("Failed node persist(nbr1): {}", e);
@@ -236,7 +259,7 @@ pub async fn fetch_vector_neighbors(
     vector_id: VectorId,
 ) -> Vec<Option<(VectorId, Vec<(VectorId, f32)>)>> {
     let results = vector_fetch(vec_store.clone(), vector_id);
-    return results;
+    return results.expect("Failed fetching vector neighbors");
 }
 
 fn calculate_statistics(_: &[i32]) -> Option<Statistics> {
