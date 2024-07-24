@@ -96,6 +96,7 @@ pub async fn init_vector_store(
         }
         prev = nn.clone();
 
+
         if l == 0 {
             root = nn.clone();
             if let LazyItem::Ready(ref mut root_node, _) = root {
@@ -104,13 +105,13 @@ pub async fn init_vector_store(
                 root_node_mut.set_prop_ready(prop);
             }
         }
-
         nodes.push(nn.clone());
         println!("sssss: {:?}", nn);
     }
 
     for (l, nn) in nodes.iter_mut().enumerate() {
         match persist_node_update_loc(&mut writer, nn) {
+
             Ok(_) => (),
             Err(e) => {
                 eprintln!("Failed node persist (init): {}", e);
@@ -118,6 +119,9 @@ pub async fn init_vector_store(
         };
     }
 
+    writer
+        .flush()
+        .expect("Final Custom Buffered Writer flush failed ");
     // ---------------------------
     // -- TODO level entry ratio
     // ---------------------------
@@ -163,10 +167,11 @@ pub async fn init_vector_store(
                 }
             }
         }
-
         Err(e) => Err(WaCustomError::DatabaseError(e.to_string())),
+
     };
-    return result;
+
+    result
 }
 
 pub async fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<(VectorIdValue, Vec<f32>)>) -> () {

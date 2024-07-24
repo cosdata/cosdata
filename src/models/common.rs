@@ -1,5 +1,5 @@
 use super::chunked_list::LazyItem;
-use super::dot_product::dot_product_u8_avx2;
+use super::dot_product::x86_64::dot_product_u8_avx2;
 use super::rpc::VectorIdValue;
 use super::types::{MergedNode, VectorId};
 use crate::models::lookup_table::*;
@@ -10,7 +10,6 @@ use async_std::stream::Cloned;
 use dashmap::DashMap;
 use futures::future::{join_all, BoxFuture, FutureExt};
 use sha2::{Digest, Sha256};
-use std::arch::x86_64::*;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
 use std::fmt;
@@ -19,6 +18,10 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::task;
 
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::*;
+
+#[cfg(target_arch = "x86_64")]
 pub fn dot_product_u8_avx2_fma(a: &[u8], b: &[u8]) -> u64 {
     assert_eq!(a.len(), b.len());
 

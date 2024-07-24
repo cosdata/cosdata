@@ -68,7 +68,7 @@ pub fn load_cache() {
 
     let mut file = OpenOptions::new()
         .read(true)
-        .open("index.0")
+        .open("0.index")
         .expect("failed to open");
 
     let offset = 0;

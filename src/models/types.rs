@@ -5,10 +5,12 @@ use bincode;
 use dashmap::DashMap;
 use lmdb::{Database, Environment, Transaction, WriteFlags};
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::fmt;
 use std::fs::*;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 pub type HNSWLevel = u8;
@@ -38,6 +40,7 @@ pub enum PropState {
     Ready(Arc<NodeProp>),
     Pending(PropPersistRef),
 }
+
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum VectorId {

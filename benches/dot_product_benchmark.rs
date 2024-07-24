@@ -1,8 +1,9 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rand::Rng;
-use std::arch::x86_64::*;
 
+#[cfg(target_arch = "x86_64")]
 pub fn dot_product_u8_avx2_fma(a: &[u8], b: &[u8]) -> u64 {
+    use std::arch::x86_64::*;
     assert_eq!(a.len(), b.len());
 
     let mut dot_product: u64 = 0;
@@ -120,6 +121,8 @@ fn bench_dot_product(c: &mut Criterion) {
                 black_box(result)
             })
         });
+
+        #[cfg(target_arch = "x86_64")]
         c.bench_function(&format!("dot_product_u8_avx2_fma_{}", size), |b| {
             b.iter(|| {
                 // Randomly select two vectors for each iteration
