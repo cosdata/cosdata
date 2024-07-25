@@ -12,3 +12,6 @@ pub mod serializer;
 pub mod types;
 pub mod user;
 pub mod versioning;
+
+#[cfg(test)]
+mod serializer_tests;
