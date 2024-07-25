@@ -1,0 +1,110 @@
+#+TITLE: MergedNode Serialization Structure
+#+AUTHOR: Nithin
+#+DATE: [Current Date]
+
+* MergedNode Serialization
+
+The following diagram represents the byte-wise serialized structure of a MergedNode in our vector database system. This structure is designed for efficient storage and retrieval of hierarchical node data, including lazy-loading capabilities for large collections of neighbors and versions.
+
+** Serialization Diagram
+
+#+BEGIN_SRC ascii
++----------------------------------+
+| Version ID         (2 bytes)     |
++----------------------------------+
+| HNSW Level         (1 byte)      |
++----------------------------------+
+| Prop Offset        (4 bytes)     |----+
++----------------------------------+    |
+| Prop Length        (4 bytes)     |    |
++----------------------------------+    |
+| Indicator Byte     (1 byte)      |    |
++----------------------------------+    |
+| Parent Offset      (4 bytes) *   |--+ |
++----------------------------------+  | |
+| Child Offset       (4 bytes) *   |-+| |
++----------------------------------+ || |
+| Neighbors Offset   (4 bytes)     |-||-+--+
++----------------------------------+ ||| | |
+| Versions Offset    (4 bytes)     |-|||-+-+--+
++----------------------------------+ ||| | | | |
+                                     ||| | | | |
++----------------------------------+ ||| | | | |
+| Parent Node Data    (variable)   |<-+| | | | |
++----------------------------------+   | | | | |
+                                       | | | | |
++----------------------------------+   | | | | |
+| Child Node Data     (variable)   |<--+ | | | |
++----------------------------------+     | | | |
+                                         | | | |
++----------------------------------+     | | | |
+| Prop Data           (variable)   |<----+ | | |
++----------------------------------+       | | |
+                                           | | |
++----------------------------------+       | | |
+| Neighbors Count     (4 bytes)    |<------+ | |
++----------------------------------+         | |
+| Chunk 1 Offsets     (24 bytes)   |         | |
++----------------------------------+         | |
+| Neighbor 1 Data     (variable)   |         | |
++----------------------------------+         | |
+| Neighbor 2 Data     (variable)   |         | |
++----------------------------------+         | |
+| ...                              |         | |
++----------------------------------+         | |
+| Chunk 2 Offsets     (24 bytes)   |         | |
++----------------------------------+         | |
+| ...                              |         | |
+                                             | |
++----------------------------------+         | |
+| Versions Count      (4 bytes)    |<--------+ |
++----------------------------------+           |
+| Chunk 1 Offsets     (24 bytes)   |           |
++----------------------------------+           |
+| Version 1 Data      (variable)   |           |
++----------------------------------+           |
+| Version 2 Data      (variable)   |           |
++----------------------------------+           |
+| ...                              |           |
++----------------------------------+           |
+| Chunk 2 Offsets     (24 bytes)   |           |
++----------------------------------+           |
+| ...                              |           |
+
+  * Only present if indicated by Indicator Byte
+#+END_SRC
+
+** Structure Explanation
+
+1. *Main Node Structure*:
+   - Contains basic information about the node (Version ID, HNSW Level)
+   - Stores offsets to other components (Prop, Parent, Child, Neighbors, Versions)
+   - Uses an Indicator Byte to flag the presence of optional components (Parent, Child)
+
+2. *Property Data*:
+   - Stored separately with its offset and length in the main structure
+
+3. *Parent and Child Nodes*:
+   - Optional components, present only if indicated
+   - Stored as separate node structures
+
+4. *Neighbors and Versions*:
+   - Implemented as LazyItems for efficient handling of large collections
+   - Use a chunked structure with each chunk containing up to 5 items
+   - Each chunk starts with offsets to its items and the next chunk
+
+** Key Features
+
+- *Lazy Loading*: Components like Parent, Child, Neighbors, and Versions can be loaded on-demand.
+- *Flexibility*: The structure accommodates variable-sized data and optional components.
+- *Efficiency*: Chunked structure for Neighbors and Versions allows partial loading of large collections.
+- *Hierarchical*: Supports parent-child relationships between nodes.
+
+** Usage in Code
+
+This serialization structure is implemented in the ~CustomSerialize~ trait for the ~MergedNode~ struct. The ~serialize~ and ~deserialize~ methods handle the conversion between the in-memory representation and this byte-wise structure.
+
+* TODO Implementation Tasks
+- [ ] Optimize chunk size for Neighbors and Versions based on typical usage patterns
+- [ ] Implement compression for Prop Data to reduce storage requirements
+- [ ] Add versioning to the serialization format for future compatibility

@@ -1,8 +1,10 @@
+use super::chunked_list::LazyItem;
 use super::dot_product::x86_64::dot_product_u8_avx2;
 use super::rpc::VectorIdValue;
-use super::types::{NodeRef, VectorId};
+use super::types::{MergedNode, VectorId};
 use crate::models::lookup_table::*;
 use crate::models::rpc::Vector;
+use crate::models::types::PropState;
 use crate::models::types::VectorQt;
 use async_std::stream::Cloned;
 use dashmap::DashMap;
@@ -338,59 +340,38 @@ pub fn quantize_to_u32_bits(fins: &[f32], resolution: u8) -> Vec<Vec<u32>> {
 
     quantized
 }
-/////
 
 #[derive(Debug, Clone)]
 pub enum WaCustomError {
-    CreateDatabaseFailed(String),
-    LmdbError(String),
+    DatabaseError(String),
     SerializationError(String),
-    DeserializationError(String),
     UpsertFailed,
-    CFNotFound,
     InvalidParams,
-    NodeNotFound(String),
-    PendingNeighborEncountered(String),
-    InvalidLocationNeighborEncountered(String, VectorId),
-    MutexPoisoned(String),
+    NodeError(String),
+    NeighborError(String, Option<VectorId>),
+    LockError(String),
     QuantizationMismatch,
+    LazyLoadingError(String),
 }
 
-// Implementing the std::fmt::Display trait for WaCustomError
 impl fmt::Display for WaCustomError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            WaCustomError::CreateDatabaseFailed(msg) => {
-                write!(f, "Failed to create the database: {}", msg)
-            }
-            WaCustomError::LmdbError(msg) => {
-                write!(f, "LMDB error: {}", msg)
-            }
-            WaCustomError::SerializationError(msg) => {
-                write!(f, "Serialization error: {}", msg)
-            }
-            WaCustomError::DeserializationError(msg) => {
-                write!(f, "Deserialization error: {}", msg)
-            }
-
+            WaCustomError::DatabaseError(msg) => write!(f, "Database error: {}", msg),
+            WaCustomError::SerializationError(msg) => write!(f, "Serialization error: {}", msg),
             WaCustomError::UpsertFailed => write!(f, "Failed to upsert vectors"),
-            WaCustomError::CFNotFound => write!(f, "ColumnFamily not found"),
             WaCustomError::InvalidParams => write!(f, "Invalid params in request"),
-            WaCustomError::NodeNotFound(msg) => write!(f, "Could not load Node: {}", msg),
-            WaCustomError::PendingNeighborEncountered(msg) => {
-                write!(f, "Pending neighbor encountered: {}", msg)
-            }
-            WaCustomError::InvalidLocationNeighborEncountered(mark, msg) => {
-                write!(f, "Invalid location neighbor encountered {} {}", mark, msg)
-            }
-            WaCustomError::MutexPoisoned(msg) => {
-                write!(f, "Mutex Poisoned here: {}", msg)
-            }
+            WaCustomError::NodeError(msg) => write!(f, "Node error: {}", msg),
+            WaCustomError::NeighborError(msg, id) => match id {
+                Some(vec_id) => write!(f, "Neighbor error: {} for ID {}", msg, vec_id),
+                None => write!(f, "Neighbor error: {}", msg),
+            },
+            WaCustomError::LockError(msg) => write!(f, "Lock error: {}", msg),
             WaCustomError::QuantizationMismatch => write!(f, "Quantization mismatch"),
+            WaCustomError::LazyLoadingError(msg) => write!(f, "Lazy loading error: {}", msg),
         }
     }
 }
-
 pub fn hash_float_vec(vec: Vec<f32>) -> Vec<u8> {
     // Create a new hasher instance
     let mut hasher = Sha256::new();
@@ -414,9 +395,9 @@ pub fn get_max_insert_level(x: f64, levels: Arc<Vec<(f64, i32)>>) -> i32 {
 }
 
 pub fn add_option_vecs(
-    a: &Option<Vec<(NodeRef, f32)>>,
-    b: &Option<Vec<(NodeRef, f32)>>,
-) -> Option<Vec<(NodeRef, f32)>> {
+    a: &Option<Vec<(LazyItem<MergedNode>, f32)>>,
+    b: &Option<Vec<(LazyItem<MergedNode>, f32)>>,
+) -> Option<Vec<(LazyItem<MergedNode>, f32)>> {
     match (a, b) {
         (None, None) => None,
         (Some(vec), None) | (None, Some(vec)) => Some(vec.clone()),
@@ -464,28 +445,34 @@ pub fn convert_vectors(vectors: Vec<Vector>) -> Vec<(VectorIdValue, Vec<f32>)> {
 }
 
 pub fn remove_duplicates_and_filter(
-    input: Option<Vec<(NodeRef, f32)>>,
+    input: Option<Vec<(LazyItem<MergedNode>, f32)>>,
 ) -> Option<Vec<(VectorId, f32)>> {
-    if let Some(vec) = input {
+    input.map(|vec| {
         let mut seen = HashSet::new();
-        let mut unique_vec = Vec::new();
-
-        for item in vec {
-            if let VectorId::Int(ref s) = item.0.prop.id {
-                if *s == -1 {
-                    continue;
+        vec.into_iter()
+            .filter_map(|(lazy_item, similarity)| {
+                if let LazyItem::Ready(node, _) = lazy_item {
+                    if let PropState::Ready(node_prop) = &*node.prop.read().unwrap() {
+                        let id = &node_prop.id;
+                        if let VectorId::Int(s) = id {
+                            if *s == -1 {
+                                return None;
+                            }
+                        }
+                        if seen.insert(id.clone()) {
+                            Some((id.clone(), similarity))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None // PropState is Pending
+                    }
+                } else {
+                    None // LazyItem is not Ready
                 }
-            }
-
-            if seen.insert(item.0.prop.id.clone()) {
-                unique_vec.push((item.0.prop.id.clone(), item.1));
-            }
-        }
-
-        Some(unique_vec)
-    } else {
-        None
-    }
+            })
+            .collect()
+    })
 }
 
 pub fn generate_tuples(x: f64) -> Vec<(f64, i32)> {
