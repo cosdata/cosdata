@@ -252,6 +252,7 @@ pub struct MetaDb {
     pub env: Arc<Environment>,
     pub db: Arc<Database>,
 }
+
 #[derive(Debug, Clone)]
 pub struct VectorStore {
     pub exec_queue_nodes: ExecQueueUpdate,
@@ -263,6 +264,7 @@ pub struct VectorStore {
     pub prop_file: Arc<File>,
     pub version_lmdb: MetaDb,
     pub current_version: Arc<RwLock<Option<VersionHash>>>,
+    pub current_open_transaction: Arc<RwLock<Option<VersionHash>>>,
 }
 impl VectorStore {
     // Get method

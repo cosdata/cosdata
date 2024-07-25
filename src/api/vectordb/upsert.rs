@@ -24,6 +24,11 @@ pub(crate) async fn upsert(web::Json(body): web::Json<UpsertVectors>) -> HttpRes
         }
     };
 
+    if vec_store.current_open_transaction.read().unwrap().is_some() {
+        return HttpResponse::Conflict()
+            .body("Cannot upsert while there's an on-going transaction");
+    }
+
     // Call run_upload with the extracted parameters
     let __result = run_upload(vec_store.clone(), convert_vectors(body.vectors)).await;
 
