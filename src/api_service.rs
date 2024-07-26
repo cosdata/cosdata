@@ -87,7 +87,7 @@ pub async fn init_vector_store(
                 versions: Arc::new(RwLock::new(LazyItems::new())),
                 persist_flag: Arc::new(RwLock::new(true)),
             }),
-            None,
+            Arc::new(RwLock::new(None)),
         );
 
         if let (LazyItem::Ready(current_node, _), LazyItem::Ready(prev_node, _)) = (&nn, &prev) {
@@ -95,7 +95,6 @@ pub async fn init_vector_store(
             prev_node.set_child(current_node.clone());
         }
         prev = nn.clone();
-
 
         if l == 0 {
             root = nn.clone();
@@ -111,7 +110,6 @@ pub async fn init_vector_store(
 
     for (l, nn) in nodes.iter_mut().enumerate() {
         match persist_node_update_loc(&mut writer, nn) {
-
             Ok(_) => (),
             Err(e) => {
                 eprintln!("Failed node persist (init): {}", e);
@@ -169,7 +167,6 @@ pub async fn init_vector_store(
             }
         }
         Err(e) => Err(WaCustomError::DatabaseError(e.to_string())),
-
     };
 
     result

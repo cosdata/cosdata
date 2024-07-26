@@ -10,9 +10,8 @@ use std::cell::RefCell;
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
-use std::sync::{Arc, Mutex, RwLock};
 use std::rc::Rc;
-
+use std::sync::{Arc, Mutex, RwLock};
 
 // pub type FileOffset = u32;
 // pub type BytesToRead = u32;
@@ -52,10 +51,10 @@ pub fn persist_node_update_loc(
     match node {
         LazyItem::Ready(arc_node, loc) => {
             let mut_node = Arc::make_mut(arc_node);
-            let current_location = (*loc).clone();
+            let current_location = *loc.read().unwrap();
 
             let file_loc = write_node_update(ver_file, mut_node, current_location)?;
-            *loc = Some(file_loc as u32);
+            *loc.write().unwrap() = Some(file_loc as u32);
             Ok(())
         }
         LazyItem::LazyLoad(offset) => Err(WaCustomError::LazyLoadingError(

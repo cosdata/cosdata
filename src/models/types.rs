@@ -41,7 +41,6 @@ pub enum PropState {
     Pending(PropPersistRef),
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum VectorId {
     Str(String),
@@ -128,7 +127,7 @@ impl MergedNode {
             node: neighbor,
             cosine_similarity,
         });
-        neighbors.push(LazyItem::Ready(neighbor_ref, None));
+        neighbors.push(LazyItem::Ready(neighbor_ref, Arc::new(RwLock::new(None))));
     }
 
     pub fn add_ready_neighbors(&self, neighbors_list: Vec<(Arc<MergedNode>, f32)>) {
@@ -138,7 +137,7 @@ impl MergedNode {
                 node: neighbor,
                 cosine_similarity,
             });
-            neighbors.push(LazyItem::Ready(neighbor_ref, None));
+            neighbors.push(LazyItem::Ready(neighbor_ref, Arc::new(RwLock::new(None))));
         }
     }
 
@@ -157,7 +156,7 @@ impl MergedNode {
 
     pub fn add_version(&self, version: Arc<MergedNode>) {
         let mut versions = self.versions.write().unwrap();
-        versions.push(LazyItem::Ready(version, None));
+        versions.push(LazyItem::Ready(version, Arc::new(RwLock::new(None))));
     }
 
     pub fn get_versions(&self) -> Vec<LazyItem<MergedNode>> {
@@ -167,12 +166,12 @@ impl MergedNode {
 
     pub fn set_parent(&self, parent: Arc<MergedNode>) {
         let mut parent_lock = self.parent.write().unwrap();
-        *parent_lock = LazyItem::Ready(parent, None);
+        *parent_lock = LazyItem::Ready(parent, Arc::new(RwLock::new(None)));
     }
 
     pub fn set_child(&self, child: Arc<MergedNode>) {
         let mut child_lock = self.child.write().unwrap();
-        *child_lock = LazyItem::Ready(child, None);
+        *child_lock = LazyItem::Ready(child, Arc::new(RwLock::new(None)));
     }
 
     pub fn get_parent(&self) -> LazyItem<MergedNode> {

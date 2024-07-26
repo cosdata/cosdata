@@ -275,7 +275,7 @@ pub fn queue_node_prop_exec(
     prop_file: Arc<File>,
 ) -> Result<(), WaCustomError> {
     let (node, location) = match &lznode {
-        LazyItem::Ready(node, loc) => (node.clone(), *loc),
+        LazyItem::Ready(node, loc) => (node.clone(), *loc.read().unwrap()),
         LazyItem::LazyLoad(offset) => {
             return Err(WaCustomError::LazyLoadingError(format!(
                 "Node at offset {} needs to be loaded",
@@ -412,7 +412,7 @@ fn insert_node_create_edges(
     }
 
     queue_node_prop_exec(
-        LazyItem::Ready(nn.clone(), None),
+        LazyItem::Ready(nn.clone(), Arc::new(RwLock::new(None))),
         vec_store.prop_file.clone(),
     )?;
 
@@ -478,7 +478,7 @@ fn traverse_find_nearest(
                 {
                     let mut z = traverse_find_nearest(
                         vec_store.clone(),
-                        LazyItem::Ready(neighbor.node.clone(), None),
+                        LazyItem::Ready(neighbor.node.clone(), Arc::new(RwLock::new(None))),
                         fvec.clone(),
                         hs.clone(),
                         hops + 1,
@@ -486,10 +486,16 @@ fn traverse_find_nearest(
                         cur_level,
                         skip_hop,
                     )?;
-                    z.push((LazyItem::Ready(neighbor.node.clone(), None), cs));
+                    z.push((
+                        LazyItem::Ready(neighbor.node.clone(), Arc::new(RwLock::new(None))),
+                        cs,
+                    ));
                     tasks.push(z);
                 } else {
-                    tasks.push(vec![(LazyItem::Ready(neighbor.node.clone(), None), cs)]);
+                    tasks.push(vec![(
+                        LazyItem::Ready(neighbor.node.clone(), Arc::new(RwLock::new(None))),
+                        cs,
+                    )]);
                 }
             }
         }

@@ -4,14 +4,17 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{Read, Seek, SeekFrom, Write};
 
 impl<T: Clone + CustomSerialize> CustomSerialize for LazyItems<T> {
-    fn serialize<W: Write + Seek>(&mut self, writer: &mut W) -> std::io::Result<u32> {
+    fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
+        if self.is_empty() {
+            return Ok(u32::MAX);
+        };
         let start_offset = writer.stream_position()? as u32;
 
         // Write the number of items
         writer.write_u32::<LittleEndian>(self.items.len() as u32)?;
 
         let mut current_chunk_start = writer.stream_position()? as u32;
-        for chunk in self.items.chunks_mut(CHUNK_SIZE) {
+        for chunk in self.items.chunks(CHUNK_SIZE) {
             // Write placeholders for item offsets
             let placeholder_start = writer.stream_position()? as u32;
             for _ in 0..CHUNK_SIZE {
@@ -23,7 +26,7 @@ impl<T: Clone + CustomSerialize> CustomSerialize for LazyItems<T> {
             writer.write_u32::<LittleEndian>(u32::MAX)?;
 
             // Serialize items and update placeholders
-            for (i, item) in chunk.iter_mut().enumerate() {
+            for (i, item) in chunk.iter().enumerate() {
                 let item_offset = item.serialize(writer)?;
                 let placeholder_pos = placeholder_start as u64 + (i as u64 * 4);
                 let current_pos = writer.stream_position()?;
@@ -49,6 +52,9 @@ impl<T: Clone + CustomSerialize> CustomSerialize for LazyItems<T> {
     }
 
     fn deserialize<R: Read + Seek>(reader: &mut R, offset: u32) -> std::io::Result<Self> {
+        if offset == u32::MAX {
+            return Ok(LazyItems::new());
+        }
         reader.seek(SeekFrom::Start(offset as u64))?;
         let item_count = reader.read_u32::<LittleEndian>()? as usize;
         let mut items = Vec::with_capacity(item_count);
@@ -61,11 +67,7 @@ impl<T: Clone + CustomSerialize> CustomSerialize for LazyItems<T> {
                     break;
                 }
                 let item_offset = reader.read_u32::<LittleEndian>()?;
-                if item_offset == u32::MAX {
-                    items.push(LazyItem::Null);
-                } else {
-                    items.push(LazyItem::LazyLoad(item_offset));
-                }
+                items.push(LazyItem::new_lazy(item_offset));
             }
             // Read next chunk link
             current_chunk = reader.read_u32::<LittleEndian>()?;

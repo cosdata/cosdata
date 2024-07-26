@@ -1,6 +1,6 @@
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 pub trait SyncPersist {
     fn set_persistence(&self, flag: bool);
@@ -15,7 +15,7 @@ pub const CHUNK_SIZE: usize = 5;
 
 #[derive(Debug, Clone)]
 pub enum LazyItem<T: Clone> {
-    Ready(Arc<T>, Option<FileOffset>),
+    Ready(Arc<T>, Arc<RwLock<Option<FileOffset>>>),
     LazyLoad(FileOffset),
     Null,
 }
@@ -28,7 +28,7 @@ pub struct LazyItems<T: Clone> {
 impl<T: Clone> LazyItem<T> {
     pub fn get_offset(&self) -> Option<FileOffset> {
         match self {
-            LazyItem::Ready(_, offset) => *offset,
+            LazyItem::Ready(_, offset) => *offset.read().unwrap(),
             LazyItem::LazyLoad(offset) => Some(*offset),
             LazyItem::Null => None,
         }
@@ -44,7 +44,7 @@ impl<T: Clone> LazyItem<T> {
 
     pub fn set_offset(&mut self, offset: Option<FileOffset>) {
         match self {
-            LazyItem::Ready(_, stored_offset) => *stored_offset = offset,
+            LazyItem::Ready(_, stored_offset) => *stored_offset.write().unwrap() = offset,
             LazyItem::LazyLoad(stored_offset) => *stored_offset = offset.unwrap_or(0),
             LazyItem::Null => {}
         }

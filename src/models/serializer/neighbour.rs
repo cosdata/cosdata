@@ -10,17 +10,17 @@ use std::{
 };
 
 impl CustomSerialize for Neighbour {
-    fn serialize<W: Write + Seek>(&mut self, writer: &mut W) -> std::io::Result<u32> {
-        if !self.needs_persistence() {
-            return Ok(u32::MAX);
-        }
+    fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
+        // if !self.needs_persistence() {
+        //    return Ok(u32::MAX);
+        // }
 
-        self.set_persistence(false);
+        // self.set_persistence(false);
 
         let offset = writer.stream_position()? as u32;
 
         // Serialize the node
-        Arc::make_mut(&mut self.node).serialize(writer)?;
+        self.node.serialize(writer)?;
 
         // Serialize the cosine similarity
         writer.write_f32::<LittleEndian>(self.cosine_similarity)?;

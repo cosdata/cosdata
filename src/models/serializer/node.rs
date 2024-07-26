@@ -10,7 +10,7 @@ use std::{
 };
 
 impl CustomSerialize for MergedNode {
-    fn serialize<W: Write + Seek>(&mut self, writer: &mut W) -> std::io::Result<u32> {
+    fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
         if !self.needs_persistence() {
             return Ok(u32::MAX);
         }
@@ -90,19 +90,17 @@ impl CustomSerialize for MergedNode {
         // Serialize child if present
         let child_offset = if child_present {
             let offset = writer.stream_position()? as u32;
-            self.child.write().unwrap().serialize(writer)?;
+            self.child.read().unwrap().serialize(writer)?;
             Some(offset)
         } else {
             None
         };
 
         // Serialize neighbors
-        let neighbors_offset = writer.stream_position()? as u32;
-        self.neighbors.write().unwrap().serialize(writer)?;
+        let neighbors_offset = self.neighbors.read().unwrap().serialize(writer)?;
 
         // Serialize versions
-        let versions_offset = writer.stream_position()? as u32;
-        self.versions.write().unwrap().serialize(writer)?;
+        let versions_offset = self.versions.read().unwrap().serialize(writer)?;
 
         // Update placeholders
         let end_pos = writer.stream_position()?;

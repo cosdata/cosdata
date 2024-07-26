@@ -13,3 +13,6 @@ pub mod serializer;
 pub mod types;
 pub mod user;
 pub mod versioning;
+
+#[cfg(test)]
+mod custom_buffered_writer_tests;

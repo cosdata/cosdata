@@ -2,21 +2,23 @@ use super::CustomSerialize;
 use crate::models::chunked_list::LazyItem;
 use std::{
     io::{Read, Seek, SeekFrom, Write},
-    sync::Arc,
+    sync::{Arc, RwLock},
 };
 
 impl<T: Clone + CustomSerialize> CustomSerialize for LazyItem<T> {
-    fn serialize<W: Write + Seek>(&mut self, writer: &mut W) -> std::io::Result<u32> {
+    fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
         let offset = match self {
-            LazyItem::Ready(item, offset) => {
-                if let Some(existing_offset) = *offset {
+            LazyItem::Ready(item, existing_offset) => {
+                let read_guard = existing_offset.read().unwrap();
+                if let Some(existing_offset) = *read_guard {
                     writer.seek(SeekFrom::Start(existing_offset as u64))?;
-                    Arc::make_mut(item).serialize(writer)?;
+                    item.serialize(writer)?;
                     existing_offset
                 } else {
-                    let offs = Arc::make_mut(item).serialize(writer)?;
-                    *offset = Some(offs);
-                    offs
+                    drop(read_guard);
+                    let offset = item.serialize(writer)?;
+                    *existing_offset.write().unwrap() = Some(offset);
+                    offset
                 }
             }
             LazyItem::LazyLoad(file_offset) => *file_offset,
@@ -30,6 +32,9 @@ impl<T: Clone + CustomSerialize> CustomSerialize for LazyItem<T> {
         reader.seek(SeekFrom::Start(offset as u64))?;
 
         let item = T::deserialize(reader, offset)?;
-        Ok(LazyItem::Ready(Arc::new(item), Some(offset)))
+        Ok(LazyItem::Ready(
+            Arc::new(item),
+            Arc::new(RwLock::new(Some(offset))),
+        ))
     }
 }
