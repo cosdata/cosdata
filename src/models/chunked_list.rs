@@ -15,64 +15,104 @@ pub const CHUNK_SIZE: usize = 5;
 
 #[derive(Debug, Clone)]
 pub enum LazyItem<T: Clone> {
-    Ready(Arc<T>, Arc<RwLock<Option<FileOffset>>>),
-    LazyLoad(FileOffset),
-    Null,
+    Valid {
+        data: Option<Arc<T>>,
+        offset: Option<FileOffset>,
+        decay_counter: usize,
+    },
+    Invalid,
 }
+
+pub type LazyItemRef<T: Clone> = Arc<RwLock<LazyItem<T>>>;
 
 #[derive(Debug, Clone)]
 pub struct LazyItems<T: Clone> {
-    pub items: Vec<LazyItem<T>>,
+    pub items: Arc<RwLock<Vec<LazyItemRef<T>>>>,
 }
 
 impl<T: Clone> LazyItem<T> {
+    pub fn new() -> Self {
+        LazyItem::Valid {
+            data: None,
+            offset: None,
+            decay_counter: 0,
+        }
+    }
+
+    pub fn with_data(data: T) -> Self {
+        LazyItem::Valid {
+            data: Some(Arc::new(data)),
+            offset: None,
+            decay_counter: 0,
+        }
+    }
+
     pub fn get_offset(&self) -> Option<FileOffset> {
         match self {
-            LazyItem::Ready(_, offset) => *offset.read().unwrap(),
-            LazyItem::LazyLoad(offset) => Some(*offset),
-            LazyItem::Null => None,
+            LazyItem::Valid { offset, .. } => *offset,
+            LazyItem::Invalid => None,
         }
     }
 
-    pub fn new_lazy(offset: FileOffset) -> Self {
-        if offset == u32::MAX {
-            LazyItem::Null
-        } else {
-            LazyItem::LazyLoad(offset)
+    pub fn set_offset(&mut self, new_offset: Option<FileOffset>) {
+        if let LazyItem::Valid { offset, .. } = self {
+            *offset = new_offset;
         }
     }
+    pub fn is_valid(&self) -> bool {
+        matches!(self, LazyItem::Valid { .. })
+    }
 
-    pub fn set_offset(&mut self, offset: Option<FileOffset>) {
+    pub fn get_data(&self) -> Option<Arc<T>> {
         match self {
-            LazyItem::Ready(_, stored_offset) => *stored_offset.write().unwrap() = offset,
-            LazyItem::LazyLoad(stored_offset) => *stored_offset = offset.unwrap_or(0),
-            LazyItem::Null => {}
+            LazyItem::Valid { data, .. } => data.clone(),
+            LazyItem::Invalid => None,
+        }
+    }
+
+    pub fn set_data(&mut self, new_data: Option<Arc<T>>) {
+        if let LazyItem::Valid { data, .. } = self {
+            *data = new_data;
+        }
+    }
+
+    pub fn increment_decay(&mut self) {
+        if let LazyItem::Valid { decay_counter, .. } = self {
+            *decay_counter += 1;
+        }
+    }
+
+    pub fn reset_decay(&mut self) {
+        if let LazyItem::Valid { decay_counter, .. } = self {
+            *decay_counter = 0;
         }
     }
 }
 
 impl<T: Clone> LazyItems<T> {
     pub fn new() -> Self {
-        LazyItems { items: Vec::new() }
+        LazyItems {
+            items: Arc::new(RwLock::new(Vec::new())),
+        }
     }
 
-    pub fn push(&mut self, item: LazyItem<T>) {
-        self.items.push(item);
+    pub fn push(&self, item: LazyItemRef<T>) {
+        self.items.write().unwrap().push(item);
     }
 
-    pub fn get(&self, index: usize) -> Option<&LazyItem<T>> {
-        self.items.get(index)
+    pub fn get(&self, index: usize) -> Option<LazyItemRef<T>> {
+        self.items.read().unwrap().get(index).cloned()
     }
 
     pub fn len(&self) -> usize {
-        self.items.len()
+        self.items.read().unwrap().len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
+        self.items.read().unwrap().is_empty()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &LazyItem<T>> {
-        self.items.iter()
+    pub fn iter(&self) -> Vec<LazyItemRef<T>> {
+        self.items.read().unwrap().clone()
     }
 }

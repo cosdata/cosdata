@@ -46,17 +46,134 @@ pub enum VectorId {
     Str(String),
     Int(i32),
 }
-
 #[derive(Debug, Clone)]
 pub struct MergedNode {
     pub version_id: VersionId,
     pub hnsw_level: HNSWLevel,
     pub prop: Arc<RwLock<PropState>>,
-    pub neighbors: Arc<RwLock<LazyItems<Neighbour>>>,
-    pub parent: Arc<RwLock<LazyItem<MergedNode>>>,
-    pub child: Arc<RwLock<LazyItem<MergedNode>>>,
-    pub versions: Arc<RwLock<LazyItems<MergedNode>>>,
+    pub neighbors: LazyItems<Neighbour>,
+    pub parent: LazyItemRef<MergedNode>,
+    pub child: LazyItemRef<MergedNode>,
+    pub versions: LazyItems<MergedNode>,
     pub persist_flag: Arc<RwLock<bool>>,
+}
+impl MergedNode {
+    pub fn new(version_id: VersionId, hnsw_level: HNSWLevel) -> Self {
+        MergedNode {
+            version_id,
+            hnsw_level,
+            prop: Arc::new(RwLock::new(PropState::Pending((0, 0)))),
+            neighbors: LazyItems::new(),
+            parent: Arc::new(RwLock::new(LazyItem::Invalid)),
+            child: Arc::new(RwLock::new(LazyItem::Invalid)),
+            versions: LazyItems::new(),
+            persist_flag: Arc::new(RwLock::new(true)),
+        }
+    }
+
+    pub fn add_ready_neighbor(&self, neighbor: Arc<MergedNode>, cosine_similarity: f32) {
+        let neighbor_ref = Arc::new(Neighbour {
+            node: neighbor,
+            cosine_similarity,
+        });
+        let lazy_item = LazyItem::Valid {
+            data: Some(neighbor_ref),
+            offset: None,
+            decay_counter: 0,
+        };
+        self.neighbors.push(Arc::new(RwLock::new(lazy_item)));
+    }
+
+    pub fn set_parent(&self, parent: Arc<MergedNode>) {
+        let lazy_item = LazyItem::Valid {
+            data: Some(parent),
+            offset: None,
+            decay_counter: 0,
+        };
+        *self.parent.write().unwrap() = lazy_item;
+    }
+
+    pub fn set_child(&self, child: Arc<MergedNode>) {
+        let lazy_item = LazyItem::Valid {
+            data: Some(child),
+            offset: None,
+            decay_counter: 0,
+        };
+        *self.child.write().unwrap() = lazy_item;
+    }
+
+    pub fn add_ready_neighbors(&self, neighbors_list: Vec<(Arc<MergedNode>, f32)>) {
+        for (neighbor, cosine_similarity) in neighbors_list {
+            self.add_ready_neighbor(neighbor, cosine_similarity);
+        }
+    }
+
+    pub fn get_neighbors(&self) -> Vec<LazyItemRef<Neighbour>> {
+        self.neighbors.iter()
+    }
+
+    pub fn set_neighbors(&self, new_neighbors: Vec<LazyItemRef<Neighbour>>) {
+        let mut neighbors = self.neighbors.items.write().unwrap();
+        *neighbors = new_neighbors;
+    }
+
+    pub fn add_version(&self, version: Arc<MergedNode>) {
+        let lazy_item = LazyItem::Valid {
+            data: Some(version),
+            offset: None,
+            decay_counter: 0,
+        };
+        self.versions.push(Arc::new(RwLock::new(lazy_item)));
+    }
+
+    pub fn get_versions(&self) -> Vec<LazyItemRef<MergedNode>> {
+        self.versions.iter()
+    }
+
+    pub fn get_parent(&self) -> LazyItemRef<MergedNode> {
+        self.parent.clone()
+    }
+
+    pub fn get_child(&self) -> LazyItemRef<MergedNode> {
+        self.child.clone()
+    }
+
+    pub fn set_prop_location(&self, new_location: PropPersistRef) {
+        let mut prop = self.prop.write().unwrap();
+        *prop = PropState::Pending(new_location);
+    }
+
+    pub fn get_prop_location(&self) -> Option<PropPersistRef> {
+        let prop = self.prop.read().unwrap();
+        match *prop {
+            PropState::Ready(ref node_prop) => node_prop.location,
+            PropState::Pending(location) => Some(location),
+        }
+    }
+
+    pub fn get_prop(&self) -> PropState {
+        self.prop.read().unwrap().clone()
+    }
+
+    pub fn set_prop_pending(&self, prop_ref: PropPersistRef) {
+        let mut prop = self.prop.write().unwrap();
+        *prop = PropState::Pending(prop_ref);
+    }
+
+    pub fn set_prop_ready(&self, node_prop: Arc<NodeProp>) {
+        let mut prop = self.prop.write().unwrap();
+        *prop = PropState::Ready(node_prop);
+    }
+
+    pub fn set_persistence(&self, flag: bool) {
+        let mut fl = self.persist_flag.write().unwrap();
+        *fl = flag;
+    }
+
+    pub fn needs_persistence(&self) -> bool {
+        let fl = self.persist_flag.read().unwrap();
+        *fl
+    }
 }
 
 impl SyncPersist for MergedNode {
@@ -89,111 +206,6 @@ impl fmt::Display for VectorId {
         match self {
             VectorId::Str(s) => write!(f, "{}", s),
             VectorId::Int(i) => write!(f, "{}", i),
-        }
-    }
-}
-
-impl MergedNode {
-    pub fn new(version_id: VersionId, hnsw_level: HNSWLevel) -> Self {
-        MergedNode {
-            version_id,
-            hnsw_level,
-            prop: Arc::new(RwLock::new(PropState::Pending((0, 0)))),
-            neighbors: Arc::new(RwLock::new(LazyItems::new())),
-            parent: Arc::new(RwLock::new(LazyItem::Null)),
-            child: Arc::new(RwLock::new(LazyItem::Null)),
-            versions: Arc::new(RwLock::new(LazyItems::new())),
-            persist_flag: Arc::new(RwLock::new(true)),
-        }
-    }
-
-    pub fn get_prop(&self) -> PropState {
-        self.prop.read().unwrap().clone()
-    }
-
-    pub fn set_prop_pending(&self, prop_ref: PropPersistRef) {
-        let mut prop = self.prop.write().unwrap();
-        *prop = PropState::Pending(prop_ref);
-    }
-
-    pub fn set_prop_ready(&self, node_prop: Arc<NodeProp>) {
-        let mut prop = self.prop.write().unwrap();
-        *prop = PropState::Ready(node_prop);
-    }
-
-    pub fn add_ready_neighbor(&self, neighbor: Arc<MergedNode>, cosine_similarity: f32) {
-        let mut neighbors = self.neighbors.write().unwrap();
-        let neighbor_ref = Arc::new(Neighbour {
-            node: neighbor,
-            cosine_similarity,
-        });
-        neighbors.push(LazyItem::Ready(neighbor_ref, Arc::new(RwLock::new(None))));
-    }
-
-    pub fn add_ready_neighbors(&self, neighbors_list: Vec<(Arc<MergedNode>, f32)>) {
-        let mut neighbors = self.neighbors.write().unwrap();
-        for (neighbor, cosine_similarity) in neighbors_list {
-            let neighbor_ref = Arc::new(Neighbour {
-                node: neighbor,
-                cosine_similarity,
-            });
-            neighbors.push(LazyItem::Ready(neighbor_ref, Arc::new(RwLock::new(None))));
-        }
-    }
-
-    pub fn get_neighbors(&self) -> Vec<LazyItem<Neighbour>> {
-        let neighbors = self.neighbors.read().unwrap();
-
-        neighbors.items.clone()
-    }
-    pub fn set_neighbors(&self, new_neighbors: Vec<LazyItem<Neighbour>>) {
-        let mut neighbors = self.neighbors.write().unwrap();
-
-        *neighbors = LazyItems {
-            items: new_neighbors,
-        };
-    }
-
-    pub fn add_version(&self, version: Arc<MergedNode>) {
-        let mut versions = self.versions.write().unwrap();
-        versions.push(LazyItem::Ready(version, Arc::new(RwLock::new(None))));
-    }
-
-    pub fn get_versions(&self) -> Vec<LazyItem<MergedNode>> {
-        let versions = self.versions.read().unwrap();
-        versions.items.clone()
-    }
-
-    pub fn set_parent(&self, parent: Arc<MergedNode>) {
-        let mut parent_lock = self.parent.write().unwrap();
-        *parent_lock = LazyItem::Ready(parent, Arc::new(RwLock::new(None)));
-    }
-
-    pub fn set_child(&self, child: Arc<MergedNode>) {
-        let mut child_lock = self.child.write().unwrap();
-        *child_lock = LazyItem::Ready(child, Arc::new(RwLock::new(None)));
-    }
-
-    pub fn get_parent(&self) -> LazyItem<MergedNode> {
-        let parent_lock = self.parent.read().unwrap();
-        parent_lock.clone()
-    }
-
-    pub fn get_child(&self) -> LazyItem<MergedNode> {
-        let child_lock = self.child.read().unwrap();
-        child_lock.clone()
-    }
-
-    pub fn set_prop_location(&self, new_location: PropPersistRef) {
-        let mut location_write = self.prop.write().unwrap();
-        *location_write = PropState::Pending(new_location);
-    }
-
-    pub fn get_prop_location(&self) -> Option<PropPersistRef> {
-        let location_read = self.prop.read().unwrap();
-        match location_read.clone() {
-            PropState::Ready(x) => x.clone().location,
-            PropState::Pending(x) => Some(x),
         }
     }
 }
