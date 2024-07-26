@@ -916,6 +916,7 @@ dependencies = [
  "sha2",
  "siphasher 1.0.1",
  "smallvec",
+ "tempfile",
  "thiserror",
  "tokio",
  "tokio-rustls",
@@ -2504,6 +2505,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "tempfile"
+version = "3.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "85b77fafb263dd9d05cbeac119526425676db3784113aa9295c88498cbf8bff1"
+dependencies = [
+ "cfg-if",
+ "fastrand 2.1.0",
+ "rustix 0.38.34",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

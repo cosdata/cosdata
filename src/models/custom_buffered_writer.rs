@@ -4,8 +4,8 @@ use std::fs::File;
 use std::io::{self, Seek, SeekFrom, Write};
 use std::rc::Rc;
 
-const BUFFER_SIZE: usize = 8192; // 8 KB buffer, adjust as needed
-const FLUSH_THRESHOLD: usize = (BUFFER_SIZE as f32 * 0.7) as usize; // 70% of buffer size
+pub const BUFFER_SIZE: usize = 8192; // 8 KB buffer, adjust as needed
+pub const FLUSH_THRESHOLD: usize = (BUFFER_SIZE as f32 * 0.7) as usize; // 70% of buffer size
 
 pub struct CustomBufferedWriter {
     file: Rc<RefCell<File>>,
