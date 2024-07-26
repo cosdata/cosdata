@@ -1,6 +1,6 @@
 use super::CustomSerialize;
 use crate::models::{
-    chunked_list::{LazyItem, LazyItems},
+    chunked_list::{LazyItem, LazyItems, SyncPersist},
     types::{MergedNode, PropState},
 };
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
@@ -10,7 +10,13 @@ use std::{
 };
 
 impl CustomSerialize for MergedNode {
-    fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
+    fn serialize<W: Write + Seek>(&mut self, writer: &mut W) -> std::io::Result<u32> {
+        if !self.needs_persistence() {
+            return Ok(u32::MAX);
+        }
+
+        self.set_persistence(false);
+
         let start_offset = writer.stream_position()? as u32;
 
         // Serialize basic fields
@@ -75,7 +81,7 @@ impl CustomSerialize for MergedNode {
         // Serialize parent if present
         let parent_offset = if parent_present {
             let offset = writer.stream_position()? as u32;
-            self.parent.read().unwrap().serialize(writer)?;
+            self.parent.write().unwrap().serialize(writer)?;
             Some(offset)
         } else {
             None
@@ -84,7 +90,7 @@ impl CustomSerialize for MergedNode {
         // Serialize child if present
         let child_offset = if child_present {
             let offset = writer.stream_position()? as u32;
-            self.child.read().unwrap().serialize(writer)?;
+            self.child.write().unwrap().serialize(writer)?;
             Some(offset)
         } else {
             None
@@ -92,11 +98,11 @@ impl CustomSerialize for MergedNode {
 
         // Serialize neighbors
         let neighbors_offset = writer.stream_position()? as u32;
-        self.neighbors.read().unwrap().serialize(writer)?;
+        self.neighbors.write().unwrap().serialize(writer)?;
 
         // Serialize versions
         let versions_offset = writer.stream_position()? as u32;
-        self.versions.read().unwrap().serialize(writer)?;
+        self.versions.write().unwrap().serialize(writer)?;
 
         // Update placeholders
         let end_pos = writer.stream_position()?;

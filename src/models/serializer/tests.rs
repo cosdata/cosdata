@@ -21,7 +21,7 @@ mod tests {
     #[test]
     fn test_lazy_item_serialization() {
         let node = Arc::new(simple_merged_node(1, 2));
-        let lazy_item = LazyItem::Ready(node, Some(0));
+        let mut lazy_item = LazyItem::Ready(node, Some(0));
 
         let mut writer = Cursor::new(Vec::new());
         let offset = lazy_item.serialize(&mut writer).unwrap();
@@ -47,6 +47,7 @@ mod tests {
 
         let mut writer = Cursor::new(Vec::new());
         let offset = lazy_items.serialize(&mut writer).unwrap();
+        println!("{:?}", writer.clone().bytes());
 
         let mut reader = Cursor::new(writer.into_inner());
         let deserialized = LazyItems::<MergedNode>::deserialize(&mut reader, offset).unwrap();
@@ -67,7 +68,7 @@ mod tests {
 
     #[test]
     fn test_merged_node_acyclic_serialization() {
-        let node = simple_merged_node(1, 2);
+        let mut node = simple_merged_node(1, 2);
 
         let mut writer = Cursor::new(Vec::new());
         let offset = node.serialize(&mut writer).unwrap();
@@ -85,7 +86,7 @@ mod tests {
 
     #[test]
     fn test_merged_node_with_neighbors_serialization() {
-        let node = MergedNode::new(1, 2);
+        let mut node = MergedNode::new(1, 2);
 
         let neighbor1 = Arc::new(MergedNode::new(2, 1));
         let neighbor2 = Arc::new(MergedNode::new(3, 1));
@@ -123,7 +124,7 @@ mod tests {
 
     #[test]
     fn test_merged_node_with_parent_child_serialization() {
-        let node = Arc::new(MergedNode::new(1, 2));
+        let mut node = Arc::new(MergedNode::new(1, 2));
         let parent = Arc::new(MergedNode::new(2, 3));
         let child = Arc::new(MergedNode::new(3, 1));
 
@@ -131,7 +132,7 @@ mod tests {
         node.set_child(child.clone());
 
         let mut writer = Cursor::new(Vec::new());
-        let offset = node.serialize(&mut writer).unwrap();
+        let offset = Arc::make_mut(&mut node).serialize(&mut writer).unwrap();
 
         let mut reader = Cursor::new(writer.into_inner());
         let deserialized = MergedNode::deserialize(&mut reader, offset).unwrap();
@@ -142,7 +143,7 @@ mod tests {
 
     #[test]
     fn test_merged_node_with_versions_serialization() {
-        let node = Arc::new(MergedNode::new(1, 2));
+        let mut node = Arc::new(MergedNode::new(1, 2));
         let version1 = Arc::new(MergedNode::new(2, 2));
         let version2 = Arc::new(MergedNode::new(3, 2));
 
@@ -150,7 +151,7 @@ mod tests {
         node.add_version(version2);
 
         let mut writer = Cursor::new(Vec::new());
-        let offset = node.serialize(&mut writer).unwrap();
+        let offset = Arc::make_mut(&mut node).serialize(&mut writer).unwrap();
 
         let mut reader = Cursor::new(writer.into_inner());
         let deserialized = MergedNode::deserialize(&mut reader, offset).unwrap();
@@ -160,14 +161,14 @@ mod tests {
 
     #[test]
     fn test_merged_node_cyclic_serialization() {
-        let node1 = Arc::new(MergedNode::new(1, 2));
+        let mut node1 = Arc::new(MergedNode::new(1, 2));
         let node2 = Arc::new(MergedNode::new(2, 2));
 
         node1.set_parent(node2.clone());
         node2.set_child(node1.clone());
 
         let mut writer = Cursor::new(Vec::new());
-        let offset = node1.serialize(&mut writer).unwrap();
+        let offset = Arc::make_mut(&mut node1).serialize(&mut writer).unwrap();
 
         let mut reader = Cursor::new(writer.into_inner());
         let deserialized = MergedNode::deserialize(&mut reader, offset).unwrap();
@@ -185,7 +186,7 @@ mod tests {
 
     #[test]
     fn test_merged_node_complex_cyclic_serialization() {
-        let node1 = Arc::new(MergedNode::new(1, 2));
+        let mut node1 = Arc::new(MergedNode::new(1, 2));
         let node2 = Arc::new(MergedNode::new(2, 2));
         let node3 = Arc::new(MergedNode::new(3, 2));
 
@@ -196,7 +197,7 @@ mod tests {
         node1.add_ready_neighbor(node3.clone(), 0.9);
 
         let mut writer = Cursor::new(Vec::new());
-        let offset = node1.serialize(&mut writer).unwrap();
+        let offset = Arc::make_mut(&mut node1).serialize(&mut writer).unwrap();
 
         let mut reader = Cursor::new(writer.into_inner());
         let deserialized = MergedNode::deserialize(&mut reader, offset).unwrap();

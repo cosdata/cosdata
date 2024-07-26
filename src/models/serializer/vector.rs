@@ -4,7 +4,7 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{Read, Seek, SeekFrom, Write};
 
 impl CustomSerialize for VectorQt {
-    fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
+    fn serialize<W: Write + Seek>(&mut self, writer: &mut W) -> std::io::Result<u32> {
         let offset = writer.stream_position()? as u32;
 
         match self {

@@ -1,5 +1,8 @@
 use super::CustomSerialize;
-use crate::models::types::{MergedNode, Neighbour};
+use crate::models::{
+    chunked_list::SyncPersist,
+    types::{MergedNode, Neighbour},
+};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::{
     io::{Read, Seek, SeekFrom, Write},
@@ -7,11 +10,17 @@ use std::{
 };
 
 impl CustomSerialize for Neighbour {
-    fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
+    fn serialize<W: Write + Seek>(&mut self, writer: &mut W) -> std::io::Result<u32> {
+        if !self.needs_persistence() {
+            return Ok(u32::MAX);
+        }
+
+        self.set_persistence(false);
+
         let offset = writer.stream_position()? as u32;
 
         // Serialize the node
-        self.serialize(writer)?;
+        Arc::make_mut(&mut self.node).serialize(writer)?;
 
         // Serialize the cosine similarity
         writer.write_f32::<LittleEndian>(self.cosine_similarity)?;

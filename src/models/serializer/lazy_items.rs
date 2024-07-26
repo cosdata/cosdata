@@ -4,14 +4,14 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{Read, Seek, SeekFrom, Write};
 
 impl<T: Clone + CustomSerialize> CustomSerialize for LazyItems<T> {
-    fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
+    fn serialize<W: Write + Seek>(&mut self, writer: &mut W) -> std::io::Result<u32> {
         let start_offset = writer.stream_position()? as u32;
 
         // Write the number of items
         writer.write_u32::<LittleEndian>(self.items.len() as u32)?;
 
         let mut current_chunk_start = writer.stream_position()? as u32;
-        for chunk in self.items.chunks(CHUNK_SIZE) {
+        for chunk in self.items.chunks_mut(CHUNK_SIZE) {
             // Write placeholders for item offsets
             let placeholder_start = writer.stream_position()? as u32;
             for _ in 0..CHUNK_SIZE {
@@ -23,7 +23,7 @@ impl<T: Clone + CustomSerialize> CustomSerialize for LazyItems<T> {
             writer.write_u32::<LittleEndian>(u32::MAX)?;
 
             // Serialize items and update placeholders
-            for (i, item) in chunk.iter().enumerate() {
+            for (i, item) in chunk.iter_mut().enumerate() {
                 let item_offset = item.serialize(writer)?;
                 let placeholder_pos = placeholder_start as u64 + (i as u64 * 4);
                 let current_pos = writer.stream_position()?;
