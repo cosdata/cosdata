@@ -45,8 +45,8 @@ impl CustomSerialize for MergedNode {
 
         // Create and write indicator byte
         let mut indicator: u8 = 0;
-        let parent_present = !matches!(*self.parent.read().unwrap(), LazyItem::Null);
-        let child_present = !matches!(*self.child.read().unwrap(), LazyItem::Null);
+        let parent_present = self.parent.is_some();
+        let child_present = self.child.is_some();
         if parent_present {
             indicator |= 0b00000001;
         }
@@ -80,24 +80,17 @@ impl CustomSerialize for MergedNode {
 
         // Serialize parent if present
         let parent_offset = if parent_present {
-            let offset = writer.stream_position()? as u32;
-            self.parent.serialize(writer)?;
-            Some(offset)
+            Some(self.parent.serialize(writer)?)
         } else {
             None
         };
 
         // Serialize child if present
         let child_offset = if child_present {
-            let offset = writer.stream_position()? as u32;
-            self.child.serialize(writer)?;
-            Some(offset)
+            Some(self.child.serialize(writer)?)
         } else {
             None
         };
-
-        // Serialize child
-        let child_offset = self.child.serialize(writer)?;
 
         // Serialize neighbors
         let neighbors_offset = self.neighbors.serialize(writer)?;
@@ -159,10 +152,18 @@ impl CustomSerialize for MergedNode {
         let versions_offset = reader.read_u32::<LittleEndian>()?;
 
         // Deserialize parent
-        let parent = LazyItemRef::deserialize(reader, parent_offset)?;
+        let parent = if let Some(offset) = parent_offset {
+            Some(LazyItemRef::deserialize(reader, offset)?)
+        } else {
+            None
+        };
 
         // Deserialize child
-        let child = LazyItemRef::deserialize(reader, child_offset)?;
+        let child = if let Some(offset) = child_offset {
+            Some(LazyItemRef::deserialize(reader, offset)?)
+        } else {
+            None
+        };
 
         // Deserialize neighbors
         let neighbors = LazyItems::deserialize(reader, neighbors_offset)?;

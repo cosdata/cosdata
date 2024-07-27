@@ -6,21 +6,15 @@ use crate::models::{
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::{
     io::{Read, Seek, SeekFrom, Write},
-    sync::Arc,
+    sync::{Arc, RwLock},
 };
 
 impl CustomSerialize for Neighbour {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
-        // if !self.needs_persistence() {
-        //    return Ok(u32::MAX);
-        // }
-
-        // self.set_persistence(false);
-
         let offset = writer.stream_position()? as u32;
 
         // Serialize the node
-        self.node.serialize(writer)?;
+        self.node.read().unwrap().serialize(writer)?;
 
         // Serialize the cosine similarity
         writer.write_f32::<LittleEndian>(self.cosine_similarity)?;
@@ -38,7 +32,7 @@ impl CustomSerialize for Neighbour {
         let cosine_similarity = reader.read_f32::<LittleEndian>()?;
 
         Ok(Neighbour {
-            node: Arc::new(node),
+            node: Arc::new(RwLock::new(node)),
             cosine_similarity,
         })
     }

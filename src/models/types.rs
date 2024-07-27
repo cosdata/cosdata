@@ -1,6 +1,7 @@
 use crate::models::chunked_list::*;
 use crate::models::common::*;
 use crate::models::versioning::VersionHash;
+use actix_web::guard;
 use bincode;
 use dashmap::DashMap;
 use lmdb::{Database, Environment, Transaction, WriteFlags};
@@ -21,7 +22,7 @@ pub type CosineSimilarity = f32;
 
 #[derive(Debug, Clone)]
 pub struct Neighbour {
-    pub node: Arc<MergedNode>,
+    pub node: Arc<RwLock<MergedNode>>,
     pub cosine_similarity: CosineSimilarity,
 }
 
@@ -46,17 +47,19 @@ pub enum VectorId {
     Str(String),
     Int(i32),
 }
+
 #[derive(Debug, Clone)]
 pub struct MergedNode {
     pub version_id: VersionId,
     pub hnsw_level: HNSWLevel,
     pub prop: Arc<RwLock<PropState>>,
     pub neighbors: LazyItems<Neighbour>,
-    pub parent: LazyItemRef<MergedNode>,
-    pub child: LazyItemRef<MergedNode>,
+    pub parent: Option<LazyItemRef<MergedNode>>,
+    pub child: Option<LazyItemRef<MergedNode>>,
     pub versions: LazyItems<MergedNode>,
     pub persist_flag: Arc<RwLock<bool>>,
 }
+
 impl MergedNode {
     pub fn new(version_id: VersionId, hnsw_level: HNSWLevel) -> Self {
         MergedNode {
@@ -64,77 +67,68 @@ impl MergedNode {
             hnsw_level,
             prop: Arc::new(RwLock::new(PropState::Pending((0, 0)))),
             neighbors: LazyItems::new(),
-            parent: Arc::new(RwLock::new(LazyItem::Invalid)),
-            child: Arc::new(RwLock::new(LazyItem::Invalid)),
+            parent: None,
+            child: None,
             versions: LazyItems::new(),
             persist_flag: Arc::new(RwLock::new(true)),
         }
     }
 
-    pub fn add_ready_neighbor(&self, neighbor: Arc<MergedNode>, cosine_similarity: f32) {
-        let neighbor_ref = Arc::new(Neighbour {
-            node: neighbor,
+    pub fn add_ready_neighbor(&self, neighbor: Arc<RwLock<MergedNode>>, cosine_similarity: f32) {
+        let neighbor_ref = Arc::new(RwLock::new(Neighbour {
+            // TODO: look at it later
+            node: unsafe { std::mem::transmute(neighbor) },
             cosine_similarity,
-        });
-        let lazy_item = LazyItem::Valid {
+        }));
+        let lazy_item = LazyItem {
             data: Some(neighbor_ref),
             offset: None,
             decay_counter: 0,
         };
-        self.neighbors.push(Arc::new(RwLock::new(lazy_item)));
+        self.neighbors.push(lazy_item);
     }
 
-    pub fn set_parent(&self, parent: Arc<MergedNode>) {
-        let lazy_item = LazyItem::Valid {
-            data: Some(parent),
-            offset: None,
-            decay_counter: 0,
-        };
-        *self.parent.write().unwrap() = lazy_item;
+    pub fn set_parent(&mut self, parent: Option<LazyItemRef<MergedNode>>) {
+        self.parent = parent;
     }
 
-    pub fn set_child(&self, child: Arc<MergedNode>) {
-        let lazy_item = LazyItem::Valid {
-            data: Some(child),
-            offset: None,
-            decay_counter: 0,
-        };
-        *self.child.write().unwrap() = lazy_item;
+    pub fn set_child(&mut self, child: Option<LazyItemRef<MergedNode>>) {
+        self.child = child;
     }
 
-    pub fn add_ready_neighbors(&self, neighbors_list: Vec<(Arc<MergedNode>, f32)>) {
+    pub fn add_ready_neighbors(&self, neighbors_list: Vec<(Arc<RwLock<MergedNode>>, f32)>) {
         for (neighbor, cosine_similarity) in neighbors_list {
             self.add_ready_neighbor(neighbor, cosine_similarity);
         }
     }
 
-    pub fn get_neighbors(&self) -> Vec<LazyItemRef<Neighbour>> {
-        self.neighbors.iter()
+    pub fn get_neighbors(&self) -> Vec<LazyItem<Neighbour>> {
+        self.neighbors.items.read().unwrap().clone()
     }
 
-    pub fn set_neighbors(&self, new_neighbors: Vec<LazyItemRef<Neighbour>>) {
+    pub fn set_neighbors(&self, new_neighbors: Vec<LazyItem<Neighbour>>) {
         let mut neighbors = self.neighbors.items.write().unwrap();
         *neighbors = new_neighbors;
     }
 
-    pub fn add_version(&self, version: Arc<MergedNode>) {
-        let lazy_item = LazyItem::Valid {
+    pub fn add_version(&self, version: Arc<RwLock<MergedNode>>) {
+        let lazy_item = LazyItem {
             data: Some(version),
             offset: None,
             decay_counter: 0,
         };
-        self.versions.push(Arc::new(RwLock::new(lazy_item)));
+        self.versions.push(lazy_item);
     }
 
-    pub fn get_versions(&self) -> Vec<LazyItemRef<MergedNode>> {
-        self.versions.iter()
+    pub fn get_versions(&self) -> Vec<LazyItem<MergedNode>> {
+        self.versions.items.read().unwrap().clone()
     }
 
-    pub fn get_parent(&self) -> LazyItemRef<MergedNode> {
+    pub fn get_parent(&self) -> Option<LazyItemRef<MergedNode>> {
         self.parent.clone()
     }
 
-    pub fn get_child(&self) -> LazyItemRef<MergedNode> {
+    pub fn get_child(&self) -> Option<LazyItemRef<MergedNode>> {
         self.child.clone()
     }
 
@@ -190,12 +184,14 @@ impl SyncPersist for MergedNode {
 
 impl SyncPersist for Neighbour {
     fn set_persistence(&self, flag: bool) {
-        let mut fl = self.node.persist_flag.write().unwrap();
+        let guard = self.node.read().unwrap();
+        let mut fl = guard.persist_flag.write().unwrap();
         *fl = flag;
     }
 
     fn needs_persistence(&self) -> bool {
-        let fl = self.node.persist_flag.read().unwrap();
+        let guard = self.node.read().unwrap();
+        let fl = guard.persist_flag.read().unwrap();
         *fl
     }
 }
@@ -215,10 +211,10 @@ impl fmt::Display for MergedNode {
             self.version_id,
             self.hnsw_level,
             self.prop.read().unwrap(),
-            self.neighbors.read().unwrap(),
-            self.parent.read().unwrap(),
-            self.child.read().unwrap(),
-            self.versions.read().unwrap()
+            self.neighbors,
+            self.parent,
+            self.child,
+            self.versions
         )
     }
 }
@@ -269,7 +265,7 @@ pub struct VectorStore {
     pub exec_queue_nodes: ExecQueueUpdate,
     pub max_cache_level: u8,
     pub database_name: String,
-    pub root_vec: LazyItem<MergedNode>,
+    pub root_vec: LazyItemRef<MergedNode>,
     pub levels_prob: Arc<Vec<(f64, i32)>>,
     pub quant_dim: usize,
     pub prop_file: Arc<File>,

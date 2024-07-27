@@ -25,8 +25,8 @@ pub(crate) async fn create(database_name: web::Path<String>) -> HttpResponse {
     let transation_id = hash.hash.clone();
 
     {
-        let mut write_gaurd = vec_store.current_open_transaction.write().unwrap();
-        *write_gaurd = Some(hash);
+        let mut write_guard = vec_store.current_open_transaction.write().unwrap();
+        *write_guard = Some(hash);
     }
 
     HttpResponse::Ok().json(json!({

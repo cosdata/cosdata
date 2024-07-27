@@ -1,7 +1,10 @@
 use super::CustomSerialize;
 use crate::models::chunked_list::{LazyItem, LazyItems, CHUNK_SIZE};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::{
+    io::{Read, Seek, SeekFrom, Write},
+    sync::{Arc, RwLock},
+};
 
 impl<T: Clone + CustomSerialize> CustomSerialize for LazyItems<T> {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
@@ -9,12 +12,13 @@ impl<T: Clone + CustomSerialize> CustomSerialize for LazyItems<T> {
             return Ok(u32::MAX);
         };
         let start_offset = writer.stream_position()? as u32;
+        let mut items_guard = self.items.write().unwrap();
 
         // Write the number of items
-        writer.write_u32::<LittleEndian>(self.items.len() as u32)?;
+        writer.write_u32::<LittleEndian>(items_guard.len() as u32)?;
 
         let mut current_chunk_start = writer.stream_position()? as u32;
-        for chunk in self.items.chunks(CHUNK_SIZE) {
+        for chunk in items_guard.chunks_mut(CHUNK_SIZE) {
             // Write placeholders for item offsets
             let placeholder_start = writer.stream_position()? as u32;
             for _ in 0..CHUNK_SIZE {
@@ -26,8 +30,9 @@ impl<T: Clone + CustomSerialize> CustomSerialize for LazyItems<T> {
             writer.write_u32::<LittleEndian>(u32::MAX)?;
 
             // Serialize items and update placeholders
-            for (i, item) in chunk.iter().enumerate() {
+            for (i, item) in chunk.iter_mut().enumerate() {
                 let item_offset = item.serialize(writer)?;
+                item.offset = Some(item_offset);
                 let placeholder_pos = placeholder_start as u64 + (i as u64 * 4);
                 let current_pos = writer.stream_position()?;
                 writer.seek(SeekFrom::Start(placeholder_pos))?;
@@ -67,7 +72,16 @@ impl<T: Clone + CustomSerialize> CustomSerialize for LazyItems<T> {
                     break;
                 }
                 let item_offset = reader.read_u32::<LittleEndian>()?;
-                items.push(LazyItem::new_lazy(item_offset));
+                if item_offset == u32::MAX {
+                    continue;
+                }
+                let item = LazyItem {
+                    data: None,
+                    offset: Some(item_offset),
+                    decay_counter: 0,
+                };
+
+                items.push(item);
             }
             // Read next chunk link
             current_chunk = reader.read_u32::<LittleEndian>()?;
@@ -76,6 +90,8 @@ impl<T: Clone + CustomSerialize> CustomSerialize for LazyItems<T> {
             }
         }
 
-        Ok(LazyItems { items })
+        Ok(LazyItems {
+            items: Arc::new(RwLock::new(items)),
+        })
     }
 }

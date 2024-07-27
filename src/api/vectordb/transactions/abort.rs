@@ -13,8 +13,8 @@ pub(crate) async fn abort(path_data: web::Path<(String, String)>) -> HttpRespons
     };
 
     {
-        let gaurd = vec_store.current_open_transaction.read().unwrap();
-        let Some(transaction) = gaurd.as_ref() else {
+        let guard = vec_store.current_open_transaction.read().unwrap();
+        let Some(transaction) = guard.as_ref() else {
             return HttpResponse::NotFound().body("Transaction not found");
         };
 

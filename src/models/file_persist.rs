@@ -34,7 +34,7 @@ pub fn read_node_from_file(file: &mut File, offset: u32) -> std::io::Result<Merg
 
 pub fn write_node_update(
     ver_file: &mut CustomBufferedWriter,
-    nprst: &mut MergedNode,
+    nprst: Arc<RwLock<MergedNode>>,
     current_location: Option<u32>,
 ) -> Result<u64, WaCustomError> {
     if let Some(loc) = current_location {
@@ -48,34 +48,24 @@ pub fn persist_node_update_loc(
     ver_file: &mut CustomBufferedWriter,
     node: &mut LazyItem<MergedNode>,
 ) -> Result<(), WaCustomError> {
-    match node {
-        LazyItem::Ready(arc_node, loc) => {
-            let mut_node = Arc::make_mut(arc_node);
-            let current_location = *loc.read().unwrap();
-
-            let file_loc = write_node_update(ver_file, mut_node, current_location)?;
-            *loc.write().unwrap() = Some(file_loc as u32);
-            Ok(())
-        }
-        LazyItem::LazyLoad(offset) => Err(WaCustomError::LazyLoadingError(
-            "Cannot update location of Lazy node".to_string(),
-        )),
-        LazyItem::Null => Err(WaCustomError::LazyLoadingError(
-            "Cannot update location of Null node".to_string(),
-        )),
-    }
+    let Some(data) = &node.data else {
+        return Err(WaCustomError::LazyLoadingError("data is None".to_string()));
+    };
+    let file_loc = write_node_update(ver_file, data.clone(), node.offset)?;
+    node.offset = Some(file_loc as u32);
+    Ok(())
 }
 
-pub fn write_node_to_file(node: &mut MergedNode, writer: &mut CustomBufferedWriter) -> u32 {
+pub fn write_node_to_file(node: Arc<RwLock<MergedNode>>, writer: &mut CustomBufferedWriter) -> u32 {
     // Assume CustomBufferWriter already handles seeking to the end
     // Serialize
-    let result = node.serialize(writer);
+    let result = node.read().unwrap().serialize(writer);
     let offset = result.expect("Failed to serialize NodePersist & write to file");
     offset as u32
 }
 
 pub fn write_node_to_file_at_offset(
-    node: &mut MergedNode,
+    node: Arc<RwLock<MergedNode>>,
     writer: &mut CustomBufferedWriter,
     offset: u32,
 ) -> u32 {
@@ -84,17 +74,17 @@ pub fn write_node_to_file_at_offset(
         .seek(SeekFrom::Start(offset as u64))
         .expect("Failed to seek in file");
     // Serialize
-    let result = node.serialize(writer);
+    let result = node.read().unwrap().serialize(writer);
     let offset = result.expect("Failed to serialize NodePersist & write to file");
     offset as u32
 }
 //
-pub fn load_vector_id_lsmdb(level: HNSWLevel, vector_id: VectorId) -> LazyItem<MergedNode> {
-    return LazyItem::Null;
+pub fn load_vector_id_lsmdb(level: HNSWLevel, vector_id: VectorId) -> Option<LazyItem<MergedNode>> {
+    None
 }
 
 pub fn load_neighbor_persist_ref(level: HNSWLevel, node_file_ref: u32) -> Option<MergedNode> {
-    return None;
+    None
 }
 pub fn write_prop_to_file(prop: &NodeProp, mut file: &File) -> (u32, u32) {
     let mut prop_bytes = Vec::new();

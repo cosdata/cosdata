@@ -56,10 +56,10 @@ impl NodeRegistry {
     }
 }
 
-fn load_object_from_file(key: &VectorId) -> LazyItem<MergedNode> {
+fn load_object_from_file(key: &VectorId) -> Option<LazyItem<MergedNode>> {
     match key {
-        VectorId::Str(s) => LazyItem::Null, //  format!("Object loaded for {}", s),
-        VectorId::Int(i) => LazyItem::Null, //format!("Object loaded for {}", i),
+        VectorId::Str(s) => None, //  format!("Object loaded for {}", s),
+        VectorId::Int(i) => None, //format!("Object loaded for {}", i),
     }
 }
 

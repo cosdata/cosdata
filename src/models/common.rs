@@ -451,8 +451,12 @@ pub fn remove_duplicates_and_filter(
         let mut seen = HashSet::new();
         vec.into_iter()
             .filter_map(|(lazy_item, similarity)| {
-                if let LazyItem::Ready(node, _) = lazy_item {
-                    if let PropState::Ready(node_prop) = &*node.prop.read().unwrap() {
+                if let LazyItem {
+                    data: Some(node), ..
+                } = lazy_item
+                {
+                    if let PropState::Ready(node_prop) = &*node.read().unwrap().prop.read().unwrap()
+                    {
                         let id = &node_prop.id;
                         if let VectorId::Int(s) = id {
                             if *s == -1 {
@@ -468,7 +472,7 @@ pub fn remove_duplicates_and_filter(
                         None // PropState is Pending
                     }
                 } else {
-                    None // LazyItem is not Ready
+                    None // data is None
                 }
             })
             .collect()
