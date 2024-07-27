@@ -1,6 +1,11 @@
+use crate::distance::{
+    cosine::CosineDistance, dotproduct::DotProductDistance, euclidean::EuclideanDistance,
+    hamming::HammingDistance, DistanceFunction,
+};
 use crate::models::chunked_list::*;
 use crate::models::common::*;
 use crate::models::versioning::VersionHash;
+use crate::quantization::{Quantization, StorageType};
 use bincode;
 use dashmap::DashMap;
 use lmdb::{Database, Environment, Transaction, WriteFlags};
@@ -57,11 +62,13 @@ pub struct MergedNode {
     pub child: Arc<RwLock<LazyItem<MergedNode>>>,
     pub versions: Arc<RwLock<LazyItems<MergedNode>>>,
     pub persist_flag: Arc<RwLock<bool>>,
-    pub quantization: Box<dyn Quantization>,
-    pub distance_fn: Box<dyn DistanceFunction>,
-    pub storage_type: StorageType,
 }
-
+pub enum DistanceMetric {
+    Cosine,
+    Euclidean,
+    Hamming,
+    DotProduct,
+}
 impl SyncPersist for MergedNode {
     fn set_persistence(&self, flag: bool) {
         let mut fl = self.persist_flag.write().unwrap();
@@ -98,9 +105,6 @@ impl fmt::Display for VectorId {
 
 impl MergedNode {
     pub fn new(version_id: VersionId, hnsw_level: HNSWLevel) -> Self {
-        // Or for product quantization:
-        let mut product_quantization = ProductQuantization { centroids: None };
-
         MergedNode {
             version_id,
             hnsw_level,
@@ -110,9 +114,6 @@ impl MergedNode {
             child: Arc::new(RwLock::new(LazyItem::Null)),
             versions: Arc::new(RwLock::new(LazyItems::new())),
             persist_flag: Arc::new(RwLock::new(true)),
-            quantization: Box::new(product_quantization),
-            distance_fn: Box::new(EuclideanDistance),
-            storage_type: StorageType::SubByte(8), // 8-bit resolution
         }
     }
 
@@ -273,8 +274,31 @@ pub struct VectorStore {
     pub version_lmdb: MetaDb,
     pub current_version: Arc<RwLock<Option<VersionHash>>>,
     pub current_open_transaction: Arc<RwLock<Option<VersionHash>>>,
+    pub quantization: Box<dyn Quantization>,
+    pub distance_fn: Box<dyn DistanceFunction>,
+    pub storage_type: StorageType,
 }
 impl VectorStore {
+    pub fn new(
+        // ... other parameters ...
+        quantization: Box<dyn Quantization>,
+        distance_metric: DistanceMetric,
+        storage_type: StorageType,
+    ) -> Self {
+        let distance_fn: Box<dyn DistanceFunction> = match distance_metric {
+            DistanceMetric::Cosine => Box::new(CosineDistance),
+            DistanceMetric::Euclidean => Box::new(EuclideanDistance),
+            DistanceMetric::Hamming => Box::new(HammingDistance),
+            DistanceMetric::DotProduct => Box::new(DotProductDistance),
+        };
+
+        VectorStore {
+            // ... other fields ...
+            quantization,
+            distance_fn,
+            storage_type,
+        }
+    }
     // Get method
     pub fn get_current_version(
         &self,
