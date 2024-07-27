@@ -57,6 +57,9 @@ pub struct MergedNode {
     pub child: Arc<RwLock<LazyItem<MergedNode>>>,
     pub versions: Arc<RwLock<LazyItems<MergedNode>>>,
     pub persist_flag: Arc<RwLock<bool>>,
+    pub quantization: Box<dyn Quantization>,
+    pub distance_fn: Box<dyn DistanceFunction>,
+    pub storage_type: StorageType,
 }
 
 impl SyncPersist for MergedNode {
@@ -95,6 +98,9 @@ impl fmt::Display for VectorId {
 
 impl MergedNode {
     pub fn new(version_id: VersionId, hnsw_level: HNSWLevel) -> Self {
+        // Or for product quantization:
+        let mut product_quantization = ProductQuantization { centroids: None };
+
         MergedNode {
             version_id,
             hnsw_level,
@@ -104,6 +110,9 @@ impl MergedNode {
             child: Arc::new(RwLock::new(LazyItem::Null)),
             versions: Arc::new(RwLock::new(LazyItems::new())),
             persist_flag: Arc::new(RwLock::new(true)),
+            quantization: Box::new(product_quantization),
+            distance_fn: Box::new(EuclideanDistance),
+            storage_type: StorageType::SubByte(8), // 8-bit resolution
         }
     }
 
