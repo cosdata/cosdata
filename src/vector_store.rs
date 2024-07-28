@@ -403,8 +403,8 @@ fn insert_node_create_edges(
     let nn = Arc::new(RwLock::new(MergedNode::new(0, cur_level as u8))); // Assuming MergedNode::new exists
     nn.read().unwrap().set_prop_ready(Arc::new(nd_p));
 
-    // Convert LazyItem<MergedNode> to Arc<MergedNode>
-    let ready_neighbors: Vec<(Arc<RwLock<MergedNode>>, f32)> = nbs
+    // Convert LazyItem<MergedNode> to Item<MergedNode>
+    let ready_neighbors: Vec<(Item<MergedNode>, f32)> = nbs
         .iter()
         .filter_map(|(nbr, cs)| {
             if let LazyItem {
@@ -422,7 +422,7 @@ fn insert_node_create_edges(
 
     for (nbr1, cs) in nbs.into_iter() {
         if let Some(nbr1_node) = nbr1.data {
-            let mut neighbor_list: Vec<(Arc<RwLock<MergedNode>>, f32)> = nbr1_node
+            let mut neighbor_list: Vec<(Item<MergedNode>, f32)> = nbr1_node
                 .read()
                 .unwrap()
                 .neighbors

@@ -1,5 +1,4 @@
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use std::io::{Read, Seek, SeekFrom, Write};
+use super::types::Item;
 use std::sync::{Arc, RwLock};
 
 pub trait SyncPersist {
@@ -15,19 +14,19 @@ pub const CHUNK_SIZE: usize = 5;
 
 #[derive(Debug, Clone)]
 pub struct LazyItem<T: Clone> {
-    pub data: Option<Arc<RwLock<T>>>,
+    pub data: Option<Item<T>>,
     pub offset: Option<FileOffset>,
     pub decay_counter: usize,
 }
 
 #[derive(Debug, Clone)]
 pub struct LazyItemRef<T: Clone> {
-    pub item: Arc<RwLock<LazyItem<T>>>,
+    pub item: Item<LazyItem<T>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct LazyItems<T: Clone> {
-    pub items: Arc<RwLock<Vec<LazyItem<T>>>>,
+    pub items: Item<Vec<LazyItem<T>>>,
 }
 
 impl<T: Clone> LazyItem<T> {
@@ -51,7 +50,7 @@ impl<T: Clone> LazyItemRef<T> {
         }
     }
 
-    pub fn new_with_lock(item: Arc<RwLock<T>>) -> Self {
+    pub fn new_with_lock(item: Item<T>) -> Self {
         LazyItemRef {
             item: Arc::new(RwLock::new(LazyItem {
                 data: Some(item),
@@ -61,7 +60,7 @@ impl<T: Clone> LazyItemRef<T> {
         }
     }
 
-    pub fn get_data(&self) -> Option<Arc<RwLock<T>>> {
+    pub fn get_data(&self) -> Option<Item<T>> {
         self.item.read().unwrap().data.clone()
     }
 

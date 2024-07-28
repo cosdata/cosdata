@@ -1,17 +1,10 @@
 use super::chunked_list::LazyItem;
-use super::common::{tuple_to_string, WaCustomError};
-use super::types::{
-    HNSWLevel, MergedNode, Neighbour, NodeFileRef, NodeProp, VectorId, VectorQt, VectorStore,
-    VersionId,
-};
+use super::common::WaCustomError;
+use super::types::{HNSWLevel, Item, MergedNode, NodeProp, VectorId};
 use crate::models::custom_buffered_writer::*;
 use crate::models::serializer::*;
-use std::cell::RefCell;
-use std::fmt;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
-use std::rc::Rc;
-use std::sync::{Arc, Mutex, RwLock};
 
 // pub type FileOffset = u32;
 // pub type BytesToRead = u32;
@@ -34,7 +27,7 @@ pub fn read_node_from_file(file: &mut File, offset: u32) -> std::io::Result<Merg
 
 pub fn write_node_update(
     ver_file: &mut CustomBufferedWriter,
-    nprst: Arc<RwLock<MergedNode>>,
+    nprst: Item<MergedNode>,
     current_location: Option<u32>,
 ) -> Result<u64, WaCustomError> {
     if let Some(loc) = current_location {
@@ -56,7 +49,7 @@ pub fn persist_node_update_loc(
     Ok(())
 }
 
-pub fn write_node_to_file(node: Arc<RwLock<MergedNode>>, writer: &mut CustomBufferedWriter) -> u32 {
+pub fn write_node_to_file(node: Item<MergedNode>, writer: &mut CustomBufferedWriter) -> u32 {
     // Assume CustomBufferWriter already handles seeking to the end
     // Serialize
     let result = node.read().unwrap().serialize(writer);
@@ -65,7 +58,7 @@ pub fn write_node_to_file(node: Arc<RwLock<MergedNode>>, writer: &mut CustomBuff
 }
 
 pub fn write_node_to_file_at_offset(
-    node: Arc<RwLock<MergedNode>>,
+    node: Item<MergedNode>,
     writer: &mut CustomBufferedWriter,
     offset: u32,
 ) -> u32 {

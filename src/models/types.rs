@@ -20,9 +20,11 @@ pub type BytesToRead = u32;
 pub type VersionId = u16;
 pub type CosineSimilarity = f32;
 
+pub type Item<T> = Arc<RwLock<T>>;
+
 #[derive(Debug, Clone)]
 pub struct Neighbour {
-    pub node: Arc<RwLock<MergedNode>>,
+    pub node: Item<MergedNode>,
     pub cosine_similarity: CosineSimilarity,
 }
 
@@ -52,12 +54,12 @@ pub enum VectorId {
 pub struct MergedNode {
     pub version_id: VersionId,
     pub hnsw_level: HNSWLevel,
-    pub prop: Arc<RwLock<PropState>>,
+    pub prop: Item<PropState>,
     pub neighbors: LazyItems<Neighbour>,
     pub parent: Option<LazyItemRef<MergedNode>>,
     pub child: Option<LazyItemRef<MergedNode>>,
     pub versions: LazyItems<MergedNode>,
-    pub persist_flag: Arc<RwLock<bool>>,
+    pub persist_flag: Item<bool>,
 }
 
 impl MergedNode {
@@ -74,10 +76,9 @@ impl MergedNode {
         }
     }
 
-    pub fn add_ready_neighbor(&self, neighbor: Arc<RwLock<MergedNode>>, cosine_similarity: f32) {
+    pub fn add_ready_neighbor(&self, neighbor: Item<MergedNode>, cosine_similarity: f32) {
         let neighbor_ref = Arc::new(RwLock::new(Neighbour {
-            // TODO: look at it later
-            node: unsafe { std::mem::transmute(neighbor) },
+            node: neighbor,
             cosine_similarity,
         }));
         let lazy_item = LazyItem {
@@ -96,7 +97,7 @@ impl MergedNode {
         self.child = child;
     }
 
-    pub fn add_ready_neighbors(&self, neighbors_list: Vec<(Arc<RwLock<MergedNode>>, f32)>) {
+    pub fn add_ready_neighbors(&self, neighbors_list: Vec<(Item<MergedNode>, f32)>) {
         for (neighbor, cosine_similarity) in neighbors_list {
             self.add_ready_neighbor(neighbor, cosine_similarity);
         }
@@ -111,7 +112,7 @@ impl MergedNode {
         *neighbors = new_neighbors;
     }
 
-    pub fn add_version(&self, version: Arc<RwLock<MergedNode>>) {
+    pub fn add_version(&self, version: Item<MergedNode>) {
         let lazy_item = LazyItem {
             data: Some(version),
             offset: None,
@@ -252,7 +253,7 @@ impl VectorQt {
 pub type SizeBytes = u32;
 
 // needed to flatten and get uniques
-pub type ExecQueueUpdate = Arc<RwLock<Vec<LazyItem<MergedNode>>>>;
+pub type ExecQueueUpdate = Item<Vec<LazyItem<MergedNode>>>;
 
 #[derive(Debug, Clone)]
 pub struct MetaDb {
@@ -270,8 +271,8 @@ pub struct VectorStore {
     pub quant_dim: usize,
     pub prop_file: Arc<File>,
     pub version_lmdb: MetaDb,
-    pub current_version: Arc<RwLock<Option<VersionHash>>>,
-    pub current_open_transaction: Arc<RwLock<Option<VersionHash>>>,
+    pub current_version: Item<Option<VersionHash>>,
+    pub current_open_transaction: Item<Option<VersionHash>>,
 }
 impl VectorStore {
     // Get method
