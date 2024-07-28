@@ -74,6 +74,9 @@ mod tests {
 
         let mut writer = Cursor::new(Vec::new());
         let offset = lazy_items.serialize(&mut writer).unwrap();
+        // Print the contents of the cursor
+        let serialized_data = writer.clone().into_inner();
+        println!("Serialized data: {:?}", serialized_data);
 
         let reader = Cursor::new(writer.into_inner());
         let cache = get_cache(reader);

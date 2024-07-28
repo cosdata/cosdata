@@ -20,27 +20,27 @@ where
         };
         let start_offset = writer.stream_position()? as u32;
         let mut items_guard = self.items.write().unwrap();
-
-        // Write the number of items
-        // writer.write_u32::<LittleEndian>(items_guard.len() as u32)?;
-
+        let total_items = items_guard.len();
         let mut current_chunk_start = writer.stream_position()? as u32;
-        for chunk in items_guard.chunks_mut(CHUNK_SIZE) {
+
+        for chunk_start in (0..total_items).step_by(CHUNK_SIZE) {
+            let chunk_end = std::cmp::min(chunk_start + CHUNK_SIZE, total_items);
+            let is_last_chunk = chunk_end == total_items;
+
             // Write placeholders for item offsets
             let placeholder_start = writer.stream_position()? as u32;
             for _ in 0..CHUNK_SIZE {
                 writer.write_u32::<LittleEndian>(u32::MAX)?;
             }
-
             // Write placeholder for next chunk link
             let next_chunk_placeholder = writer.stream_position()? as u32;
             writer.write_u32::<LittleEndian>(u32::MAX)?;
 
             // Serialize items and update placeholders
-            for (i, item) in chunk.iter_mut().enumerate() {
-                let item_offset = item.serialize(writer)?;
-                item.offset = Some(item_offset);
-                let placeholder_pos = placeholder_start as u64 + (i as u64 * 4);
+            for i in chunk_start..chunk_end {
+                let item_offset = items_guard[i].serialize(writer)?;
+                items_guard[i].offset = Some(item_offset);
+                let placeholder_pos = placeholder_start as u64 + ((i - chunk_start) as u64 * 4);
                 let current_pos = writer.stream_position()?;
                 writer.seek(SeekFrom::Start(placeholder_pos))?;
                 writer.write_u32::<LittleEndian>(item_offset)?;
@@ -50,19 +50,16 @@ where
             // Write next chunk link
             let next_chunk_start = writer.stream_position()? as u32;
             writer.seek(SeekFrom::Start(next_chunk_placeholder as u64))?;
-            if next_chunk_start == current_chunk_start {
+            if is_last_chunk {
                 writer.write_u32::<LittleEndian>(u32::MAX)?; // Last chunk
             } else {
                 writer.write_u32::<LittleEndian>(next_chunk_start)?;
             }
             writer.seek(SeekFrom::Start(next_chunk_start as u64))?;
-
             current_chunk_start = next_chunk_start;
         }
-
         Ok(start_offset)
     }
-
     fn deserialize<R: Read + Seek>(
         reader: &mut R,
         offset: u32,
