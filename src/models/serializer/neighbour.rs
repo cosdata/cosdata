@@ -1,6 +1,7 @@
 use super::CustomSerialize;
 use crate::models::{
-    chunked_list::SyncPersist,
+    cache_loader::NodeRegistry,
+    chunked_list::LazyItem,
     types::{MergedNode, Neighbour},
 };
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
@@ -22,11 +23,16 @@ impl CustomSerialize for Neighbour {
         Ok(offset)
     }
 
-    fn deserialize<R: Read + Seek>(reader: &mut R, offset: u32) -> std::io::Result<Self> {
+    fn deserialize<R: Read + Seek>(
+        reader: &mut R,
+        offset: u32,
+        cache: Arc<NodeRegistry<R>>,
+        max_loads: u16,
+    ) -> std::io::Result<Self> {
         reader.seek(SeekFrom::Start(offset as u64))?;
 
         // Deserialize the node
-        let node = MergedNode::deserialize(reader, offset)?;
+        let node = MergedNode::deserialize(reader, offset, cache, max_loads)?;
 
         // Deserialize the cosine similarity
         let cosine_similarity = reader.read_f32::<LittleEndian>()?;

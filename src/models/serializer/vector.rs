@@ -1,7 +1,10 @@
 use super::CustomSerialize;
-use crate::models::types::VectorQt;
+use crate::models::{cache_loader::NodeRegistry, types::VectorQt};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::{
+    io::{Read, Seek, SeekFrom, Write},
+    sync::Arc,
+};
 
 impl CustomSerialize for VectorQt {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
@@ -35,7 +38,12 @@ impl CustomSerialize for VectorQt {
         Ok(offset)
     }
 
-    fn deserialize<R: Read + Seek>(reader: &mut R, offset: u32) -> std::io::Result<Self> {
+    fn deserialize<R: Read + Seek>(
+        reader: &mut R,
+        offset: u32,
+        _cache: Arc<NodeRegistry<R>>,
+        _max_loads: u16,
+    ) -> std::io::Result<Self> {
         reader.seek(SeekFrom::Start(offset as u64))?;
 
         match reader.read_u8()? {

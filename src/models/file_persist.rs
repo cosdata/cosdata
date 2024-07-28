@@ -1,22 +1,27 @@
+use super::cache_loader::NodeRegistry;
 use super::chunked_list::LazyItem;
 use super::common::WaCustomError;
 use super::types::{HNSWLevel, Item, MergedNode, NodeProp, VectorId};
 use crate::models::custom_buffered_writer::*;
 use crate::models::serializer::*;
 use std::fs::File;
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::sync::Arc;
 
 // pub type FileOffset = u32;
 // pub type BytesToRead = u32;
 
 // pub type PropPersistRef = (FileOffset, BytesToRead);
 
-pub fn read_node_from_file(file: &mut File, offset: u32) -> std::io::Result<MergedNode> {
+pub fn read_node_from_file<R: Read + Seek>(
+    offset: u32,
+    cache: Arc<NodeRegistry<R>>,
+) -> std::io::Result<MergedNode> {
     // Seek to the specified offset
-    file.seek(SeekFrom::Start(offset as u64))?;
+    // file.seek(SeekFrom::Start(offset as u64))?;
 
     // Deserialize the NodePersist from the current position
-    let node = MergedNode::deserialize(file, offset)?;
+    let node: MergedNode = cache.load_item(offset)?;
 
     // Pretty print the node
     println!("Read NodePersist from offset {}:", offset);
