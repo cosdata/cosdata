@@ -65,8 +65,8 @@ pub async fn init_vector_store(
     let mut writer =
         CustomBufferedWriter::new(ver_file.clone()).expect("Failed opening custom buffer");
 
-    let mut root: LazyItem<MergedNode> = LazyItem::Null;
-    let mut prev: LazyItem<MergedNode> = LazyItem::Null;
+    let mut root: Option<LazyItemRef<MergedNode>> = None;
+    let mut prev: Option<LazyItemRef<MergedNode>> = None;
 
     let mut nodes = Vec::new();
     for l in 0..=max_cache_level {
@@ -75,41 +75,40 @@ pub async fn init_vector_store(
             value: vector_list.clone().into(),
             location: Some((0, 0)),
         });
+        let current_node = Arc::new(RwLock::new(MergedNode {
+            version_id: 0, // Initialize with appropriate version ID
+            hnsw_level: l as u8,
+            prop: Arc::new(RwLock::new(PropState::Ready(prop.clone()))),
+            neighbors: LazyItems::new(),
+            parent: None,
+            child: None,
+            versions: LazyItems::new(),
+            persist_flag: Arc::new(RwLock::new(true)),
+        }));
 
-        let nn = LazyItem::Ready(
-            Arc::new(MergedNode {
-                version_id: 0, // Initialize with appropriate version ID
-                hnsw_level: l as u8,
-                prop: Arc::new(RwLock::new(PropState::Ready(prop.clone()))),
-                neighbors: Arc::new(RwLock::new(LazyItems::new())),
-                parent: Arc::new(RwLock::new(LazyItem::Null)),
-                child: Arc::new(RwLock::new(LazyItem::Null)),
-                versions: Arc::new(RwLock::new(LazyItems::new())),
-                persist_flag: Arc::new(RwLock::new(true)),
-            }),
-            Arc::new(RwLock::new(None)),
-        );
+        let nn = LazyItemRef::new_with_lock(current_node.clone());
 
-        if let (LazyItem::Ready(current_node, _), LazyItem::Ready(prev_node, _)) = (&nn, &prev) {
-            current_node.set_parent(prev_node.clone());
-            prev_node.set_child(current_node.clone());
+        if let Some(prev_node) = prev
+            .as_ref()
+            .and_then(|prev| prev.item.read().unwrap().data.clone())
+        {
+            let mut prev_guard = prev_node.write().unwrap();
+            current_node.write().unwrap().set_parent(prev.clone());
+            prev_guard.set_child(Some(nn.clone()));
         }
-        prev = nn.clone();
+        prev = Some(nn.clone());
 
         if l == 0 {
-            root = nn.clone();
-            if let LazyItem::Ready(ref mut root_node, _) = root {
-                let prop_location = write_prop_to_file(&prop, &prop_file);
-                let root_node_mut = Arc::make_mut(root_node);
-                root_node_mut.set_prop_ready(prop);
-            }
+            root = Some(nn.clone());
+            let prop_location = write_prop_to_file(&prop, &prop_file);
+            current_node.read().unwrap().set_prop_ready(prop);
         }
         nodes.push(nn.clone());
         println!("sssss: {:?}", nn);
     }
 
     for (l, nn) in nodes.iter_mut().enumerate() {
-        match persist_node_update_loc(&mut writer, nn) {
+        match persist_node_update_loc(&mut writer, &mut *nn.item.write().unwrap()) {
             Ok(_) => (),
             Err(e) => {
                 eprintln!("Failed node persist (init): {}", e);
@@ -136,7 +135,7 @@ pub async fn init_vector_store(
                     let vec_store = Arc::new(VectorStore {
                         max_cache_level,
                         database_name: name.clone(),
-                        root_vec: root,
+                        root_vec: root.unwrap(),
                         levels_prob: lp,
                         quant_dim: (size / 32) as usize,
                         prop_file,
@@ -191,7 +190,7 @@ pub async fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<(VectorIdValue, 
                 insert_embedding(
                     vec_store.clone(),
                     vec_emb,
-                    root.clone(),
+                    root.item.read().unwrap().clone(),
                     vec_store.max_cache_level.try_into().unwrap(),
                     iv.try_into().unwrap(),
                 )
@@ -250,7 +249,7 @@ pub async fn ann_vector_query(
     let results = ann_search(
         vec_store.clone(),
         vec_emb,
-        root.clone(),
+        root.item.read().unwrap().clone(),
         vec_store.max_cache_level.try_into().unwrap(),
     )?;
     let output = remove_duplicates_and_filter(results);
