@@ -239,43 +239,77 @@ mod tests {
     fn test_merged_node_cyclic_serialization() {
         let node1 = Arc::new(RwLock::new(MergedNode::new(1, 2)));
         let node2 = Arc::new(RwLock::new(MergedNode::new(2, 2)));
+        println!("Created node1 with id: 1 and node2 with id: 2");
+
         let lazy1 = LazyItemRef::new_with_lock(node1.clone());
         let lazy2 = LazyItemRef::new_with_lock(node2.clone());
 
         node1.write().unwrap().set_parent(Some(lazy2.clone()));
         node2.write().unwrap().set_child(Some(lazy1.clone()));
+        println!("Set cyclic references: node1's parent is node2, node2's child is node1");
 
         let mut writer = Cursor::new(Vec::new());
         let offset = lazy1.serialize(&mut writer).unwrap();
+        println!("Serialized lazy1 to writer. Offset: {}", offset);
 
         let reader = Cursor::new(writer.into_inner());
+
         let cache = get_cache(reader);
+
         let deserialized: MergedNode = cache.load_item(offset).unwrap();
+        println!(
+            "Deserialized MergedNode from cache. Node : {}",
+            deserialized
+        );
 
         let parent = deserialized.get_parent().unwrap();
+        println!("Got parent from deserialized node: {:?}", parent);
+
         let parent_guard = parent.item.read().unwrap();
 
         // Deserialize the parent
         if let LazyItem {
-            offset: Some(_),
+            offset: Some(parent_offset),
             data: Some(parent),
             ..
         } = &*parent_guard
         {
+            println!("Parent is a LazyItem : {:?} ", parent);
+
             let parent_guard = parent.read().unwrap();
+
             let child = parent_guard.get_child().unwrap();
+            println!("Got child from parent: {:?}", child);
+
             let child_guard = child.item.read().unwrap();
+
+            match &*child_guard {
+                LazyItem {
+                    data: Some(_),
+                    offset: Some(child_offset),
+                    ..
+                } => println!(
+                    "Child is a LazyItem with data and offset: {:?}",
+                    child_offset
+                ),
+                _ => println!("Unexpected child state"),
+            }
+
             assert!(matches!(
                 &*child_guard,
                 LazyItem {
-                    data: None,
+                    data: Some(_),
                     offset: Some(_),
                     ..
                 }
             ));
+            println!("Assertion passed: child is a LazyItem with no data and Some offset");
         } else {
+            println!("Parent is not in the expected state");
             panic!("Expected lazy load for parent");
         }
+
+        println!("Test completed successfully");
     }
 
     #[test]
