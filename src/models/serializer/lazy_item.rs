@@ -1,9 +1,11 @@
 use super::CustomSerialize;
+use crate::models::types::FileOffset;
 use crate::models::{
     cache_loader::NodeRegistry,
     chunked_list::{LazyItem, LazyItemRef},
     types::{MergedNode, Neighbour},
 };
+use std::collections::HashSet;
 use std::{
     io::{Read, Seek, SeekFrom, Write},
     sync::{Arc, RwLock},
@@ -43,12 +45,13 @@ impl CustomSerialize for LazyItem<MergedNode> {
         offset: u32,
         cache: Arc<NodeRegistry<R>>,
         max_loads: u16,
+        skipm: &mut HashSet<FileOffset>,
     ) -> std::io::Result<Self>
     where
         Self: Sized,
     {
         reader.seek(SeekFrom::Start(offset as u64))?;
-        let item = cache.get_object(offset, reader, MergedNode::deserialize, max_loads)?;
+        let item = cache.get_object(offset, reader, MergedNode::deserialize, max_loads, skipm)?;
 
         Ok(item)
     }
@@ -84,12 +87,13 @@ impl CustomSerialize for LazyItem<Neighbour> {
         offset: u32,
         cache: Arc<NodeRegistry<R>>,
         max_loads: u16,
+        skipm: &mut HashSet<FileOffset>,
     ) -> std::io::Result<Self>
     where
         Self: Sized,
     {
         reader.seek(SeekFrom::Start(offset as u64))?;
-        let data = Neighbour::deserialize(reader, offset, cache, max_loads)?;
+        let data = Neighbour::deserialize(reader, offset, cache, max_loads, skipm)?;
 
         Ok(LazyItem {
             data: Some(Arc::new(RwLock::new(data))),
@@ -119,8 +123,9 @@ impl CustomSerialize for LazyItemRef<MergedNode> {
         offset: u32,
         cache: Arc<NodeRegistry<R>>,
         max_loads: u16,
+        skipm: &mut HashSet<FileOffset>,
     ) -> std::io::Result<Self> {
-        let lazy = LazyItem::deserialize(reader, offset, cache, max_loads)?;
+        let lazy = LazyItem::deserialize(reader, offset, cache, max_loads, skipm)?;
 
         Ok(LazyItemRef {
             item: Arc::new(RwLock::new(lazy)),

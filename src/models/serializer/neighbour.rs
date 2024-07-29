@@ -1,10 +1,12 @@
 use super::CustomSerialize;
+use crate::models::types::FileOffset;
 use crate::models::{
     cache_loader::NodeRegistry,
     chunked_list::LazyItem,
     types::{MergedNode, Neighbour},
 };
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use std::collections::HashSet;
 use std::{
     io::{Read, Seek, SeekFrom, Write},
     sync::{Arc, RwLock},
@@ -36,6 +38,7 @@ impl CustomSerialize for Neighbour {
         offset: u32,
         cache: Arc<NodeRegistry<R>>,
         max_loads: u16,
+        skipm: &mut HashSet<FileOffset>,
     ) -> std::io::Result<Self> {
         reader.seek(SeekFrom::Start(offset as u64))?;
 
@@ -44,7 +47,7 @@ impl CustomSerialize for Neighbour {
 
         // Deserialize the cosine similarity
         let cosine_similarity = reader.read_f32::<LittleEndian>()?;
-        let node = LazyItem::deserialize(reader, node_pos, cache, max_loads)?;
+        let node = LazyItem::deserialize(reader, node_pos, cache, max_loads, skipm)?;
 
         Ok(Neighbour {
             node,

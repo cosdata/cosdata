@@ -10,6 +10,8 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use crate::models::types::FileOffset;
+use std::collections::HashSet;
 impl CustomSerialize for MergedNode {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
         let start_offset = writer.stream_position()? as u32;
@@ -122,6 +124,7 @@ impl CustomSerialize for MergedNode {
         offset: u32,
         cache: Arc<NodeRegistry<R>>,
         max_loads: u16,
+        skipm: &mut HashSet<FileOffset>,
     ) -> std::io::Result<Self> {
         reader.seek(SeekFrom::Start(offset as u64))?;
 
@@ -158,6 +161,7 @@ impl CustomSerialize for MergedNode {
                 offset,
                 cache.clone(),
                 max_loads,
+                skipm,
             )?)
         } else {
             None
@@ -170,16 +174,19 @@ impl CustomSerialize for MergedNode {
                 offset,
                 cache.clone(),
                 max_loads,
+                skipm,
             )?)
         } else {
             None
         };
 
         // Deserialize neighbors
-        let neighbors = LazyItems::deserialize(reader, neighbors_offset, cache.clone(), max_loads)?;
+        let neighbors =
+            LazyItems::deserialize(reader, neighbors_offset, cache.clone(), max_loads, skipm)?;
 
         // Deserialize versions
-        let versions = LazyItems::deserialize(reader, versions_offset, cache.clone(), max_loads)?;
+        let versions =
+            LazyItems::deserialize(reader, versions_offset, cache.clone(), max_loads, skipm)?;
 
         Ok(MergedNode {
             version_id,

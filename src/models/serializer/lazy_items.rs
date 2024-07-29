@@ -9,6 +9,8 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use crate::models::types::FileOffset;
+use std::collections::HashSet;
 impl<T> CustomSerialize for LazyItems<T>
 where
     LazyItem<T>: CustomSerialize,
@@ -63,6 +65,7 @@ where
         offset: u32,
         cache: Arc<NodeRegistry<R>>,
         max_loads: u16,
+        skipm: &mut HashSet<FileOffset>,
     ) -> std::io::Result<Self> {
         if offset == u32::MAX {
             return Ok(LazyItems::new());
@@ -77,7 +80,8 @@ where
                 if item_offset == u32::MAX {
                     continue;
                 }
-                let item = LazyItem::deserialize(reader, item_offset, cache.clone(), max_loads)?;
+                let item =
+                    LazyItem::deserialize(reader, item_offset, cache.clone(), max_loads, skipm)?;
                 items.push(item);
             }
             reader.seek(SeekFrom::Start(

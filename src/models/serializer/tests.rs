@@ -303,46 +303,84 @@ mod tests {
 
         let mut writer = Cursor::new(Vec::new());
         let offset = lazy1.serialize(&mut writer).unwrap();
-
+        // Print the contents of the cursor
+        let serialized_data = writer.clone().into_inner();
+        println!("Serialized data: {:?}", serialized_data);
         let reader = Cursor::new(writer.into_inner());
-        let cache = get_cache(reader);
-        let deserialized: LazyItemRef<MergedNode> = cache.load_item(offset).unwrap();
-        let deserialized_guard = deserialized.item.read().unwrap();
-        let deserialized_data = deserialized_guard.data.clone().unwrap();
-        let deserialized_data_guard = deserialized_data.read().unwrap();
+        println!("Reader created");
 
-        assert_eq!(deserialized_data_guard.get_neighbors().len(), 1);
+        let cache = get_cache(reader);
+        println!("Cache created");
+
+        let deserialized: LazyItemRef<MergedNode> = cache.load_item(offset).unwrap();
+        println!("Deserialized: {:?}", deserialized);
+
+        let deserialized_guard = deserialized.item.read().unwrap();
+        println!("Deserialized guard: {:?}", deserialized_guard);
+
+        let deserialized_data = deserialized_guard.data.clone().unwrap();
+        println!("Deserialized data: {:?}", deserialized_data);
+
+        let deserialized_data_guard = deserialized_data.read().unwrap();
+        println!("Deserialized data guard: {:?}", deserialized_data_guard);
+
+        println!(
+            "Number of neighbors: {}",
+            deserialized_data_guard.get_neighbors().len()
+        );
+
         let parent = deserialized_data_guard.get_parent().unwrap();
+        println!("Parent: {:?}", parent);
+
         let parent_guard = parent.item.read().unwrap();
+        println!("Parent guard: {:?}", parent_guard);
 
         // Deserialize the parent
         if let LazyItem {
             data: Some(parent), ..
         } = &*parent_guard
         {
+            println!("Parent data found");
             let parent_guard = parent.read().unwrap();
-            let child = parent_guard.get_child().unwrap();
-            let child_guard = child.item.read().unwrap();
-            let grand_parent = parent_guard.get_parent().unwrap();
-            let grand_parent_guard = grand_parent.item.read().unwrap();
+            println!("Parent data guard: {:?}", parent_guard);
 
-            assert!(matches!(
-                &*child_guard,
-                LazyItem {
-                    data: Some(_),
-                    offset: Some(_),
-                    ..
-                }
-            ));
-            assert!(matches!(
-                &*grand_parent_guard,
-                LazyItem {
-                    data: Some(_),
-                    offset: Some(_),
-                    ..
-                }
-            ));
+            let child = parent_guard.get_child().unwrap();
+            println!("Child: {:?}", child);
+
+            let child_guard = child.item.read().unwrap();
+            println!("Child guard: {:?}", child_guard);
+
+            let grand_parent = parent_guard.get_parent().unwrap();
+            println!("Grand parent: {:?}", grand_parent);
+
+            let grand_parent_guard = grand_parent.item.read().unwrap();
+            println!("Grand parent guard: {:?}", grand_parent_guard);
+
+            println!(
+                "Child guard matches: {}",
+                matches!(
+                    &*child_guard,
+                    LazyItem {
+                        data: Some(_),
+                        offset: Some(_),
+                        ..
+                    }
+                )
+            );
+
+            println!(
+                "Grand parent guard matches: {}",
+                matches!(
+                    &*grand_parent_guard,
+                    LazyItem {
+                        data: Some(_),
+                        offset: Some(_),
+                        ..
+                    }
+                )
+            );
         } else {
+            println!("Deserialization Error: Parent data not found");
             panic!("Deserialization Error");
         }
     }

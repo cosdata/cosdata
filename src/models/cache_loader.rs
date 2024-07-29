@@ -4,6 +4,7 @@ use super::serializer::CustomSerialize;
 use super::types::*;
 use dashmap::DashMap;
 use probabilistic_collections::cuckoo::CuckooFilter;
+use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::io::Seek;
@@ -33,21 +34,43 @@ impl<R: Read + Seek> NodeRegistry<R> {
         reader: &mut R,
         load_function: F,
         max_loads: u16,
+        skipm: &mut HashSet<FileOffset>,
     ) -> std::io::Result<LazyItem<MergedNode>>
     where
-        F: Fn(&mut R, FileOffset, Arc<Self>, u16) -> std::io::Result<MergedNode>,
+        F: Fn(
+            &mut R,
+            FileOffset,
+            Arc<Self>,
+            u16,
+            &mut HashSet<FileOffset>,
+        ) -> std::io::Result<MergedNode>,
     {
+        println!(
+            "get_object called with key: {:?}, max_loads: {}",
+            key, max_loads
+        );
+
         {
             let cuckoo_filter = self.cuckoo_filter.read().unwrap();
+            println!("Acquired read lock on cuckoo_filter");
+
             // Initial check with Cuckoo filter
             if cuckoo_filter.contains(&key) {
+                println!("Key found in cuckoo_filter");
                 if let Some(obj) = self.registry.get(&key) {
+                    println!("Object found in registry, returning");
                     return Ok(obj.clone());
+                } else {
+                    println!("Object not found in registry despite being in cuckoo_filter");
                 }
+            } else {
+                println!("Key not found in cuckoo_filter");
             }
         }
+        println!("Released read lock on cuckoo_filter");
 
-        if max_loads == 0 {
+        if max_loads == 0 || false == skipm.insert(key) {
+            println!("max_loads is 0, returning LazyItem with no data");
             return Ok(LazyItem {
                 data: None,
                 offset: Some(key),
@@ -55,27 +78,36 @@ impl<R: Read + Seek> NodeRegistry<R> {
             });
         }
 
-        let obj = load_function(reader, key, self.clone(), max_loads - 1)?;
+        println!("Calling load_function");
+        let obj = load_function(reader, key, self.clone(), max_loads - 1, skipm)?;
+        println!("load_function returned successfully");
 
         if let Some(obj) = self.registry.get(&key) {
+            println!("Object found in registry after load, returning");
             return Ok(obj.clone());
         }
 
+        println!("Creating new LazyItem");
         let item = LazyItem {
             data: Some(Arc::new(RwLock::new(obj))),
             offset: Some(key),
             decay_counter: 0,
         };
 
+        println!("Inserting key into cuckoo_filter");
         self.cuckoo_filter.write().unwrap().insert(&key);
+
+        println!("Inserting item into registry");
         self.registry.insert(key, item.clone());
 
+        println!("Returning newly created LazyItem");
         Ok(item)
     }
 
     pub fn load_item<T: CustomSerialize>(self: Arc<Self>, offset: u32) -> std::io::Result<T> {
         let mut reader_lock = self.reader.write().unwrap();
-        T::deserialize(&mut *reader_lock, offset, self.clone(), 5)
+        let mut skipm: HashSet<FileOffset> = HashSet::new();
+        T::deserialize(&mut *reader_lock, offset, self.clone(), 1000, &mut skipm)
     }
 
     pub fn hash_key(key: &VectorId) -> u64 {
