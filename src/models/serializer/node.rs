@@ -1,6 +1,7 @@
 use super::CustomSerialize;
 use crate::models::{
-    chunked_list::{LazyItem, LazyItems, SyncPersist},
+    cache_loader::NodeRegistry,
+    chunked_list::{LazyItemRef, LazyItems},
     types::{MergedNode, PropState},
 };
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
@@ -9,14 +10,10 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use crate::models::types::FileOffset;
+use std::collections::HashSet;
 impl CustomSerialize for MergedNode {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
-        if !self.needs_persistence() {
-            return Ok(u32::MAX);
-        }
-
-        self.set_persistence(false);
-
         let start_offset = writer.stream_position()? as u32;
 
         // Serialize basic fields
@@ -45,8 +42,8 @@ impl CustomSerialize for MergedNode {
 
         // Create and write indicator byte
         let mut indicator: u8 = 0;
-        let parent_present = !matches!(*self.parent.read().unwrap(), LazyItem::Null);
-        let child_present = !matches!(*self.child.read().unwrap(), LazyItem::Null);
+        let parent_present = self.parent.is_some();
+        let child_present = self.child.is_some();
         if parent_present {
             indicator |= 0b00000001;
         }
@@ -74,33 +71,29 @@ impl CustomSerialize for MergedNode {
 
         // Write placeholders for neighbors and versions
         let neighbors_placeholder = writer.stream_position()? as u32;
-        writer.write_u32::<LittleEndian>(0)?;
+        writer.write_u32::<LittleEndian>(u32::MAX)?;
         let versions_placeholder = writer.stream_position()? as u32;
-        writer.write_u32::<LittleEndian>(0)?;
+        writer.write_u32::<LittleEndian>(u32::MAX)?;
 
         // Serialize parent if present
         let parent_offset = if parent_present {
-            let offset = writer.stream_position()? as u32;
-            self.parent.write().unwrap().serialize(writer)?;
-            Some(offset)
+            Some(self.parent.as_ref().unwrap().serialize(writer)?)
         } else {
             None
         };
 
         // Serialize child if present
         let child_offset = if child_present {
-            let offset = writer.stream_position()? as u32;
-            self.child.read().unwrap().serialize(writer)?;
-            Some(offset)
+            Some(self.child.as_ref().unwrap().serialize(writer)?)
         } else {
             None
         };
 
         // Serialize neighbors
-        let neighbors_offset = self.neighbors.read().unwrap().serialize(writer)?;
+        let neighbors_offset = self.neighbors.serialize(writer)?;
 
         // Serialize versions
-        let versions_offset = self.versions.read().unwrap().serialize(writer)?;
+        let versions_offset = self.versions.serialize(writer)?;
 
         // Update placeholders
         let end_pos = writer.stream_position()?;
@@ -126,7 +119,13 @@ impl CustomSerialize for MergedNode {
         Ok(start_offset)
     }
 
-    fn deserialize<R: Read + Seek>(reader: &mut R, offset: u32) -> std::io::Result<Self> {
+    fn deserialize<R: Read + Seek>(
+        reader: &mut R,
+        offset: u32,
+        cache: Arc<NodeRegistry<R>>,
+        max_loads: u16,
+        skipm: &mut HashSet<FileOffset>,
+    ) -> std::io::Result<Self> {
         reader.seek(SeekFrom::Start(offset as u64))?;
 
         // Read basic fields
@@ -155,31 +154,48 @@ impl CustomSerialize for MergedNode {
         let neighbors_offset = reader.read_u32::<LittleEndian>()?;
         let versions_offset = reader.read_u32::<LittleEndian>()?;
 
-        // Create LazyItems for parent and child
+        // Deserialize parent
         let parent = if let Some(offset) = parent_offset {
-            LazyItem::LazyLoad(offset)
+            Some(LazyItemRef::deserialize(
+                reader,
+                offset,
+                cache.clone(),
+                max_loads,
+                skipm,
+            )?)
         } else {
-            LazyItem::Null
+            None
         };
 
+        // Deserialize child
         let child = if let Some(offset) = child_offset {
-            LazyItem::LazyLoad(offset)
+            Some(LazyItemRef::deserialize(
+                reader,
+                offset,
+                cache.clone(),
+                max_loads,
+                skipm,
+            )?)
         } else {
-            LazyItem::Null
+            None
         };
 
-        // Create LazyItems for neighbors and versions
-        let neighbors = LazyItems::deserialize(reader, neighbors_offset)?;
-        let versions = LazyItems::deserialize(reader, versions_offset)?;
+        // Deserialize neighbors
+        let neighbors =
+            LazyItems::deserialize(reader, neighbors_offset, cache.clone(), max_loads, skipm)?;
+
+        // Deserialize versions
+        let versions =
+            LazyItems::deserialize(reader, versions_offset, cache.clone(), max_loads, skipm)?;
 
         Ok(MergedNode {
             version_id,
             hnsw_level,
             prop: Arc::new(RwLock::new(prop)),
-            neighbors: Arc::new(RwLock::new(neighbors)),
-            parent: Arc::new(RwLock::new(parent)),
-            child: Arc::new(RwLock::new(child)),
-            versions: Arc::new(RwLock::new(versions)),
+            neighbors,
+            parent,
+            child,
+            versions,
             persist_flag: Arc::new(RwLock::new(true)),
         })
     }

@@ -35,21 +35,29 @@ pub fn ann_search(
     skipm.insert(vector_emb.hash_vec.clone());
 
     let cur_node = match cur_entry.clone() {
-        LazyItem::Ready(node, _) => node,
-        LazyItem::LazyLoad(offset) => {
+        LazyItem {
+            data: Some(node), ..
+        } => node,
+        LazyItem {
+            data: None,
+            offset: Some(offset),
+            ..
+        } => {
             return Err(WaCustomError::LazyLoadingError(format!(
                 "Node at offset {} needs to be loaded",
                 offset
             )))
         }
-        LazyItem::Null => {
+        _ => {
             return Err(WaCustomError::NodeError(
                 "Current entry is null".to_string(),
             ))
         }
     };
 
-    let prop_state = cur_node
+    let cur_node_guard = cur_node.read().unwrap();
+
+    let prop_state = cur_node_guard
         .prop
         .read()
         .map_err(|e| WaCustomError::LockError(format!("Failed to read prop: {}", e)))?;
@@ -101,31 +109,40 @@ pub fn vector_fetch(
     for lev in 0..vec_store.max_cache_level {
         let maybe_res = load_vector_id_lsmdb(lev, vector_id.clone());
         let neighbors = match maybe_res {
-            LazyItem::Ready(vth, _loc) => {
-                let neighbors_guard = vth.neighbors.read().map_err(|e| {
-                    WaCustomError::LockError(format!("Failed to read neighbors: {}", e))
-                })?;
-
-                let nes: Vec<(VectorId, f32)> = neighbors_guard
+            Some(LazyItem {
+                data: Some(vth), ..
+            }) => {
+                let nes: Vec<(VectorId, f32)> = vth
+                    .read()
+                    .unwrap()
+                    .neighbors
                     .iter()
                     .filter_map(|ne| match ne {
-                        LazyItem::Ready(nbr, _) => get_neighbor_info(nbr),
-                        LazyItem::LazyLoad(xloc) => {
-                            match load_neighbor_from_db(*xloc, &vec_store) {
-                                Ok(Some(info)) => Some(info),
-                                Ok(None) => None,
-                                Err(e) => {
-                                    eprintln!("Error loading neighbor: {}", e);
-                                    None
-                                }
+                        LazyItem {
+                            data: Some(nbr), ..
+                        } => get_neighbor_info(&*nbr.read().unwrap()),
+                        LazyItem {
+                            data: None,
+                            offset: Some(xloc),
+                            ..
+                        } => match load_neighbor_from_db(xloc, &vec_store) {
+                            Ok(Some(info)) => Some(info),
+                            Ok(None) => None,
+                            Err(e) => {
+                                eprintln!("Error loading neighbor: {}", e);
+                                None
                             }
-                        }
-                        LazyItem::Null => None,
+                        },
+                        _ => None,
                     })
                     .collect();
                 Some((vector_id.clone(), nes))
             }
-            LazyItem::LazyLoad(xloc) => match load_node_from_persist(xloc, &vec_store) {
+            Some(LazyItem {
+                data: None,
+                offset: Some(xloc),
+                ..
+            }) => match load_node_from_persist(xloc, &vec_store) {
                 Ok(Some((id, neighbors))) => Some((id, neighbors)),
                 Ok(None) => None,
                 Err(e) => {
@@ -133,7 +150,7 @@ pub fn vector_fetch(
                     None
                 }
             },
-            LazyItem::Null => None,
+            _ => None,
         };
         results.push(neighbors);
     }
@@ -150,7 +167,13 @@ fn load_node_from_persist(
     ))
 }
 fn get_neighbor_info(nbr: &Neighbour) -> Option<(VectorId, f32)> {
-    let prop_state = match nbr.node.prop.read() {
+    let Some(node) = nbr.node.data.clone() else {
+        eprintln!("Neighbour node not initialized");
+        return None;
+    };
+    let guard = node.read().unwrap();
+
+    let prop_state = match guard.prop.read() {
         Ok(guard) => guard,
         Err(e) => {
             eprintln!("Lock error when reading prop: {}", e);
@@ -193,21 +216,29 @@ pub fn insert_embedding(
     skipm.insert(vector_emb.hash_vec.clone());
 
     let cur_node = match &cur_entry {
-        LazyItem::Ready(node, _) => node,
-        LazyItem::LazyLoad(offset) => {
+        LazyItem {
+            data: Some(node), ..
+        } => node,
+        LazyItem {
+            data: None,
+            offset: Some(offset),
+            ..
+        } => {
             return Err(WaCustomError::LazyLoadingError(format!(
                 "Node at offset {} needs to be loaded",
                 offset
             )))
         }
-        LazyItem::Null => {
+        _ => {
             return Err(WaCustomError::NodeError(
                 "Current entry is null".to_string(),
             ))
         }
     };
 
-    let prop_state = cur_node
+    let cur_node_guard = cur_node.read().unwrap();
+
+    let prop_state = cur_node_guard
         .prop
         .read()
         .map_err(|e| WaCustomError::LockError(format!("Failed to read prop: {}", e)))?;
@@ -275,25 +306,35 @@ pub fn queue_node_prop_exec(
     prop_file: Arc<File>,
 ) -> Result<(), WaCustomError> {
     let (node, location) = match &lznode {
-        LazyItem::Ready(node, loc) => (node.clone(), *loc.read().unwrap()),
-        LazyItem::LazyLoad(offset) => {
+        LazyItem {
+            data: Some(node),
+            offset,
+            ..
+        } => (node.clone(), *offset),
+        LazyItem {
+            data: None,
+            offset: Some(offset),
+            ..
+        } => {
             return Err(WaCustomError::LazyLoadingError(format!(
                 "Node at offset {} needs to be loaded",
                 offset
             )))
         }
-        LazyItem::Null => return Err(WaCustomError::NodeError("Node is null".to_string())),
+        _ => return Err(WaCustomError::NodeError("Node is null".to_string())),
     };
 
+    let node_guard = node.read().unwrap();
+
     // Write main node prop to file
-    let prop_state = node
+    let prop_state = node_guard
         .prop
         .read()
         .map_err(|e| WaCustomError::LockError(format!("Failed to read node prop: {}", e)))?;
 
     if let PropState::Ready(node_prop) = &*prop_state {
         let prop_location = write_prop_to_file(node_prop, &prop_file);
-        node.set_prop_location(prop_location);
+        node.read().unwrap().set_prop_location(prop_location);
     } else {
         return Err(WaCustomError::NodeError(
             "Node prop is not ready".to_string(),
@@ -301,17 +342,15 @@ pub fn queue_node_prop_exec(
     }
 
     // Set persistence flag for the main node
-    node.set_persistence(true);
+    node_guard.set_persistence(true);
 
-    // Set persistence flag for all neighbors (without writing to prop file)
-    let neighbors = node
-        .neighbors
-        .read()
-        .map_err(|e| WaCustomError::LockError(format!("Failed to read neighbors: {}", e)))?;
-
-    for nbr in neighbors.iter() {
-        if let LazyItem::Ready(neighbor, _) = nbr {
-            neighbor.set_persistence(true);
+    for neighbor in node_guard.neighbors.iter() {
+        if let LazyItem {
+            data: Some(neighbor),
+            ..
+        } = neighbor
+        {
+            neighbor.read().unwrap().set_persistence(true);
         }
     }
 
@@ -366,53 +405,58 @@ fn insert_node_create_edges(
         value: fvec.clone(),
         location: None,
     };
-    let nn = Arc::new(MergedNode::new(0, cur_level as u8)); // Assuming MergedNode::new exists
-    nn.set_prop_ready(Arc::new(nd_p));
+    let nn = Arc::new(RwLock::new(MergedNode::new(0, cur_level as u8))); // Assuming MergedNode::new exists
+    nn.read().unwrap().set_prop_ready(Arc::new(nd_p));
 
-    // Convert LazyItem<MergedNode> to Arc<MergedNode>
-    let ready_neighbors: Vec<(Arc<MergedNode>, f32)> = nbs
-        .iter()
-        .filter_map(|(nbr, cs)| {
-            if let LazyItem::Ready(node, _) = nbr {
-                Some((node.clone(), *cs))
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    nn.add_ready_neighbors(ready_neighbors);
+    nn.read().unwrap().add_ready_neighbors(nbs.clone());
 
     for (nbr1, cs) in nbs.into_iter() {
-        if let LazyItem::Ready(nbr1_node, _) = nbr1 {
-            let mut neighbor_list: Vec<(Arc<MergedNode>, f32)> = nbr1_node
-                .neighbors
+        if let Some(nbr1_node) = nbr1.data {
+            let mut neighbor_list: Vec<(LazyItem<MergedNode>, f32)> = nbr1_node
                 .read()
-                .map_err(|_| WaCustomError::LockError("Failed to read neighbors".to_string()))?
+                .unwrap()
+                .neighbors
                 .iter()
                 .filter_map(|nbr2| {
-                    if let LazyItem::Ready(neighbor, _) = nbr2 {
-                        Some((neighbor.node.clone(), neighbor.cosine_similarity))
+                    if let Some(neighbor) = nbr2.data {
+                        let neighbor_guard = neighbor.read().unwrap();
+                        Some((
+                            neighbor_guard.node.clone(),
+                            neighbor_guard.cosine_similarity,
+                        ))
                     } else {
                         None
                     }
                 })
                 .collect();
 
-            neighbor_list.push((nn.clone(), cs));
+            neighbor_list.push((
+                LazyItem {
+                    data: Some(nn.clone()),
+                    offset: None,
+                    decay_counter: 0,
+                },
+                cs,
+            ));
             neighbor_list
                 .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
             let mut seen = HashSet::new();
-            neighbor_list.retain(|(node, _)| seen.insert(Arc::as_ptr(node) as *const _));
+            neighbor_list.retain(|(node, _)| {
+                seen.insert(Arc::as_ptr(node.data.as_ref().unwrap()) as *const _)
+            });
             neighbor_list.truncate(20);
 
-            nbr1_node.add_ready_neighbors(neighbor_list);
+            nbr1_node.read().unwrap().add_ready_neighbors(neighbor_list);
         }
     }
 
     queue_node_prop_exec(
-        LazyItem::Ready(nn.clone(), Arc::new(RwLock::new(None))),
+        LazyItem {
+            data: Some(nn.clone()),
+            offset: None,
+            decay_counter: 0,
+        },
         vec_store.prop_file.clone(),
     )?;
 
@@ -432,33 +476,46 @@ fn traverse_find_nearest(
     let mut tasks: SmallVec<[Vec<(LazyItem<MergedNode>, f32)>; 24]> = SmallVec::new();
 
     let node = match vtm {
-        LazyItem::Ready(node, _) => node,
-        LazyItem::LazyLoad(_) => {
+        LazyItem {
+            data: Some(node), ..
+        } => node,
+        LazyItem {
+            data: None,
+            offset: Some(_),
+            ..
+        } => {
             return Err(WaCustomError::LazyLoadingError(
                 "Node needs to be loaded".to_string(),
             ))
         }
-        LazyItem::Null => return Err(WaCustomError::NodeError("Node is null".to_string())),
+        _ => return Err(WaCustomError::NodeError("Node is null".to_string())),
     };
 
-    let neighbors_lock = node.neighbors.read().map_err(|_| {
-        WaCustomError::LockError("Failed to acquire read lock on neighbors".to_string())
-    })?;
+    let node_guard = node.read().unwrap();
 
-    for (index, nref) in neighbors_lock.iter().enumerate() {
-        if let LazyItem::Ready(neighbor, _) = nref {
-            let prop_state = neighbor.node.prop.read().map_err(|_| {
+    for (index, nref) in node_guard.neighbors.iter().enumerate() {
+        if let Some(neighbor) = nref.data {
+            let neighbor_guard = neighbor.read().unwrap();
+            let node = neighbor_guard.node.data.clone().ok_or_else(|| {
+                WaCustomError::LazyLoadingError("Neighbour node is not loaded".to_string())
+            })?;
+            let node_guard = node.read().unwrap();
+            let prop_state = node_guard.prop.read().map_err(|_| {
                 WaCustomError::LockError("Failed to read neighbor prop".to_string())
             })?;
 
             let node_prop = match &*prop_state {
-                PropState::Ready(prop) => prop,
+                PropState::Ready(prop) => prop.clone(),
                 PropState::Pending(_) => {
                     return Err(WaCustomError::NodeError(
                         "Neighbor prop is in pending state".to_string(),
                     ))
                 }
             };
+
+            drop(prop_state);
+            // drop the guard
+            drop(node_guard);
 
             let nb = node_prop.id.clone();
 
@@ -478,7 +535,7 @@ fn traverse_find_nearest(
                 {
                     let mut z = traverse_find_nearest(
                         vec_store.clone(),
-                        LazyItem::Ready(neighbor.node.clone(), Arc::new(RwLock::new(None))),
+                        neighbor_guard.node.clone(),
                         fvec.clone(),
                         hs.clone(),
                         hops + 1,
@@ -486,16 +543,10 @@ fn traverse_find_nearest(
                         cur_level,
                         skip_hop,
                     )?;
-                    z.push((
-                        LazyItem::Ready(neighbor.node.clone(), Arc::new(RwLock::new(None))),
-                        cs,
-                    ));
+                    z.push((neighbor_guard.node.clone(), cs));
                     tasks.push(z);
                 } else {
-                    tasks.push(vec![(
-                        LazyItem::Ready(neighbor.node.clone(), Arc::new(RwLock::new(None))),
-                        cs,
-                    )]);
+                    tasks.push(vec![(neighbor_guard.node.clone(), cs)]);
                 }
             }
         }
@@ -505,8 +556,9 @@ fn traverse_find_nearest(
     nn.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
     let mut seen = HashSet::new();
     nn.retain(|(lazy_node, _)| {
-        if let LazyItem::Ready(node, _) = lazy_node {
-            let prop_state = node.prop.read().unwrap();
+        if let Some(node) = &lazy_node.data {
+            let node_guard = node.read().unwrap();
+            let prop_state = node_guard.prop.read().unwrap();
             if let PropState::Ready(node_prop) = &*prop_state {
                 seen.insert(node_prop.id.clone())
             } else {
