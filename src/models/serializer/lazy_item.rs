@@ -13,8 +13,12 @@ impl CustomSerialize for LazyItem<MergedNode> {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
         if let Some(existing_offset) = self.offset {
             if let Some(data) = &self.data {
-                writer.seek(SeekFrom::Start(existing_offset as u64))?;
-                data.read().unwrap().serialize(writer)?;
+                let guard = data.read().unwrap();
+                if guard.needs_persistence() {
+                    writer.seek(SeekFrom::Start(existing_offset as u64))?;
+                    guard.set_persistence(false);
+                    guard.serialize(writer)?;
+                }
                 Ok(existing_offset)
             } else {
                 Err(std::io::Error::new(
@@ -86,8 +90,6 @@ impl CustomSerialize for LazyItem<Neighbour> {
     {
         reader.seek(SeekFrom::Start(offset as u64))?;
         let data = Neighbour::deserialize(reader, offset, cache, max_loads)?;
-
-        // let item = T::deserialize(reader, offset, cache)?;
 
         Ok(LazyItem {
             data: Some(Arc::new(RwLock::new(data))),

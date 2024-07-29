@@ -74,9 +74,6 @@ mod tests {
 
         let mut writer = Cursor::new(Vec::new());
         let offset = lazy_items.serialize(&mut writer).unwrap();
-        // Print the contents of the cursor
-        let serialized_data = writer.clone().into_inner();
-        println!("Serialized data: {:?}", serialized_data);
 
         let reader = Cursor::new(writer.into_inner());
         let cache = get_cache(reader);
@@ -128,8 +125,8 @@ mod tests {
     fn test_merged_node_with_neighbors_serialization() {
         let node = MergedNode::new(1, 2);
 
-        let neighbor1 = Arc::new(RwLock::new(MergedNode::new(2, 1)));
-        let neighbor2 = Arc::new(RwLock::new(MergedNode::new(3, 1)));
+        let neighbor1 = LazyItem::with_data(MergedNode::new(2, 1));
+        let neighbor2 = LazyItem::with_data(MergedNode::new(3, 1));
         node.add_ready_neighbor(neighbor1, 0.9);
         node.add_ready_neighbor(neighbor2, 0.8);
 
@@ -161,16 +158,18 @@ mod tests {
                 ) => {
                     let original_guard = original.read().unwrap();
                     let deserialized_guard = deserialized.read().unwrap();
-                    let original_node_guard = original_guard.node.read().unwrap();
-                    let deserialized_node_guard = deserialized_guard.node.read().unwrap();
+                    let original_node_data = original_guard.node.data.clone().unwrap();
+                    let original_node_data_guard = original_node_data.read().unwrap();
+                    let deserialized_node_data = deserialized_guard.node.data.clone().unwrap();
+                    let deserialized_node_data_guard = deserialized_node_data.read().unwrap();
 
                     assert_eq!(
-                        original_node_guard.version_id,
-                        deserialized_node_guard.version_id
+                        original_node_data_guard.version_id,
+                        deserialized_node_data_guard.version_id
                     );
                     assert_eq!(
-                        original_node_guard.hnsw_level,
-                        deserialized_node_guard.hnsw_level
+                        original_node_data_guard.hnsw_level,
+                        deserialized_node_data_guard.hnsw_level
                     );
                     assert_eq!(
                         original_guard.cosine_similarity,
@@ -293,17 +292,27 @@ mod tests {
         node2.write().unwrap().set_child(Some(lazy1.clone()));
         node2.write().unwrap().set_parent(Some(lazy3.clone()));
         node3.write().unwrap().set_child(Some(lazy2.clone()));
-        node1.write().unwrap().add_ready_neighbor(node3, 0.9);
+        node1.write().unwrap().add_ready_neighbor(
+            LazyItem {
+                data: Some(node3),
+                offset: None,
+                decay_counter: 0,
+            },
+            0.9,
+        );
 
         let mut writer = Cursor::new(Vec::new());
         let offset = lazy1.serialize(&mut writer).unwrap();
 
         let reader = Cursor::new(writer.into_inner());
         let cache = get_cache(reader);
-        let deserialized: MergedNode = cache.load_item(offset).unwrap();
+        let deserialized: LazyItemRef<MergedNode> = cache.load_item(offset).unwrap();
+        let deserialized_guard = deserialized.item.read().unwrap();
+        let deserialized_data = deserialized_guard.data.clone().unwrap();
+        let deserialized_data_guard = deserialized_data.read().unwrap();
 
-        assert_eq!(deserialized.get_neighbors().len(), 1);
-        let parent = deserialized.get_parent().unwrap();
+        assert_eq!(deserialized_data_guard.get_neighbors().len(), 1);
+        let parent = deserialized_data_guard.get_parent().unwrap();
         let parent_guard = parent.item.read().unwrap();
 
         // Deserialize the parent

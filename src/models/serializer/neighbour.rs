@@ -14,11 +14,19 @@ impl CustomSerialize for Neighbour {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
         let offset = writer.stream_position()? as u32;
 
-        // Serialize the node
-        self.node.read().unwrap().serialize(writer)?;
+        // Serialize the node position placeholder
+        let node_placeholder = writer.stream_position()?;
+        writer.write_u32::<LittleEndian>(0)?;
 
         // Serialize the cosine similarity
         writer.write_f32::<LittleEndian>(self.cosine_similarity)?;
+        let node_pos = self.node.serialize(writer)?;
+
+        let end_pos = writer.stream_position()?;
+        writer.seek(SeekFrom::Start(node_placeholder))?;
+        // Serialize actual node position
+        writer.write_u32::<LittleEndian>(node_pos)?;
+        writer.seek(SeekFrom::Start(end_pos))?;
 
         Ok(offset)
     }
@@ -32,13 +40,14 @@ impl CustomSerialize for Neighbour {
         reader.seek(SeekFrom::Start(offset as u64))?;
 
         // Deserialize the node
-        let node = MergedNode::deserialize(reader, offset, cache, max_loads)?;
+        let node_pos = reader.read_u32::<LittleEndian>()?;
 
         // Deserialize the cosine similarity
         let cosine_similarity = reader.read_f32::<LittleEndian>()?;
+        let node = LazyItem::deserialize(reader, node_pos, cache, max_loads)?;
 
         Ok(Neighbour {
-            node: Arc::new(RwLock::new(node)),
+            node,
             cosine_similarity,
         })
     }

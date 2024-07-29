@@ -12,12 +12,6 @@ use std::{
 
 impl CustomSerialize for MergedNode {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
-        if !self.needs_persistence() {
-            return Ok(u32::MAX);
-        }
-
-        self.set_persistence(false);
-
         let start_offset = writer.stream_position()? as u32;
 
         // Serialize basic fields

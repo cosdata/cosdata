@@ -21,7 +21,6 @@ where
         let start_offset = writer.stream_position()? as u32;
         let mut items_guard = self.items.write().unwrap();
         let total_items = items_guard.len();
-        let mut current_chunk_start = writer.stream_position()? as u32;
 
         for chunk_start in (0..total_items).step_by(CHUNK_SIZE) {
             let chunk_end = std::cmp::min(chunk_start + CHUNK_SIZE, total_items);
@@ -56,7 +55,6 @@ where
                 writer.write_u32::<LittleEndian>(next_chunk_start)?;
             }
             writer.seek(SeekFrom::Start(next_chunk_start as u64))?;
-            current_chunk_start = next_chunk_start;
         }
         Ok(start_offset)
     }

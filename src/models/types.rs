@@ -24,7 +24,7 @@ pub type Item<T> = Arc<RwLock<T>>;
 
 #[derive(Debug, Clone)]
 pub struct Neighbour {
-    pub node: Item<MergedNode>,
+    pub node: LazyItem<MergedNode>,
     pub cosine_similarity: CosineSimilarity,
 }
 
@@ -76,7 +76,7 @@ impl MergedNode {
         }
     }
 
-    pub fn add_ready_neighbor(&self, neighbor: Item<MergedNode>, cosine_similarity: f32) {
+    pub fn add_ready_neighbor(&self, neighbor: LazyItem<MergedNode>, cosine_similarity: f32) {
         let neighbor_ref = Arc::new(RwLock::new(Neighbour {
             node: neighbor,
             cosine_similarity,
@@ -97,7 +97,7 @@ impl MergedNode {
         self.child = child;
     }
 
-    pub fn add_ready_neighbors(&self, neighbors_list: Vec<(Item<MergedNode>, f32)>) {
+    pub fn add_ready_neighbors(&self, neighbors_list: Vec<(LazyItem<MergedNode>, f32)>) {
         for (neighbor, cosine_similarity) in neighbors_list {
             self.add_ready_neighbor(neighbor, cosine_similarity);
         }
@@ -185,13 +185,19 @@ impl SyncPersist for MergedNode {
 
 impl SyncPersist for Neighbour {
     fn set_persistence(&self, flag: bool) {
-        let guard = self.node.read().unwrap();
+        let Some(node) = self.node.data.clone() else {
+            return;
+        };
+        let guard = node.read().unwrap();
         let mut fl = guard.persist_flag.write().unwrap();
         *fl = flag;
     }
 
     fn needs_persistence(&self) -> bool {
-        let guard = self.node.read().unwrap();
+        let Some(node) = self.node.data.clone() else {
+            return false;
+        };
+        let guard = node.read().unwrap();
         let fl = guard.persist_flag.read().unwrap();
         *fl
     }

@@ -167,7 +167,12 @@ fn load_node_from_persist(
     ))
 }
 fn get_neighbor_info(nbr: &Neighbour) -> Option<(VectorId, f32)> {
-    let guard = nbr.node.read().unwrap();
+    let Some(node) = nbr.node.data.clone() else {
+        eprintln!("Neighbour node not initialized");
+        return None;
+    };
+    let guard = node.read().unwrap();
+
     let prop_state = match guard.prop.read() {
         Ok(guard) => guard,
         Err(e) => {
@@ -403,26 +408,11 @@ fn insert_node_create_edges(
     let nn = Arc::new(RwLock::new(MergedNode::new(0, cur_level as u8))); // Assuming MergedNode::new exists
     nn.read().unwrap().set_prop_ready(Arc::new(nd_p));
 
-    // Convert LazyItem<MergedNode> to Item<MergedNode>
-    let ready_neighbors: Vec<(Item<MergedNode>, f32)> = nbs
-        .iter()
-        .filter_map(|(nbr, cs)| {
-            if let LazyItem {
-                data: Some(node), ..
-            } = nbr
-            {
-                Some((node.clone(), *cs))
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    nn.read().unwrap().add_ready_neighbors(ready_neighbors);
+    nn.read().unwrap().add_ready_neighbors(nbs.clone());
 
     for (nbr1, cs) in nbs.into_iter() {
         if let Some(nbr1_node) = nbr1.data {
-            let mut neighbor_list: Vec<(Item<MergedNode>, f32)> = nbr1_node
+            let mut neighbor_list: Vec<(LazyItem<MergedNode>, f32)> = nbr1_node
                 .read()
                 .unwrap()
                 .neighbors
@@ -440,12 +430,21 @@ fn insert_node_create_edges(
                 })
                 .collect();
 
-            neighbor_list.push((nn.clone(), cs));
+            neighbor_list.push((
+                LazyItem {
+                    data: Some(nn.clone()),
+                    offset: None,
+                    decay_counter: 0,
+                },
+                cs,
+            ));
             neighbor_list
                 .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
             let mut seen = HashSet::new();
-            neighbor_list.retain(|(node, _)| seen.insert(Arc::as_ptr(node) as *const _));
+            neighbor_list.retain(|(node, _)| {
+                seen.insert(Arc::as_ptr(node.data.as_ref().unwrap()) as *const _)
+            });
             neighbor_list.truncate(20);
 
             nbr1_node.read().unwrap().add_ready_neighbors(neighbor_list);
@@ -497,7 +496,10 @@ fn traverse_find_nearest(
     for (index, nref) in node_guard.neighbors.iter().enumerate() {
         if let Some(neighbor) = nref.data {
             let neighbor_guard = neighbor.read().unwrap();
-            let node_guard = neighbor_guard.node.read().unwrap();
+            let node = neighbor_guard.node.data.clone().ok_or_else(|| {
+                WaCustomError::LazyLoadingError("Neighbour node is not loaded".to_string())
+            })?;
+            let node_guard = node.read().unwrap();
             let prop_state = node_guard.prop.read().map_err(|_| {
                 WaCustomError::LockError("Failed to read neighbor prop".to_string())
             })?;
@@ -533,11 +535,7 @@ fn traverse_find_nearest(
                 {
                     let mut z = traverse_find_nearest(
                         vec_store.clone(),
-                        LazyItem {
-                            data: Some(neighbor_guard.node.clone()),
-                            offset: None,
-                            decay_counter: 0,
-                        },
+                        neighbor_guard.node.clone(),
                         fvec.clone(),
                         hs.clone(),
                         hops + 1,
@@ -545,24 +543,10 @@ fn traverse_find_nearest(
                         cur_level,
                         skip_hop,
                     )?;
-                    z.push((
-                        LazyItem {
-                            data: Some(neighbor_guard.node.clone()),
-                            offset: None,
-                            decay_counter: 0,
-                        },
-                        cs,
-                    ));
+                    z.push((neighbor_guard.node.clone(), cs));
                     tasks.push(z);
                 } else {
-                    tasks.push(vec![(
-                        LazyItem {
-                            data: Some(neighbor_guard.node.clone()),
-                            offset: None,
-                            decay_counter: 0,
-                        },
-                        cs,
-                    )]);
+                    tasks.push(vec![(neighbor_guard.node.clone(), cs)]);
                 }
             }
         }
