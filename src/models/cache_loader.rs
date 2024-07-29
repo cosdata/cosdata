@@ -67,6 +67,7 @@ impl<R: Read + Seek> NodeRegistry<R> {
             decay_counter: 0,
         };
 
+        self.cuckoo_filter.write().unwrap().insert(&key);
         self.registry.insert(key, item.clone());
 
         Ok(item)
