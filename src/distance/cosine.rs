@@ -1,6 +1,7 @@
 use super::{DistanceError, DistanceFunction};
 use crate::storage::Storage;
 
+#[derive(Debug)]
 pub struct CosineDistance;
 
 impl DistanceFunction for CosineDistance {

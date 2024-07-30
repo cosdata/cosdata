@@ -1,9 +1,12 @@
 use super::{Quantization, QuantizationError, StorageType};
 use crate::storage::Storage;
 
+#[derive(Debug)]
 pub struct ProductQuantization {
     centroids: Option<Centroid>,
 }
+
+#[derive(Debug)]
 pub struct Centroid {
     pub number_of_centroids: u16,
     pub centroids: Vec<u16>,

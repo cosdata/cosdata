@@ -5,8 +5,8 @@ use crate::distance::{
 use crate::models::chunked_list::*;
 use crate::models::common::*;
 use crate::models::versioning::VersionHash;
-use actix_web::guard;
 use crate::quantization::{Quantization, StorageType};
+use actix_web::guard;
 use bincode;
 use dashmap::DashMap;
 use lmdb::{Database, Environment, Transaction, WriteFlags};
@@ -291,26 +291,43 @@ pub struct VectorStore {
     pub version_lmdb: MetaDb,
     pub current_version: Item<Option<VersionHash>>,
     pub current_open_transaction: Item<Option<VersionHash>>,
-    pub quantization: Box<dyn Quantization>,
-    pub distance_fn: Box<dyn DistanceFunction>,
+    pub quantization: Arc<dyn Quantization>,
+    pub distance_fn: Arc<dyn DistanceFunction>,
     pub storage_type: StorageType,
 }
 impl VectorStore {
     pub fn new(
-        // ... other parameters ...
-        quantization: Box<dyn Quantization>,
+        exec_queue_nodes: ExecQueueUpdate,
+        max_cache_level: u8,
+        database_name: String,
+        root_vec: LazyItemRef<MergedNode>,
+        levels_prob: Arc<Vec<(f64, i32)>>,
+        quant_dim: usize,
+        prop_file: Arc<File>,
+        version_lmdb: MetaDb,
+        current_version: Item<Option<VersionHash>>,
+        quantization: Arc<dyn Quantization>,
         distance_metric: DistanceMetric,
         storage_type: StorageType,
     ) -> Self {
-        let distance_fn: Box<dyn DistanceFunction> = match distance_metric {
-            DistanceMetric::Cosine => Box::new(CosineDistance),
-            DistanceMetric::Euclidean => Box::new(EuclideanDistance),
-            DistanceMetric::Hamming => Box::new(HammingDistance),
-            DistanceMetric::DotProduct => Box::new(DotProductDistance),
+        let distance_fn: Arc<dyn DistanceFunction> = match distance_metric {
+            DistanceMetric::Cosine => Arc::new(CosineDistance),
+            DistanceMetric::Euclidean => Arc::new(EuclideanDistance),
+            DistanceMetric::Hamming => Arc::new(HammingDistance),
+            DistanceMetric::DotProduct => Arc::new(DotProductDistance),
         };
 
         VectorStore {
-            // ... other fields ...
+            exec_queue_nodes,
+            max_cache_level,
+            database_name,
+            root_vec,
+            levels_prob,
+            quant_dim,
+            prop_file,
+            version_lmdb,
+            current_version,
+            current_open_transaction: Arc::new(RwLock::new(None)),
             quantization,
             distance_fn,
             storage_type,

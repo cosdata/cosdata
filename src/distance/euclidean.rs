@@ -2,6 +2,7 @@ use super::{DistanceError, DistanceFunction};
 use crate::storage::Storage;
 use half::f16;
 
+#[derive(Debug)]
 pub struct EuclideanDistance;
 
 impl DistanceFunction for EuclideanDistance {

@@ -7,6 +7,8 @@ use crate::models::rpc::VectorIdValue;
 use crate::models::types::*;
 use crate::models::user::{AuthResp, Statistics};
 use crate::models::{self, common::*};
+use crate::quantization::scalar::ScalarQuantization;
+use crate::quantization::StorageType;
 use crate::vector_store::{self, *};
 use dashmap::DashMap;
 use futures::stream::{self, StreamExt};
@@ -132,21 +134,23 @@ pub async fn init_vector_store(
             let db_result = denv.create_db(None, DatabaseFlags::empty());
             match db_result {
                 Ok(db) => {
-                    let vec_store = Arc::new(VectorStore {
-                        max_cache_level,
-                        database_name: name.clone(),
-                        root_vec: root.unwrap(),
-                        levels_prob: lp,
-                        quant_dim: (size / 32) as usize,
-                        prop_file,
+                    let vec_store = Arc::new(VectorStore::new(
                         exec_queue_nodes,
-                        version_lmdb: MetaDb {
+                        max_cache_level,
+                        name.clone(),
+                        root.unwrap(),
+                        lp,
+                        (size / 32) as usize,
+                        prop_file,
+                        MetaDb {
                             env: denv.clone(),
                             db: Arc::new(db.clone()),
                         },
-                        current_version: Arc::new(RwLock::new(None)),
-                        current_open_transaction: Arc::new(RwLock::new(None)),
-                    });
+                        Arc::new(RwLock::new(None)),
+                        Arc::new(ScalarQuantization),
+                        DistanceMetric::Cosine,
+                        StorageType::UnsignedByte,
+                    ));
                     ain_env
                         .vector_store_map
                         .insert(name.clone(), vec_store.clone());
