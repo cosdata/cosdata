@@ -8,7 +8,7 @@ pub trait Quantization: std::fmt::Debug + Send + Sync {
     fn train(&mut self, vectors: &[Vec<f32>]) -> Result<(), QuantizationError>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum StorageType {
     UnsignedByte,
     SubByte(u8),

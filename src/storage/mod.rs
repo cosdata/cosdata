@@ -1,5 +1,7 @@
 use half::f16;
+use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Storage {
     UnsignedByte {
         mag: u32,
@@ -13,5 +15,5 @@ pub enum Storage {
     HalfPrecisionFP {
         mag: f32,
         quant_vec: Vec<f16>,
-    }
+    },
 }

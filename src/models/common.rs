@@ -2,10 +2,12 @@ use super::chunked_list::LazyItem;
 use super::dot_product::x86_64::dot_product_u8_avx2;
 use super::rpc::VectorIdValue;
 use super::types::{MergedNode, VectorId};
+use crate::distance::DistanceError;
 use crate::models::lookup_table::*;
 use crate::models::rpc::Vector;
 use crate::models::types::PropState;
 use crate::models::types::VectorQt;
+use crate::quantization::QuantizationError;
 use async_std::stream::Cloned;
 use dashmap::DashMap;
 use futures::future::{join_all, BoxFuture, FutureExt};
@@ -352,6 +354,8 @@ pub enum WaCustomError {
     LockError(String),
     QuantizationMismatch,
     LazyLoadingError(String),
+    TrainingFailed,
+    CalculationError,
 }
 
 impl fmt::Display for WaCustomError {
@@ -369,9 +373,30 @@ impl fmt::Display for WaCustomError {
             WaCustomError::LockError(msg) => write!(f, "Lock error: {}", msg),
             WaCustomError::QuantizationMismatch => write!(f, "Quantization mismatch"),
             WaCustomError::LazyLoadingError(msg) => write!(f, "Lazy loading error: {}", msg),
+            WaCustomError::TrainingFailed => write!(f, "Training failed"),
+            WaCustomError::CalculationError => write!(f, "Calculation error"),
         }
     }
 }
+
+impl From<QuantizationError> for WaCustomError {
+    fn from(value: QuantizationError) -> Self {
+        match value {
+            QuantizationError::InvalidInput => WaCustomError::InvalidParams,
+            QuantizationError::TrainingFailed => WaCustomError::TrainingFailed,
+        }
+    }
+}
+
+impl From<DistanceError> for WaCustomError {
+    fn from(value: DistanceError) -> Self {
+        match value {
+            DistanceError::StorageMismatch => WaCustomError::QuantizationMismatch,
+            DistanceError::CalculationError => WaCustomError::CalculationError,
+        }
+    }
+}
+
 pub fn hash_float_vec(vec: Vec<f32>) -> Vec<u8> {
     // Create a new hasher instance
     let mut hasher = Sha256::new();

@@ -43,7 +43,7 @@ pub type NodeFileRef = FileOffset;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeProp {
     pub id: VectorId,
-    pub value: Arc<VectorQt>,
+    pub value: Arc<Storage>,
     pub location: Option<PropPersistRef>,
 }
 
@@ -391,7 +391,7 @@ impl VectorStore {
 }
 #[derive(Debug, Clone)]
 pub struct VectorEmbedding {
-    pub raw_vec: Arc<VectorQt>,
+    pub raw_vec: Arc<Storage>,
     pub hash_vec: VectorId,
 }
 
