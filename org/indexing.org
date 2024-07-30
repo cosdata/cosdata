@@ -1,0 +1,107 @@
+
+* Cosdata Vector Database: Index Creation Approaches
+
+Cosdata shall offer three flexible approaches to index creation, catering to various use cases and performance requirements.
+
+** 1. Explicit Pre-Insertion Index Creation
+
+Cosdata shall allow users to create indexes explicitly before inserting vectors.
+
+- Method: Call =create_index= API before any vector insertion
+- Advantages: 
+  + Optimized for immediate high-performance searches
+  + Allows fine-tuning of index parameters based on known data characteristics
+- Use case: When index parameters and data characteristics are known in advance
+
+** 2. Implicit Index Creation
+
+Cosdata shall support automatic index creation based on predefined triggers.
+
+- Triggers:
+  + When vector count in a collection reaches a configurable threshold
+- Behavior:
+  + Uses default parameters for index creation
+- Advantages:
+  + Simplifies initial setup
+  + Allows for flexible data insertion without upfront index configuration
+- Use case: Rapid prototyping or when optimal index parameters are uncertain
+
+** 3. Explicit Post-Insertion Index Creation
+
+Cosdata shall provide the ability to create or recreate indexes after vectors have been inserted.
+
+- Method: Call =create_index= API at any time after vector insertion
+- Behavior:
+  + Processes all existing vectors to build the index
+  + Optionally allows for background indexing to minimize disruption
+- Advantages:
+  + Enables experimentation with different index types and parameters
+  + Allows for index optimization based on actual data distribution
+- Use case: When refining search performance or adapting to evolving data patterns
+
+** Nuances and Considerations
+
+*** Performance Implications
+- Pre-insertion indexing offers the best initial query performance
+- Post-insertion indexing may cause temporary performance degradation during index building
+- Implicit indexing may lead to unexpected delays on first query
+
+*** Resource Utilization
+- Explicit indexing allows for planned resource allocation
+- Implicit indexing may cause unexpected resource spikes
+
+*** Flexibility vs. Optimization
+- Implicit and post-insertion indexing offer more flexibility
+- Pre-insertion indexing allows for more optimized data structures
+
+*** Monitoring and Alerts
+- Cosdata shall provide mechanisms to monitor indexing progress and performance impacts
+- Alerts can be configured for long-running index operations
+
+*** Concurrent Operations
+- Cosdata shall support read operations during index creation
+- Write operations may be temporarily limited during indexing, depending on the chosen strategy
+
+Cosdata's multi-approach indexing strategy ensures that users can balance performance, flexibility, and ease of use according to their specific requirements and workflows.
+
+* Vector Database Index Creation Approaches
+
+** Pinecone
+   - Indexes created automatically with collection creation
+   - Vectors can be upserted immediately
+   - No explicit index creation step
+
+** Milvus
+   - Allows creating collections without an index
+   - Indexes can be created explicitly after vector insertion
+   - Supports index creation before and after vector insertion
+   - Recommends indexing after batch insertion for performance
+
+** Weaviate
+   - Creates default HNSW index automatically with class creation
+   - Immediate vector insertion possible
+   - Index parameters adjustable later (may trigger reindexing)
+
+** Qdrant
+   - Creates default HNSW index automatically with collection creation
+   - Allows immediate vector insertion
+   - Supports custom index creation post-insertion
+
+** Elasticsearch
+   - Requires explicit index creation before document insertion
+   - Index mapping (including vector fields) must be pre-defined
+
+** FAISS (library)
+   - Requires explicit index creation
+   - Vectors typically added after index creation
+   - Some index types allow dynamic addition, others require rebuilding
+
+* Design Philosophies
+  - Ease of use: Automatic index creation (Pinecone, Qdrant)
+  - Flexibility: Manual setup required (Milvus, Elasticsearch)
+  - Balance: Default indexes with customization options (Weaviate)
+
+* Factors Influencing Approach
+  - Expected dataset size
+  - Update frequency
+  - Query patterns

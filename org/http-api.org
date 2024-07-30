@@ -1,0 +1,181 @@
+* Vector Database API Design
+
+** Collection Creation
+#+begin_src yaml
+create_collection:
+  name: string
+  description: string (optional)
+  vector_dimension: integer
+  metadata_schema: object (optional)
+  auto_create_index: boolean
+  config:
+    max_vectors: integer (optional)
+    replication_factor: integer (optional)
+#+end_src
+
+** Index Creation
+#+begin_src yaml
+create_index:
+  collection_name: string
+  name: string
+  index_type: string
+  distance_metric_type: string
+  quantization:
+    enabled: boolean
+    bits: integer
+    type: string
+  params:
+    m: integer (optional)
+    ef_construction: integer (optional)
+    # Other index-specific parameters
+#+end_src
+
+** Namespace Creation
+#+begin_src yaml
+create_namespace:
+  collection_name: string
+  name: string
+  description: string (optional)
+#+end_src
+
+** Vector Structure
+#+begin_src yaml
+vector:
+  id: string
+  values: array[float]
+  metadata: object (optional)
+  namespace: string (optional)
+#+end_src
+
+** Example Metadata Schema
+#+begin_src yaml
+create_collection:
+  name: "clothing_items"
+  description: "Collection of clothing item vectors and metadata"
+  vector_dimension: 512
+  metadata_schema:
+    product_id:
+      type: "string"
+      index: true
+    category:
+      type: "string"
+      index: true
+    brand:
+      type: "string"
+      index: true
+    price:
+      type: "float"
+      index: false
+    color:
+      type: "string"
+      index: true
+    size:
+      type: "string"
+      index: true
+     date_added:
+      type: "date"
+      index: true
+  auto_create_index: true
+#+end_src
+
+* Vector Insertion API 
+
+** Scenario 1: Index Created Upfront (Implicitly or Explicitly)
+
+*** Insert API URL
+    POST /api/v1/collections/{collection_name}/vectors
+
+*** Request Body
+    #+BEGIN_SRC json
+    {
+      "vectors": [
+        {
+          "id": "vec1",
+          "values": [0.1, 0.2, 0.3, ...],
+          "metadata": {
+            "key1": "value1",
+            "key2": "value2"
+          }
+        },
+        // More vectors...
+      ]
+    }
+    #+END_SRC
+
+*** Notes
+    - Simple insertion process
+    - Vectors are indexed immediately
+    - May be slower for very large batches
+
+** Scenario 2: Index Created After Inserts
+
+*** Insert API URL (Initial)
+    POST /api/v1/collections/{collection_name}/vectors/unindexed
+
+*** Request Body (Initial)
+    #+BEGIN_SRC json
+    {
+      "vectors": [
+        {
+          "id": "vec1",
+          "values": [0.1, 0.2, 0.3, ...],
+          "metadata": {
+            "key1": "value1",
+            "key2": "value2"
+          }
+        },
+        // More vectors...
+      ]
+    }
+    #+END_SRC
+
+*** Index Creation API URL
+    POST /api/v1/collections/{collection_name}/index
+
+*** Index Creation Request Body
+    #+BEGIN_SRC json
+    {
+      "index_type": "hnsw",
+      "metric_type": "cosine",
+      "params": {
+        "m": 16,
+        "ef_construction": 200
+      }
+    }
+    #+END_SRC
+
+*** Notes
+    - Two-step process: insert, then create index
+    - Initial inserts may be faster
+    - Allows for bulk insertion before indexing
+    - Index creation may take significant time for large datasets
+
+* Scenario 3: Subsequent Inserts After Explicit Index Creation
+
+** Behavior
+   -  It will automatically index new vectors inserted after explicit index creation
+   - The system maintains the existing index structure and updates it with new vectors
+
+** API URL for Subsequent Inserts
+   POST /api/v1/collections/{collection_name}/vectors
+
+** Request Body
+   #+BEGIN_SRC json
+   {
+     "vectors": [
+       {
+         "id": "vec_new",
+         "values": [0.4, 0.5, 0.6, ...],
+         "metadata": {
+           "key1": "value3",
+           "key2": "value4"
+         }
+       },
+       // More vectors...
+     ]
+   }
+   #+END_SRC
+
+** Notes
+   - The URL is the same as in Scenario 1 (index created upfront)
+   - New vectors are automatically added to the existing index
