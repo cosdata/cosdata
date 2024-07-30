@@ -1,4 +1,5 @@
 use super::{DistanceError, DistanceFunction};
+use crate::models::dot_product::dot_product_u8;
 use crate::storage::Storage;
 use half::f16;
 
@@ -30,13 +31,6 @@ impl DistanceFunction for DotProductDistance {
             _ => Err(DistanceError::StorageMismatch),
         }
     }
-}
-
-pub fn dot_product_u8(x: &[u8], y: &[u8]) -> u32 {
-    x.iter()
-        .zip(y.iter())
-        .map(|(&a, &b)| (a as u32) * (b as u32))
-        .sum()
 }
 
 pub fn dot_product_f16(x: &[f16], y: &[f16]) -> f32 {
