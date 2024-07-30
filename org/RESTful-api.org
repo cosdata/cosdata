@@ -1,0 +1,202 @@
+* RESTful Vector Database API Documentation
+
+** Base URL
+   https://localhost/v1
+
+** Authentication
+   All endpoints require Bearer token authentication.
+
+** Endpoints
+
+*** Collections
+
+**** Create a Collection
+     - Method: POST
+     - Path: =/collections=
+     - Description: Create a new vector collection
+     - Request Body:
+       #+BEGIN_SRC json
+       {
+         "name": "my_collection",
+         "dimensions": 128,
+         "min_val": -1.0,
+         "max_val": 1.0
+       }
+       #+END_SRC
+     - Response:
+       #+BEGIN_SRC json
+       {
+         "id": "col_123abc",
+         "name": "my_collection",
+         "dimensions": 128,
+         "min_val": -1.0,
+         "max_val": 1.0,
+         "created_at": "2024-07-30T12:00:00Z"
+       }
+       #+END_SRC
+
+**** Get Collection
+     - Method: GET
+     - Path: =/collections/{collection_id}=
+     - Description: Retrieve details of a specific collection
+     - Response: Same as Create response
+
+**** List Collections
+     - Method: GET
+     - Path: /collections
+     - Description: List all collections
+     - Response:
+       #+BEGIN_SRC json
+       {
+         "collections": [
+           {
+             "id": "col_123abc",
+             "name": "my_collection",
+             "dimensions": 128
+           },
+           {
+             "id": "col_456def",
+             "name": "another_collection",
+             "dimensions": 256
+           }
+         ]
+       }
+       #+END_SRC
+
+**** Delete Collection
+     - Method: DELETE
+     - Path: =/collections/{collection_id}=
+     - Description: Delete a collection
+     - Response: 204 No Content
+
+*** Vectors
+
+**** Create Vector
+     - Method: POST
+     - Path: =/collections/{collection_id}/vectors=
+     - Description: Add a new vector to the collection
+     - Request Body:
+       #+BEGIN_SRC json
+       {
+         "id": "vec_1",
+         "values": [0.1, 0.2, 0.3, ...]
+       }
+       #+END_SRC
+     - Response:
+       #+BEGIN_SRC json
+       {
+         "id": "vec_1",
+         "values": [0.1, 0.2, 0.3, ...],
+         "created_at": "2024-07-30T12:05:00Z"
+       }
+       #+END_SRC
+
+**** Get Vector
+     - Method: GET
+     - Path: =/collections/{collection_id}/vectors/{vector_id}=
+     - Description: Retrieve a specific vector
+     - Response: Same as Create response
+
+**** Update Vector
+     - Method: PUT
+     - Path: =/collections/{collection_id}/vectors/{vector_id}=
+     - Description: Update an existing vector
+     - Request Body: Same as Create request
+     - Response: Same as Create response
+
+**** Delete Vector
+     - Method: DELETE
+     - Path: =/collections/{collection_id}/vectors/{vector_id}=
+     - Description: Delete a vector
+     - Response: 204 No Content
+
+*** Search
+
+**** Search Vectors
+     - Method: POST
+     - Path: =/collections/{collection_id}/search=
+     - Description: Search for similar vectors
+     - Request Body:
+       #+BEGIN_SRC json
+       {
+         "vector": [0.1, 0.2, 0.3, ...],
+         "k": 10
+       }
+       #+END_SRC
+     - Response:
+       #+BEGIN_SRC json
+       {
+         "results": [
+           {
+             "id": "vec_1",
+             "score": 0.95
+           },
+           {
+             "id": "vec_2",
+             "score": 0.85
+           }
+         ]
+       }
+       #+END_SRC
+
+*** Transactions
+
+**** Create Transaction
+     - Method: POST
+     - Path: =/collections/{collection_id}/transactions=
+     - Description: Start a new transaction
+     - Response:
+       #+BEGIN_SRC json
+       {
+         "transaction_id": "txn_abc123",
+         "created_at": "2024-07-30T12:10:00Z"
+       }
+       #+END_SRC
+
+**** Commit Transaction
+     - Method: POST
+     - Path: =/collections/{collection_id}/transactions/{transaction_id}/commit=
+     - Description: Commit a transaction
+     - Response: 204 No Content
+
+**** Abort Transaction
+     - Method: POST
+     - Path: =/collections/{collection_id}/transactions/{transaction_id}/abort=
+     - Description: Abort a transaction
+     - Response: 204 No Content
+
+**** Vector Operations within a Transaction
+
+***** Create Vector in Transaction
+      - Method: POST
+      - Path: =/collections/{collection_id}/transactions/{transaction_id}/vectors=
+      - Description: Add a new vector within the transaction
+      - Request Body:
+        #+BEGIN_SRC json
+        {
+          "id": "vec_1",
+          "values": [0.1, 0.2, 0.3, ...]
+        }
+        #+END_SRC
+      - Response:
+        #+BEGIN_SRC json
+        {
+          "id": "vec_1",
+          "values": [0.1, 0.2, 0.3, ...],
+          "created_at": "2024-07-30T12:15:00Z"
+        }
+        #+END_SRC
+
+
+***** Update Vector in Transaction
+      - Method: PUT
+      - Path: =/collections/{collection_id}/transactions/{transaction_id}/vectors/{vector_id}=
+      - Description: Update an existing vector within the transaction
+      - Request Body: Same as Create request
+      - Response: Same as Create response
+
+***** Delete Vector in Transaction
+      - Method: DELETE
+      - Path: =/collections/{collection_id}/transactions/{transaction_id}/vectors/{vector_id}=
+      - Description: Mark a vector for deletion within the transaction
+      - Response: 204 No Content
