@@ -147,8 +147,8 @@ pub async fn init_vector_store(
                             db: Arc::new(db.clone()),
                         },
                         Arc::new(RwLock::new(None)),
-                        Arc::new(ScalarQuantization),
-                        DistanceMetric::Cosine,
+                        Arc::new(QuantizationMetric::Scalar),
+                        Arc::new(DistanceMetric::Cosine),
                         StorageType::UnsignedByte,
                     ));
                     ain_env
