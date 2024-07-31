@@ -132,7 +132,7 @@ pub async fn init_vector_store(
     let factor_levels = 10.0;
     let lp = Arc::new(generate_tuples(factor_levels).into_iter().rev().collect());
 
-    let result = match get_app_env() {
+    match get_app_env() {
         Ok(ain_env) => {
             let denv = ain_env.persist.clone();
 
@@ -175,9 +175,7 @@ pub async fn init_vector_store(
             }
         }
         Err(e) => Err(WaCustomError::DatabaseError(e.to_string())),
-    };
-
-    result
+    }
 }
 
 pub async fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<(VectorIdValue, Vec<f32>)>) -> () {
@@ -197,8 +195,11 @@ pub async fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<(VectorIdValue, 
                 let lp = &vec_store.levels_prob;
                 let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
 
+                insert_embedding(vec_store.clone(), &vec_emb)
+                    .expect("Failed to inert embedding to LMDB");
+
                 // TODO: handle the error
-                insert_embedding(
+                index_embedding(
                     vec_store.clone(),
                     vec_emb,
                     root.item.read().unwrap().clone(),

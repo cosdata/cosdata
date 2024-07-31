@@ -6,21 +6,13 @@ use crate::models::file_persist::*;
 use crate::models::meta_persist::*;
 use crate::models::types::*;
 use crate::storage::Storage;
-use bincode;
-use dashmap::DashMap;
-use futures::stream::Collect;
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use lmdb::Transaction;
+use lmdb::WriteFlags;
 use smallvec::SmallVec;
-use std::borrow::BorrowMut;
-use std::collections::hash_map::DefaultHasher;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fs::File;
-use std::hash::{Hash, Hasher};
-use std::io::{Seek, SeekFrom, Write};
-use std::ops::Deref;
+use std::sync::Arc;
 use std::sync::RwLock;
-use std::sync::{Arc, Mutex};
 
 pub fn ann_search(
     vec_store: Arc<VectorStore>,
@@ -204,7 +196,67 @@ fn load_neighbor_from_db(
         "Not implemented".to_string(),
     ))
 }
+
 pub fn insert_embedding(
+    vec_store: Arc<VectorStore>,
+    vector_emb: &VectorEmbedding,
+) -> Result<(), WaCustomError> {
+    let env = vec_store.lmdb.env.clone();
+    let db = vec_store.lmdb.db.clone();
+
+    let mut txn = env
+        .begin_rw_txn()
+        .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
+
+    let data = rkyv::to_bytes::<_, 256>(vector_emb)
+        .map_err(|e| WaCustomError::SerializationError(format!("Failed to serialize: {}", e)))?;
+
+    txn.put(
+        *db.as_ref(),
+        // prefix the id with `embedding_` to avoid collision with `current_version`
+        &format!("embedding_{}", vector_emb.hash_vec),
+        &data,
+        WriteFlags::empty(),
+    )
+    .map_err(|e| WaCustomError::DatabaseError(format!("Failed to put data: {}", e)))?;
+
+    txn.commit().map_err(|e| {
+        WaCustomError::DatabaseError(format!("Failed to commit transaction: {}", e))
+    })?;
+
+    Ok(())
+}
+
+pub fn retrieve_embedding(
+    vec_store: Arc<VectorStore>,
+    vector_id: &VectorId,
+) -> Result<Option<VectorEmbedding>, WaCustomError> {
+    let env = vec_store.lmdb.env.clone();
+    let db = vec_store.lmdb.db.clone();
+
+    let txn = env
+        .begin_ro_txn()
+        .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
+
+    let serialized_emb = match txn.get(*db.as_ref(), &format!("embedding_{}", vector_id)) {
+        Ok(emb) => emb,
+        Err(lmdb::Error::NotFound) => return Ok(None),
+        Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
+    };
+
+    let emb = unsafe {
+        rkyv::from_bytes_unchecked(serialized_emb).map_err(|e| {
+            WaCustomError::SerializationError(format!(
+                "Failed to deserialize VersionEmbedding: {}",
+                e
+            ))
+        })?
+    };
+
+    Ok(Some(emb))
+}
+
+pub fn index_embedding(
     vec_store: Arc<VectorStore>,
     vector_emb: VectorEmbedding,
     cur_entry: LazyItem<MergedNode>,
@@ -280,7 +332,7 @@ pub fn insert_embedding(
     let z_clone: Vec<_> = z.iter().map(|(first, _)| first.clone()).collect();
 
     if cur_level <= max_insert_level {
-        insert_embedding(
+        index_embedding(
             vec_store.clone(),
             vector_emb.clone(),
             z_clone[0].clone(),
@@ -295,7 +347,7 @@ pub fn insert_embedding(
             cur_level,
         );
     } else {
-        insert_embedding(
+        index_embedding(
             vec_store.clone(),
             vector_emb.clone(),
             z_clone[0].clone(),
