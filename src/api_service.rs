@@ -7,6 +7,10 @@ use crate::models::rpc::VectorIdValue;
 use crate::models::types::*;
 use crate::models::user::{AuthResp, Statistics};
 use crate::models::{self, common::*};
+use crate::quantization::scalar::ScalarQuantization;
+use crate::quantization::Quantization;
+use crate::quantization::StorageType;
+use crate::storage::Storage;
 use crate::vector_store::{self, *};
 use dashmap::DashMap;
 use futures::stream::{self, StreamExt};
@@ -29,6 +33,9 @@ pub async fn init_vector_store(
         return Err(WaCustomError::InvalidParams);
     }
 
+    let quantization_metric = Arc::new(QuantizationMetric::Scalar);
+    let storage_type = StorageType::UnsignedByte;
+
     let min = lower_bound.unwrap_or(-1.0);
     let max = upper_bound.unwrap_or(1.0);
     let vec = (0..size)
@@ -42,7 +49,7 @@ pub async fn init_vector_store(
     let vec_hash = VectorId::Int(-1);
 
     let exec_queue_nodes: ExecQueueUpdate = Arc::new(RwLock::new(Vec::new()));
-    let vector_list = VectorQt::unsigned_byte(&vec);
+    let vector_list = Arc::new(quantization_metric.quantize(&vec, storage_type));
 
     // Note that setting .write(true).append(true) has the same effect
     // as setting only .append(true)
@@ -72,7 +79,7 @@ pub async fn init_vector_store(
     for l in 0..=max_cache_level {
         let prop = Arc::new(NodeProp {
             id: vec_hash.clone(),
-            value: vector_list.clone().into(),
+            value: vector_list.clone(),
             location: Some((0, 0)),
         });
         let current_node = Arc::new(RwLock::new(MergedNode {
@@ -132,21 +139,23 @@ pub async fn init_vector_store(
             let db_result = denv.create_db(None, DatabaseFlags::empty());
             match db_result {
                 Ok(db) => {
-                    let vec_store = Arc::new(VectorStore {
-                        max_cache_level,
-                        database_name: name.clone(),
-                        root_vec: root.unwrap(),
-                        levels_prob: lp,
-                        quant_dim: (size / 32) as usize,
-                        prop_file,
+                    let vec_store = Arc::new(VectorStore::new(
                         exec_queue_nodes,
-                        version_lmdb: MetaDb {
+                        max_cache_level,
+                        name.clone(),
+                        root.unwrap(),
+                        lp,
+                        (size / 32) as usize,
+                        prop_file,
+                        MetaDb {
                             env: denv.clone(),
                             db: Arc::new(db.clone()),
                         },
-                        current_version: Arc::new(RwLock::new(None)),
-                        current_open_transaction: Arc::new(RwLock::new(None)),
-                    });
+                        Arc::new(RwLock::new(None)),
+                        Arc::new(QuantizationMetric::Scalar),
+                        Arc::new(DistanceMetric::Cosine),
+                        StorageType::UnsignedByte,
+                    ));
                     ain_env
                         .vector_store_map
                         .insert(name.clone(), vec_store.clone());
@@ -178,9 +187,11 @@ pub async fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<(VectorIdValue, 
             async move {
                 let root = &vec_store.root_vec;
                 let vec_hash = convert_value(id);
-                let vector_list = VectorQt::unsigned_byte(&vec);
+                let vector_list = vec_store
+                    .quantization_metric
+                    .quantize(&vec, vec_store.storage_type);
                 let vec_emb = VectorEmbedding {
-                    raw_vec: Arc::new(vector_list.clone()),
+                    raw_vec: Arc::new(vector_list),
                     hash_vec: vec_hash.clone(),
                 };
                 let lp = &vec_store.levels_prob;
@@ -239,7 +250,9 @@ pub async fn ann_vector_query(
     let vector_store = vec_store.clone();
     let vec_hash = VectorId::Str("query".to_string());
     let root = &vector_store.root_vec;
-    let vector_list = VectorQt::unsigned_byte(&query);
+    let vector_list = vector_store
+        .quantization_metric
+        .quantize(&query, vector_store.storage_type);
 
     let vec_emb = VectorEmbedding {
         raw_vec: Arc::new(vector_list.clone()),

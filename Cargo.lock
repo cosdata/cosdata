@@ -897,6 +897,7 @@ dependencies = [
  "env_logger",
  "futures",
  "futures-util",
+ "half 2.4.1",
  "http 1.1.0",
  "http-body-util",
  "lazy_static",
@@ -1403,6 +1404,7 @@ checksum = "6dd08c532ae367adf81c312a4580bc67f1d0fe8bc9c460520283f4c0ff277888"
 dependencies = [
  "cfg-if",
  "crunchy",
+ "serde",
 ]
 
 [[package]]

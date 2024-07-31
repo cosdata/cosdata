@@ -1,6 +1,15 @@
+use crate::distance::DistanceError;
+use crate::distance::{
+    cosine::CosineDistance, dotproduct::DotProductDistance, euclidean::EuclideanDistance,
+    hamming::HammingDistance, DistanceFunction,
+};
 use crate::models::chunked_list::*;
 use crate::models::common::*;
 use crate::models::versioning::VersionHash;
+use crate::quantization::product::ProductQuantization;
+use crate::quantization::scalar::ScalarQuantization;
+use crate::quantization::{Quantization, StorageType};
+use crate::storage::Storage;
 use actix_web::guard;
 use bincode;
 use dashmap::DashMap;
@@ -34,7 +43,7 @@ pub type NodeFileRef = FileOffset;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeProp {
     pub id: VectorId,
-    pub value: Arc<VectorQt>,
+    pub value: Arc<Storage>,
     pub location: Option<PropPersistRef>,
 }
 
@@ -60,6 +69,50 @@ pub struct MergedNode {
     pub child: Option<LazyItemRef<MergedNode>>,
     pub versions: LazyItems<MergedNode>,
     pub persist_flag: Item<bool>,
+}
+
+#[derive(Debug)]
+pub enum DistanceMetric {
+    Cosine,
+    Euclidean,
+    Hamming,
+    DotProduct,
+}
+
+impl DistanceFunction for DistanceMetric {
+    fn calculate(&self, x: &Storage, y: &Storage) -> Result<f32, DistanceError> {
+        match self {
+            Self::Cosine => CosineDistance.calculate(x, y),
+            Self::Euclidean => EuclideanDistance.calculate(x, y),
+            Self::Hamming => HammingDistance.calculate(x, y),
+            Self::DotProduct => DotProductDistance.calculate(x, y),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum QuantizationMetric {
+    Scalar,
+    Product(ProductQuantization),
+}
+
+impl Quantization for QuantizationMetric {
+    fn quantize(&self, vector: &[f32], storage_type: StorageType) -> Storage {
+        match self {
+            Self::Scalar => ScalarQuantization.quantize(vector, storage_type),
+            Self::Product(product) => product.quantize(vector, storage_type),
+        }
+    }
+
+    fn train(
+        &mut self,
+        vectors: &[Vec<f32>],
+    ) -> Result<(), crate::quantization::QuantizationError> {
+        match self {
+            Self::Scalar => ScalarQuantization.train(vectors),
+            Self::Product(product) => product.train(vectors),
+        }
+    }
 }
 
 impl MergedNode {
@@ -279,8 +332,42 @@ pub struct VectorStore {
     pub version_lmdb: MetaDb,
     pub current_version: Item<Option<VersionHash>>,
     pub current_open_transaction: Item<Option<VersionHash>>,
+    pub quantization_metric: Arc<QuantizationMetric>,
+    pub distance_metric: Arc<DistanceMetric>,
+    pub storage_type: StorageType,
 }
+
 impl VectorStore {
+    pub fn new(
+        exec_queue_nodes: ExecQueueUpdate,
+        max_cache_level: u8,
+        database_name: String,
+        root_vec: LazyItemRef<MergedNode>,
+        levels_prob: Arc<Vec<(f64, i32)>>,
+        quant_dim: usize,
+        prop_file: Arc<File>,
+        version_lmdb: MetaDb,
+        current_version: Item<Option<VersionHash>>,
+        quantization_metric: Arc<QuantizationMetric>,
+        distance_metric: Arc<DistanceMetric>,
+        storage_type: StorageType,
+    ) -> Self {
+        VectorStore {
+            exec_queue_nodes,
+            max_cache_level,
+            database_name,
+            root_vec,
+            levels_prob,
+            quant_dim,
+            prop_file,
+            version_lmdb,
+            current_version,
+            current_open_transaction: Arc::new(RwLock::new(None)),
+            quantization_metric,
+            distance_metric,
+            storage_type,
+        }
+    }
     // Get method
     pub fn get_current_version(
         &self,
@@ -304,7 +391,7 @@ impl VectorStore {
 }
 #[derive(Debug, Clone)]
 pub struct VectorEmbedding {
-    pub raw_vec: Arc<VectorQt>,
+    pub raw_vec: Arc<Storage>,
     pub hash_vec: VectorId,
 }
 

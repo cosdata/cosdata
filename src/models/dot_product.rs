@@ -1,14 +1,33 @@
 #[cfg(target_arch = "aarch64")]
 mod arm64;
 
-#[cfg(target_arch = "aarch64")]
-use arm64::*;
-
 #[cfg(target_arch = "x86_64")]
 pub mod x86_64;
 
-#[cfg(target_arch = "x86_64")]
-use x86_64::*;
+pub fn dot_product_u8_simple(a: &[u8], b: &[u8]) -> u64 {
+    a.iter()
+        .zip(b.iter())
+        .map(|(&x, &y)| x as u64 * y as u64)
+        .sum()
+}
+
+pub fn dot_product_u8(a: &[u8], b: &[u8]) -> u64 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx") && is_x86_feature_detected!("avx2") {
+            return unsafe { x86_64::dot_product_u8_avx2(a, b) };
+        }
+    }
+
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    {
+        if std::arch::is_aarch64_feature_detected!("neon") {
+            return unsafe { arm64::dot_product_neon(a, b) };
+        }
+    }
+
+    dot_product_u8_simple(a, b)
+}
 
 pub fn dot_product_f32_chunk(src: &[(f32, f32)], dst: &mut [f32]) -> f32 {
     let mut d: f32 = 0.0;
@@ -72,7 +91,7 @@ pub fn dot_product_b(src: &[(f32, f32)], dst: &mut [f32]) {
     }
 }
 
-pub fn dot_product_u8(src: &[(u8, u8)]) -> u64 {
+pub fn dot_product_u8_zipped(src: &[(u8, u8)]) -> u64 {
     src.iter().map(|&(a, b)| (a as u64) * (b as u64)).sum()
 }
 
@@ -122,7 +141,7 @@ mod tests {
             println!("Size: {}", size);
 
             let result_u8_chunk = dot_product_u8_chunk(&ab_u8);
-            let result_u8_scalar = dot_product_u8(&ab_u8);
+            let result_u8_scalar = dot_product_u8_zipped(&ab_u8);
             println!("u8 results:");
             println!("  Chunk:      {}", result_u8_chunk);
             println!("  Scalar:     {}", result_u8_scalar);

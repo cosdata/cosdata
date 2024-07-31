@@ -1,9 +1,11 @@
+use crate::distance::DistanceFunction;
 use crate::models::chunked_list::*;
 use crate::models::common::*;
 use crate::models::custom_buffered_writer::CustomBufferedWriter;
 use crate::models::file_persist::*;
 use crate::models::meta_persist::*;
 use crate::models::types::*;
+use crate::storage::Storage;
 use bincode;
 use dashmap::DashMap;
 use futures::stream::Collect;
@@ -82,10 +84,12 @@ pub fn ann_search(
         false,
     )?;
 
-    let cs = cosine_similarity_qt(&fvec, &node_prop.value, vec_store.quant_dim)?;
+    let dist = vec_store
+        .distance_metric
+        .calculate(&fvec, &node_prop.value)?;
 
     let z = if z.is_empty() {
-        vec![(cur_entry.clone(), cs)]
+        vec![(cur_entry.clone(), dist)]
     } else {
         z
     };
@@ -263,10 +267,12 @@ pub fn insert_embedding(
         true,
     )?;
 
-    let cs = cosine_similarity_qt(&fvec, &node_prop.value, vec_store.quant_dim)?;
+    let dist = vec_store
+        .distance_metric
+        .calculate(&fvec, &node_prop.value)?;
 
     let z = if z.is_empty() {
-        vec![(cur_entry.clone(), cs)]
+        vec![(cur_entry.clone(), dist)]
     } else {
         z
     };
@@ -395,7 +401,7 @@ pub fn auto_commit_transaction(
 
 fn insert_node_create_edges(
     vec_store: Arc<VectorStore>,
-    fvec: Arc<VectorQt>,
+    fvec: Arc<Storage>,
     hs: VectorId,
     nbs: Vec<(LazyItem<MergedNode>, f32)>,
     cur_level: i8,
@@ -466,7 +472,7 @@ fn insert_node_create_edges(
 fn traverse_find_nearest(
     vec_store: Arc<VectorStore>,
     vtm: LazyItem<MergedNode>,
-    fvec: Arc<VectorQt>,
+    fvec: Arc<Storage>,
     hs: VectorId,
     hops: u8,
     skipm: &mut HashSet<VectorId>,
@@ -528,7 +534,9 @@ fn traverse_find_nearest(
             let hs = hs.clone();
 
             if skipm.insert(nb.clone()) {
-                let cs = cosine_similarity_qt(&fvec, &node_prop.value, vec_store.quant_dim)?;
+                let dist = vec_store
+                    .distance_metric
+                    .calculate(&fvec, &node_prop.value)?;
 
                 let full_hops = 30;
                 if hops <= tapered_total_hops(full_hops, cur_level as u8, vec_store.max_cache_level)
@@ -543,10 +551,10 @@ fn traverse_find_nearest(
                         cur_level,
                         skip_hop,
                     )?;
-                    z.push((neighbor_guard.node.clone(), cs));
+                    z.push((neighbor_guard.node.clone(), dist));
                     tasks.push(z);
                 } else {
-                    tasks.push(vec![(neighbor_guard.node.clone(), cs)]);
+                    tasks.push(vec![(neighbor_guard.node.clone(), dist)]);
                 }
             }
         }
