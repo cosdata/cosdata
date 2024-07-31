@@ -33,16 +33,16 @@ Let’s denote the two 2-bit numbers as ~a~ and ~b~, where:
 2. Calculate Partial Products:
 
    #+tblname: partial-products
-   |    | b_1    | b_0    |
-   |----+-------+-------|
+   |     | b_1     | b_0     |
+   |-----+---------+---------|
    | a_1 | a_1 b_1 | a_1 b_0 |
    | a_0 | a_0 b_1 | a_0 b_0 |
 
 3. Align Partial Products:
 
    #+tblname: aligned-products
-   |       | a_1 b_1 | a_1 b_0 |
-   | a_0 b_1 | a_0 b_0 |       |
+   |         | a_1 b_1 | a_1 b_0 |
+   | a_0 b_1 | a_0 b_0 |         |
 
 4. Sum Partial Products:
    
@@ -54,9 +54,9 @@ By summing the aligned partial products, the final result of the binary multipli
 
 *** Partial products (actual or notional)
 
-|-------+---------+---------+---------+---------|
-| K     | b_0 b_0   | b_0 b_1   | b_1 b_0   | b_1 b_1   |
-|-------+---------+---------+---------+---------|
+|---------+---------+---------+---------+---------|
+| K       | b_0 b_0 | b_0 b_1 | b_1 b_0 | b_1 b_1 |
+|---------+---------+---------+---------+---------|
 | a_0 a_0 | _00 _00 | _00 _01 | _00 _10 | _00 _11 |
 | a_0 a_1 | _01 _00 | _01 _01 | _01 _10 | _01 _11 |
 | a_1 a_0 | _10 _00 | _10 _01 | _10 _10 | _10 _11 |
@@ -64,9 +64,9 @@ By summing the aligned partial products, the final result of the binary multipli
 
 
 *** Look up table for weights             
-|---+-----+-----+-----+-----|
-| K | 0   | 1   | 2   | 3   |
-|---+-----+-----+-----+-----|
+|---+------+------+------+------|
+| K | 0    | 1    | 2    | 3    |
+|---+------+------+------+------|
 | 0 | w_00 | w_01 | w_02 | w_03 |
 | 1 | w_10 | w_11 | w_12 | w_13 |
 | 2 | w_20 | w_21 | w_22 | w_23 |

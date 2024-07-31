@@ -309,7 +309,7 @@ pub fn quantize_to_u32_bits(fins: &[f32], resolution: u8) -> Vec<Vec<u32>> {
     let bits_per_value = resolution as usize;
     let parts = 2_usize.pow(bits_per_value as u32);
     let step = 2.0 / parts as f32;
-    let u32s_per_value = (fins.len() + 31) / 32;
+    let u32s_per_value = (fins.len()) / 32;
     let mut quantized: Vec<Vec<u32>> = vec![Vec::with_capacity(u32s_per_value); bits_per_value];
 
     let mut current_u32s: Vec<u32> = vec![0; bits_per_value];
