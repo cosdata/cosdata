@@ -328,7 +328,8 @@ pub type ExecQueueUpdate = Item<Vec<LazyItem<MergedNode>>>;
 #[derive(Debug, Clone)]
 pub struct MetaDb {
     pub env: Arc<Environment>,
-    pub db: Arc<Database>,
+    pub metadata_db: Arc<Database>,
+    pub embeddings_db: Arc<Database>,
 }
 
 #[derive(Debug, Clone)]

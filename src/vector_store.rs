@@ -6,6 +6,7 @@ use crate::models::file_persist::*;
 use crate::models::meta_persist::*;
 use crate::models::types::*;
 use crate::storage::Storage;
+use lmdb::Cursor;
 use lmdb::Transaction;
 use lmdb::WriteFlags;
 use smallvec::SmallVec;
@@ -202,7 +203,7 @@ pub fn insert_embedding(
     vector_emb: &VectorEmbedding,
 ) -> Result<(), WaCustomError> {
     let env = vec_store.lmdb.env.clone();
-    let db = vec_store.lmdb.db.clone();
+    let db = vec_store.lmdb.embeddings_db.clone();
 
     let mut txn = env
         .begin_rw_txn()
@@ -213,8 +214,7 @@ pub fn insert_embedding(
 
     txn.put(
         *db.as_ref(),
-        // prefix the id with `embedding_` to avoid collision with `current_version`
-        &format!("embedding_{}", vector_emb.hash_vec),
+        &vector_emb.hash_vec.to_string(),
         &data,
         WriteFlags::empty(),
     )
@@ -232,13 +232,13 @@ pub fn retrieve_embedding(
     vector_id: &VectorId,
 ) -> Result<Option<VectorEmbedding>, WaCustomError> {
     let env = vec_store.lmdb.env.clone();
-    let db = vec_store.lmdb.db.clone();
+    let db = vec_store.lmdb.embeddings_db.clone();
 
     let txn = env
         .begin_ro_txn()
         .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
 
-    let serialized_emb = match txn.get(*db.as_ref(), &format!("embedding_{}", vector_id)) {
+    let serialized_emb = match txn.get(*db.as_ref(), &vector_id.to_string()) {
         Ok(emb) => emb,
         Err(lmdb::Error::NotFound) => return Ok(None),
         Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),

@@ -13,7 +13,7 @@ pub fn store_current_version(
     // Generate hashes for main branch
     let hash = hasher.generate_hash(&branch, version, None, None);
     let env = vec_store.lmdb.env.clone();
-    let db = vec_store.lmdb.db.clone();
+    let db = vec_store.lmdb.metadata_db.clone();
 
     let mut txn = env
         .begin_rw_txn()
@@ -39,7 +39,7 @@ pub fn store_current_version(
 
 pub fn retrieve_current_version(vec_store: Arc<VectorStore>) -> Result<VersionHash, WaCustomError> {
     let env = vec_store.lmdb.env.clone();
-    let db = vec_store.lmdb.db.clone();
+    let db = vec_store.lmdb.metadata_db.clone();
     let txn = env
         .begin_ro_txn()
         .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;

@@ -131,51 +131,47 @@ pub async fn init_vector_store(
     // ---------------------------
     let factor_levels = 10.0;
     let lp = Arc::new(generate_tuples(factor_levels).into_iter().rev().collect());
+    let ain_env = get_app_env().map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
-    match get_app_env() {
-        Ok(ain_env) => {
-            let denv = ain_env.persist.clone();
+    let denv = ain_env.persist.clone();
 
-            let db_result = denv.create_db(None, DatabaseFlags::empty());
-            match db_result {
-                Ok(db) => {
-                    let vec_store = Arc::new(VectorStore::new(
-                        exec_queue_nodes,
-                        max_cache_level,
-                        name.clone(),
-                        root.unwrap(),
-                        lp,
-                        (size / 32) as usize,
-                        prop_file,
-                        MetaDb {
-                            env: denv.clone(),
-                            db: Arc::new(db.clone()),
-                        },
-                        Arc::new(RwLock::new(None)),
-                        Arc::new(QuantizationMetric::Scalar),
-                        Arc::new(DistanceMetric::Cosine),
-                        StorageType::UnsignedByte,
-                    ));
-                    ain_env
-                        .vector_store_map
-                        .insert(name.clone(), vec_store.clone());
+    let metadata_db = denv
+        .create_db(Some("metadata"), DatabaseFlags::empty())
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
-                    let result = store_current_version(vec_store.clone(), "main".to_string(), 0);
-                    let version_hash = result.expect("Failed to get VersionHash");
-                    vec_store
-                        .set_current_version(Some(version_hash))
-                        .expect("failed to store version");
+    let embeddins_db = denv
+        .create_db(Some("embeddings"), DatabaseFlags::empty())
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
-                    Ok(())
-                }
-                Err(e) => {
-                    eprintln!("Failed node persist(nbr1): {}", e);
-                    Err(WaCustomError::DatabaseError(e.to_string()))
-                }
-            }
-        }
-        Err(e) => Err(WaCustomError::DatabaseError(e.to_string())),
-    }
+    let vec_store = Arc::new(VectorStore::new(
+        exec_queue_nodes,
+        max_cache_level,
+        name.clone(),
+        root.unwrap(),
+        lp,
+        (size / 32) as usize,
+        prop_file,
+        MetaDb {
+            env: denv.clone(),
+            metadata_db: Arc::new(metadata_db.clone()),
+            embeddings_db: Arc::new(embeddins_db),
+        },
+        Arc::new(RwLock::new(None)),
+        Arc::new(QuantizationMetric::Scalar),
+        Arc::new(DistanceMetric::Cosine),
+        StorageType::UnsignedByte,
+    ));
+    ain_env
+        .vector_store_map
+        .insert(name.clone(), vec_store.clone());
+
+    let result = store_current_version(vec_store.clone(), "main".to_string(), 0);
+    let version_hash = result.expect("Failed to get VersionHash");
+    vec_store
+        .set_current_version(Some(version_hash))
+        .expect("failed to store version");
+
+    Ok(())
 }
 
 pub async fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<(VectorIdValue, Vec<f32>)>) -> () {
