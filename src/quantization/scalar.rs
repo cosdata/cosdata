@@ -1,4 +1,5 @@
 use super::{Quantization, QuantizationError, StorageType};
+use crate::models::common::quantize_to_u32_bits;
 use crate::storage::Storage;
 use half::f16;
 
@@ -14,8 +15,13 @@ impl Quantization for ScalarQuantization {
                 Storage::UnsignedByte { mag, quant_vec }
             }
             StorageType::SubByte(resolution) => {
-                // Implement sub-byte quantization for scalar method
-                unimplemented!("Sub-byte quantization not implemented for scalar method")
+                let quant_vec: Vec<_> = quantize_to_u32_bits(vector, resolution);
+                let mag = 0; //implement todo
+                Storage::SubByte {
+                    mag,
+                    quant_vec,
+                    resolution,
+                }
             }
             StorageType::HalfPrecisionFP => {
                 let quant_vec = vector.iter().map(|&x| f16::from_f32(x)).collect();
