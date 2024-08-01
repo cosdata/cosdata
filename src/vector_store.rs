@@ -256,6 +256,113 @@ pub fn retrieve_embedding(
     Ok(Some(emb))
 }
 
+pub fn index_embeddings(vec_store: Arc<VectorStore>) -> Result<(), WaCustomError> {
+    let env = vec_store.lmdb.env.clone();
+    let embeddings_db = vec_store.lmdb.embeddings_db.clone();
+    let metadata_db = vec_store.lmdb.metadata_db.clone();
+    let txn = env
+        .begin_ro_txn()
+        .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
+
+    let last_indexed_embedding_id = match txn.get(*metadata_db.as_ref(), &"last_indexed_embedding")
+    {
+        Ok(val) => Ok(Some(val)),
+        Err(lmdb::Error::NotFound) => Ok(None),
+        Err(err) => Err(WaCustomError::DatabaseError(err.to_string())),
+    }?;
+    let mut cursor = txn
+        .open_ro_cursor(*embeddings_db)
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+    let iter = if let Some(last_indexed_embedding_id) = &last_indexed_embedding_id {
+        let mut iter = cursor.iter_from(last_indexed_embedding_id);
+        // Skip the last indexed embedding
+        iter.next();
+        iter
+    } else {
+        // Nothing is indexed, index from start
+        cursor.iter_start()
+    };
+
+    let mut new_last_indexed_embedding_id = None;
+
+    for (id, serialized_emb) in iter {
+        let emb = unsafe {
+            rkyv::from_bytes_unchecked(serialized_emb).map_err(|e| {
+                WaCustomError::SerializationError(format!(
+                    "Failed to deserialize VersionEmbedding: {}",
+                    e
+                ))
+            })?
+        };
+        let lp = &vec_store.levels_prob;
+        let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
+
+        let indexing_result = index_embedding(
+            vec_store.clone(),
+            emb,
+            vec_store.root_vec.item.read().unwrap().clone(),
+            vec_store.max_cache_level.try_into().unwrap(),
+            iv.try_into().unwrap(),
+        );
+
+        if let Err(err) = indexing_result {
+            drop(cursor);
+            if let Some(id) = new_last_indexed_embedding_id.take() {
+                txn.abort();
+                let mut write_txn = env.begin_rw_txn().map_err(|e| {
+                    WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e))
+                })?;
+                write_txn
+                    .put(
+                        *embeddings_db,
+                        &"last_indexed_embedding",
+                        &id,
+                        WriteFlags::empty(),
+                    )
+                    .map_err(|e| {
+                        WaCustomError::DatabaseError(format!(
+                            "Failed to update \"last_indexed_embedding\": {}",
+                            e
+                        ))
+                    })?;
+                write_txn.commit().map_err(|e| {
+                    WaCustomError::DatabaseError(format!("Failed to commit transaction: {}", e))
+                })?;
+            }
+            return Err(err);
+        }
+
+        new_last_indexed_embedding_id = Some(id.to_vec());
+    }
+
+    drop(cursor);
+    txn.abort();
+
+    if let Some(id) = new_last_indexed_embedding_id.take() {
+        let mut write_txn = env.begin_rw_txn().map_err(|e| {
+            WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e))
+        })?;
+        write_txn
+            .put(
+                *embeddings_db,
+                &"last_indexed_embedding",
+                &id,
+                WriteFlags::empty(),
+            )
+            .map_err(|e| {
+                WaCustomError::DatabaseError(format!(
+                    "Failed to update \"last_indexed_embedding\": {}",
+                    e
+                ))
+            })?;
+        write_txn.commit().map_err(|e| {
+            WaCustomError::DatabaseError(format!("Failed to commit transaction: {}", e))
+        })?;
+    }
+
+    Ok(())
+}
+
 pub fn index_embedding(
     vec_store: Arc<VectorStore>,
     vector_emb: VectorEmbedding,
