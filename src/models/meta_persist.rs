@@ -53,11 +53,9 @@ pub fn retrieve_current_version(vec_store: Arc<VectorStore>) -> Result<VersionHa
             _ => WaCustomError::DatabaseError(e.to_string()),
         })?;
 
-    let version_hash = unsafe {
-        rkyv::from_bytes_unchecked(serialized_hash).map_err(|e| {
-            WaCustomError::SerializationError(format!("Failed to deserialize VersionHash: {}", e))
-        })?
-    };
+    let version_hash = unsafe { rkyv::from_bytes_unchecked(serialized_hash) }.map_err(|e| {
+        WaCustomError::SerializationError(format!("Failed to deserialize VersionHash: {}", e))
+    })?;
 
     Ok(version_hash)
 }

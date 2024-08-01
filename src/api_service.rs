@@ -139,7 +139,7 @@ pub async fn init_vector_store(
         .create_db(Some("metadata"), DatabaseFlags::empty())
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
-    let embeddins_db = denv
+    let embeddings_db = denv
         .create_db(Some("embeddings"), DatabaseFlags::empty())
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
@@ -154,7 +154,7 @@ pub async fn init_vector_store(
         MetaDb {
             env: denv.clone(),
             metadata_db: Arc::new(metadata_db.clone()),
-            embeddings_db: Arc::new(embeddins_db),
+            embeddings_db: Arc::new(embeddings_db),
         },
         Arc::new(RwLock::new(None)),
         Arc::new(QuantizationMetric::Scalar),

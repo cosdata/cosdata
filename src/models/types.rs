@@ -428,7 +428,7 @@ pub fn get_app_env() -> Result<Arc<AppEnv>, WaCustomError> {
             create_dir_all(&path).map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
             // Initialize the environment
             let env = Environment::new()
-                .set_max_dbs(1)
+                .set_max_dbs(2)
                 .set_map_size(10485760) // Set the maximum size of the database to 10MB
                 .open(&path)
                 .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
