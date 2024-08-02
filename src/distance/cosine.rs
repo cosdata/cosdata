@@ -162,10 +162,11 @@ unsafe fn dot_product_quaternary_avx2(
     }
     dot_product as f32
 }
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::*;
 
 #[target_feature(enable = "avx2")]
 #[cfg(target_arch = "x86_64")]
-
 unsafe fn count_ones_simd_avx2_256i(input: __m256i) -> u64 {
     let low_mask = _mm256_set1_epi8(0x0F);
     let lookup = _mm256_setr_epi8(
@@ -188,6 +189,8 @@ unsafe fn count_ones_simd_avx2_256i(input: __m256i) -> u64 {
     // Extract and add the final sum
     _mm256_extract_epi64(sum_64, 0) as u64 + _mm256_extract_epi64(sum_64, 2) as u64
 }
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::*;
 
 #[cfg(test)]
 mod tests {
@@ -269,13 +272,12 @@ mod tests {
     fn theoretical_dot_product(a: &[f32], b: &[f32]) -> f32 {
         a.iter().zip(b.iter()).map(|(&x, &y)| x * y).sum()
     }
-
     #[cfg(test)]
     mod tests {
         use super::*;
         use rand::Rng;
         use std::time::Instant;
-
+        // Define the weight lookup table
         #[cfg(target_arch = "x86_64")]
         fn generate_random_vectors(size: usize) -> (Vec<Vec<u32>>, Vec<Vec<u32>>) {
             let mut rng = rand::thread_rng();
@@ -371,98 +373,147 @@ mod tests {
                 println!();
             }
         }
-    }
 
-    // Scalar equivalent function
-    fn count_ones_scalar(input: u32) -> u32 {
-        input.count_ones()
-    }
+        // Scalar equivalent function
+        fn count_ones_scalar(input: u32) -> u32 {
+            input.count_ones()
+        }
 
-    // Helper function to convert __m256i to Vec<u32>
-    unsafe fn m256i_to_vec(v: __m256i) -> Vec<u32> {
-        let mut result = vec![0u32; 8];
-        _mm256_storeu_si256(result.as_mut_ptr() as *mut __m256i, v);
-        result
-    }
+        // Helper function to convert __m256i to Vec<u32>
+        unsafe fn m256i_to_vec(v: __m256i) -> Vec<u32> {
+            let mut result = vec![0u32; 8];
+            _mm256_storeu_si256(result.as_mut_ptr() as *mut __m256i, v);
+            result
+        }
 
-    // Helper function to create __m256i from Vec<u32>
-    unsafe fn vec_to_m256i(v: &[u32]) -> __m256i {
-        assert!(v.len() >= 8);
-        _mm256_loadu_si256(v.as_ptr() as *const __m256i)
-    }
+        // Helper function to create __m256i from Vec<u32>
+        unsafe fn vec_to_m256i(v: &[u32]) -> __m256i {
+            assert!(v.len() >= 8);
+            _mm256_loadu_si256(v.as_ptr() as *const __m256i)
+        }
 
-    #[test]
-    fn test_count_ones_simple_cases() {
-        unsafe {
-            let test_cases = vec![
-                vec![0u32; 8],
-                vec![1u32; 8],
-                vec![0xFFFFFFFF; 8],
-                vec![0x55555555; 8],
-                vec![0xAAAAAAAA; 8],
-            ];
+        #[test]
+        fn test_count_ones_simple_cases() {
+            unsafe {
+                let test_cases = vec![
+                    vec![0u32; 8],
+                    vec![1u32; 8],
+                    vec![0xFFFFFFFF; 8],
+                    vec![0x55555555; 8],
+                    vec![0xAAAAAAAA; 8],
+                ];
 
-            for case in test_cases {
-                let input = vec_to_m256i(&case);
-                let avx2_result = count_ones_simd_avx2_256i(input);
-                let scalar_result: u64 = case.iter().map(|&x| count_ones_scalar(x) as u64).sum();
-                assert_eq!(avx2_result, scalar_result, "Failed for case: {:?}", case);
+                for case in test_cases {
+                    let input = vec_to_m256i(&case);
+                    let avx2_result = count_ones_simd_avx2_256i(input);
+                    let scalar_result: u64 =
+                        case.iter().map(|&x| count_ones_scalar(x) as u64).sum();
+                    assert_eq!(avx2_result, scalar_result, "Failed for case: {:?}", case);
+                }
+            }
+        }
+
+        #[test]
+        fn test_count_ones_random_cases() {
+            use rand::Rng;
+            let mut rng = rand::thread_rng();
+
+            unsafe {
+                for _ in 0..100 {
+                    let case: Vec<u32> = (0..8).map(|_| rng.gen()).collect();
+                    let input = vec_to_m256i(&case);
+                    let avx2_result = count_ones_simd_avx2_256i(input);
+                    let scalar_result: u64 =
+                        case.iter().map(|&x| count_ones_scalar(x) as u64).sum();
+                    assert_eq!(avx2_result, scalar_result, "Failed for case: {:?}", case);
+                }
+            }
+        }
+
+        #[test]
+        fn test_count_ones_edge_cases() {
+            unsafe {
+                let edge_cases = vec![
+                    vec![
+                        0u32, 0xFFFFFFFF, 0, 0xFFFFFFFF, 0, 0xFFFFFFFF, 0, 0xFFFFFFFF,
+                    ],
+                    vec![
+                        0x12345678, 0x9ABCDEF0, 0xFEDCBA98, 0x76543210, 0, 0, 0xFFFFFFFF,
+                        0xFFFFFFFF,
+                    ],
+                    vec![
+                        0x01010101, 0x10101010, 0x11111111, 0xEEEEEEEE, 0xFFFF0000, 0x0000FFFF,
+                        0xF0F0F0F0, 0x0F0F0F0F,
+                    ],
+                ];
+
+                for case in edge_cases {
+                    let input = vec_to_m256i(&case);
+                    let avx2_result = count_ones_simd_avx2_256i(input);
+                    let scalar_result: u64 =
+                        case.iter().map(|&x| count_ones_scalar(x) as u64).sum();
+                    assert_eq!(avx2_result, scalar_result, "Failed for case: {:?}", case);
+                }
+            }
+        }
+
+        #[test]
+        fn test_count_ones_incremental() {
+            unsafe {
+                let mut case = vec![0u32; 8];
+                for i in 0..256 {
+                    case[i / 32] |= 1 << (i % 32);
+                    let input = vec_to_m256i(&case);
+                    let avx2_result = count_ones_simd_avx2_256i(input);
+                    let scalar_result: u64 =
+                        case.iter().map(|&x| count_ones_scalar(x) as u64).sum();
+                    assert_eq!(avx2_result, scalar_result, "Failed for case: {:?}", case);
+                }
             }
         }
     }
 
-    #[test]
-    fn test_count_ones_random_cases() {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-
-        unsafe {
-            for _ in 0..100 {
-                let case: Vec<u32> = (0..8).map(|_| rng.gen()).collect();
-                let input = vec_to_m256i(&case);
-                let avx2_result = count_ones_simd_avx2_256i(input);
-                let scalar_result: u64 = case.iter().map(|&x| count_ones_scalar(x) as u64).sum();
-                assert_eq!(avx2_result, scalar_result, "Failed for case: {:?}", case);
-            }
-        }
+    #[cfg(target_arch = "x86_64")]
+    fn generate_test_vectors(size: usize, pattern: u32) -> (Vec<Vec<u32>>, Vec<Vec<u32>>) {
+        let lsb = vec![pattern; size];
+        let msb = vec![pattern; size];
+        (vec![lsb.clone(), msb.clone()], vec![lsb, msb])
     }
 
-    #[test]
-    fn test_count_ones_edge_cases() {
-        unsafe {
-            let edge_cases = vec![
-                vec![
-                    0u32, 0xFFFFFFFF, 0, 0xFFFFFFFF, 0, 0xFFFFFFFF, 0, 0xFFFFFFFF,
-                ],
-                vec![
-                    0x12345678, 0x9ABCDEF0, 0xFEDCBA98, 0x76543210, 0, 0, 0xFFFFFFFF, 0xFFFFFFFF,
-                ],
-                vec![
-                    0x01010101, 0x10101010, 0x11111111, 0xEEEEEEEE, 0xFFFF0000, 0x0000FFFF,
-                    0xF0F0F0F0, 0x0F0F0F0F,
-                ],
-            ];
+    #[cfg(target_arch = "x86_64")]
+    fn count_combinations_scalar(a_vec: &[Vec<u32>], b_vec: &[Vec<u32>]) -> [u64; 16] {
+        let mut counts = [0u64; 16];
 
-            for case in edge_cases {
-                let input = vec_to_m256i(&case);
-                let avx2_result = count_ones_simd_avx2_256i(input);
-                let scalar_result: u64 = case.iter().map(|&x| count_ones_scalar(x) as u64).sum();
-                assert_eq!(avx2_result, scalar_result, "Failed for case: {:?}", case);
+        // Ensure vectors are not empty and have the same length
+        assert!(a_vec.len() == 2 && b_vec.len() == 2);
+        let len = a_vec[0].len();
+        assert!(len == a_vec[1].len() && len == b_vec[0].len() && len == b_vec[1].len());
+
+        // Process each element in the vectors
+        for i in 0..len {
+            // Process each bit position in the u32 values
+            for bit_pos in 0..32 {
+                // Process each bit from 0 to 31
+                let bit_mask = 1 << bit_pos;
+
+                // Extract bits for this position
+                let a_lsb = (a_vec[0][i] & bit_mask) >> bit_pos;
+                let a_msb = ((a_vec[1][i] & bit_mask) >> bit_pos) << 1;
+                let b_lsb = ((b_vec[0][i] & bit_mask) >> bit_pos) << 2;
+                let b_msb = ((b_vec[1][i] & bit_mask) >> bit_pos) << 3;
+
+                // Compute the 4-bit index
+                let index = (a_msb | a_lsb | b_lsb | b_msb) as usize;
+
+                // Ensure the index is within bounds
+                if index < 16 {
+                    counts[index] += 1;
+                } else {
+                    eprintln!("Index out of bounds: {}", index);
+                }
             }
         }
-    }
 
-    #[test]
-    fn test_count_ones_incremental() {
-        unsafe {
-            let mut case = vec![0u32; 8];
-            for i in 0..256 {
-                case[i / 32] |= 1 << (i % 32);
-                let input = vec_to_m256i(&case);
-                let avx2_result = count_ones_simd_avx2_256i(input);
-                let scalar_result: u64 = case.iter().map(|&x| count_ones_scalar(x) as u64).sum();
-                assert_eq!(avx2_result, scalar_result, "Failed for case: {:?}", case);
-            }
-        }
+        counts
     }
 }
