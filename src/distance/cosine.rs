@@ -1,5 +1,4 @@
 use super::{DistanceError, DistanceFunction};
-use crate::models::lookup_table::shift_and_accumulate;
 use crate::storage::Storage;
 #[derive(Debug)]
 pub struct CosineDistance;
@@ -59,8 +58,8 @@ impl DistanceFunction for CosineDistance {
 }
 
 fn dot_product_binary(
-    x_vec: &[Vec<u32>],
-    y_vec: &[Vec<u32>],
+    x_vec: &[Vec<u8>],
+    y_vec: &[Vec<u8>],
     resolution: u8,
 ) -> Result<f32, DistanceError> {
     let parts = 2_usize.pow(resolution as u32);
@@ -71,7 +70,7 @@ fn dot_product_binary(
         let sum: usize = x_vec[index]
             .iter()
             .zip(&y_vec[index])
-            .map(|(&x_item, &y_item)| shift_and_accumulate(x_item & y_item) as usize)
+            .map(|(&x_item, &y_item)| (x_item & y_item).count_ones() as usize)
             .sum();
         final_result += sum << index;
     }
@@ -93,7 +92,7 @@ fn cosine_similarity_from_dot_product(
     }
 }
 
-fn dot_product_quaternary(x_vec: &[Vec<u32>], y_vec: &[Vec<u32>], resolution: u8) -> f32 {
+fn dot_product_quaternary(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], resolution: u8) -> f32 {
     assert_eq!(resolution, 2);
 
     let dot_product: u32 = x_vec[0]
@@ -121,20 +120,16 @@ use std::arch::x86_64::*;
 
 #[target_feature(enable = "avx2")]
 #[cfg(target_arch = "x86_64")]
-unsafe fn dot_product_quaternary_avx2(
-    x_vec: &[Vec<u32>],
-    y_vec: &[Vec<u32>],
-    resolution: u8,
-) -> f32 {
+unsafe fn dot_product_quaternary_avx2(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], resolution: u8) -> f32 {
     assert_eq!(resolution, 2);
     assert!(
-        x_vec[0].len() % 8 == 0,
-        "Vector length must be a multiple of 8"
+        x_vec[0].len() % 32 == 0,
+        "Vector length must be a multiple of 32"
     );
 
     let mut dot_product = 0u64;
 
-    for i in (0..x_vec[0].len()).step_by(8) {
+    for i in (0..x_vec[0].len()).step_by(32) {
         let x_lsb = _mm256_loadu_si256(x_vec[0][i..].as_ptr() as *const __m256i);
         let x_msb = _mm256_loadu_si256(x_vec[1][i..].as_ptr() as *const __m256i);
         let y_lsb = _mm256_loadu_si256(y_vec[0][i..].as_ptr() as *const __m256i);
@@ -162,8 +157,6 @@ unsafe fn dot_product_quaternary_avx2(
     }
     dot_product as f32
 }
-#[cfg(target_arch = "x86_64")]
-use std::arch::x86_64::*;
 
 #[target_feature(enable = "avx2")]
 #[cfg(target_arch = "x86_64")]
@@ -189,9 +182,58 @@ unsafe fn count_ones_simd_avx2_256i(input: __m256i) -> u64 {
     // Extract and add the final sum
     _mm256_extract_epi64(sum_64, 0) as u64 + _mm256_extract_epi64(sum_64, 2) as u64
 }
-#[cfg(target_arch = "x86_64")]
-use std::arch::x86_64::*;
 
+#[target_feature(enable = "avx2")]
+unsafe fn count_combinations_simd_avx2(data: *const u8, n: usize, lookup: &[u8; 32]) -> u64 {
+    let mut i = 0;
+    let lookup_vec = _mm256_loadu_si256(lookup.as_ptr() as *const __m256i);
+    let low_mask = _mm256_set1_epi8(0x0f);
+    let mut acc = _mm256_setzero_si256();
+
+    while i + 32 < n {
+        let mut local = _mm256_setzero_si256();
+        for _ in 0..255 / 8 {
+            if i + 32 >= n {
+                break;
+            }
+            let vec = _mm256_loadu_si256(data.add(i) as *const __m256i);
+            let lo = _mm256_and_si256(vec, low_mask);
+            let hi = _mm256_and_si256(_mm256_srli_epi16(vec, 4), low_mask);
+            let popcnt1 = _mm256_shuffle_epi8(lookup_vec, lo);
+            let popcnt2 = _mm256_shuffle_epi8(lookup_vec, hi);
+            local = _mm256_add_epi8(local, popcnt1);
+            local = _mm256_add_epi8(local, popcnt2);
+            i += 32;
+        }
+        acc = _mm256_add_epi64(acc, _mm256_sad_epu8(local, _mm256_setzero_si256()));
+    }
+
+    let mut result = 0u64;
+    result += _mm256_extract_epi64(acc, 0) as u64;
+    result += _mm256_extract_epi64(acc, 1) as u64;
+    result += _mm256_extract_epi64(acc, 2) as u64;
+    result += _mm256_extract_epi64(acc, 3) as u64;
+
+    // Handle remaining bytes using lookup
+    for j in i..n {
+        let byte = *data.add(j);
+        result += lookup[(byte & 0x0f) as usize] as u64;
+        result += lookup[(byte >> 4) as usize] as u64;
+    }
+
+    result
+}
+
+// Outer function to create lookup table and call the SIMD function
+pub fn count_combos_wrapper(data: &[u8]) -> u64 {
+    let lookup: [u8; 32] = [
+        0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4, // repeated
+        0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4,
+    ];
+    unsafe { count_combinations_simd_avx2(data.as_ptr(), data.len(), &lookup) }
+}
+
+#[cfg(target_arch = "x86_64")]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,47 +242,27 @@ mod tests {
     fn test_dot_product_quaternary_vs_theoretical() {
         let mut rng = rand::thread_rng();
         let length = 32;
-
         // Generate random vectors with values in the range [0, 1, 2, 3]
-        let input_a: Vec<u32> = (0..length).map(|_| rng.gen_range(0..=3)).collect();
-        let input_b: Vec<u32> = (0..length).map(|_| rng.gen_range(0..=3)).collect();
+        let input_a: Vec<u8> = (0..length).map(|_| rng.gen_range(0..=3)).collect();
+        let input_b: Vec<u8> = (0..length).map(|_| rng.gen_range(0..=3)).collect();
 
-        let mut result_a = vec![vec![0; 32]; 2];
-        let mut result_b = vec![vec![0; 32]; 2];
+        let mut vec_a = vec![vec![0u8; (length + 3) / 4]; 2];
+        let mut vec_b = vec![vec![0u8; (length + 3) / 4]; 2];
 
-        // Process input_a
-        for (i, &value) in input_a.iter().enumerate() {
-            result_a[0][i] = value & 1;
-            result_a[1][i] = (value >> 1) & 1;
+        // Pack quaternary digits into u8 values
+        for (i, (&a, &b)) in input_a.iter().zip(input_b.iter()).enumerate() {
+            let byte_index = i / 4;
+            let bit_offset = (i % 4) * 2;
+
+            vec_a[0][byte_index] |= (a & 1) << bit_offset;
+            vec_a[1][byte_index] |= ((a >> 1) & 1) << bit_offset;
+
+            vec_b[0][byte_index] |= (b & 1) << bit_offset;
+            vec_b[1][byte_index] |= ((b >> 1) & 1) << bit_offset;
         }
 
-        // Process input_b
-        for (i, &value) in input_b.iter().enumerate() {
-            result_b[0][i] = value & 1;
-            result_b[1][i] = (value >> 1) & 1;
-        }
-
-        let mut vec_a = vec![vec![0u32; 1]; 2];
-        let mut vec_b = vec![vec![0u32; 1]; 2];
-
-        // Combine bits for vec_a
-        for (i, &bit) in result_a[0].iter().enumerate() {
-            vec_a[0][0] |= (bit as u32) << i;
-        }
-        for (i, &bit) in result_a[1].iter().enumerate() {
-            vec_a[1][0] |= (bit as u32) << i;
-        }
-
-        // Combine bits for vec_b
-        for (i, &bit) in result_b[0].iter().enumerate() {
-            vec_b[0][0] |= (bit as u32) << i;
-        }
-        for (i, &bit) in result_b[1].iter().enumerate() {
-            vec_b[1][0] |= (bit as u32) << i;
-        }
-
-        // Compute dot product using binary method
-        let binary_dot_product = dot_product_quaternary(&vec_a, &vec_b, 2);
+        // Compute dot product using quaternary method
+        let quaternary_dot_product = dot_product_quaternary(&vec_a, &vec_b, 2);
 
         // Compute theoretical dot product
         let float_a: Vec<f32> = input_a.iter().map(|&x| x as f32).collect();
@@ -248,23 +270,23 @@ mod tests {
         let theoretical_dot_product = theoretical_dot_product(&float_a, &float_b);
 
         // Calculate relative error
-        let relative_error = ((binary_dot_product - theoretical_dot_product).abs()
+        let relative_error = ((quaternary_dot_product - theoretical_dot_product).abs()
             / theoretical_dot_product.abs())
             * 100.0;
 
         // Assert that the relative error is within an acceptable range (e.g., 1%)
         assert!(
             relative_error < 1.0,
-            "Relative error too high: {}%. Binary: {}, Theoretical: {}",
+            "Relative error too high: {}%. Quaternary: {}, Theoretical: {}",
             relative_error,
-            binary_dot_product,
+            quaternary_dot_product,
             theoretical_dot_product
         );
 
         // Optionally, print detailed results for debugging
         println!("Input A: {:?}", input_a);
         println!("Input B: {:?}", input_b);
-        println!("Quaternary dot product: {}", binary_dot_product);
+        println!("Quaternary dot product: {}", quaternary_dot_product);
         println!("Theoretical dot product: {}", theoretical_dot_product);
         println!("Relative error: {}%", relative_error);
     }
@@ -272,248 +294,272 @@ mod tests {
     fn theoretical_dot_product(a: &[f32], b: &[f32]) -> f32 {
         a.iter().zip(b.iter()).map(|(&x, &y)| x * y).sum()
     }
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use rand::Rng;
-        use std::time::Instant;
-        // Define the weight lookup table
-        #[cfg(target_arch = "x86_64")]
-        fn generate_random_vectors(size: usize) -> (Vec<Vec<u32>>, Vec<Vec<u32>>) {
-            let mut rng = rand::thread_rng();
-            let x_vec = vec![
-                (0..size).map(|_| rng.gen::<u32>()).collect(),
-                (0..size).map(|_| rng.gen::<u32>()).collect(),
-            ];
-            let y_vec = vec![
-                (0..size).map(|_| rng.gen::<u32>()).collect(),
-                (0..size).map(|_| rng.gen::<u32>()).collect(),
-            ];
-            (x_vec, y_vec)
-        }
-        #[test]
-        fn test_dot_product_quaternary_correctness() {
-            let sizes = vec![128, 256, 512, 1024];
 
-            for size in sizes {
+    fn generate_random_vectors(size: usize) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
+        let mut rng = rand::thread_rng();
+        let mut generate_random_u8_vec = || (0..size).map(|_| rng.gen::<u8>()).collect();
+        let x_vec = vec![generate_random_u8_vec(), generate_random_u8_vec()];
+        let y_vec = vec![generate_random_u8_vec(), generate_random_u8_vec()];
+        (x_vec, y_vec)
+    }
+
+    use std::time::Instant;
+    #[test]
+    fn test_dot_product_quaternary_correctness() {
+        let sizes = vec![128, 256, 512, 1024];
+
+        for size in sizes {
+            let (x_vec, y_vec) = generate_random_vectors(size);
+
+            let non_simd_result = dot_product_quaternary(&x_vec, &y_vec, 2);
+
+            #[cfg(target_arch = "x86_64")]
+            let simd_result = unsafe {
+                if is_x86_feature_detected!("avx2") {
+                    dot_product_quaternary_avx2(&x_vec, &y_vec, 2)
+                } else {
+                    non_simd_result // Fallback if AVX2 is not available
+                }
+            };
+
+            #[cfg(not(target_arch = "x86_64"))]
+            let simd_result = non_simd_result;
+
+            let diff = (simd_result - non_simd_result).abs();
+            const EPSILON: f32 = 1e-6;
+
+            assert!(
+                diff < EPSILON,
+                "Results don't match for size {}: SIMD = {}, Non-SIMD = {}",
+                size,
+                simd_result,
+                non_simd_result
+            );
+        }
+    }
+
+    #[test]
+    fn test_dot_product_quaternary_performance() {
+        let sizes = vec![128, 256, 512, 1024, 2048, 4096];
+        let num_tests = 100;
+
+        for size in sizes {
+            let mut simd_time = 0.0;
+            let mut non_simd_time = 0.0;
+
+            for _ in 0..num_tests {
                 let (x_vec, y_vec) = generate_random_vectors(size);
 
-                let non_simd_result = dot_product_quaternary(&x_vec, &y_vec, 2);
+                // Non-SIMD version
+                let start = Instant::now();
+                let _ = dot_product_quaternary(&x_vec, &y_vec, 2);
+                non_simd_time += start.elapsed().as_secs_f64();
 
+                // SIMD version
                 #[cfg(target_arch = "x86_64")]
-                let simd_result = unsafe {
+                unsafe {
                     if is_x86_feature_detected!("avx2") {
-                        dot_product_quaternary_avx2(&x_vec, &y_vec, 2)
+                        let start = Instant::now();
+                        let _ = dot_product_quaternary_avx2(&x_vec, &y_vec, 2);
+                        simd_time += start.elapsed().as_secs_f64();
                     } else {
-                        non_simd_result // Fallback if AVX2 is not available
+                        simd_time = non_simd_time; // Fallback if AVX2 is not available
                     }
-                };
+                }
 
                 #[cfg(not(target_arch = "x86_64"))]
-                let simd_result = non_simd_result;
-
-                let diff = (simd_result - non_simd_result).abs();
-                const EPSILON: f32 = 1e-6;
-
-                assert!(
-                    diff < EPSILON,
-                    "Results don't match for size {}: SIMD = {}, Non-SIMD = {}",
-                    size,
-                    simd_result,
-                    non_simd_result
-                );
-            }
-        }
-
-        #[test]
-        fn test_dot_product_quaternary_performance() {
-            let sizes = vec![128, 256, 512, 1024, 2048, 4096];
-            let num_tests = 100;
-
-            for size in sizes {
-                let mut simd_time = 0.0;
-                let mut non_simd_time = 0.0;
-
-                for _ in 0..num_tests {
-                    let (x_vec, y_vec) = generate_random_vectors(size);
-
-                    // Non-SIMD version
-                    let start = Instant::now();
-                    let _ = dot_product_quaternary(&x_vec, &y_vec, 2);
-                    non_simd_time += start.elapsed().as_secs_f64();
-
-                    // SIMD version
-                    #[cfg(target_arch = "x86_64")]
-                    unsafe {
-                        if is_x86_feature_detected!("avx2") {
-                            let start = Instant::now();
-                            let _ = dot_product_quaternary_avx2(&x_vec, &y_vec, 2);
-                            simd_time += start.elapsed().as_secs_f64();
-                        } else {
-                            simd_time = non_simd_time; // Fallback if AVX2 is not available
-                        }
-                    }
-
-                    #[cfg(not(target_arch = "x86_64"))]
-                    {
-                        simd_time = non_simd_time;
-                    }
-                }
-
-                println!("Size: {}", size);
-                println!(
-                    "Average non-SIMD time: {} seconds",
-                    non_simd_time / num_tests as f64
-                );
-                println!(
-                    "Average SIMD time: {} seconds",
-                    simd_time / num_tests as f64
-                );
-                println!("Speedup: {:.2}x", non_simd_time / simd_time);
-                println!();
-            }
-        }
-
-        // Scalar equivalent function
-        fn count_ones_scalar(input: u32) -> u32 {
-            input.count_ones()
-        }
-
-        // Helper function to convert __m256i to Vec<u32>
-        unsafe fn m256i_to_vec(v: __m256i) -> Vec<u32> {
-            let mut result = vec![0u32; 8];
-            _mm256_storeu_si256(result.as_mut_ptr() as *mut __m256i, v);
-            result
-        }
-
-        // Helper function to create __m256i from Vec<u32>
-        unsafe fn vec_to_m256i(v: &[u32]) -> __m256i {
-            assert!(v.len() >= 8);
-            _mm256_loadu_si256(v.as_ptr() as *const __m256i)
-        }
-
-        #[test]
-        fn test_count_ones_simple_cases() {
-            unsafe {
-                let test_cases = vec![
-                    vec![0u32; 8],
-                    vec![1u32; 8],
-                    vec![0xFFFFFFFF; 8],
-                    vec![0x55555555; 8],
-                    vec![0xAAAAAAAA; 8],
-                ];
-
-                for case in test_cases {
-                    let input = vec_to_m256i(&case);
-                    let avx2_result = count_ones_simd_avx2_256i(input);
-                    let scalar_result: u64 =
-                        case.iter().map(|&x| count_ones_scalar(x) as u64).sum();
-                    assert_eq!(avx2_result, scalar_result, "Failed for case: {:?}", case);
+                {
+                    simd_time = non_simd_time;
                 }
             }
+
+            println!("Size: {}", size);
+            println!(
+                "Average non-SIMD time: {} seconds",
+                non_simd_time / num_tests as f64
+            );
+            println!(
+                "Average SIMD time: {} seconds",
+                simd_time / num_tests as f64
+            );
+            println!("Speedup: {:.2}x", non_simd_time / simd_time);
+            println!();
         }
+    }
 
-        #[test]
-        fn test_count_ones_random_cases() {
-            use rand::Rng;
-            let mut rng = rand::thread_rng();
+    // Scalar equivalent function
+    fn count_ones_scalar(input: u32) -> u32 {
+        input.count_ones()
+    }
 
-            unsafe {
-                for _ in 0..100 {
-                    let case: Vec<u32> = (0..8).map(|_| rng.gen()).collect();
-                    let input = vec_to_m256i(&case);
-                    let avx2_result = count_ones_simd_avx2_256i(input);
-                    let scalar_result: u64 =
-                        case.iter().map(|&x| count_ones_scalar(x) as u64).sum();
-                    assert_eq!(avx2_result, scalar_result, "Failed for case: {:?}", case);
-                }
-            }
-        }
+    // Helper function to convert __m256i to Vec<u32>
+    unsafe fn m256i_to_vec(v: __m256i) -> Vec<u32> {
+        let mut result = vec![0u32; 8];
+        _mm256_storeu_si256(result.as_mut_ptr() as *mut __m256i, v);
+        result
+    }
 
-        #[test]
-        fn test_count_ones_edge_cases() {
-            unsafe {
-                let edge_cases = vec![
-                    vec![
-                        0u32, 0xFFFFFFFF, 0, 0xFFFFFFFF, 0, 0xFFFFFFFF, 0, 0xFFFFFFFF,
-                    ],
-                    vec![
-                        0x12345678, 0x9ABCDEF0, 0xFEDCBA98, 0x76543210, 0, 0, 0xFFFFFFFF,
-                        0xFFFFFFFF,
-                    ],
-                    vec![
-                        0x01010101, 0x10101010, 0x11111111, 0xEEEEEEEE, 0xFFFF0000, 0x0000FFFF,
-                        0xF0F0F0F0, 0x0F0F0F0F,
-                    ],
-                ];
+    // Helper function to create __m256i from Vec<u32>
+    unsafe fn vec_to_m256i(v: &[u32]) -> __m256i {
+        assert!(v.len() >= 8);
+        _mm256_loadu_si256(v.as_ptr() as *const __m256i)
+    }
 
-                for case in edge_cases {
-                    let input = vec_to_m256i(&case);
-                    let avx2_result = count_ones_simd_avx2_256i(input);
-                    let scalar_result: u64 =
-                        case.iter().map(|&x| count_ones_scalar(x) as u64).sum();
-                    assert_eq!(avx2_result, scalar_result, "Failed for case: {:?}", case);
-                }
-            }
-        }
+    #[test]
+    fn test_count_ones_simple_cases() {
+        unsafe {
+            let test_cases = vec![
+                vec![0u32; 8],
+                vec![1u32; 8],
+                vec![0xFFFFFFFF; 8],
+                vec![0x55555555; 8],
+                vec![0xAAAAAAAA; 8],
+            ];
 
-        #[test]
-        fn test_count_ones_incremental() {
-            unsafe {
-                let mut case = vec![0u32; 8];
-                for i in 0..256 {
-                    case[i / 32] |= 1 << (i % 32);
-                    let input = vec_to_m256i(&case);
-                    let avx2_result = count_ones_simd_avx2_256i(input);
-                    let scalar_result: u64 =
-                        case.iter().map(|&x| count_ones_scalar(x) as u64).sum();
-                    assert_eq!(avx2_result, scalar_result, "Failed for case: {:?}", case);
-                }
+            for case in test_cases {
+                let input = vec_to_m256i(&case);
+                let avx2_result = count_ones_simd_avx2_256i(input);
+                let scalar_result: u64 = case.iter().map(|&x| count_ones_scalar(x) as u64).sum();
+                assert_eq!(avx2_result, scalar_result, "Failed for case: {:?}", case);
             }
         }
     }
 
-    #[cfg(target_arch = "x86_64")]
-    fn generate_test_vectors(size: usize, pattern: u32) -> (Vec<Vec<u32>>, Vec<Vec<u32>>) {
-        let lsb = vec![pattern; size];
-        let msb = vec![pattern; size];
-        (vec![lsb.clone(), msb.clone()], vec![lsb, msb])
-    }
+    #[test]
+    fn test_count_ones_random_cases() {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
 
-    #[cfg(target_arch = "x86_64")]
-    fn count_combinations_scalar(a_vec: &[Vec<u32>], b_vec: &[Vec<u32>]) -> [u64; 16] {
-        let mut counts = [0u64; 16];
-
-        // Ensure vectors are not empty and have the same length
-        assert!(a_vec.len() == 2 && b_vec.len() == 2);
-        let len = a_vec[0].len();
-        assert!(len == a_vec[1].len() && len == b_vec[0].len() && len == b_vec[1].len());
-
-        // Process each element in the vectors
-        for i in 0..len {
-            // Process each bit position in the u32 values
-            for bit_pos in 0..32 {
-                // Process each bit from 0 to 31
-                let bit_mask = 1 << bit_pos;
-
-                // Extract bits for this position
-                let a_lsb = (a_vec[0][i] & bit_mask) >> bit_pos;
-                let a_msb = ((a_vec[1][i] & bit_mask) >> bit_pos) << 1;
-                let b_lsb = ((b_vec[0][i] & bit_mask) >> bit_pos) << 2;
-                let b_msb = ((b_vec[1][i] & bit_mask) >> bit_pos) << 3;
-
-                // Compute the 4-bit index
-                let index = (a_msb | a_lsb | b_lsb | b_msb) as usize;
-
-                // Ensure the index is within bounds
-                if index < 16 {
-                    counts[index] += 1;
-                } else {
-                    eprintln!("Index out of bounds: {}", index);
-                }
+        unsafe {
+            for _ in 0..100 {
+                let case: Vec<u32> = (0..8).map(|_| rng.gen()).collect();
+                let input = vec_to_m256i(&case);
+                let avx2_result = count_ones_simd_avx2_256i(input);
+                let scalar_result: u64 = case.iter().map(|&x| count_ones_scalar(x) as u64).sum();
+                assert_eq!(avx2_result, scalar_result, "Failed for case: {:?}", case);
             }
         }
-
-        counts
     }
+
+    #[test]
+    fn test_count_ones_edge_cases() {
+        unsafe {
+            let edge_cases = vec![
+                vec![
+                    0u32, 0xFFFFFFFF, 0, 0xFFFFFFFF, 0, 0xFFFFFFFF, 0, 0xFFFFFFFF,
+                ],
+                vec![
+                    0x12345678, 0x9ABCDEF0, 0xFEDCBA98, 0x76543210, 0, 0, 0xFFFFFFFF, 0xFFFFFFFF,
+                ],
+                vec![
+                    0x01010101, 0x10101010, 0x11111111, 0xEEEEEEEE, 0xFFFF0000, 0x0000FFFF,
+                    0xF0F0F0F0, 0x0F0F0F0F,
+                ],
+            ];
+
+            for case in edge_cases {
+                let input = vec_to_m256i(&case);
+                let avx2_result = count_ones_simd_avx2_256i(input);
+                let scalar_result: u64 = case.iter().map(|&x| count_ones_scalar(x) as u64).sum();
+                assert_eq!(avx2_result, scalar_result, "Failed for case: {:?}", case);
+            }
+        }
+    }
+
+    #[test]
+    fn test_count_ones_incremental() {
+        unsafe {
+            let mut case = vec![0u32; 8];
+            for i in 0..256 {
+                case[i / 32] |= 1 << (i % 32);
+                let input = vec_to_m256i(&case);
+                let avx2_result = count_ones_simd_avx2_256i(input);
+                let scalar_result: u64 = case.iter().map(|&x| count_ones_scalar(x) as u64).sum();
+                assert_eq!(avx2_result, scalar_result, "Failed for case: {:?}", case);
+            }
+        }
+    }
+
+    #[test]
+    fn test_combinations() {
+        let sizes = [100, 1000, 10000];
+
+        for &size in &sizes {
+            let data: Vec<u8> = (0..size).map(|i| i as u8).collect();
+
+            // Warm-up
+            let _ = count_combos_wrapper(&data);
+            let _ = scalar_combinations(&data);
+
+            // AVX2 version
+            let start = Instant::now();
+            let avx2_result = count_combos_wrapper(&data);
+            let avx2_duration = start.elapsed();
+
+            // Scalar version
+            let start = Instant::now();
+            let scalar_result = scalar_combinations(&data);
+            let scalar_duration = start.elapsed();
+
+            println!("Size: {}", size);
+            println!("AVX2 result: {}, time: {:?}", avx2_result, avx2_duration);
+            println!(
+                "Scalar result: {}, time: {:?}",
+                scalar_result, scalar_duration
+            );
+            println!("Results match: {}", avx2_result == scalar_result);
+            println!(
+                "Speedup: {:.2}x",
+                scalar_duration.as_secs_f64() / avx2_duration.as_secs_f64()
+            );
+            println!();
+        }
+    }
+}
+#[cfg(target_arch = "x86_64")]
+fn scalar_combinations(data: &[u8]) -> u64 {
+    data.iter().map(|&byte| byte.count_ones() as u64).sum()
+}
+#[cfg(target_arch = "x86_64")]
+fn generate_test_vectors(size: usize, pattern: u32) -> (Vec<Vec<u32>>, Vec<Vec<u32>>) {
+    let lsb = vec![pattern; size];
+    let msb = vec![pattern; size];
+    (vec![lsb.clone(), msb.clone()], vec![lsb, msb])
+}
+
+#[cfg(target_arch = "x86_64")]
+fn count_combinations_scalar(a_vec: &[Vec<u8>], b_vec: &[Vec<u8>]) -> [u64; 16] {
+    let mut counts = [0u64; 16];
+
+    // Ensure vectors are not empty and have the same length
+    assert!(a_vec.len() == 2 && b_vec.len() == 2);
+    let len = a_vec[0].len();
+    assert!(len == a_vec[1].len() && len == b_vec[0].len() && len == b_vec[1].len());
+
+    // Process each element in the vectors
+    for i in 0..len {
+        // Process each bit position in the u8 values
+        for bit_pos in 0..8 {
+            // Process each bit from 0 to 7
+            let bit_mask = 1 << bit_pos;
+
+            // Extract bits for this position
+            let a_lsb = (a_vec[0][i] & bit_mask) >> bit_pos;
+            let a_msb = ((a_vec[1][i] & bit_mask) >> bit_pos) << 1;
+            let b_lsb = ((b_vec[0][i] & bit_mask) >> bit_pos) << 2;
+            let b_msb = ((b_vec[1][i] & bit_mask) >> bit_pos) << 3;
+
+            // Compute the 4-bit index
+            let index = (a_msb | a_lsb | b_lsb | b_msb) as usize;
+
+            // Ensure the index is within bounds
+            if index < 16 {
+                counts[index] += 1;
+            } else {
+                eprintln!("Index out of bounds: {}", index);
+            }
+        }
+    }
+
+    counts
 }

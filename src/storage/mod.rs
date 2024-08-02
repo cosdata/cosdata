@@ -9,7 +9,7 @@ pub enum Storage {
     },
     SubByte {
         mag: u32,
-        quant_vec: Vec<Vec<u32>>,
+        quant_vec: Vec<Vec<u8>>,
         resolution: u8,
     },
     HalfPrecisionFP {
