@@ -184,7 +184,7 @@ unsafe fn count_ones_simd_avx2_256i(input: __m256i) -> u64 {
 }
 
 #[target_feature(enable = "avx2")]
-unsafe fn count_combinations_simd_avx2(data: *const u8, n: usize, lookup: &[u8; 32]) -> u64 {
+unsafe fn quaternary_weighted_simd_avx2(data: *const u8, n: usize, lookup: &[u8; 32]) -> u64 {
     let mut i = 0;
     let lookup_vec = _mm256_loadu_si256(lookup.as_ptr() as *const __m256i);
     let low_mask = _mm256_set1_epi8(0x0f);
@@ -225,14 +225,103 @@ unsafe fn count_combinations_simd_avx2(data: *const u8, n: usize, lookup: &[u8; 
 }
 
 // Outer function to create lookup table and call the SIMD function
-pub fn count_combos_wrapper(data: &[u8]) -> u64 {
+pub fn quaternary_weighted_wrapper(data: &[u8]) -> u64 {
     let lookup: [u8; 32] = [
         0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4, // repeated
         0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4,
     ];
-    unsafe { count_combinations_simd_avx2(data.as_ptr(), data.len(), &lookup) }
+    unsafe { quaternary_weighted_simd_avx2(data.as_ptr(), data.len(), &lookup) }
 }
 
+// pub fn senary_weighted_wrapper_old(data: &[u8]) -> u64 {
+//     // Initialize lookup tables
+//     let mut lookup0 = [0u8; 32];
+//     let mut lookup1 = [0u8; 32];
+
+//     for i in 0..64 {
+//         let popcount = (i as u8 & 0x3F).count_ones() as u8; // Only count lower 6 bits
+//         if i < 32 {
+//             lookup0[i] = popcount;
+//         } else {
+//             lookup1[i - 32] = popcount;
+//         }
+//     }
+
+//     unsafe { senary_weighted_simd_avx2(data.as_ptr(), data.len(), &lookup0, &lookup1) }
+// }
+pub fn senary_weighted_wrapper(data: &[u8]) -> u64 {
+    // Initialize lookup table
+    let mut lookup = [0u8; 64];
+    for i in 0..64 {
+        lookup[i] = i.count_ones() as u8;
+    }
+
+    unsafe { senary_weighted_simd_avx2(data.as_ptr(), data.len(), &lookup) }
+}
+unsafe fn senary_weighted_simd_avx2(data: *const u8, n: usize, lookup: &[u8; 64]) -> u64 {
+    let mut i = 0;
+    // Load 16 bytes and duplicate them in a 256-bit register
+    let lookup_vec0 =
+        _mm256_broadcastsi128_si256(_mm_loadu_si128(lookup.as_ptr() as *const __m128i));
+    let lookup_vec1 =
+        _mm256_broadcastsi128_si256(_mm_loadu_si128(lookup.as_ptr().add(16) as *const __m128i));
+    let lookup_vec2 =
+        _mm256_broadcastsi128_si256(_mm_loadu_si128(lookup.as_ptr().add(32) as *const __m128i));
+    let lookup_vec3 =
+        _mm256_broadcastsi128_si256(_mm_loadu_si128(lookup.as_ptr().add(48) as *const __m128i));
+
+    let low_mask = _mm256_set1_epi8(0x0f); // 4 bits mask
+    let mut acc = _mm256_setzero_si256();
+    while i + 32 < n {
+        let mut local = _mm256_setzero_si256();
+        for _ in 0..255 / 8 {
+            if i + 32 >= n {
+                break;
+            }
+            let vec = _mm256_loadu_si256(data.add(i) as *const __m256i);
+            let vec_masked = _mm256_and_si256(vec, _mm256_set1_epi8(0x3F)); // Mask to lower 6 bits
+
+            let lo = _mm256_and_si256(vec_masked, low_mask);
+            let hi = _mm256_srli_epi16(vec_masked, 4);
+
+            let result0 = _mm256_shuffle_epi8(lookup_vec0, lo);
+            let result1 = _mm256_shuffle_epi8(lookup_vec1, lo);
+            let result2 = _mm256_shuffle_epi8(lookup_vec2, lo);
+            let result3 = _mm256_shuffle_epi8(lookup_vec3, lo);
+
+            let blend01 = _mm256_blendv_epi8(result0, result1, _mm256_slli_epi16(hi, 7));
+            let blend23 = _mm256_blendv_epi8(result2, result3, _mm256_slli_epi16(hi, 7));
+            let popcnt = _mm256_blendv_epi8(blend01, blend23, _mm256_slli_epi16(hi, 6));
+
+            local = _mm256_add_epi8(local, popcnt);
+            i += 32;
+        }
+        acc = _mm256_add_epi64(acc, _mm256_sad_epu8(local, _mm256_setzero_si256()));
+    }
+
+    let mut result = 0u64;
+    result += _mm256_extract_epi64(acc, 0) as u64;
+    result += _mm256_extract_epi64(acc, 1) as u64;
+    result += _mm256_extract_epi64(acc, 2) as u64;
+    result += _mm256_extract_epi64(acc, 3) as u64;
+
+    // Handle remaining bytes
+    while i < n {
+        let byte = *data.add(i) & 0x3F; // Mask to lower 6 bits
+        result += lookup[byte as usize] as u64;
+        i += 1;
+    }
+
+    result
+}
+
+// Scalar implementation for comparison
+
+fn scalar_u6_count_ones(data: &[u8]) -> u64 {
+    data.iter()
+        .map(|&byte| (byte & 0x3F).count_ones() as u64)
+        .sum()
+}
 #[cfg(target_arch = "x86_64")]
 #[cfg(test)]
 mod tests {
@@ -488,12 +577,12 @@ mod tests {
             let data: Vec<u8> = (0..size).map(|i| i as u8).collect();
 
             // Warm-up
-            let _ = count_combos_wrapper(&data);
+            let _ = quaternary_weighted_wrapper(&data);
             let _ = scalar_combinations(&data);
 
             // AVX2 version
             let start = Instant::now();
-            let avx2_result = count_combos_wrapper(&data);
+            let avx2_result = quaternary_weighted_wrapper(&data);
             let avx2_duration = start.elapsed();
 
             // Scalar version
@@ -514,6 +603,44 @@ mod tests {
             );
             println!();
         }
+    }
+
+    #[test]
+    fn test_senary_weighted_popcount() {
+        let mut rng = rand::thread_rng();
+
+        // Test with various sizes
+        for &size in &[32, 33, 64, 1024, 10000, 100000] {
+            // Generate random data
+            let data: Vec<u8> = (0..size).map(|_| rng.gen()).collect();
+
+            // Run both implementations
+            let senary_result = senary_weighted_wrapper(&data);
+            let scalar_result = scalar_u6_count_ones(&data);
+
+            // Assert that results match
+            assert_eq!(senary_result, scalar_result, "Mismatch for size {}", size);
+            println!("Test passed for size {}", size);
+        }
+
+        // Test with edge cases
+        let edge_cases = vec![
+            vec![0u8; 32],                     // All zeros
+            vec![255u8; 64],                   // All ones
+            vec![0, 255, 0, 255, 0, 255],      // Alternating zeros and ones
+            vec![1, 2, 4, 8, 16, 32, 64, 128], // Powers of 2
+            vec![85, 170, 85, 170],            // Alternating bit patterns
+        ];
+
+        for (i, case) in edge_cases.iter().enumerate() {
+            let senary_result = senary_weighted_wrapper(case);
+            let scalar_result = scalar_u6_count_ones(case);
+
+            assert_eq!(senary_result, scalar_result, "Mismatch for edge case {}", i);
+            println!("Edge case {} passed", i);
+        }
+
+        println!("All tests passed!");
     }
 }
 #[cfg(target_arch = "x86_64")]
