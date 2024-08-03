@@ -10,12 +10,8 @@ pub mod quantization;
 pub mod storage;
 
 use crate::models::common::*;
-use crate::models::lookup_table::*;
 
 fn main() {
-    // Initialize the lookup table once
-    initialize_u16_lookup_table();
-
     let _ = run_actix_server();
     load_cache();
     ()
