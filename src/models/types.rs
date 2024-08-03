@@ -401,7 +401,7 @@ impl VectorStore {
         Ok(())
     }
 }
-#[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize, PartialEq)]
 pub struct VectorEmbedding {
     pub raw_vec: Arc<Storage>,
     pub hash_vec: VectorId,

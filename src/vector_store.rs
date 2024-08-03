@@ -204,8 +204,8 @@ fn load_neighbor_from_db(
     ))
 }
 
-pub fn save_embedding_to_file(
-    file: &mut File,
+pub fn write_embedding<W: Write + Seek>(
+    writter: &mut W,
     emb: &VectorEmbedding,
 ) -> Result<u32, WaCustomError> {
     // TODO: select a better value for `N` (number of bytes to pre-allocate)
@@ -214,40 +214,44 @@ pub fn save_embedding_to_file(
 
     let len = serialized.len() as u32;
 
-    let start = file
+    let start = writter
         .stream_position()
         .map_err(|e| WaCustomError::FsError(e.to_string()))? as u32;
 
-    file.write_u32::<LittleEndian>(len)
+    writter
+        .write_u32::<LittleEndian>(len)
         .map_err(|e| WaCustomError::FsError(e.to_string()))?;
 
-    file.write_all(&serialized)
+    writter
+        .write_all(&serialized)
         .map_err(|e| WaCustomError::FsError(e.to_string()))?;
 
     Ok(start)
 }
 
-fn load_embedding_from_file(
-    file: &mut File,
+fn read_embedding<R: Read + Seek>(
+    reader: &mut R,
     offset: u32,
 ) -> Result<(VectorEmbedding, u32), WaCustomError> {
-    file.seek(SeekFrom::Start(offset as u64))
+    reader
+        .seek(SeekFrom::Start(offset as u64))
         .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?;
 
-    let len = file
+    let len = reader
         .read_u32::<LittleEndian>()
         .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?;
 
     let mut buf = vec![0; len as usize];
 
-    file.read_exact(&mut buf)
+    reader
+        .read_exact(&mut buf)
         .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?;
 
     let emb = unsafe { rkyv::from_bytes_unchecked(&buf) }.map_err(|e| {
         WaCustomError::DeserializationError(format!("Failed to deserialize VectorEmbedding: {}", e))
     })?;
 
-    let next = file
+    let next = reader
         .stream_position()
         .map_err(|e| WaCustomError::DeserializationError(e.to_string()))? as u32;
 
@@ -272,7 +276,7 @@ pub fn insert_embedding(
         .open("vec_raw.0")
         .map_err(|e| WaCustomError::FsError(e.to_string()))?;
 
-    let offset = save_embedding_to_file(&mut file, emb)?.to_le_bytes();
+    let offset = write_embedding(&mut file, emb)?.to_le_bytes();
 
     txn.put(
         *embedding_db,
@@ -333,7 +337,7 @@ pub fn index_embeddings(vec_store: Arc<VectorStore>) -> Result<(), WaCustomError
     let mut new_indexed = 0;
 
     while i < len {
-        let (emb, next) = load_embedding_from_file(&mut file, i)?;
+        let (emb, next) = read_embedding(&mut file, i)?;
         i = next;
         let lp = &vec_store.levels_prob;
         let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
@@ -785,4 +789,70 @@ fn traverse_find_nearest(
     });
 
     Ok(nn.into_iter().take(5).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{io::Cursor, sync::Arc};
+
+    use rand::{distributions::Uniform, rngs::ThreadRng, thread_rng, Rng};
+
+    use crate::{
+        models::types::{VectorEmbedding, VectorId},
+        quantization::{scalar::ScalarQuantization, Quantization, StorageType},
+    };
+
+    use super::{read_embedding, write_embedding};
+
+    fn get_random_embedding(rng: &mut ThreadRng) -> VectorEmbedding {
+        let range = Uniform::new(-1.0, 1.0);
+
+        let vector: Vec<f32> = (0..rng.gen_range(100..200))
+            .into_iter()
+            .map(|_| rng.sample(&range))
+            .collect();
+        let raw_vec = Arc::new(ScalarQuantization.quantize(&vector, StorageType::UnsignedByte));
+
+        VectorEmbedding {
+            raw_vec,
+            hash_vec: VectorId::Int(rng.gen()),
+        }
+    }
+
+    #[test]
+    fn test_embedding_serialization() {
+        let mut rng = thread_rng();
+        let embedding = get_random_embedding(&mut rng);
+
+        let mut writer = Cursor::new(Vec::new());
+        let offset = write_embedding(&mut writer, &embedding).unwrap();
+
+        let mut reader = Cursor::new(writer.into_inner());
+        let (deserialized, _) = read_embedding(&mut reader, offset).unwrap();
+
+        assert_eq!(embedding, deserialized);
+    }
+
+    #[test]
+    fn test_embeddings_serialization() {
+        let mut rng = thread_rng();
+        let embeddings: Vec<VectorEmbedding> =
+            (0..20).map(|_| get_random_embedding(&mut rng)).collect();
+
+        let mut writer = Cursor::new(Vec::new());
+
+        for embedding in &embeddings {
+            write_embedding(&mut writer, embedding).unwrap();
+        }
+
+        let mut offset = 0;
+        let mut reader = Cursor::new(writer.into_inner());
+
+        for embedding in embeddings {
+            let (deserialized, next) = read_embedding(&mut reader, offset).unwrap();
+            offset = next;
+
+            assert_eq!(embedding, deserialized);
+        }
+    }
 }
