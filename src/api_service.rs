@@ -10,9 +10,11 @@ use crate::quantization::Quantization;
 use crate::quantization::StorageType;
 use crate::vector_store::*;
 use lmdb::DatabaseFlags;
+use lmdb::Transaction;
 use rand::Rng;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
+use std::array::TryFromSliceError;
 use std::cell::RefCell;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -184,6 +186,28 @@ pub async fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<(VectorIdValue, 
 
         insert_embedding(vec_store.clone(), &vec_emb).expect("Failed to inert embedding to LMDB");
     });
+
+    let env = vec_store.lmdb.env.clone();
+    let metadata_db = vec_store.lmdb.metadata_db.clone();
+
+    let txn = env.begin_rw_txn().expect("Failed to begin transaction");
+
+    let count_unindexed = txn
+        .get(*metadata_db, &"count_unindexed")
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))
+        .and_then(|bytes| {
+            let bytes = bytes.try_into().map_err(|e: TryFromSliceError| {
+                WaCustomError::DeserializationError(e.to_string())
+            })?;
+            Ok(u32::from_le_bytes(bytes))
+        })
+        .expect("Failed to retrieve `count_unindexed`");
+
+    txn.abort();
+
+    if count_unindexed >= 100 {
+        index_embeddings(vec_store.clone()).expect("Failed to index embeddings");
+    }
 
     // Update version
     let ver = vec_store

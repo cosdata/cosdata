@@ -22,7 +22,6 @@ use std::io::SeekFrom;
 use std::io::Write;
 use std::sync::Arc;
 use std::sync::RwLock;
-use tokio::task::JoinSet;
 
 pub fn ann_search(
     vec_store: Arc<VectorStore>,
@@ -267,10 +266,22 @@ pub fn insert_embedding(
 ) -> Result<(), WaCustomError> {
     let env = vec_store.lmdb.env.clone();
     let embedding_db = vec_store.lmdb.embeddings_db.clone();
+    let metadata_db = vec_store.lmdb.metadata_db.clone();
 
     let mut txn = env
         .begin_rw_txn()
         .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
+
+    let count_unindexed = match txn.get(*metadata_db, &"count_unindexed") {
+        Ok(bytes) => {
+            let bytes = bytes.try_into().map_err(|e: TryFromSliceError| {
+                WaCustomError::DeserializationError(e.to_string())
+            })?;
+            u32::from_le_bytes(bytes)
+        }
+        Err(lmdb::Error::NotFound) => 0,
+        Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
+    };
 
     let mut file = OpenOptions::new()
         .write(true)
@@ -288,6 +299,16 @@ pub fn insert_embedding(
         WriteFlags::empty(),
     )
     .map_err(|e| WaCustomError::DatabaseError(format!("Failed to put data: {}", e)))?;
+
+    txn.put(
+        *metadata_db,
+        &"count_unindexed",
+        &(count_unindexed + 1).to_le_bytes(),
+        WriteFlags::empty(),
+    )
+    .map_err(|e| {
+        WaCustomError::DatabaseError(format!("Failed to update `count_unindexed`: {}", e))
+    })?;
 
     txn.commit().map_err(|e| {
         WaCustomError::DatabaseError(format!("Failed to commit transaction: {}", e))
@@ -339,7 +360,7 @@ pub fn index_embeddings(vec_store: Arc<VectorStore>) -> Result<(), WaCustomError
     let mut i = next_file_offset;
     let mut embeddings = Vec::new();
 
-    // `file` is not thread safe, so we have to collect all the embeddings on the current thread
+    // `file` is not thread safe, so we have to collect all the embeddings in the current thread
     while i < len {
         let (embedding, next) = read_embedding(&mut file, i)?;
         embeddings.push(embedding);
@@ -372,6 +393,16 @@ pub fn index_embeddings(vec_store: Arc<VectorStore>) -> Result<(), WaCustomError
         )
         .map_err(|e| {
             WaCustomError::DatabaseError(format!("Failed to update `count_indexed`: {}", e))
+        })?;
+
+        txn.put(
+            *metadata_db,
+            &"count_unindexed",
+            &0u32.to_le_bytes(),
+            WriteFlags::empty(),
+        )
+        .map_err(|e| {
+            WaCustomError::DatabaseError(format!("Failed to update `count_unindexed`: {}", e))
         })?;
 
         txn.put(
