@@ -1,0 +1,6 @@
+# https://github.com/crate-ci/typos
+# cargo install typos-cli
+# typos
+
+[default.extend-words]
+nin = "nin"

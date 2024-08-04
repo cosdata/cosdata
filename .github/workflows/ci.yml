@@ -1,4 +1,4 @@
-name: Check
+name: CI
 
 on:
   workflow_dispatch:
@@ -14,7 +14,7 @@ on:
     paths-ignore:
       - "**/*.md"
       - "**/*.yml"
-      - "!.github/workflows/check.yml"
+      - "!.github/workflows/ci.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
@@ -25,7 +25,7 @@ env:
   # RUSTFLAGS: "-D warnings"
 
 jobs:
-  test:
+  check:
     name: Check
     runs-on: ubuntu-latest
     steps:
@@ -35,3 +35,12 @@ jobs:
           save-cache: ${{ github.ref_name == 'main' }}
           cache-key: warm
       - run: cargo check
+      
+  typos:
+    name: Spell Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: taiki-e/checkout-action@v1
+      - uses: crate-ci/typos@v1.23.5
+        with:
+          files: .

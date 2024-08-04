@@ -22,7 +22,7 @@ pub(crate) async fn create(database_name: web::Path<String>) -> HttpResponse {
     let new_ver = ver.version + 1;
     let mut hasher = VersionHasher::new();
     let hash = hasher.generate_hash("main", new_ver, None, None);
-    let transation_id = hash.hash.clone();
+    let transaction_id = hash.hash.clone();
 
     {
         let mut write_guard = vec_store.current_open_transaction.write().unwrap();
@@ -30,6 +30,6 @@ pub(crate) async fn create(database_name: web::Path<String>) -> HttpResponse {
     }
 
     HttpResponse::Ok().json(json!({
-        "transaction_id": transation_id
+        "transaction_id": transaction_id
     }))
 }

@@ -50,7 +50,7 @@ openssl pkcs8 -topk8 -inform PEM -outform PEM -in private_key.pem -out private_k
 
 #### Setup Certificates
 
-Set the `SSL_CERT_DIR` enviroment variable to the folder where you're gonna store the certificates:
+Set the `SSL_CERT_DIR` environment variable to the folder where you're gonna store the certificates:
 
 ```bash
 export SSL_CERT_DIR="/etc/ssl"

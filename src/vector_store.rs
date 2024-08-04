@@ -406,13 +406,13 @@ fn insert_node_create_edges(
     nbs: Vec<(LazyItem<MergedNode>, f32)>,
     cur_level: i8,
 ) -> Result<(), WaCustomError> {
-    let nd_p = NodeProp {
+    let node_prop = NodeProp {
         id: hs.clone(),
         value: fvec.clone(),
         location: None,
     };
     let nn = Arc::new(RwLock::new(MergedNode::new(0, cur_level as u8))); // Assuming MergedNode::new exists
-    nn.read().unwrap().set_prop_ready(Arc::new(nd_p));
+    nn.read().unwrap().set_prop_ready(Arc::new(node_prop));
 
     nn.read().unwrap().add_ready_neighbors(nbs.clone());
 
