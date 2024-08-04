@@ -205,7 +205,7 @@ fn load_neighbor_from_db(
 }
 
 pub fn write_embedding<W: Write + Seek>(
-    writter: &mut W,
+    writer: &mut W,
     emb: &VectorEmbedding,
 ) -> Result<u32, WaCustomError> {
     // TODO: select a better value for `N` (number of bytes to pre-allocate)
@@ -214,15 +214,15 @@ pub fn write_embedding<W: Write + Seek>(
 
     let len = serialized.len() as u32;
 
-    let start = writter
+    let start = writer
         .stream_position()
         .map_err(|e| WaCustomError::FsError(e.to_string()))? as u32;
 
-    writter
+    writer
         .write_u32::<LittleEndian>(len)
         .map_err(|e| WaCustomError::FsError(e.to_string()))?;
 
-    writter
+    writer
         .write_all(&serialized)
         .map_err(|e| WaCustomError::FsError(e.to_string()))?;
 
