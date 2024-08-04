@@ -9,6 +9,8 @@ use crate::storage::Storage;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use lmdb::Transaction;
 use lmdb::WriteFlags;
+use rayon::iter::IntoParallelIterator;
+use rayon::iter::ParallelIterator;
 use smallvec::SmallVec;
 use std::array::TryFromSliceError;
 use std::collections::HashSet;
@@ -20,6 +22,7 @@ use std::io::SeekFrom;
 use std::io::Write;
 use std::sync::Arc;
 use std::sync::RwLock;
+use tokio::task::JoinSet;
 
 pub fn ann_search(
     vec_store: Arc<VectorStore>,
@@ -334,63 +337,37 @@ pub fn index_embeddings(vec_store: Arc<VectorStore>) -> Result<(), WaCustomError
     let len = metadata.len() as u32;
 
     let mut i = next_file_offset;
-    let mut new_indexed = 0;
+    let mut embeddings = Vec::new();
 
+    // `file` is not thread safe, so we have to collect all the embeddings on the current thread
     while i < len {
-        let (emb, next) = read_embedding(&mut file, i)?;
+        let (embedding, next) = read_embedding(&mut file, i)?;
+        embeddings.push(embedding);
         i = next;
-        let lp = &vec_store.levels_prob;
-        let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
-
-        let result = index_embedding(
-            vec_store.clone(),
-            emb,
-            vec_store.root_vec.item.read().unwrap().clone(),
-            vec_store.max_cache_level.try_into().unwrap(),
-            iv.try_into().unwrap(),
-        );
-
-        if let Err(err) = result {
-            if new_indexed != 0 {
-                txn.put(
-                    *metadata_db,
-                    &"count_indexed",
-                    &(new_indexed + count_indexed).to_le_bytes(),
-                    WriteFlags::empty(),
-                )
-                .map_err(|e| {
-                    WaCustomError::DatabaseError(format!("Failed to update `count_indexed`: {}", e))
-                })?;
-
-                txn.put(
-                    *metadata_db,
-                    &"next_file_offset",
-                    &i.to_le_bytes(),
-                    WriteFlags::empty(),
-                )
-                .map_err(|e| {
-                    WaCustomError::DatabaseError(format!(
-                        "Failed to update `next_file_offset`: {}",
-                        e
-                    ))
-                })?;
-
-                txn.commit().map_err(|e| {
-                    WaCustomError::DatabaseError(format!("Failed to commit transaction: {}", e))
-                })?;
-            }
-
-            return Err(err);
-        }
-
-        new_indexed += 1;
     }
 
-    if new_indexed != 0 {
+    // TODO: handle the errors
+    let results: Vec<Result<(), WaCustomError>> = embeddings
+        .into_par_iter()
+        .map(|embedding| {
+            let lp = &vec_store.levels_prob;
+            let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
+
+            index_embedding(
+                vec_store.clone(),
+                embedding,
+                vec_store.root_vec.item.read().unwrap().clone(),
+                vec_store.max_cache_level.try_into().unwrap(),
+                iv.try_into().unwrap(),
+            )
+        })
+        .collect();
+
+    if !results.is_empty() {
         txn.put(
             *metadata_db,
             &"count_indexed",
-            &(new_indexed + count_indexed).to_le_bytes(),
+            &(count_indexed + results.len() as u32).to_le_bytes(),
             WriteFlags::empty(),
         )
         .map_err(|e| {
