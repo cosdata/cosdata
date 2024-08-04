@@ -322,6 +322,65 @@ fn scalar_u6_count_ones(data: &[u8]) -> u64 {
         .map(|&byte| (byte & 0x3F).count_ones() as u64)
         .sum()
 }
+
+fn half_adder(a: u32, b: u32) -> (u32, u32) {
+    let sum = (a ^ b).count_ones();
+    let carry = (a & b).count_ones();
+    (sum, carry)
+}
+
+fn full_adder(a: u32, b: u32, carry_in: u32) -> (u32, u32) {
+    let (sum_int, carry_out_1) = half_adder(a, b);
+    let (sum, carry_out_2) = half_adder(carry_in, sum_int);
+    let carry = (carry_out_1 | carry_out_2).count_ones();
+    (sum, carry)
+}
+
+// senary dot product
+fn dot_product_senary(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], resolution: u8) -> f32 {
+    assert_eq!(resolution, 2);
+
+    let dot_product: u32 = (x_vec[0].iter().zip(x_vec[1].iter().zip(x_vec[2].iter())))
+        .zip(y_vec[0].iter().zip(y_vec[1].iter().zip(y_vec[2].iter())))
+        .map(|((&a0, (&a1, &a2)), (&b0, (&b1, &b2)))| {
+            let p0 = (a0 & b0).count_ones();
+            
+            let (p1, carry_p1) = {
+                let x = (a1 & b0).count_ones();
+                let y = (a0 & b1).count_ones();
+                half_adder(x, y)
+            };
+            
+            let (p2, carry_p2_l1, carry_p2_l2) = {
+                let x = (a2 & b0).count_ones();
+                let y = (a1 & b1).count_ones();
+                let (x, carry_1) = half_adder(x, y);
+                let y = (a0 & b2).count_ones();
+                let (sum, carry_2) = full_adder(x, y, carry_p1);
+                (sum, carry_1, carry_2)
+            }; 
+            
+            let (p3, carry_p3_l1, carry_p3_l2) = {
+                let x = (a2 & b1).count_ones();
+                let y = (a1 & b2).count_ones();
+                let (x, carry_p3_1) = full_adder(x, y, carry_p2_l1);
+                let (sum, carry_p3_2) = half_adder(x, carry_p2_l2);
+                (sum, carry_p3_1, carry_p3_2)
+            };
+            
+            let (p4, p5) = {
+                let x = (a2 & b2).count_ones();
+                full_adder(x, carry_p3_l2, carry_p3_l1)
+            };
+
+            // dbg!(p5,p4,p3,p2,p1,p0);
+            ((p5 << 5) + (p4 << 4) + (p3 << 3) + (p2 << 2) + (p1 << 1) + p0) as u32
+        })
+        .sum();
+
+    dot_product as f32
+}
+
 #[cfg(target_arch = "x86_64")]
 #[cfg(test)]
 mod tests {
@@ -384,11 +443,11 @@ mod tests {
         a.iter().zip(b.iter()).map(|(&x, &y)| x * y).sum()
     }
 
-    fn generate_random_vectors(size: usize) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
+    fn generate_random_vectors(size: usize, bit_count: usize) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
         let mut rng = rand::thread_rng();
         let mut generate_random_u8_vec = || (0..size).map(|_| rng.gen::<u8>()).collect();
-        let x_vec = vec![generate_random_u8_vec(), generate_random_u8_vec()];
-        let y_vec = vec![generate_random_u8_vec(), generate_random_u8_vec()];
+        let x_vec = (0..bit_count).map(|_| generate_random_u8_vec()).collect::<Vec<Vec<u8>>>();
+        let y_vec = (0..bit_count).map(|_| generate_random_u8_vec()).collect::<Vec<Vec<u8>>>();
         (x_vec, y_vec)
     }
 
@@ -396,9 +455,10 @@ mod tests {
     #[test]
     fn test_dot_product_quaternary_correctness() {
         let sizes = vec![128, 256, 512, 1024];
+        let bit_count = 2;
 
         for size in sizes {
-            let (x_vec, y_vec) = generate_random_vectors(size);
+            let (x_vec, y_vec) = generate_random_vectors(size, bit_count);
 
             let non_simd_result = dot_product_quaternary(&x_vec, &y_vec, 2);
 
@@ -431,13 +491,14 @@ mod tests {
     fn test_dot_product_quaternary_performance() {
         let sizes = vec![128, 256, 512, 1024, 2048, 4096];
         let num_tests = 100;
+        let bit_count = 2;
 
         for size in sizes {
             let mut simd_time = 0.0;
             let mut non_simd_time = 0.0;
 
             for _ in 0..num_tests {
-                let (x_vec, y_vec) = generate_random_vectors(size);
+                let (x_vec, y_vec) = generate_random_vectors(size, bit_count);
 
                 // Non-SIMD version
                 let start = Instant::now();
@@ -643,6 +704,7 @@ mod tests {
         println!("All tests passed!");
     }
 }
+
 #[cfg(target_arch = "x86_64")]
 fn scalar_combinations(data: &[u8]) -> u64 {
     data.iter().map(|&byte| byte.count_ones() as u64).sum()
