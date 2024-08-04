@@ -2,5 +2,8 @@
 # cargo install typos-cli
 # typos
 
+[files]
+extend-exclude = ["**/*.html"]
+
 [default.extend-words]
 nin = "nin"
