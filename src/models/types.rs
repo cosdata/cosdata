@@ -286,7 +286,7 @@ pub enum VectorQt {
     },
     SubByte {
         mag: u32,
-        quant_vec: Vec<Vec<u32>>,
+        quant_vec: Vec<Vec<u8>>,
         resolution: u8,
     },
 }
@@ -299,7 +299,7 @@ impl VectorQt {
     }
 
     pub fn sub_byte(vec: &[f32], resolution: u8) -> Self {
-        let quant_vec = quantize_to_u32_bits(vec, resolution);
+        let quant_vec = quantize_to_u8_bits(vec, resolution);
         let mag = 0; //implement a proper magnitude calculation
         Self::SubByte {
             mag,

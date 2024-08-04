@@ -195,9 +195,7 @@ pub fn get_magnitude_plus_quantized_vec111(quant_vec: Vec<Vec<u32>>, _size: usiz
     let mut result = Vec::with_capacity(quant_vec.len());
 
     for vecx in quant_vec {
-        let premag: u32 = vecx
-            .iter()
-            .fold(0, |acc, &val| acc + shift_and_accumulate(val));
+        let premag: u32 = vecx.iter().fold(0, |acc, &val| acc + val.count_ones());
         result.push(premag);
     }
 
@@ -210,7 +208,7 @@ pub fn get_magnitude_plus_quantized_vec(quant_vec: &[Vec<u32>], _size: usize) ->
     for vecx in quant_vec {
         let premag: usize = vecx
             .iter()
-            .fold(0, |acc, &val| acc + shift_and_accumulate(val) as usize);
+            .fold(0, |acc, &val| acc + val.count_ones() as usize);
         result.push(premag);
     }
 
@@ -259,7 +257,7 @@ pub fn cosine_coalesce(x: &VectorQt, y: &VectorQt, length: usize) -> f32 {
             let sum: usize = x_vec[index]
                 .iter()
                 .zip(&y_vec[index])
-                .map(|(&x_item, &y_item)| shift_and_accumulate(x_item ^ y_item) as usize)
+                .map(|(&x_item, &y_item)| (x_item ^ y_item).count_ones() as usize)
                 .sum();
             final_result += sum << index;
         }
@@ -305,14 +303,14 @@ pub fn mag_square_u8(vec: &[u8]) -> u32 {
     vec.iter().map(|&x| x as u32 * x as u32).sum()
 }
 
-pub fn quantize_to_u32_bits(fins: &[f32], resolution: u8) -> Vec<Vec<u32>> {
+pub fn quantize_to_u8_bits(fins: &[f32], resolution: u8) -> Vec<Vec<u8>> {
     let bits_per_value = resolution as usize;
     let parts = 2_usize.pow(bits_per_value as u32);
     let step = 2.0 / parts as f32;
-    let u32s_per_value = (fins.len() + 31) / 32;
-    let mut quantized: Vec<Vec<u32>> = vec![Vec::with_capacity(u32s_per_value); bits_per_value];
+    let u32s_per_value = (fins.len()) / 8;
+    let mut quantized: Vec<Vec<u8>> = vec![Vec::with_capacity(u32s_per_value); bits_per_value];
 
-    let mut current_u32s: Vec<u32> = vec![0; bits_per_value];
+    let mut current_u32s: Vec<u8> = vec![0; bits_per_value];
     let mut bit_index: usize = 0;
 
     for &f in fins {
