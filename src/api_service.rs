@@ -1,26 +1,23 @@
-use crate::models::chunked_list::LazyItem;
 use crate::models::chunked_list::*;
+use crate::models::common::*;
 use crate::models::custom_buffered_writer::CustomBufferedWriter;
 use crate::models::file_persist::*;
 use crate::models::meta_persist::*;
 use crate::models::rpc::VectorIdValue;
 use crate::models::types::*;
-use crate::models::user::{AuthResp, Statistics};
-use crate::models::{self, common::*};
-use crate::quantization::scalar::ScalarQuantization;
+use crate::models::user::Statistics;
 use crate::quantization::Quantization;
 use crate::quantization::StorageType;
-use crate::storage::Storage;
-use crate::vector_store::{self, *};
-use dashmap::DashMap;
-use futures::stream::{self, StreamExt};
-use lmdb::{Database, DatabaseFlags, Environment, Error as LmdbError, Transaction, WriteFlags};
+use crate::vector_store::*;
+use lmdb::DatabaseFlags;
 use rand::Rng;
+use rayon::iter::IntoParallelIterator;
+use rayon::iter::ParallelIterator;
 use std::cell::RefCell;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 
 pub async fn init_vector_store(
     name: String,
@@ -174,40 +171,19 @@ pub async fn init_vector_store(
     Ok(())
 }
 
-pub async fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<(VectorIdValue, Vec<f32>)>) -> () {
-    stream::iter(vecxx)
-        .map(|(id, vec)| {
-            let vec_store = vec_store.clone();
-            async move {
-                let root = &vec_store.root_vec;
-                let vec_hash = convert_value(id);
-                let vector_list = vec_store
-                    .quantization_metric
-                    .quantize(&vec, vec_store.storage_type);
-                let vec_emb = VectorEmbedding {
-                    raw_vec: Arc::new(vector_list),
-                    hash_vec: vec_hash.clone(),
-                };
-                let lp = &vec_store.levels_prob;
-                let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
+pub async fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<(VectorIdValue, Vec<f32>)>) {
+    vecxx.into_par_iter().for_each(|(id, vec)| {
+        let hash_vec = convert_value(id);
+        let storage = vec_store
+            .quantization_metric
+            .quantize(&vec, vec_store.storage_type);
+        let vec_emb = VectorEmbedding {
+            raw_vec: Arc::new(storage),
+            hash_vec,
+        };
 
-                insert_embedding(vec_store.clone(), &vec_emb)
-                    .expect("Failed to inert embedding to LMDB");
-
-                // TODO: handle the error
-                index_embedding(
-                    vec_store.clone(),
-                    vec_emb,
-                    root.item.read().unwrap().clone(),
-                    vec_store.max_cache_level.try_into().unwrap(),
-                    iv.try_into().unwrap(),
-                )
-                .expect("Failed inserting embedding");
-            }
-        })
-        .buffer_unordered(10)
-        .collect::<Vec<_>>()
-        .await;
+        insert_embedding(vec_store.clone(), &vec_emb).expect("Failed to inert embedding to LMDB");
+    });
 
     // Update version
     let ver = vec_store
@@ -237,7 +213,6 @@ pub async fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<(VectorIdValue, 
             eprintln!("Failed node persist(nbr1): {}", e);
         }
     };
-    ()
 }
 
 pub async fn ann_vector_query(
