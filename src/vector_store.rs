@@ -325,7 +325,18 @@ pub fn index_embeddings(vec_store: Arc<VectorStore>) -> Result<(), WaCustomError
         .begin_rw_txn()
         .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
 
-    let count_indexed = match txn.get(*metadata_db, &"count_indexed") {
+    let mut count_indexed = match txn.get(*metadata_db, &"count_indexed") {
+        Ok(bytes) => {
+            let bytes = bytes.try_into().map_err(|e: TryFromSliceError| {
+                WaCustomError::DeserializationError(e.to_string())
+            })?;
+            u32::from_le_bytes(bytes)
+        }
+        Err(lmdb::Error::NotFound) => 0,
+        Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
+    };
+
+    let mut count_unindexed = match txn.get(*metadata_db, &"count_unindexed") {
         Ok(bytes) => {
             let bytes = bytes.try_into().map_err(|e: TryFromSliceError| {
                 WaCustomError::DeserializationError(e.to_string())
@@ -347,6 +358,8 @@ pub fn index_embeddings(vec_store: Arc<VectorStore>) -> Result<(), WaCustomError
         Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
     };
 
+    drop(txn);
+
     let mut file = OpenOptions::new()
         .read(true)
         .open("vec_raw.0")
@@ -365,59 +378,69 @@ pub fn index_embeddings(vec_store: Arc<VectorStore>) -> Result<(), WaCustomError
         let (embedding, next) = read_embedding(&mut file, i)?;
         embeddings.push(embedding);
         i = next;
-    }
 
-    // TODO: handle the errors
-    let results: Vec<Result<(), WaCustomError>> = embeddings
-        .into_par_iter()
-        .map(|embedding| {
-            let lp = &vec_store.levels_prob;
-            let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
+        if embeddings.len() == 1000 || i == len {
+            // TODO: handle the errors
+            let results: Vec<Result<(), WaCustomError>> = embeddings
+                .into_par_iter()
+                .map(|embedding| {
+                    let lp = &vec_store.levels_prob;
+                    let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
 
-            index_embedding(
-                vec_store.clone(),
-                embedding,
-                vec_store.root_vec.item.read().unwrap().clone(),
-                vec_store.max_cache_level.try_into().unwrap(),
-                iv.try_into().unwrap(),
+                    index_embedding(
+                        vec_store.clone(),
+                        embedding,
+                        vec_store.root_vec.item.read().unwrap().clone(),
+                        vec_store.max_cache_level.try_into().unwrap(),
+                        iv.try_into().unwrap(),
+                    )
+                })
+                .collect();
+
+            embeddings = Vec::new();
+
+            let batch_size = results.len() as u32;
+            count_indexed += batch_size;
+            count_unindexed -= batch_size;
+
+            let mut txn = env.begin_rw_txn().map_err(|e| {
+                WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e))
+            })?;
+
+            txn.put(
+                *metadata_db,
+                &"count_indexed",
+                &count_indexed.to_le_bytes(),
+                WriteFlags::empty(),
             )
-        })
-        .collect();
+            .map_err(|e| {
+                WaCustomError::DatabaseError(format!("Failed to update `count_indexed`: {}", e))
+            })?;
 
-    if !results.is_empty() {
-        txn.put(
-            *metadata_db,
-            &"count_indexed",
-            &(count_indexed + results.len() as u32).to_le_bytes(),
-            WriteFlags::empty(),
-        )
-        .map_err(|e| {
-            WaCustomError::DatabaseError(format!("Failed to update `count_indexed`: {}", e))
-        })?;
+            txn.put(
+                *metadata_db,
+                &"count_unindexed",
+                &count_unindexed.to_le_bytes(),
+                WriteFlags::empty(),
+            )
+            .map_err(|e| {
+                WaCustomError::DatabaseError(format!("Failed to update `count_unindexed`: {}", e))
+            })?;
 
-        txn.put(
-            *metadata_db,
-            &"count_unindexed",
-            &0u32.to_le_bytes(),
-            WriteFlags::empty(),
-        )
-        .map_err(|e| {
-            WaCustomError::DatabaseError(format!("Failed to update `count_unindexed`: {}", e))
-        })?;
+            txn.put(
+                *metadata_db,
+                &"next_file_offset",
+                &i.to_le_bytes(),
+                WriteFlags::empty(),
+            )
+            .map_err(|e| {
+                WaCustomError::DatabaseError(format!("Failed to update `next_file_offset`: {}", e))
+            })?;
 
-        txn.put(
-            *metadata_db,
-            &"next_file_offset",
-            &i.to_le_bytes(),
-            WriteFlags::empty(),
-        )
-        .map_err(|e| {
-            WaCustomError::DatabaseError(format!("Failed to update `next_file_offset`: {}", e))
-        })?;
-
-        txn.commit().map_err(|e| {
-            WaCustomError::DatabaseError(format!("Failed to commit transaction: {}", e))
-        })?;
+            txn.commit().map_err(|e| {
+                WaCustomError::DatabaseError(format!("Failed to commit transaction: {}", e))
+            })?;
+        }
     }
 
     Ok(())
