@@ -46,12 +46,12 @@ async fn index_manual(body: web::Bytes) -> Result<HttpResponse, Error> {
 }
 
 #[actix_web::main]
-pub async fn run_actix_server() -> std::io::Result<()> {
+pub async fn run_actix_server(host: &str, port: &str) -> std::io::Result<()> {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
 
     let config = load_rustls_config();
 
-    log::info!("starting HTTPS server at https://localhost:8443");
+    log::info!("starting HTTPS server at https://{}", format!("{}:{}",host, port));
 
     HttpServer::new(move || {
         let auth = HttpAuthentication::bearer(validator);
@@ -111,7 +111,7 @@ pub async fn run_actix_server() -> std::io::Result<()> {
         // .service(web::resource("/manual").route(web::post().to(index_manual)))
         // .service(web::resource("/").route(web::post().to(index)))
     })
-    .bind_rustls_0_23("127.0.0.1:8443", config)?
+    .bind_rustls_0_23(format!("{}:{}",host, port), config)?
     .run()
     .await
 }
