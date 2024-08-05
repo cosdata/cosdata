@@ -205,6 +205,7 @@ pub fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<(VectorIdValue, Vec<f3
 
     txn.abort();
 
+    // TODO(kannan): load the threshold value from config file
     if count_unindexed >= 100 {
         index_embeddings(vec_store.clone()).expect("Failed to index embeddings");
     }

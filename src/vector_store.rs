@@ -379,6 +379,7 @@ pub fn index_embeddings(vec_store: Arc<VectorStore>) -> Result<(), WaCustomError
         embeddings.push(embedding);
         i = next;
 
+        // TODO(kannan): load the batch size from config file
         if embeddings.len() == 1000 || i == len {
             // TODO: handle the errors
             let results: Vec<Result<(), WaCustomError>> = embeddings
