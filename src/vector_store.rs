@@ -321,8 +321,8 @@ pub fn index_embeddings(vec_store: Arc<VectorStore>) -> Result<(), WaCustomError
     let env = vec_store.lmdb.env.clone();
     let metadata_db = vec_store.lmdb.metadata_db.clone();
 
-    let mut txn = env
-        .begin_rw_txn()
+    let txn = env
+        .begin_ro_txn()
         .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
 
     let mut count_indexed = match txn.get(*metadata_db, &"count_indexed") {
@@ -358,7 +358,7 @@ pub fn index_embeddings(vec_store: Arc<VectorStore>) -> Result<(), WaCustomError
         Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
     };
 
-    drop(txn);
+    txn.abort();
 
     let mut file = OpenOptions::new()
         .read(true)
