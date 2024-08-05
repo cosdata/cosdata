@@ -1,3 +1,5 @@
+use arcshift::ArcShift;
+
 use super::types::Item;
 use std::sync::{Arc, RwLock};
 
@@ -12,27 +14,33 @@ type HNSWLevel = u8;
 
 pub const CHUNK_SIZE: usize = 5;
 
-#[derive(Debug, Clone)]
-pub struct LazyItem<T: Clone> {
-    pub data: Option<Item<T>>,
-    pub offset: Option<FileOffset>,
-    pub decay_counter: usize,
+// #[derive(Debug, Clone)]
+#[derive(Clone)]
+pub enum LazyItem<T: Clone + 'static> {
+    Valid {
+        data: Option<Item<T>>,
+        offset: Option<FileOffset>,
+        decay_counter: usize,
+    },
+    Invalid,
 }
 
-#[derive(Debug, Clone)]
-pub struct LazyItemRef<T: Clone> {
+// #[derive(Debug, Clone)]
+#[derive(Clone)]
+pub struct LazyItemRef<T: Clone + 'static> {
     pub item: Item<LazyItem<T>>,
 }
 
-#[derive(Debug, Clone)]
-pub struct LazyItems<T: Clone> {
-    pub items: Item<Vec<LazyItem<T>>>,
+// #[derive(Debug, Clone)]
+#[derive(Clone)]
+pub struct LazyItems<T: Clone + 'static> {
+    pub items: Item<Vec<LazyItemRef<T>>>,
 }
 
 impl<T: Clone> LazyItem<T> {
     pub fn with_data(data: T) -> Self {
-        LazyItem {
-            data: Some(Arc::new(RwLock::new(data))),
+        LazyItem::Valid {
+            data: Some(Item::new(data)),
             offset: None,
             decay_counter: 0,
         }
@@ -42,61 +50,100 @@ impl<T: Clone> LazyItem<T> {
 impl<T: Clone> LazyItemRef<T> {
     pub fn new(item: T) -> Self {
         LazyItemRef {
-            item: Arc::new(RwLock::new(LazyItem {
-                data: Some(Arc::new(RwLock::new(item))),
+            item: ArcShift::new(LazyItem::Valid {
+                data: Some(ArcShift::new(item)),
                 offset: None,
                 decay_counter: 0,
-            })),
+            }),
         }
     }
 
-    pub fn new_with_lock(item: Item<T>) -> Self {
+    pub fn from_item(item: Item<T>) -> Self {
         LazyItemRef {
-            item: Arc::new(RwLock::new(LazyItem {
+            item: ArcShift::new(LazyItem::Valid {
                 data: Some(item),
                 offset: None,
                 decay_counter: 0,
-            })),
+            }),
         }
     }
 
-    pub fn get_data(&self) -> Option<Item<T>> {
-        self.item.read().unwrap().data.clone()
+    pub fn get_data(&mut self) -> Option<Item<T>> {
+        if let LazyItem::Valid { data, .. } = self.item.get() {
+            return data.clone();
+        }
+        None
     }
 
-    pub fn set_data(&self, new_data: T) {
-        self.item.write().unwrap().data = Some(Arc::new(RwLock::new(new_data)));
+    pub fn set_data(&mut self, new_data: T) {
+        self.item.rcu(|item| {
+            let (offset, decay_counter) = if let LazyItem::Valid {
+                offset,
+                decay_counter,
+                ..
+            } = item
+            {
+                (offset.clone(), *decay_counter)
+            } else {
+                (None, 0)
+            };
+            LazyItem::Valid {
+                data: Some(Item::new(new_data)),
+                offset,
+                decay_counter,
+            }
+        });
     }
 
-    pub fn set_offset(&self, new_offset: Option<FileOffset>) {
-        self.item.write().unwrap().offset = new_offset;
+    pub fn set_offset(&mut self, new_offset: Option<FileOffset>) {
+        self.item.rcu(|item| {
+            let (data, decay_counter) = if let LazyItem::Valid {
+                data,
+                decay_counter,
+                ..
+            } = item
+            {
+                (data.clone(), *decay_counter)
+            } else {
+                (None, 0)
+            };
+            LazyItem::Valid {
+                data,
+                offset: new_offset,
+                decay_counter,
+            }
+        });
     }
 }
 
 impl<T: Clone> LazyItems<T> {
     pub fn new() -> Self {
         LazyItems {
-            items: Arc::new(RwLock::new(Vec::new())),
+            items: Item::new(Vec::new()),
         }
     }
 
-    pub fn push(&self, item: LazyItem<T>) {
-        self.items.write().unwrap().push(item);
+    pub fn push(&mut self, item: LazyItemRef<T>) {
+        self.items.rcu(|items| {
+            let mut items = items.clone();
+            items.push(item);
+            items
+        });
     }
 
-    pub fn get(&self, index: usize) -> Option<LazyItem<T>> {
-        self.items.read().unwrap().get(index).cloned()
+    pub fn get(&mut self, index: usize) -> Option<LazyItemRef<T>> {
+        self.items.get().get(index).cloned()
     }
 
-    pub fn len(&self) -> usize {
-        self.items.read().unwrap().len()
+    pub fn len(&mut self) -> usize {
+        self.items.get().len()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.items.read().unwrap().is_empty()
+    pub fn is_empty(&mut self) -> bool {
+        self.items.get().is_empty()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = LazyItem<T>> {
-        self.items.read().unwrap().clone().into_iter()
+    pub fn iter(&mut self) -> impl Iterator<Item = LazyItemRef<T>> {
+        self.items.get().clone().into_iter()
     }
 }

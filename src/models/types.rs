@@ -10,18 +10,15 @@ use crate::quantization::product::ProductQuantization;
 use crate::quantization::scalar::ScalarQuantization;
 use crate::quantization::{Quantization, StorageType};
 use crate::storage::Storage;
-use actix_web::guard;
-use bincode;
+use arcshift::ArcShift;
 use dashmap::DashMap;
-use lmdb::{Database, Environment, Transaction, WriteFlags};
+use lmdb::{Database, Environment};
 use serde::{Deserialize, Serialize};
-use std::cell::RefCell;
 use std::fmt;
 use std::fs::*;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::path::Path;
-use std::rc::Rc;
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 pub type HNSWLevel = u8;
 pub type FileOffset = u32;
@@ -29,7 +26,7 @@ pub type BytesToRead = u32;
 pub type VersionId = u16;
 pub type CosineSimilarity = f32;
 
-pub type Item<T> = Arc<RwLock<T>>;
+pub type Item<T> = ArcShift<T>;
 
 #[derive(Debug, Clone)]
 pub struct Neighbour {
@@ -59,7 +56,8 @@ pub enum VectorId {
     Int(i32),
 }
 
-#[derive(Debug, Clone)]
+// #[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MergedNode {
     pub version_id: VersionId,
     pub hnsw_level: HNSWLevel,
@@ -120,52 +118,55 @@ impl MergedNode {
         MergedNode {
             version_id,
             hnsw_level,
-            prop: Arc::new(RwLock::new(PropState::Pending((0, 0)))),
+            prop: Item::new(PropState::Pending((0, 0))),
             neighbors: LazyItems::new(),
             parent: None,
             child: None,
             versions: LazyItems::new(),
-            persist_flag: Arc::new(RwLock::new(true)),
+            persist_flag: Item::new(true),
         }
     }
 
     pub fn add_ready_neighbor(&self, neighbor: LazyItem<MergedNode>, cosine_similarity: f32) {
-        let neighbor_ref = Arc::new(RwLock::new(Neighbour {
+        let neighbor_ref = Item::new(Neighbour {
             node: neighbor,
             cosine_similarity,
-        }));
+        });
         let lazy_item = LazyItem {
             data: Some(neighbor_ref),
             offset: None,
             decay_counter: 0,
         };
-        self.neighbors.push(lazy_item);
+        let mut neighbours = self.neighbors.clone();
+        neighbours.push(lazy_item);
     }
 
-    pub fn set_parent(&mut self, parent: Option<LazyItemRef<MergedNode>>) {
-        self.parent = parent;
+    pub fn set_parent(mut node: ArcShift<Self>, parent: Option<LazyItemRef<MergedNode>>) {
+        node.rcu(|node| MergedNode {
+            parent,
+            ..node.clone()
+        })
     }
 
     pub fn set_child(&mut self, child: Option<LazyItemRef<MergedNode>>) {
         self.child = child;
     }
 
-    pub fn add_ready_neighbors(&self, neighbors_list: Vec<(LazyItem<MergedNode>, f32)>) {
+    pub fn add_ready_neighbors(&mut self, neighbors_list: Vec<(LazyItem<MergedNode>, f32)>) {
         for (neighbor, cosine_similarity) in neighbors_list {
             self.add_ready_neighbor(neighbor, cosine_similarity);
         }
     }
 
-    pub fn get_neighbors(&self) -> Vec<LazyItem<Neighbour>> {
-        self.neighbors.items.read().unwrap().clone()
+    pub fn get_neighbors(&mut self) -> Vec<LazyItemRef<Neighbour>> {
+        self.neighbors.items.get().clone()
     }
 
-    pub fn set_neighbors(&self, new_neighbors: Vec<LazyItem<Neighbour>>) {
-        let mut neighbors = self.neighbors.items.write().unwrap();
-        *neighbors = new_neighbors;
+    pub fn set_neighbors(&mut self, new_neighbors: Vec<LazyItem<Neighbour>>) {
+        self.neighbors.items.update(new_neighbors);
     }
 
-    pub fn add_version(&self, version: Item<MergedNode>) {
+    pub fn add_version(&mut self, version: Item<MergedNode>) {
         let lazy_item = LazyItem {
             data: Some(version),
             offset: None,
@@ -174,8 +175,8 @@ impl MergedNode {
         self.versions.push(lazy_item);
     }
 
-    pub fn get_versions(&self) -> Vec<LazyItem<MergedNode>> {
-        self.versions.items.read().unwrap().clone()
+    pub fn get_versions(&mut self) -> Vec<LazyItem<MergedNode>> {
+        self.versions.items.get().clone()
     }
 
     pub fn get_parent(&self) -> Option<LazyItemRef<MergedNode>> {
@@ -186,7 +187,7 @@ impl MergedNode {
         self.child.clone()
     }
 
-    pub fn set_prop_location(&self, new_location: PropPersistRef) {
+    pub fn set_prop_location(&mut self, new_location: PropPersistRef) {
         let mut prop = self.prop.write().unwrap();
         *prop = PropState::Pending(new_location);
     }

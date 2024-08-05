@@ -381,6 +381,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "arcshift"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff53c5923fde507c62b51b87ea5c0a13fea489f31c809a84022ac2a37992712a"
+
+[[package]]
 name = "async-channel"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -885,6 +891,7 @@ dependencies = [
  "actix-files",
  "actix-web",
  "actix-web-httpauth",
+ "arcshift",
  "async-channel 2.3.1",
  "async-std",
  "bincode",
