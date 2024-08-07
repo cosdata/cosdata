@@ -354,6 +354,8 @@ pub enum WaCustomError {
     LazyLoadingError(String),
     TrainingFailed,
     CalculationError,
+    FsError(String),
+    DeserializationError(String),
 }
 
 impl fmt::Display for WaCustomError {
@@ -373,6 +375,8 @@ impl fmt::Display for WaCustomError {
             WaCustomError::LazyLoadingError(msg) => write!(f, "Lazy loading error: {}", msg),
             WaCustomError::TrainingFailed => write!(f, "Training failed"),
             WaCustomError::CalculationError => write!(f, "Calculation error"),
+            WaCustomError::FsError(err) => write!(f, "FS error: {}", err),
+            WaCustomError::DeserializationError(err) => write!(f, "Deserialization error: {}", err),
         }
     }
 }
