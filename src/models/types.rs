@@ -16,9 +16,12 @@ use lmdb::{Database, Environment};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs::*;
-use std::hash::Hash;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::Path;
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, OnceLock,
+};
 
 pub type HNSWLevel = u8;
 pub type FileOffset = u32;
@@ -28,10 +31,30 @@ pub type CosineSimilarity = f32;
 
 pub type Item<T> = ArcShift<T>;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Neighbour {
     pub node: LazyItem<MergedNode>,
     pub cosine_similarity: CosineSimilarity,
+}
+
+impl Identifiable for Neighbour {
+    type Id = LazyItemId;
+
+    fn get_id(&self) -> Self::Id {
+        self.node.get_id()
+    }
+}
+
+impl Identifiable for MergedNode {
+    type Id = u64;
+
+    fn get_id(&self) -> Self::Id {
+        let mut prop_ref = self.prop.clone();
+        let prop = prop_ref.get();
+        let mut hasher = DefaultHasher::new();
+        prop.hash(&mut hasher);
+        hasher.finish()
+    }
 }
 
 pub type PropPersistRef = (FileOffset, BytesToRead);
@@ -44,7 +67,16 @@ pub struct NodeProp {
     pub location: Option<PropPersistRef>,
 }
 
-#[derive(Debug, Clone)]
+impl Hash for NodeProp {
+    fn hash<H>(&self, state: &mut H)
+    where
+        H: Hasher,
+    {
+        self.id.hash(state);
+    }
+}
+
+#[derive(Debug, Clone, Hash)]
 pub enum PropState {
     Ready(Arc<NodeProp>),
     Pending(PropPersistRef),
@@ -56,17 +88,16 @@ pub enum VectorId {
     Int(i32),
 }
 
-// #[derive(Debug, Clone)]
 #[derive(Clone)]
 pub struct MergedNode {
     pub version_id: VersionId,
     pub hnsw_level: HNSWLevel,
     pub prop: Item<PropState>,
-    pub neighbors: LazyItems<Neighbour>,
-    pub parent: Option<LazyItemRef<MergedNode>>,
-    pub child: Option<LazyItemRef<MergedNode>>,
-    pub versions: LazyItems<MergedNode>,
-    pub persist_flag: Item<bool>,
+    pub neighbors: EagerLazyItemSet<MergedNode, f32>,
+    pub parent: LazyItemRef<MergedNode>,
+    pub child: LazyItemRef<MergedNode>,
+    pub versions: LazyItemMap<MergedNode>,
+    pub persist_flag: Arc<AtomicBool>,
 }
 
 #[derive(Debug)]
@@ -119,141 +150,101 @@ impl MergedNode {
             version_id,
             hnsw_level,
             prop: Item::new(PropState::Pending((0, 0))),
-            neighbors: LazyItems::new(),
-            parent: None,
-            child: None,
-            versions: LazyItems::new(),
-            persist_flag: Item::new(true),
+            neighbors: EagerLazyItemSet::new(),
+            parent: LazyItemRef::new_invalid(),
+            child: LazyItemRef::new_invalid(),
+            versions: LazyItemMap::new(),
+            persist_flag: Arc::new(AtomicBool::new(true)),
         }
     }
 
     pub fn add_ready_neighbor(&self, neighbor: LazyItem<MergedNode>, cosine_similarity: f32) {
-        let neighbor_ref = Item::new(Neighbour {
-            node: neighbor,
-            cosine_similarity,
-        });
-        let lazy_item = LazyItem {
-            data: Some(neighbor_ref),
-            offset: None,
-            decay_counter: 0,
-        };
-        let mut neighbours = self.neighbors.clone();
-        neighbours.push(lazy_item);
+        self.neighbors.insert(neighbor, cosine_similarity);
     }
 
-    pub fn set_parent(mut node: ArcShift<Self>, parent: Option<LazyItemRef<MergedNode>>) {
-        node.rcu(|node| MergedNode {
-            parent,
-            ..node.clone()
-        })
+    pub fn set_parent(&self, parent: LazyItem<MergedNode>) {
+        let mut arc = self.parent.item.clone();
+        arc.update(parent);
     }
 
-    pub fn set_child(&mut self, child: Option<LazyItemRef<MergedNode>>) {
-        self.child = child;
+    pub fn set_child(&self, child: LazyItem<MergedNode>) {
+        let mut arc = self.child.item.clone();
+        arc.update(child);
     }
 
-    pub fn add_ready_neighbors(&mut self, neighbors_list: Vec<(LazyItem<MergedNode>, f32)>) {
+    pub fn add_ready_neighbors(&self, neighbors_list: Vec<(LazyItem<MergedNode>, f32)>) {
         for (neighbor, cosine_similarity) in neighbors_list {
             self.add_ready_neighbor(neighbor, cosine_similarity);
         }
     }
 
-    pub fn get_neighbors(&mut self) -> Vec<LazyItemRef<Neighbour>> {
-        self.neighbors.items.get().clone()
+    pub fn get_neighbors(&self) -> EagerLazyItemSet<MergedNode, f32> {
+        self.neighbors.clone()
     }
 
-    pub fn set_neighbors(&mut self, new_neighbors: Vec<LazyItem<Neighbour>>) {
-        self.neighbors.items.update(new_neighbors);
-    }
+    // pub fn set_neighbors(&self, new_neighbors: IdentitySet<EagerLazyItem<MergedNode, f32>>) {
+    //     let mut arc = self.neighbors.items.clone();
+    //     arc.update(new_neighbors);
+    // }
 
-    pub fn add_version(&mut self, version: Item<MergedNode>) {
-        let lazy_item = LazyItem {
+    pub fn add_version(&self, version: Item<MergedNode>) {
+        let lazy_item = LazyItem::Valid {
             data: Some(version),
             offset: None,
             decay_counter: 0,
         };
-        self.versions.push(lazy_item);
+        // TODO: look at the id
+        self.versions.insert(IdentityMapKey::Int(0), lazy_item);
     }
 
-    pub fn get_versions(&mut self) -> Vec<LazyItem<MergedNode>> {
-        self.versions.items.get().clone()
+    pub fn get_versions(&self) -> LazyItemMap<MergedNode> {
+        self.versions.clone()
     }
 
-    pub fn get_parent(&self) -> Option<LazyItemRef<MergedNode>> {
+    pub fn get_parent(&self) -> LazyItemRef<MergedNode> {
         self.parent.clone()
     }
 
-    pub fn get_child(&self) -> Option<LazyItemRef<MergedNode>> {
+    pub fn get_child(&self) -> LazyItemRef<MergedNode> {
         self.child.clone()
     }
 
-    pub fn set_prop_location(&mut self, new_location: PropPersistRef) {
-        let mut prop = self.prop.write().unwrap();
-        *prop = PropState::Pending(new_location);
+    pub fn set_prop_location(&self, new_location: PropPersistRef) {
+        let mut arc = self.prop.clone();
+        arc.update(PropState::Pending(new_location));
     }
 
     pub fn get_prop_location(&self) -> Option<PropPersistRef> {
-        let prop = self.prop.read().unwrap();
-        match *prop {
+        let mut arc = self.prop.clone();
+        match arc.get() {
             PropState::Ready(ref node_prop) => node_prop.location,
-            PropState::Pending(location) => Some(location),
+            PropState::Pending(location) => Some(*location),
         }
     }
 
     pub fn get_prop(&self) -> PropState {
-        self.prop.read().unwrap().clone()
+        let mut arc = self.prop.clone();
+        arc.get().clone()
     }
 
     pub fn set_prop_pending(&self, prop_ref: PropPersistRef) {
-        let mut prop = self.prop.write().unwrap();
-        *prop = PropState::Pending(prop_ref);
+        let mut arc = self.prop.clone();
+        arc.update(PropState::Pending(prop_ref));
     }
 
     pub fn set_prop_ready(&self, node_prop: Arc<NodeProp>) {
-        let mut prop = self.prop.write().unwrap();
-        *prop = PropState::Ready(node_prop);
-    }
-
-    pub fn set_persistence(&self, flag: bool) {
-        let mut fl = self.persist_flag.write().unwrap();
-        *fl = flag;
-    }
-
-    pub fn needs_persistence(&self) -> bool {
-        let fl = self.persist_flag.read().unwrap();
-        *fl
+        let mut arc = self.prop.clone();
+        arc.update(PropState::Ready(node_prop));
     }
 }
 
 impl SyncPersist for MergedNode {
     fn set_persistence(&self, flag: bool) {
-        let mut fl = self.persist_flag.write().unwrap();
-        *fl = flag;
+        self.persist_flag.store(flag, Ordering::Relaxed);
     }
 
     fn needs_persistence(&self) -> bool {
-        let fl = self.persist_flag.read().unwrap();
-        *fl
-    }
-}
-
-impl SyncPersist for Neighbour {
-    fn set_persistence(&self, flag: bool) {
-        let Some(node) = self.node.data.clone() else {
-            return;
-        };
-        let guard = node.read().unwrap();
-        let mut fl = guard.persist_flag.write().unwrap();
-        *fl = flag;
-    }
-
-    fn needs_persistence(&self) -> bool {
-        let Some(node) = self.node.data.clone() else {
-            return false;
-        };
-        let guard = node.read().unwrap();
-        let fl = guard.persist_flag.read().unwrap();
-        *fl
+        self.persist_flag.load(Ordering::Relaxed)
     }
 }
 
@@ -266,19 +257,21 @@ impl fmt::Display for VectorId {
         }
     }
 }
-impl fmt::Display for MergedNode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "MergedNode {{ version_id: {}, hnsw_level: {}, prop: {:?}, neighbors: {:?}, parent: {:?}, child: {:?}, version_ref: {:?} }}",
-            self.version_id,
-            self.hnsw_level,
-            self.prop.read().unwrap(),
-            self.neighbors,
-            self.parent,
-            self.child,
-            self.versions
-        )
-    }
-}
+
+// impl fmt::Display for MergedNode {
+//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+//         write!(f, "MergedNode {{ version_id: {}, hnsw_level: {}, prop: {:?}, neighbors: {:?}, parent: {:?}, child: {:?}, version_ref: {:?} }}",
+//             self.version_id,
+//             self.hnsw_level,
+//             self.prop.read().unwrap(),
+//             self.neighbors,
+//             self.parent,
+//             self.child,
+//             self.versions
+//         )
+//     }
+// }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum VectorQt {
     UnsignedByte {
@@ -321,7 +314,7 @@ pub struct MetaDb {
     pub db: Arc<Database>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct VectorStore {
     pub exec_queue_nodes: ExecQueueUpdate,
     pub max_cache_level: u8,
@@ -363,31 +356,22 @@ impl VectorStore {
             prop_file,
             version_lmdb,
             current_version,
-            current_open_transaction: Arc::new(RwLock::new(None)),
+            current_open_transaction: Item::new(None),
             quantization_metric,
             distance_metric,
             storage_type,
         }
     }
     // Get method
-    pub fn get_current_version(
-        &self,
-    ) -> Result<
-        Option<VersionHash>,
-        std::sync::PoisonError<std::sync::RwLockReadGuard<'_, Option<VersionHash>>>,
-    > {
-        self.current_version.read().map(|guard| guard.clone())
+    pub fn get_current_version(&self) -> Option<VersionHash> {
+        let mut arc = self.current_version.clone();
+        arc.get().clone()
     }
 
     // Set method
-    pub fn set_current_version(
-        &self,
-        new_version: Option<VersionHash>,
-    ) -> Result<(), std::sync::PoisonError<std::sync::RwLockWriteGuard<'_, Option<VersionHash>>>>
-    {
-        let mut write_guard = self.current_version.write()?;
-        *write_guard = new_version;
-        Ok(())
+    pub fn set_current_version(&self, new_version: Option<VersionHash>) {
+        let mut arc = self.current_version.clone();
+        arc.update(new_version);
     }
 }
 #[derive(Debug, Clone)]
