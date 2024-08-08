@@ -1,4 +1,6 @@
+mod eager_lazy_item_set;
 mod lazy_item;
+mod lazy_item_set;
 mod lazy_items;
 mod neighbour;
 mod node;
@@ -26,4 +28,23 @@ pub trait CustomSerialize {
     ) -> std::io::Result<Self>
     where
         Self: Sized;
+}
+
+impl CustomSerialize for f32 {
+    fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
+        todo!()
+    }
+
+    fn deserialize<R: Read + Seek>(
+        reader: &mut R,
+        offset: u32,
+        cache: Arc<NodeRegistry<R>>,
+        max_loads: u16,
+        skipm: &mut HashSet<FileOffset>,
+    ) -> std::io::Result<Self>
+    where
+        Self: Sized,
+    {
+        todo!()
+    }
 }
