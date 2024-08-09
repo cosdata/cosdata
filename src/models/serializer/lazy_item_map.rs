@@ -1,9 +1,9 @@
 use super::CustomSerialize;
-use crate::models::chunked_list::{EagerLazyItem, EagerLazyItemSet};
+use crate::models::chunked_list::{IdentityMap, IdentityMapKey, LazyItemMap};
 use crate::models::types::FileOffset;
 use crate::models::{
     cache_loader::NodeRegistry,
-    chunked_list::{Identifiable, IdentitySet, LazyItem, CHUNK_SIZE},
+    chunked_list::{LazyItem, CHUNK_SIZE},
     types::Item,
 };
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
@@ -13,11 +13,12 @@ use std::{
     sync::Arc,
 };
 
-impl<T, E> CustomSerialize for EagerLazyItemSet<T, E>
+const MSB: u32 = 1 << 31;
+
+impl<T> CustomSerialize for LazyItemMap<T>
 where
     LazyItem<T>: CustomSerialize,
-    T: Clone + Identifiable<Id = u64> + 'static,
-    E: Clone + CustomSerialize + 'static,
+    T: Clone + 'static,
 {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
         if self.is_empty() {
@@ -25,7 +26,11 @@ where
         };
         let start_offset = writer.stream_position()? as u32;
         let mut items_arc = self.items.clone();
-        let mut items: Vec<_> = items_arc.get().iter().map(Clone::clone).collect();
+        let mut items: Vec<_> = items_arc
+            .get()
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
         let total_items = items.len();
 
         for chunk_start in (0..total_items).step_by(CHUNK_SIZE) {
@@ -43,7 +48,7 @@ where
 
             // Serialize items and update placeholders
             for i in chunk_start..chunk_end {
-                let eager_item_offset = items[i].0.serialize(writer)?;
+                let entry_offset = items[i].0.serialize(writer)?;
                 let item_placeholder_pos = writer.stream_position()?;
                 writer.write_u32::<LittleEndian>(0)?;
                 let item_offset = items[i].1.serialize(writer)?;
@@ -51,8 +56,8 @@ where
                 let placeholder_pos = placeholder_start as u64 + ((i - chunk_start) as u64 * 4);
                 let current_pos = writer.stream_position()?;
                 writer.seek(SeekFrom::Start(placeholder_pos))?;
-                writer.write_u32::<LittleEndian>(eager_item_offset)?;
-                writer.seek(SeekFrom::Start(item_placeholder_pos));
+                writer.write_u32::<LittleEndian>(entry_offset)?;
+                writer.seek(SeekFrom::Start(item_placeholder_pos))?;
                 writer.write_u32::<LittleEndian>(item_offset)?;
                 writer.seek(SeekFrom::Start(current_pos))?;
             }
@@ -67,7 +72,7 @@ where
             }
             writer.seek(SeekFrom::Start(next_chunk_start as u64))?;
         }
-        let new_set = IdentitySet::from_iter(items.into_iter());
+        let new_set = IdentityMap::from_iter(items.into_iter());
         items_arc.update(new_set);
         Ok(start_offset)
     }
@@ -80,7 +85,7 @@ where
         skipm: &mut HashSet<FileOffset>,
     ) -> std::io::Result<Self> {
         if offset == u32::MAX {
-            return Ok(EagerLazyItemSet::new());
+            return Ok(LazyItemMap::new());
         }
         reader.seek(SeekFrom::Start(offset as u64))?;
         let mut items = Vec::new();
@@ -88,17 +93,21 @@ where
         loop {
             for i in 0..CHUNK_SIZE {
                 reader.seek(SeekFrom::Start(current_chunk as u64 + (i as u64 * 4)))?;
-                let eager_item_offset = reader.read_u32::<LittleEndian>()?;
-                if eager_item_offset == u32::MAX {
+                let entry_offset = reader.read_u32::<LittleEndian>()?;
+                if entry_offset == u32::MAX {
                     continue;
                 }
-                // NOTE: this implementation assumes `E::deserialize` will leave us at the item offset
-                let eager_data =
-                    E::deserialize(reader, eager_item_offset, cache.clone(), max_loads, skipm)?;
+                let key = IdentityMapKey::deserialize(
+                    reader,
+                    entry_offset,
+                    cache.clone(),
+                    max_loads,
+                    skipm,
+                )?;
                 let item_offset = reader.read_u32::<LittleEndian>()?;
                 let item =
                     LazyItem::deserialize(reader, item_offset, cache.clone(), max_loads, skipm)?;
-                items.push(EagerLazyItem(eager_data, item));
+                items.push((key, item));
             }
             reader.seek(SeekFrom::Start(
                 current_chunk as u64 + CHUNK_SIZE as u64 * 4,
@@ -109,8 +118,57 @@ where
                 break;
             }
         }
-        Ok(EagerLazyItemSet {
-            items: Item::new(IdentitySet::from_iter(items.into_iter())),
+        Ok(LazyItemMap {
+            items: Item::new(IdentityMap::from_iter(items.into_iter())),
         })
+    }
+}
+
+impl CustomSerialize for IdentityMapKey {
+    fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
+        let start = writer.stream_position()? as u32;
+        match self {
+            Self::String(str) => {
+                let bytes = str.clone().into_bytes();
+                let len = bytes.len() as u32;
+                writer.write_u32::<LittleEndian>(MSB | len)?;
+                writer.write_all(&bytes)?;
+            }
+            Self::Int(int) => {
+                writer.write_u32::<LittleEndian>(*int)?;
+            }
+        }
+        Ok(start)
+    }
+
+    fn deserialize<R: Read + Seek>(
+        reader: &mut R,
+        offset: u32,
+        _cache: Arc<NodeRegistry<R>>,
+        _max_loads: u16,
+        _skipm: &mut HashSet<FileOffset>,
+    ) -> std::io::Result<Self>
+    where
+        Self: Sized,
+    {
+        reader.seek(SeekFrom::Start(offset as u64))?;
+        let num = reader.read_u32::<LittleEndian>()?;
+        if num & MSB == 0 {
+            return Ok(Self::Int(num));
+        }
+
+        let len = (num << 1) >> 1;
+        let mut bytes = vec![0; len as usize];
+
+        reader.read_exact(&mut bytes)?;
+
+        let str = String::from_utf8(bytes).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Invalid identity map key: {}", e),
+            )
+        })?;
+
+        Ok(Self::String(str))
     }
 }

@@ -78,12 +78,22 @@ impl<T> IdentityMap<T> {
         }
     }
 
+    pub fn from_iter(iter: impl Iterator<Item = (IdentityMapKey, T)>) -> Self {
+        Self {
+            map: iter.collect(),
+        }
+    }
+
     pub fn insert(&mut self, key: IdentityMapKey, value: T) -> Option<T> {
         self.map.insert(key, value)
     }
 
     pub fn contains(&self, key: &IdentityMapKey) -> bool {
         self.map.contains_key(key)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&IdentityMapKey, &T)> {
+        self.map.iter()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -370,7 +380,7 @@ impl<T: Clone + Identifiable<Id = u64> + 'static> LazyItemSet<T> {
     }
 }
 
-impl<T: Clone + Identifiable<Id = u64> + 'static> LazyItemMap<T> {
+impl<T: Clone + 'static> LazyItemMap<T> {
     pub fn new() -> Self {
         Self {
             items: Item::new(IdentityMap::new()),
