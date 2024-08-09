@@ -1,9 +1,10 @@
 use super::CustomSerialize;
-use crate::models::chunked_list::{IdentityMap, IdentityMapKey, LazyItemMap};
+use crate::models::identity_collections::{IdentityMap, IdentityMapKey};
+use crate::models::lazy_load::LazyItemMap;
 use crate::models::types::FileOffset;
 use crate::models::{
     cache_loader::NodeRegistry,
-    chunked_list::{LazyItem, CHUNK_SIZE},
+    lazy_load::{LazyItem, CHUNK_SIZE},
     types::Item,
 };
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};

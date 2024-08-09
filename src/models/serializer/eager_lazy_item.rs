@@ -1,7 +1,7 @@
 use super::CustomSerialize;
 use crate::models::{
     cache_loader::NodeRegistry,
-    chunked_list::{EagerLazyItem, LazyItem},
+    lazy_load::{EagerLazyItem, LazyItem},
     types::FileOffset,
 };
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};

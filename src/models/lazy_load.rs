@@ -1,8 +1,6 @@
-use arcshift::ArcShift;
-
+use super::identity_collections::{Identifiable, IdentityMap, IdentityMapKey, IdentitySet};
 use super::serializer::CustomSerialize;
-use super::types::Item;
-use std::collections::HashMap;
+use super::types::{FileOffset, Item};
 use std::hash::Hash;
 
 pub trait SyncPersist {
@@ -10,100 +8,7 @@ pub trait SyncPersist {
     fn needs_persistence(&self) -> bool;
 }
 
-type FileOffset = u32;
-type VersionId = u16;
-type HNSWLevel = u8;
-
 pub const CHUNK_SIZE: usize = 5;
-
-pub trait Identifiable {
-    type Id: Eq + Hash;
-    fn get_id(&self) -> Self::Id;
-}
-
-#[derive(Debug, Clone)]
-pub struct IdentitySet<T: Identifiable> {
-    map: HashMap<T::Id, T>,
-}
-
-impl<T: Identifiable> IdentitySet<T> {
-    pub fn new() -> Self {
-        Self {
-            map: HashMap::new(),
-        }
-    }
-
-    pub fn from_iter(iter: impl Iterator<Item = T>) -> Self {
-        Self {
-            map: iter.map(|item| (item.get_id(), item)).collect(),
-        }
-    }
-
-    pub fn insert(&mut self, value: T) -> Option<T> {
-        self.map.insert(value.get_id(), value)
-    }
-
-    pub fn contains(&self, value: &T) -> bool {
-        self.map.contains_key(&value.get_id())
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &T> {
-        self.map.iter().map(|(_, value)| value)
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.map.is_empty()
-    }
-
-    pub fn len(&self) -> usize {
-        self.map.len()
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Hash)]
-pub enum IdentityMapKey {
-    String(String),
-    Int(u32),
-}
-
-#[derive(Debug, Clone)]
-pub struct IdentityMap<T> {
-    map: HashMap<IdentityMapKey, T>,
-}
-
-impl<T> IdentityMap<T> {
-    pub fn new() -> Self {
-        Self {
-            map: HashMap::new(),
-        }
-    }
-
-    pub fn from_iter(iter: impl Iterator<Item = (IdentityMapKey, T)>) -> Self {
-        Self {
-            map: iter.collect(),
-        }
-    }
-
-    pub fn insert(&mut self, key: IdentityMapKey, value: T) -> Option<T> {
-        self.map.insert(key, value)
-    }
-
-    pub fn contains(&self, key: &IdentityMapKey) -> bool {
-        self.map.contains_key(key)
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = (&IdentityMapKey, &T)> {
-        self.map.iter()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.map.is_empty()
-    }
-
-    pub fn len(&self) -> usize {
-        self.map.len()
-    }
-}
 
 #[derive(Clone)]
 pub enum LazyItem<T: Clone + 'static> {
@@ -257,8 +162,8 @@ impl<T: Clone + 'static> LazyItem<T> {
 
 impl<T: Clone + 'static> LazyItemRef<T> {
     pub fn new(item: T) -> Self {
-        LazyItemRef {
-            item: ArcShift::new(LazyItem::Valid {
+        Self {
+            item: Item::new(LazyItem::Valid {
                 data: Some(Item::new(item)),
                 offset: None,
                 decay_counter: 0,
@@ -267,18 +172,24 @@ impl<T: Clone + 'static> LazyItemRef<T> {
     }
 
     pub fn new_invalid() -> Self {
-        LazyItemRef {
+        Self {
             item: Item::new(LazyItem::Invalid),
         }
     }
 
     pub fn from_item(item: Item<T>) -> Self {
-        LazyItemRef {
-            item: ArcShift::new(LazyItem::Valid {
+        Self {
+            item: Item::new(LazyItem::Valid {
                 data: Some(item),
                 offset: None,
                 decay_counter: 0,
             }),
+        }
+    }
+
+    pub fn from_lazy(item: LazyItem<T>) -> Self {
+        Self {
+            item: Item::new(item),
         }
     }
 

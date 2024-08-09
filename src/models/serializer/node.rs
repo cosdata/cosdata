@@ -1,13 +1,13 @@
 use super::CustomSerialize;
 use crate::models::{
     cache_loader::NodeRegistry,
-    chunked_list::{LazyItemRef, LazyItems},
+    lazy_load::{EagerLazyItemSet, LazyItemRef},
     types::{Item, MergedNode, PropState},
 };
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::{
     io::{Read, Seek, SeekFrom, Write},
-    sync::{Arc, RwLock},
+    sync::Arc,
 };
 
 use crate::models::types::FileOffset;
@@ -182,12 +182,22 @@ impl CustomSerialize for MergedNode {
         };
 
         // Deserialize neighbors
-        let neighbors =
-            LazyItems::deserialize(reader, neighbors_offset, cache.clone(), max_loads, skipm)?;
+        let neighbors = EagerLazyItemSet::deserialize(
+            reader,
+            neighbors_offset,
+            cache.clone(),
+            max_loads,
+            skipm,
+        )?;
 
         // Deserialize versions
-        let versions =
-            LazyItems::deserialize(reader, versions_offset, cache.clone(), max_loads, skipm)?;
+        let versions = EagerLazyItemSet::deserialize(
+            reader,
+            versions_offset,
+            cache.clone(),
+            max_loads,
+            skipm,
+        )?;
 
         Ok(MergedNode {
             version_id,

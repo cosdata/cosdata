@@ -1,9 +1,9 @@
 use super::CustomSerialize;
-use crate::models::chunked_list::SyncPersist;
+use crate::models::lazy_load::SyncPersist;
 use crate::models::types::{FileOffset, Item};
 use crate::models::{
     cache_loader::NodeRegistry,
-    chunked_list::{LazyItem, LazyItemRef},
+    lazy_load::{LazyItem, LazyItemRef},
     types::MergedNode,
 };
 use std::collections::HashSet;

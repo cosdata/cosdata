@@ -1,6 +1,6 @@
 use super::cache_loader::NodeRegistry;
-use super::chunked_list::LazyItem;
 use super::common::WaCustomError;
+use super::lazy_load::LazyItem;
 use super::types::{HNSWLevel, Item, MergedNode, NodeProp, VectorId};
 use crate::models::custom_buffered_writer::*;
 use crate::models::serializer::*;

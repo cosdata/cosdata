@@ -3,8 +3,9 @@ use crate::distance::{
     cosine::CosineDistance, dotproduct::DotProductDistance, euclidean::EuclideanDistance,
     hamming::HammingDistance, DistanceFunction,
 };
-use crate::models::chunked_list::*;
 use crate::models::common::*;
+use crate::models::identity_collections::*;
+use crate::models::lazy_load::*;
 use crate::models::versioning::VersionHash;
 use crate::quantization::product::ProductQuantization;
 use crate::quantization::scalar::ScalarQuantization;
