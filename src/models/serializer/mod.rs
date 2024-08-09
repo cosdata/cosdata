@@ -1,3 +1,4 @@
+mod eager_lazy_item;
 mod eager_lazy_item_set;
 mod lazy_item;
 mod lazy_item_map;
