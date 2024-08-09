@@ -24,7 +24,7 @@ pub(crate) async fn upsert(web::Json(body): web::Json<UpsertVectors>) -> HttpRes
         }
     };
 
-    if vec_store.current_open_transaction.read().unwrap().is_some() {
+    if vec_store.current_open_transaction.clone().get().is_some() {
         return HttpResponse::Conflict()
             .body("Cannot upsert while there's an on-going transaction");
     }

@@ -1,13 +1,13 @@
 use super::CustomSerialize;
 use crate::models::{
     cache_loader::NodeRegistry,
-    lazy_load::{EagerLazyItemSet, LazyItemRef},
+    lazy_load::{EagerLazyItemSet, LazyItemMap, LazyItemRef},
     types::{Item, MergedNode, PropState},
 };
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::{
     io::{Read, Seek, SeekFrom, Write},
-    sync::Arc,
+    sync::{atomic::AtomicBool, Arc},
 };
 
 use crate::models::types::FileOffset;
@@ -43,8 +43,8 @@ impl CustomSerialize for MergedNode {
 
         // Create and write indicator byte
         let mut indicator: u8 = 0;
-        let parent_present = self.parent.is_some();
-        let child_present = self.child.is_some();
+        let parent_present = self.parent.is_valid();
+        let child_present = self.child.is_valid();
         if parent_present {
             indicator |= 0b00000001;
         }
@@ -78,14 +78,14 @@ impl CustomSerialize for MergedNode {
 
         // Serialize parent if present
         let parent_offset = if parent_present {
-            Some(self.parent.as_ref().unwrap().serialize(writer)?)
+            Some(self.parent.serialize(writer)?)
         } else {
             None
         };
 
         // Serialize child if present
         let child_offset = if child_present {
-            Some(self.child.as_ref().unwrap().serialize(writer)?)
+            Some(self.child.serialize(writer)?)
         } else {
             None
         };
@@ -157,28 +157,16 @@ impl CustomSerialize for MergedNode {
 
         // Deserialize parent
         let parent = if let Some(offset) = parent_offset {
-            Some(LazyItemRef::deserialize(
-                reader,
-                offset,
-                cache.clone(),
-                max_loads,
-                skipm,
-            )?)
+            LazyItemRef::deserialize(reader, offset, cache.clone(), max_loads, skipm)?
         } else {
-            None
+            LazyItemRef::new_invalid()
         };
 
         // Deserialize child
         let child = if let Some(offset) = child_offset {
-            Some(LazyItemRef::deserialize(
-                reader,
-                offset,
-                cache.clone(),
-                max_loads,
-                skipm,
-            )?)
+            LazyItemRef::deserialize(reader, offset, cache.clone(), max_loads, skipm)?
         } else {
-            None
+            LazyItemRef::new_invalid()
         };
 
         // Deserialize neighbors
@@ -191,13 +179,8 @@ impl CustomSerialize for MergedNode {
         )?;
 
         // Deserialize versions
-        let versions = EagerLazyItemSet::deserialize(
-            reader,
-            versions_offset,
-            cache.clone(),
-            max_loads,
-            skipm,
-        )?;
+        let versions =
+            LazyItemMap::deserialize(reader, versions_offset, cache.clone(), max_loads, skipm)?;
 
         Ok(MergedNode {
             version_id,
@@ -207,7 +190,7 @@ impl CustomSerialize for MergedNode {
             parent,
             child,
             versions,
-            persist_flag: Item::new(true),
+            persist_flag: Arc::new(AtomicBool::new(true)),
         })
     }
 }

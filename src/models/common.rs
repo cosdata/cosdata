@@ -470,11 +470,12 @@ pub fn remove_duplicates_and_filter(
         vec.into_iter()
             .filter_map(|(lazy_item, similarity)| {
                 if let LazyItem::Valid {
-                    data: Some(node), ..
+                    data: Some(mut node),
+                    ..
                 } = lazy_item
                 {
-                    if let PropState::Ready(node_prop) = &*node.read().unwrap().prop.read().unwrap()
-                    {
+                    let mut prop_arc = node.get().prop.clone();
+                    if let PropState::Ready(node_prop) = prop_arc.get() {
                         let id = &node_prop.id;
                         if let VectorId::Int(s) = id {
                             if *s == -1 {

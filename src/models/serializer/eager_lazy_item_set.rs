@@ -52,7 +52,7 @@ where
                 let current_pos = writer.stream_position()?;
                 writer.seek(SeekFrom::Start(placeholder_pos))?;
                 writer.write_u32::<LittleEndian>(eager_item_offset)?;
-                writer.seek(SeekFrom::Start(item_placeholder_pos));
+                writer.seek(SeekFrom::Start(item_placeholder_pos))?;
                 writer.write_u32::<LittleEndian>(item_offset)?;
                 writer.seek(SeekFrom::Start(current_pos))?;
             }

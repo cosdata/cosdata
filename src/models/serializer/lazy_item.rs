@@ -70,7 +70,6 @@ impl CustomSerialize for LazyItemRef<MergedNode> {
         let mut arc = self.item.clone();
         let lazy_item = arc.get();
         let offset = if lazy_item.get_offset().is_none() {
-            drop(lazy_item);
             self.set_offset(Some(writer.stream_position()? as u32));
             let lazy_item = arc.get();
             lazy_item.serialize(writer)?

@@ -25,7 +25,7 @@ pub fn read_node_from_file<R: Read + Seek>(
 
     // Pretty print the node
     println!("Read NodePersist from offset {}:", offset);
-    println!("{}", node);
+    // println!("{}", node);
 
     Ok(node)
 }
@@ -44,26 +44,33 @@ pub fn write_node_update(
 
 pub fn persist_node_update_loc(
     ver_file: &mut CustomBufferedWriter,
-    node: &mut LazyItem<MergedNode>,
+    mut node: Item<LazyItem<MergedNode>>,
 ) -> Result<(), WaCustomError> {
-    let Some(data) = &node.data else {
+    let LazyItem::Valid {
+        data: Some(data), ..
+    } = node.get()
+    else {
         return Err(WaCustomError::LazyLoadingError("data is None".to_string()));
     };
-    let file_loc = write_node_update(ver_file, data.clone(), node.offset)?;
-    node.offset = Some(file_loc as u32);
+    let file_loc = write_node_update(ver_file, data.clone(), node.get_offset())?;
+    node.rcu(|node| {
+        let mut node = node.clone();
+        node.set_offset(Some(file_loc as u32));
+        node
+    });
     Ok(())
 }
 
-pub fn write_node_to_file(node: Item<MergedNode>, writer: &mut CustomBufferedWriter) -> u32 {
+pub fn write_node_to_file(mut node: Item<MergedNode>, writer: &mut CustomBufferedWriter) -> u32 {
     // Assume CustomBufferWriter already handles seeking to the end
     // Serialize
-    let result = node.read().unwrap().serialize(writer);
+    let result = node.get().serialize(writer);
     let offset = result.expect("Failed to serialize NodePersist & write to file");
     offset as u32
 }
 
 pub fn write_node_to_file_at_offset(
-    node: Item<MergedNode>,
+    mut node: Item<MergedNode>,
     writer: &mut CustomBufferedWriter,
     offset: u32,
 ) -> u32 {
@@ -72,16 +79,16 @@ pub fn write_node_to_file_at_offset(
         .seek(SeekFrom::Start(offset as u64))
         .expect("Failed to seek in file");
     // Serialize
-    let result = node.read().unwrap().serialize(writer);
+    let result = node.get().serialize(writer);
     let offset = result.expect("Failed to serialize NodePersist & write to file");
     offset as u32
 }
 //
-pub fn load_vector_id_lsmdb(level: HNSWLevel, vector_id: VectorId) -> Option<LazyItem<MergedNode>> {
-    None
+pub fn load_vector_id_lsmdb(_level: HNSWLevel, _vector_id: VectorId) -> LazyItem<MergedNode> {
+    LazyItem::Invalid
 }
 
-pub fn load_neighbor_persist_ref(level: HNSWLevel, node_file_ref: u32) -> Option<MergedNode> {
+pub fn load_neighbor_persist_ref(_level: HNSWLevel, _node_file_ref: u32) -> Option<MergedNode> {
     None
 }
 pub fn write_prop_to_file(prop: &NodeProp, mut file: &File) -> (u32, u32) {

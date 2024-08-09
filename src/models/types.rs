@@ -307,7 +307,7 @@ impl VectorQt {
 pub type SizeBytes = u32;
 
 // needed to flatten and get uniques
-pub type ExecQueueUpdate = Item<Vec<LazyItem<MergedNode>>>;
+pub type ExecQueueUpdate = Item<Vec<Item<LazyItem<MergedNode>>>>;
 
 #[derive(Debug, Clone)]
 pub struct MetaDb {
