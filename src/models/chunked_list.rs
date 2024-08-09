@@ -191,16 +191,6 @@ pub struct LazyItemMap<T: Clone + 'static> {
     pub items: Item<IdentityMap<LazyItem<T>>>,
 }
 
-impl<T: Clone> LazyItem<T> {
-    pub fn from_data(data: T) -> Self {
-        LazyItem::Valid {
-            data: Some(Item::new(data)),
-            offset: None,
-            decay_counter: 0,
-        }
-    }
-}
-
 impl<T: Clone + 'static> LazyItem<T> {
     pub fn new(item: T) -> Self {
         Self::Valid {
@@ -214,12 +204,28 @@ impl<T: Clone + 'static> LazyItem<T> {
         Self::Invalid
     }
 
+    pub fn from_data(data: T) -> Self {
+        LazyItem::Valid {
+            data: Some(Item::new(data)),
+            offset: None,
+            decay_counter: 0,
+        }
+    }
+
     pub fn from_item(item: Item<T>) -> Self {
         Self::Valid {
             data: Some(item),
             offset: None,
             decay_counter: 0,
         }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        matches!(self, Self::Valid { .. })
+    }
+
+    pub fn is_invalid(&self) -> bool {
+        matches!(self, Self::Invalid)
     }
 
     pub fn get_data(&self) -> Option<Item<T>> {
@@ -233,6 +239,13 @@ impl<T: Clone + 'static> LazyItem<T> {
         if let Self::Valid { data, .. } = self {
             *data = Some(Item::new(new_data))
         }
+    }
+
+    pub fn get_offset(&self) -> Option<FileOffset> {
+        if let Self::Valid { offset, .. } = self {
+            return *offset;
+        }
+        None
     }
 
     pub fn set_offset(&mut self, new_offset: Option<FileOffset>) {
@@ -269,6 +282,16 @@ impl<T: Clone + 'static> LazyItemRef<T> {
         }
     }
 
+    pub fn is_valid(&self) -> bool {
+        let mut arc = self.item.clone();
+        arc.get().is_valid()
+    }
+
+    pub fn is_invalid(&self) -> bool {
+        let mut arc = self.item.clone();
+        arc.get().is_invalid()
+    }
+
     pub fn get_data(&self) -> Option<Item<T>> {
         let mut arc = self.item.clone();
         if let LazyItem::Valid { data, .. } = arc.get() {
@@ -299,8 +322,10 @@ impl<T: Clone + 'static> LazyItemRef<T> {
         });
     }
 
-    pub fn set_offset(&mut self, new_offset: Option<FileOffset>) {
-        self.item.rcu(|item| {
+    pub fn set_offset(&self, new_offset: Option<FileOffset>) {
+        let mut arc = self.item.clone();
+
+        arc.rcu(|item| {
             let (data, decay_counter) = if let LazyItem::Valid {
                 data,
                 decay_counter,
@@ -341,6 +366,12 @@ where
         })
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = EagerLazyItem<T, E>> {
+        let mut arc = self.items.clone();
+        let vec: Vec<_> = arc.get().iter().map(Clone::clone).collect();
+        vec.into_iter()
+    }
+
     pub fn is_empty(&self) -> bool {
         let mut arc = self.items.clone();
         arc.get().is_empty()
@@ -367,6 +398,12 @@ impl<T: Clone + Identifiable<Id = u64> + 'static> LazyItemSet<T> {
             set.insert(item);
             set
         })
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = LazyItem<T>> {
+        let mut arc = self.items.clone();
+        let vec: Vec<_> = arc.get().iter().map(Clone::clone).collect();
+        vec.into_iter()
     }
 
     pub fn is_empty(&self) -> bool {
