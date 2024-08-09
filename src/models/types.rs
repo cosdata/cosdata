@@ -53,7 +53,18 @@ pub enum PropState {
     Pending(PropPersistRef),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+)]
 pub enum VectorId {
     Str(String),
     Int(i32),
@@ -317,7 +328,8 @@ pub type ExecQueueUpdate = Item<Vec<LazyItem<MergedNode>>>;
 #[derive(Debug, Clone)]
 pub struct MetaDb {
     pub env: Arc<Environment>,
-    pub db: Arc<Database>,
+    pub metadata_db: Arc<Database>,
+    pub embeddings_db: Arc<Database>,
 }
 
 #[derive(Debug, Clone)]
@@ -329,7 +341,7 @@ pub struct VectorStore {
     pub levels_prob: Arc<Vec<(f64, i32)>>,
     pub quant_dim: usize,
     pub prop_file: Arc<File>,
-    pub version_lmdb: MetaDb,
+    pub lmdb: MetaDb,
     pub current_version: Item<Option<VersionHash>>,
     pub current_open_transaction: Item<Option<VersionHash>>,
     pub quantization_metric: Arc<QuantizationMetric>,
@@ -346,7 +358,7 @@ impl VectorStore {
         levels_prob: Arc<Vec<(f64, i32)>>,
         quant_dim: usize,
         prop_file: Arc<File>,
-        version_lmdb: MetaDb,
+        lmdb: MetaDb,
         current_version: Item<Option<VersionHash>>,
         quantization_metric: Arc<QuantizationMetric>,
         distance_metric: Arc<DistanceMetric>,
@@ -360,7 +372,7 @@ impl VectorStore {
             levels_prob,
             quant_dim,
             prop_file,
-            version_lmdb,
+            lmdb,
             current_version,
             current_open_transaction: Arc::new(RwLock::new(None)),
             quantization_metric,
@@ -389,7 +401,7 @@ impl VectorStore {
         Ok(())
     }
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize, PartialEq)]
 pub struct VectorEmbedding {
     pub raw_vec: Arc<Storage>,
     pub hash_vec: VectorId,
@@ -416,7 +428,7 @@ pub fn get_app_env() -> Result<Arc<AppEnv>, WaCustomError> {
             create_dir_all(&path).map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
             // Initialize the environment
             let env = Environment::new()
-                .set_max_dbs(1)
+                .set_max_dbs(2)
                 .set_map_size(10485760) // Set the maximum size of the database to 10MB
                 .open(&path)
                 .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;

@@ -1,7 +1,16 @@
 use half::f16;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+    PartialEq,
+)]
 pub enum Storage {
     UnsignedByte {
         mag: u32,

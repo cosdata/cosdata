@@ -22,7 +22,8 @@ pub(crate) async fn upsert(web::Json(body): web::Json<UpsertVectors>) -> HttpRes
             // Vector store not found, return an error response
             return HttpResponse::InternalServerError().body("Vector store not found");
         }
-    };
+    }
+    .clone();
 
     if vec_store.current_open_transaction.read().unwrap().is_some() {
         return HttpResponse::Conflict()
@@ -30,8 +31,12 @@ pub(crate) async fn upsert(web::Json(body): web::Json<UpsertVectors>) -> HttpRes
     }
 
     // Call run_upload with the extracted parameters
-    let __result = run_upload(vec_store.clone(), convert_vectors(body.vectors)).await;
+    web::block(|| {
+        let __result = run_upload(vec_store, convert_vectors(body.vectors));
+    })
+    .await
+    .unwrap();
 
-    let response_data = RPCResponseBody::RespUpsertVectors { insert_stats: None }; //
+    let response_data = RPCResponseBody::RespUpsertVectors { insert_stats: None };
     HttpResponse::Ok().json(response_data)
 }

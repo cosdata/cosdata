@@ -3,7 +3,9 @@ use bs58;
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher24;
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(
+    Serialize, Deserialize, Clone, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 pub struct VersionHash {
     pub branch: String,
     pub version: u32,
