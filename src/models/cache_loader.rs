@@ -45,29 +45,32 @@ impl<R: Read + Seek> NodeRegistry<R> {
             &mut HashSet<FileOffset>,
         ) -> std::io::Result<MergedNode>,
     {
-        println!(
-            "get_object called with key: {:?}, max_loads: {}",
-            key, max_loads
-        );
-
         {
             let cuckoo_filter = self.cuckoo_filter.read().unwrap();
-            println!("Acquired read lock on cuckoo_filter");
 
             // Initial check with Cuckoo filter
             if cuckoo_filter.contains(&key) {
-                println!("Key found in cuckoo_filter");
                 if let Some(obj) = self.registry.get(&key) {
                     println!("Object found in registry, returning");
                     return Ok(obj.clone());
-                } else {
-                    println!("Object not found in registry despite being in cuckoo_filter");
                 }
-            } else {
-                println!("Key not found in cuckoo_filter");
             }
         }
-        println!("Released read lock on cuckoo_filter");
+
+        let mut data = Item::new(MergedNode::new(0, 0));
+
+        {
+            let mut cuckoo_filter = self.cuckoo_filter.write().unwrap();
+
+            cuckoo_filter.insert(&key);
+
+            let dummy_data = LazyItem::Valid {
+                data: Some(data.clone()),
+                offset: Item::new(Some(key)),
+                decay_counter: 0,
+            };
+            self.registry.insert(key, dummy_data);
+        }
 
         if max_loads == 0 || false == skipm.insert(key) {
             println!("max_loads is 0, returning LazyItem with no data");
@@ -78,30 +81,18 @@ impl<R: Read + Seek> NodeRegistry<R> {
             });
         }
 
-        println!("Calling load_function");
-        let obj = load_function(reader, key, self.clone(), max_loads - 1, skipm)?;
-        println!("load_function returned successfully");
-
-        if let Some(obj) = self.registry.get(&key) {
-            println!("Object found in registry after load, returning");
-            return Ok(obj.clone());
-        }
-
-        println!("Creating new LazyItem");
-        let item = LazyItem::Valid {
-            data: Some(Item::new(obj)),
-            offset: Item::new(Some(key)),
-            decay_counter: 0,
+        let obj = match load_function(reader, key, self.clone(), max_loads - 1, skipm) {
+            Ok(obj) => obj,
+            Err(err) => {
+                let mut cuckoo_filter = self.cuckoo_filter.write().unwrap();
+                cuckoo_filter.remove(&key);
+                self.registry.remove(&key);
+                return Err(err);
+            }
         };
 
-        println!("Inserting key into cuckoo_filter");
-        self.cuckoo_filter.write().unwrap().insert(&key);
-
-        println!("Inserting item into registry");
-        self.registry.insert(key, item.clone());
-
-        println!("Returning newly created LazyItem");
-        Ok(item)
+        data.update(obj.clone());
+        Ok(self.registry.get(&key).unwrap().clone())
     }
 
     pub fn load_item<T: CustomSerialize>(self: Arc<Self>, offset: u32) -> std::io::Result<T> {
