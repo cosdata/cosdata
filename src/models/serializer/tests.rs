@@ -459,4 +459,51 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_eager_lazy_item_set_linked_chunk_serialization() {
+        let lazy_items = EagerLazyItemSet::new();
+        for i in 1..13 {
+            lazy_items.insert(EagerLazyItem(
+                3.4,
+                LazyItem::from_data(simple_merged_node(i, 2)),
+            ));
+        }
+
+        let mut writer = Cursor::new(Vec::new());
+        let offset = lazy_items.serialize(&mut writer).unwrap();
+
+        let reader = Cursor::new(writer.into_inner());
+        let cache = get_cache(reader);
+        let deserialized: EagerLazyItemSet<MergedNode, f32> = cache.load_item(offset).unwrap();
+
+        assert_eq!(lazy_items.len(), deserialized.len());
+        for (original, deserialized) in lazy_items.iter().zip(deserialized.iter()) {
+            match (original, deserialized) {
+                (
+                    EagerLazyItem(
+                        original_data,
+                        LazyItem::Valid {
+                            data: Some(mut original_arc),
+                            ..
+                        },
+                    ),
+                    EagerLazyItem(
+                        deserialized_data,
+                        LazyItem::Valid {
+                            data: Some(mut deserialized_arc),
+                            ..
+                        },
+                    ),
+                ) => {
+                    let original = original_arc.get();
+                    let deserialized = deserialized_arc.get();
+                    assert_eq!(original_data, deserialized_data);
+                    assert_eq!(original.version_id, deserialized.version_id);
+                    assert_eq!(original.hnsw_level, deserialized.hnsw_level);
+                }
+                _ => panic!("Deserialization mismatch"),
+            }
+        }
+    }
 }
