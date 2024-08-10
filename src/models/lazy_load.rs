@@ -267,12 +267,12 @@ where
         }
     }
 
-    pub fn insert(&self, item: LazyItem<T>, eager_data: E) {
+    pub fn insert(&self, item: EagerLazyItem<T, E>) {
         let mut arc = self.items.clone();
 
         arc.rcu(|set| {
             let mut set = set.clone();
-            set.insert(EagerLazyItem(eager_data, item));
+            set.insert(item);
             set
         })
     }

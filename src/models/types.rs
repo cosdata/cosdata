@@ -160,7 +160,8 @@ impl MergedNode {
     }
 
     pub fn add_ready_neighbor(&self, neighbor: LazyItem<MergedNode>, cosine_similarity: f32) {
-        self.neighbors.insert(neighbor, cosine_similarity);
+        self.neighbors
+            .insert(EagerLazyItem(cosine_similarity, neighbor));
     }
 
     pub fn set_parent(&self, parent: LazyItem<MergedNode>) {

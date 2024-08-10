@@ -43,15 +43,10 @@ where
 
             // Serialize items and update placeholders
             for i in chunk_start..chunk_end {
-                let eager_item_offset = items[i].0.serialize(writer)?;
-                let item_placeholder_pos = writer.stream_position()?;
-                writer.write_u32::<LittleEndian>(0)?;
-                let item_offset = items[i].1.serialize(writer)?;
+                let item_offset = items[i].serialize(writer)?;
                 let placeholder_pos = placeholder_start as u64 + ((i - chunk_start) as u64 * 4);
                 let current_pos = writer.stream_position()?;
                 writer.seek(SeekFrom::Start(placeholder_pos))?;
-                writer.write_u32::<LittleEndian>(eager_item_offset)?;
-                writer.seek(SeekFrom::Start(item_placeholder_pos))?;
                 writer.write_u32::<LittleEndian>(item_offset)?;
                 writer.seek(SeekFrom::Start(current_pos))?;
             }
@@ -85,17 +80,15 @@ where
         loop {
             for i in 0..CHUNK_SIZE {
                 reader.seek(SeekFrom::Start(current_chunk as u64 + (i as u64 * 4)))?;
-                let eager_item_offset = reader.read_u32::<LittleEndian>()?;
-                if eager_item_offset == u32::MAX {
-                    continue;
-                }
-                // NOTE: this implementation assumes `E::deserialize` will leave us at the item offset
-                let eager_data =
-                    E::deserialize(reader, eager_item_offset, cache.clone(), max_loads, skipm)?;
                 let item_offset = reader.read_u32::<LittleEndian>()?;
-                let item =
-                    LazyItem::deserialize(reader, item_offset, cache.clone(), max_loads, skipm)?;
-                items.push(EagerLazyItem(eager_data, item));
+                let item = EagerLazyItem::deserialize(
+                    reader,
+                    item_offset,
+                    cache.clone(),
+                    max_loads,
+                    skipm,
+                )?;
+                items.push(item);
             }
             reader.seek(SeekFrom::Start(
                 current_chunk as u64 + CHUNK_SIZE as u64 * 4,
