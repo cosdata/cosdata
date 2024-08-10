@@ -60,6 +60,32 @@ mod tests {
     }
 
     #[test]
+    fn test_eager_lazy_item_serialization() {
+        let item = EagerLazyItem(10.5, LazyItem::new(simple_merged_node(1, 2)));
+
+        let mut writer = Cursor::new(Vec::new());
+        let offset = item.serialize(&mut writer).unwrap();
+
+        let reader = Cursor::new(writer.into_inner());
+        let cache = get_cache(reader);
+        let deserialized: EagerLazyItem<MergedNode, f32> = cache.load_item(offset).unwrap();
+
+        assert_eq!(item.0, deserialized.0);
+
+        if let (Some(mut node_arc), Some(mut deserialized_arc)) =
+            (item.1.get_data(), deserialized.1.get_data())
+        {
+            let node = node_arc.get();
+            let deserialized = deserialized_arc.get();
+
+            assert_eq!(node.version_id, deserialized.version_id);
+            assert_eq!(node.hnsw_level, deserialized.hnsw_level);
+        } else {
+            panic!("Deserialization mismatch");
+        }
+    }
+
+    #[test]
     fn test_lazy_item_set_serialization() {
         let lazy_items = LazyItemSet::new();
         lazy_items.insert(LazyItem::from_data(simple_merged_node(1, 2)));

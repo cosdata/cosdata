@@ -40,6 +40,7 @@ where
     where
         Self: Sized,
     {
+        reader.seek(SeekFrom::Start(offset as u64))?;
         let eager_data = E::deserialize(reader, offset, cache.clone(), max_loads, skipm)?;
         let item_offset = reader.read_u32::<LittleEndian>()?;
         let item = LazyItem::deserialize(reader, item_offset, cache, max_loads, skipm)?;
