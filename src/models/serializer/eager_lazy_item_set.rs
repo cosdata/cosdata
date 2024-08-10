@@ -81,6 +81,9 @@ where
             for i in 0..CHUNK_SIZE {
                 reader.seek(SeekFrom::Start(current_chunk as u64 + (i as u64 * 4)))?;
                 let item_offset = reader.read_u32::<LittleEndian>()?;
+                if item_offset == u32::MAX {
+                    continue;
+                }
                 let item = EagerLazyItem::deserialize(
                     reader,
                     item_offset,
