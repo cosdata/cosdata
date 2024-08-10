@@ -340,44 +340,25 @@ mod tests {
         node2.get().set_child(lazy1.clone());
         node2.get().set_parent(lazy3.clone());
         node3.get().set_child(lazy2.clone());
-        node1.get().add_ready_neighbor(
-            LazyItem::Valid {
-                data: Some(node3),
-                offset: None,
-                decay_counter: 0,
-            },
-            0.9,
-        );
+        node1
+            .get()
+            .add_ready_neighbor(LazyItem::from_item(node3), 0.9);
 
         let lazy_ref = LazyItemRef::from_lazy(lazy1);
 
         let mut writer = Cursor::new(Vec::new());
         let offset = lazy_ref.serialize(&mut writer).unwrap();
-        // Print the contents of the cursor
-        let serialized_data = writer.clone().into_inner();
-        println!("Serialized data: {:?}", serialized_data);
         let reader = Cursor::new(writer.into_inner());
-        println!("Reader created");
 
         let cache = get_cache(reader);
-        println!("Cache created");
 
         let deserialized: LazyItemRef<MergedNode> = cache.load_item(offset).unwrap();
-        // println!("Deserialized: {:?}", deserialized);
 
         let mut deserialized_data_arc = deserialized.get_data().unwrap();
         let deserialized_data = deserialized_data_arc.get();
 
-        println!(
-            "Number of neighbors: {}",
-            deserialized_data.get_neighbors().len()
-        );
-
         let mut parent_ref = deserialized_data.get_parent();
         let parent = parent_ref.item.get();
-
-        // let parent_guard = parent.item.;
-        // println!("Parent guard: {:?}", parent_guard);
 
         // Deserialize the parent
         if let LazyItem::Valid {
@@ -394,31 +375,14 @@ mod tests {
 
             let grand_parent = grand_parent_ref.item.get();
 
-            println!(
-                "Child guard matches: {}",
-                matches!(
-                    child,
-                    LazyItem::Valid {
-                        data: Some(_),
-                        offset: Some(_),
-                        ..
-                    }
-                )
-            );
+            assert!(child.is_invalid());
+            assert!(matches!(child, LazyItem::Valid { data: Some(_), .. }));
 
-            println!(
-                "Grand parent guard matches: {}",
-                matches!(
-                    grand_parent,
-                    LazyItem::Valid {
-                        data: Some(_),
-                        offset: Some(_),
-                        ..
-                    }
-                )
-            );
+            assert!(matches!(
+                grand_parent,
+                LazyItem::Valid { data: Some(_), .. }
+            ));
         } else {
-            println!("Deserialization Error: Parent data not found");
             panic!("Deserialization Error");
         }
     }
