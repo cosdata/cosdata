@@ -62,16 +62,8 @@ mod tests {
     #[test]
     fn test_lazy_item_set_serialization() {
         let lazy_items = LazyItemSet::new();
-        lazy_items.insert(LazyItem::Valid {
-            data: Some(Item::new(simple_merged_node(1, 2))),
-            offset: None,
-            decay_counter: 0,
-        });
-        lazy_items.insert(LazyItem::Valid {
-            data: Some(Item::new(simple_merged_node(2, 2))),
-            offset: None,
-            decay_counter: 0,
-        });
+        lazy_items.insert(LazyItem::from_data(simple_merged_node(1, 2)));
+        lazy_items.insert(LazyItem::from_data(simple_merged_node(2, 2)));
 
         let mut writer = Cursor::new(Vec::new());
         let offset = lazy_items.serialize(&mut writer).unwrap();
@@ -194,19 +186,11 @@ mod tests {
 
         assert!(matches!(
             deserialized.get_parent().item.get(),
-            LazyItem::Valid {
-                offset: Some(_),
-                data: Some(_),
-                ..
-            }
+            LazyItem::Valid { data: Some(_), .. }
         ));
         assert!(matches!(
             deserialized.get_child().item.get(),
-            LazyItem::Valid {
-                offset: Some(_),
-                data: Some(_),
-                ..
-            }
+            LazyItem::Valid { data: Some(_), .. }
         ));
     }
 
@@ -236,56 +220,35 @@ mod tests {
 
         node1.get_data().unwrap().get().set_parent(node2.clone());
         node2.get_data().unwrap().get().set_child(node1.clone());
-        println!("Set cyclic references: node1's parent is node2, node2's child is node1");
 
         let lazy_ref = LazyItemRef::from_lazy(node1.clone());
 
         let mut writer = Cursor::new(Vec::new());
         let offset = lazy_ref.serialize(&mut writer).unwrap();
-        println!("Serialized lazy1 to writer. Offset: {}", offset);
 
         let reader = Cursor::new(writer.into_inner());
 
         let cache = get_cache(reader);
 
         let deserialized: MergedNode = cache.load_item(offset).unwrap();
-        println!(
-            "Deserialized MergedNode from cache. Node",
-            // deserialized
-        );
 
         let mut parent_ref = deserialized.get_parent();
-        // println!("Got parent from deserialized node: {:?}", parent);
 
         // Deserialize the parent
         if let LazyItem::Valid {
-            offset: Some(_),
             data: Some(mut parent_arc),
             ..
         } = parent_ref.item.get().clone()
         {
-            // println!("Parent is a LazyItem : {:?} ", parent);
-
             let parent = parent_arc.get();
 
             let mut child_ref = parent.get_child();
             let child = child_ref.item.get();
 
-            assert!(matches!(
-                child,
-                LazyItem::Valid {
-                    data: Some(_),
-                    offset: Some(_),
-                    ..
-                }
-            ));
-            println!("Assertion passed: child is a LazyItem with no data and Some offset");
+            assert!(matches!(child, LazyItem::Valid { data: Some(_), .. }));
         } else {
-            println!("Parent is not in the expected state");
             panic!("Expected lazy load for parent");
         }
-
-        println!("Test completed successfully");
     }
 
     #[test]

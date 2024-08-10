@@ -14,7 +14,7 @@ pub const CHUNK_SIZE: usize = 5;
 pub enum LazyItem<T: Clone + 'static> {
     Valid {
         data: Option<Item<T>>,
-        offset: Option<FileOffset>,
+        offset: Item<Option<FileOffset>>,
         decay_counter: usize,
     },
     Invalid,
@@ -40,8 +40,8 @@ where
 
     fn get_id(&self) -> Self::Id {
         if let LazyItem::Valid { data, offset, .. } = self {
-            if let Some(offset) = offset {
-                return LazyItemId::Persist(*offset);
+            if let Some(offset) = offset.clone().get().clone() {
+                return LazyItemId::Persist(offset);
             }
 
             if let Some(data) = data {
@@ -100,7 +100,7 @@ impl<T: Clone + 'static> LazyItem<T> {
     pub fn new(item: T) -> Self {
         Self::Valid {
             data: Some(Item::new(item)),
-            offset: None,
+            offset: Item::new(None),
             decay_counter: 0,
         }
     }
@@ -112,7 +112,7 @@ impl<T: Clone + 'static> LazyItem<T> {
     pub fn from_data(data: T) -> Self {
         LazyItem::Valid {
             data: Some(Item::new(data)),
-            offset: None,
+            offset: Item::new(None),
             decay_counter: 0,
         }
     }
@@ -120,7 +120,7 @@ impl<T: Clone + 'static> LazyItem<T> {
     pub fn from_item(item: Item<T>) -> Self {
         Self::Valid {
             data: Some(item),
-            offset: None,
+            offset: Item::new(None),
             decay_counter: 0,
         }
     }
@@ -148,14 +148,14 @@ impl<T: Clone + 'static> LazyItem<T> {
 
     pub fn get_offset(&self) -> Option<FileOffset> {
         if let Self::Valid { offset, .. } = self {
-            return *offset;
+            return offset.clone().get().clone();
         }
         None
     }
 
-    pub fn set_offset(&mut self, new_offset: Option<FileOffset>) {
+    pub fn set_offset(&self, new_offset: Option<FileOffset>) {
         if let Self::Valid { offset, .. } = self {
-            *offset = new_offset;
+            offset.clone().update(new_offset);
         }
     }
 }
@@ -165,7 +165,7 @@ impl<T: Clone + 'static> LazyItemRef<T> {
         Self {
             item: Item::new(LazyItem::Valid {
                 data: Some(Item::new(item)),
-                offset: None,
+                offset: Item::new(None),
                 decay_counter: 0,
             }),
         }
@@ -181,7 +181,7 @@ impl<T: Clone + 'static> LazyItemRef<T> {
         Self {
             item: Item::new(LazyItem::Valid {
                 data: Some(item),
-                offset: None,
+                offset: Item::new(None),
                 decay_counter: 0,
             }),
         }
@@ -223,7 +223,7 @@ impl<T: Clone + 'static> LazyItemRef<T> {
             {
                 (offset.clone(), *decay_counter)
             } else {
-                (None, 0)
+                (Item::new(None), 0)
             };
             LazyItem::Valid {
                 data: Some(Item::new(new_data)),
@@ -249,7 +249,7 @@ impl<T: Clone + 'static> LazyItemRef<T> {
             };
             LazyItem::Valid {
                 data,
-                offset: new_offset,
+                offset: Item::new(new_offset),
                 decay_counter,
             }
         });

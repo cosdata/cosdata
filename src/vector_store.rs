@@ -4,7 +4,6 @@ use crate::distance::DistanceFunction;
 use crate::models::common::*;
 use crate::models::custom_buffered_writer::CustomBufferedWriter;
 use crate::models::file_persist::*;
-use crate::models::identity_collections::IdentitySet;
 use crate::models::lazy_load::*;
 use crate::models::meta_persist::*;
 use crate::models::types::*;
@@ -12,7 +11,6 @@ use crate::storage::Storage;
 use std::collections::HashSet;
 use std::fs::File;
 use std::sync::Arc;
-use std::sync::RwLock;
 
 pub fn ann_search(
     vec_store: Arc<VectorStore>,
@@ -34,13 +32,19 @@ pub fn ann_search(
         } => node,
         LazyItem::Valid {
             data: None,
-            offset: Some(offset),
+            mut offset,
             ..
         } => {
-            return Err(WaCustomError::LazyLoadingError(format!(
-                "Node at offset {} needs to be loaded",
-                offset
-            )))
+            if let Some(offset) = offset.get() {
+                return Err(WaCustomError::LazyLoadingError(format!(
+                    "Node at offset {} needs to be loaded",
+                    offset
+                )));
+            } else {
+                return Err(WaCustomError::NodeError(
+                    "Current entry is null".to_string(),
+                ));
+            }
         }
         _ => {
             return Err(WaCustomError::NodeError(
@@ -117,16 +121,22 @@ pub fn vector_fetch(
                         } => get_vector_id_from_node(node.clone().get()).map(|id| (id, ne.0)),
                         LazyItem::Valid {
                             data: None,
-                            offset: Some(xloc),
+                            mut offset,
                             ..
-                        } => match load_neighbor_from_db(xloc, &vec_store) {
-                            Ok(Some(info)) => Some(info),
-                            Ok(None) => None,
-                            Err(e) => {
-                                eprintln!("Error loading neighbor: {}", e);
+                        } => {
+                            if let Some(xloc) = offset.get() {
+                                match load_neighbor_from_db(*xloc, &vec_store) {
+                                    Ok(Some(info)) => Some(info),
+                                    Ok(None) => None,
+                                    Err(e) => {
+                                        eprintln!("Error loading neighbor: {}", e);
+                                        None
+                                    }
+                                }
+                            } else {
                                 None
                             }
-                        },
+                        }
                         _ => None,
                     })
                     .collect();
@@ -134,16 +144,22 @@ pub fn vector_fetch(
             }
             LazyItem::Valid {
                 data: None,
-                offset: Some(xloc),
+                mut offset,
                 ..
-            } => match load_node_from_persist(xloc, &vec_store) {
-                Ok(Some((id, neighbors))) => Some((id, neighbors)),
-                Ok(None) => None,
-                Err(e) => {
-                    eprintln!("Error loading vector: {}", e);
+            } => {
+                if let Some(xloc) = offset.get() {
+                    match load_node_from_persist(*xloc, &vec_store) {
+                        Ok(Some((id, neighbors))) => Some((id, neighbors)),
+                        Ok(None) => None,
+                        Err(e) => {
+                            eprintln!("Error loading vector: {}", e);
+                            None
+                        }
+                    }
+                } else {
                     None
                 }
-            },
+            }
             _ => None,
         };
         results.push(neighbors);
@@ -224,13 +240,19 @@ pub fn insert_embedding(
         } => node,
         LazyItem::Valid {
             data: None,
-            offset: Some(offset),
+            mut offset,
             ..
         } => {
-            return Err(WaCustomError::LazyLoadingError(format!(
-                "Node at offset {} needs to be loaded",
-                offset
-            )))
+            if let Some(offset) = offset.get() {
+                return Err(WaCustomError::LazyLoadingError(format!(
+                    "Node at offset {} needs to be loaded",
+                    offset
+                )));
+            } else {
+                return Err(WaCustomError::NodeError(
+                    "Current entry is null".to_string(),
+                ));
+            }
         }
         _ => {
             return Err(WaCustomError::NodeError(
@@ -313,16 +335,18 @@ pub fn queue_node_prop_exec(
             data: Some(node),
             offset,
             ..
-        } => (node.clone(), *offset),
+        } => (node.clone(), offset.clone().get().clone()),
         LazyItem::Valid {
-            data: None,
-            offset: Some(offset),
-            ..
+            data: None, offset, ..
         } => {
-            return Err(WaCustomError::LazyLoadingError(format!(
-                "Node at offset {} needs to be loaded",
-                offset
-            )))
+            if let Some(offset) = offset.clone().get().clone() {
+                return Err(WaCustomError::LazyLoadingError(format!(
+                    "Node at offset {} needs to be loaded",
+                    offset
+                )));
+            } else {
+                return Err(WaCustomError::NodeError("Node is null".to_string()));
+            }
         }
         _ => return Err(WaCustomError::NodeError("Node is null".to_string())),
     };
@@ -447,20 +471,31 @@ fn traverse_find_nearest(
 ) -> Result<Vec<(LazyItem<MergedNode>, f32)>, WaCustomError> {
     let mut tasks: SmallVec<[Vec<(LazyItem<MergedNode>, f32)>; 24]> = SmallVec::new();
 
-    let mut node_arc = match vtm {
+    let mut node_arc = match vtm.clone() {
         LazyItem::Valid {
             data: Some(node), ..
-        } => node.clone(),
+        } => node,
         LazyItem::Valid {
             data: None,
-            offset: Some(_),
+            mut offset,
             ..
         } => {
-            return Err(WaCustomError::LazyLoadingError(
-                "Node needs to be loaded".to_string(),
+            if let Some(offset) = offset.get() {
+                return Err(WaCustomError::LazyLoadingError(format!(
+                    "Node at offset {} needs to be loaded",
+                    offset
+                )));
+            } else {
+                return Err(WaCustomError::NodeError(
+                    "Current entry is null".to_string(),
+                ));
+            }
+        }
+        _ => {
+            return Err(WaCustomError::NodeError(
+                "Current entry is null".to_string(),
             ))
         }
-        _ => return Err(WaCustomError::NodeError("Node is null".to_string())),
     };
 
     let node = node_arc.get();

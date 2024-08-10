@@ -73,7 +73,7 @@ impl<R: Read + Seek> NodeRegistry<R> {
             println!("max_loads is 0, returning LazyItem with no data");
             return Ok(LazyItem::Valid {
                 data: None,
-                offset: Some(key),
+                offset: Item::new(Some(key)),
                 decay_counter: 0,
             });
         }
@@ -90,7 +90,7 @@ impl<R: Read + Seek> NodeRegistry<R> {
         println!("Creating new LazyItem");
         let item = LazyItem::Valid {
             data: Some(Item::new(obj)),
-            offset: Some(key),
+            offset: Item::new(Some(key)),
             decay_counter: 0,
         };
 

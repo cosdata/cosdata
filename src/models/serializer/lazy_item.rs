@@ -16,7 +16,7 @@ impl CustomSerialize for LazyItem<MergedNode> {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
         match self {
             Self::Valid { data, offset, .. } => {
-                if let Some(existing_offset) = *offset {
+                if let Some(existing_offset) = offset.clone().get().clone() {
                     if let Some(data) = &data {
                         let mut arc = data.clone();
                         let data = arc.get();
@@ -35,7 +35,10 @@ impl CustomSerialize for LazyItem<MergedNode> {
                 } else {
                     if let Some(data) = &data {
                         let mut arc = data.clone();
-                        arc.get().serialize(writer)
+                        let offset = writer.stream_position()? as u32;
+                        self.set_offset(Some(offset));
+                        let offset = arc.get().serialize(writer)?;
+                        Ok(offset)
                     } else {
                         Err(std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
@@ -69,13 +72,7 @@ impl CustomSerialize for LazyItemRef<MergedNode> {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
         let mut arc = self.item.clone();
         let lazy_item = arc.get();
-        let offset = if lazy_item.get_offset().is_none() {
-            self.set_offset(Some(writer.stream_position()? as u32));
-            let lazy_item = arc.get();
-            lazy_item.serialize(writer)?
-        } else {
-            lazy_item.serialize(writer)?
-        };
+        let offset = lazy_item.serialize(writer)?;
 
         Ok(offset)
     }

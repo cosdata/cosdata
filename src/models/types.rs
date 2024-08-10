@@ -189,11 +189,7 @@ impl MergedNode {
     // }
 
     pub fn add_version(&self, version: Item<MergedNode>) {
-        let lazy_item = LazyItem::Valid {
-            data: Some(version),
-            offset: None,
-            decay_counter: 0,
-        };
+        let lazy_item = LazyItem::from_item(version);
         // TODO: look at the id
         self.versions.insert(IdentityMapKey::Int(0), lazy_item);
     }
