@@ -375,7 +375,6 @@ mod tests {
 
             let grand_parent = grand_parent_ref.item.get();
 
-            assert!(child.is_invalid());
             assert!(matches!(child, LazyItem::Valid { data: Some(_), .. }));
 
             assert!(matches!(
