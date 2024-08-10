@@ -84,7 +84,7 @@ pub async fn init_vector_store(
         });
         let current_node = Arc::new(RwLock::new(MergedNode {
             version_id: 0, // Initialize with appropriate version ID
-            hnsw_level: l as u8,
+            hnsw_level: HNSWLevel(l),
             prop: Arc::new(RwLock::new(PropState::Ready(prop.clone()))),
             neighbors: LazyItems::new(),
             parent: None,

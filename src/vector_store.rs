@@ -111,7 +111,7 @@ pub fn vector_fetch(
     let mut results = Vec::new();
 
     for lev in 0..vec_store.max_cache_level {
-        let maybe_res = load_vector_id_lsmdb(lev, vector_id.clone());
+        let maybe_res = load_vector_id_lsmdb(HNSWLevel(lev), vector_id.clone());
         let neighbors = match maybe_res {
             Some(LazyItem {
                 data: Some(vth), ..
@@ -411,7 +411,7 @@ fn insert_node_create_edges(
         value: fvec.clone(),
         location: None,
     };
-    let nn = Arc::new(RwLock::new(MergedNode::new(0, cur_level as u8))); // Assuming MergedNode::new exists
+    let nn = Arc::new(RwLock::new(MergedNode::new(0, HNSWLevel(cur_level as u8)))); // Assuming MergedNode::new exists
     nn.read().unwrap().set_prop_ready(Arc::new(node_prop));
 
     nn.read().unwrap().add_ready_neighbors(nbs.clone());

@@ -23,7 +23,8 @@ use std::path::Path;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
-pub type HNSWLevel = u8;
+#[derive(Debug, Clone)]
+pub struct HNSWLevel(pub u8);
 pub type FileOffset = u32;
 pub type BytesToRead = u32;
 pub type VersionId = u16;
@@ -269,7 +270,7 @@ impl fmt::Display for MergedNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "MergedNode {{ version_id: {}, hnsw_level: {}, prop: {:?}, neighbors: {:?}, parent: {:?}, child: {:?}, version_ref: {:?} }}",
             self.version_id,
-            self.hnsw_level,
+            self.hnsw_level.0,
             self.prop.read().unwrap(),
             self.neighbors,
             self.parent,
