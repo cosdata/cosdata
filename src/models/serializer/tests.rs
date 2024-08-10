@@ -352,7 +352,7 @@ mod tests {
 
         let cache = get_cache(reader);
 
-        let deserialized: LazyItemRef<MergedNode> = cache.load_item(offset).unwrap();
+        let deserialized: LazyItemRef<MergedNode> = cache.clone().load_item(offset).unwrap();
 
         let mut deserialized_data_arc = deserialized.get_data().unwrap();
         let deserialized_data = deserialized_data_arc.get();
@@ -375,7 +375,15 @@ mod tests {
 
             let grand_parent = grand_parent_ref.item.get();
 
-            assert!(matches!(child, LazyItem::Valid { data: Some(_), .. }));
+            if let LazyItem::Valid {
+                data: None, offset, ..
+            } = &child
+            {
+                let offset = offset.clone().get().clone().unwrap();
+                let _: MergedNode = cache.load_item(offset).unwrap();
+            } else {
+                panic!("Deserialization mismatch");
+            }
 
             assert!(matches!(
                 grand_parent,
