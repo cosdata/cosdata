@@ -37,7 +37,9 @@ impl CustomSerialize for LazyItem<MergedNode> {
                         let mut arc = data.clone();
                         let offset = writer.stream_position()? as u32;
                         self.set_offset(Some(offset));
-                        let offset = arc.get().serialize(writer)?;
+                        let data = arc.get();
+                        data.set_persistence(false);
+                        let offset = data.serialize(writer)?;
                         Ok(offset)
                     } else {
                         Err(std::io::Error::new(
