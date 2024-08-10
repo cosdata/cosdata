@@ -12,6 +12,8 @@ use std::fs::create_dir_all;
 use std::path::Path;
 use std::sync::Arc;
 use std::{fs::File, io::BufReader};
+use cosdata::config_loader::load_config;
+use actix_web::web::Data;
 
 use crate::models::types::*;
 use crate::{api, WaCustomError};
@@ -46,12 +48,14 @@ async fn index_manual(body: web::Bytes) -> Result<HttpResponse, Error> {
 }
 
 #[actix_web::main]
-pub async fn run_actix_server(host: &str, port: &str) -> std::io::Result<()> {
+pub async fn run_actix_server() -> std::io::Result<()> {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
 
     let config = load_rustls_config();
 
-    log::info!("starting HTTPS server at https://{}", format!("{}:{}",host, port));
+    let config_data = Data::new(load_config());
+
+    log::info!("starting HTTPS server at https://{}", format!("{}:{}",&config_data.server.host, &config_data.server.port));
 
     HttpServer::new(move || {
         let auth = HttpAuthentication::bearer(validator);
@@ -101,6 +105,8 @@ pub async fn run_actix_server(host: &str, port: &str) -> std::io::Result<()> {
                             ),
                     ),
             )
+            .app_data(Data::new(load_config()).clone())
+
         // .service(web::resource("/index").route(web::post().to(index)))
         // .service(
         //     web::resource("/extractor")
@@ -111,7 +117,7 @@ pub async fn run_actix_server(host: &str, port: &str) -> std::io::Result<()> {
         // .service(web::resource("/manual").route(web::post().to(index_manual)))
         // .service(web::resource("/").route(web::post().to(index)))
     })
-    .bind_rustls_0_23(format!("{}:{}",host, port), config)?
+    .bind_rustls_0_23(format!("{}:{}", config_data.server.host, config_data.server.port), config)?
     .run()
     .await
 }

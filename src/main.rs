@@ -8,7 +8,6 @@ pub(crate) mod api;
 pub mod distance;
 pub mod quantization;
 pub mod storage;
-use cosdata::config_loader::load_config;
 
 use crate::models::common::*;
 
@@ -18,9 +17,8 @@ use crate::models::common::*;
 
 
 fn main() {
-    let config = load_config();
 
-    let _ = run_actix_server(&config.server.host, &config.server.port);
+    let _ = run_actix_server();
     load_cache();
     ()
 }

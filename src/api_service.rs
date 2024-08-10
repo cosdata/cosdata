@@ -20,6 +20,10 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::rc::Rc;
 use std::sync::{Arc, RwLock};
+use cosdata::config_loader::Config;
+use actix_web::{web};
+
+
 
 pub async fn init_vector_store(
     name: String,
@@ -173,7 +177,7 @@ pub async fn init_vector_store(
     Ok(())
 }
 
-pub fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<(VectorIdValue, Vec<f32>)>) {
+pub fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<(VectorIdValue, Vec<f32>)>, config: web::Data<Config>) {
     vecxx.into_par_iter().for_each(|(id, vec)| {
         let hash_vec = convert_value(id);
         let storage = vec_store
@@ -205,9 +209,10 @@ pub fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<(VectorIdValue, Vec<f3
 
     txn.abort();
 
+
     // TODO(kannan): load the threshold value from config file
-    if count_unindexed >= 100 {
-        index_embeddings(vec_store.clone()).expect("Failed to index embeddings");
+    if count_unindexed >= config.threshold {
+        index_embeddings(vec_store.clone(), config.batch_size).expect("Failed to index embeddings");
     }
 
     // Update version
