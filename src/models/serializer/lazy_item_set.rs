@@ -24,7 +24,7 @@ where
         };
         let start_offset = writer.stream_position()? as u32;
         let mut items_arc = self.items.clone();
-        let mut items: Vec<_> = items_arc.get().iter().map(Clone::clone).collect();
+        let items: Vec<_> = items_arc.get().iter().map(Clone::clone).collect();
         let total_items = items.len();
 
         for chunk_start in (0..total_items).step_by(CHUNK_SIZE) {
@@ -61,8 +61,6 @@ where
             }
             writer.seek(SeekFrom::Start(next_chunk_start as u64))?;
         }
-        let new_set = IdentitySet::from_iter(items.into_iter());
-        items_arc.update(new_set);
         Ok(start_offset)
     }
 
