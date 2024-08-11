@@ -1,6 +1,6 @@
 use nom::{branch::alt, bytes::complete::tag, combinator::map, IResult};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DataType {
     String,
     Int,
@@ -17,4 +17,26 @@ pub fn parse_data_type(input: &str) -> IResult<&str, DataType> {
         map(tag("date"), |_| DataType::Date),
         map(tag("boolean"), |_| DataType::Boolean),
     ))(input)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_type_parser() {
+        let values = [
+            ("string", DataType::String),
+            ("int", DataType::Int),
+            ("double", DataType::Double),
+            ("date", DataType::Date),
+            ("boolean", DataType::Boolean),
+        ];
+
+        for (source, expected) in values {
+            let (_, parsed) = parse_data_type(source).unwrap();
+
+            assert_eq!(parsed, expected);
+        }
+    }
 }
