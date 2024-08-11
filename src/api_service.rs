@@ -7,7 +7,9 @@ use crate::models::rpc::VectorIdValue;
 use crate::models::types::*;
 use crate::models::user::Statistics;
 use crate::quantization::{Quantization, StorageType};
-use futures::stream::{self, StreamExt};
+use crate::vector_store::*;
+use actix_web::web;
+use cosdata::config_loader::Config;
 use lmdb::{DatabaseFlags, Transaction};
 use rand::Rng;
 use rayon::iter::IntoParallelIterator;
@@ -17,9 +19,7 @@ use std::cell::RefCell;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::rc::Rc;
-use cosdata::config_loader::Config;
-use actix_web::{web};
-use std::sync::{atomic::AtomicBool, Arc, RwLock};
+use std::sync::{atomic::AtomicBool, Arc};
 
 pub async fn init_vector_store(
     name: String,
@@ -96,7 +96,6 @@ pub async fn init_vector_store(
         let nn = LazyItemRef::from_item(current_node.clone());
 
         if let Some(prev_node) = prev.item.get().get_data() {
-            let mut prev_guard = prev_node.clone();
             current_node
                 .get()
                 .set_parent(prev.clone().item.get().clone());
@@ -166,14 +165,16 @@ pub async fn init_vector_store(
 
     let result = store_current_version(vec_store.clone(), "main".to_string(), 0);
     let version_hash = result.expect("Failed to get VersionHash");
-    vec_store
-        .set_current_version(Some(version_hash))
-        .expect("failed to store version");
+    vec_store.set_current_version(Some(version_hash));
 
     Ok(())
 }
 
-pub async fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<(VectorIdValue, Vec<f32>)>) -> () {
+pub async fn run_upload(
+    vec_store: Arc<VectorStore>,
+    vecxx: Vec<(VectorIdValue, Vec<f32>)>,
+    config: web::Data<Config>,
+) -> () {
     vecxx.into_par_iter().for_each(|(id, vec)| {
         let hash_vec = convert_value(id);
         let storage = vec_store
@@ -204,7 +205,7 @@ pub async fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<(VectorIdValue, 
         .expect("Failed to retrieve `count_unindexed`");
 
     txn.abort();
-  
+
     if count_unindexed >= config.threshold {
         index_embeddings(vec_store.clone(), config.batch_size).expect("Failed to index embeddings");
     }
