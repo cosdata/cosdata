@@ -26,7 +26,7 @@ mod tests {
 
     #[test]
     fn test_lazy_item_serialization() {
-        let node = simple_merged_node(1, HNSWLevel(2));
+        let node = simple_merged_node(VersionId(1), HNSWLevel(2));
         let lazy_item = LazyItemRef::new(node);
 
         let mut writer = Cursor::new(Vec::new());
@@ -51,7 +51,7 @@ mod tests {
             ) => {
                 let original_guard = original.read().unwrap();
                 let deserialized_guard = deserialized.read().unwrap();
-                assert_eq!(original_guard.version_id, deserialized_guard.version_id);
+                assert_eq!(original_guard.version_id.0, deserialized_guard.version_id.0);
                 assert_eq!(original_guard.hnsw_level.0, deserialized_guard.hnsw_level.0);
             }
             _ => panic!("Deserialization mismatch"),
@@ -62,12 +62,18 @@ mod tests {
     fn test_lazy_items_serialization() {
         let lazy_items = LazyItems::new();
         lazy_items.push(LazyItem {
-            data: Some(Arc::new(RwLock::new(simple_merged_node(1, HNSWLevel(2))))),
+            data: Some(Arc::new(RwLock::new(simple_merged_node(
+                VersionId(1),
+                HNSWLevel(2),
+            )))),
             offset: None,
             decay_counter: 0,
         });
         lazy_items.push(LazyItem {
-            data: Some(Arc::new(RwLock::new(simple_merged_node(2, HNSWLevel(2))))),
+            data: Some(Arc::new(RwLock::new(simple_merged_node(
+                VersionId(2),
+                HNSWLevel(2),
+            )))),
             offset: None,
             decay_counter: 0,
         });
@@ -94,7 +100,7 @@ mod tests {
                 ) => {
                     let original_guard = original.read().unwrap();
                     let deserialized_guard = deserialized.read().unwrap();
-                    assert_eq!(original_guard.version_id, deserialized_guard.version_id);
+                    assert_eq!(original_guard.version_id.0, deserialized_guard.version_id.0);
                     assert_eq!(original_guard.hnsw_level.0, deserialized_guard.hnsw_level.0);
                 }
                 _ => panic!("Deserialization mismatch"),
@@ -104,7 +110,7 @@ mod tests {
 
     #[test]
     fn test_merged_node_acyclic_serialization() {
-        let node = simple_merged_node(1, HNSWLevel(2));
+        let node = simple_merged_node(VersionId(1), HNSWLevel(2));
 
         let mut writer = Cursor::new(Vec::new());
         let offset = node.serialize(&mut writer).unwrap();
@@ -113,7 +119,7 @@ mod tests {
         let cache = get_cache(reader);
         let deserialized: MergedNode = cache.load_item(FileOffset(offset)).unwrap();
 
-        assert_eq!(node.version_id, deserialized.version_id);
+        assert_eq!(node.version_id.0, deserialized.version_id.0);
         assert_eq!(node.hnsw_level.0, deserialized.hnsw_level.0);
         assert!(deserialized.get_parent().is_none());
         assert!(deserialized.get_child().is_none());
@@ -123,10 +129,10 @@ mod tests {
 
     #[test]
     fn test_merged_node_with_neighbors_serialization() {
-        let node = MergedNode::new(1, HNSWLevel(2));
+        let node = MergedNode::new(VersionId(1), HNSWLevel(2));
 
-        let neighbor1 = LazyItem::with_data(MergedNode::new(2, HNSWLevel(1)));
-        let neighbor2 = LazyItem::with_data(MergedNode::new(3, HNSWLevel(1)));
+        let neighbor1 = LazyItem::with_data(MergedNode::new(VersionId(2), HNSWLevel(1)));
+        let neighbor2 = LazyItem::with_data(MergedNode::new(VersionId(3), HNSWLevel(1)));
         node.add_ready_neighbor(neighbor1, 0.9);
         node.add_ready_neighbor(neighbor2, 0.8);
 
@@ -164,8 +170,8 @@ mod tests {
                     let deserialized_node_data_guard = deserialized_node_data.read().unwrap();
 
                     assert_eq!(
-                        original_node_data_guard.version_id,
-                        deserialized_node_data_guard.version_id
+                        original_node_data_guard.version_id.0,
+                        deserialized_node_data_guard.version_id.0
                     );
                     assert_eq!(
                         original_node_data_guard.hnsw_level.0,
@@ -183,9 +189,9 @@ mod tests {
 
     #[test]
     fn test_merged_node_with_parent_child_serialization() {
-        let mut node = MergedNode::new(1, HNSWLevel(2));
-        let parent = LazyItemRef::new(MergedNode::new(2, HNSWLevel(3)));
-        let child = LazyItemRef::new(MergedNode::new(3, HNSWLevel(1)));
+        let mut node = MergedNode::new(VersionId(1), HNSWLevel(2));
+        let parent = LazyItemRef::new(MergedNode::new(VersionId(2), HNSWLevel(3)));
+        let child = LazyItemRef::new(MergedNode::new(VersionId(3), HNSWLevel(1)));
 
         // TODO: take a look later
         node.set_parent(Some(parent));
@@ -218,9 +224,9 @@ mod tests {
 
     #[test]
     fn test_merged_node_with_versions_serialization() {
-        let node = Arc::new(MergedNode::new(1, HNSWLevel(2)));
-        let version1 = Arc::new(RwLock::new(MergedNode::new(2, HNSWLevel(2))));
-        let version2 = Arc::new(RwLock::new(MergedNode::new(3, HNSWLevel(2))));
+        let node = Arc::new(MergedNode::new(VersionId(1), HNSWLevel(2)));
+        let version1 = Arc::new(RwLock::new(MergedNode::new(VersionId(2), HNSWLevel(2))));
+        let version2 = Arc::new(RwLock::new(MergedNode::new(VersionId(3), HNSWLevel(2))));
 
         node.add_version(version1);
         node.add_version(version2);
@@ -237,8 +243,8 @@ mod tests {
 
     #[test]
     fn test_merged_node_cyclic_serialization() {
-        let node1 = Arc::new(RwLock::new(MergedNode::new(1, HNSWLevel(2))));
-        let node2 = Arc::new(RwLock::new(MergedNode::new(2, HNSWLevel(2))));
+        let node1 = Arc::new(RwLock::new(MergedNode::new(VersionId(1), HNSWLevel(2))));
+        let node2 = Arc::new(RwLock::new(MergedNode::new(VersionId(2), HNSWLevel(2))));
         println!("Created node1 with id: 1 and node2 with id: 2");
 
         let lazy1 = LazyItemRef::new_with_lock(node1.clone());
@@ -314,9 +320,9 @@ mod tests {
 
     #[test]
     fn test_merged_node_complex_cyclic_serialization() {
-        let node1 = Arc::new(RwLock::new(MergedNode::new(1, HNSWLevel(2))));
-        let node2 = Arc::new(RwLock::new(MergedNode::new(2, HNSWLevel(2))));
-        let node3 = Arc::new(RwLock::new(MergedNode::new(3, HNSWLevel(2))));
+        let node1 = Arc::new(RwLock::new(MergedNode::new(VersionId(1), HNSWLevel(2))));
+        let node2 = Arc::new(RwLock::new(MergedNode::new(VersionId(2), HNSWLevel(2))));
+        let node3 = Arc::new(RwLock::new(MergedNode::new(VersionId(3), HNSWLevel(2))));
 
         let lazy1 = LazyItemRef::new_with_lock(node1.clone());
         let lazy2 = LazyItemRef::new_with_lock(node2.clone());
@@ -423,7 +429,7 @@ mod tests {
     fn test_lazy_items_linked_chunk_serialization() {
         let lazy_items = LazyItems::new();
         for i in 1..13 {
-            lazy_items.push(LazyItem::with_data(simple_merged_node(i, HNSWLevel(2))));
+            lazy_items.push(LazyItem::with_data(simple_merged_node(VersionId(i), HNSWLevel(2))));
         }
 
         let mut writer = Cursor::new(Vec::new());
@@ -448,7 +454,7 @@ mod tests {
                 ) => {
                     let original_guard = original.read().unwrap();
                     let deserialized_guard = deserialized.read().unwrap();
-                    assert_eq!(original_guard.version_id, deserialized_guard.version_id);
+                    assert_eq!(original_guard.version_id.0, deserialized_guard.version_id.0);
                     assert_eq!(original_guard.hnsw_level.0, deserialized_guard.hnsw_level.0);
                 }
                 _ => panic!("Deserialization mismatch"),

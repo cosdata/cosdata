@@ -2,7 +2,7 @@ use super::CustomSerialize;
 use crate::models::{
     cache_loader::NodeRegistry,
     chunked_list::{LazyItemRef, LazyItems},
-    types::{BytesToRead, HNSWLevel, MergedNode, PropState},
+    types::{BytesToRead, HNSWLevel, MergedNode, PropState, VersionId},
 };
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::{
@@ -17,7 +17,7 @@ impl CustomSerialize for MergedNode {
         let start_offset = writer.stream_position()? as u32;
 
         // Serialize basic fields
-        writer.write_u16::<LittleEndian>(self.version_id)?;
+        writer.write_u16::<LittleEndian>(self.version_id.0)?;
         writer.write_u8(self.hnsw_level.0)?;
 
         // Serialize prop
@@ -129,7 +129,7 @@ impl CustomSerialize for MergedNode {
         reader.seek(SeekFrom::Start(offset as u64))?;
 
         // Read basic fields
-        let version_id = reader.read_u16::<LittleEndian>()?;
+        let version_id = VersionId(reader.read_u16::<LittleEndian>()?);
         let hnsw_level = HNSWLevel(reader.read_u8()?);
 
         // Read prop

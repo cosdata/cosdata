@@ -411,7 +411,10 @@ fn insert_node_create_edges(
         value: fvec.clone(),
         location: None,
     };
-    let nn = Arc::new(RwLock::new(MergedNode::new(0, HNSWLevel(cur_level as u8)))); // Assuming MergedNode::new exists
+    let nn = Arc::new(RwLock::new(MergedNode::new(
+        VersionId(0),
+        HNSWLevel(cur_level as u8),
+    ))); // Assuming MergedNode::new exists
     nn.read().unwrap().set_prop_ready(Arc::new(node_prop));
 
     nn.read().unwrap().add_ready_neighbors(nbs.clone());

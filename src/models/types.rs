@@ -30,7 +30,9 @@ pub struct FileOffset(pub u32);
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct BytesToRead(pub u32);
-pub type VersionId = u16;
+
+#[derive(Debug, Copy, Clone)]
+pub struct VersionId(pub u16);
 pub type CosineSimilarity = f32;
 
 pub type Item<T> = Arc<RwLock<T>>;
@@ -124,7 +126,10 @@ impl MergedNode {
         MergedNode {
             version_id,
             hnsw_level,
-            prop: Arc::new(RwLock::new(PropState::Pending((FileOffset(0), BytesToRead(0))))),
+            prop: Arc::new(RwLock::new(PropState::Pending((
+                FileOffset(0),
+                BytesToRead(0),
+            )))),
             neighbors: LazyItems::new(),
             parent: None,
             child: None,
@@ -272,7 +277,7 @@ impl fmt::Display for VectorId {
 impl fmt::Display for MergedNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "MergedNode {{ version_id: {}, hnsw_level: {}, prop: {:?}, neighbors: {:?}, parent: {:?}, child: {:?}, version_ref: {:?} }}",
-            self.version_id,
+            self.version_id.0,
             self.hnsw_level.0,
             self.prop.read().unwrap(),
             self.neighbors,
