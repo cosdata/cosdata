@@ -9,7 +9,7 @@ use nom::{
 
 use super::common::{parse_identifier, parse_string_literal};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     String(String),
     Int(i64),
@@ -22,13 +22,6 @@ pub enum Value {
 pub fn parse_value(input: &str) -> IResult<&str, Value> {
     alt((
         map(parse_string_literal, |s| Value::String(s.to_string())),
-        map(recognize(pair(opt(char('-')), digit1)), |s: &str| {
-            Value::Int(s.parse().unwrap())
-        }),
-        map(
-            recognize(tuple((opt(char('-')), digit1, char('.'), digit1))),
-            |s: &str| Value::Double(s.parse().unwrap()),
-        ),
         map(
             recognize(tuple((
                 digit1::<&str, _>,
@@ -39,6 +32,13 @@ pub fn parse_value(input: &str) -> IResult<&str, Value> {
             ))),
             |s| Value::Date(s.to_string()),
         ),
+        map(
+            recognize(tuple((opt(char('-')), digit1, char('.'), digit1))),
+            |s: &str| Value::Double(s.parse().unwrap()),
+        ),
+        map(recognize(pair(opt(char('-')), digit1)), |s: &str| {
+            Value::Int(s.parse().unwrap())
+        }),
         map(tag("true"), |_| Value::Boolean(true)),
         map(tag("false"), |_| Value::Boolean(false)),
         map(preceded(char('$'), parse_identifier), |s| {
