@@ -8,9 +8,22 @@ use crate::models::lazy_load::*;
 use crate::models::meta_persist::*;
 use crate::models::types::*;
 use crate::storage::Storage;
+use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use lmdb::Transaction;
+use lmdb::WriteFlags;
+use rayon::iter::IntoParallelIterator;
+use rayon::iter::ParallelIterator;
+use smallvec::SmallVec;
+use std::array::TryFromSliceError;
 use std::collections::HashSet;
 use std::fs::File;
+use std::fs::OpenOptions;
+use std::io::Read;
+use std::io::Seek;
+use std::io::SeekFrom;
+use std::io::Write;
 use std::sync::Arc;
+use std::sync::RwLock;
 
 pub fn ann_search(
     vec_store: Arc<VectorStore>,
@@ -219,7 +232,249 @@ fn load_neighbor_from_db(
         "Not implemented".to_string(),
     ))
 }
+
+pub fn write_embedding<W: Write + Seek>(
+    writer: &mut W,
+    emb: &VectorEmbedding,
+) -> Result<u32, WaCustomError> {
+    // TODO: select a better value for `N` (number of bytes to pre-allocate)
+    let serialized = rkyv::to_bytes::<_, 256>(emb)
+        .map_err(|e| WaCustomError::SerializationError(e.to_string()))?;
+
+    let len = serialized.len() as u32;
+
+    let start = writer
+        .stream_position()
+        .map_err(|e| WaCustomError::FsError(e.to_string()))? as u32;
+
+    writer
+        .write_u32::<LittleEndian>(len)
+        .map_err(|e| WaCustomError::FsError(e.to_string()))?;
+
+    writer
+        .write_all(&serialized)
+        .map_err(|e| WaCustomError::FsError(e.to_string()))?;
+
+    Ok(start)
+}
+
+fn read_embedding<R: Read + Seek>(
+    reader: &mut R,
+    offset: u32,
+) -> Result<(VectorEmbedding, u32), WaCustomError> {
+    reader
+        .seek(SeekFrom::Start(offset as u64))
+        .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?;
+
+    let len = reader
+        .read_u32::<LittleEndian>()
+        .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?;
+
+    let mut buf = vec![0; len as usize];
+
+    reader
+        .read_exact(&mut buf)
+        .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?;
+
+    let emb = unsafe { rkyv::from_bytes_unchecked(&buf) }.map_err(|e| {
+        WaCustomError::DeserializationError(format!("Failed to deserialize VectorEmbedding: {}", e))
+    })?;
+
+    let next = reader
+        .stream_position()
+        .map_err(|e| WaCustomError::DeserializationError(e.to_string()))? as u32;
+
+    Ok((emb, next))
+}
+
 pub fn insert_embedding(
+    vec_store: Arc<VectorStore>,
+    emb: &VectorEmbedding,
+) -> Result<(), WaCustomError> {
+    let env = vec_store.lmdb.env.clone();
+    let embedding_db = vec_store.lmdb.embeddings_db.clone();
+    let metadata_db = vec_store.lmdb.metadata_db.clone();
+
+    let mut txn = env
+        .begin_rw_txn()
+        .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
+
+    let count_unindexed = match txn.get(*metadata_db, &"count_unindexed") {
+        Ok(bytes) => {
+            let bytes = bytes.try_into().map_err(|e: TryFromSliceError| {
+                WaCustomError::DeserializationError(e.to_string())
+            })?;
+            u32::from_le_bytes(bytes)
+        }
+        Err(lmdb::Error::NotFound) => 0,
+        Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
+    };
+
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .append(true)
+        .open("vec_raw.0")
+        .map_err(|e| WaCustomError::FsError(e.to_string()))?;
+
+    let offset = write_embedding(&mut file, emb)?.to_le_bytes();
+
+    txn.put(
+        *embedding_db,
+        &emb.hash_vec.to_string(),
+        &offset,
+        WriteFlags::empty(),
+    )
+    .map_err(|e| WaCustomError::DatabaseError(format!("Failed to put data: {}", e)))?;
+
+    txn.put(
+        *metadata_db,
+        &"count_unindexed",
+        &(count_unindexed + 1).to_le_bytes(),
+        WriteFlags::empty(),
+    )
+    .map_err(|e| {
+        WaCustomError::DatabaseError(format!("Failed to update `count_unindexed`: {}", e))
+    })?;
+
+    txn.commit().map_err(|e| {
+        WaCustomError::DatabaseError(format!("Failed to commit transaction: {}", e))
+    })?;
+
+    Ok(())
+}
+
+pub fn index_embeddings(vec_store: Arc<VectorStore>) -> Result<(), WaCustomError> {
+    let env = vec_store.lmdb.env.clone();
+    let metadata_db = vec_store.lmdb.metadata_db.clone();
+
+    let txn = env
+        .begin_ro_txn()
+        .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
+
+    let mut count_indexed = match txn.get(*metadata_db, &"count_indexed") {
+        Ok(bytes) => {
+            let bytes = bytes.try_into().map_err(|e: TryFromSliceError| {
+                WaCustomError::DeserializationError(e.to_string())
+            })?;
+            u32::from_le_bytes(bytes)
+        }
+        Err(lmdb::Error::NotFound) => 0,
+        Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
+    };
+
+    let mut count_unindexed = match txn.get(*metadata_db, &"count_unindexed") {
+        Ok(bytes) => {
+            let bytes = bytes.try_into().map_err(|e: TryFromSliceError| {
+                WaCustomError::DeserializationError(e.to_string())
+            })?;
+            u32::from_le_bytes(bytes)
+        }
+        Err(lmdb::Error::NotFound) => 0,
+        Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
+    };
+
+    let next_file_offset = match txn.get(*metadata_db, &"next_file_offset") {
+        Ok(bytes) => {
+            let bytes = bytes.try_into().map_err(|e: TryFromSliceError| {
+                WaCustomError::DeserializationError(e.to_string())
+            })?;
+            u32::from_le_bytes(bytes)
+        }
+        Err(lmdb::Error::NotFound) => 0,
+        Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
+    };
+
+    txn.abort();
+
+    let mut file = OpenOptions::new()
+        .read(true)
+        .open("vec_raw.0")
+        .map_err(|e| WaCustomError::FsError(e.to_string()))?;
+
+    let metadata = file
+        .metadata()
+        .map_err(|e| WaCustomError::FsError(e.to_string()))?;
+    let len = metadata.len() as u32;
+
+    let mut i = next_file_offset;
+    let mut embeddings = Vec::new();
+
+    // `file` is not thread safe, so we have to collect all the embeddings in the current thread
+    while i < len {
+        let (embedding, next) = read_embedding(&mut file, i)?;
+        embeddings.push(embedding);
+        i = next;
+
+        // TODO(kannan): load the batch size from config file
+        if embeddings.len() == 1000 || i == len {
+            // TODO: handle the errors
+            let results: Vec<Result<(), WaCustomError>> = embeddings
+                .into_par_iter()
+                .map(|embedding| {
+                    let lp = &vec_store.levels_prob;
+                    let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
+
+                    index_embedding(
+                        vec_store.clone(),
+                        embedding,
+                        vec_store.root_vec.item.read().unwrap().clone(),
+                        vec_store.max_cache_level.try_into().unwrap(),
+                        iv.try_into().unwrap(),
+                    )
+                })
+                .collect();
+
+            embeddings = Vec::new();
+
+            let batch_size = results.len() as u32;
+            count_indexed += batch_size;
+            count_unindexed -= batch_size;
+
+            let mut txn = env.begin_rw_txn().map_err(|e| {
+                WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e))
+            })?;
+
+            txn.put(
+                *metadata_db,
+                &"count_indexed",
+                &count_indexed.to_le_bytes(),
+                WriteFlags::empty(),
+            )
+            .map_err(|e| {
+                WaCustomError::DatabaseError(format!("Failed to update `count_indexed`: {}", e))
+            })?;
+
+            txn.put(
+                *metadata_db,
+                &"count_unindexed",
+                &count_unindexed.to_le_bytes(),
+                WriteFlags::empty(),
+            )
+            .map_err(|e| {
+                WaCustomError::DatabaseError(format!("Failed to update `count_unindexed`: {}", e))
+            })?;
+
+            txn.put(
+                *metadata_db,
+                &"next_file_offset",
+                &i.to_le_bytes(),
+                WriteFlags::empty(),
+            )
+            .map_err(|e| {
+                WaCustomError::DatabaseError(format!("Failed to update `next_file_offset`: {}", e))
+            })?;
+
+            txn.commit().map_err(|e| {
+                WaCustomError::DatabaseError(format!("Failed to commit transaction: {}", e))
+            })?;
+        }
+    }
+
+    Ok(())
+}
+
+pub fn index_embedding(
     vec_store: Arc<VectorStore>,
     vector_emb: VectorEmbedding,
     cur_entry: LazyItem<MergedNode>,
@@ -299,7 +554,7 @@ pub fn insert_embedding(
     let z_clone: Vec<_> = z.iter().map(|(first, _)| first.clone()).collect();
 
     if cur_level <= max_insert_level {
-        insert_embedding(
+        index_embedding(
             vec_store.clone(),
             vector_emb.clone(),
             z_clone[0].clone(),
@@ -314,7 +569,7 @@ pub fn insert_embedding(
             cur_level,
         );
     } else {
-        insert_embedding(
+        index_embedding(
             vec_store.clone(),
             vector_emb.clone(),
             z_clone[0].clone(),
@@ -576,4 +831,70 @@ fn traverse_find_nearest(
     });
 
     Ok(nn.into_iter().take(5).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{io::Cursor, sync::Arc};
+
+    use rand::{distributions::Uniform, rngs::ThreadRng, thread_rng, Rng};
+
+    use crate::{
+        models::types::{VectorEmbedding, VectorId},
+        quantization::{scalar::ScalarQuantization, Quantization, StorageType},
+    };
+
+    use super::{read_embedding, write_embedding};
+
+    fn get_random_embedding(rng: &mut ThreadRng) -> VectorEmbedding {
+        let range = Uniform::new(-1.0, 1.0);
+
+        let vector: Vec<f32> = (0..rng.gen_range(100..200))
+            .into_iter()
+            .map(|_| rng.sample(&range))
+            .collect();
+        let raw_vec = Arc::new(ScalarQuantization.quantize(&vector, StorageType::UnsignedByte));
+
+        VectorEmbedding {
+            raw_vec,
+            hash_vec: VectorId::Int(rng.gen()),
+        }
+    }
+
+    #[test]
+    fn test_embedding_serialization() {
+        let mut rng = thread_rng();
+        let embedding = get_random_embedding(&mut rng);
+
+        let mut writer = Cursor::new(Vec::new());
+        let offset = write_embedding(&mut writer, &embedding).unwrap();
+
+        let mut reader = Cursor::new(writer.into_inner());
+        let (deserialized, _) = read_embedding(&mut reader, offset).unwrap();
+
+        assert_eq!(embedding, deserialized);
+    }
+
+    #[test]
+    fn test_embeddings_serialization() {
+        let mut rng = thread_rng();
+        let embeddings: Vec<VectorEmbedding> =
+            (0..20).map(|_| get_random_embedding(&mut rng)).collect();
+
+        let mut writer = Cursor::new(Vec::new());
+
+        for embedding in &embeddings {
+            write_embedding(&mut writer, embedding).unwrap();
+        }
+
+        let mut offset = 0;
+        let mut reader = Cursor::new(writer.into_inner());
+
+        for embedding in embeddings {
+            let (deserialized, next) = read_embedding(&mut reader, offset).unwrap();
+            offset = next;
+
+            assert_eq!(embedding, deserialized);
+        }
+    }
 }

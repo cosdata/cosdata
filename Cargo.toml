@@ -21,7 +21,7 @@ dashmap = "5.5.3"
 env_logger = "0.11.3"
 futures = "0.3.30"
 futures-util = "0.3.30"
-half = { version = "2.4.1", features = ["serde"] }
+half = { version = "2.4.1", features = ["serde", "rkyv"] }
 http = "1.1.0"
 http-body-util = "0.1.1"
 lazy_static = "1.4.0"
@@ -33,6 +33,7 @@ rancor = "0.1.0-pre8"
 rand = "0.8.5"
 rayon = "1.10.0"
 regex = "1.10.4"
+rkyv = "0.7.44"
 rustls = "0.23"
 rustls-pemfile = "2.1.2"
 serde = { version = "1.0.203", features = ["derive", "rc"] }

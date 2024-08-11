@@ -1,3 +1,4 @@
+
 use crate::models::common::*;
 use crate::models::custom_buffered_writer::CustomBufferedWriter;
 use crate::models::file_persist::*;
@@ -15,11 +16,15 @@ use crate::vector_store::vector_fetch;
 use futures::stream::{self, StreamExt};
 use lmdb::DatabaseFlags;
 use rand::Rng;
+use rayon::iter::IntoParallelIterator;
+use rayon::iter::ParallelIterator;
+use std::array::TryFromSliceError;
 use std::cell::RefCell;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::rc::Rc;
 use std::sync::{atomic::AtomicBool, Arc};
+
 
 pub async fn init_vector_store(
     name: String,
@@ -130,6 +135,39 @@ pub async fn init_vector_store(
     // ---------------------------
     let factor_levels = 10.0;
     let lp = Arc::new(generate_tuples(factor_levels).into_iter().rev().collect());
+    let ain_env = get_app_env().map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+    let denv = ain_env.persist.clone();
+
+    let metadata_db = denv
+        .create_db(Some("metadata"), DatabaseFlags::empty())
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+    let embeddings_db = denv
+        .create_db(Some("embeddings"), DatabaseFlags::empty())
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+    let vec_store = Arc::new(VectorStore::new(
+        exec_queue_nodes,
+        max_cache_level,
+        name.clone(),
+        root.unwrap(),
+        lp,
+        (size / 32) as usize,
+        prop_file,
+        MetaDb {
+            env: denv.clone(),
+            metadata_db: Arc::new(metadata_db.clone()),
+            embeddings_db: Arc::new(embeddings_db),
+        },
+        Arc::new(RwLock::new(None)),
+        Arc::new(QuantizationMetric::Scalar),
+        Arc::new(DistanceMetric::Cosine),
+        StorageType::UnsignedByte,
+    ));
+    ain_env
+        .vector_store_map
+        .insert(name.clone(), vec_store.clone());
 
     let result = match get_app_env() {
         Ok(ain_env) => {
@@ -173,8 +211,7 @@ pub async fn init_vector_store(
         }
         Err(e) => Err(WaCustomError::DatabaseError(e.to_string())),
     };
-
-    result
+    Ok(())
 }
 
 pub async fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<(VectorIdValue, Vec<f32>)>) -> () {
@@ -205,9 +242,14 @@ pub async fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<(VectorIdValue, 
                 .expect("Failed inserting embedding");
             }
         })
-        .buffer_unordered(10)
-        .collect::<Vec<_>>()
-        .await;
+        .expect("Failed to retrieve `count_unindexed`");
+
+    txn.abort();
+
+    // TODO(kannan): load the threshold value from config file
+    if count_unindexed >= 100 {
+        index_embeddings(vec_store.clone()).expect("Failed to index embeddings");
+    }
 
     // Update version
     let ver = vec_store
