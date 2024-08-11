@@ -1,5 +1,3 @@
-use smallvec::SmallVec;
-
 use crate::distance::DistanceFunction;
 use crate::models::common::*;
 use crate::models::custom_buffered_writer::CustomBufferedWriter;
@@ -23,7 +21,6 @@ use std::io::Seek;
 use std::io::SeekFrom;
 use std::io::Write;
 use std::sync::Arc;
-use std::sync::RwLock;
 
 pub fn ann_search(
     vec_store: Arc<VectorStore>,
@@ -418,7 +415,7 @@ pub fn index_embeddings(vec_store: Arc<VectorStore>) -> Result<(), WaCustomError
                     index_embedding(
                         vec_store.clone(),
                         embedding,
-                        vec_store.root_vec.item.read().unwrap().clone(),
+                        vec_store.root_vec.item.clone().get().clone(),
                         vec_store.max_cache_level.try_into().unwrap(),
                         iv.try_into().unwrap(),
                     )

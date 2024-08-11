@@ -1,4 +1,3 @@
-
 use crate::models::common::*;
 use crate::models::custom_buffered_writer::CustomBufferedWriter;
 use crate::models::file_persist::*;
@@ -11,10 +10,11 @@ use crate::models::user::Statistics;
 use crate::quantization::{Quantization, StorageType};
 use crate::vector_store::ann_search;
 use crate::vector_store::auto_commit_transaction;
+use crate::vector_store::index_embeddings;
 use crate::vector_store::insert_embedding;
 use crate::vector_store::vector_fetch;
 use futures::stream::{self, StreamExt};
-use lmdb::DatabaseFlags;
+use lmdb::{DatabaseFlags, Transaction};
 use rand::Rng;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
@@ -24,7 +24,6 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::rc::Rc;
 use std::sync::{atomic::AtomicBool, Arc};
-
 
 pub async fn init_vector_store(
     name: String,
@@ -151,7 +150,7 @@ pub async fn init_vector_store(
         exec_queue_nodes,
         max_cache_level,
         name.clone(),
-        root.unwrap(),
+        root,
         lp,
         (size / 32) as usize,
         prop_file,
@@ -160,7 +159,7 @@ pub async fn init_vector_store(
             metadata_db: Arc::new(metadata_db.clone()),
             embeddings_db: Arc::new(embeddings_db),
         },
-        Arc::new(RwLock::new(None)),
+        Item::new(None),
         Arc::new(QuantizationMetric::Scalar),
         Arc::new(DistanceMetric::Cosine),
         StorageType::UnsignedByte,
@@ -169,78 +168,36 @@ pub async fn init_vector_store(
         .vector_store_map
         .insert(name.clone(), vec_store.clone());
 
-    let result = match get_app_env() {
-        Ok(ain_env) => {
-            let denv = ain_env.persist.clone();
-
-            let db_result = denv.create_db(None, DatabaseFlags::empty());
-            match db_result {
-                Ok(db) => {
-                    let vec_store = Arc::new(VectorStore::new(
-                        exec_queue_nodes,
-                        max_cache_level,
-                        name.clone(),
-                        root,
-                        lp,
-                        (size / 32) as usize,
-                        prop_file,
-                        MetaDb {
-                            env: denv.clone(),
-                            db: Arc::new(db.clone()),
-                        },
-                        Item::new(None),
-                        Arc::new(QuantizationMetric::Scalar),
-                        Arc::new(DistanceMetric::Cosine),
-                        StorageType::UnsignedByte,
-                    ));
-                    ain_env
-                        .vector_store_map
-                        .insert(name.clone(), vec_store.clone());
-
-                    let result = store_current_version(vec_store.clone(), "main".to_string(), 0);
-                    let version_hash = result.expect("Failed to get VersionHash");
-                    vec_store.set_current_version(Some(version_hash));
-
-                    Ok(())
-                }
-                Err(e) => {
-                    eprintln!("Failed node persist(nbr1): {}", e);
-                    Err(WaCustomError::DatabaseError(e.to_string()))
-                }
-            }
-        }
-        Err(e) => Err(WaCustomError::DatabaseError(e.to_string())),
-    };
     Ok(())
 }
 
 pub async fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<(VectorIdValue, Vec<f32>)>) -> () {
-    stream::iter(vecxx)
-        .map(|(id, vec)| {
-            let vec_store = vec_store.clone();
-            async move {
-                let root = &vec_store.root_vec;
-                let vec_hash = convert_value(id);
-                let vector_list = vec_store
-                    .quantization_metric
-                    .quantize(&vec, vec_store.storage_type);
-                let vec_emb = VectorEmbedding {
-                    raw_vec: Arc::new(vector_list),
-                    hash_vec: vec_hash.clone(),
-                };
-                let lp = &vec_store.levels_prob;
-                let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
+    vecxx.into_par_iter().for_each(|(id, vec)| {
+        let hash_vec = convert_value(id);
+        let storage = vec_store
+            .quantization_metric
+            .quantize(&vec, vec_store.storage_type);
+        let vec_emb = VectorEmbedding {
+            raw_vec: Arc::new(storage),
+            hash_vec,
+        };
 
-                // TODO: handle the error
-                insert_embedding(
-                    vec_store.clone(),
-                    vec_emb,
-                    root.item.clone().get().clone(),
-                    vec_store.max_cache_level.try_into().unwrap(),
-                    iv.try_into().unwrap(),
-                )
-                .expect("Failed inserting embedding");
-            }
+        insert_embedding(vec_store.clone(), &vec_emb).expect("Failed to inert embedding to LMDB");
+    });
+
+    let env = vec_store.lmdb.env.clone();
+    let metadata_db = vec_store.lmdb.metadata_db.clone();
+
+    let txn = env.begin_rw_txn().expect("Failed to begin transaction");
+
+    let count_unindexed = txn
+        .get(*metadata_db, &"count_unindexed")
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))
+        .and_then(|bytes| {
+            let bytes = bytes.try_into().map_err(|e: TryFromSliceError| {
+                WaCustomError::DeserializationError(e.to_string())
+            })?;
+            Ok(u32::from_le_bytes(bytes))
         })
         .expect("Failed to retrieve `count_unindexed`");
 
