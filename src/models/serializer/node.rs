@@ -2,7 +2,7 @@ use super::CustomSerialize;
 use crate::models::{
     cache_loader::NodeRegistry,
     chunked_list::{LazyItemRef, LazyItems},
-    types::{HNSWLevel, MergedNode, PropState},
+    types::{BytesToRead, HNSWLevel, MergedNode, PropState},
 };
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::{
@@ -24,7 +24,7 @@ impl CustomSerialize for MergedNode {
         let prop_state = self.prop.read().unwrap();
         match &*prop_state {
             PropState::Ready(node_prop) => {
-                if let Some((FileOffset(offset), length)) = node_prop.location {
+                if let Some((FileOffset(offset), BytesToRead(length))) = node_prop.location {
                     writer.write_u32::<LittleEndian>(offset)?;
                     writer.write_u32::<LittleEndian>(length)?;
                 } else {
@@ -34,7 +34,7 @@ impl CustomSerialize for MergedNode {
                     ));
                 }
             }
-            PropState::Pending((FileOffset(offset), length)) => {
+            PropState::Pending((FileOffset(offset), BytesToRead(length))) => {
                 writer.write_u32::<LittleEndian>(*offset)?;
                 writer.write_u32::<LittleEndian>(*length)?;
             }
@@ -134,7 +134,7 @@ impl CustomSerialize for MergedNode {
 
         // Read prop
         let prop_offset = FileOffset(reader.read_u32::<LittleEndian>()?);
-        let prop_length = reader.read_u32::<LittleEndian>()?;
+        let prop_length = BytesToRead(reader.read_u32::<LittleEndian>()?);
         let prop = PropState::Pending((prop_offset, prop_length));
 
         // Read indicator byte

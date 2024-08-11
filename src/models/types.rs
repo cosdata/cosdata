@@ -27,7 +27,9 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 pub struct HNSWLevel(pub u8);
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct FileOffset(pub u32);
-pub type BytesToRead = u32;
+
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+pub struct BytesToRead(pub u32);
 pub type VersionId = u16;
 pub type CosineSimilarity = f32;
 
@@ -122,7 +124,7 @@ impl MergedNode {
         MergedNode {
             version_id,
             hnsw_level,
-            prop: Arc::new(RwLock::new(PropState::Pending((FileOffset(0), 0)))),
+            prop: Arc::new(RwLock::new(PropState::Pending((FileOffset(0), BytesToRead(0))))),
             neighbors: LazyItems::new(),
             parent: None,
             child: None,

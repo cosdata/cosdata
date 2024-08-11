@@ -1,16 +1,12 @@
 use super::cache_loader::NodeRegistry;
 use super::chunked_list::LazyItem;
 use super::common::WaCustomError;
-use super::types::{FileOffset, HNSWLevel, Item, MergedNode, NodeProp, VectorId};
+use super::types::{BytesToRead, FileOffset, HNSWLevel, Item, MergedNode, NodeProp, VectorId};
 use crate::models::custom_buffered_writer::*;
 use crate::models::serializer::*;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::Arc;
-
-// pub type BytesToRead = u32;
-
-// pub type PropPersistRef = (FileOffset, BytesToRead);
 
 pub fn read_node_from_file<R: Read + Seek>(
     offset: FileOffset,
@@ -86,7 +82,7 @@ pub fn load_neighbor_persist_ref(
 ) -> Option<MergedNode> {
     None
 }
-pub fn write_prop_to_file(prop: &NodeProp, mut file: &File) -> (FileOffset, u32) {
+pub fn write_prop_to_file(prop: &NodeProp, mut file: &File) -> (FileOffset, BytesToRead) {
     let mut prop_bytes = Vec::new();
     //let result = encode(&prop);
     let result = serde_cbor::to_vec(&prop).unwrap();
@@ -96,5 +92,8 @@ pub fn write_prop_to_file(prop: &NodeProp, mut file: &File) -> (FileOffset, u32)
     file.write_all(&prop_bytes)
         .expect("Failed to write to file");
     let offset = file.metadata().unwrap().len() - prop_bytes.len() as u64;
-    (FileOffset(offset as u32), prop_bytes.len() as u32)
+    (
+        FileOffset(offset as u32),
+        BytesToRead(prop_bytes.len() as u32),
+    )
 }
