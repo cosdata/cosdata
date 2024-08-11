@@ -1,4 +1,5 @@
 pub mod entity;
+pub mod extend_entity;
 pub mod relationship;
 
 use nom::{
@@ -6,9 +7,8 @@ use nom::{
 };
 
 use super::common::ws;
-use entity::{
-    parse_entity_inference, parse_extend_entity_inference, EntityInference, ExtendEntityInference,
-};
+use entity::{parse_entity_inference, EntityInference};
+use extend_entity::{parse_extend_entity_inference, ExtendEntityInference};
 use relationship::{parse_relationship_inference, RelationshipInference};
 
 pub type Inferences = Vec<Inference>;

@@ -8,24 +8,21 @@ use crate::cosql::{
 };
 
 #[derive(Debug, Clone)]
-pub struct EntityInference {
+pub struct ExtendEntityInference {
     pub variable: String,
-    pub entity_type: String,
     pub attributes: Attributes,
 }
 
-pub fn parse_entity_inference(input: &str) -> IResult<&str, EntityInference> {
+pub fn parse_extend_entity_inference(input: &str) -> IResult<&str, ExtendEntityInference> {
     map(
         tuple((
+            ws(tag("extend")),
             ws(char('$')),
-            ws(parse_identifier),
-            ws(tag("isa")),
             ws(parse_identifier),
             ws(parse_attributes0),
         )),
-        |(_, variable, _, entity_type, attributes)| EntityInference {
+        |(_, _, variable, attributes)| ExtendEntityInference {
             variable: variable.to_string(),
-            entity_type: entity_type.to_string(),
             attributes,
         },
     )(input)
