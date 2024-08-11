@@ -46,3 +46,29 @@ pub fn parse_value(input: &str) -> IResult<&str, Value> {
         }),
     ))(input)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_value_parser() {
+        let values = [
+            (r#""Hello, Rust""#, Value::String("Hello, Rust".to_string())),
+            ("23", Value::Int(23)),
+            ("-756", Value::Int(-756)),
+            ("2345.12", Value::Double(2345.12)),
+            ("-765.2", Value::Double(-765.2)),
+            ("11-8-2024", Value::Date("11-8-2024".to_string())),
+            ("true", Value::Boolean(true)),
+            ("false", Value::Boolean(false)),
+            ("$var_name", Value::Variable("var_name".to_string())),
+        ];
+
+        for (source, expected) in values {
+            let (_, parsed) = parse_value(source).unwrap();
+
+            assert_eq!(parsed, expected);
+        }
+    }
+}
