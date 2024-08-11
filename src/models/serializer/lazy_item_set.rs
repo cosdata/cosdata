@@ -1,28 +1,31 @@
 use super::CustomSerialize;
+use crate::models::types::FileOffset;
 use crate::models::{
     cache_loader::NodeRegistry,
-    chunked_list::{LazyItem, LazyItems, CHUNK_SIZE},
+    identity_collections::{Identifiable, IdentitySet},
+    lazy_load::{LazyItem, LazyItemSet, CHUNK_SIZE},
+    types::Item,
 };
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use std::collections::HashSet;
 use std::{
     io::{Read, Seek, SeekFrom, Write},
-    sync::{Arc, RwLock},
+    sync::Arc,
 };
 
-use crate::models::types::FileOffset;
-use std::collections::HashSet;
-impl<T> CustomSerialize for LazyItems<T>
+impl<T> CustomSerialize for LazyItemSet<T>
 where
     LazyItem<T>: CustomSerialize,
-    T: Clone,
+    T: Clone + Identifiable<Id = u64> + 'static,
 {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
         if self.is_empty() {
             return Ok(u32::MAX);
         };
         let start_offset = writer.stream_position()? as u32;
-        let mut items_guard = self.items.write().unwrap();
-        let total_items = items_guard.len();
+        let mut items_arc = self.items.clone();
+        let items: Vec<_> = items_arc.get().iter().map(Clone::clone).collect();
+        let total_items = items.len();
 
         for chunk_start in (0..total_items).step_by(CHUNK_SIZE) {
             let chunk_end = std::cmp::min(chunk_start + CHUNK_SIZE, total_items);
@@ -39,8 +42,8 @@ where
 
             // Serialize items and update placeholders
             for i in chunk_start..chunk_end {
-                let item_offset = items_guard[i].serialize(writer)?;
-                items_guard[i].offset = Some(item_offset);
+                let item_offset = items[i].serialize(writer)?;
+                items[i].set_offset(Some(item_offset));
                 let placeholder_pos = placeholder_start as u64 + ((i - chunk_start) as u64 * 4);
                 let current_pos = writer.stream_position()?;
                 writer.seek(SeekFrom::Start(placeholder_pos))?;
@@ -60,6 +63,7 @@ where
         }
         Ok(start_offset)
     }
+
     fn deserialize<R: Read + Seek>(
         reader: &mut R,
         offset: u32,
@@ -68,7 +72,7 @@ where
         skipm: &mut HashSet<FileOffset>,
     ) -> std::io::Result<Self> {
         if offset == u32::MAX {
-            return Ok(LazyItems::new());
+            return Ok(LazyItemSet::new());
         }
         reader.seek(SeekFrom::Start(offset as u64))?;
         let mut items = Vec::new();
@@ -93,8 +97,8 @@ where
                 break;
             }
         }
-        Ok(LazyItems {
-            items: Arc::new(RwLock::new(items)),
+        Ok(LazyItemSet {
+            items: Item::new(IdentitySet::from_iter(items.into_iter())),
         })
     }
 }
