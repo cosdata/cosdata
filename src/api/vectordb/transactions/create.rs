@@ -13,21 +13,20 @@ pub(crate) async fn create(database_name: web::Path<String>) -> HttpResponse {
         return HttpResponse::NotFound().body("Vector store not found");
     };
 
-    if vec_store.current_open_transaction.read().unwrap().is_some() {
+    let mut cot_arc = vec_store.current_open_transaction.clone();
+
+    if cot_arc.get().is_some() {
         return HttpResponse::Conflict()
             .body("Cannot create a new transaction while there's an on-going transaction");
     }
 
-    let ver = vec_store.get_current_version().unwrap().unwrap();
+    let ver = vec_store.get_current_version().unwrap();
     let new_ver = ver.version + 1;
     let mut hasher = VersionHasher::new();
     let hash = hasher.generate_hash("main", new_ver, None, None);
     let transaction_id = hash.hash.clone();
 
-    {
-        let mut write_guard = vec_store.current_open_transaction.write().unwrap();
-        *write_guard = Some(hash);
-    }
+    cot_arc.update(Some(hash));
 
     HttpResponse::Ok().json(json!({
         "transaction_id": transaction_id

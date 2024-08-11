@@ -1,16 +1,14 @@
-use crate::models::chunked_list::*;
 use crate::models::common::*;
 use crate::models::custom_buffered_writer::CustomBufferedWriter;
 use crate::models::file_persist::*;
+use crate::models::lazy_load::*;
 use crate::models::meta_persist::*;
 use crate::models::rpc::VectorIdValue;
 use crate::models::types::*;
 use crate::models::user::Statistics;
-use crate::quantization::Quantization;
-use crate::quantization::StorageType;
-use crate::vector_store::*;
-use lmdb::DatabaseFlags;
-use lmdb::Transaction;
+use crate::quantization::{Quantization, StorageType};
+use futures::stream::{self, StreamExt};
+use lmdb::{DatabaseFlags, Transaction};
 use rand::Rng;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
@@ -19,11 +17,9 @@ use std::cell::RefCell;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::rc::Rc;
-use std::sync::{Arc, RwLock};
 use cosdata::config_loader::Config;
 use actix_web::{web};
-
-
+use std::sync::{atomic::AtomicBool, Arc, RwLock};
 
 pub async fn init_vector_store(
     name: String,
@@ -51,7 +47,7 @@ pub async fn init_vector_store(
         .collect::<Vec<f32>>();
     let vec_hash = VectorId::Int(-1);
 
-    let exec_queue_nodes: ExecQueueUpdate = Arc::new(RwLock::new(Vec::new()));
+    let exec_queue_nodes: ExecQueueUpdate = Item::new(Vec::new());
     let vector_list = Arc::new(quantization_metric.quantize(&vec, storage_type));
 
     // Note that setting .write(true).append(true) has the same effect
@@ -75,8 +71,8 @@ pub async fn init_vector_store(
     let mut writer =
         CustomBufferedWriter::new(ver_file.clone()).expect("Failed opening custom buffer");
 
-    let mut root: Option<LazyItemRef<MergedNode>> = None;
-    let mut prev: Option<LazyItemRef<MergedNode>> = None;
+    let mut root: LazyItemRef<MergedNode> = LazyItemRef::new_invalid();
+    let mut prev: LazyItemRef<MergedNode> = LazyItemRef::new_invalid();
 
     let mut nodes = Vec::new();
     for l in 0..=max_cache_level {
@@ -85,40 +81,40 @@ pub async fn init_vector_store(
             value: vector_list.clone(),
             location: Some((0, 0)),
         });
-        let current_node = Arc::new(RwLock::new(MergedNode {
+        let mut current_node = Item::new(MergedNode {
             version_id: 0, // Initialize with appropriate version ID
             hnsw_level: l as u8,
-            prop: Arc::new(RwLock::new(PropState::Ready(prop.clone()))),
-            neighbors: LazyItems::new(),
-            parent: None,
-            child: None,
-            versions: LazyItems::new(),
-            persist_flag: Arc::new(RwLock::new(true)),
-        }));
+            prop: Item::new(PropState::Ready(prop.clone())),
+            neighbors: EagerLazyItemSet::new(),
+            parent: LazyItemRef::new_invalid(),
+            child: LazyItemRef::new_invalid(),
+            versions: LazyItemMap::new(),
+            persist_flag: Arc::new(AtomicBool::new(true)),
+        });
 
-        let nn = LazyItemRef::new_with_lock(current_node.clone());
+        let lazy_node = LazyItem::from_item(current_node.clone());
+        let nn = LazyItemRef::from_item(current_node.clone());
 
-        if let Some(prev_node) = prev
-            .as_ref()
-            .and_then(|prev| prev.item.read().unwrap().data.clone())
-        {
-            let mut prev_guard = prev_node.write().unwrap();
-            current_node.write().unwrap().set_parent(prev.clone());
-            prev_guard.set_child(Some(nn.clone()));
+        if let Some(prev_node) = prev.item.get().get_data() {
+            let mut prev_guard = prev_node.clone();
+            current_node
+                .get()
+                .set_parent(prev.clone().item.get().clone());
+            prev_node.set_child(lazy_node.clone());
         }
-        prev = Some(nn.clone());
+        prev = nn.clone();
 
         if l == 0 {
-            root = Some(nn.clone());
+            root = nn.clone();
             let prop_location = write_prop_to_file(&prop, &prop_file);
-            current_node.read().unwrap().set_prop_ready(prop);
+            current_node.get().set_prop_ready(prop);
         }
         nodes.push(nn.clone());
-        println!("sssss: {:?}", nn);
+        // println!("sssss: {:?}", nn);
     }
 
     for (l, nn) in nodes.iter_mut().enumerate() {
-        match persist_node_update_loc(&mut writer, &mut *nn.item.write().unwrap()) {
+        match persist_node_update_loc(&mut writer, nn.item.clone()) {
             Ok(_) => (),
             Err(e) => {
                 eprintln!("Failed node persist (init): {}", e);
@@ -150,7 +146,7 @@ pub async fn init_vector_store(
         exec_queue_nodes,
         max_cache_level,
         name.clone(),
-        root.unwrap(),
+        root,
         lp,
         (size / 32) as usize,
         prop_file,
@@ -159,7 +155,7 @@ pub async fn init_vector_store(
             metadata_db: Arc::new(metadata_db.clone()),
             embeddings_db: Arc::new(embeddings_db),
         },
-        Arc::new(RwLock::new(None)),
+        Item::new(None),
         Arc::new(QuantizationMetric::Scalar),
         Arc::new(DistanceMetric::Cosine),
         StorageType::UnsignedByte,
@@ -177,7 +173,7 @@ pub async fn init_vector_store(
     Ok(())
 }
 
-pub fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<(VectorIdValue, Vec<f32>)>, config: web::Data<Config>) {
+pub async fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<(VectorIdValue, Vec<f32>)>) -> () {
     vecxx.into_par_iter().for_each(|(id, vec)| {
         let hash_vec = convert_value(id);
         let storage = vec_store
@@ -208,9 +204,7 @@ pub fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<(VectorIdValue, Vec<f3
         .expect("Failed to retrieve `count_unindexed`");
 
     txn.abort();
-
-
-    // TODO(kannan): load the threshold value from config file
+  
     if count_unindexed >= config.threshold {
         index_embeddings(vec_store.clone(), config.batch_size).expect("Failed to index embeddings");
     }
@@ -218,7 +212,6 @@ pub fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<(VectorIdValue, Vec<f3
     // Update version
     let ver = vec_store
         .get_current_version()
-        .unwrap()
         .expect("No current version found");
     let new_ver = ver.version + 1;
 
@@ -264,7 +257,7 @@ pub async fn ann_vector_query(
     let results = ann_search(
         vec_store.clone(),
         vec_emb,
-        root.item.read().unwrap().clone(),
+        root.item.clone().get().clone(),
         vec_store.max_cache_level.try_into().unwrap(),
     )?;
     let output = remove_duplicates_and_filter(results);
