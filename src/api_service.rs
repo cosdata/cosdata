@@ -80,7 +80,7 @@ pub async fn init_vector_store(
         let prop = Arc::new(NodeProp {
             id: vec_hash.clone(),
             value: vector_list.clone(),
-            location: Some((0, 0)),
+            location: Some((FileOffset(0), 0)),
         });
         let current_node = Arc::new(RwLock::new(MergedNode {
             version_id: 0, // Initialize with appropriate version ID

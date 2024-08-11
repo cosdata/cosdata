@@ -13,7 +13,7 @@ use std::{
 
 impl CustomSerialize for LazyItem<MergedNode> {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
-        if let Some(existing_offset) = self.offset {
+        if let Some(FileOffset(existing_offset)) = self.offset {
             if let Some(data) = &self.data {
                 let guard = data.read().unwrap();
                 if guard.needs_persistence() {
@@ -42,7 +42,7 @@ impl CustomSerialize for LazyItem<MergedNode> {
 
     fn deserialize<R: Read + Seek>(
         reader: &mut R,
-        offset: u32,
+        offset: FileOffset,
         cache: Arc<NodeRegistry<R>>,
         max_loads: u16,
         skipm: &mut HashSet<FileOffset>,
@@ -50,7 +50,7 @@ impl CustomSerialize for LazyItem<MergedNode> {
     where
         Self: Sized,
     {
-        reader.seek(SeekFrom::Start(offset as u64))?;
+        reader.seek(SeekFrom::Start(offset.0 as u64))?;
         let item = cache.get_object(offset, reader, MergedNode::deserialize, max_loads, skipm)?;
 
         Ok(item)
@@ -59,7 +59,7 @@ impl CustomSerialize for LazyItem<MergedNode> {
 
 impl CustomSerialize for LazyItem<Neighbour> {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
-        if let Some(existing_offset) = self.offset {
+        if let Some(FileOffset(existing_offset)) = self.offset {
             writer.seek(SeekFrom::Start(existing_offset as u64))?;
             if let Some(data) = &self.data {
                 data.read().unwrap().serialize(writer)?;
@@ -84,7 +84,7 @@ impl CustomSerialize for LazyItem<Neighbour> {
 
     fn deserialize<R: Read + Seek>(
         reader: &mut R,
-        offset: u32,
+        offset: FileOffset,
         cache: Arc<NodeRegistry<R>>,
         max_loads: u16,
         skipm: &mut HashSet<FileOffset>,
@@ -92,7 +92,7 @@ impl CustomSerialize for LazyItem<Neighbour> {
     where
         Self: Sized,
     {
-        reader.seek(SeekFrom::Start(offset as u64))?;
+        reader.seek(SeekFrom::Start(offset.0 as u64))?;
         let data = Neighbour::deserialize(reader, offset, cache, max_loads, skipm)?;
 
         Ok(LazyItem {
@@ -108,7 +108,8 @@ impl CustomSerialize for LazyItemRef<MergedNode> {
         let lazy_item = self.item.read().unwrap();
         let offset = if lazy_item.offset.is_none() {
             drop(lazy_item);
-            self.set_offset(Some(writer.stream_position()? as u32));
+            let new_offset = Some(FileOffset(writer.stream_position()? as u32));
+            self.set_offset(new_offset);
             let lazy_item = self.item.read().unwrap();
             lazy_item.serialize(writer)?
         } else {
@@ -120,7 +121,7 @@ impl CustomSerialize for LazyItemRef<MergedNode> {
 
     fn deserialize<R: Read + Seek>(
         reader: &mut R,
-        offset: u32,
+        offset: FileOffset,
         cache: Arc<NodeRegistry<R>>,
         max_loads: u16,
         skipm: &mut HashSet<FileOffset>,

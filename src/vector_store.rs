@@ -47,7 +47,7 @@ pub fn ann_search(
         } => {
             return Err(WaCustomError::LazyLoadingError(format!(
                 "Node at offset {} needs to be loaded",
-                offset
+                offset.0
             )))
         }
         _ => {
@@ -230,7 +230,7 @@ pub fn insert_embedding(
         } => {
             return Err(WaCustomError::LazyLoadingError(format!(
                 "Node at offset {} needs to be loaded",
-                offset
+                offset.0
             )))
         }
         _ => {
@@ -324,7 +324,7 @@ pub fn queue_node_prop_exec(
         } => {
             return Err(WaCustomError::LazyLoadingError(format!(
                 "Node at offset {} needs to be loaded",
-                offset
+                offset.0
             )))
         }
         _ => return Err(WaCustomError::NodeError("Node is null".to_string())),

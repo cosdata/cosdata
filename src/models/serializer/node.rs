@@ -24,7 +24,7 @@ impl CustomSerialize for MergedNode {
         let prop_state = self.prop.read().unwrap();
         match &*prop_state {
             PropState::Ready(node_prop) => {
-                if let Some((offset, length)) = node_prop.location {
+                if let Some((FileOffset(offset), length)) = node_prop.location {
                     writer.write_u32::<LittleEndian>(offset)?;
                     writer.write_u32::<LittleEndian>(length)?;
                 } else {
@@ -34,7 +34,7 @@ impl CustomSerialize for MergedNode {
                     ));
                 }
             }
-            PropState::Pending((offset, length)) => {
+            PropState::Pending((FileOffset(offset), length)) => {
                 writer.write_u32::<LittleEndian>(*offset)?;
                 writer.write_u32::<LittleEndian>(*length)?;
             }
@@ -121,7 +121,7 @@ impl CustomSerialize for MergedNode {
 
     fn deserialize<R: Read + Seek>(
         reader: &mut R,
-        offset: u32,
+        FileOffset(offset): FileOffset,
         cache: Arc<NodeRegistry<R>>,
         max_loads: u16,
         skipm: &mut HashSet<FileOffset>,
@@ -133,7 +133,7 @@ impl CustomSerialize for MergedNode {
         let hnsw_level = HNSWLevel(reader.read_u8()?);
 
         // Read prop
-        let prop_offset = reader.read_u32::<LittleEndian>()?;
+        let prop_offset = FileOffset(reader.read_u32::<LittleEndian>()?);
         let prop_length = reader.read_u32::<LittleEndian>()?;
         let prop = PropState::Pending((prop_offset, prop_length));
 
@@ -158,7 +158,7 @@ impl CustomSerialize for MergedNode {
         let parent = if let Some(offset) = parent_offset {
             Some(LazyItemRef::deserialize(
                 reader,
-                offset,
+                FileOffset(offset),
                 cache.clone(),
                 max_loads,
                 skipm,
@@ -171,7 +171,7 @@ impl CustomSerialize for MergedNode {
         let child = if let Some(offset) = child_offset {
             Some(LazyItemRef::deserialize(
                 reader,
-                offset,
+                FileOffset(offset),
                 cache.clone(),
                 max_loads,
                 skipm,
@@ -181,12 +181,22 @@ impl CustomSerialize for MergedNode {
         };
 
         // Deserialize neighbors
-        let neighbors =
-            LazyItems::deserialize(reader, neighbors_offset, cache.clone(), max_loads, skipm)?;
+        let neighbors = LazyItems::deserialize(
+            reader,
+            FileOffset(neighbors_offset),
+            cache.clone(),
+            max_loads,
+            skipm,
+        )?;
 
         // Deserialize versions
-        let versions =
-            LazyItems::deserialize(reader, versions_offset, cache.clone(), max_loads, skipm)?;
+        let versions = LazyItems::deserialize(
+            reader,
+            FileOffset(versions_offset),
+            cache.clone(),
+            max_loads,
+            skipm,
+        )?;
 
         Ok(MergedNode {
             version_id,

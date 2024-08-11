@@ -19,7 +19,7 @@ pub trait CustomSerialize {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32>;
     fn deserialize<R: Read + Seek>(
         reader: &mut R,
-        offset: u32,
+        offset: FileOffset,
         cache: Arc<NodeRegistry<R>>,
         max_loads: u16,
         skipm: &mut HashSet<FileOffset>,

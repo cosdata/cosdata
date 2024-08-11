@@ -35,19 +35,19 @@ impl CustomSerialize for Neighbour {
 
     fn deserialize<R: Read + Seek>(
         reader: &mut R,
-        offset: u32,
+        offset: FileOffset,
         cache: Arc<NodeRegistry<R>>,
         max_loads: u16,
         skipm: &mut HashSet<FileOffset>,
     ) -> std::io::Result<Self> {
-        reader.seek(SeekFrom::Start(offset as u64))?;
+        reader.seek(SeekFrom::Start(offset.0 as u64))?;
 
         // Deserialize the node
         let node_pos = reader.read_u32::<LittleEndian>()?;
 
         // Deserialize the cosine similarity
         let cosine_similarity = reader.read_f32::<LittleEndian>()?;
-        let node = LazyItem::deserialize(reader, node_pos, cache, max_loads, skipm)?;
+        let node = LazyItem::deserialize(reader, FileOffset(node_pos), cache, max_loads, skipm)?;
 
         Ok(Neighbour {
             node,

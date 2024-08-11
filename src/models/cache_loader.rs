@@ -104,7 +104,10 @@ impl<R: Read + Seek> NodeRegistry<R> {
         Ok(item)
     }
 
-    pub fn load_item<T: CustomSerialize>(self: Arc<Self>, offset: u32) -> std::io::Result<T> {
+    pub fn load_item<T: CustomSerialize>(
+        self: Arc<Self>,
+        offset: FileOffset,
+    ) -> std::io::Result<T> {
         let mut reader_lock = self.reader.write().unwrap();
         let mut skipm: HashSet<FileOffset> = HashSet::new();
         T::deserialize(&mut *reader_lock, offset, self.clone(), 1000, &mut skipm)
@@ -125,10 +128,10 @@ pub fn load_cache() {
         .open("0.index")
         .expect("failed to open");
 
-    let offset = 0;
+    let offset = FileOffset(0);
     let cache = Arc::new(NodeRegistry::new(1000, file));
     match read_node_from_file(offset, cache) {
-        Ok(_) => println!("Successfully read and printed node from offset {}", offset),
+        Ok(_) => println!("Successfully read and printed node from offset {}", offset.0),
         Err(e) => println!("Failed to read node: {}", e),
     }
 }

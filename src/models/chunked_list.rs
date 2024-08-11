@@ -1,4 +1,4 @@
-use super::types::Item;
+use super::types::{FileOffset, Item};
 use std::sync::{Arc, RwLock};
 
 pub trait SyncPersist {
@@ -6,7 +6,6 @@ pub trait SyncPersist {
     fn needs_persistence(&self) -> bool;
 }
 
-type FileOffset = u32;
 type VersionId = u16;
 type HNSWLevel = u8;
 

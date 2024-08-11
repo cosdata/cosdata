@@ -40,7 +40,7 @@ where
             // Serialize items and update placeholders
             for i in chunk_start..chunk_end {
                 let item_offset = items_guard[i].serialize(writer)?;
-                items_guard[i].offset = Some(item_offset);
+                items_guard[i].offset = Some(FileOffset(item_offset));
                 let placeholder_pos = placeholder_start as u64 + ((i - chunk_start) as u64 * 4);
                 let current_pos = writer.stream_position()?;
                 writer.seek(SeekFrom::Start(placeholder_pos))?;
@@ -62,17 +62,17 @@ where
     }
     fn deserialize<R: Read + Seek>(
         reader: &mut R,
-        offset: u32,
+        offset: FileOffset,
         cache: Arc<NodeRegistry<R>>,
         max_loads: u16,
         skipm: &mut HashSet<FileOffset>,
     ) -> std::io::Result<Self> {
-        if offset == u32::MAX {
+        if offset.0 == u32::MAX {
             return Ok(LazyItems::new());
         }
-        reader.seek(SeekFrom::Start(offset as u64))?;
+        reader.seek(SeekFrom::Start(offset.0 as u64))?;
         let mut items = Vec::new();
-        let mut current_chunk = offset;
+        let FileOffset(mut current_chunk) = offset;
         loop {
             for i in 0..CHUNK_SIZE {
                 reader.seek(SeekFrom::Start(current_chunk as u64 + (i as u64 * 4)))?;
@@ -80,8 +80,13 @@ where
                 if item_offset == u32::MAX {
                     continue;
                 }
-                let item =
-                    LazyItem::deserialize(reader, item_offset, cache.clone(), max_loads, skipm)?;
+                let item = LazyItem::deserialize(
+                    reader,
+                    FileOffset(item_offset),
+                    cache.clone(),
+                    max_loads,
+                    skipm,
+                )?;
                 items.push(item);
             }
             reader.seek(SeekFrom::Start(
