@@ -21,6 +21,7 @@ use std::io::Seek;
 use std::io::SeekFrom;
 use std::io::Write;
 use std::sync::Arc;
+use std::sync::RwLock;
 
 pub fn ann_search(
     vec_store: Arc<VectorStore>,
@@ -341,7 +342,7 @@ pub fn insert_embedding(
     Ok(())
 }
 
-pub fn index_embeddings(vec_store: Arc<VectorStore>) -> Result<(), WaCustomError> {
+pub fn index_embeddings(vec_store: Arc<VectorStore>, batch_size: usize) -> Result<(), WaCustomError> {
     let env = vec_store.lmdb.env.clone();
     let metadata_db = vec_store.lmdb.metadata_db.clone();
 
@@ -403,8 +404,7 @@ pub fn index_embeddings(vec_store: Arc<VectorStore>) -> Result<(), WaCustomError
         embeddings.push(embedding);
         i = next;
 
-        // TODO(kannan): load the batch size from config file
-        if embeddings.len() == 1000 || i == len {
+        if embeddings.len() == batch_size || i == len {
             // TODO: handle the errors
             let results: Vec<Result<(), WaCustomError>> = embeddings
                 .into_par_iter()

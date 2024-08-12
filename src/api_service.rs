@@ -1,19 +1,15 @@
 use crate::models::common::*;
 use crate::models::custom_buffered_writer::CustomBufferedWriter;
 use crate::models::file_persist::*;
-use crate::models::lazy_load::LazyItemRef;
 use crate::models::lazy_load::*;
 use crate::models::meta_persist::*;
 use crate::models::rpc::VectorIdValue;
 use crate::models::types::*;
 use crate::models::user::Statistics;
 use crate::quantization::{Quantization, StorageType};
-use crate::vector_store::ann_search;
-use crate::vector_store::auto_commit_transaction;
-use crate::vector_store::index_embeddings;
-use crate::vector_store::insert_embedding;
-use crate::vector_store::vector_fetch;
-use futures::stream::{self, StreamExt};
+use crate::vector_store::*;
+use actix_web::web;
+use cosdata::config_loader::Config;
 use lmdb::{DatabaseFlags, Transaction};
 use rand::Rng;
 use rayon::iter::IntoParallelIterator;
@@ -100,7 +96,6 @@ pub async fn init_vector_store(
         let nn = LazyItemRef::from_item(current_node.clone());
 
         if let Some(prev_node) = prev.item.get().get_data() {
-            let mut prev_guard = prev_node.clone();
             current_node
                 .get()
                 .set_parent(prev.clone().item.get().clone());
@@ -168,10 +163,18 @@ pub async fn init_vector_store(
         .vector_store_map
         .insert(name.clone(), vec_store.clone());
 
+    let result = store_current_version(vec_store.clone(), "main".to_string(), 0);
+    let version_hash = result.expect("Failed to get VersionHash");
+    vec_store.set_current_version(Some(version_hash));
+
     Ok(())
 }
 
-pub fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<(VectorIdValue, Vec<f32>)>) -> () {
+pub async fn run_upload(
+    vec_store: Arc<VectorStore>,
+    vecxx: Vec<(VectorIdValue, Vec<f32>)>,
+    config: web::Data<Config>,
+) -> () {
     vecxx.into_par_iter().for_each(|(id, vec)| {
         let hash_vec = convert_value(id);
         let storage = vec_store
@@ -203,9 +206,8 @@ pub fn run_upload(vec_store: Arc<VectorStore>, vecxx: Vec<(VectorIdValue, Vec<f3
 
     txn.abort();
 
-    // TODO(kannan): load the threshold value from config file
-    if count_unindexed >= 100 {
-        index_embeddings(vec_store.clone()).expect("Failed to index embeddings");
+    if count_unindexed >= config.threshold {
+        index_embeddings(vec_store.clone(), config.batch_size).expect("Failed to index embeddings");
     }
 
     // Update version

@@ -8,8 +8,10 @@ use crate::{
         types::get_app_env,
     },
 };
+use cosdata::config_loader::Config;
+
 // Route: `/vectordb/upsert`
-pub(crate) async fn upsert(web::Json(body): web::Json<UpsertVectors>) -> HttpResponse {
+pub(crate) async fn upsert(web::Json(body): web::Json<UpsertVectors>,  config: web::Data<Config>) -> HttpResponse {
     let env = match get_app_env() {
         Ok(env) => env,
         Err(_) => return HttpResponse::InternalServerError().body("Env initialization error"),
@@ -30,8 +32,8 @@ pub(crate) async fn upsert(web::Json(body): web::Json<UpsertVectors>) -> HttpRes
     }
 
     // Call run_upload with the extracted parameters
-    web::block(|| {
-        let __result = run_upload(vec_store, convert_vectors(body.vectors));
+    web::block(move || {
+        let __result = run_upload(vec_store, convert_vectors(body.vectors),  config);
     })
     .await
     .unwrap();
