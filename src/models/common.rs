@@ -1,24 +1,19 @@
-use super::chunked_list::LazyItem;
 use super::dot_product::x86_64::dot_product_u8_avx2;
+use super::lazy_load::LazyItem;
 use super::rpc::VectorIdValue;
 use super::types::{MergedNode, VectorId};
 use crate::distance::DistanceError;
-use crate::models::lookup_table::*;
 use crate::models::rpc::Vector;
 use crate::models::types::PropState;
 use crate::models::types::VectorQt;
 use crate::quantization::QuantizationError;
-use async_std::stream::Cloned;
-use dashmap::DashMap;
-use futures::future::{join_all, BoxFuture, FutureExt};
+use futures::future::FutureExt;
 use sha2::{Digest, Sha256};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use thiserror::Error;
-use tokio::task;
 
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
@@ -354,6 +349,8 @@ pub enum WaCustomError {
     LazyLoadingError(String),
     TrainingFailed,
     CalculationError,
+    FsError(String),
+    DeserializationError(String),
 }
 
 impl fmt::Display for WaCustomError {
@@ -373,6 +370,8 @@ impl fmt::Display for WaCustomError {
             WaCustomError::LazyLoadingError(msg) => write!(f, "Lazy loading error: {}", msg),
             WaCustomError::TrainingFailed => write!(f, "Training failed"),
             WaCustomError::CalculationError => write!(f, "Calculation error"),
+            WaCustomError::FsError(err) => write!(f, "FS error: {}", err),
+            WaCustomError::DeserializationError(err) => write!(f, "Deserialization error: {}", err),
         }
     }
 }
@@ -474,12 +473,13 @@ pub fn remove_duplicates_and_filter(
         let mut seen = HashSet::new();
         vec.into_iter()
             .filter_map(|(lazy_item, similarity)| {
-                if let LazyItem {
-                    data: Some(node), ..
+                if let LazyItem::Valid {
+                    data: Some(mut node),
+                    ..
                 } = lazy_item
                 {
-                    if let PropState::Ready(node_prop) = &*node.read().unwrap().prop.read().unwrap()
-                    {
+                    let mut prop_arc = node.get().prop.clone();
+                    if let PropState::Ready(node_prop) = prop_arc.get() {
                         let id = &node_prop.id;
                         if let VectorId::Int(s) = id {
                             if *s == -1 {

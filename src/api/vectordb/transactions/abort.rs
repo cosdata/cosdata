@@ -12,18 +12,17 @@ pub(crate) async fn abort(path_data: web::Path<(String, String)>) -> HttpRespons
         return HttpResponse::NotFound().body("Vector store not found");
     };
 
-    {
-        let guard = vec_store.current_open_transaction.read().unwrap();
-        let Some(transaction) = guard.as_ref() else {
-            return HttpResponse::NotFound().body("Transaction not found");
-        };
+    let mut cot_arc = vec_store.current_open_transaction.clone();
+    let cot = cot_arc.get();
+    let Some(transaction) = cot.as_ref() else {
+        return HttpResponse::NotFound().body("Transaction not found");
+    };
 
-        if transaction.hash != transaction_id {
-            return HttpResponse::NotFound().body("Transaction not found");
-        }
+    if transaction.hash != transaction_id {
+        return HttpResponse::NotFound().body("Transaction not found");
     }
 
-    *vec_store.current_open_transaction.write().unwrap() = None;
+    cot_arc.update(None);
 
     // TODO: delete the wal file?
 

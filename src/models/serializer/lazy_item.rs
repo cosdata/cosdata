@@ -1,42 +1,55 @@
 use super::CustomSerialize;
-use crate::models::types::FileOffset;
+use crate::models::lazy_load::SyncPersist;
+use crate::models::types::{FileOffset, Item};
 use crate::models::{
     cache_loader::NodeRegistry,
-    chunked_list::{LazyItem, LazyItemRef},
-    types::{MergedNode, Neighbour},
+    lazy_load::{LazyItem, LazyItemRef},
+    types::MergedNode,
 };
 use std::collections::HashSet;
 use std::{
     io::{Read, Seek, SeekFrom, Write},
-    sync::{Arc, RwLock},
+    sync::Arc,
 };
 
 impl CustomSerialize for LazyItem<MergedNode> {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
-        if let Some(FileOffset(existing_offset)) = self.offset {
-            if let Some(data) = &self.data {
-                let guard = data.read().unwrap();
-                if guard.needs_persistence() {
-                    writer.seek(SeekFrom::Start(existing_offset as u64))?;
-                    guard.set_persistence(false);
-                    guard.serialize(writer)?;
+        match self {
+            Self::Valid { data, offset, .. } => {
+                if let Some(existing_offset) = offset.clone().get().clone() {
+                    if let Some(data) = &data {
+                        let mut arc = data.clone();
+                        let data = arc.get();
+                        if data.needs_persistence() {
+                            writer.seek(SeekFrom::Start(existing_offset as u64))?;
+                            data.set_persistence(false);
+                            data.serialize(writer)?;
+                        }
+                        Ok(existing_offset)
+                    } else {
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "Attempting to serialize LazyItem with no data",
+                        ))
+                    }
+                } else {
+                    if let Some(data) = &data {
+                        let mut arc = data.clone();
+                        let offset = writer.stream_position()? as u32;
+                        self.set_offset(Some(offset));
+                        let data = arc.get();
+                        data.set_persistence(false);
+                        let offset = data.serialize(writer)?;
+                        Ok(offset)
+                    } else {
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "Attempting to serialize LazyItem with no data",
+                        ))
+                    }
                 }
-                Ok(existing_offset)
-            } else {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Attempting to serialize LazyItem with no data",
-                ))
             }
-        } else {
-            if let Some(data) = &self.data {
-                data.read().unwrap().serialize(writer)
-            } else {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Attempting to serialize LazyItem with no data",
-                ))
-            }
+            Self::Invalid => Ok(u32::MAX),
         }
     }
 
@@ -57,64 +70,11 @@ impl CustomSerialize for LazyItem<MergedNode> {
     }
 }
 
-impl CustomSerialize for LazyItem<Neighbour> {
-    fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
-        if let Some(FileOffset(existing_offset)) = self.offset {
-            writer.seek(SeekFrom::Start(existing_offset as u64))?;
-            if let Some(data) = &self.data {
-                data.read().unwrap().serialize(writer)?;
-                Ok(existing_offset)
-            } else {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Attempting to serialize LazyItem with no data",
-                ))
-            }
-        } else {
-            if let Some(data) = &self.data {
-                data.read().unwrap().serialize(writer)
-            } else {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Attempting to serialize LazyItem with no data",
-                ))
-            }
-        }
-    }
-
-    fn deserialize<R: Read + Seek>(
-        reader: &mut R,
-        offset: FileOffset,
-        cache: Arc<NodeRegistry<R>>,
-        max_loads: u16,
-        skipm: &mut HashSet<FileOffset>,
-    ) -> std::io::Result<Self>
-    where
-        Self: Sized,
-    {
-        reader.seek(SeekFrom::Start(offset.0 as u64))?;
-        let data = Neighbour::deserialize(reader, offset, cache, max_loads, skipm)?;
-
-        Ok(LazyItem {
-            data: Some(Arc::new(RwLock::new(data))),
-            offset: Some(offset),
-            decay_counter: 0,
-        })
-    }
-}
-
 impl CustomSerialize for LazyItemRef<MergedNode> {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
-        let lazy_item = self.item.read().unwrap();
-        let offset = if lazy_item.offset.is_none() {
-            drop(lazy_item);
-            let new_offset = Some(FileOffset(writer.stream_position()? as u32));
-            self.set_offset(new_offset);
-            let lazy_item = self.item.read().unwrap();
-            lazy_item.serialize(writer)?
-        } else {
-            lazy_item.serialize(writer)?
-        };
+        let mut arc = self.item.clone();
+        let lazy_item = arc.get();
+        let offset = lazy_item.serialize(writer)?;
 
         Ok(offset)
     }
@@ -129,7 +89,7 @@ impl CustomSerialize for LazyItemRef<MergedNode> {
         let lazy = LazyItem::deserialize(reader, offset, cache, max_loads, skipm)?;
 
         Ok(LazyItemRef {
-            item: Arc::new(RwLock::new(lazy)),
+            item: Item::new(lazy),
         })
     }
 }

@@ -8,9 +8,10 @@ use crate::{
         types::get_app_env,
     },
 };
+use cosdata::config_loader::Config;
 
 // Route: `/vectordb/upsert`
-pub(crate) async fn upsert(web::Json(body): web::Json<UpsertVectors>) -> HttpResponse {
+pub(crate) async fn upsert(web::Json(body): web::Json<UpsertVectors>,  config: web::Data<Config>) -> HttpResponse {
     let env = match get_app_env() {
         Ok(env) => env,
         Err(_) => return HttpResponse::InternalServerError().body("Env initialization error"),
@@ -22,16 +23,20 @@ pub(crate) async fn upsert(web::Json(body): web::Json<UpsertVectors>) -> HttpRes
             // Vector store not found, return an error response
             return HttpResponse::InternalServerError().body("Vector store not found");
         }
-    };
+    }
+    .clone();
 
-    if vec_store.current_open_transaction.read().unwrap().is_some() {
+    if vec_store.current_open_transaction.clone().get().is_some() {
         return HttpResponse::Conflict()
             .body("Cannot upsert while there's an on-going transaction");
     }
 
     // Call run_upload with the extracted parameters
-    let __result = run_upload(vec_store.clone(), convert_vectors(body.vectors)).await;
-
-    let response_data = RPCResponseBody::RespUpsertVectors { insert_stats: None }; //
+    web::block(move || {
+        let __result = run_upload(vec_store, convert_vectors(body.vectors),  config);
+    })
+    .await
+    .unwrap();
+    let response_data = RPCResponseBody::RespUpsertVectors { insert_stats: None };
     HttpResponse::Ok().json(response_data)
 }

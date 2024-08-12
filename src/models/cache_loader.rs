@@ -1,5 +1,5 @@
-use super::chunked_list::LazyItem;
 use super::file_persist::*;
+use super::lazy_load::LazyItem;
 use super::serializer::CustomSerialize;
 use super::types::*;
 use dashmap::DashMap;
@@ -70,10 +70,10 @@ impl<R: Read + Seek> NodeRegistry<R> {
         println!("Released read lock on cuckoo_filter");
 
         if max_loads == 0 || false == skipm.insert(key) {
-            println!("max_loads is 0, returning LazyItem with no data");
-            return Ok(LazyItem {
+            println!("Either max_loads hit 0 or loop detected, returning LazyItem with no data");
+            return Ok(LazyItem::Valid {
                 data: None,
-                offset: Some(key),
+                offset: Item::new(Some(key)),
                 decay_counter: 0,
             });
         }
@@ -88,9 +88,9 @@ impl<R: Read + Seek> NodeRegistry<R> {
         }
 
         println!("Creating new LazyItem");
-        let item = LazyItem {
-            data: Some(Arc::new(RwLock::new(obj))),
-            offset: Some(key),
+        let item = LazyItem::Valid {
+            data: Some(Item::new(obj)),
+            offset: Item::new(Some(key)),
             decay_counter: 0,
         };
 

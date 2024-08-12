@@ -35,7 +35,7 @@ jobs:
           save-cache: ${{ github.ref_name == 'main' }}
           cache-key: warm
       - run: cargo check
-      
+
   typos:
     name: Spell Check
     runs-on: ubuntu-latest
@@ -44,3 +44,14 @@ jobs:
       - uses: crate-ci/typos@v1.23.5
         with:
           files: .
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: taiki-e/checkout-action@v1
+      - uses: Boshen/setup-rust@main
+        with:
+          save-cache: ${{ github.ref_name == 'main' }}
+          cache-key: warm
+      - run: cargo test
