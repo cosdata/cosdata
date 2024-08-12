@@ -37,7 +37,6 @@ pub(crate) async fn upsert(web::Json(body): web::Json<UpsertVectors>,  config: w
     })
     .await
     .unwrap();
-
     let response_data = RPCResponseBody::RespUpsertVectors { insert_stats: None };
     HttpResponse::Ok().json(response_data)
 }

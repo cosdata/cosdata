@@ -54,7 +54,7 @@ pub fn persist_node_update_loc(
     };
     let file_loc = write_node_update(ver_file, data.clone(), node.get_offset())?;
     node.rcu(|node| {
-        let mut node = node.clone();
+        let node = node.clone();
         node.set_offset(Some(file_loc as u32));
         node
     });
