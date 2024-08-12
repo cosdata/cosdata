@@ -82,8 +82,8 @@ pub async fn init_vector_store(
             location: Some((FileOffset(0), BytesToRead(0))),
         });
         let mut current_node = Item::new(MergedNode {
-            version_id: 0, // Initialize with appropriate version ID
-            hnsw_level: l as u8,
+            version_id: VersionId(0), // Initialize with appropriate version ID
+            hnsw_level: HNSWLevel(l as u8),
             prop: Item::new(PropState::Ready(prop.clone())),
             neighbors: EagerLazyItemSet::new(),
             parent: LazyItemRef::new_invalid(),

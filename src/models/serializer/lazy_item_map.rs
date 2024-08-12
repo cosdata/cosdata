@@ -53,7 +53,7 @@ where
                 let item_placeholder_pos = writer.stream_position()?;
                 writer.write_u32::<LittleEndian>(0)?;
                 let item_offset = items[i].1.serialize(writer)?;
-                items[i].1.set_offset(Some(item_offset));
+                items[i].1.set_offset(Some(FileOffset(item_offset)));
                 let placeholder_pos = placeholder_start as u64 + ((i - chunk_start) as u64 * 4);
                 let current_pos = writer.stream_position()?;
                 writer.seek(SeekFrom::Start(placeholder_pos))?;
@@ -78,7 +78,7 @@ where
 
     fn deserialize<R: Read + Seek>(
         reader: &mut R,
-        offset: u32,
+        FileOffset(offset): FileOffset,
         cache: Arc<NodeRegistry<R>>,
         max_loads: u16,
         skipm: &mut HashSet<FileOffset>,
@@ -98,14 +98,19 @@ where
                 }
                 let key = IdentityMapKey::deserialize(
                     reader,
-                    entry_offset,
+                    FileOffset(entry_offset),
                     cache.clone(),
                     max_loads,
                     skipm,
                 )?;
                 let item_offset = reader.read_u32::<LittleEndian>()?;
-                let item =
-                    LazyItem::deserialize(reader, item_offset, cache.clone(), max_loads, skipm)?;
+                let item = LazyItem::deserialize(
+                    reader,
+                    FileOffset(item_offset),
+                    cache.clone(),
+                    max_loads,
+                    skipm,
+                )?;
                 items.push((key, item));
             }
             reader.seek(SeekFrom::Start(
@@ -142,7 +147,7 @@ impl CustomSerialize for IdentityMapKey {
 
     fn deserialize<R: Read + Seek>(
         reader: &mut R,
-        offset: u32,
+        FileOffset(offset): FileOffset,
         _cache: Arc<NodeRegistry<R>>,
         _max_loads: u16,
         _skipm: &mut HashSet<FileOffset>,

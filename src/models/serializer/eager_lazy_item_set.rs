@@ -66,7 +66,7 @@ where
 
     fn deserialize<R: Read + Seek>(
         reader: &mut R,
-        offset: u32,
+        FileOffset(offset): FileOffset,
         cache: Arc<NodeRegistry<R>>,
         max_loads: u16,
         skipm: &mut HashSet<FileOffset>,
@@ -86,7 +86,7 @@ where
                 }
                 let item = EagerLazyItem::deserialize(
                     reader,
-                    item_offset,
+                    FileOffset(item_offset),
                     cache.clone(),
                     max_loads,
                     skipm,

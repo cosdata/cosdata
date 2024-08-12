@@ -41,7 +41,7 @@ impl CustomSerialize for f32 {
 
     fn deserialize<R: Read + Seek>(
         reader: &mut R,
-        offset: u32,
+        offset: FileOffset,
         _cache: Arc<NodeRegistry<R>>,
         _max_loads: u16,
         _skipm: &mut HashSet<FileOffset>,
@@ -49,7 +49,7 @@ impl CustomSerialize for f32 {
     where
         Self: Sized,
     {
-        reader.seek(SeekFrom::Start(offset as u64))?;
+        reader.seek(SeekFrom::Start(offset.0 as u64))?;
         reader.read_f32::<LittleEndian>()
     }
 }

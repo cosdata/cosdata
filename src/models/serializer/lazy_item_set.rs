@@ -43,7 +43,7 @@ where
             // Serialize items and update placeholders
             for i in chunk_start..chunk_end {
                 let item_offset = items[i].serialize(writer)?;
-                items[i].set_offset(Some(item_offset));
+                items[i].set_offset(Some(FileOffset(item_offset)));
                 let placeholder_pos = placeholder_start as u64 + ((i - chunk_start) as u64 * 4);
                 let current_pos = writer.stream_position()?;
                 writer.seek(SeekFrom::Start(placeholder_pos))?;
@@ -66,7 +66,7 @@ where
 
     fn deserialize<R: Read + Seek>(
         reader: &mut R,
-        offset: FileOffset,
+        FileOffset(offset): FileOffset,
         cache: Arc<NodeRegistry<R>>,
         max_loads: u16,
         skipm: &mut HashSet<FileOffset>,
@@ -74,9 +74,9 @@ where
         if offset == u32::MAX {
             return Ok(LazyItemSet::new());
         }
-        reader.seek(SeekFrom::Start(offset.0 as u64))?;
+        reader.seek(SeekFrom::Start(offset as u64))?;
         let mut items = Vec::new();
-        let FileOffset(mut current_chunk) = offset;
+        let mut current_chunk = offset;
         loop {
             for i in 0..CHUNK_SIZE {
                 reader.seek(SeekFrom::Start(current_chunk as u64 + (i as u64 * 4)))?;

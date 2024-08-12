@@ -41,7 +41,7 @@ where
     fn get_id(&self) -> Self::Id {
         if let LazyItem::Valid { data, offset, .. } = self {
             if let Some(offset) = offset.clone().get().clone() {
-                return LazyItemId::Persist(offset);
+                return LazyItemId::Persist(offset.0);
             }
 
             if let Some(data) = data {

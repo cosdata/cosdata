@@ -32,7 +32,7 @@ where
 
     fn deserialize<R: Read + Seek>(
         reader: &mut R,
-        offset: u32,
+        FileOffset(offset): FileOffset,
         cache: Arc<NodeRegistry<R>>,
         max_loads: u16,
         skipm: &mut HashSet<FileOffset>,
@@ -41,8 +41,9 @@ where
         Self: Sized,
     {
         reader.seek(SeekFrom::Start(offset as u64))?;
-        let eager_data = E::deserialize(reader, offset, cache.clone(), max_loads, skipm)?;
-        let item_offset = reader.read_u32::<LittleEndian>()?;
+        let eager_data =
+            E::deserialize(reader, FileOffset(offset), cache.clone(), max_loads, skipm)?;
+        let item_offset = FileOffset(reader.read_u32::<LittleEndian>()?);
         let item = LazyItem::deserialize(reader, item_offset, cache, max_loads, skipm)?;
 
         Ok(Self(eager_data, item))

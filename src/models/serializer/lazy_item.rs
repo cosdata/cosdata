@@ -21,11 +21,11 @@ impl CustomSerialize for LazyItem<MergedNode> {
                         let mut arc = data.clone();
                         let data = arc.get();
                         if data.needs_persistence() {
-                            writer.seek(SeekFrom::Start(existing_offset as u64))?;
+                            writer.seek(SeekFrom::Start(existing_offset.0 as u64))?;
                             data.set_persistence(false);
                             data.serialize(writer)?;
                         }
-                        Ok(existing_offset)
+                        Ok(existing_offset.0)
                     } else {
                         Err(std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
@@ -36,7 +36,7 @@ impl CustomSerialize for LazyItem<MergedNode> {
                     if let Some(data) = &data {
                         let mut arc = data.clone();
                         let offset = writer.stream_position()? as u32;
-                        self.set_offset(Some(offset));
+                        self.set_offset(Some(FileOffset(offset)));
                         let data = arc.get();
                         data.set_persistence(false);
                         let offset = data.serialize(writer)?;

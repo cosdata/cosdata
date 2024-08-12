@@ -29,7 +29,7 @@ pub struct HNSWLevel(pub u8);
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct FileOffset(pub u32);
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, Hash)]
 pub struct BytesToRead(pub u32);
 
 #[derive(Debug, Copy, Clone)]
@@ -167,7 +167,7 @@ impl MergedNode {
         MergedNode {
             version_id,
             hnsw_level,
-            prop: Item::new(PropState::Pending((0, 0))),
+            prop: Item::new(PropState::Pending((FileOffset(0), BytesToRead(0)))),
             neighbors: EagerLazyItemSet::new(),
             parent: LazyItemRef::new_invalid(),
             child: LazyItemRef::new_invalid(),
@@ -276,8 +276,8 @@ impl fmt::Display for VectorId {
 impl fmt::Display for MergedNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "MergedNode {{")?;
-        writeln!(f, "  version_id: {},", self.version_id)?;
-        writeln!(f, "  hnsw_level: {},", self.hnsw_level)?;
+        writeln!(f, "  version_id: {},", self.version_id.0)?;
+        writeln!(f, "  hnsw_level: {},", self.hnsw_level.0)?;
 
         // Display PropState
         write!(f, "  prop: ")?;

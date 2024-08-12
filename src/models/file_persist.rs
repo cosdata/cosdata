@@ -1,7 +1,7 @@
 use super::cache_loader::NodeRegistry;
 use super::common::WaCustomError;
 use super::lazy_load::LazyItem;
-use super::types::{HNSWLevel, Item, MergedNode, NodeProp, VectorId};
+use super::types::{BytesToRead, FileOffset, HNSWLevel, Item, MergedNode, NodeProp, VectorId};
 use crate::models::custom_buffered_writer::*;
 use crate::models::serializer::*;
 use std::fs::File;
@@ -19,7 +19,7 @@ pub fn read_node_from_file<R: Read + Seek>(
     let node: MergedNode = cache.load_item(offset)?;
 
     // Pretty print the node
-    println!("Read NodePersist from offset {}:", offset);
+    println!("Read NodePersist from offset {}:", offset.0);
     // println!("{}", node);
 
     Ok(node)
@@ -50,13 +50,16 @@ pub fn persist_node_update_loc(
     let file_loc = write_node_update(ver_file, data.clone(), node.get_offset())?;
     node.rcu(|node| {
         let node = node.clone();
-        node.set_offset(Some(file_loc as u32));
+        node.set_offset(Some(file_loc));
         node
     });
     Ok(())
 }
 
-pub fn write_node_to_file(mut node: Item<MergedNode>, writer: &mut CustomBufferedWriter) -> u32 {
+pub fn write_node_to_file(
+    mut node: Item<MergedNode>,
+    writer: &mut CustomBufferedWriter,
+) -> FileOffset {
     println!("about to write node: {}", node.get());
     // Assume CustomBufferWriter already handles seeking to the end
     // Serialize
@@ -68,8 +71,8 @@ pub fn write_node_to_file(mut node: Item<MergedNode>, writer: &mut CustomBuffere
 pub fn write_node_to_file_at_offset(
     mut node: Item<MergedNode>,
     writer: &mut CustomBufferedWriter,
-    offset: u32,
-) -> u32 {
+    offset: FileOffset,
+) -> FileOffset {
     println!("write_node_to_file_at_offset");
     // Seek to the specified offset before writing
     writer

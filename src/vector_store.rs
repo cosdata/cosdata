@@ -49,7 +49,7 @@ pub fn ann_search(
             if let Some(offset) = offset.get() {
                 return Err(WaCustomError::LazyLoadingError(format!(
                     "Node at offset {} needs to be loaded",
-                    offset
+                    offset.0
                 )));
             } else {
                 return Err(WaCustomError::NodeError(
@@ -502,7 +502,7 @@ pub fn index_embedding(
             if let Some(offset) = offset.get() {
                 return Err(WaCustomError::LazyLoadingError(format!(
                     "Node at offset {} needs to be loaded",
-                    offset
+                    offset.0
                 )));
             } else {
                 return Err(WaCustomError::NodeError(
@@ -601,7 +601,7 @@ pub fn queue_node_prop_exec(
             if let Some(offset) = offset.clone().get().clone() {
                 return Err(WaCustomError::LazyLoadingError(format!(
                     "Node at offset {} needs to be loaded",
-                    offset
+                    offset.0
                 )));
             } else {
                 return Err(WaCustomError::NodeError("Node is null".to_string()));
@@ -694,7 +694,7 @@ fn insert_node_create_edges(
         value: fvec.clone(),
         location: None,
     };
-    let mut nn = Item::new(MergedNode::new(0, cur_level as u8)); // Assuming MergedNode::new exists
+    let mut nn = Item::new(MergedNode::new(VersionId(0), HNSWLevel(cur_level as u8))); // Assuming MergedNode::new exists
     nn.get().set_prop_ready(Arc::new(node_prop));
 
     nn.get().add_ready_neighbors(nbs.clone());
@@ -756,7 +756,7 @@ fn traverse_find_nearest(
             if let Some(offset) = offset.get() {
                 return Err(WaCustomError::LazyLoadingError(format!(
                     "Node at offset {} needs to be loaded",
-                    offset
+                    offset.0
                 )));
             } else {
                 return Err(WaCustomError::NodeError(

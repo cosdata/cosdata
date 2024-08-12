@@ -2,7 +2,7 @@ use super::CustomSerialize;
 use crate::models::{
     cache_loader::NodeRegistry,
     lazy_load::{EagerLazyItemSet, LazyItemMap, LazyItemRef},
-    types::{Item, MergedNode, PropState},
+    types::{BytesToRead, HNSWLevel, Item, MergedNode, PropState, VersionId},
 };
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::{
@@ -157,14 +157,14 @@ impl CustomSerialize for MergedNode {
 
         // Deserialize parent
         let parent = if let Some(offset) = parent_offset {
-            LazyItemRef::deserialize(reader, offset, cache.clone(), max_loads, skipm)?
+            LazyItemRef::deserialize(reader, FileOffset(offset), cache.clone(), max_loads, skipm)?
         } else {
             LazyItemRef::new_invalid()
         };
 
         // Deserialize child
         let child = if let Some(offset) = child_offset {
-            LazyItemRef::deserialize(reader, offset, cache.clone(), max_loads, skipm)?
+            LazyItemRef::deserialize(reader, FileOffset(offset), cache.clone(), max_loads, skipm)?
         } else {
             LazyItemRef::new_invalid()
         };
@@ -172,15 +172,20 @@ impl CustomSerialize for MergedNode {
         // Deserialize neighbors
         let neighbors = EagerLazyItemSet::deserialize(
             reader,
-            neighbors_offset,
+            FileOffset(neighbors_offset),
             cache.clone(),
             max_loads,
             skipm,
         )?;
 
         // Deserialize versions
-        let versions =
-            LazyItemMap::deserialize(reader, versions_offset, cache.clone(), max_loads, skipm)?;
+        let versions = LazyItemMap::deserialize(
+            reader,
+            FileOffset(versions_offset),
+            cache.clone(),
+            max_loads,
+            skipm,
+        )?;
 
         Ok(MergedNode {
             version_id,
