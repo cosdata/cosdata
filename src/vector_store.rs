@@ -342,7 +342,10 @@ pub fn insert_embedding(
     Ok(())
 }
 
-pub fn index_embeddings(vec_store: Arc<VectorStore>, batch_size: usize) -> Result<(), WaCustomError> {
+pub fn index_embeddings(
+    vec_store: Arc<VectorStore>,
+    batch_size: usize,
+) -> Result<(), WaCustomError> {
     let env = vec_store.lmdb.env.clone();
     let metadata_db = vec_store.lmdb.metadata_db.clone();
 
@@ -412,6 +415,7 @@ pub fn index_embeddings(vec_store: Arc<VectorStore>, batch_size: usize) -> Resul
                     let lp = &vec_store.levels_prob;
                     let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
 
+                    println!("index_embedding");
                     index_embedding(
                         vec_store.clone(),
                         embedding,
@@ -558,13 +562,15 @@ pub fn index_embedding(
             cur_level - 1,
             max_insert_level,
         )?;
+        println!("here");
         insert_node_create_edges(
             vec_store.clone(),
             fvec,
             vector_emb.hash_vec.clone(),
             z,
             cur_level,
-        );
+        )
+        .expect("Failed insert_node_create_edges");
     } else {
         index_embedding(
             vec_store.clone(),
@@ -581,6 +587,7 @@ pub fn index_embedding(
 pub fn queue_node_prop_exec(
     lznode: LazyItem<MergedNode>,
     prop_file: Arc<File>,
+    vec_store: Arc<VectorStore>,
 ) -> Result<(), WaCustomError> {
     let (mut node_arc, location) = match &lznode {
         LazyItem::Valid {
@@ -631,6 +638,15 @@ pub fn queue_node_prop_exec(
         }
     }
 
+    // Add the node to exec_queue_nodes
+    let mut exec_queue = vec_store.exec_queue_nodes.clone();
+    println!("queue length {}", exec_queue.len());
+    exec_queue.rcu(|queue| {
+        let mut new_queue = queue.clone();
+        new_queue.push(Item::new(lznode.clone()));
+        new_queue
+    });
+
     Ok(())
 }
 
@@ -647,6 +663,7 @@ pub fn auto_commit_transaction(
 
     // Iterate through the exec_queue_nodes and persist each node
     for node in exec_queue_nodes.iter() {
+        println!("auto_commit_txn");
         persist_node_update_loc(buf_writer, node.clone())?;
     }
 
@@ -705,8 +722,12 @@ fn insert_node_create_edges(
             nbr1_node.get().add_ready_neighbors(neighbor_list);
         }
     }
-
-    queue_node_prop_exec(LazyItem::from_item(nn), vec_store.prop_file.clone())?;
+    println!("insert node create edges, queuing nodes");
+    queue_node_prop_exec(
+        LazyItem::from_item(nn),
+        vec_store.prop_file.clone(),
+        vec_store,
+    )?;
 
     Ok(())
 }

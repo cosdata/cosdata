@@ -170,7 +170,7 @@ pub async fn init_vector_store(
     Ok(())
 }
 
-pub async fn run_upload(
+pub fn run_upload(
     vec_store: Arc<VectorStore>,
     vecxx: Vec<(VectorIdValue, Vec<f32>)>,
     config: web::Data<Config>,
@@ -231,6 +231,7 @@ pub async fn run_upload(
     let mut writer =
         CustomBufferedWriter::new(ver_file.clone()).expect("Failed opening custom buffer");
 
+    println!("run_upload 333");
     match auto_commit_transaction(vec_store.clone(), &mut writer) {
         Ok(_) => (),
         Err(e) => {

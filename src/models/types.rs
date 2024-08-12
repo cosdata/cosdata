@@ -267,19 +267,55 @@ impl fmt::Display for VectorId {
     }
 }
 
-// impl fmt::Display for MergedNode {
-//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//         write!(f, "MergedNode {{ version_id: {}, hnsw_level: {}, prop: {:?}, neighbors: {:?}, parent: {:?}, child: {:?}, version_ref: {:?} }}",
-//             self.version_id,
-//             self.hnsw_level,
-//             self.prop.read().unwrap(),
-//             self.neighbors,
-//             self.parent,
-//             self.child,
-//             self.versions
-//         )
-//     }
-// }
+impl fmt::Display for MergedNode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "MergedNode {{")?;
+        writeln!(f, "  version_id: {},", self.version_id)?;
+        writeln!(f, "  hnsw_level: {},", self.hnsw_level)?;
+
+        // Display PropState
+        write!(f, "  prop: ")?;
+        let mut prop_arc = self.prop.clone();
+        match prop_arc.get() {
+            PropState::Ready(node_prop) => writeln!(f, "Ready {{ id: {} }}", node_prop.id)?,
+            PropState::Pending(_) => writeln!(f, "Pending")?,
+        }
+        // Display number of neighbors
+        writeln!(f, "  neighbors: {} items,", self.neighbors.len())?;
+
+        // Display parent and child status
+        writeln!(
+            f,
+            "  parent: {}",
+            if self.parent.is_valid() {
+                "Valid"
+            } else {
+                "Invalid"
+            }
+        )?;
+        writeln!(
+            f,
+            "  child: {}",
+            if self.child.is_valid() {
+                "Valid"
+            } else {
+                "Invalid"
+            }
+        )?;
+
+        // Display number of versions
+        writeln!(f, "  versions: {} items,", self.versions.len())?;
+
+        // Display persist flag
+        writeln!(
+            f,
+            "  persist_flag: {}",
+            self.persist_flag.load(std::sync::atomic::Ordering::Relaxed)
+        )?;
+
+        write!(f, "}}")
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum VectorQt {
