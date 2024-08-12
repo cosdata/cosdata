@@ -8,7 +8,10 @@ use nom::{
 use entity::{parse_entity_pattern, EntityPattern};
 use relationship::{parse_relationship_pattern, RelationshipPattern};
 
-use super::common::ws;
+use super::{
+    common::ws,
+    condition::{parse_condition, Condition},
+};
 
 pub type Patterns = Vec<Pattern>;
 
@@ -16,7 +19,7 @@ pub type Patterns = Vec<Pattern>;
 pub enum Pattern {
     EntityPattern(EntityPattern),
     RelationshipPattern(RelationshipPattern),
-    Condition(String),
+    Condition(Condition),
 }
 
 pub fn parse_patterns0(input: &str) -> IResult<&str, Patterns> {
@@ -29,9 +32,10 @@ pub fn parse_patterns1(input: &str) -> IResult<&str, Patterns> {
 
 pub fn parse_pattern(input: &str) -> IResult<&str, Pattern> {
     alt((
-        map(parse_entity_pattern, |p| Pattern::EntityPattern(p)),
-        map(parse_relationship_pattern, |p| {
-            Pattern::RelationshipPattern(p)
+        map(parse_entity_pattern, |ep| Pattern::EntityPattern(ep)),
+        map(parse_relationship_pattern, |rp| {
+            Pattern::RelationshipPattern(rp)
         }),
+        map(parse_condition, |c| Pattern::Condition(c)),
     ))(input)
 }

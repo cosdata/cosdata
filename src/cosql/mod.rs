@@ -1,5 +1,6 @@
 pub mod common;
 pub mod compute_clause;
+pub mod condition;
 pub mod data_type;
 pub mod definition;
 pub mod inference;
