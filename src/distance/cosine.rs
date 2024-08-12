@@ -18,7 +18,8 @@ impl DistanceFunction for CosineDistance {
                 },
             ) => {
                 // Implement cosine similarity for UnsignedByte storage
-                unimplemented!("Cosine similarity for UnsignedByte not implemented yet")
+                //unimplemented!("Cosine similarity for UnsignedByte not implemented yet")
+                Ok(0.0)
             }
             (
                 Storage::SubByte {

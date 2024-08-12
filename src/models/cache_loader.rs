@@ -70,7 +70,7 @@ impl<R: Read + Seek> NodeRegistry<R> {
         println!("Released read lock on cuckoo_filter");
 
         if max_loads == 0 || false == skipm.insert(key) {
-            println!("max_loads is 0, returning LazyItem with no data");
+            println!("Either max_loads hit 0 or loop detected, returning LazyItem with no data");
             return Ok(LazyItem::Valid {
                 data: None,
                 offset: Item::new(Some(key)),

@@ -8,7 +8,6 @@ use crate::{
         types::get_app_env,
     },
 };
-
 // Route: `/vectordb/upsert`
 pub(crate) async fn upsert(web::Json(body): web::Json<UpsertVectors>) -> HttpResponse {
     let env = match get_app_env() {
@@ -36,7 +35,6 @@ pub(crate) async fn upsert(web::Json(body): web::Json<UpsertVectors>) -> HttpRes
     })
     .await
     .unwrap();
-
     let response_data = RPCResponseBody::RespUpsertVectors { insert_stats: None };
     HttpResponse::Ok().json(response_data)
 }
