@@ -145,8 +145,8 @@ pub fn vector_fetch(
                                     }
                                 }
                             } else {
-                                NonePaste, drop, or click to add files
-￼Create pull request
+                                None
+                                // NonePaste, drop, or click to add files Create pull request
 
                             }
                         }
