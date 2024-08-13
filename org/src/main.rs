@@ -93,10 +93,12 @@ fn main() {
 
     let vector_list1 = VectorQt {
         quant_vec: quantized_values1,
+        magnitude: 1,
         resolution: resolution,
     };
     let vector_list2 = VectorQt {
         quant_vec: quantized_values2,
+        magnitude: 1,
         resolution: resolution,
     };
     println!("quantized vec A :{:?}", vector_list1);
@@ -147,7 +149,7 @@ fn quaternary_multiply_u8(a0: u8, a1: u8, b0: u8, b1: u8) -> u16 {
 
     // Combine intermediate products to form the final result
     let result = (p2 << 2) | (p1 << 1) | p0;
-    result
+    result.into()
 }
 
 fn senary_multiply_u8(a0: u8, a1: u8, a2: u8, b0: u8, b1: u8, b2: u8) -> u16 {
@@ -160,7 +162,7 @@ fn senary_multiply_u8(a0: u8, a1: u8, a2: u8, b0: u8, b1: u8, b2: u8) -> u16 {
 
     // Combine intermediate products to form the final result
     let result = (p4 << 4) | (p3 << 3) | (p2 << 2) | (p1 << 1) | p0;
-    result
+    result.into()
 }
 
 pub fn cosine_coalesce(x: &VectorQt, y: &VectorQt, length: usize) -> f32 {
@@ -183,7 +185,7 @@ pub fn cosine_coalesce(x: &VectorQt, y: &VectorQt, length: usize) -> f32 {
         dot_product += sum;
     }
     let final_result = dot_product / x.magnitude * y.magnitude;
-    final_result
+    final_result as f32
 }
 
 fn cosine_similarity_new(x: &VectorQt, y: &VectorQt) -> f32 {
@@ -256,8 +258,8 @@ fn cosine_similarity_new(x: &VectorQt, y: &VectorQt) -> f32 {
     dot_product / (magnitude_vec1 * magnitude_vec2)
 }
 
-fn quantize_to_u8(vec: &[f32], u32: length) -> Vec<u8> {
-    let mut quantized_vec = Vec::with_capacity(length);
+fn quantize_to_u8(vec: &[f32], length: u32) -> Vec<u8> {
+    let mut quantized_vec = Vec::with_capacity(length as usize);
 
     for &x in vec {
         quantized_vec.push((x * 255.0).round() as u8);
@@ -266,12 +268,12 @@ fn quantize_to_u8(vec: &[f32], u32: length) -> Vec<u8> {
     quantized_vec
 }
 
-fn quantize_and_combine(vec: &[f32], u32: length) -> Vec<u8> {
+fn quantize_and_combine(vec: &[f32], length: usize) -> Vec<u8> {
     let mut result = Vec::with_capacity(length >> 1);
 
-    for i in (0..len).step_by(2) {
+    for i in (0..length).step_by(2) {
         let even = ((vec[i] * 15.0).round() as u8) << 4;
-        let odd = ((vec[i + 1] * 15.0).round() as u8);
+        let odd = (vec[i + 1] * 15.0).round() as u8;
         result.push(even | odd);
     }
 
