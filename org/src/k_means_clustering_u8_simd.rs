@@ -68,13 +68,23 @@ unsafe fn process_data_simd(
         }
     }
 
-    println!("counts: {:?}", centroid_counts);
-
     // Adjust centroids based on counts
     // ***** Todo *****
     // depending on if the count is above/below 128 ,
     // then increment/decrement the centroid (not sure which is which)
     // Its 128 for each step of 32 (in this example there are 64, so 256 is the mid point)
+    for (i, centroid_count) in centroid_counts.iter().enumerate() {
+
+        let sum : u64 = centroid_count.iter().sum();
+
+        let average = sum / 8;
+
+        if average >= 128 {
+            centroids[i] = cmp::min(254, centroids[i]) + 1;
+        } else {
+            centroids[i] = cmp::max(1, centroids[i]) - 1;
+        }
+    }
 }
 
 #[target_feature(enable = "avx2")]
