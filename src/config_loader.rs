@@ -4,8 +4,8 @@ use std::fs;
 #[derive(Deserialize, Clone)]
 pub struct Config {
    pub server: Server,
-   pub threshold: u32, 
-   pub batch_size: usize
+   pub upload_threshold: u32, 
+   pub upload_process_batch_size: usize
 }
 
 #[derive(Deserialize, Clone)]
