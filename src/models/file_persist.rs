@@ -62,6 +62,7 @@ pub fn persist_node_update_loc(
 }
 
 pub fn write_node_to_file(mut node: Item<MergedNode>, writer: &mut CustomBufferedWriter) -> u32 {
+    println!("about to write node: {}", node.get());
     // Assume CustomBufferWriter already handles seeking to the end
     // Serialize
     let result = node.get().serialize(writer);
@@ -74,6 +75,7 @@ pub fn write_node_to_file_at_offset(
     writer: &mut CustomBufferedWriter,
     offset: u32,
 ) -> u32 {
+    println!("write_node_to_file_at_offset");
     // Seek to the specified offset before writing
     writer
         .seek(SeekFrom::Start(offset as u64))
