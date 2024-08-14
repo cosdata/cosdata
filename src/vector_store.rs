@@ -409,20 +409,21 @@ pub fn index_embeddings(
 
         if embeddings.len() == batch_size || i == len {
             // TODO: handle the errors
-            let results: Vec<Result<(), WaCustomError>> = embeddings
-                .into_par_iter()
+            let results: Vec<()> = embeddings
+                .into_iter()
                 .map(|embedding| {
                     let lp = &vec_store.levels_prob;
                     let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
 
-                    println!("index_embedding");
                     index_embedding(
                         vec_store.clone(),
+                        None,
                         embedding,
                         vec_store.root_vec.item.clone().get().clone(),
                         vec_store.max_cache_level.try_into().unwrap(),
                         iv.try_into().unwrap(),
                     )
+                    .expect("index_embedding failed");
                 })
                 .collect();
 
@@ -477,6 +478,7 @@ pub fn index_embeddings(
 
 pub fn index_embedding(
     vec_store: Arc<VectorStore>,
+    parent: Option<LazyItem<MergedNode>>,
     vector_emb: VectorEmbedding,
     cur_entry: LazyItem<MergedNode>,
     cur_level: i8,
@@ -555,25 +557,27 @@ pub fn index_embedding(
     let z_clone: Vec<_> = z.iter().map(|(first, _)| first.clone()).collect();
 
     if cur_level <= max_insert_level {
-        index_embedding(
+        let parent = insert_node_create_edges(
             vec_store.clone(),
-            vector_emb.clone(),
-            z_clone[0].clone(),
-            cur_level - 1,
-            max_insert_level,
-        )?;
-        println!("here");
-        insert_node_create_edges(
-            vec_store.clone(),
+            parent,
             fvec,
             vector_emb.hash_vec.clone(),
             z,
             cur_level,
         )
         .expect("Failed insert_node_create_edges");
+        index_embedding(
+            vec_store.clone(),
+            Some(parent),
+            vector_emb.clone(),
+            z_clone[0].clone(),
+            cur_level - 1,
+            max_insert_level,
+        )?;
     } else {
         index_embedding(
             vec_store.clone(),
+            None,
             vector_emb.clone(),
             z_clone[0].clone(),
             cur_level - 1,
@@ -640,12 +644,15 @@ pub fn queue_node_prop_exec(
 
     // Add the node to exec_queue_nodes
     let mut exec_queue = vec_store.exec_queue_nodes.clone();
-    println!("queue length {}", exec_queue.len());
-    exec_queue.rcu(|queue| {
-        let mut new_queue = queue.clone();
-        new_queue.push(Item::new(lznode.clone()));
-        new_queue
-    });
+    println!("queue length before {}", exec_queue.get().len());
+    exec_queue
+        .transactional_update(|queue| {
+            let mut new_queue = queue.clone();
+            new_queue.push(Item::new(lznode.clone()));
+            new_queue
+        })
+        .unwrap();
+    println!("queue length after {}", exec_queue.get().len());
 
     Ok(())
 }
@@ -684,11 +691,12 @@ pub fn auto_commit_transaction(
 
 fn insert_node_create_edges(
     vec_store: Arc<VectorStore>,
+    parent: Option<LazyItem<MergedNode>>,
     fvec: Arc<Storage>,
     hs: VectorId,
     nbs: Vec<(LazyItem<MergedNode>, f32)>,
     cur_level: i8,
-) -> Result<(), WaCustomError> {
+) -> Result<LazyItem<MergedNode>, WaCustomError> {
     let node_prop = NodeProp {
         id: hs.clone(),
         value: fvec.clone(),
@@ -723,13 +731,14 @@ fn insert_node_create_edges(
         }
     }
     println!("insert node create edges, queuing nodes");
-    queue_node_prop_exec(
-        LazyItem::from_item(nn),
-        vec_store.prop_file.clone(),
-        vec_store,
-    )?;
+    let lz_item = LazyItem::from_item(nn);
+    if let Some(parent) = parent {
+        lz_item.get_data().unwrap().set_parent(parent.clone());
+        parent.get_data().unwrap().set_child(lz_item.clone());
+    }
+    queue_node_prop_exec(lz_item.clone(), vec_store.prop_file.clone(), vec_store)?;
 
-    Ok(())
+    Ok(lz_item)
 }
 
 fn traverse_find_nearest(
@@ -781,10 +790,11 @@ fn traverse_find_nearest(
 
             let node_prop = match prop_state {
                 PropState::Ready(prop) => prop.clone(),
-                PropState::Pending(_) => {
-                    return Err(WaCustomError::NodeError(
-                        "Neighbor prop is in pending state".to_string(),
-                    ))
+                PropState::Pending(loc) => {
+                    return Err(WaCustomError::NodeError(format!(
+                        "Neighbor prop is in pending state at loc: {:?}",
+                        loc
+                    )))
                 }
             };
 

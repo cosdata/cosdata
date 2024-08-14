@@ -5,7 +5,6 @@ use crate::models::types::FileOffset;
 use crate::models::{
     cache_loader::NodeRegistry,
     lazy_load::{LazyItem, CHUNK_SIZE},
-    types::Item,
 };
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::collections::HashSet;
@@ -117,9 +116,9 @@ where
                 break;
             }
         }
-        Ok(LazyItemMap {
-            items: Item::new(IdentityMap::from_iter(items.into_iter())),
-        })
+        Ok(LazyItemMap::from_map(IdentityMap::from_iter(
+            items.into_iter(),
+        )))
     }
 }
 

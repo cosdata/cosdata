@@ -502,9 +502,9 @@ pub fn remove_duplicates_and_filter(
     })
 }
 
-pub fn generate_tuples(x: f64) -> Vec<(f64, i32)> {
+pub fn generate_tuples(x: f64, max_cache_level: u8) -> Vec<(f64, i32)> {
     let mut result = Vec::new();
-    for n in 0..20 {
+    for n in (0..=max_cache_level).rev() {
         let first_item = 1.0 - x.powi(-(n as i32));
         let second_item = n as i32;
         result.push((first_item, second_item));

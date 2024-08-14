@@ -21,7 +21,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::Path;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, OnceLock,
+    Arc, OnceLock, RwLock,
 };
 
 pub type HNSWLevel = u8;
@@ -220,7 +220,14 @@ impl MergedNode {
 
     pub fn set_prop_location(&self, new_location: PropPersistRef) {
         let mut arc = self.prop.clone();
-        arc.update(PropState::Pending(new_location));
+        arc.rcu(|prop| match prop {
+            PropState::Pending(_) => PropState::Pending(new_location),
+            PropState::Ready(prop) => {
+                let mut new_prop = NodeProp::clone(&prop);
+                new_prop.location = Some(new_location);
+                PropState::Ready(Arc::new(new_prop))
+            }
+        });
     }
 
     pub fn get_prop_location(&self) -> Option<PropPersistRef> {
@@ -267,53 +274,36 @@ impl fmt::Display for VectorId {
     }
 }
 
-impl fmt::Display for MergedNode {
+impl fmt::Debug for MergedNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "MergedNode {{")?;
-        writeln!(f, "  version_id: {},", self.version_id)?;
-        writeln!(f, "  hnsw_level: {},", self.hnsw_level)?;
-
-        // Display PropState
-        write!(f, "  prop: ")?;
         let mut prop_arc = self.prop.clone();
-        match prop_arc.get() {
-            PropState::Ready(node_prop) => writeln!(f, "Ready {{ id: {} }}", node_prop.id)?,
-            PropState::Pending(_) => writeln!(f, "Pending")?,
-        }
-        // Display number of neighbors
-        writeln!(f, "  neighbors: {} items,", self.neighbors.len())?;
-
-        // Display parent and child status
-        writeln!(
-            f,
-            "  parent: {}",
-            if self.parent.is_valid() {
-                "Valid"
-            } else {
-                "Invalid"
-            }
-        )?;
-        writeln!(
-            f,
-            "  child: {}",
-            if self.child.is_valid() {
-                "Valid"
-            } else {
-                "Invalid"
-            }
-        )?;
-
-        // Display number of versions
-        writeln!(f, "  versions: {} items,", self.versions.len())?;
-
-        // Display persist flag
-        writeln!(
-            f,
-            "  persist_flag: {}",
-            self.persist_flag.load(std::sync::atomic::Ordering::Relaxed)
-        )?;
-
-        write!(f, "}}")
+        let prop = match prop_arc.get() {
+            PropState::Ready(node_prop) => format!("Ready {{ id: {} }}", node_prop.id),
+            PropState::Pending(_) => "Pending".to_string(),
+        };
+        f.debug_struct("MergedNode")
+            .field("version_id", &self.version_id)
+            .field("hnsw_level", &self.hnsw_level)
+            .field("prop", &prop)
+            .field("neighbors", &self.neighbors.len())
+            .field(
+                "parent",
+                if self.parent.is_valid() {
+                    &"Valid"
+                } else {
+                    &"Invalid"
+                },
+            )
+            .field(
+                "child",
+                if self.child.is_valid() {
+                    &"Valid"
+                } else {
+                    &"Invalid"
+                },
+            )
+            .field("persist_flag", &self.persist_flag.load(Ordering::Relaxed))
+            .finish()
     }
 }
 
@@ -351,7 +341,7 @@ impl VectorQt {
 pub type SizeBytes = u32;
 
 // needed to flatten and get uniques
-pub type ExecQueueUpdate = Item<Vec<Item<LazyItem<MergedNode>>>>;
+pub type ExecQueueUpdate = STM<Vec<Item<LazyItem<MergedNode>>>>;
 
 #[derive(Debug, Clone)]
 pub struct MetaDb {
@@ -459,4 +449,54 @@ pub fn get_app_env() -> Result<Arc<AppEnv>, WaCustomError> {
             }))
         })
         .clone()
+}
+
+#[derive(Clone)]
+pub struct STM<T: 'static> {
+    arcshift: ArcShift<T>,
+    max_retries: usize,
+    strict: bool,
+}
+
+impl<T> STM<T>
+where
+    T: 'static,
+{
+    pub fn new(initial_value: T, max_retries: usize, strict: bool) -> Self {
+        Self {
+            arcshift: ArcShift::new(initial_value),
+            max_retries,
+            strict,
+        }
+    }
+
+    pub fn get(&mut self) -> &T {
+        self.arcshift.get()
+    }
+
+    pub fn transactional_update<F>(&mut self, mut update_fn: F) -> Result<bool, WaCustomError>
+    where
+        F: FnMut(&T) -> T + Clone,
+    {
+        let mut updated = false;
+        let mut tries = 0;
+
+        while !updated {
+            updated = self.arcshift.rcu(|t| update_fn(t));
+
+            if !updated && tries >= self.max_retries {
+                if !self.strict {
+                    return Ok(false);
+                }
+
+                return Err(WaCustomError::LockError(
+                    "Unable to update data inside ArcShift".to_string(),
+                ));
+            }
+
+            tries += 1;
+        }
+
+        Ok(updated)
+    }
 }

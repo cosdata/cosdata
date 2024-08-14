@@ -47,7 +47,7 @@ pub async fn init_vector_store(
         .collect::<Vec<f32>>();
     let vec_hash = VectorId::Int(-1);
 
-    let exec_queue_nodes: ExecQueueUpdate = Item::new(Vec::new());
+    let exec_queue_nodes: ExecQueueUpdate = STM::new(Vec::new(), 1, true);
     let vector_list = Arc::new(quantization_metric.quantize(&vec, storage_type));
 
     // Note that setting .write(true).append(true) has the same effect
@@ -75,7 +75,7 @@ pub async fn init_vector_store(
     let mut prev: LazyItemRef<MergedNode> = LazyItemRef::new_invalid();
 
     let mut nodes = Vec::new();
-    for l in 0..=max_cache_level {
+    for l in (0..=max_cache_level).rev() {
         let prop = Arc::new(NodeProp {
             id: vec_hash.clone(),
             value: vector_list.clone(),
@@ -109,7 +109,6 @@ pub async fn init_vector_store(
             current_node.get().set_prop_ready(prop);
         }
         nodes.push(nn.clone());
-        // println!("sssss: {:?}", nn);
     }
 
     for (l, nn) in nodes.iter_mut().enumerate() {
@@ -128,7 +127,7 @@ pub async fn init_vector_store(
     // -- TODO level entry ratio
     // ---------------------------
     let factor_levels = 10.0;
-    let lp = Arc::new(generate_tuples(factor_levels).into_iter().rev().collect());
+    let lp = Arc::new(generate_tuples(factor_levels, max_cache_level));
     let ain_env = get_app_env().map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
     let denv = ain_env.persist.clone();

@@ -1,6 +1,6 @@
 use super::identity_collections::{Identifiable, IdentityMap, IdentityMapKey, IdentitySet};
 use super::serializer::CustomSerialize;
-use super::types::{FileOffset, Item};
+use super::types::{FileOffset, Item, STM};
 use std::hash::Hash;
 
 pub trait SyncPersist {
@@ -80,7 +80,7 @@ where
     T: Clone + Identifiable<Id = u64> + 'static,
     E: Clone + CustomSerialize + 'static,
 {
-    pub items: Item<IdentitySet<EagerLazyItem<T, E>>>,
+    pub items: STM<IdentitySet<EagerLazyItem<T, E>>>,
 }
 
 #[derive(Clone)]
@@ -88,12 +88,12 @@ pub struct LazyItemSet<T>
 where
     T: Clone + Identifiable<Id = u64> + 'static,
 {
-    pub items: Item<IdentitySet<LazyItem<T>>>,
+    pub items: STM<IdentitySet<LazyItem<T>>>,
 }
 
 #[derive(Clone)]
 pub struct LazyItemMap<T: Clone + 'static> {
-    pub items: Item<IdentityMap<LazyItem<T>>>,
+    pub items: STM<IdentityMap<LazyItem<T>>>,
 }
 
 impl<T: Clone + 'static> LazyItem<T> {
@@ -263,18 +263,25 @@ where
 {
     pub fn new() -> Self {
         Self {
-            items: Item::new(IdentitySet::new()),
+            items: STM::new(IdentitySet::new(), 8, true),
+        }
+    }
+
+    pub fn from_set(set: IdentitySet<EagerLazyItem<T, E>>) -> Self {
+        Self {
+            items: STM::new(set, 1, true),
         }
     }
 
     pub fn insert(&self, item: EagerLazyItem<T, E>) {
         let mut arc = self.items.clone();
 
-        arc.rcu(|set| {
+        arc.transactional_update(|set| {
             let mut set = set.clone();
-            set.insert(item);
+            set.insert(item.clone());
             set
         })
+        .unwrap();
     }
 
     pub fn iter(&self) -> impl Iterator<Item = EagerLazyItem<T, E>> {
@@ -297,18 +304,24 @@ where
 impl<T: Clone + Identifiable<Id = u64> + 'static> LazyItemSet<T> {
     pub fn new() -> Self {
         Self {
-            items: Item::new(IdentitySet::new()),
+            items: STM::new(IdentitySet::new(), 1, true),
+        }
+    }
+
+    pub fn from_set(set: IdentitySet<LazyItem<T>>) -> Self {
+        Self {
+            items: STM::new(set, 1, true),
         }
     }
 
     pub fn insert(&self, item: LazyItem<T>) {
         let mut arc = self.items.clone();
 
-        arc.rcu(|set| {
+        arc.transactional_update(|set| {
             let mut set = set.clone();
-            set.insert(item);
+            set.insert(item.clone());
             set
-        })
+        });
     }
 
     pub fn iter(&self) -> impl Iterator<Item = LazyItem<T>> {
@@ -331,18 +344,24 @@ impl<T: Clone + Identifiable<Id = u64> + 'static> LazyItemSet<T> {
 impl<T: Clone + 'static> LazyItemMap<T> {
     pub fn new() -> Self {
         Self {
-            items: Item::new(IdentityMap::new()),
+            items: STM::new(IdentityMap::new(), 1, true),
+        }
+    }
+
+    pub fn from_map(map: IdentityMap<LazyItem<T>>) -> Self {
+        Self {
+            items: STM::new(map, 1, true),
         }
     }
 
     pub fn insert(&self, key: IdentityMapKey, value: LazyItem<T>) {
         let mut arc = self.items.clone();
 
-        arc.rcu(|set| {
+        arc.transactional_update(|set| {
             let mut map = set.clone();
-            map.insert(key, value);
+            map.insert(key.clone(), value.clone());
             map
-        })
+        });
     }
 
     pub fn is_empty(&self) -> bool {
