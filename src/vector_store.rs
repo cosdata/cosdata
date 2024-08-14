@@ -147,7 +147,6 @@ pub fn vector_fetch(
                             } else {
                                 None
                                 // NonePaste, drop, or click to add files Create pull request
-
                             }
                         }
                         _ => None,
@@ -344,7 +343,10 @@ pub fn insert_embedding(
     Ok(())
 }
 
-pub fn index_embeddings(vec_store: Arc<VectorStore>, upload_process_batch_size: usize) -> Result<(), WaCustomError> {
+pub fn index_embeddings(
+    vec_store: Arc<VectorStore>,
+    upload_process_batch_size: usize,
+) -> Result<(), WaCustomError> {
     let env = vec_store.lmdb.env.clone();
     let metadata_db = vec_store.lmdb.metadata_db.clone();
 
@@ -672,6 +674,8 @@ pub fn auto_commit_transaction(
         println!("auto_commit_txn");
         persist_node_update_loc(buf_writer, node.clone())?;
     }
+
+    exec_queue_nodes_arc.update(Vec::new());
 
     // Update version
     let ver = vec_store

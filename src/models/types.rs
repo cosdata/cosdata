@@ -474,6 +474,10 @@ where
         self.arcshift.get()
     }
 
+    pub fn update(&mut self, new_value: T) {
+        self.arcshift.update(new_value);
+    }
+
     pub fn transactional_update<F>(&mut self, mut update_fn: F) -> Result<bool, WaCustomError>
     where
         F: FnMut(&T) -> T + Clone,
