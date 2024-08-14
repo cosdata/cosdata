@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs::*;
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hint::spin_loop;
 use std::path::Path;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -458,6 +459,13 @@ pub struct STM<T: 'static> {
     strict: bool,
 }
 
+fn backoff(iteration: usize) {
+    let spins = 1 << iteration;
+    for _ in 0..spins {
+        spin_loop();
+    }
+}
+
 impl<T> STM<T>
 where
     T: 'static,
@@ -488,17 +496,21 @@ where
         while !updated {
             updated = self.arcshift.rcu(|t| update_fn(t));
 
-            if !updated && tries >= self.max_retries {
-                if !self.strict {
-                    return Ok(false);
+            if !updated {
+                if tries >= self.max_retries {
+                    if !self.strict {
+                        return Ok(false);
+                    }
+
+                    return Err(WaCustomError::LockError(
+                        "Unable to update data inside ArcShift".to_string(),
+                    ));
                 }
 
-                return Err(WaCustomError::LockError(
-                    "Unable to update data inside ArcShift".to_string(),
-                ));
+                // Apply backoff before the next retry attempt
+                backoff(tries);
+                tries += 1;
             }
-
-            tries += 1;
         }
 
         Ok(updated)
