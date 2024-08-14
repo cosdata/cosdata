@@ -3,6 +3,7 @@ mod tests {
     use crate::models::lazy_load::*;
     use crate::models::serializer::*;
     use crate::models::types::*;
+    use arcshift::ArcShift;
     use std::io::Cursor;
     use std::sync::Arc;
 
@@ -272,8 +273,8 @@ mod tests {
     #[test]
     fn test_merged_node_with_versions_serialization() {
         let node = Arc::new(MergedNode::new(1, 2));
-        let version1 = Item::new(MergedNode::new(2, 2));
-        let version2 = Item::new(MergedNode::new(3, 2));
+        let version1 = ArcShift::new(MergedNode::new(2, 2));
+        let version2 = ArcShift::new(MergedNode::new(3, 2));
 
         node.add_version(version1);
         node.add_version(version2);
@@ -328,13 +329,13 @@ mod tests {
 
     #[test]
     fn test_merged_node_complex_cyclic_serialization() {
-        let mut node1 = Item::new(MergedNode::new(1, 2));
-        let mut node2 = Item::new(MergedNode::new(2, 2));
-        let mut node3 = Item::new(MergedNode::new(3, 2));
+        let mut node1 = ArcShift::new(MergedNode::new(1, 2));
+        let mut node2 = ArcShift::new(MergedNode::new(2, 2));
+        let mut node3 = ArcShift::new(MergedNode::new(3, 2));
 
-        let lazy1 = LazyItem::from_item(node1.clone());
-        let lazy2 = LazyItem::from_item(node2.clone());
-        let lazy3 = LazyItem::from_item(node3.clone());
+        let lazy1 = LazyItem::from_arcshift(node1.clone());
+        let lazy2 = LazyItem::from_arcshift(node2.clone());
+        let lazy3 = LazyItem::from_arcshift(node3.clone());
 
         node1.get().set_parent(lazy2.clone());
         node2.get().set_child(lazy1.clone());
@@ -342,7 +343,7 @@ mod tests {
         node3.get().set_child(lazy2.clone());
         node1
             .get()
-            .add_ready_neighbor(LazyItem::from_item(node3), 0.9);
+            .add_ready_neighbor(LazyItem::from_arcshift(node3), 0.9);
 
         let lazy_ref = LazyItemRef::from_lazy(lazy1);
 

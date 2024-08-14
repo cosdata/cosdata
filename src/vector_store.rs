@@ -6,6 +6,7 @@ use crate::models::lazy_load::*;
 use crate::models::meta_persist::*;
 use crate::models::types::*;
 use crate::storage::Storage;
+use arcshift::ArcShift;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use lmdb::Transaction;
 use lmdb::WriteFlags;
@@ -21,7 +22,6 @@ use std::io::Seek;
 use std::io::SeekFrom;
 use std::io::Write;
 use std::sync::Arc;
-use std::sync::RwLock;
 
 pub fn ann_search(
     vec_store: Arc<VectorStore>,
@@ -410,7 +410,7 @@ pub fn index_embeddings(
         if embeddings.len() == batch_size || i == len {
             // TODO: handle the errors
             let results: Vec<()> = embeddings
-                .into_iter()
+                .into_par_iter()
                 .map(|embedding| {
                     let lp = &vec_store.levels_prob;
                     let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
@@ -648,7 +648,7 @@ pub fn queue_node_prop_exec(
     exec_queue
         .transactional_update(|queue| {
             let mut new_queue = queue.clone();
-            new_queue.push(Item::new(lznode.clone()));
+            new_queue.push(ArcShift::new(lznode.clone()));
             new_queue
         })
         .unwrap();
@@ -702,7 +702,7 @@ fn insert_node_create_edges(
         value: fvec.clone(),
         location: None,
     };
-    let mut nn = Item::new(MergedNode::new(0, cur_level as u8)); // Assuming MergedNode::new exists
+    let mut nn = ArcShift::new(MergedNode::new(0, cur_level as u8)); // Assuming MergedNode::new exists
     nn.get().set_prop_ready(Arc::new(node_prop));
 
     nn.get().add_ready_neighbors(nbs.clone());
@@ -720,7 +720,7 @@ fn insert_node_create_edges(
                 .map(|nbr2| (nbr2.1, nbr2.0))
                 .collect();
 
-            neighbor_list.push((LazyItem::from_item(nn.clone()), cs));
+            neighbor_list.push((LazyItem::from_arcshift(nn.clone()), cs));
 
             neighbor_list
                 .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -731,7 +731,7 @@ fn insert_node_create_edges(
         }
     }
     println!("insert node create edges, queuing nodes");
-    let lz_item = LazyItem::from_item(nn);
+    let lz_item = LazyItem::from_arcshift(nn);
     if let Some(parent) = parent {
         lz_item.get_data().unwrap().set_parent(parent.clone());
         parent.get_data().unwrap().set_child(lz_item.clone());

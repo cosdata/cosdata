@@ -21,7 +21,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::Path;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, OnceLock, RwLock,
+    Arc, OnceLock,
 };
 
 pub type HNSWLevel = u8;
@@ -30,7 +30,7 @@ pub type BytesToRead = u32;
 pub type VersionId = u16;
 pub type CosineSimilarity = f32;
 
-pub type Item<T> = ArcShift<T>;
+// pub type Item<T> = ArcShift<T>;
 
 #[derive(Clone)]
 pub struct Neighbour {
@@ -104,7 +104,7 @@ pub enum VectorId {
 pub struct MergedNode {
     pub version_id: VersionId,
     pub hnsw_level: HNSWLevel,
-    pub prop: Item<PropState>,
+    pub prop: ArcShift<PropState>,
     pub neighbors: EagerLazyItemSet<MergedNode, f32>,
     pub parent: LazyItemRef<MergedNode>,
     pub child: LazyItemRef<MergedNode>,
@@ -161,7 +161,7 @@ impl MergedNode {
         MergedNode {
             version_id,
             hnsw_level,
-            prop: Item::new(PropState::Pending((0, 0))),
+            prop: ArcShift::new(PropState::Pending((0, 0))),
             neighbors: EagerLazyItemSet::new(),
             parent: LazyItemRef::new_invalid(),
             child: LazyItemRef::new_invalid(),
@@ -200,8 +200,8 @@ impl MergedNode {
     //     arc.update(new_neighbors);
     // }
 
-    pub fn add_version(&self, version: Item<MergedNode>) {
-        let lazy_item = LazyItem::from_item(version);
+    pub fn add_version(&self, version: ArcShift<MergedNode>) {
+        let lazy_item = LazyItem::from_arcshift(version);
         // TODO: look at the id
         self.versions.insert(IdentityMapKey::Int(0), lazy_item);
     }
@@ -341,7 +341,7 @@ impl VectorQt {
 pub type SizeBytes = u32;
 
 // needed to flatten and get uniques
-pub type ExecQueueUpdate = STM<Vec<Item<LazyItem<MergedNode>>>>;
+pub type ExecQueueUpdate = STM<Vec<ArcShift<LazyItem<MergedNode>>>>;
 
 #[derive(Debug, Clone)]
 pub struct MetaDb {
@@ -360,8 +360,8 @@ pub struct VectorStore {
     pub quant_dim: usize,
     pub prop_file: Arc<File>,
     pub lmdb: MetaDb,
-    pub current_version: Item<Option<VersionHash>>,
-    pub current_open_transaction: Item<Option<VersionHash>>,
+    pub current_version: ArcShift<Option<VersionHash>>,
+    pub current_open_transaction: ArcShift<Option<VersionHash>>,
     pub quantization_metric: Arc<QuantizationMetric>,
     pub distance_metric: Arc<DistanceMetric>,
     pub storage_type: StorageType,
@@ -377,7 +377,7 @@ impl VectorStore {
         quant_dim: usize,
         prop_file: Arc<File>,
         lmdb: MetaDb,
-        current_version: Item<Option<VersionHash>>,
+        current_version: ArcShift<Option<VersionHash>>,
         quantization_metric: Arc<QuantizationMetric>,
         distance_metric: Arc<DistanceMetric>,
         storage_type: StorageType,
@@ -392,7 +392,7 @@ impl VectorStore {
             prop_file,
             lmdb,
             current_version,
-            current_open_transaction: Item::new(None),
+            current_open_transaction: ArcShift::new(None),
             quantization_metric,
             distance_metric,
             storage_type,

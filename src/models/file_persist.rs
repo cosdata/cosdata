@@ -1,9 +1,10 @@
 use super::cache_loader::NodeRegistry;
 use super::common::WaCustomError;
 use super::lazy_load::LazyItem;
-use super::types::{HNSWLevel, Item, MergedNode, NodeProp, VectorId};
+use super::types::{HNSWLevel, MergedNode, NodeProp, VectorId};
 use crate::models::custom_buffered_writer::*;
-use crate::models::serializer::*;
+use crate::models::serializer::CustomSerialize;
+use arcshift::ArcShift;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::Arc;
@@ -32,7 +33,7 @@ pub fn read_node_from_file<R: Read + Seek>(
 
 pub fn write_node_update(
     ver_file: &mut CustomBufferedWriter,
-    nprst: Item<MergedNode>,
+    nprst: ArcShift<MergedNode>,
     current_location: Option<u32>,
 ) -> Result<u64, WaCustomError> {
     if let Some(loc) = current_location {
@@ -44,7 +45,7 @@ pub fn write_node_update(
 
 pub fn persist_node_update_loc(
     ver_file: &mut CustomBufferedWriter,
-    mut node: Item<LazyItem<MergedNode>>,
+    mut node: ArcShift<LazyItem<MergedNode>>,
 ) -> Result<(), WaCustomError> {
     let LazyItem::Valid {
         data: Some(data), ..
@@ -61,7 +62,10 @@ pub fn persist_node_update_loc(
     Ok(())
 }
 
-pub fn write_node_to_file(mut node: Item<MergedNode>, writer: &mut CustomBufferedWriter) -> u32 {
+pub fn write_node_to_file(
+    mut node: ArcShift<MergedNode>,
+    writer: &mut CustomBufferedWriter,
+) -> u32 {
     println!("about to write node: {:#?}", node.get());
     // Assume CustomBufferWriter already handles seeking to the end
     // Serialize
@@ -71,7 +75,7 @@ pub fn write_node_to_file(mut node: Item<MergedNode>, writer: &mut CustomBuffere
 }
 
 pub fn write_node_to_file_at_offset(
-    mut node: Item<MergedNode>,
+    mut node: ArcShift<MergedNode>,
     writer: &mut CustomBufferedWriter,
     offset: u32,
 ) -> u32 {

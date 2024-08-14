@@ -2,6 +2,7 @@ use super::file_persist::*;
 use super::lazy_load::LazyItem;
 use super::serializer::CustomSerialize;
 use super::types::*;
+use arcshift::ArcShift;
 use dashmap::DashMap;
 use probabilistic_collections::cuckoo::CuckooFilter;
 use std::collections::HashSet;
@@ -73,7 +74,7 @@ impl<R: Read + Seek> NodeRegistry<R> {
             println!("Either max_loads hit 0 or loop detected, returning LazyItem with no data");
             return Ok(LazyItem::Valid {
                 data: None,
-                offset: Item::new(Some(key)),
+                offset: ArcShift::new(Some(key)),
                 decay_counter: 0,
             });
         }
@@ -89,8 +90,8 @@ impl<R: Read + Seek> NodeRegistry<R> {
 
         println!("Creating new LazyItem");
         let item = LazyItem::Valid {
-            data: Some(Item::new(obj)),
-            offset: Item::new(Some(key)),
+            data: Some(ArcShift::new(obj)),
+            offset: ArcShift::new(Some(key)),
             decay_counter: 0,
         };
 

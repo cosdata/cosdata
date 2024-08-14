@@ -9,6 +9,7 @@ use crate::models::user::Statistics;
 use crate::quantization::{Quantization, StorageType};
 use crate::vector_store::*;
 use actix_web::web;
+use arcshift::ArcShift;
 use cosdata::config_loader::Config;
 use lmdb::{DatabaseFlags, Transaction};
 use rand::Rng;
@@ -81,10 +82,10 @@ pub async fn init_vector_store(
             value: vector_list.clone(),
             location: Some((0, 0)),
         });
-        let mut current_node = Item::new(MergedNode {
+        let mut current_node = ArcShift::new(MergedNode {
             version_id: 0, // Initialize with appropriate version ID
             hnsw_level: l as u8,
-            prop: Item::new(PropState::Ready(prop.clone())),
+            prop: ArcShift::new(PropState::Ready(prop.clone())),
             neighbors: EagerLazyItemSet::new(),
             parent: LazyItemRef::new_invalid(),
             child: LazyItemRef::new_invalid(),
@@ -92,8 +93,8 @@ pub async fn init_vector_store(
             persist_flag: Arc::new(AtomicBool::new(true)),
         });
 
-        let lazy_node = LazyItem::from_item(current_node.clone());
-        let nn = LazyItemRef::from_item(current_node.clone());
+        let lazy_node = LazyItem::from_arcshift(current_node.clone());
+        let nn = LazyItemRef::from_arcshift(current_node.clone());
 
         if let Some(prev_node) = prev.item.get().get_data() {
             current_node
@@ -153,7 +154,7 @@ pub async fn init_vector_store(
             metadata_db: Arc::new(metadata_db.clone()),
             embeddings_db: Arc::new(embeddings_db),
         },
-        Item::new(None),
+        ArcShift::new(None),
         Arc::new(QuantizationMetric::Scalar),
         Arc::new(DistanceMetric::Cosine),
         StorageType::UnsignedByte,
