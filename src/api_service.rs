@@ -206,8 +206,8 @@ pub fn run_upload(
 
     txn.abort();
 
-    if count_unindexed >= config.threshold {
-        index_embeddings(vec_store.clone(), config.batch_size).expect("Failed to index embeddings");
+    if count_unindexed >= config.upload_threshold {
+        index_embeddings(vec_store.clone(), config.upload_process_batch_size).expect("Failed to index embeddings");
     }
 
     // Update version
