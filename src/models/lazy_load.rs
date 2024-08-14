@@ -264,13 +264,13 @@ where
 {
     pub fn new() -> Self {
         Self {
-            items: STM::new(IdentitySet::new(), 8, true),
+            items: STM::new(IdentitySet::new(), 5, false),
         }
     }
 
     pub fn from_set(set: IdentitySet<EagerLazyItem<T, E>>) -> Self {
         Self {
-            items: STM::new(set, 1, true),
+            items: STM::new(set, 5, false),
         }
     }
 
@@ -322,7 +322,8 @@ impl<T: Clone + Identifiable<Id = u64> + 'static> LazyItemSet<T> {
             let mut set = set.clone();
             set.insert(item.clone());
             set
-        });
+        })
+        .unwrap();
     }
 
     pub fn iter(&self) -> impl Iterator<Item = LazyItem<T>> {
@@ -362,7 +363,8 @@ impl<T: Clone + 'static> LazyItemMap<T> {
             let mut map = set.clone();
             map.insert(key.clone(), value.clone());
             map
-        });
+        })
+        .unwrap();
     }
 
     pub fn is_empty(&self) -> bool {
