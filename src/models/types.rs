@@ -196,6 +196,9 @@ impl MergedNode {
         self.neighbors.clone()
     }
 
+    pub fn get_current_version(&self) -> VersionId {
+        self.version_id
+    }
     // pub fn set_neighbors(&self, new_neighbors: IdentitySet<EagerLazyItem<MergedNode, f32>>) {
     //     let mut arc = self.neighbors.items.clone();
     //     arc.update(new_neighbors);
@@ -262,6 +265,10 @@ impl SyncPersist for MergedNode {
 
     fn needs_persistence(&self) -> bool {
         self.persist_flag.load(Ordering::Relaxed)
+    }
+
+    fn get_current_version(&self) -> VersionId {
+        self.version_id
     }
 }
 

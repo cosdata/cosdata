@@ -3,7 +3,7 @@ use crate::models::types::FileOffset;
 use crate::models::{
     cache_loader::NodeRegistry,
     identity_collections::{Identifiable, IdentitySet},
-    lazy_load::{LazyItem, LazyItemSet, CHUNK_SIZE},
+    lazy_load::{FileIndex, LazyItem, LazyItemSet, SyncPersist, CHUNK_SIZE},
 };
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::collections::HashSet;
@@ -14,8 +14,8 @@ use std::{
 
 impl<T> CustomSerialize for LazyItemSet<T>
 where
+    T: Clone + Identifiable<Id = u64> + SyncPersist + CustomSerialize + 'static,
     LazyItem<T>: CustomSerialize,
-    T: Clone + Identifiable<Id = u64> + 'static,
 {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
         if self.is_empty() {
@@ -42,7 +42,12 @@ where
             // Serialize items and update placeholders
             for i in chunk_start..chunk_end {
                 let item_offset = items[i].serialize(writer)?;
-                items[i].set_offset(Some(item_offset));
+                if let Some(version) = items[i].get_current_version() {
+                    items[i].set_file_index(Some(FileIndex::Valid {
+                        offset: item_offset,
+                        version,
+                    }));
+                }
                 let placeholder_pos = placeholder_start as u64 + ((i - chunk_start) as u64 * 4);
                 let current_pos = writer.stream_position()?;
                 writer.seek(SeekFrom::Start(placeholder_pos))?;
@@ -62,42 +67,52 @@ where
         }
         Ok(start_offset)
     }
-
     fn deserialize<R: Read + Seek>(
         reader: &mut R,
-        offset: u32,
+        file_index: FileIndex,
         cache: Arc<NodeRegistry<R>>,
         max_loads: u16,
-        skipm: &mut HashSet<FileOffset>,
+        skipm: &mut HashSet<u64>,
     ) -> std::io::Result<Self> {
-        if offset == u32::MAX {
-            return Ok(LazyItemSet::new());
-        }
-        reader.seek(SeekFrom::Start(offset as u64))?;
-        let mut items = Vec::new();
-        let mut current_chunk = offset;
-        loop {
-            for i in 0..CHUNK_SIZE {
-                reader.seek(SeekFrom::Start(current_chunk as u64 + (i as u64 * 4)))?;
-                let item_offset = reader.read_u32::<LittleEndian>()?;
-                if item_offset == u32::MAX {
-                    continue;
+        match file_index {
+            FileIndex::Invalid => Ok(LazyItemSet::new()),
+            FileIndex::Valid { offset, version } => {
+                reader.seek(SeekFrom::Start(offset as u64))?;
+                let mut items = Vec::new();
+                let mut current_chunk = offset;
+                loop {
+                    for i in 0..CHUNK_SIZE {
+                        reader.seek(SeekFrom::Start(current_chunk as u64 + (i as u64 * 4)))?;
+                        let item_offset = reader.read_u32::<LittleEndian>()?;
+                        if item_offset == u32::MAX {
+                            continue;
+                        }
+                        let item_file_index = FileIndex::Valid {
+                            offset: item_offset,
+                            version,
+                        };
+                        let item = LazyItem::deserialize(
+                            reader,
+                            item_file_index,
+                            cache.clone(),
+                            max_loads,
+                            skipm,
+                        )?;
+                        items.push(item);
+                    }
+                    reader.seek(SeekFrom::Start(
+                        current_chunk as u64 + CHUNK_SIZE as u64 * 4,
+                    ))?;
+                    // Read next chunk link
+                    current_chunk = reader.read_u32::<LittleEndian>()?;
+                    if current_chunk == u32::MAX {
+                        break;
+                    }
                 }
-                let item =
-                    LazyItem::deserialize(reader, item_offset, cache.clone(), max_loads, skipm)?;
-                items.push(item);
-            }
-            reader.seek(SeekFrom::Start(
-                current_chunk as u64 + CHUNK_SIZE as u64 * 4,
-            ))?;
-            // Read next chunk link
-            current_chunk = reader.read_u32::<LittleEndian>()?;
-            if current_chunk == u32::MAX {
-                break;
+                Ok(LazyItemSet::from_set(IdentitySet::from_iter(
+                    items.into_iter(),
+                )))
             }
         }
-        Ok(LazyItemSet::from_set(IdentitySet::from_iter(
-            items.into_iter(),
-        )))
     }
 }

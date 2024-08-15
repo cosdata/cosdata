@@ -1,5 +1,5 @@
 use super::CustomSerialize;
-use crate::models::lazy_load::{EagerLazyItem, EagerLazyItemSet, LazyItem, CHUNK_SIZE};
+use crate::models::lazy_load::{EagerLazyItem, EagerLazyItemSet, FileIndex, LazyItem, CHUNK_SIZE};
 use crate::models::types::FileOffset;
 use crate::models::{
     cache_loader::NodeRegistry,
@@ -65,44 +65,50 @@ where
 
     fn deserialize<R: Read + Seek>(
         reader: &mut R,
-        offset: u32,
+        file_index: FileIndex,
         cache: Arc<NodeRegistry<R>>,
         max_loads: u16,
-        skipm: &mut HashSet<FileOffset>,
+        skipm: &mut HashSet<u64>,
     ) -> std::io::Result<Self> {
-        if offset == u32::MAX {
-            return Ok(EagerLazyItemSet::new());
-        }
-        reader.seek(SeekFrom::Start(offset as u64))?;
-        let mut items = Vec::new();
-        let mut current_chunk = offset;
-        loop {
-            for i in 0..CHUNK_SIZE {
-                reader.seek(SeekFrom::Start(current_chunk as u64 + (i as u64 * 4)))?;
-                let item_offset = reader.read_u32::<LittleEndian>()?;
-                if item_offset == u32::MAX {
-                    continue;
+        match file_index {
+            FileIndex::Invalid => Ok(EagerLazyItemSet::new()),
+            FileIndex::Valid { offset, version } => {
+                reader.seek(SeekFrom::Start(offset as u64))?;
+                let mut items = Vec::new();
+                let mut current_chunk = offset;
+                loop {
+                    for i in 0..CHUNK_SIZE {
+                        reader.seek(SeekFrom::Start(current_chunk as u64 + (i as u64 * 4)))?;
+                        let item_offset = reader.read_u32::<LittleEndian>()?;
+                        if item_offset == u32::MAX {
+                            continue;
+                        }
+                        let item_file_index = FileIndex::Valid {
+                            offset: item_offset,
+                            version,
+                        };
+                        let item = EagerLazyItem::deserialize(
+                            reader,
+                            item_file_index,
+                            cache.clone(),
+                            max_loads,
+                            skipm,
+                        )?;
+                        items.push(item);
+                    }
+                    reader.seek(SeekFrom::Start(
+                        current_chunk as u64 + CHUNK_SIZE as u64 * 4,
+                    ))?;
+                    // Read next chunk link
+                    current_chunk = reader.read_u32::<LittleEndian>()?;
+                    if current_chunk == u32::MAX {
+                        break;
+                    }
                 }
-                let item = EagerLazyItem::deserialize(
-                    reader,
-                    item_offset,
-                    cache.clone(),
-                    max_loads,
-                    skipm,
-                )?;
-                items.push(item);
-            }
-            reader.seek(SeekFrom::Start(
-                current_chunk as u64 + CHUNK_SIZE as u64 * 4,
-            ))?;
-            // Read next chunk link
-            current_chunk = reader.read_u32::<LittleEndian>()?;
-            if current_chunk == u32::MAX {
-                break;
+                Ok(EagerLazyItemSet::from_set(IdentitySet::from_iter(
+                    items.into_iter(),
+                )))
             }
         }
-        Ok(EagerLazyItemSet::from_set(IdentitySet::from_iter(
-            items.into_iter(),
-        )))
     }
 }

@@ -377,7 +377,9 @@ mod tests {
             let grand_parent = grand_parent_ref.item.get();
 
             if let LazyItem::Valid {
-                data: None, offset, ..
+                data: None,
+                file_index,
+                ..
             } = &child
             {
                 let offset = offset.clone().get().clone().unwrap();

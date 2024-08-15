@@ -43,13 +43,13 @@ pub fn ann_search(
         } => node,
         LazyItem::Valid {
             data: None,
-            mut offset,
+            mut file_index,
             ..
         } => {
-            if let Some(offset) = offset.get() {
+            if let Some(file_index) = file_index.get() {
                 return Err(WaCustomError::LazyLoadingError(format!(
                     "Node at offset {} needs to be loaded",
-                    offset
+                    file_index
                 )));
             } else {
                 return Err(WaCustomError::NodeError(
@@ -132,11 +132,11 @@ pub fn vector_fetch(
                         } => get_vector_id_from_node(node.clone().get()).map(|id| (id, ne.0)),
                         LazyItem::Valid {
                             data: None,
-                            mut offset,
+                            mut file_index,
                             ..
                         } => {
-                            if let Some(xloc) = offset.get() {
-                                match load_neighbor_from_db(*xloc, &vec_store) {
+                            if let Some(xloc) = file_index.get() {
+                                match load_neighbor_from_db(xloc.clone(), &vec_store) {
                                     Ok(Some(info)) => Some(info),
                                     Ok(None) => None,
                                     Err(e) => {
@@ -156,11 +156,11 @@ pub fn vector_fetch(
             }
             LazyItem::Valid {
                 data: None,
-                mut offset,
+                mut file_index,
                 ..
             } => {
-                if let Some(xloc) = offset.get() {
-                    match load_node_from_persist(*xloc, &vec_store) {
+                if let Some(xloc) = file_index.get() {
+                    match load_node_from_persist(xloc.clone(), &vec_store) {
                         Ok(Some((id, neighbors))) => Some((id, neighbors)),
                         Ok(None) => None,
                         Err(e) => {
@@ -179,7 +179,7 @@ pub fn vector_fetch(
     Ok(results)
 }
 fn load_node_from_persist(
-    offset: FileOffset,
+    offset: FileIndex,
     vec_store: &Arc<VectorStore>,
 ) -> Result<Option<(VectorId, Vec<(VectorId, f32)>)>, WaCustomError> {
     // Placeholder function to load vector from database
@@ -222,7 +222,7 @@ fn get_vector_id_from_node(node: &MergedNode) -> Option<VectorId> {
 }
 
 fn load_neighbor_from_db(
-    offset: FileOffset,
+    offset: FileIndex,
     vec_store: &Arc<VectorStore>,
 ) -> Result<Option<(VectorId, f32)>, WaCustomError> {
     // Placeholder function to load neighbor from database
@@ -499,10 +499,10 @@ pub fn index_embedding(
         } => node,
         LazyItem::Valid {
             data: None,
-            mut offset,
+            mut file_index,
             ..
         } => {
-            if let Some(offset) = offset.get() {
+            if let Some(offset) = file_index.get() {
                 return Err(WaCustomError::LazyLoadingError(format!(
                     "Node at offset {} needs to be loaded",
                     offset
@@ -597,13 +597,15 @@ pub fn queue_node_prop_exec(
     let (mut node_arc, location) = match &lznode {
         LazyItem::Valid {
             data: Some(node),
-            offset,
+            file_index,
             ..
-        } => (node.clone(), offset.clone().get().clone()),
+        } => (node.clone(), file_index.clone().get().clone()),
         LazyItem::Valid {
-            data: None, offset, ..
+            data: None,
+            file_index,
+            ..
         } => {
-            if let Some(offset) = offset.clone().get().clone() {
+            if let Some(offset) = file_index.clone().get().clone() {
                 return Err(WaCustomError::LazyLoadingError(format!(
                     "Node at offset {} needs to be loaded",
                     offset
@@ -672,7 +674,7 @@ pub fn auto_commit_transaction(
     // Iterate through the exec_queue_nodes and persist each node
     for node in exec_queue_nodes.iter() {
         println!("auto_commit_txn");
-        persist_node_update_loc(buf_writer, node.clone())?;
+        persist_node_update_loc(buf_writer, node)?;
     }
 
     exec_queue_nodes_arc.update(Vec::new());

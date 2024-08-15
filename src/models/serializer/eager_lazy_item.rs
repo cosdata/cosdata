@@ -1,7 +1,7 @@
 use super::CustomSerialize;
 use crate::models::{
     cache_loader::NodeRegistry,
-    lazy_load::{EagerLazyItem, LazyItem},
+    lazy_load::{EagerLazyItem, FileIndex, LazyItem},
     types::FileOffset,
 };
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
@@ -32,19 +32,31 @@ where
 
     fn deserialize<R: Read + Seek>(
         reader: &mut R,
-        offset: u32,
+        file_index: FileIndex,
         cache: Arc<NodeRegistry<R>>,
         max_loads: u16,
-        skipm: &mut HashSet<FileOffset>,
+        skipm: &mut HashSet<u64>,
     ) -> std::io::Result<Self>
     where
         Self: Sized,
     {
-        reader.seek(SeekFrom::Start(offset as u64))?;
-        let eager_data = E::deserialize(reader, offset, cache.clone(), max_loads, skipm)?;
-        let item_offset = reader.read_u32::<LittleEndian>()?;
-        let item = LazyItem::deserialize(reader, item_offset, cache, max_loads, skipm)?;
-
-        Ok(Self(eager_data, item))
+        match file_index {
+            FileIndex::Invalid => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Cannot deserialize EagerLazyItem with an invalid FileIndex",
+            )),
+            FileIndex::Valid { offset, version } => {
+                reader.seek(SeekFrom::Start(offset as u64))?;
+                let eager_data =
+                    E::deserialize(reader, file_index, cache.clone(), max_loads, skipm)?;
+                let item_offset = reader.read_u32::<LittleEndian>()?;
+                let item_file_index = FileIndex::Valid {
+                    offset: item_offset,
+                    version,
+                };
+                let item = LazyItem::deserialize(reader, item_file_index, cache, max_loads, skipm)?;
+                Ok(Self(eager_data, item))
+            }
+        }
     }
 }

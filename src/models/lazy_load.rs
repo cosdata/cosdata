@@ -1,21 +1,31 @@
 use super::identity_collections::{Identifiable, IdentityMap, IdentityMapKey, IdentitySet};
 use super::serializer::CustomSerialize;
-use super::types::{FileOffset, STM};
+use super::types::{FileOffset, VersionId, STM};
 use arcshift::ArcShift;
+use std::fmt;
 use std::hash::Hash;
 
 pub trait SyncPersist {
     fn set_persistence(&self, flag: bool);
     fn needs_persistence(&self) -> bool;
+    fn get_current_version(&self) -> VersionId;
 }
 
 pub const CHUNK_SIZE: usize = 5;
 
+#[derive(Debug, Eq, PartialEq, Hash, Clone)]
+pub enum FileIndex {
+    Valid {
+        offset: FileOffset,
+        version: VersionId,
+    },
+    Invalid,
+}
 #[derive(Clone)]
 pub enum LazyItem<T: Clone + 'static> {
     Valid {
         data: Option<ArcShift<T>>,
-        offset: ArcShift<Option<FileOffset>>,
+        file_index: ArcShift<Option<FileIndex>>,
         decay_counter: usize,
     },
     Invalid,
@@ -30,9 +40,19 @@ pub struct EagerLazyItem<T: Clone + 'static, E: Clone + CustomSerialize + 'stati
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
 pub enum LazyItemId {
     Memory(u64),
-    Persist(u32),
+    Persist(FileIndex),
 }
 
+impl fmt::Display for FileIndex {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FileIndex::Valid { offset, version } => {
+                write!(f, "FileIndex(offset: {}, version: {})", offset, version)
+            }
+            FileIndex::Invalid => write!(f, "FileIndex(Invalid)"),
+        }
+    }
+}
 impl<T> Identifiable for LazyItem<T>
 where
     T: Clone + Identifiable<Id = u64> + 'static,
@@ -40,8 +60,11 @@ where
     type Id = LazyItemId;
 
     fn get_id(&self) -> Self::Id {
-        if let LazyItem::Valid { data, offset, .. } = self {
-            if let Some(offset) = offset.clone().get().clone() {
+        if let LazyItem::Valid {
+            data, file_index, ..
+        } = self
+        {
+            if let Some(offset) = file_index.clone().get().clone() {
                 return LazyItemId::Persist(offset);
             }
 
@@ -51,7 +74,7 @@ where
             }
         }
 
-        LazyItemId::Persist(u32::MAX)
+        LazyItemId::Persist(FileIndex::Invalid)
     }
 }
 
@@ -87,7 +110,7 @@ where
 #[derive(Clone)]
 pub struct LazyItemSet<T>
 where
-    T: Clone + Identifiable<Id = u64> + 'static,
+    T: Clone + Identifiable<Id = u64> + SyncPersist + 'static,
 {
     pub items: STM<IdentitySet<LazyItem<T>>>,
 }
@@ -101,7 +124,7 @@ impl<T: Clone + 'static> LazyItem<T> {
     pub fn new(item: T) -> Self {
         Self::Valid {
             data: Some(ArcShift::new(item)),
-            offset: ArcShift::new(None),
+            file_index: ArcShift::new(None),
             decay_counter: 0,
         }
     }
@@ -113,7 +136,7 @@ impl<T: Clone + 'static> LazyItem<T> {
     pub fn from_data(data: T) -> Self {
         LazyItem::Valid {
             data: Some(ArcShift::new(data)),
-            offset: ArcShift::new(None),
+            file_index: ArcShift::new(None),
             decay_counter: 0,
         }
     }
@@ -121,7 +144,7 @@ impl<T: Clone + 'static> LazyItem<T> {
     pub fn from_arcshift(item: ArcShift<T>) -> Self {
         Self::Valid {
             data: Some(item),
-            offset: ArcShift::new(None),
+            file_index: ArcShift::new(None),
             decay_counter: 0,
         }
     }
@@ -147,16 +170,16 @@ impl<T: Clone + 'static> LazyItem<T> {
         }
     }
 
-    pub fn get_offset(&self) -> Option<FileOffset> {
-        if let Self::Valid { offset, .. } = self {
-            return offset.clone().get().clone();
+    pub fn get_offset(&self) -> Option<FileIndex> {
+        if let Self::Valid { file_index, .. } = self {
+            return file_index.clone().get().clone();
         }
         None
     }
 
-    pub fn set_offset(&self, new_offset: Option<FileOffset>) {
-        if let Self::Valid { offset, .. } = self {
-            offset.clone().update(new_offset);
+    pub fn set_offset(&self, new_offset: Option<FileIndex>) {
+        if let Self::Valid { file_index, .. } = self {
+            file_index.clone().update(new_offset);
         }
     }
 }
@@ -166,7 +189,7 @@ impl<T: Clone + 'static> LazyItemRef<T> {
         Self {
             item: ArcShift::new(LazyItem::Valid {
                 data: Some(ArcShift::new(item)),
-                offset: ArcShift::new(None),
+                file_index: ArcShift::new(None),
                 decay_counter: 0,
             }),
         }
@@ -182,7 +205,7 @@ impl<T: Clone + 'static> LazyItemRef<T> {
         Self {
             item: ArcShift::new(LazyItem::Valid {
                 data: Some(item),
-                offset: ArcShift::new(None),
+                file_index: ArcShift::new(None),
                 decay_counter: 0,
             }),
         }
@@ -216,25 +239,25 @@ impl<T: Clone + 'static> LazyItemRef<T> {
         let mut arc = self.item.clone();
 
         arc.rcu(|item| {
-            let (offset, decay_counter) = if let LazyItem::Valid {
-                offset,
+            let (file_index, decay_counter) = if let LazyItem::Valid {
+                file_index,
                 decay_counter,
                 ..
             } = item
             {
-                (offset.clone(), *decay_counter)
+                (file_index.clone(), *decay_counter)
             } else {
                 (ArcShift::new(None), 0)
             };
             LazyItem::Valid {
                 data: Some(ArcShift::new(new_data)),
-                offset,
+                file_index,
                 decay_counter,
             }
         });
     }
 
-    pub fn set_offset(&self, new_offset: Option<FileOffset>) {
+    pub fn set_offset(&self, new_offset: Option<FileIndex>) {
         let mut arc = self.item.clone();
 
         arc.rcu(|item| {
@@ -250,7 +273,7 @@ impl<T: Clone + 'static> LazyItemRef<T> {
             };
             LazyItem::Valid {
                 data,
-                offset: ArcShift::new(new_offset),
+                file_index: ArcShift::new(new_offset),
                 decay_counter,
             }
         });
@@ -302,7 +325,7 @@ where
     }
 }
 
-impl<T: Clone + Identifiable<Id = u64> + 'static> LazyItemSet<T> {
+impl<T: Clone + Identifiable<Id = u64> + SyncPersist + 'static> LazyItemSet<T> {
     pub fn new() -> Self {
         Self {
             items: STM::new(IdentitySet::new(), 1, true),
@@ -343,7 +366,7 @@ impl<T: Clone + Identifiable<Id = u64> + 'static> LazyItemSet<T> {
     }
 }
 
-impl<T: Clone + 'static> LazyItemMap<T> {
+impl<T: Clone + SyncPersist + 'static> LazyItemMap<T> {
     pub fn new() -> Self {
         Self {
             items: STM::new(IdentityMap::new(), 1, true),
