@@ -19,7 +19,7 @@ pub use relationship::RelationshipInsertion;
 
 pub type Attributes = Vec<Attribute>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Attribute {
     pub name: String,
     pub value: Value,
@@ -49,4 +49,96 @@ pub fn parse_attribute(input: &str) -> IResult<&str, Attribute> {
             value,
         },
     )(input)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_attribute_parser() {
+        let values = [
+            (
+                r#"name: "The Rust Dev""#,
+                Attribute {
+                    name: "name".to_string(),
+                    value: Value::String("The Rust Dev".to_string()),
+                },
+            ),
+            (
+                "age: 54",
+                Attribute {
+                    name: "age".to_string(),
+                    value: Value::Int(54),
+                },
+            ),
+            (
+                "date_of_birth: 01-01-1970",
+                Attribute {
+                    name: "date_of_birth".to_string(),
+                    value: Value::Date("01-01-1970".to_string()),
+                },
+            ),
+        ];
+
+        for (source, expected) in values {
+            let (_, parsed) = parse_attribute(source).unwrap();
+
+            assert_eq!(parsed, expected);
+        }
+    }
+
+    #[test]
+    fn test_attributes_parser() {
+        let values = [
+            (
+                r#"(
+                    name: "The Rust Dev",
+                    age: 54,
+                    date_of_birth: 01-01-1970
+                )"#,
+                vec![
+                    Attribute {
+                        name: "name".to_string(),
+                        value: Value::String("The Rust Dev".to_string()),
+                    },
+                    Attribute {
+                        name: "age".to_string(),
+                        value: Value::Int(54),
+                    },
+                    Attribute {
+                        name: "date_of_birth".to_string(),
+                        value: Value::Date("01-01-1970".to_string()),
+                    },
+                ],
+            ),
+            (
+                r#"(
+                    name: "A Rust Project",
+                    start_date: 01-01-2000,
+                    end_date: 31-12-2009 
+                )"#,
+                vec![
+                    Attribute {
+                        name: "name".to_string(),
+                        value: Value::String("A Rust Project".to_string()),
+                    },
+                    Attribute {
+                        name: "start_date".to_string(),
+                        value: Value::Date("01-01-2000".to_string()),
+                    },
+                    Attribute {
+                        name: "end_date".to_string(),
+                        value: Value::Date("31-12-2009".to_string()),
+                    },
+                ],
+            ),
+        ];
+
+        for (source, expected) in values {
+            let (_, parsed) = parse_attributes1(source).unwrap();
+
+            assert_eq!(parsed, expected);
+        }
+    }
 }
