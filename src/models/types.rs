@@ -118,6 +118,27 @@ pub struct MergedNode {
     pub persist_flag: Arc<AtomicBool>,
 }
 
+#[derive(Clone)]
+pub enum MetricResult {
+    CosineSimilarity(f32),
+    CosineDistance(f32),
+    EuclideanDistance(f32),
+    HammingDistance(f32),
+    DotProductDistance(f32),
+}
+
+impl MetricResult {
+    pub fn get_value(&self) -> f32 {
+        match self {
+            MetricResult::CosineSimilarity(value) => *value,
+            MetricResult::CosineDistance(value) => *value,
+            MetricResult::EuclideanDistance(value) => *value,
+            MetricResult::HammingDistance(value) => *value,
+            MetricResult::DotProductDistance(value) => *value,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum DistanceMetric {
     Cosine,
@@ -127,7 +148,7 @@ pub enum DistanceMetric {
 }
 
 impl DistanceFunction for DistanceMetric {
-    fn calculate(&self, x: &Storage, y: &Storage) -> Result<f32, DistanceError> {
+    fn calculate(&self, x: &Storage, y: &Storage) -> Result<MetricResult, DistanceError> {
         match self {
             Self::Cosine => CosineDistance.calculate(x, y),
             Self::Euclidean => EuclideanDistance.calculate(x, y),
@@ -176,9 +197,13 @@ impl MergedNode {
         }
     }
 
-    pub fn add_ready_neighbor(&self, neighbor: LazyItem<MergedNode>, cosine_similarity: f32) {
+    pub fn add_ready_neighbor(
+        &self,
+        neighbor: LazyItem<MergedNode>,
+        cosine_similarity: MetricResult,
+    ) {
         self.neighbors
-            .insert(EagerLazyItem(cosine_similarity, neighbor));
+            .insert(EagerLazyItem(cosine_similarity.get_value(), neighbor));
     }
 
     pub fn set_parent(&self, parent: LazyItem<MergedNode>) {
@@ -191,7 +216,7 @@ impl MergedNode {
         arc.update(child);
     }
 
-    pub fn add_ready_neighbors(&self, neighbors_list: Vec<(LazyItem<MergedNode>, f32)>) {
+    pub fn add_ready_neighbors(&self, neighbors_list: Vec<(LazyItem<MergedNode>, MetricResult)>) {
         for (neighbor, cosine_similarity) in neighbors_list {
             self.add_ready_neighbor(neighbor, cosine_similarity);
         }

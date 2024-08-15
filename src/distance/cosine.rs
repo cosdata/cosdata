@@ -1,11 +1,13 @@
 use super::{DistanceError, DistanceFunction};
-use crate::storage::Storage;
+use crate::{models::types::MetricResult, storage::Storage};
 #[derive(Debug)]
 pub struct CosineDistance;
 
 impl DistanceFunction for CosineDistance {
     // Implementation here
-    fn calculate(&self, x: &Storage, y: &Storage) -> Result<f32, DistanceError> {
+    // TODO: this method is calculating and returning COSINE SIMILARITY, while it's named COSINE DISTANCE
+    // should not it be renamed???
+    fn calculate(&self, x: &Storage, y: &Storage) -> Result<MetricResult, DistanceError> {
         match (x, y) {
             (
                 Storage::UnsignedByte {
@@ -19,7 +21,7 @@ impl DistanceFunction for CosineDistance {
             ) => {
                 // Implement cosine similarity for UnsignedByte storage
                 //unimplemented!("Cosine similarity for UnsignedByte not implemented yet")
-                Ok(0.0)
+                Ok(MetricResult::CosineSimilarity(0.0))
             }
             (
                 Storage::SubByte {
@@ -84,12 +86,12 @@ fn cosine_similarity_from_dot_product(
     dot_product: f32,
     mag_x: u32,
     mag_y: u32,
-) -> Result<f32, DistanceError> {
+) -> Result<MetricResult, DistanceError> {
     let denominator = (mag_x as f32).sqrt() * (mag_y as f32).sqrt();
     if denominator == 0.0 {
         Err(DistanceError::CalculationError)
     } else {
-        Ok(dot_product / denominator)
+        Ok(MetricResult::CosineSimilarity(dot_product / denominator))
     }
 }
 

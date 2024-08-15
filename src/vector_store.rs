@@ -686,7 +686,7 @@ fn insert_node_create_edges(
     vec_store: Arc<VectorStore>,
     fvec: Arc<Storage>,
     hs: VectorId,
-    nbs: Vec<(LazyItem<MergedNode>, f32)>,
+    nbs: Vec<(LazyItem<MergedNode>, MetricResult)>,
     cur_level: i8,
 ) -> Result<(), WaCustomError> {
     let node_prop = NodeProp {
@@ -712,7 +712,7 @@ fn insert_node_create_edges(
                 .map(|nbr2| (nbr2.1, nbr2.0))
                 .collect();
 
-            neighbor_list.push((LazyItem::from_item(nn.clone()), cs));
+            neighbor_list.push((LazyItem::from_item(nn.clone()), cs.get_value()));
 
             neighbor_list
                 .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -741,8 +741,8 @@ fn traverse_find_nearest(
     skipm: &mut HashSet<VectorId>,
     cur_level: i8,
     skip_hop: bool,
-) -> Result<Vec<(LazyItem<MergedNode>, f32)>, WaCustomError> {
-    let mut tasks: SmallVec<[Vec<(LazyItem<MergedNode>, f32)>; 24]> = SmallVec::new();
+) -> Result<Vec<(LazyItem<MergedNode>, MetricResult)>, WaCustomError> {
+    let mut tasks: SmallVec<[Vec<(LazyItem<MergedNode>, MetricResult)>; 24]> = SmallVec::new();
 
     let mut node_arc = match vtm.clone() {
         LazyItem::Valid {
@@ -826,7 +826,7 @@ fn traverse_find_nearest(
     }
 
     let mut nn: Vec<_> = tasks.into_iter().flatten().collect();
-    nn.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    nn.sort_by(|a, b| b.1.get_value().partial_cmp(&a.1.get_value()).unwrap());
     let mut seen = HashSet::new();
     nn.retain(|(lazy_node, _)| {
         if let LazyItem::Valid {

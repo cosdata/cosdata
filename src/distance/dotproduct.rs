@@ -1,5 +1,6 @@
 use super::{DistanceError, DistanceFunction};
 use crate::models::dot_product::dot_product_u8;
+use crate::models::types::MetricResult;
 use crate::storage::Storage;
 use half::f16;
 
@@ -7,7 +8,7 @@ use half::f16;
 pub struct DotProductDistance;
 
 impl DistanceFunction for DotProductDistance {
-    fn calculate(&self, x: &Storage, y: &Storage) -> Result<f32, DistanceError> {
+    fn calculate(&self, x: &Storage, y: &Storage) -> Result<MetricResult, DistanceError> {
         match (x, y) {
             (
                 Storage::UnsignedByte {
@@ -16,7 +17,9 @@ impl DistanceFunction for DotProductDistance {
                 Storage::UnsignedByte {
                     quant_vec: vec_y, ..
                 },
-            ) => Ok(dot_product_u8(vec_x, vec_y) as f32),
+            ) => Ok(MetricResult::DotProductDistance(
+                dot_product_u8(vec_x, vec_y) as f32,
+            )),
             (
                 Storage::HalfPrecisionFP {
                     quant_vec: vec_x, ..
@@ -24,7 +27,9 @@ impl DistanceFunction for DotProductDistance {
                 Storage::HalfPrecisionFP {
                     quant_vec: vec_y, ..
                 },
-            ) => Ok(dot_product_f16(vec_x, vec_y)),
+            ) => Ok(MetricResult::DotProductDistance(dot_product_f16(
+                vec_x, vec_y,
+            ))),
             (Storage::SubByte { .. }, Storage::SubByte { .. }) => {
                 Err(DistanceError::CalculationError) // Implement if needed
             }
