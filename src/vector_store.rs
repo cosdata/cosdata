@@ -663,33 +663,25 @@ pub fn queue_node_prop_exec(
 pub fn link_prev_version(prev_loc: Option<u32>, offset: u32) {
     // todo , needs to happen in file persist
 }
+
 pub fn auto_commit_transaction(
     vec_store: Arc<VectorStore>,
     buf_writer: &mut CustomBufferedWriter,
 ) -> Result<(), WaCustomError> {
     // Retrieve exec_queue_nodes from vec_store
     let mut exec_queue_nodes_arc = vec_store.exec_queue_nodes.clone();
-    let exec_queue_nodes = exec_queue_nodes_arc.get();
+    let mut exec_queue_nodes = exec_queue_nodes_arc.get().clone();
 
-    // Iterate through the exec_queue_nodes and persist each node
-    for node in exec_queue_nodes.iter() {
+    let mut updated_nodes = Vec::new();
+
+    for node in exec_queue_nodes.iter_mut() {
         println!("auto_commit_txn");
         persist_node_update_loc(buf_writer, node)?;
+        updated_nodes.push(node.clone());
     }
 
-    exec_queue_nodes_arc.update(Vec::new());
-
-    // Update version
-    let ver = vec_store
-        .get_current_version()
-        .expect("No current version found");
-    let new_ver = ver.version + 1;
-    let vec_hash =
-        store_current_version(vec_store.clone(), "main".to_string(), new_ver).map_err(|e| {
-            WaCustomError::DatabaseError(format!("Failed to store current version: {:?}", e))
-        })?;
-
-    vec_store.set_current_version(Some(vec_hash));
+    // Update the exec_queue_nodes with the modified nodes
+    exec_queue_nodes_arc.update(updated_nodes);
 
     Ok(())
 }
@@ -764,10 +756,10 @@ fn traverse_find_nearest(
         } => node,
         LazyItem::Valid {
             data: None,
-            mut offset,
+            mut file_index,
             ..
         } => {
-            if let Some(offset) = offset.get() {
+            if let Some(offset) = file_index.get() {
                 return Err(WaCustomError::LazyLoadingError(format!(
                     "Node at offset {} needs to be loaded",
                     offset
