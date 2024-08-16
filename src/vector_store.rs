@@ -672,16 +672,12 @@ pub fn auto_commit_transaction(
     let mut exec_queue_nodes_arc = vec_store.exec_queue_nodes.clone();
     let mut exec_queue_nodes = exec_queue_nodes_arc.get().clone();
 
-    let mut updated_nodes = Vec::new();
-
     for node in exec_queue_nodes.iter_mut() {
         println!("auto_commit_txn");
         persist_node_update_loc(buf_writer, node)?;
-        updated_nodes.push(node.clone());
     }
 
-    // Update the exec_queue_nodes with the modified nodes
-    exec_queue_nodes_arc.update(updated_nodes);
+    exec_queue_nodes_arc.update(Vec::new());
 
     Ok(())
 }
