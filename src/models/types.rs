@@ -1,3 +1,4 @@
+use crate::distance::cosine::CosineSimilarity;
 use crate::distance::DistanceError;
 use crate::distance::{
     cosine::CosineDistance, dotproduct::DotProductDistance, euclidean::EuclideanDistance,
@@ -34,7 +35,6 @@ pub struct BytesToRead(pub u32);
 
 #[derive(Debug, Copy, Clone)]
 pub struct VersionId(pub u16);
-pub type CosineSimilarity = f32;
 
 pub type Item<T> = ArcShift<T>;
 
@@ -111,30 +111,31 @@ pub struct MergedNode {
     pub version_id: VersionId,
     pub hnsw_level: HNSWLevel,
     pub prop: Item<PropState>,
-    pub neighbors: EagerLazyItemSet<MergedNode, f32>,
+    pub neighbors: EagerLazyItemSet<MergedNode, MetricResult>,
     pub parent: LazyItemRef<MergedNode>,
     pub child: LazyItemRef<MergedNode>,
     pub versions: LazyItemMap<MergedNode>,
     pub persist_flag: Arc<AtomicBool>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub enum MetricResult {
-    CosineSimilarity(f32),
-    CosineDistance(f32),
-    EuclideanDistance(f32),
-    HammingDistance(f32),
-    DotProductDistance(f32),
+    CosineSimilarity(CosineSimilarity),
+    CosineDistance(CosineDistance),
+    EuclideanDistance(EuclideanDistance),
+    HammingDistance(HammingDistance),
+    DotProductDistance(DotProductDistance),
 }
 
 impl MetricResult {
+    // gets the bare numerical value stored in the type
     pub fn get_value(&self) -> f32 {
         match self {
-            MetricResult::CosineSimilarity(value) => *value,
-            MetricResult::CosineDistance(value) => *value,
-            MetricResult::EuclideanDistance(value) => *value,
-            MetricResult::HammingDistance(value) => *value,
-            MetricResult::DotProductDistance(value) => *value,
+            MetricResult::CosineSimilarity(value) => value.0,
+            MetricResult::CosineDistance(value) => value.0,
+            MetricResult::EuclideanDistance(value) => value.0,
+            MetricResult::HammingDistance(value) => value.0,
+            MetricResult::DotProductDistance(value) => value.0,
         }
     }
 }
@@ -148,12 +149,25 @@ pub enum DistanceMetric {
 }
 
 impl DistanceFunction for DistanceMetric {
-    fn calculate(&self, x: &Storage, y: &Storage) -> Result<MetricResult, DistanceError> {
+    type Item = MetricResult;
+    fn calculate(&self, x: &Storage, y: &Storage) -> Result<Self::Item, DistanceError> {
         match self {
-            Self::Cosine => CosineDistance.calculate(x, y),
-            Self::Euclidean => EuclideanDistance.calculate(x, y),
-            Self::Hamming => HammingDistance.calculate(x, y),
-            Self::DotProduct => DotProductDistance.calculate(x, y),
+            Self::Cosine => {
+                let value = CosineSimilarity(0.0).calculate(x, y)?;
+                Ok(MetricResult::CosineSimilarity(value))
+            }
+            Self::Euclidean => {
+                let value = EuclideanDistance(0.0).calculate(x, y)?;
+                Ok(MetricResult::EuclideanDistance(value))
+            }
+            Self::Hamming => {
+                let value = HammingDistance(0.0).calculate(x, y)?;
+                Ok(MetricResult::HammingDistance(value))
+            }
+            Self::DotProduct => {
+                let value = DotProductDistance(0.0).calculate(x, y)?;
+                Ok(MetricResult::DotProductDistance(value))
+            }
         }
     }
 }
@@ -197,13 +211,8 @@ impl MergedNode {
         }
     }
 
-    pub fn add_ready_neighbor(
-        &self,
-        neighbor: LazyItem<MergedNode>,
-        cosine_similarity: MetricResult,
-    ) {
-        self.neighbors
-            .insert(EagerLazyItem(cosine_similarity.get_value(), neighbor));
+    pub fn add_ready_neighbor(&self, neighbor: LazyItem<MergedNode>, distance: MetricResult) {
+        self.neighbors.insert(EagerLazyItem(distance, neighbor));
     }
 
     pub fn set_parent(&self, parent: LazyItem<MergedNode>) {
@@ -217,12 +226,12 @@ impl MergedNode {
     }
 
     pub fn add_ready_neighbors(&self, neighbors_list: Vec<(LazyItem<MergedNode>, MetricResult)>) {
-        for (neighbor, cosine_similarity) in neighbors_list {
-            self.add_ready_neighbor(neighbor, cosine_similarity);
+        for (neighbor, distance) in neighbors_list {
+            self.add_ready_neighbor(neighbor, distance);
         }
     }
 
-    pub fn get_neighbors(&self) -> EagerLazyItemSet<MergedNode, f32> {
+    pub fn get_neighbors(&self) -> EagerLazyItemSet<MergedNode, MetricResult> {
         self.neighbors.clone()
     }
 

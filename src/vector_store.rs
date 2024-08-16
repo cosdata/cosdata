@@ -28,7 +28,7 @@ pub fn ann_search(
     vector_emb: VectorEmbedding,
     cur_entry: LazyItem<MergedNode>,
     cur_level: i8,
-) -> Result<Option<Vec<(LazyItem<MergedNode>, f32)>>, WaCustomError> {
+) -> Result<Option<Vec<(LazyItem<MergedNode>, MetricResult)>>, WaCustomError> {
     if cur_level == -1 {
         return Ok(Some(vec![]));
     }
@@ -112,7 +112,7 @@ pub fn ann_search(
 pub fn vector_fetch(
     vec_store: Arc<VectorStore>,
     vector_id: VectorId,
-) -> Result<Vec<Option<(VectorId, Vec<(VectorId, f32)>)>>, WaCustomError> {
+) -> Result<Vec<Option<(VectorId, Vec<(VectorId, MetricResult)>)>>, WaCustomError> {
     let mut results = Vec::new();
 
     for lev in 0..vec_store.max_cache_level {
@@ -122,7 +122,7 @@ pub fn vector_fetch(
                 data: Some(vth), ..
             } => {
                 let mut vth = vth.clone();
-                let nes: Vec<(VectorId, f32)> = vth
+                let nes: Vec<(VectorId, MetricResult)> = vth
                     .get()
                     .neighbors
                     .iter()
@@ -180,7 +180,7 @@ pub fn vector_fetch(
 fn load_node_from_persist(
     offset: FileOffset,
     vec_store: &Arc<VectorStore>,
-) -> Result<Option<(VectorId, Vec<(VectorId, f32)>)>, WaCustomError> {
+) -> Result<Option<(VectorId, Vec<(VectorId, MetricResult)>)>, WaCustomError> {
     // Placeholder function to load vector from database
     // TODO: Implement actual database loading logic
     Err(WaCustomError::LazyLoadingError(
@@ -223,7 +223,7 @@ fn get_vector_id_from_node(node: &MergedNode) -> Option<VectorId> {
 fn load_neighbor_from_db(
     offset: FileOffset,
     vec_store: &Arc<VectorStore>,
-) -> Result<Option<(VectorId, f32)>, WaCustomError> {
+) -> Result<Option<(VectorId, MetricResult)>, WaCustomError> {
     // Placeholder function to load neighbor from database
     // TODO: Implement actual database loading logic
     Err(WaCustomError::LazyLoadingError(
@@ -705,17 +705,20 @@ fn insert_node_create_edges(
             ..
         } = nbr1.clone()
         {
-            let mut neighbor_list: Vec<(LazyItem<MergedNode>, f32)> = nbr1_node
+            let mut neighbor_list: Vec<(LazyItem<MergedNode>, MetricResult)> = nbr1_node
                 .get()
                 .neighbors
                 .iter()
                 .map(|nbr2| (nbr2.1, nbr2.0))
                 .collect();
 
-            neighbor_list.push((LazyItem::from_item(nn.clone()), cs.get_value()));
+            neighbor_list.push((LazyItem::from_item(nn.clone()), cs));
 
-            neighbor_list
-                .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            neighbor_list.sort_by(|a, b| {
+                b.1.get_value()
+                    .partial_cmp(&a.1.get_value())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
 
             neighbor_list.truncate(20);
 

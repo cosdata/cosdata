@@ -1,7 +1,7 @@
 use super::dot_product::x86_64::dot_product_u8_avx2;
 use super::lazy_load::LazyItem;
 use super::rpc::VectorIdValue;
-use super::types::{MergedNode, VectorId};
+use super::types::{MergedNode, MetricResult, VectorId};
 use crate::distance::DistanceError;
 use crate::models::rpc::Vector;
 use crate::models::types::PropState;
@@ -417,9 +417,9 @@ pub fn get_max_insert_level(x: f64, levels: Arc<Vec<(f64, i32)>>) -> i32 {
 }
 
 pub fn add_option_vecs(
-    a: &Option<Vec<(LazyItem<MergedNode>, f32)>>,
-    b: &Option<Vec<(LazyItem<MergedNode>, f32)>>,
-) -> Option<Vec<(LazyItem<MergedNode>, f32)>> {
+    a: &Option<Vec<(LazyItem<MergedNode>, MetricResult)>>,
+    b: &Option<Vec<(LazyItem<MergedNode>, MetricResult)>>,
+) -> Option<Vec<(LazyItem<MergedNode>, MetricResult)>> {
     match (a, b) {
         (None, None) => None,
         (Some(vec), None) | (None, Some(vec)) => Some(vec.clone()),
@@ -449,8 +449,8 @@ fn convert_id(id: VectorId) -> VectorIdValue {
 
 // Function to convert the Option<Vec<(VectorId, _)>> to Option<Vec<(VectorIdValue, _)>>
 pub fn convert_option_vec(
-    input: Option<Vec<(VectorId, f32)>>,
-) -> Option<Vec<(VectorIdValue, f32)>> {
+    input: Option<Vec<(VectorId, MetricResult)>>,
+) -> Option<Vec<(VectorIdValue, MetricResult)>> {
     input.map(|vec| {
         vec.into_iter()
             .map(|(id, value)| (convert_id(id), value))
@@ -467,8 +467,8 @@ pub fn convert_vectors(vectors: Vec<Vector>) -> Vec<(VectorIdValue, Vec<f32>)> {
 }
 
 pub fn remove_duplicates_and_filter(
-    input: Option<Vec<(LazyItem<MergedNode>, f32)>>,
-) -> Option<Vec<(VectorId, f32)>> {
+    input: Option<Vec<(LazyItem<MergedNode>, MetricResult)>>,
+) -> Option<Vec<(VectorId, MetricResult)>> {
     input.map(|vec| {
         let mut seen = HashSet::new();
         vec.into_iter()

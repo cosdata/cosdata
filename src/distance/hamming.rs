@@ -1,12 +1,16 @@
-use super::{DistanceError, DistanceFunction};
-use crate::{models::types::MetricResult, storage::Storage};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug)]
-pub struct HammingDistance;
+use super::{DistanceError, DistanceFunction};
+use crate::storage::Storage;
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Serialize)]
+pub struct HammingDistance(pub f32);
 
 impl DistanceFunction for HammingDistance {
+    type Item = Self;
+
     // Implementation here
-    fn calculate(&self, x: &Storage, y: &Storage) -> Result<MetricResult, DistanceError> {
+    fn calculate(&self, x: &Storage, y: &Storage) -> Result<Self::Item, DistanceError> {
         match (x, y) {
             (
                 Storage::UnsignedByte {

@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod tests {
+    use crate::distance::cosine::CosineSimilarity;
     use crate::models::lazy_load::*;
     use crate::models::serializer::*;
     use crate::models::types::*;
@@ -206,8 +207,14 @@ mod tests {
 
         let neighbor1 = LazyItem::from_data(MergedNode::new(VersionId(2), HNSWLevel(1)));
         let neighbor2 = LazyItem::from_data(MergedNode::new(VersionId(3), HNSWLevel(1)));
-        node.add_ready_neighbor(neighbor1, 0.9);
-        node.add_ready_neighbor(neighbor2, 0.8);
+        node.add_ready_neighbor(
+            neighbor1,
+            MetricResult::CosineSimilarity(CosineSimilarity(0.9)),
+        );
+        node.add_ready_neighbor(
+            neighbor2,
+            MetricResult::CosineSimilarity(CosineSimilarity(0.8)),
+        );
 
         let mut writer = Cursor::new(Vec::new());
         let offset = node.serialize(&mut writer).unwrap();
@@ -351,9 +358,10 @@ mod tests {
         node2.get().set_child(lazy1.clone());
         node2.get().set_parent(lazy3.clone());
         node3.get().set_child(lazy2.clone());
-        node1
-            .get()
-            .add_ready_neighbor(LazyItem::from_item(node3), 0.9);
+        node1.get().add_ready_neighbor(
+            LazyItem::from_item(node3),
+            MetricResult::CosineSimilarity(CosineSimilarity(0.9)),
+        );
 
         let lazy_ref = LazyItemRef::from_lazy(lazy1);
 

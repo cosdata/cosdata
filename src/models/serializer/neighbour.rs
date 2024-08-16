@@ -1,4 +1,5 @@
 use super::CustomSerialize;
+use crate::distance::cosine::CosineSimilarity;
 use crate::models::types::FileOffset;
 use crate::models::{cache_loader::NodeRegistry, lazy_load::LazyItem, types::Neighbour};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
@@ -17,7 +18,7 @@ impl CustomSerialize for Neighbour {
         writer.write_u32::<LittleEndian>(0)?;
 
         // Serialize the cosine similarity
-        writer.write_f32::<LittleEndian>(self.cosine_similarity)?;
+        writer.write_f32::<LittleEndian>(self.cosine_similarity.0)?;
         let node_pos = self.node.serialize(writer)?;
 
         let end_pos = writer.stream_position()?;
@@ -47,7 +48,7 @@ impl CustomSerialize for Neighbour {
 
         Ok(Neighbour {
             node,
-            cosine_similarity,
+            cosine_similarity: CosineSimilarity(cosine_similarity),
         })
     }
 }

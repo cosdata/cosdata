@@ -6,6 +6,7 @@ mod lazy_item_set;
 mod neighbour;
 mod node;
 mod vector;
+mod metric_distance;
 
 #[cfg(test)]
 mod tests;

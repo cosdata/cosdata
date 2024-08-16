@@ -243,7 +243,7 @@ pub fn run_upload(
 pub async fn ann_vector_query(
     vec_store: Arc<VectorStore>,
     query: Vec<f32>,
-) -> Result<Option<Vec<(VectorId, f32)>>, WaCustomError> {
+) -> Result<Option<Vec<(VectorId, MetricResult)>>, WaCustomError> {
     let vector_store = vec_store.clone();
     let vec_hash = VectorId::Str("query".to_string());
     let root = &vector_store.root_vec;
@@ -269,7 +269,7 @@ pub async fn ann_vector_query(
 pub async fn fetch_vector_neighbors(
     vec_store: Arc<VectorStore>,
     vector_id: VectorId,
-) -> Vec<Option<(VectorId, Vec<(VectorId, f32)>)>> {
+) -> Vec<Option<(VectorId, Vec<(VectorId, MetricResult)>)>> {
     let results = vector_fetch(vec_store.clone(), vector_id);
     return results.expect("Failed fetching vector neighbors");
 }

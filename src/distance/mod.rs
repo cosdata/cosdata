@@ -3,10 +3,11 @@ pub mod dotproduct;
 pub mod euclidean;
 pub mod hamming;
 
-use crate::{models::types::MetricResult, storage::Storage};
+use crate::storage::Storage;
 
 pub trait DistanceFunction: std::fmt::Debug + Send + Sync {
-    fn calculate(&self, x: &Storage, y: &Storage) -> Result<MetricResult, DistanceError>;
+    type Item;
+    fn calculate(&self, x: &Storage, y: &Storage) -> Result<Self::Item, DistanceError>;
 }
 
 #[derive(Debug)]

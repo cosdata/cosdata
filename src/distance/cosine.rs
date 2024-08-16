@@ -1,13 +1,25 @@
+use serde::{Deserialize, Serialize};
+
 use super::{DistanceError, DistanceFunction};
-use crate::{models::types::MetricResult, storage::Storage};
-#[derive(Debug)]
-pub struct CosineDistance;
+use crate::storage::Storage;
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Serialize)]
+pub struct CosineDistance(pub f32);
 
 impl DistanceFunction for CosineDistance {
-    // Implementation here
-    // TODO: this method is calculating and returning COSINE SIMILARITY, while it's named COSINE DISTANCE
-    // should not it be renamed???
-    fn calculate(&self, x: &Storage, y: &Storage) -> Result<MetricResult, DistanceError> {
+    type Item = Self;
+    fn calculate(&self, _x: &Storage, _y: &Storage) -> Result<Self::Item, DistanceError> {
+        // placeholder method to be implemented
+        Err(DistanceError::CalculationError)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Serialize)]
+pub struct CosineSimilarity(pub f32);
+
+impl DistanceFunction for CosineSimilarity {
+    type Item = Self;
+    fn calculate(&self, x: &Storage, y: &Storage) -> Result<Self::Item, DistanceError> {
         match (x, y) {
             (
                 Storage::UnsignedByte {
@@ -21,7 +33,7 @@ impl DistanceFunction for CosineDistance {
             ) => {
                 // Implement cosine similarity for UnsignedByte storage
                 //unimplemented!("Cosine similarity for UnsignedByte not implemented yet")
-                Ok(MetricResult::CosineSimilarity(0.0))
+                Ok(CosineSimilarity(0.0))
             }
             (
                 Storage::SubByte {
@@ -86,12 +98,12 @@ fn cosine_similarity_from_dot_product(
     dot_product: f32,
     mag_x: u32,
     mag_y: u32,
-) -> Result<MetricResult, DistanceError> {
+) -> Result<CosineSimilarity, DistanceError> {
     let denominator = (mag_x as f32).sqrt() * (mag_y as f32).sqrt();
     if denominator == 0.0 {
         Err(DistanceError::CalculationError)
     } else {
-        Ok(MetricResult::CosineSimilarity(dot_product / denominator))
+        Ok(CosineSimilarity(dot_product / denominator))
     }
 }
 

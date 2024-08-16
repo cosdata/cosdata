@@ -1,12 +1,14 @@
 use super::{DistanceError, DistanceFunction};
-use crate::{models::types::MetricResult, storage::Storage};
+use crate::storage::Storage;
 use half::f16;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug)]
-pub struct EuclideanDistance;
+#[derive(Debug, Clone, Deserialize, PartialEq, Serialize)]
+pub struct EuclideanDistance(pub f32);
 
 impl DistanceFunction for EuclideanDistance {
-    fn calculate(&self, x: &Storage, y: &Storage) -> Result<MetricResult, DistanceError> {
+    type Item = Self;
+    fn calculate(&self, x: &Storage, y: &Storage) -> Result<Self::Item, DistanceError> {
         match (x, y) {
             (
                 Storage::UnsignedByte {
@@ -31,8 +33,8 @@ impl DistanceFunction for EuclideanDistance {
         }
     }
 }
-pub fn euclidean_distance_u8(x: &[u8], y: &[u8]) -> MetricResult {
-    MetricResult::EuclideanDistance(
+pub fn euclidean_distance_u8(x: &[u8], y: &[u8]) -> EuclideanDistance {
+    EuclideanDistance(
         x.iter()
             .zip(y.iter())
             .map(|(&a, &b)| {
@@ -44,8 +46,8 @@ pub fn euclidean_distance_u8(x: &[u8], y: &[u8]) -> MetricResult {
     )
 }
 
-pub fn euclidean_distance_f16(x: &[f16], y: &[f16]) -> MetricResult {
-    MetricResult::EuclideanDistance(
+pub fn euclidean_distance_f16(x: &[f16], y: &[f16]) -> EuclideanDistance {
+    EuclideanDistance(
         x.iter()
             .zip(y.iter())
             .map(|(&a, &b)| {
