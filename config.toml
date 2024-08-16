@@ -1,5 +1,5 @@
-threshold= 100
-batch_size = 1000
+upload_threshold = 100
+upload_process_batch_size = 1000
 
 [server]
 host = "127.0.0.1"

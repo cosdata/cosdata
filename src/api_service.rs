@@ -9,6 +9,7 @@ use crate::models::user::Statistics;
 use crate::quantization::{Quantization, StorageType};
 use crate::vector_store::*;
 use actix_web::web;
+use arcshift::ArcShift;
 use cosdata::config_loader::Config;
 use lmdb::{DatabaseFlags, Transaction};
 use rand::Rng;
@@ -47,7 +48,7 @@ pub async fn init_vector_store(
         .collect::<Vec<f32>>();
     let vec_hash = VectorId::Int(-1);
 
-    let exec_queue_nodes: ExecQueueUpdate = Item::new(Vec::new());
+    let exec_queue_nodes: ExecQueueUpdate = STM::new(Vec::new(), 1, true);
     let vector_list = Arc::new(quantization_metric.quantize(&vec, storage_type));
 
     // Note that setting .write(true).append(true) has the same effect
@@ -75,16 +76,16 @@ pub async fn init_vector_store(
     let mut prev: LazyItemRef<MergedNode> = LazyItemRef::new_invalid();
 
     let mut nodes = Vec::new();
-    for l in 0..=max_cache_level {
+    for l in (0..=max_cache_level).rev() {
         let prop = Arc::new(NodeProp {
             id: vec_hash.clone(),
             value: vector_list.clone(),
             location: Some((FileOffset(0), BytesToRead(0))),
         });
-        let mut current_node = Item::new(MergedNode {
+        let mut current_node = ArcShift::new(MergedNode {
             version_id: VersionId(0), // Initialize with appropriate version ID
             hnsw_level: HNSWLevel(l as u8),
-            prop: Item::new(PropState::Ready(prop.clone())),
+            prop: ArcShift::new(PropState::Ready(prop.clone())),
             neighbors: EagerLazyItemSet::new(),
             parent: LazyItemRef::new_invalid(),
             child: LazyItemRef::new_invalid(),
@@ -92,8 +93,8 @@ pub async fn init_vector_store(
             persist_flag: Arc::new(AtomicBool::new(true)),
         });
 
-        let lazy_node = LazyItem::from_item(current_node.clone());
-        let nn = LazyItemRef::from_item(current_node.clone());
+        let lazy_node = LazyItem::from_arcshift(current_node.clone());
+        let nn = LazyItemRef::from_arcshift(current_node.clone());
 
         if let Some(prev_node) = prev.item.get().get_data() {
             current_node
@@ -109,7 +110,6 @@ pub async fn init_vector_store(
             current_node.get().set_prop_ready(prop);
         }
         nodes.push(nn.clone());
-        // println!("sssss: {:?}", nn);
     }
 
     for (l, nn) in nodes.iter_mut().enumerate() {
@@ -128,7 +128,7 @@ pub async fn init_vector_store(
     // -- TODO level entry ratio
     // ---------------------------
     let factor_levels = 10.0;
-    let lp = Arc::new(generate_tuples(factor_levels).into_iter().rev().collect());
+    let lp = Arc::new(generate_tuples(factor_levels, max_cache_level));
     let ain_env = get_app_env().map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
     let denv = ain_env.persist.clone();
@@ -154,7 +154,7 @@ pub async fn init_vector_store(
             metadata_db: Arc::new(metadata_db.clone()),
             embeddings_db: Arc::new(embeddings_db),
         },
-        Item::new(None),
+        ArcShift::new(None),
         Arc::new(QuantizationMetric::Scalar),
         Arc::new(DistanceMetric::Cosine),
         StorageType::UnsignedByte,
@@ -206,8 +206,8 @@ pub fn run_upload(
 
     txn.abort();
 
-    if count_unindexed >= config.threshold {
-        index_embeddings(vec_store.clone(), config.batch_size).expect("Failed to index embeddings");
+    if count_unindexed >= config.upload_threshold {
+        index_embeddings(vec_store.clone(), config.upload_process_batch_size).expect("Failed to index embeddings");
     }
 
     // Update version

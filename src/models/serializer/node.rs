@@ -2,8 +2,9 @@ use super::CustomSerialize;
 use crate::models::{
     cache_loader::NodeRegistry,
     lazy_load::{EagerLazyItemSet, LazyItemMap, LazyItemRef},
-    types::{BytesToRead, HNSWLevel, Item, MergedNode, PropState, VersionId},
+    types::{BytesToRead, HNSWLevel, MergedNode, PropState, VersionId},
 };
+use arcshift::ArcShift;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::{
     io::{Read, Seek, SeekFrom, Write},
@@ -190,7 +191,7 @@ impl CustomSerialize for MergedNode {
         Ok(MergedNode {
             version_id,
             hnsw_level,
-            prop: Item::new(prop),
+            prop: ArcShift::new(prop),
             neighbors,
             parent,
             child,

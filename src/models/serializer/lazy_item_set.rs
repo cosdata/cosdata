@@ -4,7 +4,6 @@ use crate::models::{
     cache_loader::NodeRegistry,
     identity_collections::{Identifiable, IdentitySet},
     lazy_load::{LazyItem, LazyItemSet, CHUNK_SIZE},
-    types::Item,
 };
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::collections::HashSet;
@@ -102,8 +101,8 @@ where
                 break;
             }
         }
-        Ok(LazyItemSet {
-            items: Item::new(IdentitySet::from_iter(items.into_iter())),
-        })
+        Ok(LazyItemSet::from_set(IdentitySet::from_iter(
+            items.into_iter(),
+        )))
     }
 }

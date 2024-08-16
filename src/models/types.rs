@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs::*;
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hint::spin_loop;
 use std::path::Path;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -35,8 +36,6 @@ pub struct BytesToRead(pub u32);
 
 #[derive(Debug, Copy, Clone)]
 pub struct VersionId(pub u16);
-
-pub type Item<T> = ArcShift<T>;
 
 #[derive(Clone)]
 pub struct Neighbour {
@@ -110,7 +109,7 @@ pub enum VectorId {
 pub struct MergedNode {
     pub version_id: VersionId,
     pub hnsw_level: HNSWLevel,
-    pub prop: Item<PropState>,
+    pub prop: ArcShift<PropState>,
     pub neighbors: EagerLazyItemSet<MergedNode, MetricResult>,
     pub parent: LazyItemRef<MergedNode>,
     pub child: LazyItemRef<MergedNode>,
@@ -202,7 +201,7 @@ impl MergedNode {
         MergedNode {
             version_id,
             hnsw_level,
-            prop: Item::new(PropState::Pending((FileOffset(0), BytesToRead(0)))),
+            prop: ArcShift::new(PropState::Pending((FileOffset(0), BytesToRead(0)))),
             neighbors: EagerLazyItemSet::new(),
             parent: LazyItemRef::new_invalid(),
             child: LazyItemRef::new_invalid(),
@@ -240,8 +239,8 @@ impl MergedNode {
     //     arc.update(new_neighbors);
     // }
 
-    pub fn add_version(&self, version: Item<MergedNode>) {
-        let lazy_item = LazyItem::from_item(version);
+    pub fn add_version(&self, version: ArcShift<MergedNode>) {
+        let lazy_item = LazyItem::from_arcshift(version);
         // TODO: look at the id
         self.versions.insert(IdentityMapKey::Int(0), lazy_item);
     }
@@ -260,7 +259,14 @@ impl MergedNode {
 
     pub fn set_prop_location(&self, new_location: PropPersistRef) {
         let mut arc = self.prop.clone();
-        arc.update(PropState::Pending(new_location));
+        arc.rcu(|prop| match prop {
+            PropState::Pending(_) => PropState::Pending(new_location),
+            PropState::Ready(prop) => {
+                let mut new_prop = NodeProp::clone(&prop);
+                new_prop.location = Some(new_location);
+                PropState::Ready(Arc::new(new_prop))
+            }
+        });
     }
 
     pub fn get_prop_location(&self) -> Option<PropPersistRef> {
@@ -307,7 +313,7 @@ impl fmt::Display for VectorId {
     }
 }
 
-impl fmt::Display for MergedNode {
+impl fmt::Debug for MergedNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "MergedNode {{")?;
         writeln!(f, "  version_id: {},", self.version_id.0)?;
@@ -316,44 +322,33 @@ impl fmt::Display for MergedNode {
         // Display PropState
         write!(f, "  prop: ")?;
         let mut prop_arc = self.prop.clone();
-        match prop_arc.get() {
-            PropState::Ready(node_prop) => writeln!(f, "Ready {{ id: {} }}", node_prop.id)?,
-            PropState::Pending(_) => writeln!(f, "Pending")?,
-        }
-        // Display number of neighbors
-        writeln!(f, "  neighbors: {} items,", self.neighbors.len())?;
-
-        // Display parent and child status
-        writeln!(
-            f,
-            "  parent: {}",
-            if self.parent.is_valid() {
-                "Valid"
-            } else {
-                "Invalid"
-            }
-        )?;
-        writeln!(
-            f,
-            "  child: {}",
-            if self.child.is_valid() {
-                "Valid"
-            } else {
-                "Invalid"
-            }
-        )?;
-
-        // Display number of versions
-        writeln!(f, "  versions: {} items,", self.versions.len())?;
-
-        // Display persist flag
-        writeln!(
-            f,
-            "  persist_flag: {}",
-            self.persist_flag.load(std::sync::atomic::Ordering::Relaxed)
-        )?;
-
-        write!(f, "}}")
+        let prop = match prop_arc.get() {
+            PropState::Ready(node_prop) => format!("Ready {{ id: {} }}", node_prop.id),
+            PropState::Pending(_) => "Pending".to_string(),
+        };
+        f.debug_struct("MergedNode")
+            .field("version_id", &self.version_id)
+            .field("hnsw_level", &self.hnsw_level)
+            .field("prop", &prop)
+            .field("neighbors", &self.neighbors.len())
+            .field(
+                "parent",
+                if self.parent.is_valid() {
+                    &"Valid"
+                } else {
+                    &"Invalid"
+                },
+            )
+            .field(
+                "child",
+                if self.child.is_valid() {
+                    &"Valid"
+                } else {
+                    &"Invalid"
+                },
+            )
+            .field("persist_flag", &self.persist_flag.load(Ordering::Relaxed))
+            .finish()
     }
 }
 
@@ -391,7 +386,7 @@ impl VectorQt {
 pub type SizeBytes = u32;
 
 // needed to flatten and get uniques
-pub type ExecQueueUpdate = Item<Vec<Item<LazyItem<MergedNode>>>>;
+pub type ExecQueueUpdate = STM<Vec<ArcShift<LazyItem<MergedNode>>>>;
 
 #[derive(Debug, Clone)]
 pub struct MetaDb {
@@ -410,8 +405,8 @@ pub struct VectorStore {
     pub quant_dim: usize,
     pub prop_file: Arc<File>,
     pub lmdb: MetaDb,
-    pub current_version: Item<Option<VersionHash>>,
-    pub current_open_transaction: Item<Option<VersionHash>>,
+    pub current_version: ArcShift<Option<VersionHash>>,
+    pub current_open_transaction: ArcShift<Option<VersionHash>>,
     pub quantization_metric: Arc<QuantizationMetric>,
     pub distance_metric: Arc<DistanceMetric>,
     pub storage_type: StorageType,
@@ -427,7 +422,7 @@ impl VectorStore {
         quant_dim: usize,
         prop_file: Arc<File>,
         lmdb: MetaDb,
-        current_version: Item<Option<VersionHash>>,
+        current_version: ArcShift<Option<VersionHash>>,
         quantization_metric: Arc<QuantizationMetric>,
         distance_metric: Arc<DistanceMetric>,
         storage_type: StorageType,
@@ -442,7 +437,7 @@ impl VectorStore {
             prop_file,
             lmdb,
             current_version,
-            current_open_transaction: Item::new(None),
+            current_open_transaction: ArcShift::new(None),
             quantization_metric,
             distance_metric,
             storage_type,
@@ -499,4 +494,69 @@ pub fn get_app_env() -> Result<Arc<AppEnv>, WaCustomError> {
             }))
         })
         .clone()
+}
+
+#[derive(Clone)]
+pub struct STM<T: 'static> {
+    arcshift: ArcShift<T>,
+    max_retries: usize,
+    strict: bool,
+}
+
+fn backoff(iteration: usize) {
+    let spins = 1 << iteration;
+    for _ in 0..spins {
+        spin_loop();
+    }
+}
+
+impl<T> STM<T>
+where
+    T: 'static,
+{
+    pub fn new(initial_value: T, max_retries: usize, strict: bool) -> Self {
+        Self {
+            arcshift: ArcShift::new(initial_value),
+            max_retries,
+            strict,
+        }
+    }
+
+    pub fn get(&mut self) -> &T {
+        self.arcshift.get()
+    }
+
+    pub fn update(&mut self, new_value: T) {
+        self.arcshift.update(new_value);
+    }
+
+    pub fn transactional_update<F>(&mut self, mut update_fn: F) -> Result<bool, WaCustomError>
+    where
+        F: FnMut(&T) -> T + Clone,
+    {
+        let mut updated = false;
+        let mut tries = 0;
+
+        while !updated {
+            updated = self.arcshift.rcu(|t| update_fn(t));
+
+            if !updated {
+                if tries >= self.max_retries {
+                    if !self.strict {
+                        return Ok(false);
+                    }
+
+                    return Err(WaCustomError::LockError(
+                        "Unable to update data inside ArcShift".to_string(),
+                    ));
+                }
+
+                // Apply backoff before the next retry attempt
+                backoff(tries);
+                tries += 1;
+            }
+        }
+
+        Ok(updated)
+    }
 }

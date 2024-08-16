@@ -1,11 +1,12 @@
 use super::CustomSerialize;
 use crate::models::lazy_load::SyncPersist;
-use crate::models::types::{FileOffset, Item};
+use crate::models::types::FileOffset;
 use crate::models::{
     cache_loader::NodeRegistry,
     lazy_load::{LazyItem, LazyItemRef},
     types::MergedNode,
 };
+use arcshift::ArcShift;
 use std::collections::HashSet;
 use std::{
     io::{Read, Seek, SeekFrom, Write},
@@ -89,7 +90,7 @@ impl CustomSerialize for LazyItemRef<MergedNode> {
         let lazy = LazyItem::deserialize(reader, offset, cache, max_loads, skipm)?;
 
         Ok(LazyItemRef {
-            item: Item::new(lazy),
+            item: ArcShift::new(lazy),
         })
     }
 }

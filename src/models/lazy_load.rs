@@ -1,6 +1,7 @@
 use super::identity_collections::{Identifiable, IdentityMap, IdentityMapKey, IdentitySet};
 use super::serializer::CustomSerialize;
-use super::types::{FileOffset, Item};
+use super::types::{FileOffset, STM};
+use arcshift::ArcShift;
 use std::hash::Hash;
 
 pub trait SyncPersist {
@@ -13,8 +14,8 @@ pub const CHUNK_SIZE: usize = 5;
 #[derive(Clone)]
 pub enum LazyItem<T: Clone + 'static> {
     Valid {
-        data: Option<Item<T>>,
-        offset: Item<Option<FileOffset>>,
+        data: Option<ArcShift<T>>,
+        offset: ArcShift<Option<FileOffset>>,
         decay_counter: usize,
     },
     Invalid,
@@ -71,7 +72,7 @@ pub struct LazyItemRef<T>
 where
     T: Clone + 'static,
 {
-    pub item: Item<LazyItem<T>>,
+    pub item: ArcShift<LazyItem<T>>,
 }
 
 #[derive(Clone)]
@@ -80,7 +81,7 @@ where
     T: Clone + Identifiable<Id = u64> + 'static,
     E: Clone + CustomSerialize + 'static,
 {
-    pub items: Item<IdentitySet<EagerLazyItem<T, E>>>,
+    pub items: STM<IdentitySet<EagerLazyItem<T, E>>>,
 }
 
 #[derive(Clone)]
@@ -88,19 +89,19 @@ pub struct LazyItemSet<T>
 where
     T: Clone + Identifiable<Id = u64> + 'static,
 {
-    pub items: Item<IdentitySet<LazyItem<T>>>,
+    pub items: STM<IdentitySet<LazyItem<T>>>,
 }
 
 #[derive(Clone)]
 pub struct LazyItemMap<T: Clone + 'static> {
-    pub items: Item<IdentityMap<LazyItem<T>>>,
+    pub items: STM<IdentityMap<LazyItem<T>>>,
 }
 
 impl<T: Clone + 'static> LazyItem<T> {
     pub fn new(item: T) -> Self {
         Self::Valid {
-            data: Some(Item::new(item)),
-            offset: Item::new(None),
+            data: Some(ArcShift::new(item)),
+            offset: ArcShift::new(None),
             decay_counter: 0,
         }
     }
@@ -111,16 +112,16 @@ impl<T: Clone + 'static> LazyItem<T> {
 
     pub fn from_data(data: T) -> Self {
         LazyItem::Valid {
-            data: Some(Item::new(data)),
-            offset: Item::new(None),
+            data: Some(ArcShift::new(data)),
+            offset: ArcShift::new(None),
             decay_counter: 0,
         }
     }
 
-    pub fn from_item(item: Item<T>) -> Self {
+    pub fn from_arcshift(item: ArcShift<T>) -> Self {
         Self::Valid {
             data: Some(item),
-            offset: Item::new(None),
+            offset: ArcShift::new(None),
             decay_counter: 0,
         }
     }
@@ -133,7 +134,7 @@ impl<T: Clone + 'static> LazyItem<T> {
         matches!(self, Self::Invalid)
     }
 
-    pub fn get_data(&self) -> Option<Item<T>> {
+    pub fn get_data(&self) -> Option<ArcShift<T>> {
         if let Self::Valid { data, .. } = self {
             return data.clone();
         }
@@ -142,7 +143,7 @@ impl<T: Clone + 'static> LazyItem<T> {
 
     pub fn set_data(&mut self, new_data: T) {
         if let Self::Valid { data, .. } = self {
-            *data = Some(Item::new(new_data))
+            *data = Some(ArcShift::new(new_data))
         }
     }
 
@@ -163,9 +164,9 @@ impl<T: Clone + 'static> LazyItem<T> {
 impl<T: Clone + 'static> LazyItemRef<T> {
     pub fn new(item: T) -> Self {
         Self {
-            item: Item::new(LazyItem::Valid {
-                data: Some(Item::new(item)),
-                offset: Item::new(None),
+            item: ArcShift::new(LazyItem::Valid {
+                data: Some(ArcShift::new(item)),
+                offset: ArcShift::new(None),
                 decay_counter: 0,
             }),
         }
@@ -173,15 +174,15 @@ impl<T: Clone + 'static> LazyItemRef<T> {
 
     pub fn new_invalid() -> Self {
         Self {
-            item: Item::new(LazyItem::Invalid),
+            item: ArcShift::new(LazyItem::Invalid),
         }
     }
 
-    pub fn from_item(item: Item<T>) -> Self {
+    pub fn from_arcshift(item: ArcShift<T>) -> Self {
         Self {
-            item: Item::new(LazyItem::Valid {
+            item: ArcShift::new(LazyItem::Valid {
                 data: Some(item),
-                offset: Item::new(None),
+                offset: ArcShift::new(None),
                 decay_counter: 0,
             }),
         }
@@ -189,7 +190,7 @@ impl<T: Clone + 'static> LazyItemRef<T> {
 
     pub fn from_lazy(item: LazyItem<T>) -> Self {
         Self {
-            item: Item::new(item),
+            item: ArcShift::new(item),
         }
     }
 
@@ -203,7 +204,7 @@ impl<T: Clone + 'static> LazyItemRef<T> {
         arc.get().is_invalid()
     }
 
-    pub fn get_data(&self) -> Option<Item<T>> {
+    pub fn get_data(&self) -> Option<ArcShift<T>> {
         let mut arc = self.item.clone();
         if let LazyItem::Valid { data, .. } = arc.get() {
             return data.clone();
@@ -223,10 +224,10 @@ impl<T: Clone + 'static> LazyItemRef<T> {
             {
                 (offset.clone(), *decay_counter)
             } else {
-                (Item::new(None), 0)
+                (ArcShift::new(None), 0)
             };
             LazyItem::Valid {
-                data: Some(Item::new(new_data)),
+                data: Some(ArcShift::new(new_data)),
                 offset,
                 decay_counter,
             }
@@ -249,7 +250,7 @@ impl<T: Clone + 'static> LazyItemRef<T> {
             };
             LazyItem::Valid {
                 data,
-                offset: Item::new(new_offset),
+                offset: ArcShift::new(new_offset),
                 decay_counter,
             }
         });
@@ -263,18 +264,25 @@ where
 {
     pub fn new() -> Self {
         Self {
-            items: Item::new(IdentitySet::new()),
+            items: STM::new(IdentitySet::new(), 5, false),
+        }
+    }
+
+    pub fn from_set(set: IdentitySet<EagerLazyItem<T, E>>) -> Self {
+        Self {
+            items: STM::new(set, 5, false),
         }
     }
 
     pub fn insert(&self, item: EagerLazyItem<T, E>) {
         let mut arc = self.items.clone();
 
-        arc.rcu(|set| {
+        arc.transactional_update(|set| {
             let mut set = set.clone();
-            set.insert(item);
+            set.insert(item.clone());
             set
         })
+        .unwrap();
     }
 
     pub fn iter(&self) -> impl Iterator<Item = EagerLazyItem<T, E>> {
@@ -297,18 +305,25 @@ where
 impl<T: Clone + Identifiable<Id = u64> + 'static> LazyItemSet<T> {
     pub fn new() -> Self {
         Self {
-            items: Item::new(IdentitySet::new()),
+            items: STM::new(IdentitySet::new(), 1, true),
+        }
+    }
+
+    pub fn from_set(set: IdentitySet<LazyItem<T>>) -> Self {
+        Self {
+            items: STM::new(set, 1, true),
         }
     }
 
     pub fn insert(&self, item: LazyItem<T>) {
         let mut arc = self.items.clone();
 
-        arc.rcu(|set| {
+        arc.transactional_update(|set| {
             let mut set = set.clone();
-            set.insert(item);
+            set.insert(item.clone());
             set
         })
+        .unwrap();
     }
 
     pub fn iter(&self) -> impl Iterator<Item = LazyItem<T>> {
@@ -331,18 +346,25 @@ impl<T: Clone + Identifiable<Id = u64> + 'static> LazyItemSet<T> {
 impl<T: Clone + 'static> LazyItemMap<T> {
     pub fn new() -> Self {
         Self {
-            items: Item::new(IdentityMap::new()),
+            items: STM::new(IdentityMap::new(), 1, true),
+        }
+    }
+
+    pub fn from_map(map: IdentityMap<LazyItem<T>>) -> Self {
+        Self {
+            items: STM::new(map, 1, true),
         }
     }
 
     pub fn insert(&self, key: IdentityMapKey, value: LazyItem<T>) {
         let mut arc = self.items.clone();
 
-        arc.rcu(|set| {
+        arc.transactional_update(|set| {
             let mut map = set.clone();
-            map.insert(key, value);
+            map.insert(key.clone(), value.clone());
             map
         })
+        .unwrap();
     }
 
     pub fn is_empty(&self) -> bool {
