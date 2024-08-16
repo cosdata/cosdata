@@ -1,5 +1,4 @@
 use super::CustomSerialize;
-use crate::models::types::FileOffset;
 use crate::models::{
     cache_loader::NodeRegistry,
     identity_collections::{Identifiable, IdentitySet},
@@ -77,6 +76,9 @@ where
         match file_index {
             FileIndex::Invalid => Ok(LazyItemSet::new()),
             FileIndex::Valid { offset, version } => {
+                if offset == u32::MAX {
+                    return Ok(LazyItemSet::new());
+                }
                 reader.seek(SeekFrom::Start(offset as u64))?;
                 let mut items = Vec::new();
                 let mut current_chunk = offset;

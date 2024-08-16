@@ -78,6 +78,7 @@ impl CustomSerialize for LazyItem<MergedNode> {
             Self::Invalid => Ok(u32::MAX),
         }
     }
+
     fn deserialize<R: Read + Seek>(
         reader: &mut R,
         file_index: FileIndex,
@@ -89,8 +90,13 @@ impl CustomSerialize for LazyItem<MergedNode> {
             FileIndex::Valid { offset, version } => {
                 let combined_index = NodeRegistry::<R>::combine_index(&file_index);
                 reader.seek(SeekFrom::Start(offset as u64))?;
-                let item =
-                    cache.get_object(file_index, reader, Self::deserialize, max_loads, skipm)?;
+                let item = cache.get_object(
+                    file_index,
+                    reader,
+                    MergedNode::deserialize,
+                    max_loads,
+                    skipm,
+                )?;
                 Ok(item)
             }
             FileIndex::Invalid => Err(std::io::Error::new(

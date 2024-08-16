@@ -1,7 +1,6 @@
 use super::CustomSerialize;
 use crate::models::identity_collections::{IdentityMap, IdentityMapKey};
 use crate::models::lazy_load::{FileIndex, LazyItemMap, SyncPersist};
-use crate::models::types::FileOffset;
 use crate::models::{
     cache_loader::NodeRegistry,
     lazy_load::{LazyItem, CHUNK_SIZE},
@@ -98,6 +97,9 @@ where
         match file_index {
             FileIndex::Invalid => Ok(LazyItemMap::new()),
             FileIndex::Valid { offset, version } => {
+                if offset == u32::MAX {
+                    return Ok(LazyItemMap::new());
+                }
                 reader.seek(SeekFrom::Start(offset as u64))?;
                 let mut items = Vec::new();
                 let mut current_chunk = offset;

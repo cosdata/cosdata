@@ -31,10 +31,11 @@ mod tests {
 
         let mut writer = Cursor::new(Vec::new());
         let offset = lazy_item.serialize(&mut writer).unwrap();
+        let file_index = FileIndex::Valid { offset, version: 0 };
 
         let reader = Cursor::new(writer.into_inner());
         let cache = get_cache(reader);
-        let deserialized: LazyItemRef<MergedNode> = cache.load_item(offset).unwrap();
+        let deserialized: LazyItemRef<MergedNode> = cache.load_item(file_index).unwrap();
         let mut deserialized_arc = deserialized.item.clone();
         let mut original_arc = lazy_item.item.clone();
 
@@ -66,10 +67,11 @@ mod tests {
 
         let mut writer = Cursor::new(Vec::new());
         let offset = item.serialize(&mut writer).unwrap();
+        let file_index = FileIndex::Valid { offset, version: 0 };
 
         let reader = Cursor::new(writer.into_inner());
         let cache = get_cache(reader);
-        let deserialized: EagerLazyItem<MergedNode, f32> = cache.load_item(offset).unwrap();
+        let deserialized: EagerLazyItem<MergedNode, f32> = cache.load_item(file_index).unwrap();
 
         assert_eq!(item.0, deserialized.0);
 
@@ -94,10 +96,11 @@ mod tests {
 
         let mut writer = Cursor::new(Vec::new());
         let offset = lazy_items.serialize(&mut writer).unwrap();
+        let file_index = FileIndex::Valid { offset, version: 0 };
 
         let reader = Cursor::new(writer.into_inner());
         let cache = get_cache(reader);
-        let deserialized: LazyItemSet<MergedNode> = cache.load_item(offset).unwrap();
+        let deserialized: LazyItemSet<MergedNode> = cache.load_item(file_index).unwrap();
 
         assert_eq!(lazy_items.len(), deserialized.len());
         for (original, deserialized) in lazy_items.iter().zip(deserialized.iter()) {
@@ -136,10 +139,11 @@ mod tests {
 
         let mut writer = Cursor::new(Vec::new());
         let offset = lazy_items.serialize(&mut writer).unwrap();
+        let file_index = FileIndex::Valid { offset, version: 0 };
 
         let reader = Cursor::new(writer.into_inner());
         let cache = get_cache(reader);
-        let deserialized: EagerLazyItemSet<MergedNode, f32> = cache.load_item(offset).unwrap();
+        let deserialized: EagerLazyItemSet<MergedNode, f32> = cache.load_item(file_index).unwrap();
 
         assert_eq!(lazy_items.len(), deserialized.len());
         for (original, deserialized) in lazy_items.iter().zip(deserialized.iter()) {
@@ -177,10 +181,11 @@ mod tests {
 
         let mut writer = Cursor::new(Vec::new());
         let offset = node.serialize(&mut writer).unwrap();
+        let file_index = FileIndex::Valid { offset, version: 0 };
 
         let reader = Cursor::new(writer.into_inner());
         let cache = get_cache(reader);
-        let deserialized: MergedNode = cache.load_item(offset).unwrap();
+        let deserialized: MergedNode = cache.load_item(file_index).unwrap();
 
         assert_eq!(node.version_id, deserialized.version_id);
         assert_eq!(node.hnsw_level, deserialized.hnsw_level);
@@ -201,10 +206,11 @@ mod tests {
 
         let mut writer = Cursor::new(Vec::new());
         let offset = node.serialize(&mut writer).unwrap();
+        let file_index = FileIndex::Valid { offset, version: 0 };
 
         let reader = Cursor::new(writer.into_inner());
         let cache = get_cache(reader);
-        let deserialized: MergedNode = cache.load_item(offset).unwrap();
+        let deserialized: MergedNode = cache.load_item(file_index).unwrap();
 
         let original_neighbors = node.get_neighbors();
         let deserialized_neighbors = deserialized.get_neighbors();
@@ -255,10 +261,11 @@ mod tests {
 
         let mut writer = Cursor::new(Vec::new());
         let offset = node.serialize(&mut writer).unwrap();
+        let file_index = FileIndex::Valid { offset, version: 0 };
 
         let reader = Cursor::new(writer.into_inner());
         let cache = get_cache(reader);
-        let deserialized: MergedNode = cache.load_item(offset).unwrap();
+        let deserialized: MergedNode = cache.load_item(file_index).unwrap();
 
         assert!(matches!(
             deserialized.get_parent().item.get(),
@@ -281,10 +288,11 @@ mod tests {
 
         let mut writer = Cursor::new(Vec::new());
         let offset = node.serialize(&mut writer).unwrap();
+        let file_index = FileIndex::Valid { offset, version: 0 };
 
         let reader = Cursor::new(writer.into_inner());
         let cache = get_cache(reader);
-        let deserialized: MergedNode = cache.load_item(offset).unwrap();
+        let deserialized: MergedNode = cache.load_item(file_index).unwrap();
 
         assert_eq!(node.get_versions().len(), deserialized.get_versions().len());
     }
@@ -301,12 +309,11 @@ mod tests {
 
         let mut writer = Cursor::new(Vec::new());
         let offset = lazy_ref.serialize(&mut writer).unwrap();
+        let file_index = FileIndex::Valid { offset, version: 0 };
 
         let reader = Cursor::new(writer.into_inner());
-
         let cache = get_cache(reader);
-
-        let deserialized: MergedNode = cache.load_item(offset).unwrap();
+        let deserialized: MergedNode = cache.load_item(file_index).unwrap();
 
         let mut parent_ref = deserialized.get_parent();
 
@@ -349,11 +356,11 @@ mod tests {
 
         let mut writer = Cursor::new(Vec::new());
         let offset = lazy_ref.serialize(&mut writer).unwrap();
+        let file_index = FileIndex::Valid { offset, version: 0 };
+
         let reader = Cursor::new(writer.into_inner());
-
         let cache = get_cache(reader);
-
-        let deserialized: LazyItemRef<MergedNode> = cache.clone().load_item(offset).unwrap();
+        let deserialized: LazyItemRef<MergedNode> = cache.clone().load_item(file_index).unwrap();
 
         let mut deserialized_data_arc = deserialized.get_data().unwrap();
         let deserialized_data = deserialized_data_arc.get();
@@ -382,8 +389,8 @@ mod tests {
                 ..
             } = &child
             {
-                let offset = offset.clone().get().clone().unwrap();
-                let _: MergedNode = cache.load_item(offset).unwrap();
+                let file_index = file_index.clone().get().clone().unwrap();
+                let _: MergedNode = cache.load_item(file_index).unwrap();
             } else {
                 panic!("Deserialization mismatch");
             }
@@ -406,10 +413,11 @@ mod tests {
 
         let mut writer = Cursor::new(Vec::new());
         let offset = lazy_items.serialize(&mut writer).unwrap();
+        let file_index = FileIndex::Valid { offset, version: 0 };
 
         let reader = Cursor::new(writer.into_inner());
         let cache = get_cache(reader);
-        let deserialized: LazyItemSet<MergedNode> = cache.load_item(offset).unwrap();
+        let deserialized: LazyItemSet<MergedNode> = cache.load_item(file_index).unwrap();
 
         assert_eq!(lazy_items.len(), deserialized.len());
         for (original, deserialized) in lazy_items.iter().zip(deserialized.iter()) {
@@ -446,10 +454,11 @@ mod tests {
 
         let mut writer = Cursor::new(Vec::new());
         let offset = lazy_items.serialize(&mut writer).unwrap();
+        let file_index = FileIndex::Valid { offset, version: 0 };
 
         let reader = Cursor::new(writer.into_inner());
         let cache = get_cache(reader);
-        let deserialized: EagerLazyItemSet<MergedNode, f32> = cache.load_item(offset).unwrap();
+        let deserialized: EagerLazyItemSet<MergedNode, f32> = cache.load_item(file_index).unwrap();
 
         assert_eq!(lazy_items.len(), deserialized.len());
         for (original, deserialized) in lazy_items.iter().zip(deserialized.iter()) {
