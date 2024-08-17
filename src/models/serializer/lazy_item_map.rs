@@ -1,6 +1,6 @@
 use super::CustomSerialize;
 use crate::models::identity_collections::{IdentityMap, IdentityMapKey};
-use crate::models::lazy_load::{FileIndex, LazyItemMap};
+use crate::models::lazy_load::{FileIndex, LazyItemMap, SyncPersist};
 use crate::models::{
     cache_loader::NodeRegistry,
     lazy_load::{LazyItem, CHUNK_SIZE},
@@ -40,6 +40,7 @@ where
             let placeholder_start = writer.stream_position()? as u32;
             for _ in 0..CHUNK_SIZE {
                 writer.write_u32::<LittleEndian>(u32::MAX)?;
+                writer.write_u16::<LittleEndian>(u16::MAX)?;
             }
             // Write placeholder for next chunk link
             let next_chunk_placeholder = writer.stream_position()? as u32;
@@ -52,20 +53,13 @@ where
                 writer.write_u32::<LittleEndian>(0)?;
                 let item_offset = items[i].1.serialize(writer)?;
 
-                // Get the current version and set the FileIndex
-                // if let Some(version) = items[i].1.get_current_version() {
-                //     items[i].1.set_file_index(Some(FileIndex::Valid {
-                //         offset: item_offset,
-                //         version,
-                //     }));
-                // }
-
-                let placeholder_pos = placeholder_start as u64 + ((i - chunk_start) as u64 * 4);
+                let placeholder_pos = placeholder_start as u64 + ((i - chunk_start) as u64 * 6);
                 let current_pos = writer.stream_position()?;
 
                 // Write entry offset
                 writer.seek(SeekFrom::Start(placeholder_pos))?;
                 writer.write_u32::<LittleEndian>(entry_offset)?;
+                writer.write_u16::<LittleEndian>(items[i].1.get_current_version())?;
 
                 // Write item offset
                 writer.seek(SeekFrom::Start(item_placeholder_pos))?;
@@ -105,7 +99,7 @@ where
                 let mut current_chunk = offset;
                 loop {
                     for i in 0..CHUNK_SIZE {
-                        reader.seek(SeekFrom::Start(current_chunk as u64 + (i as u64 * 4)))?;
+                        reader.seek(SeekFrom::Start(current_chunk as u64 + (i as u64 * 6)))?;
                         let entry_offset = reader.read_u32::<LittleEndian>()?;
                         if entry_offset == u32::MAX {
                             continue;
@@ -122,6 +116,7 @@ where
                             skipm,
                         )?;
                         let item_offset = reader.read_u32::<LittleEndian>()?;
+                        let version = reader.read_u16::<LittleEndian>()?;
                         let item_file_index = FileIndex::Valid {
                             offset: item_offset,
                             version,

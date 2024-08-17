@@ -33,6 +33,7 @@ where
             let placeholder_start = writer.stream_position()? as u32;
             for _ in 0..CHUNK_SIZE {
                 writer.write_u32::<LittleEndian>(u32::MAX)?;
+                writer.write_u16::<LittleEndian>(u16::MAX)?;
             }
             // Write placeholder for next chunk link
             let next_chunk_placeholder = writer.stream_position()? as u32;
@@ -41,14 +42,11 @@ where
             // Serialize items and update placeholders
             for i in chunk_start..chunk_end {
                 let item_offset = items[i].serialize(writer)?;
-                items[i].set_file_index(Some(FileIndex::Valid {
-                    offset: item_offset,
-                    version: items[i].get_current_version(),
-                }));
-                let placeholder_pos = placeholder_start as u64 + ((i - chunk_start) as u64 * 4);
+                let placeholder_pos = placeholder_start as u64 + ((i - chunk_start) as u64 * 6);
                 let current_pos = writer.stream_position()?;
                 writer.seek(SeekFrom::Start(placeholder_pos))?;
                 writer.write_u32::<LittleEndian>(item_offset)?;
+                writer.write_u16::<LittleEndian>(items[i].get_current_version())?;
                 writer.seek(SeekFrom::Start(current_pos))?;
             }
 
@@ -73,7 +71,7 @@ where
     ) -> std::io::Result<Self> {
         match file_index {
             FileIndex::Invalid => Ok(LazyItemSet::new()),
-            FileIndex::Valid { offset, version } => {
+            FileIndex::Valid { offset, .. } => {
                 if offset == u32::MAX {
                     return Ok(LazyItemSet::new());
                 }
@@ -82,8 +80,9 @@ where
                 let mut current_chunk = offset;
                 loop {
                     for i in 0..CHUNK_SIZE {
-                        reader.seek(SeekFrom::Start(current_chunk as u64 + (i as u64 * 4)))?;
+                        reader.seek(SeekFrom::Start(current_chunk as u64 + (i as u64 * 6)))?;
                         let item_offset = reader.read_u32::<LittleEndian>()?;
+                        let version = reader.read_u16::<LittleEndian>()?;
                         if item_offset == u32::MAX {
                             continue;
                         }

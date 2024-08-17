@@ -339,6 +339,11 @@ impl<T: Clone + 'static> LazyItemRef<T> {
             }
         });
     }
+
+    pub fn get_current_version(&self) -> VersionId {
+        let mut arc = self.item.clone();
+        arc.get().get_current_version()
+    }
 }
 
 impl<T, E> EagerLazyItemSet<T, E>

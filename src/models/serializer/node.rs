@@ -56,6 +56,7 @@ impl CustomSerialize for MergedNode {
         let parent_placeholder = if parent_present {
             let pos = writer.stream_position()? as u32;
             writer.write_u32::<LittleEndian>(0)?;
+            writer.write_u16::<LittleEndian>(0)?;
             Some(pos)
         } else {
             None
@@ -64,6 +65,7 @@ impl CustomSerialize for MergedNode {
         let child_placeholder = if child_present {
             let pos = writer.stream_position()? as u32;
             writer.write_u32::<LittleEndian>(0)?;
+            writer.write_u16::<LittleEndian>(0)?;
             Some(pos)
         } else {
             None
@@ -101,11 +103,13 @@ impl CustomSerialize for MergedNode {
         if let (Some(placeholder), Some(offset)) = (parent_placeholder, parent_offset) {
             writer.seek(SeekFrom::Start(placeholder as u64))?;
             writer.write_u32::<LittleEndian>(offset)?;
+            writer.write_u16::<LittleEndian>(self.parent.get_current_version())?;
         }
 
         if let (Some(placeholder), Some(offset)) = (child_placeholder, child_offset) {
             writer.seek(SeekFrom::Start(placeholder as u64))?;
             writer.write_u32::<LittleEndian>(offset)?;
+            writer.write_u16::<LittleEndian>(self.child.get_current_version())?;
         }
 
         writer.seek(SeekFrom::Start(neighbors_placeholder as u64))?;
@@ -118,6 +122,7 @@ impl CustomSerialize for MergedNode {
 
         Ok(start_offset)
     }
+
     fn deserialize<R: Read + Seek>(
         reader: &mut R,
         file_index: FileIndex,
@@ -143,18 +148,24 @@ impl CustomSerialize for MergedNode {
                 let parent_present = indicator & 0b00000001 != 0;
                 let child_present = indicator & 0b00000010 != 0;
                 // Read offsets
-                let mut parent_offset = None;
-                let mut child_offset = None;
+                let mut parent_offset_and_version = None;
+                let mut child_offset_and_version = None;
                 if parent_present {
-                    parent_offset = Some(reader.read_u32::<LittleEndian>()?);
+                    parent_offset_and_version = Some((
+                        reader.read_u32::<LittleEndian>()?,
+                        reader.read_u16::<LittleEndian>()?,
+                    ));
                 }
                 if child_present {
-                    child_offset = Some(reader.read_u32::<LittleEndian>()?);
+                    child_offset_and_version = Some((
+                        reader.read_u32::<LittleEndian>()?,
+                        reader.read_u16::<LittleEndian>()?,
+                    ));
                 }
                 let neighbors_offset = reader.read_u32::<LittleEndian>()?;
                 let versions_offset = reader.read_u32::<LittleEndian>()?;
                 // Deserialize parent
-                let parent = if let Some(offset) = parent_offset {
+                let parent = if let Some((offset, version)) = parent_offset_and_version {
                     LazyItemRef::deserialize(
                         reader,
                         FileIndex::Valid { offset, version },
@@ -166,7 +177,7 @@ impl CustomSerialize for MergedNode {
                     LazyItemRef::new_invalid()
                 };
                 // Deserialize child
-                let child = if let Some(offset) = child_offset {
+                let child = if let Some((offset, version)) = child_offset_and_version {
                     LazyItemRef::deserialize(
                         reader,
                         FileIndex::Valid { offset, version },

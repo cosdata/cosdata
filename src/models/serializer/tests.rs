@@ -16,7 +16,7 @@ fn test_lazy_item_serialization() {
 
     let mut writer = Cursor::new(Vec::new());
     let offset = lazy_item.serialize(&mut writer).unwrap();
-    let file_index = FileIndex::Valid { offset, version: 0 };
+    let file_index = FileIndex::Valid { offset, version: 1 };
 
     let reader = Cursor::new(writer.into_inner());
     let cache = get_cache(reader);
@@ -51,7 +51,7 @@ fn test_eager_lazy_item_serialization() {
 
     let mut writer = Cursor::new(Vec::new());
     let offset = item.serialize(&mut writer).unwrap();
-    let file_index = FileIndex::Valid { offset, version: 0 };
+    let file_index = FileIndex::Valid { offset, version: 1 };
 
     let reader = Cursor::new(writer.into_inner());
     let cache = get_cache(reader);
@@ -286,7 +286,7 @@ fn test_merged_node_cyclic_serialization() {
 
     let mut writer = Cursor::new(Vec::new());
     let offset = lazy_ref.serialize(&mut writer).unwrap();
-    let file_index = FileIndex::Valid { offset, version: 0 };
+    let file_index = FileIndex::Valid { offset, version: 1 };
 
     let reader = Cursor::new(writer.into_inner());
     let cache = get_cache(reader);
@@ -333,7 +333,7 @@ fn test_merged_node_complex_cyclic_serialization() {
 
     let mut writer = Cursor::new(Vec::new());
     let offset = lazy_ref.serialize(&mut writer).unwrap();
-    let file_index = FileIndex::Valid { offset, version: 0 };
+    let file_index = FileIndex::Valid { offset, version: 1 };
 
     let reader = Cursor::new(writer.into_inner());
     let cache = get_cache(reader);
