@@ -631,18 +631,8 @@ pub fn queue_node_prop_exec(
         ));
     }
 
-    // Set persistence flag for the main node
-    node.set_persistence(true);
-
     for neighbor in node.neighbors.iter() {
-        if let LazyItem::Valid {
-            data: Some(mut neighbor_arc),
-            ..
-        } = neighbor.1
-        {
-            let neighbor = neighbor_arc.get();
-            neighbor.set_persistence(true);
-        }
+        neighbor.1.set_persistence(true);
     }
 
     // Add the node to exec_queue_nodes
@@ -695,10 +685,12 @@ fn insert_node_create_edges(
         value: fvec.clone(),
         location: None,
     };
-    let mut nn = ArcShift::new(MergedNode::new(0, cur_level as u8)); // Assuming MergedNode::new exists
+    let mut nn = ArcShift::new(MergedNode::new(cur_level as u8));
     nn.get().set_prop_ready(Arc::new(node_prop));
 
     nn.get().add_ready_neighbors(nbs.clone());
+    // TODO: Initialize with appropriate version ID
+    let lz_item = LazyItem::from_arcshift(0, nn.clone());
 
     for (nbr1, cs) in nbs.into_iter() {
         if let LazyItem::Valid {
@@ -713,7 +705,7 @@ fn insert_node_create_edges(
                 .map(|nbr2| (nbr2.1, nbr2.0))
                 .collect();
 
-            neighbor_list.push((LazyItem::from_arcshift(nn.clone()), cs));
+            neighbor_list.push((lz_item.clone(), cs));
 
             neighbor_list
                 .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -724,7 +716,6 @@ fn insert_node_create_edges(
         }
     }
     println!("insert node create edges, queuing nodes");
-    let lz_item = LazyItem::from_arcshift(nn);
     if let Some(parent) = parent {
         lz_item.get_data().unwrap().set_parent(parent.clone());
         parent.get_data().unwrap().set_child(lz_item.clone());

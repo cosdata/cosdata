@@ -6,10 +6,8 @@ use arcshift::ArcShift;
 use dashmap::DashMap;
 use probabilistic_collections::cuckoo::CuckooFilter;
 use std::collections::HashSet;
-use std::io::Read;
-use std::io::Seek;
-use std::sync::Arc;
-use std::sync::RwLock;
+use std::io::{Read, Seek};
+use std::sync::{atomic::AtomicBool, Arc, RwLock};
 
 pub struct NodeRegistry<R: Read + Seek> {
     cuckoo_filter: RwLock<CuckooFilter<u64>>,
@@ -64,12 +62,20 @@ impl<R: Read + Seek> NodeRegistry<R> {
         }
         println!("Released read lock on cuckoo_filter");
 
+        let version_id = if let FileIndex::Valid { version, .. } = &file_index {
+            *version
+        } else {
+            0
+        };
+
         if max_loads == 0 || !skipm.insert(combined_index) {
             println!("Either max_loads hit 0 or loop detected, returning LazyItem with no data");
             return Ok(LazyItem::Valid {
                 data: None,
                 file_index: ArcShift::new(Some(file_index)),
                 decay_counter: 0,
+                persist_flag: Arc::new(AtomicBool::new(true)),
+                version_id,
             });
         }
 
@@ -95,6 +101,8 @@ impl<R: Read + Seek> NodeRegistry<R> {
             data: Some(ArcShift::new(node)),
             file_index: ArcShift::new(Some(file_index)),
             decay_counter: 0,
+            persist_flag: Arc::new(AtomicBool::new(true)),
+            version_id,
         };
 
         println!("Inserting item into registry");
@@ -111,19 +119,20 @@ impl<R: Read + Seek> NodeRegistry<R> {
         let mut reader_lock = self.reader.write().unwrap();
         let mut skipm: HashSet<u64> = HashSet::new();
 
-        match file_index {
-            FileIndex::Valid { offset, .. } => T::deserialize(
-                &mut *reader_lock,
-                file_index,
-                self.clone(),
-                1000,
-                &mut skipm,
-            ),
-            FileIndex::Invalid => Err(std::io::Error::new(
+        if file_index == FileIndex::Invalid {
+            return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "Cannot deserialize with an invalid FileIndex",
-            )),
-        }
+            ));
+        };
+
+        T::deserialize(
+            &mut *reader_lock,
+            file_index,
+            self.clone(),
+            1000,
+            &mut skipm,
+        )
     }
 
     pub fn combine_index(file_index: &FileIndex) -> u64 {

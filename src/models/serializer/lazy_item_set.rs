@@ -13,7 +13,7 @@ use std::{
 
 impl<T> CustomSerialize for LazyItemSet<T>
 where
-    T: Clone + Identifiable<Id = u64> + SyncPersist + CustomSerialize + 'static,
+    T: Clone + Identifiable<Id = u64> + CustomSerialize + 'static,
     LazyItem<T>: CustomSerialize,
 {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
@@ -41,12 +41,10 @@ where
             // Serialize items and update placeholders
             for i in chunk_start..chunk_end {
                 let item_offset = items[i].serialize(writer)?;
-                if let Some(version) = items[i].get_current_version() {
-                    items[i].set_file_index(Some(FileIndex::Valid {
-                        offset: item_offset,
-                        version,
-                    }));
-                }
+                items[i].set_file_index(Some(FileIndex::Valid {
+                    offset: item_offset,
+                    version: items[i].get_current_version(),
+                }));
                 let placeholder_pos = placeholder_start as u64 + ((i - chunk_start) as u64 * 4);
                 let current_pos = writer.stream_position()?;
                 writer.seek(SeekFrom::Start(placeholder_pos))?;

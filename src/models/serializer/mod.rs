@@ -12,7 +12,6 @@ mod tests;
 
 use super::cache_loader::NodeRegistry;
 use super::lazy_load::FileIndex;
-use crate::models::types::FileOffset;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::collections::HashSet;
 use std::{

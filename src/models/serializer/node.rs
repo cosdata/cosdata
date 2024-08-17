@@ -6,19 +6,17 @@ use crate::models::{
 };
 use arcshift::ArcShift;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use std::collections::HashSet;
 use std::{
     io::{Read, Seek, SeekFrom, Write},
-    sync::{atomic::AtomicBool, Arc},
+    sync::Arc,
 };
 
-use crate::models::types::FileOffset;
-use std::collections::HashSet;
 impl CustomSerialize for MergedNode {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
         let start_offset = writer.stream_position()? as u32;
 
         // Serialize basic fields
-        writer.write_u16::<LittleEndian>(self.version_id)?;
         writer.write_u8(self.hnsw_level)?;
 
         // Serialize prop
@@ -135,7 +133,6 @@ impl CustomSerialize for MergedNode {
             FileIndex::Valid { offset, version } => {
                 reader.seek(SeekFrom::Start(offset as u64))?;
                 // Read basic fields
-                let version_id = reader.read_u16::<LittleEndian>()?;
                 let hnsw_level = reader.read_u8()?;
                 // Read prop
                 let prop_offset = reader.read_u32::<LittleEndian>()?;
@@ -203,14 +200,12 @@ impl CustomSerialize for MergedNode {
                     skipm,
                 )?;
                 Ok(MergedNode {
-                    version_id,
                     hnsw_level,
                     prop: ArcShift::new(prop),
                     neighbors,
                     parent,
                     child,
                     versions,
-                    persist_flag: Arc::new(AtomicBool::new(true)),
                 })
             }
         }

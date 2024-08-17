@@ -83,18 +83,17 @@ pub async fn init_vector_store(
             location: Some((0, 0)),
         });
         let mut current_node = ArcShift::new(MergedNode {
-            version_id: 0, // Initialize with appropriate version ID
             hnsw_level: l as u8,
             prop: ArcShift::new(PropState::Ready(prop.clone())),
             neighbors: EagerLazyItemSet::new(),
             parent: LazyItemRef::new_invalid(),
             child: LazyItemRef::new_invalid(),
             versions: LazyItemMap::new(),
-            persist_flag: Arc::new(AtomicBool::new(true)),
         });
 
-        let lazy_node = LazyItem::from_arcshift(current_node.clone());
-        let nn = LazyItemRef::from_arcshift(current_node.clone());
+        // TODO: Initialize with appropriate version ID
+        let lazy_node = LazyItem::from_arcshift(0, current_node.clone());
+        let nn = LazyItemRef::from_arcshift(0, current_node.clone());
 
         if let Some(prev_node) = prev.item.get().get_data() {
             current_node

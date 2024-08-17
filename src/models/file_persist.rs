@@ -1,6 +1,6 @@
 use super::cache_loader::NodeRegistry;
 use super::common::WaCustomError;
-use super::lazy_load::{FileIndex, LazyItem};
+use super::lazy_load::{FileIndex, LazyItem, SyncPersist};
 use super::types::{HNSWLevel, MergedNode, NodeProp, VectorId};
 use crate::models::custom_buffered_writer::*;
 use crate::models::serializer::CustomSerialize;
@@ -36,24 +36,27 @@ pub fn read_node_from_file<R: Read + Seek>(
     Ok(node)
 }
 pub fn write_node_to_file(
-    mut node: ArcShift<MergedNode>,
+    lazy_item: &LazyItem<MergedNode>,
     writer: &mut CustomBufferedWriter,
     file_index: Option<FileIndex>,
 ) -> Result<FileIndex, WaCustomError> {
+    let mut node_arc = lazy_item
+        .get_data()
+        .ok_or(WaCustomError::LazyLoadingError("node in null".to_string()))?;
+    let node = node_arc.get();
+
     match file_index {
         Some(FileIndex::Valid { offset, version }) => {
             println!(
                 "About to write at offset {}, version {}, node: {:#?}",
-                offset,
-                version,
-                node.get()
+                offset, version, node
             );
             writer
                 .seek(SeekFrom::Start(offset as u64))
                 .map_err(|e| WaCustomError::FsError(e.to_string()))?;
         }
         Some(FileIndex::Invalid) | None => {
-            println!("About to write node at the end of file: {:#?}", node.get());
+            println!("About to write node at the end of file: {:#?}", node);
             writer
                 .seek(SeekFrom::End(0))
                 .map_err(|e| WaCustomError::FsError(e.to_string()))?;
@@ -61,7 +64,6 @@ pub fn write_node_to_file(
     }
 
     let new_offset = node
-        .get()
         .serialize(writer)
         .map_err(|e| WaCustomError::SerializationError(e.to_string()))?;
 
@@ -70,7 +72,7 @@ pub fn write_node_to_file(
         offset: new_offset,
         version: match file_index {
             Some(FileIndex::Valid { version, .. }) => version,
-            _ => node.get().get_current_version(),
+            _ => lazy_item.get_current_version(),
         },
     };
 
@@ -81,22 +83,11 @@ pub fn persist_node_update_loc(
     ver_file: &mut CustomBufferedWriter,
     node: &mut ArcShift<LazyItem<MergedNode>>,
 ) -> Result<(), WaCustomError> {
-    // Extract the necessary information from the node
-    let (data, current_file_index) = {
-        let lazy_item = node.get();
-        match lazy_item {
-            LazyItem::Valid {
-                data: Some(data), ..
-            } => {
-                let current_file_index = lazy_item.get_file_index();
-                (data.clone(), current_file_index)
-            }
-            _ => return Err(WaCustomError::LazyLoadingError("Data is None".to_string())),
-        }
-    };
+    let lazy_item = node.get();
+    let current_file_index = lazy_item.get_file_index();
 
     // Write the node to file
-    let new_file_index = write_node_to_file(data, ver_file, current_file_index)?;
+    let new_file_index = write_node_to_file(node.get(), ver_file, current_file_index)?;
 
     // Update the file index in the lazy item
     node.rcu(|lazy_item| {

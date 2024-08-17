@@ -1,6 +1,6 @@
 use super::CustomSerialize;
 use crate::models::identity_collections::{IdentityMap, IdentityMapKey};
-use crate::models::lazy_load::{FileIndex, LazyItemMap, SyncPersist};
+use crate::models::lazy_load::{FileIndex, LazyItemMap};
 use crate::models::{
     cache_loader::NodeRegistry,
     lazy_load::{LazyItem, CHUNK_SIZE},
@@ -16,7 +16,7 @@ const MSB: u32 = 1 << 31;
 
 impl<T> CustomSerialize for LazyItemMap<T>
 where
-    T: Clone + SyncPersist + CustomSerialize + 'static,
+    T: Clone + CustomSerialize + 'static,
     LazyItem<T>: CustomSerialize,
 {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
@@ -53,12 +53,12 @@ where
                 let item_offset = items[i].1.serialize(writer)?;
 
                 // Get the current version and set the FileIndex
-                if let Some(version) = items[i].1.get_current_version() {
-                    items[i].1.set_file_index(Some(FileIndex::Valid {
-                        offset: item_offset,
-                        version,
-                    }));
-                }
+                // if let Some(version) = items[i].1.get_current_version() {
+                //     items[i].1.set_file_index(Some(FileIndex::Valid {
+                //         offset: item_offset,
+                //         version,
+                //     }));
+                // }
 
                 let placeholder_pos = placeholder_start as u64 + ((i - chunk_start) as u64 * 4);
                 let current_pos = writer.stream_position()?;
