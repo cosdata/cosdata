@@ -1,20 +1,17 @@
 use super::file_persist::*;
-use super::lazy_load::LazyItem;
+use super::lazy_load::{FileIndex, LazyItem};
 use super::serializer::CustomSerialize;
 use super::types::*;
 use arcshift::ArcShift;
 use dashmap::DashMap;
 use probabilistic_collections::cuckoo::CuckooFilter;
 use std::collections::HashSet;
-use std::hash::{Hash, Hasher};
-use std::io::Read;
-use std::io::Seek;
-use std::sync::Arc;
-use std::sync::RwLock;
+use std::io::{Read, Seek};
+use std::sync::{atomic::AtomicBool, Arc, RwLock};
 
 pub struct NodeRegistry<R: Read + Seek> {
-    cuckoo_filter: RwLock<CuckooFilter<FileOffset>>,
-    registry: DashMap<FileOffset, LazyItem<MergedNode>>,
+    cuckoo_filter: RwLock<CuckooFilter<u64>>,
+    registry: DashMap<u64, LazyItem<MergedNode>>,
     reader: Arc<RwLock<R>>,
 }
 
@@ -28,93 +25,132 @@ impl<R: Read + Seek> NodeRegistry<R> {
             reader: Arc::new(RwLock::new(reader)),
         }
     }
-
     pub fn get_object<F>(
         self: Arc<Self>,
-        key: FileOffset,
+        file_index: FileIndex,
         reader: &mut R,
         load_function: F,
         max_loads: u16,
-        skipm: &mut HashSet<FileOffset>,
+        skipm: &mut HashSet<u64>,
     ) -> std::io::Result<LazyItem<MergedNode>>
     where
-        F: Fn(
-            &mut R,
-            FileOffset,
-            Arc<Self>,
-            u16,
-            &mut HashSet<FileOffset>,
-        ) -> std::io::Result<MergedNode>,
+        F: Fn(&mut R, FileIndex, Arc<Self>, u16, &mut HashSet<u64>) -> std::io::Result<MergedNode>,
     {
         println!(
-            "get_object called with key: {:?}, max_loads: {}",
-            key, max_loads
+            "get_object called with file_index: {:?}, max_loads: {}",
+            file_index, max_loads
         );
+
+        let combined_index = Self::combine_index(&file_index);
 
         {
             let cuckoo_filter = self.cuckoo_filter.read().unwrap();
             println!("Acquired read lock on cuckoo_filter");
 
             // Initial check with Cuckoo filter
-            if cuckoo_filter.contains(&key) {
-                println!("Key found in cuckoo_filter");
-                if let Some(obj) = self.registry.get(&key) {
+            if cuckoo_filter.contains(&combined_index) {
+                println!("FileIndex found in cuckoo_filter");
+                if let Some(obj) = self.registry.get(&combined_index) {
                     println!("Object found in registry, returning");
                     return Ok(obj.clone());
                 } else {
                     println!("Object not found in registry despite being in cuckoo_filter");
                 }
             } else {
-                println!("Key not found in cuckoo_filter");
+                println!("FileIndex not found in cuckoo_filter");
             }
         }
         println!("Released read lock on cuckoo_filter");
 
-        if max_loads == 0 || false == skipm.insert(key) {
+        let version_id = if let FileIndex::Valid { version, .. } = &file_index {
+            *version
+        } else {
+            0
+        };
+
+        if max_loads == 0 || !skipm.insert(combined_index) {
             println!("Either max_loads hit 0 or loop detected, returning LazyItem with no data");
             return Ok(LazyItem::Valid {
                 data: None,
-                offset: ArcShift::new(Some(key)),
+                file_index: ArcShift::new(Some(file_index)),
                 decay_counter: 0,
+                persist_flag: Arc::new(AtomicBool::new(true)),
+                version_id,
             });
         }
 
         println!("Calling load_function");
-        let obj = load_function(reader, key, self.clone(), max_loads - 1, skipm)?;
+        let node = load_function(
+            reader,
+            file_index.clone(),
+            self.clone(),
+            max_loads - 1,
+            skipm,
+        )?;
         println!("load_function returned successfully");
 
-        if let Some(obj) = self.registry.get(&key) {
+        if let Some(obj) = self.registry.get(&combined_index) {
             println!("Object found in registry after load, returning");
             return Ok(obj.clone());
         }
 
-        println!("Creating new LazyItem");
+        println!("Inserting key into cuckoo_filter");
+        self.cuckoo_filter.write().unwrap().insert(&combined_index);
+
         let item = LazyItem::Valid {
-            data: Some(ArcShift::new(obj)),
-            offset: ArcShift::new(Some(key)),
+            data: Some(ArcShift::new(node)),
+            file_index: ArcShift::new(Some(file_index)),
             decay_counter: 0,
+            persist_flag: Arc::new(AtomicBool::new(true)),
+            version_id,
         };
 
-        println!("Inserting key into cuckoo_filter");
-        self.cuckoo_filter.write().unwrap().insert(&key);
-
         println!("Inserting item into registry");
-        self.registry.insert(key, item.clone());
+        self.registry.insert(combined_index, item.clone());
 
         println!("Returning newly created LazyItem");
         Ok(item)
     }
 
-    pub fn load_item<T: CustomSerialize>(self: Arc<Self>, offset: u32) -> std::io::Result<T> {
+    pub fn load_item<T: CustomSerialize>(
+        self: Arc<Self>,
+        file_index: FileIndex,
+    ) -> std::io::Result<T> {
         let mut reader_lock = self.reader.write().unwrap();
-        let mut skipm: HashSet<FileOffset> = HashSet::new();
-        T::deserialize(&mut *reader_lock, offset, self.clone(), 1000, &mut skipm)
+        let mut skipm: HashSet<u64> = HashSet::new();
+
+        if file_index == FileIndex::Invalid {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Cannot deserialize with an invalid FileIndex",
+            ));
+        };
+
+        T::deserialize(
+            &mut *reader_lock,
+            file_index,
+            self.clone(),
+            1000,
+            &mut skipm,
+        )
     }
 
-    pub fn hash_key(key: &VectorId) -> u64 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        key.hash(&mut hasher);
-        hasher.finish()
+    pub fn combine_index(file_index: &FileIndex) -> u64 {
+        match file_index {
+            FileIndex::Valid { offset, version } => ((*offset as u64) << 32) | (*version as u64),
+            FileIndex::Invalid => u64::MAX, // Use max u64 value for Invalid
+        }
+    }
+
+    pub fn split_combined_index(combined: u64) -> FileIndex {
+        if combined == u64::MAX {
+            FileIndex::Invalid
+        } else {
+            FileIndex::Valid {
+                offset: (combined >> 32) as u32,
+                version: combined as u16,
+            }
+        }
     }
 }
 
@@ -126,10 +162,16 @@ pub fn load_cache() {
         .open("0.index")
         .expect("failed to open");
 
-    let offset = 0;
+    let file_index = FileIndex::Valid {
+        offset: 0,
+        version: 0,
+    }; // Assuming initial version is 0
     let cache = Arc::new(NodeRegistry::new(1000, file));
-    match read_node_from_file(offset, cache) {
-        Ok(_) => println!("Successfully read and printed node from offset {}", offset),
+    match read_node_from_file(file_index.clone(), cache) {
+        Ok(_) => println!(
+            "Successfully read and printed node from file_index {:?}",
+            file_index
+        ),
         Err(e) => println!("Failed to read node: {}", e),
     }
 }

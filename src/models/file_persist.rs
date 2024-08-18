@@ -1,6 +1,6 @@
 use super::cache_loader::NodeRegistry;
 use super::common::WaCustomError;
-use super::lazy_load::LazyItem;
+use super::lazy_load::{FileIndex, LazyItem, SyncPersist};
 use super::types::{HNSWLevel, MergedNode, NodeProp, VectorId};
 use crate::models::custom_buffered_writer::*;
 use crate::models::serializer::CustomSerialize;
@@ -9,89 +9,94 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::Arc;
 
-// pub type FileOffset = u32;
-// pub type BytesToRead = u32;
-
-// pub type PropPersistRef = (FileOffset, BytesToRead);
-
 pub fn read_node_from_file<R: Read + Seek>(
-    offset: u32,
+    file_index: FileIndex,
     cache: Arc<NodeRegistry<R>>,
 ) -> std::io::Result<MergedNode> {
-    // Seek to the specified offset
-    // file.seek(SeekFrom::Start(offset as u64))?;
-
-    // Deserialize the NodePersist from the current position
-    let node: MergedNode = cache.load_item(offset)?;
+    // Deserialize the MergedNode using the FileIndex
+    let node: MergedNode = cache.load_item(file_index.clone())?;
 
     // Pretty print the node
-    println!("Read NodePersist from offset {}:", offset);
-    // println!("{}", node);
+    match file_index {
+        FileIndex::Valid { offset, version } => {
+            println!(
+                "Read MergedNode from offset: {}, version: {}",
+                offset, version
+            );
+        }
+        FileIndex::Invalid => {
+            println!("Attempted to read MergedNode with an invalid FileIndex");
+        }
+    }
+
+    // You might want to add more detailed printing here, depending on what information
+    // you want to see about the node
+    // println!("{:#?}", node);
 
     Ok(node)
 }
+pub fn write_node_to_file(
+    lazy_item: &LazyItem<MergedNode>,
+    writer: &mut CustomBufferedWriter,
+    file_index: Option<FileIndex>,
+) -> Result<FileIndex, WaCustomError> {
+    let mut node_arc = lazy_item
+        .get_data()
+        .ok_or(WaCustomError::LazyLoadingError("node in null".to_string()))?;
+    let node = node_arc.get();
 
-pub fn write_node_update(
-    ver_file: &mut CustomBufferedWriter,
-    nprst: ArcShift<MergedNode>,
-    current_location: Option<u32>,
-) -> Result<u64, WaCustomError> {
-    if let Some(loc) = current_location {
-        Ok(write_node_to_file_at_offset(nprst, ver_file, loc) as u64)
-    } else {
-        Ok(write_node_to_file(nprst, ver_file) as u64)
+    match file_index {
+        Some(FileIndex::Valid { offset, version }) => {
+            println!(
+                "About to write at offset {}, version {}, node: {:#?}",
+                offset, version, node
+            );
+            writer
+                .seek(SeekFrom::Start(offset as u64))
+                .map_err(|e| WaCustomError::FsError(e.to_string()))?;
+        }
+        Some(FileIndex::Invalid) | None => {
+            println!("About to write node at the end of file: {:#?}", node);
+            writer
+                .seek(SeekFrom::End(0))
+                .map_err(|e| WaCustomError::FsError(e.to_string()))?;
+        }
     }
+
+    let new_offset = node
+        .serialize(writer)
+        .map_err(|e| WaCustomError::SerializationError(e.to_string()))?;
+
+    // Create and return the new FileIndex
+    let new_file_index = FileIndex::Valid {
+        offset: new_offset,
+        version: match file_index {
+            Some(FileIndex::Valid { version, .. }) => version,
+            _ => lazy_item.get_current_version(),
+        },
+    };
+
+    Ok(new_file_index)
 }
 
 pub fn persist_node_update_loc(
     ver_file: &mut CustomBufferedWriter,
-    mut node: ArcShift<LazyItem<MergedNode>>,
+    node: &mut ArcShift<LazyItem<MergedNode>>,
 ) -> Result<(), WaCustomError> {
-    let LazyItem::Valid {
-        data: Some(data), ..
-    } = node.get()
-    else {
-        return Err(WaCustomError::LazyLoadingError("data is None".to_string()));
-    };
-    let file_loc = write_node_update(ver_file, data.clone(), node.get_offset())?;
-    node.rcu(|node| {
-        let node = node.clone();
-        node.set_offset(Some(file_loc as u32));
-        node
+    let lazy_item = node.get();
+    let current_file_index = lazy_item.get_file_index();
+
+    // Write the node to file
+    let new_file_index = write_node_to_file(node.get(), ver_file, current_file_index)?;
+
+    // Update the file index in the lazy item
+    node.rcu(|lazy_item| {
+        let updated_item = lazy_item.clone();
+        updated_item.set_file_index(Some(new_file_index));
+        updated_item
     });
+
     Ok(())
-}
-
-pub fn write_node_to_file(
-    mut node: ArcShift<MergedNode>,
-    writer: &mut CustomBufferedWriter,
-) -> u32 {
-    println!("about to write node: {:#?}", node.get());
-    // Assume CustomBufferWriter already handles seeking to the end
-    // Serialize
-    let result = node.get().serialize(writer);
-    let offset = result.expect("Failed to serialize NodePersist & write to file");
-    offset as u32
-}
-
-pub fn write_node_to_file_at_offset(
-    mut node: ArcShift<MergedNode>,
-    writer: &mut CustomBufferedWriter,
-    offset: u32,
-) -> u32 {
-    println!(
-        "about to write at offset {}, node: {:#?}",
-        offset,
-        node.get()
-    );
-    // Seek to the specified offset before writing
-    writer
-        .seek(SeekFrom::Start(offset as u64))
-        .expect("Failed to seek in file");
-    // Serialize
-    let result = node.get().serialize(writer);
-    let offset = result.expect("Failed to serialize NodePersist & write to file");
-    offset as u32
 }
 //
 pub fn load_vector_id_lsmdb(_level: HNSWLevel, _vector_id: VectorId) -> LazyItem<MergedNode> {

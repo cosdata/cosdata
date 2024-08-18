@@ -83,18 +83,17 @@ pub async fn init_vector_store(
             location: Some((0, 0)),
         });
         let mut current_node = ArcShift::new(MergedNode {
-            version_id: 0, // Initialize with appropriate version ID
             hnsw_level: l as u8,
             prop: ArcShift::new(PropState::Ready(prop.clone())),
             neighbors: EagerLazyItemSet::new(),
             parent: LazyItemRef::new_invalid(),
             child: LazyItemRef::new_invalid(),
             versions: LazyItemMap::new(),
-            persist_flag: Arc::new(AtomicBool::new(true)),
         });
 
-        let lazy_node = LazyItem::from_arcshift(current_node.clone());
-        let nn = LazyItemRef::from_arcshift(current_node.clone());
+        // TODO: Initialize with appropriate version ID
+        let lazy_node = LazyItem::from_arcshift(0, current_node.clone());
+        let nn = LazyItemRef::from_arcshift(0, current_node.clone());
 
         if let Some(prev_node) = prev.item.get().get_data() {
             current_node
@@ -111,12 +110,11 @@ pub async fn init_vector_store(
         }
         nodes.push(nn.clone());
     }
-
     for (l, nn) in nodes.iter_mut().enumerate() {
-        match persist_node_update_loc(&mut writer, nn.item.clone()) {
+        match persist_node_update_loc(&mut writer, &mut nn.item) {
             Ok(_) => (),
             Err(e) => {
-                eprintln!("Failed node persist (init): {}", e);
+                eprintln!("Failed node persist (init) for node {}: {}", l, e);
             }
         };
     }
@@ -207,7 +205,8 @@ pub fn run_upload(
     txn.abort();
 
     if count_unindexed >= config.upload_threshold {
-        index_embeddings(vec_store.clone(), config.upload_process_batch_size).expect("Failed to index embeddings");
+        index_embeddings(vec_store.clone(), config.upload_process_batch_size)
+            .expect("Failed to index embeddings");
     }
 
     // Update version
