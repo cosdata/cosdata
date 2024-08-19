@@ -35,9 +35,14 @@ cargo build --release
 
 ### Self Signed Certificates
 
-While developing Cosdata, you can use self-signed certificates for
-testing the APIs. The paths to the certificate and priviate key files
-are configured in the [config.toml](config.toml) file.
+It's recommended to run Cosdata server in HTTPS mode i.e. with TLS
+support. However, during development it might be easier to get it
+running without TLS. To do so, set `server.mode=http` in the
+[config.toml](config.toml) file.
+
+Alternately, you may use self-signed certificates for testing the
+APIs. The paths to the certificate and private key files are
+configured in the [config.toml](config.toml) file.
 
 This sections mentions how you can generate and setup the
 certificates.

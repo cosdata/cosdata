@@ -15,10 +15,27 @@ pub struct Ssl {
 }
 
 #[derive(Deserialize, Clone)]
+#[serde(rename_all = "lowercase")]
+pub enum ServerMode {
+    Http,
+    Https,
+}
+
+impl ServerMode {
+    pub fn protocol(&self) -> &str {
+        match self {
+            Self::Http => "http",
+            Self::Https => "https",
+        }
+    }
+}
+
+#[derive(Deserialize, Clone)]
 pub struct Server {
     pub host: String,
     pub port: u16,
     pub ssl: Ssl,
+    pub mode: ServerMode,
 }
 
 pub fn load_config() -> Config {

@@ -12,7 +12,7 @@ use std::fs::create_dir_all;
 use std::path::Path;
 use std::sync::Arc;
 use std::{fs::File, io::BufReader};
-use cosdata::config_loader::{load_config, Ssl};
+use cosdata::config_loader::{load_config, ServerMode, Ssl};
 use actix_web::web::Data;
 
 use crate::models::types::*;
@@ -51,12 +51,25 @@ async fn index_manual(body: web::Bytes) -> Result<HttpResponse, Error> {
 pub async fn run_actix_server() -> std::io::Result<()> {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
     let config = load_config();
-    let tls_config = load_rustls_config(&config.server.ssl);
+
+    let tls = match &config.server.mode {
+        ServerMode::Https => Some(load_rustls_config(&config.server.ssl)),
+        ServerMode::Http => {
+            log::warn!("server.mode=http is not recommended in production");
+            None
+        },
+    };
+
     let config_data = Data::new(config);
     let app_state = config_data.clone();
-    log::info!("starting HTTPS server at https://{}", format!("{}:{}",&config_data.server.host, &config_data.server.port));
+    log::info!(
+        "starting HTTPS server at {}://{}:{}",
+        &config_data.server.mode.protocol(),
+        &config_data.server.host,
+        &config_data.server.port
+    );
 
-    HttpServer::new(move || {
+    let server = HttpServer::new(move || {
         let auth = HttpAuthentication::bearer(validator);
         App::new()
             // enable logger
@@ -115,10 +128,16 @@ pub async fn run_actix_server() -> std::io::Result<()> {
         // )
         // .service(web::resource("/manual").route(web::post().to(index_manual)))
         // .service(web::resource("/").route(web::post().to(index)))
-    })
-    .bind_rustls_0_23(format!("{}:{}", config_data.server.host, config_data.server.port), tls_config)?
-    .run()
-    .await
+    });
+
+    let addr = (config_data.server.host.as_str(), config_data.server.port);
+    let server = match tls {
+        Some(config) => server.bind_rustls_0_23(addr, config),
+        None => server.bind(addr)
+    };
+    server?
+        .run()
+        .await
 }
 
 fn load_rustls_config(ssl_config: &Ssl) -> rustls::ServerConfig {
