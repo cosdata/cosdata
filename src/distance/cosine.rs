@@ -234,7 +234,7 @@ pub fn quaternary_weighted_wrapper(data: &[u8]) -> u64 {
     unsafe { quaternary_weighted_simd_avx2(data.as_ptr(), data.len(), &lookup) }
 }
 
-// pub fn senary_weighted_wrapper_old(data: &[u8]) -> u64 {
+// pub fn octal_weighted_wrapper_old(data: &[u8]) -> u64 {
 //     // Initialize lookup tables
 //     let mut lookup0 = [0u8; 32];
 //     let mut lookup1 = [0u8; 32];
@@ -248,18 +248,18 @@ pub fn quaternary_weighted_wrapper(data: &[u8]) -> u64 {
 //         }
 //     }
 
-//     unsafe { senary_weighted_simd_avx2(data.as_ptr(), data.len(), &lookup0, &lookup1) }
+//     unsafe { octal_weighted_simd_avx2(data.as_ptr(), data.len(), &lookup0, &lookup1) }
 // }
-pub fn senary_weighted_wrapper(data: &[u8]) -> u64 {
+pub fn octal_weighted_wrapper(data: &[u8]) -> u64 {
     // Initialize lookup table
     let mut lookup = [0u8; 64];
     for i in 0..64 {
         lookup[i] = i.count_ones() as u8;
     }
 
-    unsafe { senary_weighted_simd_avx2(data.as_ptr(), data.len(), &lookup) }
+    unsafe { octal_weighted_simd_avx2(data.as_ptr(), data.len(), &lookup) }
 }
-unsafe fn senary_weighted_simd_avx2(data: *const u8, n: usize, lookup: &[u8; 64]) -> u64 {
+unsafe fn octal_weighted_simd_avx2(data: *const u8, n: usize, lookup: &[u8; 64]) -> u64 {
     let mut i = 0;
     // Load 16 bytes and duplicate them in a 256-bit register
     let lookup_vec0 =
@@ -607,7 +607,7 @@ mod tests {
     }
 
     #[test]
-    fn test_senary_weighted_popcount() {
+    fn test_octal_weighted_popcount() {
         let mut rng = rand::thread_rng();
 
         // Test with various sizes
@@ -616,11 +616,11 @@ mod tests {
             let data: Vec<u8> = (0..size).map(|_| rng.gen()).collect();
 
             // Run both implementations
-            let senary_result = senary_weighted_wrapper(&data);
+            let octal_result = octal_weighted_wrapper(&data);
             let scalar_result = scalar_u6_count_ones(&data);
 
             // Assert that results match
-            assert_eq!(senary_result, scalar_result, "Mismatch for size {}", size);
+            assert_eq!(octal_result, scalar_result, "Mismatch for size {}", size);
             println!("Test passed for size {}", size);
         }
 
@@ -634,10 +634,10 @@ mod tests {
         ];
 
         for (i, case) in edge_cases.iter().enumerate() {
-            let senary_result = senary_weighted_wrapper(case);
+            let octal_result = octal_weighted_wrapper(case);
             let scalar_result = scalar_u6_count_ones(case);
 
-            assert_eq!(senary_result, scalar_result, "Mismatch for edge case {}", i);
+            assert_eq!(octal_result, scalar_result, "Mismatch for edge case {}", i);
             println!("Edge case {} passed", i);
         }
 
