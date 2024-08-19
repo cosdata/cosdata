@@ -3,5 +3,5 @@ upload_process_batch_size = 1000
 
 [server]
 host = "127.0.0.1"
-port= "8443"
+port= 8443
 
