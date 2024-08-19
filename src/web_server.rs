@@ -53,6 +53,7 @@ pub async fn run_actix_server() -> std::io::Result<()> {
     let config = load_config();
     let tls_config = load_rustls_config(&config.server.ssl);
     let config_data = Data::new(config);
+    let app_state = config_data.clone();
     log::info!("starting HTTPS server at https://{}", format!("{}:{}",&config_data.server.host, &config_data.server.port));
 
     HttpServer::new(move || {
@@ -103,7 +104,7 @@ pub async fn run_actix_server() -> std::io::Result<()> {
                             ),
                     ),
             )
-            .app_data(Data::new(load_config()).clone())
+            .app_data(app_state.clone())
 
         // .service(web::resource("/index").route(web::post().to(index)))
         // .service(
