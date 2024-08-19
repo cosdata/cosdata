@@ -12,7 +12,7 @@ use std::fs::create_dir_all;
 use std::path::Path;
 use std::sync::Arc;
 use std::{fs::File, io::BufReader};
-use cosdata::config_loader::load_config;
+use cosdata::config_loader::{load_config, Ssl};
 use actix_web::web::Data;
 
 use crate::models::types::*;
@@ -50,11 +50,9 @@ async fn index_manual(body: web::Bytes) -> Result<HttpResponse, Error> {
 #[actix_web::main]
 pub async fn run_actix_server() -> std::io::Result<()> {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
-
-    let config = load_rustls_config();
-
-    let config_data = Data::new(load_config());
-
+    let config = load_config();
+    let tls_config = load_rustls_config(&config.server.ssl);
+    let config_data = Data::new(config);
     log::info!("starting HTTPS server at https://{}", format!("{}:{}",&config_data.server.host, &config_data.server.port));
 
     HttpServer::new(move || {
@@ -117,12 +115,12 @@ pub async fn run_actix_server() -> std::io::Result<()> {
         // .service(web::resource("/manual").route(web::post().to(index_manual)))
         // .service(web::resource("/").route(web::post().to(index)))
     })
-    .bind_rustls_0_23(format!("{}:{}", config_data.server.host, config_data.server.port), config)?
+    .bind_rustls_0_23(format!("{}:{}", config_data.server.host, config_data.server.port), tls_config)?
     .run()
     .await
 }
 
-fn load_rustls_config() -> rustls::ServerConfig {
+fn load_rustls_config(ssl_config: &Ssl) -> rustls::ServerConfig {
     rustls::crypto::aws_lc_rs::default_provider()
         .install_default()
         .unwrap();
@@ -130,28 +128,13 @@ fn load_rustls_config() -> rustls::ServerConfig {
     // init server config builder with safe defaults
     let mut config = ServerConfig::builder().with_no_client_auth();
 
-    let key = "SSL_CERT_DIR";
-    let ssl_cert_dir = match env::var_os(key) {
-        Some(val) => val.into_string().unwrap_or_else(|_| {
-            eprintln!("{key} is not a valid UTF-8 string.");
-            std::process::exit(1);
-        }),
-        None => {
-            eprintln!("{key} is not defined in the environment.");
-            std::process::exit(1);
-        }
-    };
-
-    let cert_file_path = format!("{}/certs/cosdata-ssl.crt", ssl_cert_dir);
-    let key_file_path = format!("{}/private/cosdata-ssl.key", ssl_cert_dir);
-
     // load TLS key/cert files
-    let cert_file = &mut BufReader::new(File::open(&cert_file_path).unwrap_or_else(|_| {
-        eprintln!("Failed to open certificate file: {}", cert_file_path);
+    let cert_file = &mut BufReader::new(File::open(&ssl_config.cert_file).unwrap_or_else(|_| {
+        eprintln!("Failed to open certificate file: {}", ssl_config.key_file.display());
         std::process::exit(1);
     }));
-    let key_file = &mut BufReader::new(File::open(&key_file_path).unwrap_or_else(|_| {
-        eprintln!("Failed to open key file: {}", key_file_path);
+    let key_file = &mut BufReader::new(File::open(&ssl_config.key_file).unwrap_or_else(|_| {
+        eprintln!("Failed to open key file: {}", ssl_config.key_file.display());
         std::process::exit(1);
     }));
 

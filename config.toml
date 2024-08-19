@@ -5,3 +5,7 @@ upload_process_batch_size = 1000
 host = "127.0.0.1"
 port= 8443
 
+[server.ssl]
+cert_file = "/etc/ssl/certs/cosdata-ssl.crt"
+key_file = "/etc/ssl/private/cosdata-ssl.key"
+
