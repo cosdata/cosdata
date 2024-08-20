@@ -39,39 +39,6 @@ pub fn store_current_version(
     Ok(hash)
 }
 
-pub fn get_increamented_version(
-    lmdb: &MetaDb,
-    vcs: Arc<VersionControl>,
-    branch: &str,
-) -> Result<Hash, WaCustomError> {
-    let hash = vcs
-        .add_next_version(branch)
-        .map_err(|err| WaCustomError::DatabaseError(format!("Unable to generate hash: {}", err)))?;
-    let env = lmdb.env.clone();
-    let db = lmdb.metadata_db.clone();
-
-    let mut txn = env
-        .begin_rw_txn()
-        .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
-
-    let serialized = rkyv::to_bytes::<_, 256>(&hash)
-        .map_err(|e| WaCustomError::SerializationError(format!("Failed to serialize: {}", e)))?;
-
-    txn.put(
-        *db.as_ref(),
-        &"current_version",
-        &serialized,
-        WriteFlags::empty(),
-    )
-    .map_err(|e| WaCustomError::DatabaseError(format!("Failed to put data: {}", e)))?;
-
-    txn.commit().map_err(|e| {
-        WaCustomError::DatabaseError(format!("Failed to commit transaction: {}", e))
-    })?;
-
-    Ok(hash)
-}
-
 pub fn retrieve_current_version(lmdb: &MetaDb) -> Result<Hash, WaCustomError> {
     let env = lmdb.env.clone();
     let db = lmdb.metadata_db.clone();
