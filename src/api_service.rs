@@ -6,6 +6,7 @@ use crate::models::meta_persist::*;
 use crate::models::rpc::VectorIdValue;
 use crate::models::types::*;
 use crate::models::user::Statistics;
+use crate::models::versioning::VersionControl;
 use crate::quantization::{Quantization, StorageType};
 use crate::vector_store::*;
 use actix_web::web;
@@ -20,7 +21,7 @@ use std::cell::RefCell;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::rc::Rc;
-use std::sync::{atomic::AtomicBool, Arc};
+use std::sync::Arc;
 
 pub async fn init_vector_store(
     name: String,
@@ -139,6 +140,19 @@ pub async fn init_vector_store(
         .create_db(Some("embeddings"), DatabaseFlags::empty())
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
+    let vcs = Arc::new(
+        VersionControl::new(denv.clone())
+            .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?,
+    );
+
+    let lmdb = MetaDb {
+        env: denv.clone(),
+        metadata_db: Arc::new(metadata_db),
+        embeddings_db: Arc::new(embeddings_db),
+    };
+
+    let hash = store_current_version(&lmdb, vcs.clone(), "main", 0)?;
+
     let vec_store = Arc::new(VectorStore::new(
         exec_queue_nodes,
         max_cache_level,
@@ -147,23 +161,14 @@ pub async fn init_vector_store(
         lp,
         (size / 32) as usize,
         prop_file,
-        MetaDb {
-            env: denv.clone(),
-            metadata_db: Arc::new(metadata_db.clone()),
-            embeddings_db: Arc::new(embeddings_db),
-        },
-        ArcShift::new(None),
+        lmdb,
+        ArcShift::new(Some(hash)),
         Arc::new(QuantizationMetric::Scalar),
         Arc::new(DistanceMetric::Cosine),
         StorageType::UnsignedByte,
+        vcs,
     ));
-    ain_env
-        .vector_store_map
-        .insert(name.clone(), vec_store.clone());
-
-    let result = store_current_version(vec_store.clone(), "main".to_string(), 0);
-    let version_hash = result.expect("Failed to get VersionHash");
-    vec_store.set_current_version(Some(version_hash));
+    ain_env.vector_store_map.insert(name.clone(), vec_store);
 
     Ok(())
 }
@@ -209,18 +214,14 @@ pub fn run_upload(
             .expect("Failed to index embeddings");
     }
 
-    // Update version
-    let ver = vec_store
-        .get_current_version()
-        .expect("No current version found");
-    let new_ver = ver.version + 1;
+    let new_ver = vec_store.vcs.add_next_version("main").expect("LMDB error");
 
     // Create new version file
     let ver_file = Rc::new(RefCell::new(
         OpenOptions::new()
             .create(true)
             .append(true)
-            .open(format!("{}.index", new_ver))
+            .open(format!("{}.index", *new_ver))
             .map_err(|e| {
                 WaCustomError::DatabaseError(format!("Failed to open new version file: {}", e))
             })

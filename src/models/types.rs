@@ -6,7 +6,7 @@ use crate::distance::{
 use crate::models::common::*;
 use crate::models::identity_collections::*;
 use crate::models::lazy_load::*;
-use crate::models::versioning::VersionHash;
+use crate::models::versioning::*;
 use crate::quantization::product::ProductQuantization;
 use crate::quantization::scalar::ScalarQuantization;
 use crate::quantization::{Quantization, StorageType};
@@ -17,13 +17,12 @@ use lmdb::{Database, Environment};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs::*;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{DefaultHasher, Hash as StdHash, Hasher};
 use std::hint::spin_loop;
 use std::path::Path;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, OnceLock,
-};
+use std::sync::{Arc, OnceLock};
+
+use super::versioning::{VersionControl, VersionHash};
 
 pub type HNSWLevel = u8;
 pub type FileOffset = u32;
@@ -69,7 +68,7 @@ pub struct NodeProp {
     pub location: Option<PropPersistRef>,
 }
 
-impl Hash for NodeProp {
+impl StdHash for NodeProp {
     fn hash<H>(&self, state: &mut H)
     where
         H: Hasher,
@@ -340,11 +339,12 @@ pub struct VectorStore {
     pub quant_dim: usize,
     pub prop_file: Arc<File>,
     pub lmdb: MetaDb,
-    pub current_version: ArcShift<Option<VersionHash>>,
-    pub current_open_transaction: ArcShift<Option<VersionHash>>,
+    pub current_version: ArcShift<Option<Hash>>,
+    pub current_open_transaction: ArcShift<Option<Hash>>,
     pub quantization_metric: Arc<QuantizationMetric>,
     pub distance_metric: Arc<DistanceMetric>,
     pub storage_type: StorageType,
+    pub vcs: Arc<VersionControl>,
 }
 
 impl VectorStore {
@@ -357,10 +357,11 @@ impl VectorStore {
         quant_dim: usize,
         prop_file: Arc<File>,
         lmdb: MetaDb,
-        current_version: ArcShift<Option<VersionHash>>,
+        current_version: ArcShift<Option<Hash>>,
         quantization_metric: Arc<QuantizationMetric>,
         distance_metric: Arc<DistanceMetric>,
         storage_type: StorageType,
+        vcs: Arc<VersionControl>,
     ) -> Self {
         VectorStore {
             exec_queue_nodes,
@@ -376,16 +377,17 @@ impl VectorStore {
             quantization_metric,
             distance_metric,
             storage_type,
+            vcs,
         }
     }
     // Get method
-    pub fn get_current_version(&self) -> Option<VersionHash> {
+    pub fn get_current_version(&self) -> Option<Hash> {
         let mut arc = self.current_version.clone();
         arc.get().clone()
     }
 
     // Set method
-    pub fn set_current_version(&self, new_version: Option<VersionHash>) {
+    pub fn set_current_version(&self, new_version: Option<Hash>) {
         let mut arc = self.current_version.clone();
         arc.update(new_version);
     }
@@ -417,7 +419,7 @@ pub fn get_app_env() -> Result<Arc<AppEnv>, WaCustomError> {
             create_dir_all(&path).map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
             // Initialize the environment
             let env = Environment::new()
-                .set_max_dbs(2)
+                .set_max_dbs(4)
                 .set_map_size(10485760) // Set the maximum size of the database to 10MB
                 .open(&path)
                 .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
