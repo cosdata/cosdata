@@ -7,16 +7,64 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Archive, Serialize, Deserialize)]
-pub struct BranchId(pub u64);
+pub struct BranchId(u64);
+
+impl From<u64> for BranchId {
+    fn from(inner: u64) -> Self {
+        Self(inner)
+    }
+}
+
+impl Deref for BranchId {
+    type Target = u64;
+
+    fn deref(&self) -> &u64 {
+        &self.0
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Archive, Serialize, Deserialize)]
-pub struct Version(pub u32);
+pub struct Version(u32);
+
+impl From<u32> for Version {
+    fn from(inner: u32) -> Self {
+        Self(inner)
+    }
+}
+
+impl Deref for Version {
+    type Target = u32;
+
+    fn deref(&self) -> &u32 {
+        &self.0
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Archive, Serialize, Deserialize)]
 pub struct Timestamp(u32);
 
+impl From<u32> for Timestamp {
+    fn from(inner: u32) -> Self {
+        Self(inner)
+    }
+}
+
+impl Deref for Timestamp {
+    type Target = u32;
+
+    fn deref(&self) -> &u32 {
+        &self.0
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Archive, Serialize, Deserialize)]
 pub struct Hash(u32);
+
+impl From<u32> for Hash {
+    fn from(inner: u32) -> Self {
+        Self(inner)
+    }
+}
 
 impl Deref for Hash {
     type Target = u32;
@@ -62,8 +110,8 @@ impl VersionHash {
     }
 
     fn calculate_hash(&self) -> Hash {
-        let branch_last_4_bytes = (self.branch.0 & 0xFFFFFFFF) as u32;
-        Hash(branch_last_4_bytes ^ self.version.0 ^ self.timestamp.0)
+        let branch_last_4_bytes = (*self.branch & 0xFFFFFFFF) as u32;
+        Hash(branch_last_4_bytes ^ *self.version ^ *self.timestamp)
     }
 }
 
@@ -93,7 +141,7 @@ impl VersionControl {
             parent_version: Version(0),
         };
 
-        let key = main_branch_id.0.to_le_bytes();
+        let key = main_branch_id.to_le_bytes();
         let bytes = rkyv::to_bytes::<_, 256>(&branch_info).unwrap();
 
         let versions_db = env.create_db(Some("versions"), DatabaseFlags::empty())?;
@@ -114,7 +162,7 @@ impl VersionControl {
         let branch_id = BranchId::new(branch_name);
         let version_hash = VersionHash::new(branch_id, version);
         let hash = version_hash.calculate_hash();
-        let key = hash.0.to_le_bytes();
+        let key = hash.to_le_bytes();
         let bytes = rkyv::to_bytes::<_, 256>(&version_hash).unwrap();
 
         let mut txn = self.env.begin_rw_txn()?;
@@ -126,13 +174,13 @@ impl VersionControl {
 
     pub fn add_next_version(&self, branch_name: &str) -> lmdb::Result<Hash> {
         let branch_id = BranchId::new(branch_name);
-        let key = branch_id.0.to_le_bytes();
+        let key = branch_id.to_le_bytes();
 
         let mut txn = self.env.begin_rw_txn()?;
         let bytes = txn.get(self.branches_db, &key)?;
 
         let mut branch_info: BranchInfo = unsafe { rkyv::from_bytes_unchecked(bytes) }.unwrap();
-        let new_version = Version(branch_info.current_version.0 + 1);
+        let new_version = Version(branch_info.current_version + 1);
         branch_info.current_version = new_version;
         let bytes = rkyv::to_bytes::<_, 256>(&branch_info).unwrap();
 
@@ -140,7 +188,7 @@ impl VersionControl {
         let version_hash = VersionHash::new(branch_id, new_version);
         let hash = version_hash.calculate_hash();
 
-        let key = hash.0.to_le_bytes();
+        let key = hash.to_le_bytes();
         let bytes = rkyv::to_bytes::<_, 256>(&version_hash).unwrap();
 
         txn.put(self.versions_db, &key, &bytes, WriteFlags::empty())?;
@@ -156,8 +204,8 @@ impl VersionControl {
     ) -> lmdb::Result<()> {
         let branch_id = BranchId::new(branch_name);
         let parent_branch_id = BranchId::new(parent_branch_name);
-        let key = branch_id.0.to_le_bytes();
-        let parent_key = parent_branch_id.0.to_le_bytes();
+        let key = branch_id.to_le_bytes();
+        let parent_key = parent_branch_id.to_le_bytes();
 
         let mut txn = self.env.begin_rw_txn()?;
 
@@ -185,7 +233,7 @@ impl VersionControl {
 
     pub fn branch_exists(&self, branch_name: &str) -> lmdb::Result<bool> {
         let branch_id = BranchId::new(branch_name);
-        let key = branch_id.0.to_le_bytes();
+        let key = branch_id.to_le_bytes();
 
         let txn = self.env.begin_ro_txn()?;
 
@@ -205,7 +253,7 @@ impl VersionControl {
 
     pub fn get_branch_info(&self, branch_name: &str) -> lmdb::Result<Option<BranchInfo>> {
         let branch_id = BranchId::new(branch_name);
-        let key = branch_id.0.to_le_bytes();
+        let key = branch_id.to_le_bytes();
 
         let txn = self.env.begin_ro_txn()?;
 
@@ -227,7 +275,7 @@ impl VersionControl {
     pub fn trace_to_main(&self, start_branch: &str) -> lmdb::Result<Vec<BranchInfo>> {
         let mut branch_path = Vec::new();
         let branch_id = BranchId::new(start_branch);
-        let mut current_key = branch_id.0.to_le_bytes();
+        let mut current_key = branch_id.to_le_bytes();
 
         let txn = self.env.begin_ro_txn()?;
 
@@ -251,7 +299,7 @@ impl VersionControl {
             if info.branch_name == "main" {
                 break;
             }
-            current_key = info.parent_branch.0.to_le_bytes();
+            current_key = info.parent_branch.to_le_bytes();
             branch_path.push(info);
         }
 

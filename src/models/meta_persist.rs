@@ -12,7 +12,7 @@ pub fn store_current_version(
 ) -> Result<Hash, WaCustomError> {
     // Generate hashes for main branch
     let hash = vcs
-        .generate_hash(branch, Version(version))
+        .generate_hash(branch, version.into())
         .map_err(|err| WaCustomError::DatabaseError(format!("Unable to generate hash: {}", err)))?;
     let env = lmdb.env.clone();
     let db = lmdb.metadata_db.clone();
