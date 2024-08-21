@@ -180,7 +180,7 @@ impl VersionControl {
         let bytes = txn.get(self.branches_db, &key)?;
 
         let mut branch_info: BranchInfo = unsafe { rkyv::from_bytes_unchecked(bytes) }.unwrap();
-        let new_version = Version(branch_info.current_version + 1);
+        let new_version = Version(*branch_info.current_version + 1);
         branch_info.current_version = new_version;
         let bytes = rkyv::to_bytes::<_, 256>(&branch_info).unwrap();
 

@@ -56,7 +56,7 @@ impl CustomSerialize for MergedNode {
         let parent_placeholder = if parent_present {
             let pos = writer.stream_position()? as u32;
             writer.write_u32::<LittleEndian>(0)?;
-            writer.write_u16::<LittleEndian>(0)?;
+            writer.write_u32::<LittleEndian>(0)?;
             Some(pos)
         } else {
             None
@@ -65,7 +65,7 @@ impl CustomSerialize for MergedNode {
         let child_placeholder = if child_present {
             let pos = writer.stream_position()? as u32;
             writer.write_u32::<LittleEndian>(0)?;
-            writer.write_u16::<LittleEndian>(0)?;
+            writer.write_u32::<LittleEndian>(0)?;
             Some(pos)
         } else {
             None
@@ -103,13 +103,13 @@ impl CustomSerialize for MergedNode {
         if let (Some(placeholder), Some(offset)) = (parent_placeholder, parent_offset) {
             writer.seek(SeekFrom::Start(placeholder as u64))?;
             writer.write_u32::<LittleEndian>(offset)?;
-            writer.write_u16::<LittleEndian>(self.parent.get_current_version())?;
+            writer.write_u32::<LittleEndian>(*self.parent.get_current_version())?;
         }
 
         if let (Some(placeholder), Some(offset)) = (child_placeholder, child_offset) {
             writer.seek(SeekFrom::Start(placeholder as u64))?;
             writer.write_u32::<LittleEndian>(offset)?;
-            writer.write_u16::<LittleEndian>(self.child.get_current_version())?;
+            writer.write_u32::<LittleEndian>(*self.child.get_current_version())?;
         }
 
         writer.seek(SeekFrom::Start(neighbors_placeholder as u64))?;
@@ -153,13 +153,13 @@ impl CustomSerialize for MergedNode {
                 if parent_present {
                     parent_offset_and_version = Some((
                         reader.read_u32::<LittleEndian>()?,
-                        reader.read_u16::<LittleEndian>()?,
+                        reader.read_u32::<LittleEndian>()?.into(),
                     ));
                 }
                 if child_present {
                     child_offset_and_version = Some((
                         reader.read_u32::<LittleEndian>()?,
-                        reader.read_u16::<LittleEndian>()?,
+                        reader.read_u32::<LittleEndian>()?.into(),
                     ));
                 }
                 let neighbors_offset = reader.read_u32::<LittleEndian>()?;

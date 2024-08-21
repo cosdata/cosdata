@@ -22,12 +22,11 @@ use std::hint::spin_loop;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
-use super::versioning::{VersionControl, VersionHash};
+use super::versioning::VersionControl;
 
 pub type HNSWLevel = u8;
 pub type FileOffset = u32;
 pub type BytesToRead = u32;
-pub type VersionId = u16;
 pub type CosineSimilarity = f32;
 
 // pub type Item<T> = ArcShift<T>;
@@ -191,10 +190,10 @@ impl MergedNode {
         self.neighbors.clone()
     }
 
-    pub fn add_version(&self, version_id: VersionId, version: ArcShift<MergedNode>) {
+    pub fn add_version(&self, version_id: Hash, version: ArcShift<MergedNode>) {
         let lazy_item = LazyItem::from_arcshift(version_id, version);
         self.versions
-            .insert(IdentityMapKey::Int(version_id as u32), lazy_item);
+            .insert(IdentityMapKey::Int(*version_id), lazy_item);
     }
 
     pub fn get_versions(&self) -> LazyItemMap<MergedNode> {

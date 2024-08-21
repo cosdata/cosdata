@@ -690,7 +690,7 @@ fn insert_node_create_edges(
 
     nn.get().add_ready_neighbors(nbs.clone());
     // TODO: Initialize with appropriate version ID
-    let lz_item = LazyItem::from_arcshift(0, nn.clone());
+    let lz_item = LazyItem::from_arcshift(0.into(), nn.clone());
 
     for (nbr1, cs) in nbs.into_iter() {
         if let LazyItem::Valid {

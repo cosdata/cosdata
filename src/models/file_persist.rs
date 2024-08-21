@@ -21,7 +21,7 @@ pub fn read_node_from_file<R: Read + Seek>(
         FileIndex::Valid { offset, version } => {
             println!(
                 "Read MergedNode from offset: {}, version: {}",
-                offset, version
+                offset, *version
             );
         }
         FileIndex::Invalid => {
@@ -49,7 +49,7 @@ pub fn write_node_to_file(
         Some(FileIndex::Valid { offset, version }) => {
             println!(
                 "About to write at offset {}, version {}, node: {:#?}",
-                offset, version, node
+                offset, *version, node
             );
             writer
                 .seek(SeekFrom::Start(offset as u64))
