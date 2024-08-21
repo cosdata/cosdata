@@ -383,7 +383,7 @@ impl VectorQt {
     }
 }
 
-pub type SizeBytes = u32;
+pub struct SizeBytes(pub u32);
 
 // needed to flatten and get uniques
 pub type ExecQueueUpdate = STM<Vec<ArcShift<LazyItem<MergedNode>>>>;
