@@ -2,6 +2,7 @@ use super::CustomSerialize;
 use crate::models::lazy_load::{
     EagerLazyItem, EagerLazyItemSet, FileIndex, LazyItem, SyncPersist, CHUNK_SIZE,
 };
+use crate::models::types::{FileOffset, VersionId};
 use crate::models::{
     cache_loader::NodeRegistry,
     identity_collections::{Identifiable, IdentitySet},
@@ -49,7 +50,7 @@ where
                 let current_pos = writer.stream_position()?;
                 writer.seek(SeekFrom::Start(placeholder_pos))?;
                 writer.write_u32::<LittleEndian>(item_offset)?;
-                writer.write_u16::<LittleEndian>(items[i].1.get_current_version())?;
+                writer.write_u16::<LittleEndian>(items[i].1.get_current_version().0)?;
                 writer.seek(SeekFrom::Start(current_pos))?;
             }
 
@@ -75,7 +76,10 @@ where
     ) -> std::io::Result<Self> {
         match file_index {
             FileIndex::Invalid => Ok(EagerLazyItemSet::new()),
-            FileIndex::Valid { offset, .. } => {
+            FileIndex::Valid {
+                offset: FileOffset(offset),
+                ..
+            } => {
                 if offset == u32::MAX {
                     return Ok(EagerLazyItemSet::new());
                 }
@@ -91,8 +95,8 @@ where
                             continue;
                         }
                         let item_file_index = FileIndex::Valid {
-                            offset: item_offset,
-                            version,
+                            offset: FileOffset(item_offset),
+                            version: VersionId(version),
                         };
                         let item = EagerLazyItem::deserialize(
                             reader,

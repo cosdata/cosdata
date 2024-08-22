@@ -1,3 +1,4 @@
+use crate::distance::cosine::CosineSimilarity;
 use crate::distance::DistanceError;
 use crate::distance::{
     cosine::CosineDistance, dotproduct::DotProductDistance, euclidean::EuclideanDistance,
@@ -20,18 +21,18 @@ use std::fs::*;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::hint::spin_loop;
 use std::path::Path;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, OnceLock,
-};
+use std::sync::{Arc, OnceLock};
 
-pub type HNSWLevel = u8;
-pub type FileOffset = u32;
-pub type BytesToRead = u32;
-pub type VersionId = u16;
-pub type CosineSimilarity = f32;
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct HNSWLevel(pub u8);
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct FileOffset(pub u32);
 
-// pub type Item<T> = ArcShift<T>;
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, Hash)]
+pub struct BytesToRead(pub u32);
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub struct VersionId(pub u16);
 
 #[derive(Clone)]
 pub struct Neighbour {
@@ -60,7 +61,6 @@ impl Identifiable for MergedNode {
 }
 
 pub type PropPersistRef = (FileOffset, BytesToRead);
-pub type NodeFileRef = FileOffset;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeProp {
@@ -105,10 +105,32 @@ pub enum VectorId {
 pub struct MergedNode {
     pub hnsw_level: HNSWLevel,
     pub prop: ArcShift<PropState>,
-    pub neighbors: EagerLazyItemSet<MergedNode, f32>,
+    pub neighbors: EagerLazyItemSet<MergedNode, MetricResult>,
     pub parent: LazyItemRef<MergedNode>,
     pub child: LazyItemRef<MergedNode>,
     pub versions: LazyItemMap<MergedNode>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub enum MetricResult {
+    CosineSimilarity(CosineSimilarity),
+    CosineDistance(CosineDistance),
+    EuclideanDistance(EuclideanDistance),
+    HammingDistance(HammingDistance),
+    DotProductDistance(DotProductDistance),
+}
+
+impl MetricResult {
+    // gets the bare numerical value stored in the type
+    pub fn get_value(&self) -> f32 {
+        match self {
+            MetricResult::CosineSimilarity(value) => value.0,
+            MetricResult::CosineDistance(value) => value.0,
+            MetricResult::EuclideanDistance(value) => value.0,
+            MetricResult::HammingDistance(value) => value.0,
+            MetricResult::DotProductDistance(value) => value.0,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -120,12 +142,25 @@ pub enum DistanceMetric {
 }
 
 impl DistanceFunction for DistanceMetric {
-    fn calculate(&self, x: &Storage, y: &Storage) -> Result<f32, DistanceError> {
+    type Item = MetricResult;
+    fn calculate(&self, x: &Storage, y: &Storage) -> Result<Self::Item, DistanceError> {
         match self {
-            Self::Cosine => CosineDistance.calculate(x, y),
-            Self::Euclidean => EuclideanDistance.calculate(x, y),
-            Self::Hamming => HammingDistance.calculate(x, y),
-            Self::DotProduct => DotProductDistance.calculate(x, y),
+            Self::Cosine => {
+                let value = CosineSimilarity(0.0).calculate(x, y)?;
+                Ok(MetricResult::CosineSimilarity(value))
+            }
+            Self::Euclidean => {
+                let value = EuclideanDistance(0.0).calculate(x, y)?;
+                Ok(MetricResult::EuclideanDistance(value))
+            }
+            Self::Hamming => {
+                let value = HammingDistance(0.0).calculate(x, y)?;
+                Ok(MetricResult::HammingDistance(value))
+            }
+            Self::DotProduct => {
+                let value = DotProductDistance(0.0).calculate(x, y)?;
+                Ok(MetricResult::DotProductDistance(value))
+            }
         }
     }
 }
@@ -159,7 +194,7 @@ impl MergedNode {
     pub fn new(hnsw_level: HNSWLevel) -> Self {
         MergedNode {
             hnsw_level,
-            prop: ArcShift::new(PropState::Pending((0, 0))),
+            prop: ArcShift::new(PropState::Pending((FileOffset(0), BytesToRead(0)))),
             neighbors: EagerLazyItemSet::new(),
             parent: LazyItemRef::new_invalid(),
             child: LazyItemRef::new_invalid(),
@@ -167,9 +202,8 @@ impl MergedNode {
         }
     }
 
-    pub fn add_ready_neighbor(&self, neighbor: LazyItem<MergedNode>, cosine_similarity: f32) {
-        self.neighbors
-            .insert(EagerLazyItem(cosine_similarity, neighbor));
+    pub fn add_ready_neighbor(&self, neighbor: LazyItem<MergedNode>, distance: MetricResult) {
+        self.neighbors.insert(EagerLazyItem(distance, neighbor));
     }
 
     pub fn set_parent(&self, parent: LazyItem<MergedNode>) {
@@ -182,20 +216,20 @@ impl MergedNode {
         arc.update(child);
     }
 
-    pub fn add_ready_neighbors(&self, neighbors_list: Vec<(LazyItem<MergedNode>, f32)>) {
-        for (neighbor, cosine_similarity) in neighbors_list {
-            self.add_ready_neighbor(neighbor, cosine_similarity);
+    pub fn add_ready_neighbors(&self, neighbors_list: Vec<(LazyItem<MergedNode>, MetricResult)>) {
+        for (neighbor, distance) in neighbors_list {
+            self.add_ready_neighbor(neighbor, distance);
         }
     }
 
-    pub fn get_neighbors(&self) -> EagerLazyItemSet<MergedNode, f32> {
+    pub fn get_neighbors(&self) -> EagerLazyItemSet<MergedNode, MetricResult> {
         self.neighbors.clone()
     }
 
     pub fn add_version(&self, version_id: VersionId, version: ArcShift<MergedNode>) {
         let lazy_item = LazyItem::from_arcshift(version_id, version);
         self.versions
-            .insert(IdentityMapKey::Int(version_id as u32), lazy_item);
+            .insert(IdentityMapKey::Int(version_id.0 as u32), lazy_item);
     }
 
     pub fn get_versions(&self) -> LazyItemMap<MergedNode> {
@@ -258,6 +292,12 @@ impl fmt::Display for VectorId {
 
 impl fmt::Debug for MergedNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "MergedNode {{")?;
+        // writeln!(f, "  version_id: {},", self.version_id.0)?;
+        writeln!(f, "  hnsw_level: {},", self.hnsw_level.0)?;
+
+        // Display PropState
+        write!(f, "  prop: ")?;
         let mut prop_arc = self.prop.clone();
         let prop = match prop_arc.get() {
             PropState::Ready(node_prop) => format!("Ready {{ id: {} }}", node_prop.id),
@@ -318,7 +358,7 @@ impl VectorQt {
     }
 }
 
-pub type SizeBytes = u32;
+pub struct SizeBytes(pub u32);
 
 // needed to flatten and get uniques
 pub type ExecQueueUpdate = STM<Vec<ArcShift<LazyItem<MergedNode>>>>;

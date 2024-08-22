@@ -6,7 +6,8 @@ pub mod hamming;
 use crate::storage::Storage;
 
 pub trait DistanceFunction: std::fmt::Debug + Send + Sync {
-    fn calculate(&self, x: &Storage, y: &Storage) -> Result<f32, DistanceError>;
+    type Item;
+    fn calculate(&self, x: &Storage, y: &Storage) -> Result<Self::Item, DistanceError>;
 }
 
 #[derive(Debug)]

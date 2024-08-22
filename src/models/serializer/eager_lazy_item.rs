@@ -1,7 +1,7 @@
 use super::CustomSerialize;
 use crate::models::{
     cache_loader::NodeRegistry,
-    lazy_load::{EagerLazyItem, FileIndex, LazyItem, SyncPersist},
+    lazy_load::{EagerLazyItem, FileIndex, LazyItem, SyncPersist}, types::{FileOffset, VersionId},
 };
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::collections::HashSet;
@@ -19,7 +19,7 @@ where
         self.0.serialize(writer)?;
         let item_placeholder = writer.stream_position()?;
         writer.write_u32::<LittleEndian>(0)?;
-        writer.write_u16::<LittleEndian>(self.1.get_current_version())?;
+        writer.write_u16::<LittleEndian>(self.1.get_current_version().0)?;
         let item_offset = self.1.serialize(writer)?;
         let end_position = writer.stream_position()?;
 
@@ -46,14 +46,14 @@ where
                 "Cannot deserialize EagerLazyItem with an invalid FileIndex",
             )),
             FileIndex::Valid { offset, .. } => {
-                reader.seek(SeekFrom::Start(offset as u64))?;
+                reader.seek(SeekFrom::Start(offset.0 as u64))?;
                 let eager_data =
                     E::deserialize(reader, file_index, cache.clone(), max_loads, skipm)?;
                 let item_offset = reader.read_u32::<LittleEndian>()?;
                 let version = reader.read_u16::<LittleEndian>()?;
                 let item_file_index = FileIndex::Valid {
-                    offset: item_offset,
-                    version,
+                    offset: FileOffset(item_offset),
+                    version: VersionId(version),
                 };
                 let item = LazyItem::deserialize(reader, item_file_index, cache, max_loads, skipm)?;
                 Ok(Self(eager_data, item))

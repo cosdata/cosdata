@@ -20,7 +20,7 @@ use std::cell::RefCell;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::rc::Rc;
-use std::sync::{atomic::AtomicBool, Arc};
+use std::sync::Arc;
 
 pub async fn init_vector_store(
     name: String,
@@ -80,10 +80,10 @@ pub async fn init_vector_store(
         let prop = Arc::new(NodeProp {
             id: vec_hash.clone(),
             value: vector_list.clone(),
-            location: Some((0, 0)),
+            location: Some((FileOffset(0), BytesToRead(0))),
         });
         let mut current_node = ArcShift::new(MergedNode {
-            hnsw_level: l as u8,
+            hnsw_level: HNSWLevel(l as u8),
             prop: ArcShift::new(PropState::Ready(prop.clone())),
             neighbors: EagerLazyItemSet::new(),
             parent: LazyItemRef::new_invalid(),
@@ -92,8 +92,8 @@ pub async fn init_vector_store(
         });
 
         // TODO: Initialize with appropriate version ID
-        let lazy_node = LazyItem::from_arcshift(0, current_node.clone());
-        let nn = LazyItemRef::from_arcshift(0, current_node.clone());
+        let lazy_node = LazyItem::from_arcshift(VersionId(0), current_node.clone());
+        let nn = LazyItemRef::from_arcshift(VersionId(0), current_node.clone());
 
         if let Some(prev_node) = prev.item.get().get_data() {
             current_node
@@ -105,7 +105,7 @@ pub async fn init_vector_store(
 
         if l == 0 {
             root = nn.clone();
-            let prop_location = write_prop_to_file(&prop, &prop_file);
+            let _prop_location = write_prop_to_file(&prop, &prop_file);
             current_node.get().set_prop_ready(prop);
         }
         nodes.push(nn.clone());
@@ -242,7 +242,7 @@ pub fn run_upload(
 pub async fn ann_vector_query(
     vec_store: Arc<VectorStore>,
     query: Vec<f32>,
-) -> Result<Option<Vec<(VectorId, f32)>>, WaCustomError> {
+) -> Result<Option<Vec<(VectorId, MetricResult)>>, WaCustomError> {
     let vector_store = vec_store.clone();
     let vec_hash = VectorId::Str("query".to_string());
     let root = &vector_store.root_vec;
@@ -268,7 +268,7 @@ pub async fn ann_vector_query(
 pub async fn fetch_vector_neighbors(
     vec_store: Arc<VectorStore>,
     vector_id: VectorId,
-) -> Vec<Option<(VectorId, Vec<(VectorId, f32)>)>> {
+) -> Vec<Option<(VectorId, Vec<(VectorId, MetricResult)>)>> {
     let results = vector_fetch(vec_store.clone(), vector_id);
     return results.expect("Failed fetching vector neighbors");
 }
@@ -278,7 +278,7 @@ fn calculate_statistics(_: &[i32]) -> Option<Statistics> {
     None
 }
 
-fn vector_knn(vs: &Vec<f32>, vecs: &Vec<f32>) -> Vec<(i8, i8, String, f64)> {
+fn vector_knn(_vs: &Vec<f32>, _vecs: &Vec<f32>) -> Vec<(i8, i8, String, f64)> {
     // Placeholder for vector KNN
     vec![]
 }

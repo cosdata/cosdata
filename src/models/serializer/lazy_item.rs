@@ -1,6 +1,7 @@
 use super::CustomSerialize;
 use crate::models::lazy_load::FileIndex;
 use crate::models::lazy_load::SyncPersist;
+use crate::models::types::FileOffset;
 use crate::models::{
     cache_loader::NodeRegistry,
     lazy_load::{LazyItem, LazyItemRef},
@@ -20,7 +21,11 @@ impl CustomSerialize for LazyItem<MergedNode> {
                 data, file_index, ..
             } => {
                 if let Some(existing_file_index) = file_index.clone().get().clone() {
-                    if let FileIndex::Valid { offset, .. } = existing_file_index {
+                    if let FileIndex::Valid {
+                        offset: FileOffset(offset),
+                        ..
+                    } = existing_file_index
+                    {
                         if let Some(data) = &data {
                             let mut arc = data.clone();
                             let data = arc.get();
@@ -38,7 +43,10 @@ impl CustomSerialize for LazyItem<MergedNode> {
                     let mut arc = data.clone();
                     let offset = writer.stream_position()? as u32;
                     let version = self.get_current_version();
-                    self.set_file_index(Some(FileIndex::Valid { offset, version }));
+                    self.set_file_index(Some(FileIndex::Valid {
+                        offset: FileOffset(offset),
+                        version,
+                    }));
                     let data = arc.get();
                     self.set_persistence(false);
                     let offset = data.serialize(writer)?;
@@ -62,8 +70,11 @@ impl CustomSerialize for LazyItem<MergedNode> {
         skipm: &mut HashSet<u64>,
     ) -> std::io::Result<Self> {
         match file_index {
-            FileIndex::Valid { offset, version } => {
-                let combined_index = NodeRegistry::<R>::combine_index(&file_index);
+            FileIndex::Valid {
+                offset: FileOffset(offset),
+                ..
+            } => {
+                let _ = NodeRegistry::<R>::combine_index(&file_index);
                 reader.seek(SeekFrom::Start(offset as u64))?;
                 let item = cache.get_object(
                     file_index,
