@@ -1,7 +1,11 @@
 use super::CustomSerialize;
 use crate::distance::cosine::CosineSimilarity;
 use crate::models::types::FileOffset;
-use crate::models::{cache_loader::NodeRegistry, lazy_load::LazyItem, types::Neighbour};
+use crate::models::{
+    cache_loader::NodeRegistry,
+    lazy_load::{FileIndex, LazyItem},
+    types::Neighbour,
+};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::collections::HashSet;
 use std::{
@@ -29,26 +33,38 @@ impl CustomSerialize for Neighbour {
 
         Ok(offset)
     }
-
     fn deserialize<R: Read + Seek>(
         reader: &mut R,
-        offset: FileOffset,
+        file_index: FileIndex,
         cache: Arc<NodeRegistry<R>>,
         max_loads: u16,
-        skipm: &mut HashSet<FileOffset>,
+        skipm: &mut HashSet<u64>,
     ) -> std::io::Result<Self> {
-        reader.seek(SeekFrom::Start(offset.0 as u64))?;
-
-        // Deserialize the node
-        let node_pos = reader.read_u32::<LittleEndian>()?;
-
-        // Deserialize the cosine similarity
-        let cosine_similarity = reader.read_f32::<LittleEndian>()?;
-        let node = LazyItem::deserialize(reader, FileOffset(node_pos), cache, max_loads, skipm)?;
-
-        Ok(Neighbour {
-            node,
-            cosine_similarity: CosineSimilarity(cosine_similarity),
-        })
+        match file_index {
+            FileIndex::Invalid => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Cannot deserialize Neighbour with an invalid FileIndex",
+            )),
+            FileIndex::Valid {
+                offset: FileOffset(offset),
+                version,
+            } => {
+                reader.seek(SeekFrom::Start(offset as u64))?;
+                // Deserialize the node position
+                let node_pos = reader.read_u32::<LittleEndian>()?;
+                // Deserialize the cosine similarity
+                let cosine_similarity = reader.read_f32::<LittleEndian>()?;
+                // Deserialize the node using the node position
+                let node_file_index = FileIndex::Valid {
+                    offset: FileOffset(node_pos),
+                    version,
+                };
+                let node = LazyItem::deserialize(reader, node_file_index, cache, max_loads, skipm)?;
+                Ok(Neighbour {
+                    node,
+                    cosine_similarity: CosineSimilarity(cosine_similarity),
+                })
+            }
+        }
     }
 }

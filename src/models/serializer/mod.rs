@@ -12,7 +12,7 @@ mod metric_distance;
 mod tests;
 
 use super::cache_loader::NodeRegistry;
-use crate::models::types::FileOffset;
+use super::lazy_load::FileIndex;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::collections::HashSet;
 use std::{
@@ -24,10 +24,10 @@ pub trait CustomSerialize {
     fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32>;
     fn deserialize<R: Read + Seek>(
         reader: &mut R,
-        offset: FileOffset,
+        file_index: FileIndex,
         cache: Arc<NodeRegistry<R>>,
         max_loads: u16,
-        skipm: &mut HashSet<FileOffset>,
+        skipm: &mut HashSet<u64>,
     ) -> std::io::Result<Self>
     where
         Self: Sized;
@@ -42,15 +42,23 @@ impl CustomSerialize for f32 {
 
     fn deserialize<R: Read + Seek>(
         reader: &mut R,
-        offset: FileOffset,
+        file_index: FileIndex,
         _cache: Arc<NodeRegistry<R>>,
         _max_loads: u16,
-        _skipm: &mut HashSet<FileOffset>,
+        _skipm: &mut HashSet<u64>,
     ) -> std::io::Result<Self>
     where
         Self: Sized,
     {
-        reader.seek(SeekFrom::Start(offset.0 as u64))?;
-        reader.read_f32::<LittleEndian>()
+        match file_index {
+            FileIndex::Valid { offset, .. } => {
+                reader.seek(SeekFrom::Start(offset.0 as u64))?;
+                reader.read_f32::<LittleEndian>()
+            }
+            FileIndex::Invalid => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Cannot deserialize f32 with an invalid FileIndex",
+            )),
+        }
     }
 }

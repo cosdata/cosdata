@@ -21,12 +21,9 @@ use std::fs::*;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::hint::spin_loop;
 use std::path::Path;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, OnceLock,
-};
+use std::sync::{Arc, OnceLock};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HNSWLevel(pub u8);
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct FileOffset(pub u32);
@@ -34,7 +31,7 @@ pub struct FileOffset(pub u32);
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, Hash)]
 pub struct BytesToRead(pub u32);
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct VersionId(pub u16);
 
 #[derive(Clone)]
@@ -64,7 +61,6 @@ impl Identifiable for MergedNode {
 }
 
 pub type PropPersistRef = (FileOffset, BytesToRead);
-pub type NodeFileRef = FileOffset;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeProp {
@@ -107,14 +103,12 @@ pub enum VectorId {
 
 #[derive(Clone)]
 pub struct MergedNode {
-    pub version_id: VersionId,
     pub hnsw_level: HNSWLevel,
     pub prop: ArcShift<PropState>,
     pub neighbors: EagerLazyItemSet<MergedNode, MetricResult>,
     pub parent: LazyItemRef<MergedNode>,
     pub child: LazyItemRef<MergedNode>,
     pub versions: LazyItemMap<MergedNode>,
-    pub persist_flag: Arc<AtomicBool>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -197,16 +191,14 @@ impl Quantization for QuantizationMetric {
 }
 
 impl MergedNode {
-    pub fn new(version_id: VersionId, hnsw_level: HNSWLevel) -> Self {
+    pub fn new(hnsw_level: HNSWLevel) -> Self {
         MergedNode {
-            version_id,
             hnsw_level,
             prop: ArcShift::new(PropState::Pending((FileOffset(0), BytesToRead(0)))),
             neighbors: EagerLazyItemSet::new(),
             parent: LazyItemRef::new_invalid(),
             child: LazyItemRef::new_invalid(),
             versions: LazyItemMap::new(),
-            persist_flag: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -234,15 +226,10 @@ impl MergedNode {
         self.neighbors.clone()
     }
 
-    // pub fn set_neighbors(&self, new_neighbors: IdentitySet<EagerLazyItem<MergedNode, f32>>) {
-    //     let mut arc = self.neighbors.items.clone();
-    //     arc.update(new_neighbors);
-    // }
-
-    pub fn add_version(&self, version: ArcShift<MergedNode>) {
-        let lazy_item = LazyItem::from_arcshift(version);
-        // TODO: look at the id
-        self.versions.insert(IdentityMapKey::Int(0), lazy_item);
+    pub fn add_version(&self, version_id: VersionId, version: ArcShift<MergedNode>) {
+        let lazy_item = LazyItem::from_arcshift(version_id, version);
+        self.versions
+            .insert(IdentityMapKey::Int(version_id.0 as u32), lazy_item);
     }
 
     pub fn get_versions(&self) -> LazyItemMap<MergedNode> {
@@ -293,16 +280,6 @@ impl MergedNode {
     }
 }
 
-impl SyncPersist for MergedNode {
-    fn set_persistence(&self, flag: bool) {
-        self.persist_flag.store(flag, Ordering::Relaxed);
-    }
-
-    fn needs_persistence(&self) -> bool {
-        self.persist_flag.load(Ordering::Relaxed)
-    }
-}
-
 // Implementing the std::fmt::Display trait for VectorId
 impl fmt::Display for VectorId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -316,7 +293,7 @@ impl fmt::Display for VectorId {
 impl fmt::Debug for MergedNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "MergedNode {{")?;
-        writeln!(f, "  version_id: {},", self.version_id.0)?;
+        // writeln!(f, "  version_id: {},", self.version_id.0)?;
         writeln!(f, "  hnsw_level: {},", self.hnsw_level.0)?;
 
         // Display PropState
@@ -327,7 +304,6 @@ impl fmt::Debug for MergedNode {
             PropState::Pending(_) => "Pending".to_string(),
         };
         f.debug_struct("MergedNode")
-            .field("version_id", &self.version_id)
             .field("hnsw_level", &self.hnsw_level)
             .field("prop", &prop)
             .field("neighbors", &self.neighbors.len())
@@ -347,7 +323,6 @@ impl fmt::Debug for MergedNode {
                     &"Invalid"
                 },
             )
-            .field("persist_flag", &self.persist_flag.load(Ordering::Relaxed))
             .finish()
     }
 }
