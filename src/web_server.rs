@@ -12,7 +12,7 @@ use std::fs::create_dir_all;
 use std::path::Path;
 use std::sync::Arc;
 use std::{fs::File, io::BufReader};
-use cosdata::config_loader::{load_config, ServerMode, Ssl};
+use cosdata::config_loader::{load_config, ServerMode, Ssl, Host};
 use actix_web::web::Data;
 
 use crate::models::types::*;
@@ -130,10 +130,10 @@ pub async fn run_actix_server() -> std::io::Result<()> {
         // .service(web::resource("/").route(web::post().to(index)))
     });
 
-    let addr = (config_data.server.host.as_str(), config_data.server.port);
+    let addr = config_data.server.listen_address();
     let server = match tls {
-        Some(config) => server.bind_rustls_0_23(addr, config),
-        None => server.bind(addr)
+        Some(tls_config) => server.bind_rustls_0_23(addr, tls_config),
+        None => server.bind(addr),
     };
     server?
         .run()
