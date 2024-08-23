@@ -106,7 +106,6 @@ pub struct MergedNode {
     pub neighbors: EagerLazyItemSet<MergedNode, f32>,
     pub parent: LazyItemRef<MergedNode>,
     pub child: LazyItemRef<MergedNode>,
-    pub versions: LazyItemMap<MergedNode>,
 }
 
 #[derive(Debug)]
@@ -161,7 +160,6 @@ impl MergedNode {
             neighbors: EagerLazyItemSet::new(),
             parent: LazyItemRef::new_invalid(),
             child: LazyItemRef::new_invalid(),
-            versions: LazyItemMap::new(),
         }
     }
 
@@ -188,16 +186,6 @@ impl MergedNode {
 
     pub fn get_neighbors(&self) -> EagerLazyItemSet<MergedNode, f32> {
         self.neighbors.clone()
-    }
-
-    pub fn add_version(&self, version_id: Hash, version: ArcShift<MergedNode>) {
-        let lazy_item = LazyItem::from_arcshift(version_id, version);
-        self.versions
-            .insert(IdentityMapKey::Int(*version_id), lazy_item);
-    }
-
-    pub fn get_versions(&self) -> LazyItemMap<MergedNode> {
-        self.versions.clone()
     }
 
     pub fn get_parent(&self) -> LazyItemRef<MergedNode> {

@@ -125,9 +125,9 @@ pub struct BranchInfo {
 
 pub struct VersionControl {
     env: Arc<Environment>,
-    // `BranchId` -> `BranchInfo`
-    versions_db: Database,
     // `Hash` -> `VersionHash`
+    versions_db: Database,
+    // `BranchId` -> `BranchInfo`
     branches_db: Database,
 }
 

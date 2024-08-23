@@ -187,7 +187,6 @@ fn test_merged_node_acyclic_serialization() {
     assert!(deserialized.get_parent().is_invalid());
     assert!(deserialized.get_child().is_invalid());
     assert_eq!(deserialized.get_neighbors().len(), 0);
-    assert_eq!(deserialized.get_versions().len(), 0);
 }
 
 #[test]
@@ -277,15 +276,15 @@ fn test_merged_node_with_parent_child_serialization() {
 
 #[test]
 fn test_merged_node_with_versions_serialization() {
-    let node = Arc::new(MergedNode::new(2));
-    let version1 = ArcShift::new(MergedNode::new(2));
-    let version2 = ArcShift::new(MergedNode::new(2));
+    let node_v0 = LazyItem::new(0.into(), MergedNode::new(2));
+    let node_v1 = LazyItem::new(1.into(), MergedNode::new(2));
+    let node_v2 = LazyItem::new(2.into(), MergedNode::new(2));
 
-    node.add_version(2.into(), version1);
-    node.add_version(3.into(), version2);
+    node_v0.add_version(1, node_v1);
+    node_v0.add_version(2, node_v2);
 
     let mut writer = Cursor::new(Vec::new());
-    let offset = node.serialize(&mut writer).unwrap();
+    let offset = node_v0.serialize(&mut writer).unwrap();
     let file_index = FileIndex::Valid {
         offset,
         version: 0.into(),
@@ -293,9 +292,12 @@ fn test_merged_node_with_versions_serialization() {
 
     let reader = Cursor::new(writer.into_inner());
     let cache = get_cache(reader);
-    let deserialized: MergedNode = cache.load_item(file_index).unwrap();
+    let deserialized: LazyItem<MergedNode> = cache.load_item(file_index).unwrap();
 
-    assert_eq!(node.get_versions().len(), deserialized.get_versions().len());
+    assert_eq!(
+        node_v0.get_versions().unwrap().len(),
+        deserialized.get_versions().unwrap().len()
+    );
 }
 
 #[test]
@@ -317,9 +319,9 @@ fn test_merged_node_cyclic_serialization() {
 
     let reader = Cursor::new(writer.into_inner());
     let cache = get_cache(reader);
-    let deserialized: MergedNode = cache.load_item(file_index).unwrap();
+    let deserialized: LazyItem<MergedNode> = cache.load_item(file_index).unwrap();
 
-    let mut parent_ref = deserialized.get_parent();
+    let mut parent_ref = deserialized.get_data().unwrap().get_parent();
 
     // Deserialize the parent
     if let LazyItem::Valid {
@@ -332,7 +334,7 @@ fn test_merged_node_cyclic_serialization() {
         let mut child_ref = parent.get_child();
         let child = child_ref.item.get();
 
-        assert!(matches!(child, LazyItem::Valid { data: Some(_), .. }));
+        assert!(matches!(child, LazyItem::Valid { data: None, .. }));
     } else {
         panic!("Expected lazy load for parent");
     }
@@ -397,7 +399,7 @@ fn test_merged_node_complex_cyclic_serialization() {
         } = &child
         {
             let file_index = file_index.clone().get().clone().unwrap();
-            let _: MergedNode = cache.load_item(file_index).unwrap();
+            let _: LazyItemRef<MergedNode> = cache.load_item(file_index).unwrap();
         } else {
             panic!("Deserialization mismatch");
         }

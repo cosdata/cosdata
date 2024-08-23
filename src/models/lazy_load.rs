@@ -22,6 +22,7 @@ pub enum FileIndex {
     Valid { offset: FileOffset, version: Hash },
     Invalid,
 }
+
 #[derive(Clone)]
 pub enum LazyItem<T: Clone + 'static> {
     Valid {
@@ -29,6 +30,7 @@ pub enum LazyItem<T: Clone + 'static> {
         file_index: ArcShift<Option<FileIndex>>,
         decay_counter: usize,
         persist_flag: Arc<AtomicBool>,
+        versions: LazyItemMap<T>,
         version_id: Hash,
     },
     Invalid,
@@ -155,6 +157,7 @@ impl<T: Clone + 'static> LazyItem<T> {
             file_index: ArcShift::new(None),
             decay_counter: 0,
             persist_flag: Arc::new(AtomicBool::new(true)),
+            versions: LazyItemMap::new(),
             version_id,
         }
     }
@@ -169,6 +172,7 @@ impl<T: Clone + 'static> LazyItem<T> {
             file_index: ArcShift::new(None),
             decay_counter: 0,
             persist_flag: Arc::new(AtomicBool::new(true)),
+            versions: LazyItemMap::new(),
             version_id,
         }
     }
@@ -179,6 +183,7 @@ impl<T: Clone + 'static> LazyItem<T> {
             file_index: ArcShift::new(None),
             decay_counter: 0,
             persist_flag: Arc::new(AtomicBool::new(true)),
+            versions: LazyItemMap::new(),
             version_id,
         }
     }
@@ -216,6 +221,20 @@ impl<T: Clone + 'static> LazyItem<T> {
             file_index.clone().update(new_file_index);
         }
     }
+
+    pub fn add_version(&self, version: u32, lazy_item: LazyItem<T>) {
+        if let Self::Valid { versions, .. } = self {
+            versions.insert(IdentityMapKey::Int(version), lazy_item);
+        }
+    }
+
+    pub fn get_versions(&self) -> Option<LazyItemMap<T>> {
+        if let Self::Valid { versions, .. } = self {
+            Some(versions.clone())
+        } else {
+            None
+        }
+    }
 }
 
 impl<T: Clone + 'static> LazyItemRef<T> {
@@ -226,6 +245,7 @@ impl<T: Clone + 'static> LazyItemRef<T> {
                 file_index: ArcShift::new(None),
                 decay_counter: 0,
                 persist_flag: Arc::new(AtomicBool::new(true)),
+                versions: LazyItemMap::new(),
                 version_id,
             }),
         }
@@ -244,6 +264,7 @@ impl<T: Clone + 'static> LazyItemRef<T> {
                 file_index: ArcShift::new(None),
                 decay_counter: 0,
                 persist_flag: Arc::new(AtomicBool::new(true)),
+                versions: LazyItemMap::new(),
                 version_id,
             }),
         }
@@ -277,34 +298,39 @@ impl<T: Clone + 'static> LazyItemRef<T> {
         let mut arc = self.item.clone();
 
         arc.rcu(|item| {
-            let (file_index, decay_counter, persist_flag, version_id) = if let LazyItem::Valid {
-                file_index,
-                decay_counter,
-                persist_flag,
-                version_id,
-                ..
-            } = item
-            {
-                (
-                    file_index.clone(),
-                    *decay_counter,
-                    persist_flag.clone(),
-                    *version_id,
-                )
-            } else {
-                (
-                    ArcShift::new(None),
-                    0,
-                    Arc::new(AtomicBool::new(true)),
-                    0.into(),
-                )
-            };
+            let (file_index, decay_counter, persist_flag, version_id, versions) =
+                if let LazyItem::Valid {
+                    file_index,
+                    decay_counter,
+                    persist_flag,
+                    version_id,
+                    versions,
+                    ..
+                } = item
+                {
+                    (
+                        file_index.clone(),
+                        *decay_counter,
+                        persist_flag.clone(),
+                        *version_id,
+                        versions.clone(),
+                    )
+                } else {
+                    (
+                        ArcShift::new(None),
+                        0,
+                        Arc::new(AtomicBool::new(true)),
+                        0.into(),
+                        LazyItemMap::new(),
+                    )
+                };
 
             LazyItem::Valid {
                 data: Some(ArcShift::new(new_data)),
                 file_index,
                 decay_counter,
                 persist_flag,
+                versions,
                 version_id,
             }
         });
@@ -314,29 +340,39 @@ impl<T: Clone + 'static> LazyItemRef<T> {
         let mut arc = self.item.clone();
 
         arc.rcu(|item| {
-            let (data, decay_counter, persist_flag, version_id) = if let LazyItem::Valid {
-                data,
-                decay_counter,
-                persist_flag,
-                version_id,
-                ..
-            } = item
-            {
-                (
-                    data.clone(),
-                    *decay_counter,
-                    persist_flag.clone(),
-                    *version_id,
-                )
-            } else {
-                (None, 0, Arc::new(AtomicBool::new(true)), 0.into())
-            };
+            let (data, decay_counter, persist_flag, version_id, versions) =
+                if let LazyItem::Valid {
+                    data,
+                    decay_counter,
+                    persist_flag,
+                    version_id,
+                    versions,
+                    ..
+                } = item
+                {
+                    (
+                        data.clone(),
+                        *decay_counter,
+                        persist_flag.clone(),
+                        *version_id,
+                        versions.clone(),
+                    )
+                } else {
+                    (
+                        None,
+                        0,
+                        Arc::new(AtomicBool::new(true)),
+                        0.into(),
+                        LazyItemMap::new(),
+                    )
+                };
 
             LazyItem::Valid {
                 data,
                 file_index: ArcShift::new(new_offset),
                 decay_counter,
                 persist_flag,
+                versions,
                 version_id,
             }
         });

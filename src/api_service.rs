@@ -89,7 +89,6 @@ pub async fn init_vector_store(
             neighbors: EagerLazyItemSet::new(),
             parent: LazyItemRef::new_invalid(),
             child: LazyItemRef::new_invalid(),
-            versions: LazyItemMap::new(),
         });
 
         // TODO: Initialize with appropriate version ID

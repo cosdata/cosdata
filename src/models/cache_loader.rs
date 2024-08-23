@@ -1,5 +1,5 @@
 use super::file_persist::*;
-use super::lazy_load::{FileIndex, LazyItem};
+use super::lazy_load::{FileIndex, LazyItem, LazyItemMap};
 use super::serializer::CustomSerialize;
 use super::types::*;
 use arcshift::ArcShift;
@@ -34,7 +34,13 @@ impl<R: Read + Seek> NodeRegistry<R> {
         skipm: &mut HashSet<u64>,
     ) -> std::io::Result<LazyItem<MergedNode>>
     where
-        F: Fn(&mut R, FileIndex, Arc<Self>, u16, &mut HashSet<u64>) -> std::io::Result<MergedNode>,
+        F: Fn(
+            &mut R,
+            FileIndex,
+            Arc<Self>,
+            u16,
+            &mut HashSet<u64>,
+        ) -> std::io::Result<LazyItem<MergedNode>>,
     {
         println!(
             "get_object called with file_index: {:?}, max_loads: {}",
@@ -75,12 +81,13 @@ impl<R: Read + Seek> NodeRegistry<R> {
                 file_index: ArcShift::new(Some(file_index)),
                 decay_counter: 0,
                 persist_flag: Arc::new(AtomicBool::new(true)),
+                versions: LazyItemMap::new(),
                 version_id,
             });
         }
 
         println!("Calling load_function");
-        let node = load_function(
+        let item = load_function(
             reader,
             file_index.clone(),
             self.clone(),
@@ -96,14 +103,6 @@ impl<R: Read + Seek> NodeRegistry<R> {
 
         println!("Inserting key into cuckoo_filter");
         self.cuckoo_filter.write().unwrap().insert(&combined_index);
-
-        let item = LazyItem::Valid {
-            data: Some(ArcShift::new(node)),
-            file_index: ArcShift::new(Some(file_index)),
-            decay_counter: 0,
-            persist_flag: Arc::new(AtomicBool::new(true)),
-            version_id,
-        };
 
         println!("Inserting item into registry");
         self.registry.insert(combined_index, item.clone());
