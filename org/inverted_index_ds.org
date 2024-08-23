@@ -1,0 +1,195 @@
+* Inverted Index Implementation in Rust
+
+** Overview
+This Rust code implements an inverted index data structure using a tree-like structure. The main components are:
+- InvertedIndexItem: Represents a node in the tree
+- InvertedIndex: The main data structure that holds the root node
+- Helper functions for tree traversal and power-of-4 calculations
+
+** Data Structures
+
+*** InvertedIndexItem
+#+BEGIN_SRC rust
+#[derive(Debug)]
+struct InvertedIndexItem {
+    dim_index: u32,
+    implicit: bool,
+    pointers: Vec<Option<Arc<Mutex<InvertedIndexItem>>>>,
+}
+
+impl InvertedIndexItem {
+    fn new(dim_index: u32, implicit: bool) -> Self {
+        InvertedIndexItem {
+            dim_index,
+            implicit,
+            pointers: vec![None; 8], // Space for exponents 0 to 7 (1 to 16384)
+        }
+    }
+
+    fn insert_dim_index(&mut self, target_dim_index: u32) -> Result<(), String> {
+        let path = generate_power_of_4_list(target_dim_index - self.dim_index);
+        self.insert_recursive(target_dim_index, &path, 0)
+    }
+
+    fn insert_recursive(&mut self, target_dim_index: u32, path: &[(u32, u32)], path_index: usize) -> Result<(), String> {
+        if path_index == path.len() {
+            // We've reached the target dimension index
+            if !self.implicit {
+                return Err(format!("Dimension-Index {} is already explicit", self.dim_index));
+            }
+            self.dim_index = target_dim_index;
+            self.implicit = false;
+            return Ok(());
+        }
+
+        let (_, exponent) = path[path_index];
+        let next_dim_index = self.dim_index + 4u32.pow(exponent);
+
+        if self.pointers[exponent as usize].is_none() {
+            let new_item = Arc::new(Mutex::new(InvertedIndexItem::new(next_dim_index, true)));
+            self.pointers[exponent as usize] = Some(new_item);
+        }
+
+        if let Some(next_item) = &self.pointers[exponent as usize] {
+            next_item.lock().unwrap().insert_recursive(target_dim_index, path, path_index + 1)
+        } else {
+            Err("Failed to create or access the next item".to_string())
+        }
+    }
+
+    fn print_tree(&self, depth: usize) {
+        let indent = "  ".repeat(depth);
+        println!("{}Dimension-Index {}: {}", indent, self.dim_index,
+                 if self.implicit { "Implicit" } else { "Explicit" });
+        for (i, pointer) in self.pointers.iter().enumerate() {
+            if let Some(item) = pointer {
+                println!("{}-> 4^{} to:", indent, i);
+                item.lock().unwrap().print_tree(depth + 1);
+            }
+        }
+    }
+}
+#+END_SRC
+
+*** InvertedIndex
+#+BEGIN_SRC rust
+struct InvertedIndex {
+    root: Arc<Mutex<InvertedIndexItem>>,
+}
+
+impl InvertedIndex {
+    fn new() -> Self {
+        InvertedIndex {
+            root: Arc::new(Mutex::new(InvertedIndexItem::new(0, false)))
+        }
+    }
+
+    fn add_dim_index(&self, dim_index: u32) -> Result<(), String> {
+        self.root.lock().unwrap().insert_dim_index(dim_index)
+    }
+
+    fn print_tree(&self) {
+        self.root.lock().unwrap().print_tree(0);
+    }
+}
+#+END_SRC
+
+** Helper Functions
+
+*** generate_power_of_4_list
+#+BEGIN_SRC rust
+fn generate_power_of_4_list(valx: u32) -> Vec<(u32, u32)> {
+    fn largest_power_of_4_exponent(n: u32) -> u32 {
+        let mut exponent = 0;
+        while (4u32.pow(exponent + 1)) <= n {
+            exponent += 1;
+        }
+        exponent
+    }
+
+    let mut result = Vec::new();
+    let mut current = 0;
+
+    while current < valx {
+        let exponent = largest_power_of_4_exponent(valx - current);
+        let delta = 4u32.pow(exponent);
+        result.push((current, exponent));
+        current += delta;
+    }
+
+    if current != valx {
+        result.push((current, 0));  // Add the final step to reach the exact dimension index
+    }
+
+    result
+}
+#+END_SRC
+
+** Main Function
+#+BEGIN_SRC rust
+fn main() {
+    let inverted_index = InvertedIndex::new();
+
+    let dim_indices = vec![130, 260, 1000, 4000, 16500];
+
+    for &dim_index in &dim_indices {
+        match inverted_index.add_dim_index(dim_index) {
+            Ok(_) => {
+                println!("After adding Dimension-Index {}:", dim_index);
+                inverted_index.print_tree();
+                println!();
+            },
+            Err(e) => println!("Error adding Dimension-Index {}: {}", dim_index, e),
+        }
+    }
+
+    // Try to add an already explicit dimension index
+    match inverted_index.add_dim_index(1000) {
+        Ok(_) => println!("Successfully added Dimension-Index 1000 again (unexpected)"),
+        Err(e) => println!("Error adding Dimension-Index 1000 again: {}", e),
+    }
+
+    // Add an already implicitly added dimension index again explicitly
+    match inverted_index.add_dim_index(256) {
+        Ok(_) => {
+            println!("After adding Dimension-Index 256:");
+            inverted_index.print_tree();
+        },
+        Err(e) => println!("Error adding Dimension-Index 256: {}", e),
+    }
+}
+#+END_SRC
+
+** Traversal Logic
+
+The traversal logic is based on the concept of representing dimension indices as sums of powers of 4. This allows for efficient storage and retrieval of indices.
+
+1. When inserting a new dimension index:
+   - Calculate the difference between the target index and the current node's index
+   - Generate a list of power-of-4 steps to reach the target
+   - Traverse the tree following these steps, creating new nodes as needed
+
+2. The tree structure:
+   - Each node can have up to 8 children (representing powers of 4 from 4^0 to 4^7)
+   - Child nodes represent jumps of 4^n in dimension index
+
+3. Implicit vs Explicit nodes:
+   - Explicit nodes represent actually inserted dimension indices
+   - Implicit nodes are created as intermediate steps and can be made explicit later
+
+** Key Concepts
+
+- Thread-safe implementation using Arc (Atomic Reference Counting) and Mutex
+- Recursive tree traversal for insertion and printing
+- Efficient representation of large dimension indices using powers of 4
+- Distinction between implicit and explicit nodes for memory efficiency
+
+** Potential Improvements
+
+- Implement search functionality
+- Add deletion of indices
+- Optimize memory usage for very large indices
+- Implement parallel insertion for better performance on multi-core systems
+
+* Conclusion
+This implementation provides an efficient way to store and manage large dimension indices using a tree-based inverted index structure. The use of powers of 4 allows for a compact representation and efficient traversal.
