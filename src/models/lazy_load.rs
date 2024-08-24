@@ -9,6 +9,15 @@ use std::sync::{
     Arc,
 };
 
+fn largest_power_of_4_below(x: u32) -> u32 {
+    if x == 0 {
+        0
+    } else {
+        let msb_position = 31 - x.leading_zeros();
+        msb_position / 2
+    }
+}
+
 pub trait SyncPersist {
     fn set_persistence(&self, flag: bool);
     fn needs_persistence(&self) -> bool;
@@ -222,9 +231,22 @@ impl<T: Clone + 'static> LazyItem<T> {
         }
     }
 
-    pub fn add_version(&self, version: u32, lazy_item: LazyItem<T>) {
-        if let Self::Valid { versions, .. } = self {
-            versions.insert(IdentityMapKey::Int(version), lazy_item);
+    pub fn add_version(&self, vcs: Arc<VersionControl>, version: u32, lazy_item: LazyItem<T>) {
+        if let Self::Valid {
+            versions,
+            version_id,
+            ..
+        } = self
+        {
+            if let Ok(Some(version_hash)) = vcs.get_version_hash(version_id) {
+                let target_diff = version - *version_hash.version;
+                let index = largest_power_of_4_below(target_diff);
+                if let Some(existing_version) = versions.get(&IdentityMapKey::Int(index)) {
+                    existing_version.add_version(vcs, version, lazy_item);
+                } else {
+                    versions.insert(IdentityMapKey::Int(index), lazy_item);
+                }
+            }
         }
     }
 
@@ -492,6 +514,12 @@ impl<T: Clone + 'static> LazyItemMap<T> {
             map
         })
         .unwrap();
+    }
+
+    pub fn get(&self, key: &IdentityMapKey) -> Option<LazyItem<T>> {
+        let mut arc = self.items.clone();
+
+        arc.get().get(key).cloned()
     }
 
     pub fn is_empty(&self) -> bool {

@@ -73,6 +73,10 @@ impl<T> IdentityMap<T> {
         self.map.insert(key, value)
     }
 
+    pub fn get(&self, key: &IdentityMapKey) -> Option<&T> {
+        self.map.get(key)
+    }
+
     pub fn contains(&self, key: &IdentityMapKey) -> bool {
         self.map.contains_key(key)
     }

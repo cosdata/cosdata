@@ -1,9 +1,12 @@
 use crate::models::lazy_load::*;
 use crate::models::serializer::*;
 use crate::models::types::*;
+use crate::models::versioning::VersionControl;
 use arcshift::ArcShift;
+use lmdb::Environment;
 use std::io::Cursor;
 use std::sync::Arc;
+use tempfile::tempdir;
 
 fn get_cache<R: Read + Seek>(reader: R) -> Arc<NodeRegistry<R>> {
     Arc::new(NodeRegistry::new(1000, reader))
@@ -276,12 +279,26 @@ fn test_merged_node_with_parent_child_serialization() {
 
 #[test]
 fn test_merged_node_with_versions_serialization() {
-    let node_v0 = LazyItem::new(0.into(), MergedNode::new(2));
-    let node_v1 = LazyItem::new(1.into(), MergedNode::new(2));
-    let node_v2 = LazyItem::new(2.into(), MergedNode::new(2));
+    let temp_dir = tempdir().unwrap();
+    let env = Arc::new(
+        Environment::new()
+            .set_max_dbs(2)
+            .set_map_size(10485760) // 10MB
+            .open(temp_dir.as_ref())
+            .unwrap(),
+    );
+    let vcs = Arc::new(VersionControl::new(env).unwrap());
 
-    node_v0.add_version(1, node_v1);
-    node_v0.add_version(2, node_v2);
+    let v0_hash = vcs.generate_hash("main", 0.into()).unwrap();
+    let node_v0 = LazyItem::new(v0_hash, MergedNode::new(2));
+
+    let v1_hash = vcs.add_next_version("main").unwrap();
+    let node_v1 = LazyItem::new(v1_hash, MergedNode::new(2));
+    node_v0.add_version(vcs.clone(), 1, node_v1);
+
+    let v2_hash = vcs.add_next_version("main").unwrap();
+    let node_v2 = LazyItem::new(v2_hash, MergedNode::new(2));
+    node_v0.add_version(vcs.clone(), 2, node_v2);
 
     let mut writer = Cursor::new(Vec::new());
     let offset = node_v0.serialize(&mut writer).unwrap();
