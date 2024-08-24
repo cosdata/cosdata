@@ -1,12 +1,11 @@
 use lmdb::{Database, DatabaseFlags, Environment, Transaction, WriteFlags};
-use rkyv::{Archive, Deserialize, Serialize};
 use siphasher::sip::SipHasher24;
 use std::hash::Hasher;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BranchId(u64);
 
 impl From<u64> for BranchId {
@@ -23,7 +22,7 @@ impl Deref for BranchId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Version(u32);
 
 impl From<u32> for Version {
@@ -40,7 +39,7 @@ impl Deref for Version {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Timestamp(u32);
 
 impl From<u32> for Timestamp {
@@ -57,7 +56,7 @@ impl Deref for Timestamp {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Hash(u32);
 
 impl From<u32> for Hash {
@@ -93,11 +92,11 @@ impl Timestamp {
     }
 }
 
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct VersionHash {
-    branch: BranchId,
-    version: Version,
-    timestamp: Timestamp,
+    pub branch: BranchId,
+    pub version: Version,
+    pub timestamp: Timestamp,
 }
 
 impl VersionHash {
@@ -113,14 +112,87 @@ impl VersionHash {
         let branch_last_4_bytes = (*self.branch & 0xFFFFFFFF) as u32;
         Hash(branch_last_4_bytes ^ *self.version ^ *self.timestamp)
     }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut result = Vec::with_capacity(16);
+
+        result.extend_from_slice(&self.branch.0.to_be_bytes());
+        result.extend_from_slice(&self.version.0.to_be_bytes());
+        result.extend_from_slice(&self.timestamp.0.to_be_bytes());
+
+        result
+    }
+
+    fn deserialize(bytes: &[u8]) -> Result<Self, &'static str> {
+        if bytes.len() != 16 {
+            return Err("Input must be exactly 12 bytes");
+        }
+
+        let branch = u64::from_be_bytes(bytes[0..8].try_into().unwrap());
+        let version = u32::from_be_bytes(bytes[8..12].try_into().unwrap());
+        let timestamp = u32::from_be_bytes(bytes[12..16].try_into().unwrap());
+
+        Ok(VersionHash {
+            branch: BranchId(branch),
+            version: Version(version),
+            timestamp: Timestamp(timestamp),
+        })
+    }
 }
 
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct BranchInfo {
     branch_name: String,
     current_version: Version,
     parent_branch: BranchId,
     parent_version: Version,
+}
+
+impl BranchInfo {
+    fn serialize(&self) -> Vec<u8> {
+        let name_bytes = self.branch_name.as_bytes();
+
+        let mut result = Vec::with_capacity(16 + name_bytes.len());
+
+        // Serialize current_version
+        result.extend_from_slice(&self.current_version.0.to_be_bytes());
+
+        // Serialize parent_branch
+        result.extend_from_slice(&self.parent_branch.0.to_be_bytes());
+
+        // Serialize parent_version
+        result.extend_from_slice(&self.parent_version.0.to_be_bytes());
+
+        // Serialize branch_name
+        result.extend_from_slice(name_bytes);
+
+        result
+    }
+
+    fn deserialize(bytes: &[u8]) -> Result<Self, &'static str> {
+        if bytes.len() < 16 {
+            return Err("Input must be at least 16 bytes");
+        }
+
+        // Deserialize current_version
+        let current_version = Version(u32::from_be_bytes(bytes[0..4].try_into().unwrap()));
+
+        // Deserialize parent_branch
+        let parent_branch = BranchId(u64::from_be_bytes(bytes[4..12].try_into().unwrap()));
+
+        // Deserialize parent_version
+        let parent_version = Version(u32::from_be_bytes(bytes[12..16].try_into().unwrap()));
+
+        let branch_name =
+            String::from_utf8(bytes[16..].to_vec()).map_err(|_| "Invalid UTF-8 in branch name")?;
+
+        Ok(BranchInfo {
+            branch_name,
+            current_version,
+            parent_branch,
+            parent_version,
+        })
+    }
 }
 
 pub struct VersionControl {
@@ -142,7 +214,7 @@ impl VersionControl {
         };
 
         let key = main_branch_id.to_le_bytes();
-        let bytes = rkyv::to_bytes::<_, 256>(&branch_info).unwrap();
+        let bytes = branch_info.serialize();
 
         let versions_db = env.create_db(Some("versions"), DatabaseFlags::empty())?;
         let branches_db = env.create_db(Some("branches"), DatabaseFlags::empty())?;
@@ -163,7 +235,7 @@ impl VersionControl {
         let version_hash = VersionHash::new(branch_id, version);
         let hash = version_hash.calculate_hash();
         let key = hash.to_le_bytes();
-        let bytes = rkyv::to_bytes::<_, 256>(&version_hash).unwrap();
+        let bytes = version_hash.serialize();
 
         let mut txn = self.env.begin_rw_txn()?;
         txn.put(self.versions_db, &key, &bytes, WriteFlags::empty())?;
@@ -179,17 +251,17 @@ impl VersionControl {
         let mut txn = self.env.begin_rw_txn()?;
         let bytes = txn.get(self.branches_db, &key)?;
 
-        let mut branch_info: BranchInfo = unsafe { rkyv::from_bytes_unchecked(bytes) }.unwrap();
+        let mut branch_info: BranchInfo = BranchInfo::deserialize(bytes).unwrap();
         let new_version = Version(*branch_info.current_version + 1);
         branch_info.current_version = new_version;
-        let bytes = rkyv::to_bytes::<_, 256>(&branch_info).unwrap();
+        let bytes = branch_info.serialize();
 
         txn.put(self.branches_db, &key, &bytes, WriteFlags::empty())?;
         let version_hash = VersionHash::new(branch_id, new_version);
         let hash = version_hash.calculate_hash();
 
         let key = hash.to_le_bytes();
-        let bytes = rkyv::to_bytes::<_, 256>(&version_hash).unwrap();
+        let bytes = version_hash.serialize();
 
         txn.put(self.versions_db, &key, &bytes, WriteFlags::empty())?;
         txn.commit()?;
@@ -214,7 +286,7 @@ impl VersionControl {
         }
 
         let parent_bytes = txn.get(self.branches_db, &parent_key)?;
-        let parent_info: BranchInfo = unsafe { rkyv::from_bytes_unchecked(parent_bytes) }.unwrap();
+        let parent_info = BranchInfo::deserialize(parent_bytes).unwrap();
 
         let new_branch_info = BranchInfo {
             branch_name: branch_name.to_string(),
@@ -223,7 +295,7 @@ impl VersionControl {
             parent_version: parent_info.current_version,
         };
 
-        let bytes = rkyv::to_bytes::<_, 256>(&new_branch_info).unwrap();
+        let bytes = new_branch_info.serialize();
 
         txn.put(self.branches_db, &key, &bytes, WriteFlags::empty())?;
         txn.commit()?;
@@ -265,11 +337,31 @@ impl VersionControl {
             Err(err) => return Err(err),
         };
 
-        let branch_info = unsafe { rkyv::from_bytes_unchecked(bytes) }.unwrap();
+        let branch_info = BranchInfo::deserialize(bytes).unwrap();
 
         txn.abort();
 
         Ok(Some(branch_info))
+    }
+
+    pub fn get_version_hash(&self, hash: &Hash) -> lmdb::Result<Option<VersionHash>> {
+        let key = hash.to_le_bytes();
+
+        let txn = self.env.begin_ro_txn()?;
+
+        let bytes = match txn.get(self.versions_db, &key) {
+            Ok(bytes) => bytes,
+            Err(lmdb::Error::NotFound) => {
+                return Ok(None);
+            }
+            Err(err) => return Err(err),
+        };
+
+        let version_hash = VersionHash::deserialize(bytes).unwrap();
+
+        txn.abort();
+
+        Ok(Some(version_hash))
     }
 
     pub fn trace_to_main(&self, start_branch: &str) -> lmdb::Result<Vec<BranchInfo>> {
@@ -290,7 +382,7 @@ impl VersionControl {
                 }
             };
 
-            let branch_info: BranchInfo = unsafe { rkyv::from_bytes_unchecked(bytes) }.unwrap();
+            let branch_info = BranchInfo::deserialize(bytes).unwrap();
 
             Ok(Some(branch_info))
         };
