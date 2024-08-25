@@ -165,9 +165,8 @@ define rule infer_management as
         ($employee, $dept) forms manages;
   #+end_src
 * Querying
-** Basic Query Structure
 
-Query
+** Basic Query Structure
 #+BEGIN_SRC c
 match
     $<variable> isa <entity_type> (
@@ -181,13 +180,8 @@ match
         <attribute_name>: <value_or_variable>
         [, <attribute_name>: <value_or_variable>]*
     )]*
-get $<variable> [, $<variable>]*
-[enlist];
+get $<variable> [, $<variable>]*;
 #+END_SRC
-
-Output Schema
- - a list of all the matches
-   - with the free variables optionally enlisted after the demanded ones
 
 Example (querying a ternary relationship):
 #+BEGIN_SRC c
