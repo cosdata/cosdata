@@ -1,0 +1,181 @@
+#+TITLE: Inverted Index Building and Querying
+
+* Overview
+
+This document outlines the process of building an inverted index using the provided graph data structure, querying it efficiently using SIMD operations, and returning the top K candidates with their highest dot product scores.
+
+* Building the Inverted Index
+
+** Data Structure
+
+We'll use a modified version of the ~InvertedIndex~ structure from the [[./inverted_index_ds.org][provided code]]  :
+
+#+BEGIN_SRC rust
+struct InvertedIndex {
+    root: Arc<Mutex<InvertedIndexItem>>,
+}
+#+END_SRC
+
+** Steps
+
+1. Create a new ~InvertedIndex~:
+
+#+BEGIN_SRC rust
+let inverted_index = InvertedIndex::new();
+#+END_SRC
+
+2. For each dimension index in the sparse vector data, add the dimension and its associated data in a single step:
+
+#+BEGIN_SRC rust
+fn add_dim_index(&self, dim_index: u32, value: f32, vector_id: u32) -> Result<(), String> {
+    // Implementation needed:
+    // - Modify the existing add_dim_index method to include value and vector_id
+    // - Update the InvertedIndexItem structure to store (value, vector_id) tuples
+    // - Adjust the insertion logic to handle the additional data
+}
+
+// Usage
+inverted_index.add_dim_index(dimension_index, value, vector_id)?;
+#+END_SRC
+
+Note: The existing code in inverted_index_ds.org will need to be modified to accommodate this change. The ~InvertedIndexItem~ structure should be updated to store a list of (value, vector_id) tuples, and the insertion logic should be adjusted accordingly.
+
+3. Create a quantized property list:
+
+#+BEGIN_SRC rust
+fn create_quantized_property_list(values: &[f32]) -> Vec<u8> {
+    // Implementation needed: quantize to octal (3 bits)
+}
+
+let quantized_list = create_quantized_property_list(&values);
+#+END_SRC
+
+* Querying the Inverted Index
+
+** Setup
+
+1. Create an MPSC channel for candidate vectors:
+
+#+BEGIN_SRC rust
+use std::sync::mpsc;
+
+let (tx, rx) = mpsc::channel();
+#+END_SRC
+
+2. Create a set to track posted candidates:
+
+#+BEGIN_SRC rust
+use std::collections::HashSet;
+
+let mut posted_candidates = HashSet::new();
+#+END_SRC
+
+** Query Process
+
+1. For each dimension in the query vector:
+
+#+BEGIN_SRC rust
+fn query_dimension(&self, dim_index: u32, tx: &mpsc::Sender<u32>, posted_candidates: &mut HashSet<u32>) -> Result<(), String> {
+    // Implementation needed:
+    // - Look up the dimension index in the inverted index
+    // - For each (value, vector_id) in the dimension's list:
+    //   - If vector_id not in posted_candidates:
+    //     - tx.send(vector_id)?;
+    //     - posted_candidates.insert(vector_id);
+    Ok(())
+}
+
+// Usage
+for (dim_index, _) in query_vector {
+    inverted_index.query_dimension(dim_index, &tx, &mut posted_candidates)?;
+}
+#+END_SRC
+
+2. Close the sender channel:
+
+#+BEGIN_SRC rust
+drop(tx);
+#+END_SRC
+
+3. Process candidates in the consumer:
+
+#+BEGIN_SRC rust
+fn process_candidates(rx: mpsc::Receiver<u32>, quantized_list: &[u8], query_vector: &[(u32, f32)], k: usize) -> Vec<(u32, f32)> {
+    // Implementation needed:
+    // - For each candidate received from rx:
+    //   - Perform SIMD binary AND operation
+    //   - Use SIMD count_ones function
+    //   - Apply weights and calculate dot product
+    // - Maintain a min-heap of size K to keep track of top K candidates
+    // - Return vector of top K (candidate_id, score) tuples
+}
+
+let k = 10; // Number of top candidates to return
+let results = process_candidates(rx, &quantized_list, &query_vector, k);
+#+END_SRC
+
+* SIMD Operations
+
+Implement the following SIMD functions for efficient processing:
+
+#+BEGIN_SRC rust
+fn simd_binary_and(a: &[u8], b: &[u8]) -> Vec<u8> {
+    // Implementation needed
+}
+
+fn simd_count_ones(data: &[u8]) -> u32 {
+    // Implementation needed
+}
+#+END_SRC
+
+* Top K Filtering
+
+To maintain the top K candidates efficiently, use a min-heap:
+
+#+BEGIN_SRC rust
+use std::collections::BinaryHeap;
+use std::cmp::Reverse;
+
+struct ScoredCandidate(f32, u32); // (score, candidate_id)
+
+impl PartialOrd for ScoredCandidate {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.0.partial_cmp(&other.0)
+    }
+}
+
+impl Ord for ScoredCandidate {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.partial_cmp(other).unwrap()
+    }
+}
+
+impl PartialEq for ScoredCandidate {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Eq for ScoredCandidate {}
+
+fn maintain_top_k(heap: &mut BinaryHeap<Reverse<ScoredCandidate>>, score: f32, candidate_id: u32, k: usize) {
+    if heap.len() < k {
+        heap.push(Reverse(ScoredCandidate(score, candidate_id)));
+    } else if score > heap.peek().unwrap().0.0 {
+        heap.pop();
+        heap.push(Reverse(ScoredCandidate(score, candidate_id)));
+    }
+}
+#+END_SRC
+
+* Conclusion
+
+This document outlines the process of building an inverted index using the provided graph data structure, querying it efficiently using SIMD operations, and returning the top K candidates with their highest dot product scores. The main steps involve:
+
+1. Building the inverted index
+2. Creating a quantized property list
+3. Querying the index using an MPSC channel
+4. Processing candidates with SIMD operations
+5. Filtering and returning the top K candidates
+
+Implement the missing functions and integrate them into the existing codebase to complete the inverted index system with top K candidate filtering.
