@@ -54,6 +54,16 @@ define relationship employment as
     salary: double;
 #+END_SRC
 
+Example (primitive ternary relationship)
+#+begin_src c
+// can't be decomposed into binaries
+define relationship contributes_research as
+    (author: person,
+     research_entity: research_entity, // survey, workshop, talk
+     domain: domain),
+    date: date; //in-exhaustive attrs
+#+end_src
+
 *** Note: Relationship Definitions (Schema Level):
 
 - These are like blueprints or templates for relationships.
