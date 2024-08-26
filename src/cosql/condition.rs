@@ -16,25 +16,33 @@ pub enum Condition {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BinaryOperator {
+pub enum BinaryConditionOperator {
+    // ==
     Equality,
+    // !=
     Inequality,
+    // <
     LessThan,
+    // <=
     LessEqualThan,
+    // >
     GreaterThan,
+    // >=
     GreaterEqualThan,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BinaryCondition {
     pub left: String,
-    pub operator: BinaryOperator,
+    pub operator: BinaryConditionOperator,
     pub right: Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LogicalOperator {
+    // and
     And,
+    // or
     Or,
 }
 
@@ -45,20 +53,24 @@ pub struct LogicalCondition {
     pub right: Condition,
 }
 
-pub fn parse_binary_operator(input: &str) -> IResult<&str, BinaryOperator> {
+pub fn parse_binary_condition_operator(input: &str) -> IResult<&str, BinaryConditionOperator> {
     alt((
-        map(tag("=="), |_| BinaryOperator::Equality),
-        map(tag("!="), |_| BinaryOperator::Inequality),
-        map(tag("<="), |_| BinaryOperator::LessEqualThan),
-        map(tag("<"), |_| BinaryOperator::LessThan),
-        map(tag(">="), |_| BinaryOperator::GreaterEqualThan),
-        map(tag(">"), |_| BinaryOperator::GreaterThan),
+        map(tag("=="), |_| BinaryConditionOperator::Equality),
+        map(tag("!="), |_| BinaryConditionOperator::Inequality),
+        map(tag("<="), |_| BinaryConditionOperator::LessEqualThan),
+        map(tag("<"), |_| BinaryConditionOperator::LessThan),
+        map(tag(">="), |_| BinaryConditionOperator::GreaterEqualThan),
+        map(tag(">"), |_| BinaryConditionOperator::GreaterThan),
     ))(input)
 }
 
 pub fn parse_binary_condition(input: &str) -> IResult<&str, BinaryCondition> {
     map(
-        tuple((parse_variable, ws(parse_binary_operator), parse_value)),
+        tuple((
+            parse_variable,
+            ws(parse_binary_condition_operator),
+            parse_value,
+        )),
         |(left, operator, right)| BinaryCondition {
             left: left.to_string(),
             operator,
@@ -108,18 +120,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_binary_operator_parser() {
+    fn test_binary_condition_operator_parser() {
         let values = [
-            ("==", BinaryOperator::Equality),
-            ("!=", BinaryOperator::Inequality),
-            ("<=", BinaryOperator::LessEqualThan),
-            ("<", BinaryOperator::LessThan),
-            (">=", BinaryOperator::GreaterEqualThan),
-            (">", BinaryOperator::GreaterThan),
+            ("==", BinaryConditionOperator::Equality),
+            ("!=", BinaryConditionOperator::Inequality),
+            ("<=", BinaryConditionOperator::LessEqualThan),
+            ("<", BinaryConditionOperator::LessThan),
+            (">=", BinaryConditionOperator::GreaterEqualThan),
+            (">", BinaryConditionOperator::GreaterThan),
         ];
 
         for (source, expected) in values {
-            let (_, parsed) = parse_binary_operator(source).unwrap();
+            let (_, parsed) = parse_binary_condition_operator(source).unwrap();
 
             assert_eq!(parsed, expected);
         }
@@ -132,7 +144,7 @@ mod tests {
                 r#"$programming_language == "Rust""#,
                 BinaryCondition {
                     left: "programming_language".to_string(),
-                    operator: BinaryOperator::Equality,
+                    operator: BinaryConditionOperator::Equality,
                     right: Value::String("Rust".to_string()),
                 },
             ),
@@ -140,7 +152,7 @@ mod tests {
                 "$salary >= 1000000",
                 BinaryCondition {
                     left: "salary".to_string(),
-                    operator: BinaryOperator::GreaterEqualThan,
+                    operator: BinaryConditionOperator::GreaterEqualThan,
                     right: Value::Int(1000000),
                 },
             ),
@@ -148,7 +160,7 @@ mod tests {
                 "$age < 18",
                 BinaryCondition {
                     left: "age".to_string(),
-                    operator: BinaryOperator::LessThan,
+                    operator: BinaryConditionOperator::LessThan,
                     right: Value::Int(18),
                 },
             ),
@@ -179,7 +191,7 @@ mod tests {
                 "$age < 18",
                 Condition::Binary(BinaryCondition {
                     left: "age".to_string(),
-                    operator: BinaryOperator::LessThan,
+                    operator: BinaryConditionOperator::LessThan,
                     right: Value::Int(18),
                 }),
             ),
@@ -187,7 +199,7 @@ mod tests {
                 r#"(((($programming_language == "Rust"))))"#,
                 Condition::Binary(BinaryCondition {
                     left: "programming_language".to_string(),
-                    operator: BinaryOperator::Equality,
+                    operator: BinaryConditionOperator::Equality,
                     right: Value::String("Rust".to_string()),
                 }),
             ),
@@ -196,13 +208,13 @@ mod tests {
                 Condition::Logical(Box::new(LogicalCondition {
                     left: Condition::Binary(BinaryCondition {
                         left: "programming_language".to_string(),
-                        operator: BinaryOperator::Equality,
+                        operator: BinaryConditionOperator::Equality,
                         right: Value::String("Rust".to_string()),
                     }),
                     operator: LogicalOperator::And,
                     right: Condition::Binary(BinaryCondition {
                         left: "salary".to_string(),
-                        operator: BinaryOperator::GreaterEqualThan,
+                        operator: BinaryConditionOperator::GreaterEqualThan,
                         right: Value::Int(1000000),
                     }),
                 })),
@@ -213,20 +225,20 @@ mod tests {
                     left: Condition::Logical(Box::new(LogicalCondition {
                         left: Condition::Binary(BinaryCondition {
                             left: "programming_language".to_string(),
-                            operator: BinaryOperator::Equality,
+                            operator: BinaryConditionOperator::Equality,
                             right: Value::String("Rust".to_string()),
                         }),
                         operator: LogicalOperator::And,
                         right: Condition::Binary(BinaryCondition {
                             left: "salary".to_string(),
-                            operator: BinaryOperator::GreaterEqualThan,
+                            operator: BinaryConditionOperator::GreaterEqualThan,
                             right: Value::Int(1000000),
                         }),
                     })),
                     operator: LogicalOperator::Or,
                     right: Condition::Binary(BinaryCondition {
                         left: "age".to_string(),
-                        operator: BinaryOperator::LessThan,
+                        operator: BinaryConditionOperator::LessThan,
                         right: Value::Int(18),
                     }),
                 })),
