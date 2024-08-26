@@ -67,6 +67,13 @@ impl BufferManager {
         cursor_id
     }
 
+    // @DOUBT: The caller will need to remember to call close_cursor,
+    // other wise the cursors will keep accumulating. One way to
+    // prevent that can be to implement Drop trait for the Cursor
+    // struct. But for that, we'd need to have the cursors hashmap
+    // inside an Arc so that a reference to it can be shared with the
+    // Cursor struct. Then in the Cursor::drop method, the cursor can
+    // be removed from the hashmap.
     pub fn close_cursor(&self, cursor_id: u64) {
         let mut cursors = self.cursors.write().unwrap();
         cursors.remove(&cursor_id);
@@ -130,6 +137,11 @@ impl BufferManager {
     }
 
     pub fn read_with_cursor(&self, cursor_id: u64, buf: &mut [u8]) -> io::Result<usize> {
+        // DOUBT: Do we need to take a write lock on cursors? I think
+        // a read lock should suffice here because multiple thread
+        // should be able to call this function concurrently. The only
+        // time we need to lock cursors hashmap is at the time of
+        // updating the position of the current cursor
         let mut cursors = self.cursors.write().unwrap();
         let cursor = cursors.get_mut(&cursor_id)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid cursor"))?;
@@ -149,12 +161,20 @@ impl BufferManager {
             let to_read = (buf.len() - total_read).min(available);
             buf[total_read..total_read + to_read].copy_from_slice(&buffer[buffer_pos..buffer_pos + to_read]);
             total_read += to_read;
+            // @DOUBT: Do we need to update the cursor position in
+            // each iteration. We can capture the value in a local
+            // variable and after the while loop, take a write lock on
+            // the cursors hashmap and update it
             cursor.position += to_read as u64;
         }
         Ok(total_read)
     }
 
     pub fn write_with_cursor(&self, cursor_id: u64, buf: &[u8]) -> io::Result<usize> {
+        // @DOUBT: Same as above. If we take a write lock here, then
+        // this function can't be called concurrently. Instead we can
+        // take a read lock just to get the cursor position and store
+        // that in a local var.
         let mut cursors = self.cursors.write().unwrap();
         let cursor = cursors.get_mut(&cursor_id)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid cursor"))?;
@@ -170,6 +190,9 @@ impl BufferManager {
             region.end.store((buffer_pos + to_write).max(region.end.load(Ordering::SeqCst)), Ordering::SeqCst);
             region.dirty.store(true, Ordering::SeqCst);
             total_written += to_write;
+            // @DOUBT: As with above, update the local var here and
+            // after the while loop, sync the value with cursor
+            // position by taking a write lock
             cursor.position += to_write as u64;
             self.file_size.fetch_max(cursor.position, Ordering::SeqCst);
 
@@ -177,6 +200,14 @@ impl BufferManager {
         }
         Ok(total_written)
     }
+
+    // @DOUBT: How to ensure that the read/write_with_cursor functions
+    // are not concurrently called for the same cursor? May be
+    // self.cursors can be defined as `HashMap<u64,
+    // RWLock<Cursor>>`. Then we can acquire a read lock on the
+    // hashmap to identify and get the cursor from it. And then
+    // acquire a write lock on the the value i.e. RWLock<Cursor> while
+    // reading/writing is going on.
 
     pub fn seek_with_cursor(&self, cursor_id: u64, pos: SeekFrom) -> io::Result<u64> {
         let mut cursors = self.cursors.write().unwrap();
