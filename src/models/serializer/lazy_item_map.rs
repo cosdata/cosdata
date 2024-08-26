@@ -1,6 +1,7 @@
 use super::CustomSerialize;
 use crate::models::identity_collections::{IdentityMap, IdentityMapKey};
 use crate::models::lazy_load::{FileIndex, LazyItemMap, SyncPersist};
+use crate::models::types::{FileOffset, VersionId};
 use crate::models::{
     cache_loader::NodeRegistry,
     lazy_load::{LazyItem, CHUNK_SIZE},
@@ -59,7 +60,7 @@ where
                 // Write entry offset
                 writer.seek(SeekFrom::Start(placeholder_pos))?;
                 writer.write_u32::<LittleEndian>(entry_offset)?;
-                writer.write_u16::<LittleEndian>(items[i].1.get_current_version())?;
+                writer.write_u16::<LittleEndian>(items[i].1.get_current_version().0)?;
 
                 // Write item offset
                 writer.seek(SeekFrom::Start(item_placeholder_pos))?;
@@ -90,7 +91,10 @@ where
     ) -> std::io::Result<Self> {
         match file_index {
             FileIndex::Invalid => Ok(LazyItemMap::new()),
-            FileIndex::Valid { offset, version } => {
+            FileIndex::Valid {
+                offset: FileOffset(offset),
+                version,
+            } => {
                 if offset == u32::MAX {
                     return Ok(LazyItemMap::new());
                 }
@@ -105,7 +109,7 @@ where
                             continue;
                         }
                         let entry_file_index = FileIndex::Valid {
-                            offset: entry_offset,
+                            offset: FileOffset(entry_offset),
                             version,
                         };
                         let key = IdentityMapKey::deserialize(
@@ -118,8 +122,8 @@ where
                         let item_offset = reader.read_u32::<LittleEndian>()?;
                         let version = reader.read_u16::<LittleEndian>()?;
                         let item_file_index = FileIndex::Valid {
-                            offset: item_offset,
-                            version,
+                            offset: FileOffset(item_offset),
+                            version: VersionId(version),
                         };
                         let item = LazyItem::deserialize(
                             reader,
@@ -174,7 +178,10 @@ impl CustomSerialize for IdentityMapKey {
         Self: Sized,
     {
         match file_index {
-            FileIndex::Valid { offset, .. } => {
+            FileIndex::Valid {
+                offset: FileOffset(offset),
+                ..
+            } => {
                 reader.seek(SeekFrom::Start(offset as u64))?;
                 let num = reader.read_u32::<LittleEndian>()?;
                 if num & MSB == 0 {

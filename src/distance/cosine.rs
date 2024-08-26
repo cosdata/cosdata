@@ -1,25 +1,39 @@
+use serde::{Deserialize, Serialize};
+
 use super::{DistanceError, DistanceFunction};
 use crate::storage::Storage;
-#[derive(Debug)]
-pub struct CosineDistance;
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Serialize)]
+pub struct CosineDistance(pub f32);
 
 impl DistanceFunction for CosineDistance {
-    // Implementation here
-    fn calculate(&self, x: &Storage, y: &Storage) -> Result<f32, DistanceError> {
+    type Item = Self;
+    fn calculate(&self, _x: &Storage, _y: &Storage) -> Result<Self::Item, DistanceError> {
+        // placeholder method to be implemented
+        Err(DistanceError::CalculationError)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Serialize)]
+pub struct CosineSimilarity(pub f32);
+
+impl DistanceFunction for CosineSimilarity {
+    type Item = Self;
+    fn calculate(&self, x: &Storage, y: &Storage) -> Result<Self::Item, DistanceError> {
         match (x, y) {
             (
                 Storage::UnsignedByte {
-                    mag: mag_x,
-                    quant_vec: vec_x,
+                    mag: _mag_x,
+                    quant_vec: _vec_x,
                 },
                 Storage::UnsignedByte {
-                    mag: mag_y,
-                    quant_vec: vec_y,
+                    mag: _mag_y,
+                    quant_vec: _vec_y,
                 },
             ) => {
                 // Implement cosine similarity for UnsignedByte storage
                 //unimplemented!("Cosine similarity for UnsignedByte not implemented yet")
-                Ok(0.0)
+                Ok(CosineSimilarity(0.0))
             }
             (
                 Storage::SubByte {
@@ -84,12 +98,12 @@ fn cosine_similarity_from_dot_product(
     dot_product: f32,
     mag_x: u32,
     mag_y: u32,
-) -> Result<f32, DistanceError> {
+) -> Result<CosineSimilarity, DistanceError> {
     let denominator = (mag_x as f32).sqrt() * (mag_y as f32).sqrt();
     if denominator == 0.0 {
         Err(DistanceError::CalculationError)
     } else {
-        Ok(dot_product / denominator)
+        Ok(CosineSimilarity(dot_product / denominator))
     }
 }
 
@@ -101,7 +115,7 @@ fn dot_product_quaternary(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], resolution: u8) 
         .zip(&x_vec[1])
         .zip(y_vec[0].iter().zip(&y_vec[1]))
         .enumerate()
-        .map(|(i, ((&x_lsb, &x_msb), (&y_lsb, &y_msb)))| {
+        .map(|(_i, ((&x_lsb, &x_msb), (&y_lsb, &y_msb)))| {
             let lsbs = (x_lsb & y_lsb).count_ones();
             let mid1 = x_lsb & y_msb;
             let mid2 = y_lsb & x_msb;

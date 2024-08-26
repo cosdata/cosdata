@@ -53,7 +53,7 @@ impl fmt::Display for FileIndex {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             FileIndex::Valid { offset, version } => {
-                write!(f, "FileIndex(offset: {}, version: {})", offset, version)
+                write!(f, "FileIndex(offset: {}, version: {})", offset.0, version.0)
             }
             FileIndex::Invalid => write!(f, "FileIndex(Invalid)"),
         }
@@ -146,7 +146,7 @@ impl<T: Clone + 'static> SyncPersist for LazyItem<T> {
         if let Self::Valid { version_id, .. } = self {
             *version_id
         } else {
-            0
+            VersionId(0)
         }
     }
 }
@@ -295,7 +295,12 @@ impl<T: Clone + 'static> LazyItemRef<T> {
                     *version_id,
                 )
             } else {
-                (ArcShift::new(None), 0, Arc::new(AtomicBool::new(true)), 0)
+                (
+                    ArcShift::new(None),
+                    0,
+                    Arc::new(AtomicBool::new(true)),
+                    VersionId(0),
+                )
             };
 
             LazyItem::Valid {
@@ -327,7 +332,7 @@ impl<T: Clone + 'static> LazyItemRef<T> {
                     *version_id,
                 )
             } else {
-                (None, 0, Arc::new(AtomicBool::new(true)), 0)
+                (None, 0, Arc::new(AtomicBool::new(true)), VersionId(0))
             };
 
             LazyItem::Valid {
