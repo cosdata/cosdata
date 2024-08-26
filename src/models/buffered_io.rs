@@ -181,16 +181,22 @@ impl BufferManager {
         let mut total_written = 0;
         while total_written < buf.len() {
             let region = self.get_or_create_region(curr_pos)?;
-            let mut buffer = region.buffer.write().unwrap();
-            let buffer_pos = (curr_pos - region.start) as usize;
-            let available = BUFFER_SIZE - buffer_pos;
-            let to_write = (buf.len() - total_written).min(available);
-            buffer[buffer_pos..buffer_pos + to_write].copy_from_slice(&buf[total_written..total_written + to_write]);
-            region.end.store((buffer_pos + to_write).max(region.end.load(Ordering::SeqCst)), Ordering::SeqCst);
-            region.dirty.store(true, Ordering::SeqCst);
-            total_written += to_write;
-            curr_pos += to_write as u64;
-            self.file_size.fetch_max(curr_pos, Ordering::SeqCst);
+            {
+                // @NOTE: Here we need a separate scope because the
+                // `buffer` guard on the next line needs to be dropped
+                // before `flush_region_if_needed` can be called.
+                let mut buffer = region.buffer.write().unwrap();
+                let buffer_pos = (curr_pos - region.start) as usize;
+                let available = BUFFER_SIZE - buffer_pos;
+                let to_write = (buf.len() - total_written).min(available);
+                buffer[buffer_pos..buffer_pos + to_write].copy_from_slice(&buf[total_written..total_written + to_write]);
+                region.end.store((buffer_pos + to_write).max(region.end.load(Ordering::SeqCst)), Ordering::SeqCst);
+                region.dirty.store(true, Ordering::SeqCst);
+                total_written += to_write;
+                curr_pos += to_write as u64;
+                self.file_size.fetch_max(curr_pos, Ordering::SeqCst);
+
+            }
             self.flush_region_if_needed(&region)?;
         }
 
@@ -420,5 +426,52 @@ mod tests {
         for t in vec![t1, t2, t3] {
             t.join().unwrap();
         }
+    }
+
+    #[test]
+    fn test_conc_writes_different_regions() {
+        let file = large_tmp_file().unwrap();
+
+        let bufman = Arc::new(BufferManager::new(file).unwrap());
+
+        // Assert that the bytes at the position we will be writting
+        // to (in 2 separate threads) is initially 0
+        let cursor = bufman.open_cursor();
+        bufman.seek_with_cursor(cursor, SeekFrom::Start(10)).unwrap();
+        assert_eq!(0, bufman.read_u32_with_cursor(cursor).unwrap());
+
+        bufman.seek_with_cursor(cursor, SeekFrom::Start(file_offset(2, 45))).unwrap();
+        assert_eq!(0, bufman.read_u32_with_cursor(cursor).unwrap());
+
+        let t1 = {
+            let bm = bufman.clone();
+            thread::spawn(move || {
+                let cid = bm.open_cursor();
+                bm.seek_with_cursor(cid, SeekFrom::Start(10)).unwrap();
+                let res = bm.write_with_cursor(cid, &123_u32.to_le_bytes()).unwrap();
+                assert_eq!(4, res);
+                bm.close_cursor(cid);
+            })
+        };
+
+        let t2 = {
+            let bm = bufman.clone();
+            thread::spawn(move || {
+                let cid = bm.open_cursor();
+                bm.seek_with_cursor(cid, SeekFrom::Start(file_offset(2, 45))).unwrap();
+                let res = bm.write_with_cursor(cid, &456_u32.to_le_bytes()).unwrap();
+                assert_eq!(4, res);
+                bm.close_cursor(cid);
+            })
+        };
+
+        t1.join().unwrap();
+        t2.join().unwrap();
+
+        // Read the bytes that were just written and verify the values
+        bufman.seek_with_cursor(cursor, SeekFrom::Start(10)).unwrap();
+        assert_eq!(123, bufman.read_u32_with_cursor(cursor).unwrap());
+        bufman.seek_with_cursor(cursor, SeekFrom::Start(file_offset(2, 45))).unwrap();
+        assert_eq!(456, bufman.read_u32_with_cursor(cursor).unwrap());
     }
 }
