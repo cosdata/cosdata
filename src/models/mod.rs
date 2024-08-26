@@ -1,3 +1,4 @@
+pub mod buffered_io;
 pub mod cache_loader;
 pub mod common;
 pub mod custom_buffered_writer;
