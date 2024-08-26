@@ -3,11 +3,13 @@ use nom::{
     bytes::complete::tag,
     character::complete::{char, digit1},
     combinator::{map, map_res, opt, recognize},
-    sequence::{pair, preceded, tuple},
+    sequence::{pair, tuple},
     IResult,
 };
 
-use super::common::{parse_identifier, parse_string_literal};
+use super::common::{parse_string_literal, parse_variable};
+
+use std::num::{ParseFloatError, ParseIntError};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -39,18 +41,16 @@ pub fn parse_value(input: &str) -> IResult<&str, Value> {
     alt((
         map(parse_string_literal, |s| Value::String(s.to_string())),
         map(parse_date, |date| Value::Date(date)),
-        map(
+        map_res(
             recognize(tuple((opt(char('-')), digit1, char('.'), digit1))),
-            |s: &str| Value::Double(s.parse().unwrap()),
+            |s: &str| Ok::<_, ParseFloatError>(Value::Double(s.parse()?)),
         ),
-        map(recognize(pair(opt(char('-')), digit1)), |s: &str| {
-            Value::Int(s.parse().unwrap())
+        map_res(recognize(pair(opt(char('-')), digit1)), |s: &str| {
+            Ok::<_, ParseIntError>(Value::Int(s.parse()?))
         }),
         map(tag("true"), |_| Value::Boolean(true)),
         map(tag("false"), |_| Value::Boolean(false)),
-        map(preceded(char('$'), parse_identifier), |s| {
-            Value::Variable(s.to_string())
-        }),
+        map(parse_variable, |s| Value::Variable(s.to_string())),
     ))(input)
 }
 
