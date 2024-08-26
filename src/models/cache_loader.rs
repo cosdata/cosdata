@@ -65,7 +65,7 @@ impl<R: Read + Seek> NodeRegistry<R> {
         let version_id = if let FileIndex::Valid { version, .. } = &file_index {
             *version
         } else {
-            0
+            VersionId(0)
         };
 
         if max_loads == 0 || !skipm.insert(combined_index) {
@@ -137,7 +137,7 @@ impl<R: Read + Seek> NodeRegistry<R> {
 
     pub fn combine_index(file_index: &FileIndex) -> u64 {
         match file_index {
-            FileIndex::Valid { offset, version } => ((*offset as u64) << 32) | (*version as u64),
+            FileIndex::Valid { offset, version } => ((offset.0 as u64) << 32) | (version.0 as u64),
             FileIndex::Invalid => u64::MAX, // Use max u64 value for Invalid
         }
     }
@@ -147,8 +147,8 @@ impl<R: Read + Seek> NodeRegistry<R> {
             FileIndex::Invalid
         } else {
             FileIndex::Valid {
-                offset: (combined >> 32) as u32,
-                version: combined as u16,
+                offset: FileOffset((combined >> 32) as u32),
+                version: VersionId(combined as u16),
             }
         }
     }
@@ -163,8 +163,8 @@ pub fn load_cache() {
         .expect("failed to open");
 
     let file_index = FileIndex::Valid {
-        offset: 0,
-        version: 0,
+        offset: FileOffset(0),
+        version: VersionId(0),
     }; // Assuming initial version is 0
     let cache = Arc::new(NodeRegistry::new(1000, file));
     match read_node_from_file(file_index.clone(), cache) {

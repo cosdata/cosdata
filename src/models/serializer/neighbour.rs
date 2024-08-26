@@ -1,4 +1,5 @@
 use super::CustomSerialize;
+use crate::distance::cosine::CosineSimilarity;
 use crate::models::types::FileOffset;
 use crate::models::{
     cache_loader::NodeRegistry,
@@ -21,7 +22,7 @@ impl CustomSerialize for Neighbour {
         writer.write_u32::<LittleEndian>(0)?;
 
         // Serialize the cosine similarity
-        writer.write_f32::<LittleEndian>(self.cosine_similarity)?;
+        writer.write_f32::<LittleEndian>(self.cosine_similarity.0)?;
         let node_pos = self.node.serialize(writer)?;
 
         let end_pos = writer.stream_position()?;
@@ -44,7 +45,10 @@ impl CustomSerialize for Neighbour {
                 std::io::ErrorKind::InvalidInput,
                 "Cannot deserialize Neighbour with an invalid FileIndex",
             )),
-            FileIndex::Valid { offset, version } => {
+            FileIndex::Valid {
+                offset: FileOffset(offset),
+                version,
+            } => {
                 reader.seek(SeekFrom::Start(offset as u64))?;
                 // Deserialize the node position
                 let node_pos = reader.read_u32::<LittleEndian>()?;
@@ -52,13 +56,13 @@ impl CustomSerialize for Neighbour {
                 let cosine_similarity = reader.read_f32::<LittleEndian>()?;
                 // Deserialize the node using the node position
                 let node_file_index = FileIndex::Valid {
-                    offset: node_pos,
+                    offset: FileOffset(node_pos),
                     version,
                 };
                 let node = LazyItem::deserialize(reader, node_file_index, cache, max_loads, skipm)?;
                 Ok(Neighbour {
                     node,
-                    cosine_similarity,
+                    cosine_similarity: CosineSimilarity(cosine_similarity),
                 })
             }
         }

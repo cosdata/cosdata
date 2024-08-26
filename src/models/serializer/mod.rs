@@ -6,6 +6,7 @@ mod lazy_item_set;
 mod neighbour;
 mod node;
 mod vector;
+mod metric_distance;
 
 #[cfg(test)]
 mod tests;
@@ -51,7 +52,7 @@ impl CustomSerialize for f32 {
     {
         match file_index {
             FileIndex::Valid { offset, .. } => {
-                reader.seek(SeekFrom::Start(offset as u64))?;
+                reader.seek(SeekFrom::Start(offset.0 as u64))?;
                 reader.read_f32::<LittleEndian>()
             }
             FileIndex::Invalid => Err(std::io::Error::new(

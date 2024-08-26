@@ -2,12 +2,14 @@ use super::{DistanceError, DistanceFunction};
 use crate::models::dot_product::dot_product_u8;
 use crate::storage::Storage;
 use half::f16;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug)]
-pub struct DotProductDistance;
+#[derive(Debug, Clone, Deserialize, PartialEq, Serialize)]
+pub struct DotProductDistance(pub f32);
 
 impl DistanceFunction for DotProductDistance {
-    fn calculate(&self, x: &Storage, y: &Storage) -> Result<f32, DistanceError> {
+    type Item = Self;
+    fn calculate(&self, x: &Storage, y: &Storage) -> Result<Self::Item, DistanceError> {
         match (x, y) {
             (
                 Storage::UnsignedByte {
@@ -16,7 +18,7 @@ impl DistanceFunction for DotProductDistance {
                 Storage::UnsignedByte {
                     quant_vec: vec_y, ..
                 },
-            ) => Ok(dot_product_u8(vec_x, vec_y) as f32),
+            ) => Ok(DotProductDistance(dot_product_u8(vec_x, vec_y) as f32)),
             (
                 Storage::HalfPrecisionFP {
                     quant_vec: vec_x, ..
@@ -24,7 +26,7 @@ impl DistanceFunction for DotProductDistance {
                 Storage::HalfPrecisionFP {
                     quant_vec: vec_y, ..
                 },
-            ) => Ok(dot_product_f16(vec_x, vec_y)),
+            ) => Ok(DotProductDistance(dot_product_f16(vec_x, vec_y))),
             (Storage::SubByte { .. }, Storage::SubByte { .. }) => {
                 Err(DistanceError::CalculationError) // Implement if needed
             }

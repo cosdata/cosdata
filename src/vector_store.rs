@@ -3,7 +3,6 @@ use crate::models::common::*;
 use crate::models::custom_buffered_writer::CustomBufferedWriter;
 use crate::models::file_persist::*;
 use crate::models::lazy_load::*;
-use crate::models::meta_persist::*;
 use crate::models::types::*;
 use crate::storage::Storage;
 use arcshift::ArcShift;
@@ -28,7 +27,7 @@ pub fn ann_search(
     vector_emb: VectorEmbedding,
     cur_entry: LazyItem<MergedNode>,
     cur_level: i8,
-) -> Result<Option<Vec<(LazyItem<MergedNode>, f32)>>, WaCustomError> {
+) -> Result<Option<Vec<(LazyItem<MergedNode>, MetricResult)>>, WaCustomError> {
     if cur_level == -1 {
         return Ok(Some(vec![]));
     }
@@ -112,17 +111,17 @@ pub fn ann_search(
 pub fn vector_fetch(
     vec_store: Arc<VectorStore>,
     vector_id: VectorId,
-) -> Result<Vec<Option<(VectorId, Vec<(VectorId, f32)>)>>, WaCustomError> {
+) -> Result<Vec<Option<(VectorId, Vec<(VectorId, MetricResult)>)>>, WaCustomError> {
     let mut results = Vec::new();
 
     for lev in 0..vec_store.max_cache_level {
-        let maybe_res = load_vector_id_lsmdb(lev, vector_id.clone());
+        let maybe_res = load_vector_id_lsmdb(HNSWLevel(lev), vector_id.clone());
         let neighbors = match maybe_res {
             LazyItem::Valid {
                 data: Some(vth), ..
             } => {
                 let mut vth = vth.clone();
-                let nes: Vec<(VectorId, f32)> = vth
+                let nes: Vec<(VectorId, MetricResult)> = vth
                     .get()
                     .neighbors
                     .iter()
@@ -179,9 +178,9 @@ pub fn vector_fetch(
     Ok(results)
 }
 fn load_node_from_persist(
-    offset: FileIndex,
-    vec_store: &Arc<VectorStore>,
-) -> Result<Option<(VectorId, Vec<(VectorId, f32)>)>, WaCustomError> {
+    _offset: FileIndex,
+    _vec_store: &Arc<VectorStore>,
+) -> Result<Option<(VectorId, Vec<(VectorId, MetricResult)>)>, WaCustomError> {
     // Placeholder function to load vector from database
     // TODO: Implement actual database loading logic
     Err(WaCustomError::LazyLoadingError(
@@ -222,9 +221,9 @@ fn get_vector_id_from_node(node: &MergedNode) -> Option<VectorId> {
 }
 
 fn load_neighbor_from_db(
-    offset: FileIndex,
-    vec_store: &Arc<VectorStore>,
-) -> Result<Option<(VectorId, f32)>, WaCustomError> {
+    _offset: FileIndex,
+    _vec_store: &Arc<VectorStore>,
+) -> Result<Option<(VectorId, MetricResult)>, WaCustomError> {
     // Placeholder function to load neighbor from database
     // TODO: Implement actual database loading logic
     Err(WaCustomError::LazyLoadingError(
@@ -502,11 +501,20 @@ pub fn index_embedding(
             mut file_index,
             ..
         } => {
-            if let Some(offset) = file_index.get() {
-                return Err(WaCustomError::LazyLoadingError(format!(
-                    "Node at offset {} needs to be loaded",
-                    offset
-                )));
+            if let Some(file_index) = file_index.get() {
+                match file_index {
+                    FileIndex::Valid { offset, .. } => {
+                        return Err(WaCustomError::LazyLoadingError(format!(
+                            "Node at offset {} needs to be loaded",
+                            offset.0
+                        )));
+                    }
+                    FileIndex::Invalid => {
+                        return Err(WaCustomError::NodeError(
+                            "Current entry is null".to_string(),
+                        ));
+                    }
+                }
             } else {
                 return Err(WaCustomError::NodeError(
                     "Current entry is null".to_string(),
@@ -594,7 +602,7 @@ pub fn queue_node_prop_exec(
     prop_file: Arc<File>,
     vec_store: Arc<VectorStore>,
 ) -> Result<(), WaCustomError> {
-    let (mut node_arc, location) = match &lznode {
+    let (mut node_arc, _location) = match &lznode {
         LazyItem::Valid {
             data: Some(node),
             file_index,
@@ -605,11 +613,18 @@ pub fn queue_node_prop_exec(
             file_index,
             ..
         } => {
-            if let Some(offset) = file_index.clone().get().clone() {
-                return Err(WaCustomError::LazyLoadingError(format!(
-                    "Node at offset {} needs to be loaded",
-                    offset
-                )));
+            if let Some(file_index) = file_index.clone().get().clone() {
+                match file_index {
+                    FileIndex::Valid { offset, .. } => {
+                        return Err(WaCustomError::LazyLoadingError(format!(
+                            "Node at offset {} needs to be loaded",
+                            offset.0
+                        )));
+                    }
+                    FileIndex::Invalid => {
+                        return Err(WaCustomError::NodeError("Node is null".to_string()));
+                    }
+                }
             } else {
                 return Err(WaCustomError::NodeError("Node is null".to_string()));
             }
@@ -650,7 +665,7 @@ pub fn queue_node_prop_exec(
     Ok(())
 }
 
-pub fn link_prev_version(prev_loc: Option<u32>, offset: u32) {
+pub fn _link_prev_version(_prev_loc: Option<u32>, _offset: u32) {
     // todo , needs to happen in file persist
 }
 
@@ -677,7 +692,7 @@ fn insert_node_create_edges(
     parent: Option<LazyItem<MergedNode>>,
     fvec: Arc<Storage>,
     hs: VectorId,
-    nbs: Vec<(LazyItem<MergedNode>, f32)>,
+    nbs: Vec<(LazyItem<MergedNode>, MetricResult)>,
     cur_level: i8,
 ) -> Result<LazyItem<MergedNode>, WaCustomError> {
     let node_prop = NodeProp {
@@ -685,12 +700,12 @@ fn insert_node_create_edges(
         value: fvec.clone(),
         location: None,
     };
-    let mut nn = ArcShift::new(MergedNode::new(cur_level as u8));
+    let mut nn = ArcShift::new(MergedNode::new(HNSWLevel(cur_level as u8)));
     nn.get().set_prop_ready(Arc::new(node_prop));
 
     nn.get().add_ready_neighbors(nbs.clone());
     // TODO: Initialize with appropriate version ID
-    let lz_item = LazyItem::from_arcshift(0, nn.clone());
+    let lz_item = LazyItem::from_arcshift(VersionId(0), nn.clone());
 
     for (nbr1, cs) in nbs.into_iter() {
         if let LazyItem::Valid {
@@ -698,7 +713,7 @@ fn insert_node_create_edges(
             ..
         } = nbr1.clone()
         {
-            let mut neighbor_list: Vec<(LazyItem<MergedNode>, f32)> = nbr1_node
+            let mut neighbor_list: Vec<(LazyItem<MergedNode>, MetricResult)> = nbr1_node
                 .get()
                 .neighbors
                 .iter()
@@ -707,8 +722,11 @@ fn insert_node_create_edges(
 
             neighbor_list.push((lz_item.clone(), cs));
 
-            neighbor_list
-                .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            neighbor_list.sort_by(|a, b| {
+                b.1.get_value()
+                    .partial_cmp(&a.1.get_value())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
 
             neighbor_list.truncate(20);
 
@@ -734,8 +752,8 @@ fn traverse_find_nearest(
     skipm: &mut HashSet<VectorId>,
     cur_level: i8,
     skip_hop: bool,
-) -> Result<Vec<(LazyItem<MergedNode>, f32)>, WaCustomError> {
-    let mut tasks: SmallVec<[Vec<(LazyItem<MergedNode>, f32)>; 24]> = SmallVec::new();
+) -> Result<Vec<(LazyItem<MergedNode>, MetricResult)>, WaCustomError> {
+    let mut tasks: SmallVec<[Vec<(LazyItem<MergedNode>, MetricResult)>; 24]> = SmallVec::new();
 
     let mut node_arc = match vtm.clone() {
         LazyItem::Valid {
@@ -746,11 +764,20 @@ fn traverse_find_nearest(
             mut file_index,
             ..
         } => {
-            if let Some(offset) = file_index.get() {
-                return Err(WaCustomError::LazyLoadingError(format!(
-                    "Node at offset {} needs to be loaded",
-                    offset
-                )));
+            if let Some(file_index) = file_index.get() {
+                match file_index {
+                    FileIndex::Valid { offset, .. } => {
+                        return Err(WaCustomError::LazyLoadingError(format!(
+                            "Node at offset {} needs to be loaded",
+                            offset.0
+                        )));
+                    }
+                    FileIndex::Invalid => {
+                        return Err(WaCustomError::NodeError(
+                            "Current entry is null".to_string(),
+                        ));
+                    }
+                }
             } else {
                 return Err(WaCustomError::NodeError(
                     "Current entry is null".to_string(),
@@ -820,7 +847,7 @@ fn traverse_find_nearest(
     }
 
     let mut nn: Vec<_> = tasks.into_iter().flatten().collect();
-    nn.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    nn.sort_by(|a, b| b.1.get_value().partial_cmp(&a.1.get_value()).unwrap());
     let mut seen = HashSet::new();
     nn.retain(|(lazy_node, _)| {
         if let LazyItem::Valid {
