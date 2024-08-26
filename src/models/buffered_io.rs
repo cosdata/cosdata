@@ -137,23 +137,21 @@ impl BufferManager {
     }
 
     pub fn read_with_cursor(&self, cursor_id: u64, buf: &mut [u8]) -> io::Result<usize> {
-        // DOUBT: Do we need to take a write lock on cursors? I think
-        // a read lock should suffice here because multiple thread
-        // should be able to call this function concurrently. The only
-        // time we need to lock cursors hashmap is at the time of
-        // updating the position of the current cursor
-        let mut cursors = self.cursors.write().unwrap();
-        let cursor = cursors.get_mut(&cursor_id)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid cursor"))?;
+        let mut curr_pos = {
+            let cursors = self.cursors.read().unwrap();
+            let cursor = cursors.get(&cursor_id)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid cursor"))?;
+            cursor.position
+        };
 
         let mut total_read = 0;
         while total_read < buf.len() {
-            let region = self.get_or_create_region(cursor.position)?;
+            let region = self.get_or_create_region(curr_pos)?;
             let buffer = region.buffer.read().unwrap();
-            let buffer_pos = (cursor.position - region.start) as usize;
+            let buffer_pos = (curr_pos - region.start) as usize;
             let available = region.end.load(Ordering::SeqCst) - buffer_pos;
             if available == 0 {
-                if total_read == 0 && cursor.position >= self.file_size.load(Ordering::SeqCst) {
+                if total_read == 0 && curr_pos >= self.file_size.load(Ordering::SeqCst) {
                     return Ok(0); // EOF
                 }
                 break;
@@ -161,43 +159,46 @@ impl BufferManager {
             let to_read = (buf.len() - total_read).min(available);
             buf[total_read..total_read + to_read].copy_from_slice(&buffer[buffer_pos..buffer_pos + to_read]);
             total_read += to_read;
-            // @DOUBT: Do we need to update the cursor position in
-            // each iteration. We can capture the value in a local
-            // variable and after the while loop, take a write lock on
-            // the cursors hashmap and update it
-            cursor.position += to_read as u64;
+            curr_pos += to_read as u64;
         }
+
+        let mut cursors = self.cursors.write().unwrap();
+        let cursor = cursors.get_mut(&cursor_id)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid cursor"))?;
+        cursor.position = curr_pos;
+
         Ok(total_read)
     }
 
     pub fn write_with_cursor(&self, cursor_id: u64, buf: &[u8]) -> io::Result<usize> {
-        // @DOUBT: Same as above. If we take a write lock here, then
-        // this function can't be called concurrently. Instead we can
-        // take a read lock just to get the cursor position and store
-        // that in a local var.
-        let mut cursors = self.cursors.write().unwrap();
-        let cursor = cursors.get_mut(&cursor_id)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid cursor"))?;
+        let mut curr_pos = {
+            let cursors = self.cursors.read().unwrap();
+            let cursor = cursors.get(&cursor_id)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid cursor"))?;
+            cursor.position
+        };
 
         let mut total_written = 0;
         while total_written < buf.len() {
-            let region = self.get_or_create_region(cursor.position)?;
+            let region = self.get_or_create_region(curr_pos)?;
             let mut buffer = region.buffer.write().unwrap();
-            let buffer_pos = (cursor.position - region.start) as usize;
+            let buffer_pos = (curr_pos - region.start) as usize;
             let available = BUFFER_SIZE - buffer_pos;
             let to_write = (buf.len() - total_written).min(available);
             buffer[buffer_pos..buffer_pos + to_write].copy_from_slice(&buf[total_written..total_written + to_write]);
             region.end.store((buffer_pos + to_write).max(region.end.load(Ordering::SeqCst)), Ordering::SeqCst);
             region.dirty.store(true, Ordering::SeqCst);
             total_written += to_write;
-            // @DOUBT: As with above, update the local var here and
-            // after the while loop, sync the value with cursor
-            // position by taking a write lock
-            cursor.position += to_write as u64;
-            self.file_size.fetch_max(cursor.position, Ordering::SeqCst);
-
+            curr_pos += to_write as u64;
+            self.file_size.fetch_max(curr_pos, Ordering::SeqCst);
             self.flush_region_if_needed(&region)?;
         }
+
+        let mut cursors = self.cursors.write().unwrap();
+        let cursor = cursors.get_mut(&cursor_id)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid cursor"))?;
+        cursor.position = curr_pos;
+
         Ok(total_written)
     }
 
@@ -270,5 +271,15 @@ mod tests {
         // Thread 1: Continue reading
         let value2 = bufman.read_u32_with_cursor(cursor1).unwrap();
         assert_eq!(789_u32, value2);
+
+        // Thread 2: Again write to end of file
+        bufman.write_with_cursor(cursor2, &12345_u32.to_le_bytes()).unwrap();
+
+        // Thread 1: Continue reading
+        let value3 = bufman.read_u32_with_cursor(cursor1).unwrap();
+        assert_eq!(12345_u32, value3);
+
+        bufman.close_cursor(cursor1);
+        bufman.close_cursor(cursor1);
     }
 }
