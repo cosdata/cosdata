@@ -53,6 +53,8 @@ pub fn parse_attribute(input: &str) -> IResult<&str, Attribute> {
 
 #[cfg(test)]
 mod tests {
+    use crate::cosql::Date;
+
     use super::*;
 
     #[test]
@@ -76,7 +78,7 @@ mod tests {
                 "date_of_birth: 01-01-1970",
                 Attribute {
                     name: "date_of_birth".to_string(),
-                    value: Value::Date("01-01-1970".to_string()),
+                    value: Value::Date(Date(1, 1, 1970)),
                 },
             ),
         ];
@@ -108,7 +110,7 @@ mod tests {
                     },
                     Attribute {
                         name: "date_of_birth".to_string(),
-                        value: Value::Date("01-01-1970".to_string()),
+                        value: Value::Date(Date(1, 1, 1970)),
                     },
                 ],
             ),
@@ -125,11 +127,11 @@ mod tests {
                     },
                     Attribute {
                         name: "start_date".to_string(),
-                        value: Value::Date("01-01-2000".to_string()),
+                        value: Value::Date(Date(1, 1, 2000)),
                     },
                     Attribute {
                         name: "end_date".to_string(),
-                        value: Value::Date("31-12-2009".to_string()),
+                        value: Value::Date(Date(31, 12, 2009)),
                     },
                 ],
             ),

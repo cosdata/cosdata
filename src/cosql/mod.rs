@@ -28,7 +28,7 @@ pub use compute_clause::{ComputeClause, ComputeClauses};
 pub use data_type::DataType;
 pub use inference::{Inference, Inferences};
 pub use pattern::{Pattern, Patterns};
-pub use value::Value;
+pub use value::{Date, Value};
 
 pub type CosQLStatements = Vec<CosQLStatement>;
 
