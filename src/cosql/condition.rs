@@ -6,7 +6,7 @@ use nom::{
 use super::{
     common::{parse_variable, ws},
     value::parse_value,
-    Value,
+    Precedence, Value,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -44,6 +44,15 @@ pub enum LogicalOperator {
     And,
     // or
     Or,
+}
+
+impl LogicalOperator {
+    pub fn precedence(&self) -> Precedence {
+        match self {
+            Self::And => Precedence::And,
+            Self::Or => Precedence::Or,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

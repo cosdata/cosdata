@@ -6,6 +6,7 @@ pub mod definition;
 pub mod inference;
 pub mod insertion;
 pub mod pattern;
+mod precedence;
 pub mod query;
 pub mod rule;
 pub mod value;
@@ -28,6 +29,7 @@ pub use compute_clause::{ComputeClause, ComputeClauses};
 pub use data_type::DataType;
 pub use inference::{Inference, Inferences};
 pub use pattern::{Pattern, Patterns};
+pub use precedence::Precedence;
 pub use value::{Date, Value};
 
 pub type CosQLStatements = Vec<CosQLStatement>;
