@@ -243,6 +243,7 @@ impl BufferManager {
 #[cfg(test)]
 mod tests {
 
+    use std::thread;
     use tempfile::tempfile;
     use super::*;
 
@@ -281,5 +282,143 @@ mod tests {
 
         bufman.close_cursor(cursor1);
         bufman.close_cursor(cursor1);
+    }
+
+    /// Create a large tmp content file about (5 * BUFFER_SIZE + 150)
+    /// in size
+    fn large_tmp_file() -> io::Result<File> {
+        let mut file = tempfile()?;
+        file.write_all(&vec![0_u8; (BUFFER_SIZE * 5) + 200])?;
+        Ok(file)
+    }
+
+    fn file_offset(region: usize, region_offset: usize) -> u64 {
+        if region_offset > BUFFER_SIZE {
+            panic!("region_offset must be smaller than BUFFER_SIZE ({BUFFER_SIZE})");
+        }
+        (BUFFER_SIZE * (region - 1) + region_offset) as u64
+    }
+
+    #[test]
+    fn test_reads_across_regions() {
+        // Setup: Create a large tmp file and write 4 bytes into at
+        // position 8190 i.e. BUFFER_SIZE - 2. This means first 2
+        // bytes will be in region 1 and rest will be in region 2
+
+        let mut file = large_tmp_file().unwrap();
+        file.seek(SeekFrom::Start(8190)).unwrap();
+        file.write_all(&1678_u32.to_le_bytes()).unwrap();
+
+        let bufman = BufferManager::new(file).unwrap();
+
+        let cursor1 = bufman.open_cursor();
+        bufman.seek_with_cursor(cursor1, SeekFrom::Start(8190)).unwrap();
+        let value1 = bufman.read_u32_with_cursor(cursor1).unwrap();
+        assert_eq!(1678_u32, value1);
+
+        bufman.close_cursor(cursor1);
+    }
+
+
+    #[test]
+    fn test_conc_reads_different_regions() {
+        let mut file = large_tmp_file().unwrap();
+
+        // Write some data in region 1
+        file.seek(SeekFrom::Start(100)).unwrap();
+        file.write_all(&500_u16.to_le_bytes()).unwrap();
+
+        // Write some data in region 3
+        file.seek(SeekFrom::Start(file_offset(3, 147))).unwrap();
+        file.write_all(&1000_u32.to_le_bytes()).unwrap();
+
+        let bufman = Arc::new(BufferManager::new(file).unwrap());
+        let t1 = {
+            // Thread 1 that reads from region 1
+            let bm = bufman.clone();
+            thread::spawn(move || {
+                let cid = bm.open_cursor();
+                bm.seek_with_cursor(cid, SeekFrom::Start(100)).unwrap();
+                let v = bm.read_u16_with_cursor(cid).unwrap();
+                assert_eq!(500_u16, v);
+                bm.close_cursor(cid);
+            })
+        };
+
+        let t2 = {
+            // Thread 2 that reads from region 3
+            let bm = bufman.clone();
+            thread::spawn(move || {
+                let cid = bm.open_cursor();
+                bm.seek_with_cursor(cid, SeekFrom::Start(file_offset(3, 147))).unwrap();
+                let v = bm.read_u32_with_cursor(cid).unwrap();
+                assert_eq!(1000_u32, v);
+                bm.close_cursor(cid);
+            })
+        };
+
+        t1.join().unwrap();
+        t2.join().unwrap();
+    }
+
+    #[test]
+    fn test_conc_reads_same_region() {
+        let mut file = large_tmp_file().unwrap();
+
+        // Write some data in region 1
+        file.seek(SeekFrom::Start(0)).unwrap();
+        file.write_all(&500_u16.to_le_bytes()).unwrap();
+
+        file.seek(SeekFrom::Start(2)).unwrap();
+        file.write_all(&1000_u32.to_le_bytes()).unwrap();
+
+        file.seek(SeekFrom::Start(6)).unwrap();
+        file.write_all(&145_u32.to_le_bytes()).unwrap();
+
+        // Thread 1 will read first two bytes in region 1
+        let bufman = Arc::new(BufferManager::new(file).unwrap());
+        let t1 = {
+            // Thread 1 that reads from region 1
+            let bm = bufman.clone();
+            thread::spawn(move || {
+                let cid = bm.open_cursor();
+                bm.seek_with_cursor(cid, SeekFrom::Start(0)).unwrap();
+                let v = bm.read_u16_with_cursor(cid).unwrap();
+                assert_eq!(500_u16, v);
+                bm.close_cursor(cid);
+            })
+        };
+
+        // Thread 2 will read first 6 bytes in region 1
+        let t2 = {
+            // Thread 1 that reads from region 1
+            let bm = bufman.clone();
+            thread::spawn(move || {
+                let cid = bm.open_cursor();
+                bm.seek_with_cursor(cid, SeekFrom::Start(0)).unwrap();
+                let v1 = bm.read_u16_with_cursor(cid).unwrap();
+                assert_eq!(500_u16, v1);
+                let v2 = bm.read_u32_with_cursor(cid).unwrap();
+                assert_eq!(1000_u32, v2);
+                bm.close_cursor(cid);
+            })
+        };
+
+        // Thread 3 will read last 4 bytes in region 1
+        let t3 = {
+            // Thread 1 that reads from region 1
+            let bm = bufman.clone();
+            thread::spawn(move || {
+                let cid = bm.open_cursor();
+                bm.seek_with_cursor(cid, SeekFrom::Start(6)).unwrap();
+                let v = bm.read_u32_with_cursor(cid).unwrap();
+                assert_eq!(145_u32, v);
+                bm.close_cursor(cid);
+            })
+        };
+
+        for t in vec![t1, t2, t3] {
+            t.join().unwrap();
+        }
     }
 }
