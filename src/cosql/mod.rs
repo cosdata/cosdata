@@ -3,6 +3,7 @@ pub mod compute_clause;
 pub mod condition;
 pub mod data_type;
 pub mod definition;
+pub mod expression;
 pub mod inference;
 pub mod insertion;
 pub mod pattern;
@@ -27,6 +28,7 @@ use rule::{parse_rule, Rule};
 
 pub use compute_clause::{ComputeClause, ComputeClauses};
 pub use data_type::DataType;
+pub use expression::Expression;
 pub use inference::{Inference, Inferences};
 pub use pattern::{Pattern, Patterns};
 pub use precedence::Precedence;

@@ -1,5 +1,5 @@
 use nom::{
-    bytes::complete::{tag, take_while1},
+    bytes::complete::tag,
     character::complete::char,
     combinator::map,
     multi::separated_list1,
@@ -7,14 +7,18 @@ use nom::{
     IResult,
 };
 
-use super::common::{parse_identifier, ws};
+use super::{
+    common::{parse_identifier, ws},
+    expression::parse_expression,
+    Expression,
+};
 
 pub type ComputeClauses = Vec<ComputeClause>;
 
 #[derive(Debug, Clone)]
 pub struct ComputeClause {
     pub variable: String,
-    pub expression: String,
+    pub expression: Expression,
 }
 
 pub fn parse_compute_clauses(input: &str) -> IResult<&str, ComputeClauses> {
@@ -29,11 +33,11 @@ pub fn parse_compute_clause(input: &str) -> IResult<&str, ComputeClause> {
         tuple((
             preceded(char('$'), ws(parse_identifier)),
             ws(char('=')),
-            take_while1(|c| c != ',' && c != '\n'),
+            parse_expression,
         )),
         |(variable, _, expression)| ComputeClause {
             variable: variable.to_string(),
-            expression: expression.trim().to_string(),
+            expression,
         },
     )(input)
 }
