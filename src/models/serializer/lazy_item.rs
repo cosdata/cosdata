@@ -21,7 +21,6 @@ fn lazy_item_serialize_impl<W: Write + Seek>(
     writer: &mut W,
 ) -> std::io::Result<u32> {
     let node_placeholder = writer.stream_position()?;
-    println!("--- Serializing LazyItem at: {}", node_placeholder);
     writer.write_u32::<LittleEndian>(0)?;
     let versions_placeholder = writer.stream_position()?;
     writer.write_u32::<LittleEndian>(0)?;
@@ -52,7 +51,6 @@ fn lazy_item_deserialize_impl<R: Read + Seek>(
             "Cannot deserialize MergedNode with an invalid FileIndex",
         )),
         FileIndex::Valid { offset, version } => {
-            println!("--- Deserializing LazyItem at: {}", offset);
             if offset == u32::MAX {
                 return Ok(LazyItem::Invalid);
             }
@@ -143,10 +141,6 @@ impl CustomSerialize for LazyItem<MergedNode> {
         max_loads: u16,
         skipm: &mut HashSet<u64>,
     ) -> std::io::Result<Self> {
-        println!(
-            "LAZYITEM DESERIALIZE CALLED WITH FILE_INDEX: {:#?}",
-            file_index
-        );
         cache.get_object(
             file_index,
             reader,

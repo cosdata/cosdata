@@ -456,7 +456,7 @@ where
 
     pub fn transactional_update<F>(&mut self, mut update_fn: F) -> Result<bool, WaCustomError>
     where
-        F: FnMut(&T) -> T + Clone,
+        F: FnMut(&T) -> T,
     {
         let mut updated = false;
         let mut tries = 0;

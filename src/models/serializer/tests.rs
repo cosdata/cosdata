@@ -1,7 +1,10 @@
+use crate::models::identity_collections::IdentityMapKey;
 use crate::models::lazy_load::*;
 use crate::models::serializer::*;
 use crate::models::types::*;
-use crate::models::versioning::VersionControl;
+use crate::models::versioning::BranchId;
+use crate::models::versioning::VersionHash;
+use crate::models::versioning::{Version, VersionControl};
 use arcshift::ArcShift;
 use lmdb::Environment;
 use std::io::Cursor;
@@ -278,7 +281,7 @@ fn test_merged_node_with_parent_child_serialization() {
 }
 
 #[test]
-fn test_merged_node_with_versions_serialization() {
+fn test_lazy_item_with_versions_serialization() {
     let temp_dir = tempdir().unwrap();
     let env = Arc::new(
         Environment::new()
@@ -294,11 +297,11 @@ fn test_merged_node_with_versions_serialization() {
 
     let v1_hash = vcs.add_next_version("main").unwrap();
     let node_v1 = LazyItem::new(v1_hash, MergedNode::new(2));
-    node_v0.add_version(vcs.clone(), 1, node_v1);
+    node_v0.add_version(vcs.clone(), 1, node_v1).unwrap();
 
     let v2_hash = vcs.add_next_version("main").unwrap();
     let node_v2 = LazyItem::new(v2_hash, MergedNode::new(2));
-    node_v0.add_version(vcs.clone(), 2, node_v2);
+    node_v0.add_version(vcs.clone(), 2, node_v2).unwrap();
 
     let mut writer = Cursor::new(Vec::new());
     let offset = node_v0.serialize(&mut writer).unwrap();
@@ -318,7 +321,7 @@ fn test_merged_node_with_versions_serialization() {
 }
 
 #[test]
-fn test_merged_node_cyclic_serialization() {
+fn test_lazy_item_cyclic_serialization() {
     let node1 = LazyItem::new(1.into(), MergedNode::new(2));
     let node2 = LazyItem::new(2.into(), MergedNode::new(2));
 
@@ -358,7 +361,7 @@ fn test_merged_node_cyclic_serialization() {
 }
 
 #[test]
-fn test_merged_node_complex_cyclic_serialization() {
+fn test_lazy_item_complex_cyclic_serialization() {
     let mut node1 = ArcShift::new(MergedNode::new(2));
     let mut node2 = ArcShift::new(MergedNode::new(2));
     let mut node3 = ArcShift::new(MergedNode::new(2));
@@ -518,4 +521,98 @@ fn test_eager_lazy_item_set_linked_chunk_serialization() {
             _ => panic!("Deserialization mismatch"),
         }
     }
+}
+
+fn validate_lazy_item_versions<R: Read + Seek>(
+    vcs: Arc<VersionControl>,
+    cache: Arc<NodeRegistry<R>>,
+    lazy_item: LazyItem<MergedNode>,
+    current_version_hash: VersionHash,
+) {
+    let versions = lazy_item.get_versions().unwrap();
+
+    for i in 0.. {
+        let key = IdentityMapKey::Int(i);
+        if let Some(version) = versions.get(&key) {
+            let version = if version.get_data().is_none() {
+                let file_index = version.get_file_index().unwrap();
+                cache.clone().load_item(file_index).unwrap()
+            } else {
+                version
+            };
+
+            let version_hash = vcs
+                .get_version_hash(&version.get_current_version())
+                .unwrap()
+                .unwrap();
+
+            assert_eq!(
+                *version_hash.version - *current_version_hash.version,
+                4_u32.pow(i)
+            );
+            validate_lazy_item_versions(vcs.clone(), cache.clone(), version, version_hash);
+        } else {
+            break;
+        }
+    }
+}
+
+#[test]
+fn test_lazy_item_with_versions_serialization_and_validation() {
+    let temp_dir = tempdir().unwrap();
+    let env = Arc::new(
+        Environment::new()
+            .set_max_dbs(2)
+            .set_map_size(10485760) // 10MB
+            .open(temp_dir.as_ref())
+            .unwrap(),
+    );
+    let vcs = Arc::new(VersionControl::new(env).unwrap());
+
+    let v0_hash = vcs.generate_hash("main", Version::from(0)).unwrap();
+    let root = LazyItem::new(v0_hash, MergedNode::new(0));
+
+    for i in 0..100 {
+        let hash = vcs.add_next_version("main").unwrap();
+        let next_version = LazyItem::new(hash, MergedNode::new(0));
+        root.add_version(vcs.clone(), i + 1, next_version).unwrap();
+    }
+
+    let root_version_hash = vcs.get_version_hash(&v0_hash).unwrap().unwrap();
+    let empty_reader = Cursor::new(Vec::new());
+    let empty_cache = get_cache(empty_reader);
+    validate_lazy_item_versions(
+        vcs.clone(),
+        empty_cache,
+        root.clone(),
+        root_version_hash.clone(),
+    );
+
+    let mut writer = Cursor::new(Vec::new());
+    let offset = root.serialize(&mut writer).unwrap();
+    let file_index = FileIndex::Valid {
+        offset,
+        version: v0_hash,
+    };
+
+    let reader = Cursor::new(writer.into_inner());
+    let cache = get_cache(reader);
+    let deserialized: LazyItem<MergedNode> = cache.clone().load_item(file_index).unwrap();
+
+    validate_lazy_item_versions(vcs, cache, deserialized, root_version_hash);
+}
+
+#[test]
+fn test_version_hashing_function_uniqueness() {
+    let branch_id = BranchId::new("main");
+    let mut versions = HashSet::new();
+
+    for i in 0..1000 {
+        let version_hash = VersionHash::new(branch_id, Version::from(i));
+        versions.insert(version_hash.calculate_hash());
+        // simulate some processing
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    assert_eq!(versions.iter().count(), 1000);
 }

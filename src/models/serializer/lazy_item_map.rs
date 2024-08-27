@@ -81,6 +81,7 @@ where
         }
         Ok(start_offset)
     }
+
     fn deserialize<R: Read + Seek>(
         reader: &mut R,
         file_index: FileIndex,
@@ -90,7 +91,7 @@ where
     ) -> std::io::Result<Self> {
         match file_index {
             FileIndex::Invalid => Ok(LazyItemMap::new()),
-            FileIndex::Valid { offset, version } => {
+            FileIndex::Valid { offset, .. } => {
                 if offset == u32::MAX {
                     return Ok(LazyItemMap::new());
                 }
@@ -101,6 +102,7 @@ where
                     for i in 0..CHUNK_SIZE {
                         reader.seek(SeekFrom::Start(current_chunk as u64 + (i as u64 * 8)))?;
                         let entry_offset = reader.read_u32::<LittleEndian>()?;
+                        let version = reader.read_u32::<LittleEndian>()?.into();
                         if entry_offset == u32::MAX {
                             continue;
                         }
@@ -116,7 +118,6 @@ where
                             skipm,
                         )?;
                         let item_offset = reader.read_u32::<LittleEndian>()?;
-                        let version = reader.read_u32::<LittleEndian>()?.into();
                         let item_file_index = FileIndex::Valid {
                             offset: item_offset,
                             version,
