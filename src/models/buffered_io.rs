@@ -391,7 +391,6 @@ mod tests {
         bufman.close_cursor(cursor1);
     }
 
-
     #[test]
     fn test_conc_reads_different_regions() {
         let mut file = create_tmp_file(4, 200).unwrap();
@@ -495,6 +494,89 @@ mod tests {
     }
 
     #[test]
+    fn test_conc_reads_across_regions() {
+        let mut file = create_tmp_file(3, 200).unwrap();
+
+        let pos1 = file_offset(1, 8190);
+        let pos2 = file_offset(2, 8190);
+
+        file.seek(SeekFrom::Start(pos1)).unwrap();
+        file.write_all(&1000_u32.to_le_bytes()).unwrap();
+
+        file.seek(SeekFrom::Start(pos2)).unwrap();
+        file.write_all(&2000_u32.to_le_bytes()).unwrap();
+
+        let bufman = Arc::new(BufferManager::new(file).unwrap());
+        let t1 = {
+            // Thread 1 that reads from region 1 and 2
+            let bm = bufman.clone();
+            thread::spawn(move || {
+                let cid = bm.open_cursor();
+                bm.seek_with_cursor(cid, SeekFrom::Start(pos1)).unwrap();
+                let v = bm.read_u32_with_cursor(cid).unwrap();
+                assert_eq!(1000_u32, v);
+                bm.close_cursor(cid);
+            })
+        };
+
+        let t2 = {
+            // Thread 2 that reads from region 2 and 3
+            let bm = bufman.clone();
+            thread::spawn(move || {
+                let cid = bm.open_cursor();
+                bm.seek_with_cursor(cid, SeekFrom::Start(pos2)).unwrap();
+                let v = bm.read_u32_with_cursor(cid).unwrap();
+                assert_eq!(2000_u32, v);
+                bm.close_cursor(cid);
+            })
+        };
+
+        t1.join().unwrap();
+        t2.join().unwrap();
+    }
+
+    #[test]
+    fn test_writes_across_regions() {
+        let file = create_tmp_file(5, 200).unwrap();
+        let bufman = BufferManager::new(file).unwrap();
+
+        let cursor = bufman.open_cursor();
+        bufman.seek_with_cursor(cursor, SeekFrom::Start(8190)).unwrap();
+        let res = bufman.write_with_cursor(cursor, &100000_u32.to_le_bytes()).unwrap();
+        assert_eq!(4, res);
+
+        bufman.seek_with_cursor(cursor, SeekFrom::Start(8190)).unwrap();
+        let x = bufman.read_u32_with_cursor(cursor).unwrap();
+        assert_eq!(100000, x);
+
+        // Verify that `bufman.file_size` remains the same
+        assert_eq!((BUFFER_SIZE * 5 + 200) as u64, *bufman.file_size.read().unwrap());
+    }
+
+    // Where a thread starts writing from an offset in the middle of
+    // the file but ends up writing beyond end of file
+    #[test]
+    fn test_writes_beyond_eof() {
+        let file = create_tmp_file(0, 10).unwrap();
+        let bufman = BufferManager::new(file).unwrap();
+
+        let cursor = bufman.open_cursor();
+        bufman.seek_with_cursor(cursor, SeekFrom::Start(7)).unwrap();
+        let txt = String::from("Hello, World");
+        let data = txt.as_bytes();
+        let res = bufman.write_with_cursor(cursor, &data).unwrap();
+        assert_eq!(data.len(), res);
+
+        // Verify that `bufman.file_size` has correctly increased
+        assert_eq!(19_u64, *bufman.file_size.read().unwrap());
+
+        bufman.seek_with_cursor(cursor, SeekFrom::Start(7)).unwrap();
+        let mut output = [0u8; 12];
+        bufman.read_with_cursor(cursor, &mut output).unwrap();
+        assert_eq!(b"Hello, World", &output);
+    }
+
+    #[test]
     fn test_conc_writes_different_regions() {
         let file = create_tmp_file(3, 200).unwrap();
 
@@ -539,8 +621,12 @@ mod tests {
         assert_eq!(123, bufman.read_u32_with_cursor(cursor).unwrap());
         bufman.seek_with_cursor(cursor, SeekFrom::Start(file_offset(2, 45))).unwrap();
         assert_eq!(456, bufman.read_u32_with_cursor(cursor).unwrap());
+
+        // Verify that `bufman.file_size` remains the same
+        assert_eq!((BUFFER_SIZE * 3 + 200) as u64, *bufman.file_size.read().unwrap());
     }
 
+    // Two threads, both writing to the end of file
     #[test]
     fn test_conc_writes_to_end_of_file() {
         let file = create_tmp_file(0, 45).unwrap();
@@ -588,5 +674,217 @@ mod tests {
         }
 
         bufman.close_cursor(cursor);
+
+        // Verify that `bufman.file_size` has increased by 4 bytes
+        assert_eq!(49_u64, *bufman.file_size.read().unwrap());
+    }
+
+    // Concurrent writes to the same region, where both threads are
+    // writing to two different positions in the same region, other
+    // than the end of file
+    #[test]
+    fn test_conc_writes_to_same_region_1() {
+        let file = create_tmp_file(2, 23).unwrap();
+        let bufman = Arc::new(BufferManager::new(file).unwrap());
+
+        let pos1 = (BUFFER_SIZE * 2 + 12) as u64;
+        let pos2 = (BUFFER_SIZE * 2 + 5) as u64;
+
+        // Thread 1 will write to pos1
+        let t1 = {
+            let bm = bufman.clone();
+            thread::spawn(move || {
+                let cid = bm.open_cursor();
+                bm.seek_with_cursor(cid, SeekFrom::Start(pos1)).unwrap();
+                let res = bm.write_with_cursor(cid, &42_u16.to_le_bytes()).unwrap();
+                assert_eq!(2, res);
+                bm.close_cursor(cid);
+            })
+        };
+
+        // Thread 2 will write to pos2
+        let t2 = {
+            let bm = bufman.clone();
+            thread::spawn(move || {
+                let cid = bm.open_cursor();
+                bm.seek_with_cursor(cid, SeekFrom::Start(pos2)).unwrap();
+                let res = bm.write_with_cursor(cid, &2024_u32.to_le_bytes()).unwrap();
+                assert_eq!(4, res);
+                bm.close_cursor(cid);
+            })
+        };
+
+        t1.join().unwrap();
+        t2.join().unwrap();
+
+        let cursor = bufman.open_cursor();
+
+        bufman.seek_with_cursor(cursor, SeekFrom::Start(pos1)).unwrap();
+        let x = bufman.read_u16_with_cursor(cursor).unwrap();
+        assert_eq!(42, x);
+
+        bufman.seek_with_cursor(cursor, SeekFrom::Start(pos2)).unwrap();
+        let y = bufman.read_u32_with_cursor(cursor).unwrap();
+        assert_eq!(2024, y);
+
+        bufman.close_cursor(cursor);
+
+        // Verify that `bufman.file_size` increases by 2 bytes
+        assert_eq!((BUFFER_SIZE * 2 + 23) as u64, *bufman.file_size.read().unwrap());
+    }
+
+    // Concurrent writes to the same region, where one thread is
+    // writing to the end of file and other is writing to some other
+    // position
+    #[test]
+    fn test_conc_writes_to_same_region_2() {
+        let file = create_tmp_file(2, 23).unwrap();
+        let bufman = Arc::new(BufferManager::new(file).unwrap());
+
+        // Thread 1 will write to the end of file
+        let t1 = {
+            let bm = bufman.clone();
+            thread::spawn(move || {
+                let cid = bm.open_cursor();
+                bm.seek_with_cursor(cid, SeekFrom::End(0)).unwrap();
+                let res = bm.write_with_cursor(cid, &42_u16.to_le_bytes()).unwrap();
+                assert_eq!(2, res);
+                bm.close_cursor(cid);
+            })
+        };
+
+        // Thread 2 will write to some position in the last region
+        // (same region as thread 1 is writing to)
+        let t2 = {
+            let bm = bufman.clone();
+            thread::spawn(move || {
+                let cid = bm.open_cursor();
+                let some_pos = (BUFFER_SIZE * 2 + 5) as u64;
+                bm.seek_with_cursor(cid, SeekFrom::Start(some_pos)).unwrap();
+                let res = bm.write_with_cursor(cid, &2024_u32.to_le_bytes()).unwrap();
+                assert_eq!(4, res);
+                bm.close_cursor(cid);
+            })
+        };
+
+        t1.join().unwrap();
+        t2.join().unwrap();
+
+        let cursor = bufman.open_cursor();
+
+        bufman.seek_with_cursor(cursor, SeekFrom::End(-2)).unwrap();
+        let x = bufman.read_u16_with_cursor(cursor).unwrap();
+        assert_eq!(42, x);
+
+        bufman.seek_with_cursor(cursor, SeekFrom::Start((BUFFER_SIZE * 2 + 5) as u64)).unwrap();
+        let y = bufman.read_u32_with_cursor(cursor).unwrap();
+        assert_eq!(2024, y);
+
+        bufman.close_cursor(cursor);
+
+        // Verify that `bufman.file_size` increases by 2 bytes
+        assert_eq!((BUFFER_SIZE * 2 + 23 + 2) as u64, *bufman.file_size.read().unwrap());
+    }
+
+    // 2 threads, one thread writes from region 1 + 2 and another one
+    // writes to region 2 + 3
+    #[test]
+    fn test_conc_writes_across_regions() {
+        let file = create_tmp_file(3, 200).unwrap();
+        let bufman = Arc::new(BufferManager::new(file).unwrap());
+
+        let pos1 = file_offset(1, 8190);
+        let pos2 = file_offset(2, 8190);
+
+        let t1 = {
+            let bm = bufman.clone();
+            thread::spawn(move || {
+                let cid = bm.open_cursor();
+                bm.seek_with_cursor(cid, SeekFrom::Start(pos1)).unwrap();
+                let res = bm.write_with_cursor(cid, &123_u32.to_le_bytes()).unwrap();
+                assert_eq!(4, res);
+                bm.close_cursor(cid);
+            })
+        };
+
+        let t2 = {
+            let bm = bufman.clone();
+            thread::spawn(move || {
+                let cid = bm.open_cursor();
+                bm.seek_with_cursor(cid, SeekFrom::Start(pos2)).unwrap();
+                let res = bm.write_with_cursor(cid, &456_u32.to_le_bytes()).unwrap();
+                assert_eq!(4, res);
+                bm.close_cursor(cid);
+            })
+        };
+
+        t1.join().unwrap();
+        t2.join().unwrap();
+
+        let cursor = bufman.open_cursor();
+
+        bufman.seek_with_cursor(cursor, SeekFrom::Start(pos1)).unwrap();
+        let x = bufman.read_u32_with_cursor(cursor).unwrap();
+        assert_eq!(123, x);
+
+        bufman.seek_with_cursor(cursor, SeekFrom::Start(pos2)).unwrap();
+        let y = bufman.read_u32_with_cursor(cursor).unwrap();
+        assert_eq!(456, y);
+
+        bufman.close_cursor(cursor);
+
+        // Verify that `bufman.file_size` remain the same
+        assert_eq!((BUFFER_SIZE * 3 + 200) as u64, *bufman.file_size.read().unwrap());
+    }
+
+    #[test]
+    fn test_conc_reads_writes() {
+        // 2 threads, one thread reads from region 5 and another thread
+        // writes to region 5 as well.
+        let mut file = create_tmp_file(1, 10).unwrap();
+
+        let pos1 = file_offset(1, 5);
+        let pos2 = file_offset(1, 45);
+
+        file.seek(SeekFrom::Start(pos1)).unwrap();
+        file.write_all(&1000_u32.to_le_bytes()).unwrap();
+
+        let bufman = Arc::new(BufferManager::new(file).unwrap());
+        let t1 = {
+            // Thread 1 that reads from region 1 and 2
+            let bm = bufman.clone();
+            thread::spawn(move || {
+                let cid = bm.open_cursor();
+                bm.seek_with_cursor(cid, SeekFrom::Start(pos1)).unwrap();
+                let v = bm.read_u32_with_cursor(cid).unwrap();
+                assert_eq!(1000_u32, v);
+                bm.close_cursor(cid);
+            })
+        };
+
+        let t2 = {
+            let bm = bufman.clone();
+            thread::spawn(move || {
+                let cid = bm.open_cursor();
+                bm.seek_with_cursor(cid, SeekFrom::Start(pos2)).unwrap();
+                let res = bm.write_with_cursor(cid, &456_u16.to_le_bytes()).unwrap();
+                assert_eq!(2, res);
+                bm.close_cursor(cid);
+            })
+        };
+
+        t1.join().unwrap();
+        t2.join().unwrap();
+
+        let cursor = bufman.open_cursor();
+
+        bufman.seek_with_cursor(cursor, SeekFrom::Start(pos2)).unwrap();
+        let y = bufman.read_u16_with_cursor(cursor).unwrap();
+        assert_eq!(456, y);
+
+        bufman.close_cursor(cursor);
+
+        // Verify that `bufman.file_size` remain the same
+        assert_eq!((BUFFER_SIZE + 10) as u64, *bufman.file_size.read().unwrap());
     }
 }
