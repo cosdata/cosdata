@@ -292,9 +292,9 @@ mod tests {
 
     /// Create a large tmp content file about (5 * BUFFER_SIZE + 150)
     /// in size
-    fn large_tmp_file() -> io::Result<File> {
+    fn create_tmp_file(num_regions: u8, extra: u16) -> io::Result<File> {
         let mut file = tempfile()?;
-        file.write_all(&vec![0_u8; (BUFFER_SIZE * 5) + 200])?;
+        file.write_all(&vec![0_u8; (BUFFER_SIZE * num_regions as usize) + extra as usize])?;
         Ok(file)
     }
 
@@ -311,7 +311,7 @@ mod tests {
         // position 8190 i.e. BUFFER_SIZE - 2. This means first 2
         // bytes will be in region 1 and rest will be in region 2
 
-        let mut file = large_tmp_file().unwrap();
+        let mut file = create_tmp_file(5, 200).unwrap();
         file.seek(SeekFrom::Start(8190)).unwrap();
         file.write_all(&1678_u32.to_le_bytes()).unwrap();
 
@@ -328,7 +328,7 @@ mod tests {
 
     #[test]
     fn test_conc_reads_different_regions() {
-        let mut file = large_tmp_file().unwrap();
+        let mut file = create_tmp_file(4, 200).unwrap();
 
         // Write some data in region 1
         file.seek(SeekFrom::Start(100)).unwrap();
@@ -369,7 +369,7 @@ mod tests {
 
     #[test]
     fn test_conc_reads_same_region() {
-        let mut file = large_tmp_file().unwrap();
+        let mut file = create_tmp_file(1, 200).unwrap();
 
         // Write some data in region 1
         file.seek(SeekFrom::Start(0)).unwrap();
@@ -430,7 +430,7 @@ mod tests {
 
     #[test]
     fn test_conc_writes_different_regions() {
-        let file = large_tmp_file().unwrap();
+        let file = create_tmp_file(3, 200).unwrap();
 
         let bufman = Arc::new(BufferManager::new(file).unwrap());
 
