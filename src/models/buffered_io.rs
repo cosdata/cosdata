@@ -31,11 +31,12 @@ impl BufferRegion {
 
 struct Cursor {
     position: u64,
+    is_eof: bool,
 }
 
 impl Cursor {
     fn new() -> Self {
-        Cursor { position: 0 }
+        Cursor { position: 0, is_eof: false }
     }
 }
 
@@ -44,7 +45,7 @@ pub struct BufferManager {
     regions: RwLock<BTreeMap<u64, Arc<BufferRegion>>>,
     cursors: RwLock<HashMap<u64, Cursor>>,
     next_cursor_id: AtomicU64,
-    file_size: AtomicU64,
+    file_size: RwLock<u64>,
 }
 
 impl BufferManager {
@@ -56,7 +57,7 @@ impl BufferManager {
             regions: RwLock::new(BTreeMap::new()),
             cursors: RwLock::new(HashMap::new()),
             next_cursor_id: AtomicU64::new(0),
-            file_size: AtomicU64::new(file_size),
+            file_size: RwLock::new(file_size),
         })
     }
 
@@ -151,7 +152,7 @@ impl BufferManager {
             let buffer_pos = (curr_pos - region.start) as usize;
             let available = region.end.load(Ordering::SeqCst) - buffer_pos;
             if available == 0 {
-                if total_read == 0 && curr_pos >= self.file_size.load(Ordering::SeqCst) {
+                if total_read == 0 && curr_pos >= *self.file_size.read().unwrap() {
                     return Ok(0); // EOF
                 }
                 break;
@@ -171,33 +172,91 @@ impl BufferManager {
     }
 
     pub fn write_with_cursor(&self, cursor_id: u64, buf: &[u8]) -> io::Result<usize> {
-        let mut curr_pos = {
+        let cursor_info = {
             let cursors = self.cursors.read().unwrap();
             let cursor = cursors.get(&cursor_id)
                 .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid cursor"))?;
-            cursor.position
+            (cursor.position, cursor.is_eof)
         };
 
-        let mut total_written = 0;
-        while total_written < buf.len() {
-            let region = self.get_or_create_region(curr_pos)?;
-            {
-                // @NOTE: Here we need a separate scope because the
-                // `buffer` guard on the next line needs to be dropped
-                // before `flush_region_if_needed` can be called.
-                let mut buffer = region.buffer.write().unwrap();
-                let buffer_pos = (curr_pos - region.start) as usize;
-                let available = BUFFER_SIZE - buffer_pos;
-                let to_write = (buf.len() - total_written).min(available);
-                buffer[buffer_pos..buffer_pos + to_write].copy_from_slice(&buf[total_written..total_written + to_write]);
-                region.end.store((buffer_pos + to_write).max(region.end.load(Ordering::SeqCst)), Ordering::SeqCst);
-                region.dirty.store(true, Ordering::SeqCst);
-                total_written += to_write;
-                curr_pos += to_write as u64;
-                self.file_size.fetch_max(curr_pos, Ordering::SeqCst);
+        let mut curr_pos = cursor_info.0;
+        let cursor_is_at_eof = cursor_info.1;
 
+        let mut total_written = 0;
+        if cursor_is_at_eof {
+            // This means we're appending to a file. Some
+            // synchronization is required here because threads will
+            // call seek and then write in two separate calls. Hence
+            // it needs to be ensured that multiple threads are not
+            // updaing the `file_size` field at the same
+            // time. Additionally, we also need to handle the case
+            // where `file_size` changes between `seek_with_cursor`
+            // and `write_with_cursor` calls for the same cursor. This
+            // is done as follows:
+            //
+            // 1. take a write lock on file_size
+            // 2. check that cursor position = file size, if not sync it
+            // 3. start writing in a while loop
+            // 4. After the loop, write fize_size = curr_positon
+            // 5. Release the lock
+            // 6. Update the cursor
+
+            let mut file_size = self.file_size.write().unwrap();
+
+            // println!("Cursor Id = {cursor_id}; Position = {curr_pos}; File Size = {}", *file_size);
+
+            if curr_pos < *file_size {
+                curr_pos = *file_size;
             }
-            self.flush_region_if_needed(&region)?;
+
+            while total_written < buf.len() {
+                let region = self.get_or_create_region(curr_pos)?;
+                {
+                    // @NOTE: Here we need a separate scope because the
+                    // `buffer` guard on the next line needs to be dropped
+                    // before `flush_region_if_needed` can be called.
+                    let mut buffer = region.buffer.write().unwrap();
+                    let buffer_pos = (curr_pos - region.start) as usize;
+                    let available = BUFFER_SIZE - buffer_pos;
+                    let to_write = (buf.len() - total_written).min(available);
+                    buffer[buffer_pos..buffer_pos + to_write].copy_from_slice(&buf[total_written..total_written + to_write]);
+                    region.end.store((buffer_pos + to_write).max(region.end.load(Ordering::SeqCst)), Ordering::SeqCst);
+                    region.dirty.store(true, Ordering::SeqCst);
+                    total_written += to_write;
+                    curr_pos += to_write as u64;
+                }
+                self.flush_region_if_needed(&region)?;
+            }
+            *file_size = curr_pos;
+        } else {
+
+            // println!("Cursor Id = {cursor_id}; Position = {curr_pos};");
+
+            while total_written < buf.len() {
+                let region = self.get_or_create_region(curr_pos)?;
+                {
+                    // @NOTE: Here we need a separate scope because the
+                    // `buffer` guard on the next line needs to be dropped
+                    // before `flush_region_if_needed` can be called.
+                    let mut buffer = region.buffer.write().unwrap();
+                    let buffer_pos = (curr_pos - region.start) as usize;
+                    let available = BUFFER_SIZE - buffer_pos;
+                    let to_write = (buf.len() - total_written).min(available);
+                    buffer[buffer_pos..buffer_pos + to_write].copy_from_slice(&buf[total_written..total_written + to_write]);
+                    region.end.store((buffer_pos + to_write).max(region.end.load(Ordering::SeqCst)), Ordering::SeqCst);
+                    region.dirty.store(true, Ordering::SeqCst);
+                    total_written += to_write;
+                    curr_pos += to_write as u64;
+                }
+                self.flush_region_if_needed(&region)?;
+            }
+
+            // In case this thread has written past the end of file,
+            // then update the file_size
+            let mut file_size = self.file_size.write().unwrap();
+            if curr_pos > *file_size {
+                *file_size = curr_pos;
+            }
         }
 
         let mut cursors = self.cursors.write().unwrap();
@@ -222,11 +281,18 @@ impl BufferManager {
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid cursor"))?;
 
         let new_position = match pos {
-            SeekFrom::Start(abs) => abs,
+            SeekFrom::Start(abs) => {
+                cursor.is_eof = false;
+                abs
+            },
             SeekFrom::End(rel) => {
-                (self.file_size.load(Ordering::SeqCst) as i64 + rel) as u64
+                // Mark that this cursor is at the end of file
+                cursor.is_eof = true;
+                // file_size.read()
+                (*self.file_size.read().unwrap() as i64 + rel) as u64
             }
             SeekFrom::Current(rel) => {
+                cursor.is_eof = false;
                 (cursor.position as i64 + rel) as u64
             }
         };
@@ -473,5 +539,54 @@ mod tests {
         assert_eq!(123, bufman.read_u32_with_cursor(cursor).unwrap());
         bufman.seek_with_cursor(cursor, SeekFrom::Start(file_offset(2, 45))).unwrap();
         assert_eq!(456, bufman.read_u32_with_cursor(cursor).unwrap());
+    }
+
+    #[test]
+    fn test_conc_writes_to_end_of_file() {
+        let file = create_tmp_file(0, 45).unwrap();
+
+        let bufman = Arc::new(BufferManager::new(file).unwrap());
+
+        let t1 = {
+            let bm = bufman.clone();
+            thread::spawn(move || {
+                let cid = bm.open_cursor();
+                bm.seek_with_cursor(cid, SeekFrom::End(0)).unwrap();
+                let res = bm.write_with_cursor(cid, &8_u16.to_le_bytes()).unwrap();
+                assert_eq!(2, res);
+                bm.close_cursor(cid);
+            })
+        };
+
+        let t2 = {
+            let bm = bufman.clone();
+            thread::spawn(move || {
+                let cid = bm.open_cursor();
+                bm.seek_with_cursor(cid, SeekFrom::End(0)).unwrap();
+                let res = bm.write_with_cursor(cid, &9_u16.to_le_bytes()).unwrap();
+                assert_eq!(2, res);
+                bm.close_cursor(cid);
+            })
+        };
+
+        t1.join().unwrap();
+        t2.join().unwrap();
+
+        let cursor = bufman.open_cursor();
+        bufman.seek_with_cursor(cursor, SeekFrom::Start(45)).unwrap();
+        let x = bufman.read_u16_with_cursor(cursor).unwrap();
+        let y = bufman.read_u16_with_cursor(cursor).unwrap();
+
+        // We don't know which one of the two threads will run
+        // first. So verify both cases.
+        if x == 8 {
+            assert_eq!(9, y);
+        } else if x == 9 {
+            assert_eq!(8, y);
+        } else {
+            assert!(false);
+        }
+
+        bufman.close_cursor(cursor);
     }
 }
