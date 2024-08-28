@@ -33,6 +33,12 @@ impl BufferRegion {
     }
 
     fn should_flush(&self) -> bool {
+        // @DOUBT: Here we're checking if `end` is greater than the
+        // threshold. This makes sense for inserts where writes will
+        // be performed at the end of the file. But not in case of
+        // updates happening in between the file. So if there are only
+        // updates happening to a region, it will never be flushed
+        // with the current logic
         self.dirty.load(Ordering::SeqCst) && self.end.load(Ordering::SeqCst) >= FLUSH_THRESHOLD
     }
 }
