@@ -9,6 +9,7 @@ pub mod file_persist;
 pub mod identity_collections;
 pub mod lazy_load;
 pub mod lookup_table;
+mod lru_cache;
 pub mod meta_persist;
 pub mod rpc;
 pub mod serializer;
