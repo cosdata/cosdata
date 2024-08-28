@@ -4,6 +4,8 @@ use std::io::{self, Read, Write, Seek, SeekFrom};
 use std::fs::File;
 use std::sync::atomic::{AtomicU64, AtomicUsize, AtomicBool, Ordering};
 
+use super::lru_cache::LRUCache;
+
 const BUFFER_SIZE: usize = 8192;
 const FLUSH_THRESHOLD: usize = (BUFFER_SIZE as f32 * 0.7) as usize; // 70% of buffer size
 
@@ -56,7 +58,7 @@ impl Cursor {
 
 pub struct BufferManager {
     file: Arc<RwLock<File>>,
-    regions: RwLock<BTreeMap<u64, Arc<BufferRegion>>>,
+    regions: RwLock<LRUCache<u64, Arc<BufferRegion>>>,
     cursors: RwLock<HashMap<u64, Cursor>>,
     next_cursor_id: AtomicU64,
     file_size: RwLock<u64>,
@@ -68,7 +70,7 @@ impl BufferManager {
         file.seek(SeekFrom::Start(0))?;
         Ok(BufferManager {
             file: Arc::new(RwLock::new(file)),
-            regions: RwLock::new(BTreeMap::new()),
+            regions: RwLock::new(LRUCache::new(100)),
             cursors: RwLock::new(HashMap::new()),
             next_cursor_id: AtomicU64::new(0),
             file_size: RwLock::new(file_size),
@@ -100,10 +102,10 @@ impl BufferManager {
 
     fn get_or_create_region(&self, position: u64) -> Result<Arc<BufferRegion>, BufIoError> {
         let start = position - (position % BUFFER_SIZE as u64);
-        let mut regions = self.regions.write().map_err(|_| BufIoError::Locking)?;
+        let regions = self.regions.write().map_err(|_| BufIoError::Locking)?;
 
         if let Some(region) = regions.get(&start) {
-            return Ok(Arc::clone(region));
+            return Ok(Arc::clone(&region));
         }
 
         // Create new region
@@ -320,11 +322,11 @@ impl BufferManager {
     }
 
     pub fn flush(&self) -> Result<(), BufIoError> {
-        let regions = self.regions.read().map_err(|_| BufIoError::Locking)?;
-        for region in regions.values() {
-            if region.dirty.load(Ordering::SeqCst) {
-                self.flush_region(region)?;
-            }
+        for entry in self.regions.iter() {
+            // @TODO: Leaky abstraction. LRUCache's API can be
+            // improved here.
+            let (region, _) = entry.value();
+            self.flush_region(region)?;
         }
         self.file
             .write()

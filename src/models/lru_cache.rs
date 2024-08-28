@@ -2,7 +2,7 @@ use dashmap::DashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[allow(unused)]
-struct LRUCache<K, V>
+pub struct LRUCache<K, V>
 where
     K: Eq + std::hash::Hash + Clone,
     V: Clone,
@@ -17,14 +17,14 @@ where
     K: Eq + std::hash::Hash + Clone,
     V: Clone,
 {
-    fn new(capacity: usize) -> Self {
+    pub fn new(capacity: usize) -> Self {
         LRUCache {
             map: DashMap::new(),
             capacity,
         }
     }
 
-    fn get(&self, key: &K) -> Option<V> {
+    pub fn get(&self, key: &K) -> Option<V> {
         if let Some(mut entry) = self.map.get_mut(key) {
             let (value, mut timestamp) = entry.value_mut();
             timestamp = Self::current_time();
@@ -34,7 +34,7 @@ where
         }
     }
 
-    fn insert(&self, key: K, value: V) {
+    pub fn insert(&self, key: K, value: V) {
         if self.map.len() >= self.capacity {
             self.evict_lru();
         }
@@ -56,6 +56,10 @@ where
         if let Some(key) = oldest_key {
             self.map.remove(&key);
         }
+    }
+
+    pub fn iter(&self) -> dashmap::iter::Iter<K, (V, u64), std::hash::RandomState, DashMap<K, (V, u64)>> {
+        self.map.iter()
     }
 
     fn current_time() -> u64 {
