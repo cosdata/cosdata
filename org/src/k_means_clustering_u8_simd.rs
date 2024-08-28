@@ -1,135 +1,111 @@
-use std::arch::x86_64::*;
+use rand::seq::SliceRandom;
+use rand::thread_rng;
+use rand_distr::{Normal, Distribution};
 
-// Update the main clustering function
-unsafe fn simd_kmeans_clustering(x_vec: &[Vec<u8>], k: usize) -> Vec<u8> {
-    assert!(k <= 256, "K should be less than or equal to 256");
-    let iterations = 32;
-    // Initialize centroids
-    let mut centroids = initialize_centroids(k);
+// Scalar implementation
+fn kmeans_scalar(x_vec: &[u8], k: usize, iterations: usize) -> (Vec<u8>, Vec<usize>) {
+    let mut rng = thread_rng();
+    let mut centroids: Vec<u8> = x_vec.choose_multiple(&mut rng, k).cloned().collect();
+    let mut cluster_counts = vec![0; k];
+    
     for _ in 0..iterations {
-        // Convert centroids to binary and create SIMD vectors
-        let centroid_vectors = create_centroid_vectors(&centroids);
-        // Process data in SIMD chunks and update centroids
-        process_data_simd(x_vec, &centroid_vectors, &mut centroids);
-    }
-    centroids
-}
-
-fn initialize_centroids(k: usize) -> Vec<u8> {
-    (0..k).map(|i| (i * 255 / (k - 1)) as u8).collect()
-}
-
-#[target_feature(enable = "avx2")]
-#[cfg(target_arch = "x86_64")]
-unsafe fn create_centroid_vectors(centroids: &[u8]) -> Vec<Vec<__m256i>> {
-    let mut all_centroid_vectors = Vec::with_capacity(centroids.len());
-
-    for &centroid in centroids {
-        let mut centroid_vectors = Vec::with_capacity(8);
-        for bit in 0..8 {
-            let mask = if (centroid & (1 << bit)) != 0 {
-                unsafe { _mm256_set1_epi32(-1) } // All 1s
-            } else {
-                unsafe { _mm256_setzero_si256() } // All 0s
-            };
-            centroid_vectors.push(mask);
+        let mut new_centroids = vec![0u32; k];
+        let mut counts = vec![0u32; k];
+        for &x in x_vec {
+            let nearest = centroids
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, &c)| x.abs_diff(c) as u16)
+                .map(|(idx, _)| idx)
+                .unwrap();
+            new_centroids[nearest] += x as u32;
+            counts[nearest] += 1;
         }
-        all_centroid_vectors.push(centroid_vectors);
-    }
-
-    all_centroid_vectors
-}
-#[target_feature(enable = "avx2")]
-#[cfg(target_arch = "x86_64")]
-unsafe fn process_data_simd(
-    x: &[Vec<u8>],
-    centroid_vectors: &[Vec<__m256i>],
-    centroids: &mut Vec<u8>,
-) {
-    assert_eq!(x.len(), 8, "Expected 8 bit planes");
-
-    let num_centroids = centroids.len();
-    // Initialize counts for each bit of each centroid
-    let mut centroid_counts = vec![vec![0u64; 8]; num_centroids];
-
-    for bit in (0..8).rev() {
-        // Start from MSB (7) to LSB (0)
-        let mut count = 0u64;
-        for i in (0..x[bit].len()).step_by(32) {
-            // Load 32 bytes (256 bits) of data from x vector
-            let x_bits = _mm256_loadu_si256(x[bit][i..].as_ptr() as *const __m256i);
-
-            //  AND and count ones
-            for (centroid_index, centroid_vector) in centroid_vectors.iter().enumerate() {
-                let x_and = _mm256_and_si256(x_bits, centroid_vector[bit]);
-                count = count_ones_simd_avx2_256i(x_and);
-                centroid_counts[centroid_index][bit] += count;
+        for i in 0..k {
+            if counts[i] > 0 {
+                centroids[i] = (new_centroids[i] / counts[i]) as u8;
             }
         }
+        cluster_counts = counts.iter().map(|&c| c as usize).collect();
     }
-
-    println!("counts: {:?}", centroid_counts);
-
-    // Adjust centroids based on counts
-    // ***** Todo *****
-    // depending on if the count is above/below 128 ,
-    // then increment/decrement the centroid (not sure which is which)
-    // Its 128 for each step of 32 (in this example there are 64, so 256 is the mid point)
+    (centroids, cluster_counts)
 }
 
-#[target_feature(enable = "avx2")]
-#[cfg(target_arch = "x86_64")]
-unsafe fn count_ones_simd_avx2_256i(input: __m256i) -> u64 {
-    let low_mask = _mm256_set1_epi8(0x0F);
-    let lookup = _mm256_setr_epi8(
-        0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4, 0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3,
-        3, 4,
-    );
-    let lo = _mm256_and_si256(input, low_mask);
-    let hi = _mm256_and_si256(_mm256_srli_epi16(input, 4), low_mask);
-    let popcnt_lo = _mm256_shuffle_epi8(lookup, lo);
-    let popcnt_hi = _mm256_shuffle_epi8(lookup, hi);
-    let sum = _mm256_add_epi8(popcnt_lo, popcnt_hi);
-    // Sum all bytes using horizontal addition
-    let sum_16 = _mm256_sad_epu8(sum, _mm256_setzero_si256());
-    let sum_64 = _mm256_add_epi64(
-        _mm256_unpacklo_epi64(sum_16, _mm256_setzero_si256()),
-        _mm256_unpackhi_epi64(sum_16, _mm256_setzero_si256()),
-    );
-    // Extract and add the final sum
-    _mm256_extract_epi64(sum_64, 0) as u64 + _mm256_extract_epi64(sum_64, 2) as u64
+unsafe fn kmeans_simd(x_vec: &[u8], k: usize, iterations: usize) -> (Vec<u8>, Vec<usize>) {
+    use std::arch::x86_64::*;
+    let mut rng = thread_rng();
+    let mut centroids: Vec<u8> = x_vec.choose_multiple(&mut rng, k).cloned().collect();
+    let mut cluster_counts = vec![0; k];
+    
+    for _ in 0..iterations {
+        let mut new_centroids = vec![0u32; k];
+        let mut counts = vec![0u32; k];
+        for chunk in x_vec.chunks_exact(32) {
+            let x_vec_avx = _mm256_loadu_si256(chunk.as_ptr() as *const __m256i);
+            let mut min_distances = _mm256_set1_epi8(i8::MAX);
+            let mut min_indices = _mm256_setzero_si256();
+            for (i, &centroid) in centroids.iter().enumerate() {
+                let centroid_avx = _mm256_set1_epi8(centroid as i8);
+                let distances = _mm256_abs_epi8(_mm256_sub_epi8(x_vec_avx, centroid_avx));
+                let mask = _mm256_cmpgt_epi8(min_distances, distances);
+                min_distances = _mm256_blendv_epi8(min_distances, distances, mask);
+                min_indices = _mm256_blendv_epi8(min_indices, _mm256_set1_epi8(i as i8), mask);
+            }
+            // Extract results
+            let min_indices_array = std::mem::transmute::<__m256i, [u8; 32]>(min_indices);
+            let chunk_array = std::mem::transmute::<__m256i, [u8; 32]>(x_vec_avx);
+            for j in 0..32 {
+                let index = min_indices_array[j] as usize;
+                new_centroids[index] += chunk_array[j] as u32;
+                counts[index] += 1;
+            }
+        }
+        // Handle remaining elements
+        for &x in x_vec.chunks_exact(32).remainder() {
+            let nearest = centroids
+                .iter()
+                .enumerate()
+                .min_by_key(|&(_, &c)| x.abs_diff(c) as u16)
+                .map(|(idx, _)| idx)
+                .unwrap();
+            new_centroids[nearest] += x as u32;
+            counts[nearest] += 1;
+        }
+        for i in 0..k {
+            if counts[i] > 0 {
+                centroids[i] = (new_centroids[i] / counts[i]) as u8;
+            }
+        }
+        cluster_counts = counts.iter().map(|&c| c as usize).collect();
+    }
+    (centroids, cluster_counts)
 }
-
-use rand::Rng;
-use std::arch::x86_64::*;
 
 fn main() {
-    let num_vectors = 8; // Number of vectors in x_vec
-    let vector_length = 64; // Length of each vector, must be multiple of 32
-    let k = 4;
-
-    // Generate random x_vec and y_vec
     let mut rng = rand::thread_rng();
-    let x_vec = generate_random_vectors(&mut rng, num_vectors, vector_length);
-
-    // Print a sample of the generated data
-    println!(" x_vec: {:?}", &x_vec[0][0..]);
-
-    // Check if AVX2 is supported
-    if is_x86_feature_detected!("avx2") {
-        let result = unsafe { simd_kmeans_clustering(&x_vec, k) };
-        println!("Resulting centroids: {:?}", result);
-    } else {
-        println!("AVX2 is not supported on this CPU");
+    // Parameters for the normal distribution
+    let mean = 128.0;  // Center of the distribution (middle of u8 range)
+    let std_dev = 40.0;  // Standard deviation
+    // Create a normal distribution
+    let normal = Normal::new(mean, std_dev).unwrap();
+    // Generate a vector of 10000 random u8 values following a normal distribution
+    let x_vec: Vec<u8> = (0..10000)
+        .map(|_| {
+            let value = normal.sample(&mut rng);
+            value as u8  // Ensure values are within u8 range
+        })
+        .collect();
+    let k = 4;
+    let iterations = 32;
+    
+    // Run scalar version
+    let (scalar_result, scalar_counts) = kmeans_scalar(&x_vec, k, iterations);
+    println!("Scalar K-means centroids: {:?}", scalar_result);
+    println!("Scalar K-means cluster counts: {:?}", scalar_counts);
+    
+    unsafe {
+        let (simd_result, simd_counts) = kmeans_simd(&x_vec, k, iterations);
+        println!("SIMD K-means centroids: {:?}", simd_result);
+        println!("SIMD K-means cluster counts: {:?}", simd_counts);
     }
-}
-
-fn generate_random_vectors(
-    rng: &mut impl Rng,
-    num_vectors: usize,
-    vector_length: usize,
-) -> Vec<Vec<u8>> {
-    (0..num_vectors)
-        .map(|_| (0..vector_length).map(|_| rng.gen::<u8>()).collect())
-        .collect()
 }
