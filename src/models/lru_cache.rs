@@ -1,5 +1,4 @@
 use dashmap::DashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[allow(unused)]
@@ -8,7 +7,7 @@ where
     K: Eq + std::hash::Hash + Clone,
     V: Clone,
 {
-    map: DashMap<K, (V, AtomicU64)>,
+    map: DashMap<K, (V, u64)>,
     capacity: usize,
 }
 
@@ -27,8 +26,8 @@ where
 
     fn get(&self, key: &K) -> Option<V> {
         if let Some(mut entry) = self.map.get_mut(key) {
-            let (value, timestamp) = entry.value_mut();
-            timestamp.store(Self::current_time(), Ordering::SeqCst);
+            let (value, mut timestamp) = entry.value_mut();
+            timestamp = Self::current_time();
             Some(value.clone())
         } else {
             None
@@ -39,7 +38,7 @@ where
         if self.map.len() >= self.capacity {
             self.evict_lru();
         }
-        self.map.insert(key, (value, AtomicU64::new(Self::current_time())));
+        self.map.insert(key, (value, Self::current_time()));
     }
 
     fn evict_lru(&self) {
@@ -48,9 +47,8 @@ where
 
         for entry in self.map.iter() {
             let (key, (_, timestamp)) = entry.pair();
-            let time = timestamp.load(Ordering::SeqCst);
-            if time < oldest_time {
-                oldest_time = time;
+            if *timestamp < oldest_time {
+                oldest_time = *timestamp;
                 oldest_key = Some(key.clone());
             }
         }
