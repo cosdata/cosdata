@@ -1,5 +1,5 @@
 use dashmap::DashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::buffered_io::BufIoError;
 
@@ -8,8 +8,11 @@ where
     K: Eq + std::hash::Hash + Clone,
     V: Clone,
 {
+    // Store value and counter value
     map: DashMap<K, (V, u64)>,
     capacity: usize,
+    // Global counter
+    counter: AtomicU64,
 }
 
 impl<K, V> LRUCache<K, V>
@@ -21,13 +24,15 @@ where
         LRUCache {
             map: DashMap::new(),
             capacity,
+            counter: AtomicU64::new(0),
+
         }
     }
 
     pub fn get(&self, key: &K) -> Option<V> {
         if let Some(mut entry) = self.map.get_mut(key) {
-            let (value, mut timestamp) = entry.value_mut();
-            timestamp = Self::current_time();
+            let (value, counter_val) = entry.value_mut();
+            *counter_val = self.increment_counter();
             Some(value.clone())
         } else {
             None
@@ -35,7 +40,7 @@ where
     }
 
     pub fn insert(&self, key: K, value: V) {
-        self.map.insert(key, (value, Self::current_time()));
+        self.map.insert(key, (value, self.increment_counter()));
         if self.map.len() > self.capacity {
             self.evict_lru();
         }
@@ -44,9 +49,9 @@ where
     pub fn get_or_insert(&self, key: K, f: impl FnOnce() -> Result<V, BufIoError>) -> Result<V, BufIoError> {
         let res = self.map
             .entry(key)
-            .and_modify(|(_, ts)| *ts = Self::current_time())
+            .and_modify(|(_, counter)| *counter = self.increment_counter())
             .or_try_insert_with(move || {
-                f().map(|v| (v, Self::current_time()))
+                f().map(|v| (v, self.increment_counter()))
             })
             .map(|v| v.0.clone());
         // @NOTE: We need to clone the value before calling
@@ -65,12 +70,12 @@ where
 
     fn evict_lru(&self) {
         let mut oldest_key = None;
-        let mut oldest_time = u64::MAX;
+        let mut oldest_counter = u64::MAX;
 
         for entry in self.map.iter() {
-            let (key, (_, timestamp)) = entry.pair();
-            if *timestamp < oldest_time {
-                oldest_time = *timestamp;
+            let (key, (_, counter_val)) = entry.pair();
+            if *counter_val < oldest_counter {
+                oldest_counter = *counter_val;
                 oldest_key = Some(key.clone());
             }
         }
@@ -84,11 +89,8 @@ where
         self.map.iter()
     }
 
-    fn current_time() -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
+    fn increment_counter(&self) -> u64 {
+        self.counter.fetch_add(1, Ordering::SeqCst)
     }
 }
 
@@ -117,12 +119,8 @@ mod tests {
         }
 
         // Verify that key2 is evicted
-        //
-        // @TODO: Checking for the evicted key causes the code to
-        // panic for some reason. So for now we're just checking that
-        // size <= capacity.
         assert_eq!(2, cache.map.len());
-        // assert!(!cache.map.contains_key(&"key2"));
+        assert!(!cache.map.contains_key(&"key2"));
     }
 
     #[test]
@@ -159,12 +157,8 @@ mod tests {
         assert_eq!("value3", z.unwrap());
 
         // Verify that key2 is evicted
-        //
-        // @TODO: Checking for the evicted key causes the code to
-        // panic for some reason. So for now we're just checking that
-        // size <= capacity.
         assert_eq!(2, cache.map.len());
-        // assert!(!cache.map.contains_key(&"key2"));
+        assert!(!cache.map.contains_key(&"key2"));
 
         // Verify that error during insertion doesn't result in
         // evictions
