@@ -58,7 +58,7 @@ impl Cursor {
 
 pub struct BufferManager {
     file: Arc<RwLock<File>>,
-    regions: RwLock<LRUCache<u64, Arc<BufferRegion>>>,
+    regions: LRUCache<u64, Arc<BufferRegion>>,
     cursors: RwLock<HashMap<u64, Cursor>>,
     next_cursor_id: AtomicU64,
     file_size: RwLock<u64>,
@@ -70,7 +70,7 @@ impl BufferManager {
         file.seek(SeekFrom::Start(0))?;
         Ok(BufferManager {
             file: Arc::new(RwLock::new(file)),
-            regions: RwLock::new(LRUCache::new(100)),
+            regions: LRUCache::new(100),
             cursors: RwLock::new(HashMap::new()),
             next_cursor_id: AtomicU64::new(0),
             file_size: RwLock::new(file_size),
@@ -102,23 +102,15 @@ impl BufferManager {
 
     fn get_or_create_region(&self, position: u64) -> Result<Arc<BufferRegion>, BufIoError> {
         let start = position - (position % BUFFER_SIZE as u64);
-        let regions = self.regions.write().map_err(|_| BufIoError::Locking)?;
-
-        if let Some(region) = regions.get(&start) {
-            return Ok(Arc::clone(&region));
-        }
-
-        // Create new region
-        let mut region = BufferRegion::new(start);
-        let mut file = self.file.write().map_err(|_| BufIoError::Locking)?;
-        file.seek(SeekFrom::Start(start)).map_err(BufIoError::Io)?;
-        let buffer = region.buffer.get_mut().map_err(|_| BufIoError::Locking)?;
-        let bytes_read = file.read(&mut buffer[..]).map_err(BufIoError::Io)?;
-        region.end.store(bytes_read, Ordering::SeqCst);
-
-        let region = Arc::new(region);
-        regions.insert(start, Arc::clone(&region));
-        Ok(region)
+        self.regions.get_or_insert(start, || {
+            let mut region = BufferRegion::new(start);
+            let mut file = self.file.write().map_err(|_| BufIoError::Locking)?;
+            file.seek(SeekFrom::Start(start)).map_err(BufIoError::Io)?;
+            let buffer = region.buffer.get_mut().map_err(|_| BufIoError::Locking)?;
+            let bytes_read = file.read(&mut buffer[..]).map_err(BufIoError::Io)?;
+            region.end.store(bytes_read, Ordering::SeqCst);
+            Ok(Arc::new(region))
+        })
     }
 
     fn flush_region(&self, region: &BufferRegion) -> Result<(), BufIoError> {

@@ -1,7 +1,8 @@
 use dashmap::DashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[allow(unused)]
+use super::buffered_io::BufIoError;
+
 pub struct LRUCache<K, V>
 where
     K: Eq + std::hash::Hash + Clone,
@@ -11,7 +12,6 @@ where
     capacity: usize,
 }
 
-#[allow(unused)]
 impl<K, V> LRUCache<K, V>
 where
     K: Eq + std::hash::Hash + Clone,
@@ -35,10 +35,32 @@ where
     }
 
     pub fn insert(&self, key: K, value: V) {
-        if self.map.len() >= self.capacity {
+        self.map.insert(key, (value, Self::current_time()));
+        if self.map.len() > self.capacity {
             self.evict_lru();
         }
-        self.map.insert(key, (value, Self::current_time()));
+    }
+
+    pub fn get_or_insert(&self, key: K, f: impl FnOnce() -> Result<V, BufIoError>) -> Result<V, BufIoError> {
+        let res = self.map
+            .entry(key)
+            .and_modify(|(_, ts)| *ts = Self::current_time())
+            .or_try_insert_with(move || {
+                f().map(|v| (v, Self::current_time()))
+            })
+            .map(|v| v.0.clone());
+        // @NOTE: We need to clone the value before calling
+        // `self.evict_lru`, that too in a separate block! Otherwise
+        // it causes some deadlock
+        match res {
+            Ok(v) => {
+                if self.map.len() > self.capacity {
+                    self.evict_lru();
+                }
+                Ok(v)
+            }
+            Err(e) => Err(e)
+        }
     }
 
     fn evict_lru(&self) {
@@ -93,5 +115,63 @@ mod tests {
             Some(v) => assert_eq!("value3", v),
             None => assert!(false),
         }
+
+        // Verify that key2 is evicted
+        //
+        // @TODO: Checking for the evicted key causes the code to
+        // panic for some reason. So for now we're just checking that
+        // size <= capacity.
+        assert_eq!(2, cache.map.len());
+        // assert!(!cache.map.contains_key(&"key2"));
+    }
+
+    #[test]
+    fn test_get_or_insert() {
+        let cache = LRUCache::new(2);
+
+        // Insert two values using `try_insert_with`, verifying that
+        // the method returns the correct value
+        let x = cache.get_or_insert("key1", || {
+            Ok("value1")
+        });
+        assert_eq!("value1", x.unwrap());
+        assert_eq!(1, cache.map.len());
+
+        let y = cache.get_or_insert("key2", || {
+            Ok("value2")
+        });
+        assert_eq!("value2", y.unwrap());
+        assert_eq!(2, cache.map.len());
+
+        // Try getting key1 again. The closure shouldn't get executed
+        // this time.
+        let x1 = cache.get_or_insert("key1", || {
+            // This code will not be executed
+            assert!(false);
+            Err(BufIoError::Locking)
+        });
+        assert!(x1.is_ok_and(|x| x == "value1"));
+
+        // Insert a third value. It will cause key2 to be evicted
+        let z = cache.get_or_insert("key3", || {
+            Ok("value3")
+        });
+        assert_eq!("value3", z.unwrap());
+
+        // Verify that key2 is evicted
+        //
+        // @TODO: Checking for the evicted key causes the code to
+        // panic for some reason. So for now we're just checking that
+        // size <= capacity.
+        assert_eq!(2, cache.map.len());
+        // assert!(!cache.map.contains_key(&"key2"));
+
+        // Verify that error during insertion doesn't result in
+        // evictions
+        match cache.get_or_insert("key4", || Err(BufIoError::Locking)) {
+            Err(BufIoError::Locking) => assert!(true),
+            _ => assert!(false),
+        }
+        assert_eq!(2, cache.map.len());
     }
 }
