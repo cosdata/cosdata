@@ -216,9 +216,7 @@ pub fn parse_paren_expression(input: &str) -> IResult<&str, Expression> {
 }
 
 pub fn parse_expression(input: &str) -> IResult<&str, Expression> {
-    alt((parse_paren_expression, |input| {
-        parse_binary_expression_or_highier(input, Precedence::Lowest)
-    }))(input)
+    parse_binary_expression_or_highier(input, Precedence::Lowest)
 }
 
 #[cfg(test)]
@@ -358,6 +356,26 @@ mod tests {
             (
                 "((((((((((26-08-2024))))))))))",
                 Expression::Value(Value::Date(Date(26, 8, 2024))),
+            ),
+            (
+                "$selling_price - $cost_price",
+                Expression::BinaryExpression(Box::new(BinaryExpression {
+                    left: Expression::Value(Value::Variable("selling_price".to_string())),
+                    operator: BinaryExpressionOperator::Subtraction,
+                    right: Expression::Value(Value::Variable("cost_price".to_string())),
+                })),
+            ),
+            (
+                "($profit / $cost_price) * 100",
+                Expression::BinaryExpression(Box::new(BinaryExpression {
+                    left: Expression::BinaryExpression(Box::new(BinaryExpression {
+                        left: Expression::Value(Value::Variable("profit".to_string())),
+                        operator: BinaryExpressionOperator::Division,
+                        right: Expression::Value(Value::Variable("cost_price".to_string())),
+                    })),
+                    operator: BinaryExpressionOperator::Multiplication,
+                    right: Expression::Value(Value::Int(100)),
+                })),
             ),
         ];
 
