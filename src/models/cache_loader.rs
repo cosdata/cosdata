@@ -1,5 +1,5 @@
 use super::file_persist::*;
-use super::lazy_load::{FileIndex, LazyItem};
+use super::lazy_load::{FileIndex, LazyItem, LazyItemMap};
 use super::serializer::CustomSerialize;
 use super::types::*;
 use arcshift::ArcShift;
@@ -34,7 +34,13 @@ impl<R: Read + Seek> NodeRegistry<R> {
         skipm: &mut HashSet<u64>,
     ) -> std::io::Result<LazyItem<MergedNode>>
     where
-        F: Fn(&mut R, FileIndex, Arc<Self>, u16, &mut HashSet<u64>) -> std::io::Result<MergedNode>,
+        F: Fn(
+            &mut R,
+            FileIndex,
+            Arc<Self>,
+            u16,
+            &mut HashSet<u64>,
+        ) -> std::io::Result<LazyItem<MergedNode>>,
     {
         println!(
             "get_object called with file_index: {:?}, max_loads: {}",
@@ -65,7 +71,7 @@ impl<R: Read + Seek> NodeRegistry<R> {
         let version_id = if let FileIndex::Valid { version, .. } = &file_index {
             *version
         } else {
-            VersionId(0)
+            0.into()
         };
 
         if max_loads == 0 || !skipm.insert(combined_index) {
@@ -75,12 +81,13 @@ impl<R: Read + Seek> NodeRegistry<R> {
                 file_index: ArcShift::new(Some(file_index)),
                 decay_counter: 0,
                 persist_flag: Arc::new(AtomicBool::new(true)),
+                versions: LazyItemMap::new(),
                 version_id,
             });
         }
 
         println!("Calling load_function");
-        let node = load_function(
+        let item = load_function(
             reader,
             file_index.clone(),
             self.clone(),
@@ -96,14 +103,6 @@ impl<R: Read + Seek> NodeRegistry<R> {
 
         println!("Inserting key into cuckoo_filter");
         self.cuckoo_filter.write().unwrap().insert(&combined_index);
-
-        let item = LazyItem::Valid {
-            data: Some(ArcShift::new(node)),
-            file_index: ArcShift::new(Some(file_index)),
-            decay_counter: 0,
-            persist_flag: Arc::new(AtomicBool::new(true)),
-            version_id,
-        };
 
         println!("Inserting item into registry");
         self.registry.insert(combined_index, item.clone());
@@ -137,7 +136,7 @@ impl<R: Read + Seek> NodeRegistry<R> {
 
     pub fn combine_index(file_index: &FileIndex) -> u64 {
         match file_index {
-            FileIndex::Valid { offset, version } => ((offset.0 as u64) << 32) | (version.0 as u64),
+            FileIndex::Valid { offset, version } => ((offset.0 as u64) << 32) | (**version as u64),
             FileIndex::Invalid => u64::MAX, // Use max u64 value for Invalid
         }
     }
@@ -148,7 +147,7 @@ impl<R: Read + Seek> NodeRegistry<R> {
         } else {
             FileIndex::Valid {
                 offset: FileOffset((combined >> 32) as u32),
-                version: VersionId(combined as u16),
+                version: (combined as u32).into(),
             }
         }
     }
@@ -164,7 +163,7 @@ pub fn load_cache() {
 
     let file_index = FileIndex::Valid {
         offset: FileOffset(0),
-        version: VersionId(0),
+        version: 0.into(),
     }; // Assuming initial version is 0
     let cache = Arc::new(NodeRegistry::new(1000, file));
     match read_node_from_file(file_index.clone(), cache) {

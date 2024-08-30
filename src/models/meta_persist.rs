@@ -5,30 +5,26 @@ use lmdb::{Transaction, WriteFlags};
 use std::sync::Arc;
 
 pub fn store_current_version(
-    vec_store: Arc<VectorStore>,
-    branch: String,
+    lmdb: &MetaDb,
+    vcs: Arc<VersionControl>,
+    branch: &str,
     version: u32,
-) -> Result<VersionHash, WaCustomError> {
-    let mut hasher = VersionHasher::new();
+) -> Result<Hash, WaCustomError> {
     // Generate hashes for main branch
-    let hash = hasher.generate_hash(&branch, version, None, None);
-    let env = vec_store.lmdb.env.clone();
-    let db = vec_store.lmdb.metadata_db.clone();
+    let hash = vcs
+        .generate_hash(branch, version.into())
+        .map_err(|err| WaCustomError::DatabaseError(format!("Unable to generate hash: {}", err)))?;
+    let env = lmdb.env.clone();
+    let db = lmdb.metadata_db.clone();
 
     let mut txn = env
         .begin_rw_txn()
         .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
 
-    let serialized = rkyv::to_bytes::<_, 256>(&hash)
-        .map_err(|e| WaCustomError::SerializationError(format!("Failed to serialize: {}", e)))?;
+    let bytes = hash.to_le_bytes();
 
-    txn.put(
-        *db.as_ref(),
-        &"current_version".to_string(),
-        &serialized,
-        WriteFlags::empty(),
-    )
-    .map_err(|e| WaCustomError::DatabaseError(format!("Failed to put data: {}", e)))?;
+    txn.put(*db, &"current_version", &bytes, WriteFlags::empty())
+        .map_err(|e| WaCustomError::DatabaseError(format!("Failed to put data: {}", e)))?;
 
     txn.commit().map_err(|e| {
         WaCustomError::DatabaseError(format!("Failed to commit transaction: {}", e))
@@ -37,25 +33,28 @@ pub fn store_current_version(
     Ok(hash)
 }
 
-pub fn retrieve_current_version(vec_store: Arc<VectorStore>) -> Result<VersionHash, WaCustomError> {
-    let env = vec_store.lmdb.env.clone();
-    let db = vec_store.lmdb.metadata_db.clone();
+pub fn retrieve_current_version(lmdb: &MetaDb) -> Result<Hash, WaCustomError> {
+    let env = lmdb.env.clone();
+    let db = lmdb.metadata_db.clone();
     let txn = env
         .begin_ro_txn()
         .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
 
     let serialized_hash = txn
-        .get(*db.as_ref(), &"current_version".to_string())
+        .get(*db, &"current_version".to_string())
         .map_err(|e| match e {
             lmdb::Error::NotFound => {
-                WaCustomError::DatabaseError(format!("Record not found: {}", "current_version"))
+                WaCustomError::DatabaseError("Record not found: current_version".to_string())
             }
             _ => WaCustomError::DatabaseError(e.to_string()),
         })?;
 
-    let version_hash = unsafe { rkyv::from_bytes_unchecked(serialized_hash) }.map_err(|e| {
-        WaCustomError::SerializationError(format!("Failed to deserialize VersionHash: {}", e))
+    let bytes: [u8; 4] = serialized_hash.try_into().map_err(|_| {
+        WaCustomError::DeserializationError(
+            "Failed to deserialize Hash: length mismatch".to_string(),
+        )
     })?;
+    let hash = Hash::from(u32::from_le_bytes(bytes));
 
-    Ok(version_hash)
+    Ok(hash)
 }

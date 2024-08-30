@@ -41,7 +41,7 @@ where
             let placeholder_start = writer.stream_position()? as u32;
             for _ in 0..CHUNK_SIZE {
                 writer.write_u32::<LittleEndian>(u32::MAX)?;
-                writer.write_u16::<LittleEndian>(u16::MAX)?;
+                writer.write_u32::<LittleEndian>(u32::MAX)?;
             }
             // Write placeholder for next chunk link
             let next_chunk_placeholder = writer.stream_position()? as u32;
@@ -54,13 +54,13 @@ where
                 writer.write_u32::<LittleEndian>(0)?;
                 let item_offset = items[i].1.serialize(writer)?;
 
-                let placeholder_pos = placeholder_start as u64 + ((i - chunk_start) as u64 * 6);
+                let placeholder_pos = placeholder_start as u64 + ((i - chunk_start) as u64 * 8);
                 let current_pos = writer.stream_position()?;
 
                 // Write entry offset
                 writer.seek(SeekFrom::Start(placeholder_pos))?;
                 writer.write_u32::<LittleEndian>(entry_offset)?;
-                writer.write_u16::<LittleEndian>(items[i].1.get_current_version().0)?;
+                writer.write_u32::<LittleEndian>(*items[i].1.get_current_version())?;
 
                 // Write item offset
                 writer.seek(SeekFrom::Start(item_placeholder_pos))?;
@@ -82,6 +82,7 @@ where
         }
         Ok(start_offset)
     }
+
     fn deserialize<R: Read + Seek>(
         reader: &mut R,
         file_index: FileIndex,
@@ -91,10 +92,7 @@ where
     ) -> std::io::Result<Self> {
         match file_index {
             FileIndex::Invalid => Ok(LazyItemMap::new()),
-            FileIndex::Valid {
-                offset: FileOffset(offset),
-                version,
-            } => {
+            FileIndex::Valid { offset: FileOffset(offset), .. } => {
                 if offset == u32::MAX {
                     return Ok(LazyItemMap::new());
                 }
@@ -103,8 +101,9 @@ where
                 let mut current_chunk = offset;
                 loop {
                     for i in 0..CHUNK_SIZE {
-                        reader.seek(SeekFrom::Start(current_chunk as u64 + (i as u64 * 6)))?;
+                        reader.seek(SeekFrom::Start(current_chunk as u64 + (i as u64 * 8)))?;
                         let entry_offset = reader.read_u32::<LittleEndian>()?;
+                        let version = reader.read_u32::<LittleEndian>()?.into();
                         if entry_offset == u32::MAX {
                             continue;
                         }
@@ -120,7 +119,6 @@ where
                             skipm,
                         )?;
                         let item_offset = reader.read_u32::<LittleEndian>()?;
-                        let version = reader.read_u16::<LittleEndian>()?;
                         let item_file_index = FileIndex::Valid {
                             offset: FileOffset(item_offset),
                             version: VersionId(version),
@@ -135,7 +133,7 @@ where
                         items.push((key, item));
                     }
                     reader.seek(SeekFrom::Start(
-                        current_chunk as u64 + CHUNK_SIZE as u64 * 4,
+                        current_chunk as u64 + CHUNK_SIZE as u64 * 8,
                     ))?;
                     // Read next chunk link
                     current_chunk = reader.read_u32::<LittleEndian>()?;
