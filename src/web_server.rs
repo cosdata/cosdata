@@ -80,10 +80,6 @@ pub async fn run_actix_server() -> std::io::Result<()> {
             .wrap(Cors::permissive())
             // register simple handler, handle all methods
             .app_data(web::JsonConfig::default().limit(4 * 1048576))
-            .route(
-                "/auth/gettoken",
-                web::post().to(crate::api::auth::get_token),
-            )
             .service(auth_module())
             .service(
                 web::scope("/vectordb")
