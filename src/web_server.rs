@@ -15,6 +15,7 @@ use std::{fs::File, io::BufReader};
 use cosdata::config_loader::{load_config, ServerMode, Ssl, Host};
 use actix_web::web::Data;
 
+use crate::api::auth::auth_module;
 use crate::models::types::*;
 use crate::{api, WaCustomError};
 use std::env;
@@ -83,6 +84,7 @@ pub async fn run_actix_server() -> std::io::Result<()> {
                 "/auth/gettoken",
                 web::post().to(crate::api::auth::get_token),
             )
+            .service(auth_module())
             .service(
                 web::scope("/vectordb")
                     .wrap(auth.clone())
