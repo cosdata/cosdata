@@ -3,10 +3,10 @@ mod eager_lazy_item_set;
 mod lazy_item;
 mod lazy_item_map;
 mod lazy_item_set;
+mod metric_distance;
 mod neighbour;
 mod node;
 mod vector;
-mod metric_distance;
 
 #[cfg(test)]
 mod tests;

@@ -448,10 +448,7 @@ fn test_lazy_item_complex_cyclic_serialization() {
 fn test_lazy_item_set_linked_chunk_serialization() {
     let lazy_items = LazyItemSet::new();
     for i in 1..13 {
-        lazy_items.insert(LazyItem::from_data(
-            i.into(),
-            MergedNode::new(HNSWLevel(2)),
-        ));
+        lazy_items.insert(LazyItem::from_data(i.into(), MergedNode::new(HNSWLevel(2))));
     }
 
     let mut writer = Cursor::new(Vec::new());
@@ -606,7 +603,7 @@ fn test_lazy_item_with_versions_serialization_and_validation() {
     let mut writer = Cursor::new(Vec::new());
     let offset = root.serialize(&mut writer).unwrap();
     let file_index = FileIndex::Valid {
-        offset,
+        offset: FileOffset(offset),
         version: v0_hash,
     };
 

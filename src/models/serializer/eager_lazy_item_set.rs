@@ -2,7 +2,7 @@ use super::CustomSerialize;
 use crate::models::lazy_load::{
     EagerLazyItem, EagerLazyItemSet, FileIndex, LazyItem, SyncPersist, CHUNK_SIZE,
 };
-use crate::models::types::{FileOffset, VersionId};
+use crate::models::types::FileOffset;
 use crate::models::{
     cache_loader::NodeRegistry,
     identity_collections::{Identifiable, IdentitySet},
@@ -96,7 +96,7 @@ where
                         }
                         let item_file_index = FileIndex::Valid {
                             offset: FileOffset(item_offset),
-                            version: VersionId(version),
+                            version,
                         };
                         let item = EagerLazyItem::deserialize(
                             reader,

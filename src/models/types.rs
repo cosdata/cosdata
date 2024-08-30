@@ -1,3 +1,4 @@
+use super::versioning::VersionControl;
 use crate::distance::cosine::CosineSimilarity;
 use crate::distance::DistanceError;
 use crate::distance::{
@@ -22,7 +23,6 @@ use std::hash::{DefaultHasher, Hash as StdHash, Hasher};
 use std::hint::spin_loop;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
-use super::versioning::VersionControl;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HNSWLevel(pub u8);
@@ -32,9 +32,6 @@ pub struct FileOffset(pub u32);
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, Hash)]
 pub struct BytesToRead(pub u32);
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-pub struct VersionId(pub u16);
 
 #[derive(Clone)]
 pub struct Neighbour {

@@ -1,7 +1,7 @@
 use super::cache_loader::NodeRegistry;
 use super::common::WaCustomError;
 use super::lazy_load::{FileIndex, LazyItem, SyncPersist};
-use super::types::{BytesToRead, FileOffset, HNSWLevel, MergedNode, NodeProp, VectorId, VersionId};
+use super::types::{BytesToRead, FileOffset, HNSWLevel, MergedNode, NodeProp, VectorId};
 use crate::models::custom_buffered_writer::*;
 use crate::models::serializer::CustomSerialize;
 use arcshift::ArcShift;
@@ -48,7 +48,7 @@ pub fn write_node_to_file(
     match file_index {
         Some(FileIndex::Valid {
             offset: FileOffset(offset),
-            version: VersionId(version),
+            version,
         }) => {
             println!(
                 "About to write at offset {}, version {}, node: {:#?}",

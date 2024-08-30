@@ -2,7 +2,7 @@ use super::CustomSerialize;
 use crate::models::{
     cache_loader::NodeRegistry,
     lazy_load::{EagerLazyItemSet, FileIndex, LazyItemRef},
-    types::{BytesToRead, FileOffset, HNSWLevel, MergedNode, PropState, VersionId},
+    types::{BytesToRead, FileOffset, HNSWLevel, MergedNode, PropState},
 };
 use arcshift::ArcShift;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
@@ -165,7 +165,7 @@ impl CustomSerialize for MergedNode {
                         reader,
                         FileIndex::Valid {
                             offset: FileOffset(offset),
-                            version: VersionId(version),
+                            version,
                         },
                         cache.clone(),
                         max_loads,
@@ -180,7 +180,7 @@ impl CustomSerialize for MergedNode {
                         reader,
                         FileIndex::Valid {
                             offset: FileOffset(offset),
-                            version: VersionId(version),
+                            version,
                         },
                         cache.clone(),
                         max_loads,
@@ -200,7 +200,7 @@ impl CustomSerialize for MergedNode {
                     max_loads,
                     skipm,
                 )?;
-              
+
                 Ok(MergedNode {
                     hnsw_level,
                     prop: ArcShift::new(prop),

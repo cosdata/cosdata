@@ -52,16 +52,16 @@ fn lazy_item_deserialize_impl<R: Read + Seek>(
             "Cannot deserialize MergedNode with an invalid FileIndex",
         )),
         FileIndex::Valid { offset, version } => {
-            if offset == u32::MAX {
+            if offset.0 == u32::MAX {
                 return Ok(LazyItem::Invalid);
             }
-            reader.seek(SeekFrom::Start(offset as u64))?;
+            reader.seek(SeekFrom::Start(offset.0 as u64))?;
             let node_offset = reader.read_u32::<LittleEndian>()?;
             let versions_offset = reader.read_u32::<LittleEndian>()?;
             let data = MergedNode::deserialize(
                 reader,
                 FileIndex::Valid {
-                    offset: node_offset,
+                    offset: FileOffset(node_offset),
                     version,
                 },
                 cache.clone(),
@@ -71,7 +71,7 @@ fn lazy_item_deserialize_impl<R: Read + Seek>(
             let versions = LazyItemMap::deserialize(
                 reader,
                 FileIndex::Valid {
-                    offset: versions_offset,
+                    offset: FileOffset(versions_offset),
                     version,
                 },
                 cache,
@@ -122,10 +122,10 @@ impl CustomSerialize for LazyItem<MergedNode> {
                     let mut arc = data.clone();
                     let offset = writer.stream_position()? as u32;
                     let version = self.get_current_version();
-                  
+
                     self.set_file_index(Some(FileIndex::Valid {
                         offset: FileOffset(offset),
-                        version
+                        version,
                     }));
 
                     let data = arc.get();

@@ -1,7 +1,7 @@
 use super::CustomSerialize;
 use crate::models::identity_collections::{IdentityMap, IdentityMapKey};
 use crate::models::lazy_load::{FileIndex, LazyItemMap, SyncPersist};
-use crate::models::types::{FileOffset, VersionId};
+use crate::models::types::FileOffset;
 use crate::models::{
     cache_loader::NodeRegistry,
     lazy_load::{LazyItem, CHUNK_SIZE},
@@ -92,7 +92,10 @@ where
     ) -> std::io::Result<Self> {
         match file_index {
             FileIndex::Invalid => Ok(LazyItemMap::new()),
-            FileIndex::Valid { offset: FileOffset(offset), .. } => {
+            FileIndex::Valid {
+                offset: FileOffset(offset),
+                ..
+            } => {
                 if offset == u32::MAX {
                     return Ok(LazyItemMap::new());
                 }
@@ -121,7 +124,7 @@ where
                         let item_offset = reader.read_u32::<LittleEndian>()?;
                         let item_file_index = FileIndex::Valid {
                             offset: FileOffset(item_offset),
-                            version: VersionId(version),
+                            version,
                         };
                         let item = LazyItem::deserialize(
                             reader,

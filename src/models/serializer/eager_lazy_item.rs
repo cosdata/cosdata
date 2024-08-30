@@ -1,7 +1,8 @@
 use super::CustomSerialize;
 use crate::models::{
     cache_loader::NodeRegistry,
-    lazy_load::{EagerLazyItem, FileIndex, LazyItem, SyncPersist}, types::{FileOffset, VersionId},
+    lazy_load::{EagerLazyItem, FileIndex, LazyItem, SyncPersist},
+    types::FileOffset,
 };
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::collections::HashSet;
@@ -53,7 +54,7 @@ where
                 let version = reader.read_u32::<LittleEndian>()?.into();
                 let item_file_index = FileIndex::Valid {
                     offset: FileOffset(item_offset),
-                    version: VersionId(version),
+                    version,
                 };
                 let item = LazyItem::deserialize(reader, item_file_index, cache, max_loads, skipm)?;
                 Ok(Self(eager_data, item))
