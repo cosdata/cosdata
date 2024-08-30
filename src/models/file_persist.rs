@@ -1,7 +1,7 @@
 use super::cache_loader::NodeRegistry;
 use super::common::WaCustomError;
 use super::lazy_load::{FileIndex, LazyItem, SyncPersist};
-use super::types::{HNSWLevel, MergedNode, NodeProp, VectorId};
+use super::types::{BytesToRead, FileOffset, HNSWLevel, MergedNode, NodeProp, VectorId, VersionId};
 use crate::models::custom_buffered_writer::*;
 use crate::models::serializer::CustomSerialize;
 use arcshift::ArcShift;
@@ -21,7 +21,7 @@ pub fn read_node_from_file<R: Read + Seek>(
         FileIndex::Valid { offset, version } => {
             println!(
                 "Read MergedNode from offset: {}, version: {}",
-                offset, *version
+                offset.0, *version
             );
         }
         FileIndex::Invalid => {
@@ -46,7 +46,10 @@ pub fn write_node_to_file(
     let node = node_arc.get();
 
     match file_index {
-        Some(FileIndex::Valid { offset, version }) => {
+        Some(FileIndex::Valid {
+            offset: FileOffset(offset),
+            version: VersionId(version),
+        }) => {
             println!(
                 "About to write at offset {}, version {}, node: {:#?}",
                 offset, *version, node
@@ -69,7 +72,7 @@ pub fn write_node_to_file(
 
     // Create and return the new FileIndex
     let new_file_index = FileIndex::Valid {
-        offset: new_offset,
+        offset: FileOffset(new_offset),
         version: match file_index {
             Some(FileIndex::Valid { version, .. }) => version,
             _ => lazy_item.get_current_version(),
@@ -106,7 +109,7 @@ pub fn load_vector_id_lsmdb(_level: HNSWLevel, _vector_id: VectorId) -> LazyItem
 pub fn load_neighbor_persist_ref(_level: HNSWLevel, _node_file_ref: u32) -> Option<MergedNode> {
     None
 }
-pub fn write_prop_to_file(prop: &NodeProp, mut file: &File) -> (u32, u32) {
+pub fn write_prop_to_file(prop: &NodeProp, mut file: &File) -> (FileOffset, BytesToRead) {
     let mut prop_bytes = Vec::new();
     //let result = encode(&prop);
     let result = serde_cbor::to_vec(&prop).unwrap();
@@ -116,5 +119,8 @@ pub fn write_prop_to_file(prop: &NodeProp, mut file: &File) -> (u32, u32) {
     file.write_all(&prop_bytes)
         .expect("Failed to write to file");
     let offset = file.metadata().unwrap().len() - prop_bytes.len() as u64;
-    (offset as u32, prop_bytes.len() as u32)
+    (
+        FileOffset(offset as u32),
+        BytesToRead(prop_bytes.len() as u32),
+    )
 }

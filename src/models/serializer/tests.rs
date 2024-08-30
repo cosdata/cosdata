@@ -1,3 +1,4 @@
+use crate::distance::cosine::CosineSimilarity;
 use crate::models::identity_collections::IdentityMapKey;
 use crate::models::lazy_load::*;
 use crate::models::serializer::*;
@@ -17,13 +18,13 @@ fn get_cache<R: Read + Seek>(reader: R) -> Arc<NodeRegistry<R>> {
 
 #[test]
 fn test_lazy_item_serialization() {
-    let node = MergedNode::new(2);
+    let node = MergedNode::new(HNSWLevel(2));
     let lazy_item = LazyItemRef::new(1.into(), node);
 
     let mut writer = Cursor::new(Vec::new());
     let offset = lazy_item.serialize(&mut writer).unwrap();
     let file_index = FileIndex::Valid {
-        offset,
+        offset: FileOffset(offset),
         version: 1.into(),
     };
 
@@ -56,12 +57,12 @@ fn test_lazy_item_serialization() {
 
 #[test]
 fn test_eager_lazy_item_serialization() {
-    let item = EagerLazyItem(10.5, LazyItem::new(1.into(), MergedNode::new(2)));
+    let item = EagerLazyItem(10.5, LazyItem::new(1.into(), MergedNode::new(HNSWLevel(2))));
 
     let mut writer = Cursor::new(Vec::new());
     let offset = item.serialize(&mut writer).unwrap();
     let file_index = FileIndex::Valid {
-        offset,
+        offset: FileOffset(offset),
         version: 1.into(),
     };
 
@@ -86,13 +87,14 @@ fn test_eager_lazy_item_serialization() {
 #[test]
 fn test_lazy_item_set_serialization() {
     let lazy_items = LazyItemSet::new();
-    lazy_items.insert(LazyItem::from_data(1.into(), MergedNode::new(2)));
-    lazy_items.insert(LazyItem::from_data(2.into(), MergedNode::new(2)));
+
+    lazy_items.insert(LazyItem::from_data(1.into(), MergedNode::new(HNSWLevel(2))));
+    lazy_items.insert(LazyItem::from_data(2.into(), MergedNode::new(HNSWLevel(2))));
 
     let mut writer = Cursor::new(Vec::new());
     let offset = lazy_items.serialize(&mut writer).unwrap();
     let file_index = FileIndex::Valid {
-        offset,
+        offset: FileOffset(offset),
         version: 0.into(),
     };
 
@@ -127,17 +129,17 @@ fn test_eager_lazy_item_set_serialization() {
     let lazy_items = EagerLazyItemSet::new();
     lazy_items.insert(EagerLazyItem(
         1.0,
-        LazyItem::from_data(1.into(), MergedNode::new(2)),
+        LazyItem::from_data(1.into(), MergedNode::new(HNSWLevel(2))),
     ));
     lazy_items.insert(EagerLazyItem(
         2.5,
-        LazyItem::from_data(2.into(), MergedNode::new(2)),
+        LazyItem::from_data(2.into(), MergedNode::new(HNSWLevel(2))),
     ));
 
     let mut writer = Cursor::new(Vec::new());
     let offset = lazy_items.serialize(&mut writer).unwrap();
     let file_index = FileIndex::Valid {
-        offset,
+        offset: FileOffset(offset),
         version: 0.into(),
     };
 
@@ -176,12 +178,12 @@ fn test_eager_lazy_item_set_serialization() {
 
 #[test]
 fn test_merged_node_acyclic_serialization() {
-    let node = MergedNode::new(2);
+    let node = MergedNode::new(HNSWLevel(2));
 
     let mut writer = Cursor::new(Vec::new());
     let offset = node.serialize(&mut writer).unwrap();
     let file_index = FileIndex::Valid {
-        offset,
+        offset: FileOffset(offset),
         version: 0.into(),
     };
 
@@ -197,17 +199,23 @@ fn test_merged_node_acyclic_serialization() {
 
 #[test]
 fn test_merged_node_with_neighbors_serialization() {
-    let node = MergedNode::new(2);
+    let node = MergedNode::new(HNSWLevel(2));
 
-    let neighbor1 = LazyItem::from_data(2.into(), MergedNode::new(1));
-    let neighbor2 = LazyItem::from_data(3.into(), MergedNode::new(1));
-    node.add_ready_neighbor(neighbor1, 0.9);
-    node.add_ready_neighbor(neighbor2, 0.8);
+    let neighbor1 = LazyItem::from_data(2.into(), MergedNode::new(HNSWLevel(1)));
+    let neighbor2 = LazyItem::from_data(3.into(), MergedNode::new(HNSWLevel(1)));
+    node.add_ready_neighbor(
+        neighbor1,
+        MetricResult::CosineSimilarity(CosineSimilarity(0.9)),
+    );
+    node.add_ready_neighbor(
+        neighbor2,
+        MetricResult::CosineSimilarity(CosineSimilarity(0.9)),
+    );
 
     let mut writer = Cursor::new(Vec::new());
     let offset = node.serialize(&mut writer).unwrap();
     let file_index = FileIndex::Valid {
-        offset,
+        offset: FileOffset(offset),
         version: 0.into(),
     };
 
@@ -252,9 +260,9 @@ fn test_merged_node_with_neighbors_serialization() {
 
 #[test]
 fn test_merged_node_with_parent_child_serialization() {
-    let node = MergedNode::new(2);
-    let parent = LazyItem::new(2.into(), MergedNode::new(3));
-    let child = LazyItem::new(3.into(), MergedNode::new(1));
+    let node = MergedNode::new(HNSWLevel(2));
+    let parent = LazyItem::new(2.into(), MergedNode::new(HNSWLevel(3)));
+    let child = LazyItem::new(3.into(), MergedNode::new(HNSWLevel(1)));
 
     node.set_parent(parent);
     node.set_child(child);
@@ -262,7 +270,7 @@ fn test_merged_node_with_parent_child_serialization() {
     let mut writer = Cursor::new(Vec::new());
     let offset = node.serialize(&mut writer).unwrap();
     let file_index = FileIndex::Valid {
-        offset,
+        offset: FileOffset(offset),
         version: 0.into(),
     };
 
@@ -294,20 +302,20 @@ fn test_lazy_item_with_versions_serialization() {
     let branch_id = BranchId::new("main");
 
     let v0_hash = vcs.generate_hash("main", 0.into()).unwrap();
-    let node_v0 = LazyItem::new(v0_hash, MergedNode::new(2));
+    let node_v0 = LazyItem::new(v0_hash, MergedNode::new(HNSWLevel(2)));
 
     let v1_hash = vcs.add_next_version("main").unwrap();
-    let node_v1 = LazyItem::new(v1_hash, MergedNode::new(2));
+    let node_v1 = LazyItem::new(v1_hash, MergedNode::new(HNSWLevel(2)));
     node_v0.add_version(branch_id, 1, node_v1).unwrap();
 
     let v2_hash = vcs.add_next_version("main").unwrap();
-    let node_v2 = LazyItem::new(v2_hash, MergedNode::new(2));
+    let node_v2 = LazyItem::new(v2_hash, MergedNode::new(HNSWLevel(2)));
     node_v0.add_version(branch_id, 2, node_v2).unwrap();
 
     let mut writer = Cursor::new(Vec::new());
     let offset = node_v0.serialize(&mut writer).unwrap();
     let file_index = FileIndex::Valid {
-        offset,
+        offset: FileOffset(offset),
         version: 0.into(),
     };
 
@@ -323,8 +331,8 @@ fn test_lazy_item_with_versions_serialization() {
 
 #[test]
 fn test_lazy_item_cyclic_serialization() {
-    let node1 = LazyItem::new(1.into(), MergedNode::new(2));
-    let node2 = LazyItem::new(2.into(), MergedNode::new(2));
+    let node1 = LazyItem::new(1.into(), MergedNode::new(HNSWLevel(2)));
+    let node2 = LazyItem::new(2.into(), MergedNode::new(HNSWLevel(2)));
 
     node1.get_data().unwrap().get().set_parent(node2.clone());
     node2.get_data().unwrap().get().set_child(node1.clone());
@@ -334,7 +342,7 @@ fn test_lazy_item_cyclic_serialization() {
     let mut writer = Cursor::new(Vec::new());
     let offset = lazy_ref.serialize(&mut writer).unwrap();
     let file_index = FileIndex::Valid {
-        offset,
+        offset: FileOffset(offset),
         version: 1.into(),
     };
 
@@ -363,9 +371,9 @@ fn test_lazy_item_cyclic_serialization() {
 
 #[test]
 fn test_lazy_item_complex_cyclic_serialization() {
-    let mut node1 = ArcShift::new(MergedNode::new(2));
-    let mut node2 = ArcShift::new(MergedNode::new(2));
-    let mut node3 = ArcShift::new(MergedNode::new(2));
+    let mut node1 = ArcShift::new(MergedNode::new(HNSWLevel(2)));
+    let mut node2 = ArcShift::new(MergedNode::new(HNSWLevel(2)));
+    let mut node3 = ArcShift::new(MergedNode::new(HNSWLevel(2)));
 
     let lazy1 = LazyItem::from_arcshift(1.into(), node1.clone());
     let lazy2 = LazyItem::from_arcshift(2.into(), node2.clone());
@@ -375,16 +383,18 @@ fn test_lazy_item_complex_cyclic_serialization() {
     node2.get().set_child(lazy1.clone());
     node2.get().set_parent(lazy3.clone());
     node3.get().set_child(lazy2.clone());
-    node1
-        .get()
-        .add_ready_neighbor(LazyItem::from_arcshift(3.into(), node3), 0.9);
+
+    node1.get().add_ready_neighbor(
+        LazyItem::from_arcshift(3.into(), node3),
+        MetricResult::CosineSimilarity(CosineSimilarity(0.9)),
+    );
 
     let lazy_ref = LazyItemRef::from_lazy(lazy1);
 
     let mut writer = Cursor::new(Vec::new());
     let offset = lazy_ref.serialize(&mut writer).unwrap();
     let file_index = FileIndex::Valid {
-        offset,
+        offset: FileOffset(offset),
         version: 1.into(),
     };
 
@@ -438,13 +448,16 @@ fn test_lazy_item_complex_cyclic_serialization() {
 fn test_lazy_item_set_linked_chunk_serialization() {
     let lazy_items = LazyItemSet::new();
     for i in 1..13 {
-        lazy_items.insert(LazyItem::from_data(i.into(), MergedNode::new(2)));
+        lazy_items.insert(LazyItem::from_data(
+            i.into(),
+            MergedNode::new(HNSWLevel(2)),
+        ));
     }
 
     let mut writer = Cursor::new(Vec::new());
     let offset = lazy_items.serialize(&mut writer).unwrap();
     let file_index = FileIndex::Valid {
-        offset,
+        offset: FileOffset(offset),
         version: 0.into(),
     };
 
@@ -480,14 +493,14 @@ fn test_eager_lazy_item_set_linked_chunk_serialization() {
     for i in 1..13 {
         lazy_items.insert(EagerLazyItem(
             3.4,
-            LazyItem::from_data(i.into(), MergedNode::new(2)),
+            LazyItem::from_data(i.into(), MergedNode::new(HNSWLevel(2))),
         ));
     }
 
     let mut writer = Cursor::new(Vec::new());
     let offset = lazy_items.serialize(&mut writer).unwrap();
     let file_index = FileIndex::Valid {
-        offset,
+        offset: FileOffset(offset),
         version: 0.into(),
     };
 
@@ -572,11 +585,11 @@ fn test_lazy_item_with_versions_serialization_and_validation() {
     let branch_id = BranchId::new("main");
 
     let v0_hash = vcs.generate_hash("main", Version::from(0)).unwrap();
-    let root = LazyItem::new(v0_hash, MergedNode::new(0));
+    let root = LazyItem::new(v0_hash, MergedNode::new(HNSWLevel(0)));
 
     for i in 0..100 {
         let hash = vcs.add_next_version("main").unwrap();
-        let next_version = LazyItem::new(hash, MergedNode::new(0));
+        let next_version = LazyItem::new(hash, MergedNode::new(HNSWLevel(0)));
         root.add_version(branch_id, i + 1, next_version).unwrap();
     }
 

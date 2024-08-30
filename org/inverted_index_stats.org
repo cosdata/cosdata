@@ -1,0 +1,195 @@
+* Inverted Index Statistics Implicit vs Explicit nodes
+
+** Code
+#+BEGIN_SRC rust
+use std::sync::{Arc, Mutex};
+use rand::Rng;
+
+#[derive(Debug)]
+struct InvertedIndexItem {
+    dim_index: u32,
+    explicit: bool,
+    pointers: Vec<Option<Arc<Mutex<InvertedIndexItem>>>>,
+}
+
+impl InvertedIndexItem {
+    fn new(dim_index: u32, explicit: bool) -> Self {
+        InvertedIndexItem {
+            dim_index,
+            explicit,
+            pointers: vec![None; 8], // Space for exponents 0 to 7 (1 to 16384)
+        }
+    }
+
+    fn insert_dim_index(&mut self, target_dim_index: u32) -> Result<(), String> {
+        if target_dim_index == self.dim_index {
+            if self.explicit {
+                return Err(format!("Dimension-Index {} is already explicit", self.dim_index));
+            }
+            self.explicit = true;
+            return Ok(());
+        }
+
+        let path = generate_power_of_4_list(target_dim_index - self.dim_index);
+        self.insert_recursive(target_dim_index, &path, 0)
+    }
+
+    fn insert_recursive(&mut self, target_dim_index: u32, path: &[(u32, u32)], path_index: usize) -> Result<(), String> {
+        if path_index == path.len() - 1 {
+            let (_, exponent) = path[path_index];
+            let new_dim_index = self.dim_index + 4u32.pow(exponent);
+            if new_dim_index == target_dim_index {
+                let new_item = Arc::new(Mutex::new(InvertedIndexItem::new(new_dim_index, true)));
+                self.pointers[exponent as usize] = Some(new_item);
+                return Ok(());
+            }
+        }
+
+        let (_, exponent) = path[path_index];
+        let next_dim_index = self.dim_index + 4u32.pow(exponent);
+
+        if self.pointers[exponent as usize].is_none() {
+            let new_item = Arc::new(Mutex::new(InvertedIndexItem::new(next_dim_index, false)));
+            self.pointers[exponent as usize] = Some(new_item);
+        }
+
+        if let Some(next_item) = &self.pointers[exponent as usize] {
+            next_item.lock().unwrap().insert_recursive(target_dim_index, path, path_index + 1)
+        } else {
+            Err("Failed to create or access the next item".to_string())
+        }
+    }
+
+    fn print_tree(&self, depth: usize) {
+        let indent = "  ".repeat(depth);
+        println!("{}Dimension-Index {}: {}", indent, self.dim_index, if self.explicit { "Explicit" } else { "Implicit" });
+        for (i, pointer) in self.pointers.iter().enumerate() {
+            if let Some(item) = pointer {
+                println!("{}-> 4^{} to:", indent, i);
+                item.lock().unwrap().print_tree(depth + 1);
+            }
+        }
+    }
+}
+
+struct InvertedIndex {
+    root: Arc<Mutex<InvertedIndexItem>>,
+}
+
+impl InvertedIndex {
+    fn new() -> Self {
+        InvertedIndex {
+            root: Arc::new(Mutex::new(InvertedIndexItem::new(0, true)))
+        }
+    }
+
+    fn add_dim_index(&self, dim_index: u32) -> Result<(), String> {
+        self.root.lock().unwrap().insert_dim_index(dim_index)
+    }
+
+    fn print_tree(&self) {
+        self.root.lock().unwrap().print_tree(0);
+    }
+
+    fn count_nodes(&self) -> (u32, u32) {
+        fn count_recursive(node: &InvertedIndexItem) -> (u32, u32) {
+            let mut implicit = 0;
+            let mut explicit = 0;
+
+            if node.explicit {
+                explicit += 1;
+            } else {
+                implicit += 1;
+            }
+
+            for child in &node.pointers {
+                if let Some(child_node) = child {
+                    let (child_implicit, child_explicit) = count_recursive(&child_node.lock().unwrap());
+                    implicit += child_implicit;
+                    explicit += child_explicit;
+                }
+            }
+
+            (implicit, explicit)
+        }
+
+        count_recursive(&self.root.lock().unwrap())
+    }
+}
+
+fn generate_power_of_4_list(valx: u32) -> Vec<(u32, u32)> {
+    fn largest_power_of_4_exponent(n: u32) -> u32 {
+        let mut exponent = 0;
+        while (4u32.pow(exponent + 1)) <= n {
+            exponent += 1;
+        }
+        exponent
+    }
+
+    let mut result = Vec::new();
+    let mut current = 0;
+    
+    while current < valx {
+        let exponent = largest_power_of_4_exponent(valx - current);
+        let delta = 4u32.pow(exponent);
+        result.push((current, exponent));
+        current += delta;
+    }
+
+    result
+}
+
+fn main() {
+    let inverted_index = InvertedIndex::new();
+    let mut rng = rand::thread_rng();
+    
+    // Randomly add half the numbers from 0 to 10,000
+    for i in 0..10000 {
+        if rng.gen_bool(0.8) {
+            match inverted_index.add_dim_index(i) {
+                Ok(_) => {},
+                Err(_) => {},  // Ignore errors (e.g., when trying to add an already explicit index)
+            }
+        }
+    }
+
+    // Count implicit and explicit nodes
+    let (implicit_count, explicit_count) = inverted_index.count_nodes();
+    
+    println!("Final tree statistics:");
+    println!("Implicit nodes: {}", implicit_count);
+    println!("Explicit nodes: {}", explicit_count);
+    println!("Total nodes: {}", implicit_count + explicit_count);
+}
+#+END_SRC
+
+** Understanding the Statistics Computation
+
+The statistics computation in this code is performed by the `count_nodes` method of the `InvertedIndex` struct. Here's a breakdown of how it works:
+
+1. The `count_nodes` method initializes the counting process by calling a recursive helper function `count_recursive` on the root node of the inverted index.
+
+2. The `count_recursive` function takes an `InvertedIndexItem` as input and returns a tuple of two `u32` values: (implicit_count, explicit_count).
+
+3. For each node, the function first checks if it's explicit or implicit:
+   - If explicit, it increments the explicit count.
+   - If implicit, it increments the implicit count.
+
+4. Then, it iterates through all the child pointers of the current node.
+
+5. For each child that exists (is Some), it recursively calls `count_recursive` on that child.
+
+6. The counts from each child are added to the current implicit and explicit counts.
+
+7. Finally, the function returns the total implicit and explicit counts for the subtree rooted at the current node.
+
+8. The main `count_nodes` method returns the result of calling `count_recursive` on the root node, which gives the counts for the entire tree.
+
+This approach ensures that every node in the tree is visited exactly once, and each node is correctly classified as either implicit or explicit. The use of recursion allows the function to traverse the entire tree structure regardless of its depth or complexity.
+
+In the main function, these statistics are computed after randomly adding dimension indices to the inverted index. The results show:
+- The number of implicit nodes (intermediate nodes created during insertion)
+- The number of explicit nodes (nodes representing actually inserted dimension indices)
+- The total number of nodes in the tree
+
+This gives us insight into the structure and efficiency of the inverted index, showing how many nodes are needed to represent the inserted dimension indices and how many additional nodes are created to maintain the tree structure.

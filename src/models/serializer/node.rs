@@ -2,7 +2,7 @@ use super::CustomSerialize;
 use crate::models::{
     cache_loader::NodeRegistry,
     lazy_load::{EagerLazyItemSet, FileIndex, LazyItemRef},
-    types::{MergedNode, PropState},
+    types::{BytesToRead, FileOffset, HNSWLevel, MergedNode, PropState, VersionId},
 };
 use arcshift::ArcShift;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
@@ -17,14 +17,14 @@ impl CustomSerialize for MergedNode {
         let start_offset = writer.stream_position()? as u32;
 
         // Serialize basic fields
-        writer.write_u8(self.hnsw_level)?;
+        writer.write_u8(self.hnsw_level.0)?;
 
         // Serialize prop
         let mut prop = self.prop.clone();
         let prop_state = prop.get();
         match &*prop_state {
             PropState::Ready(node_prop) => {
-                if let Some((offset, length)) = node_prop.location {
+                if let Some((FileOffset(offset), BytesToRead(length))) = node_prop.location {
                     writer.write_u32::<LittleEndian>(offset)?;
                     writer.write_u32::<LittleEndian>(length)?;
                 } else {
@@ -34,7 +34,7 @@ impl CustomSerialize for MergedNode {
                     ));
                 }
             }
-            PropState::Pending((offset, length)) => {
+            PropState::Pending((FileOffset(offset), BytesToRead(length))) => {
                 writer.write_u32::<LittleEndian>(*offset)?;
                 writer.write_u32::<LittleEndian>(*length)?;
             }
@@ -128,13 +128,16 @@ impl CustomSerialize for MergedNode {
                 std::io::ErrorKind::InvalidInput,
                 "Cannot deserialize MergedNode with an invalid FileIndex",
             )),
-            FileIndex::Valid { offset, version } => {
+            FileIndex::Valid {
+                offset: FileOffset(offset),
+                version,
+            } => {
                 reader.seek(SeekFrom::Start(offset as u64))?;
                 // Read basic fields
-                let hnsw_level = reader.read_u8()?;
+                let hnsw_level = HNSWLevel(reader.read_u8()?);
                 // Read prop
-                let prop_offset = reader.read_u32::<LittleEndian>()?;
-                let prop_length = reader.read_u32::<LittleEndian>()?;
+                let prop_offset = FileOffset(reader.read_u32::<LittleEndian>()?);
+                let prop_length = BytesToRead(reader.read_u32::<LittleEndian>()?);
                 let prop = PropState::Pending((prop_offset, prop_length));
                 // Read indicator byte
                 let indicator = reader.read_u8()?;
@@ -160,7 +163,10 @@ impl CustomSerialize for MergedNode {
                 let parent = if let Some((offset, version)) = parent_offset_and_version {
                     LazyItemRef::deserialize(
                         reader,
-                        FileIndex::Valid { offset, version },
+                        FileIndex::Valid {
+                            offset: FileOffset(offset),
+                            version: VersionId(version),
+                        },
                         cache.clone(),
                         max_loads,
                         skipm,
@@ -172,7 +178,10 @@ impl CustomSerialize for MergedNode {
                 let child = if let Some((offset, version)) = child_offset_and_version {
                     LazyItemRef::deserialize(
                         reader,
-                        FileIndex::Valid { offset, version },
+                        FileIndex::Valid {
+                            offset: FileOffset(offset),
+                            version: VersionId(version),
+                        },
                         cache.clone(),
                         max_loads,
                         skipm,
@@ -184,13 +193,14 @@ impl CustomSerialize for MergedNode {
                 let neighbors = EagerLazyItemSet::deserialize(
                     reader,
                     FileIndex::Valid {
-                        offset: neighbors_offset,
+                        offset: FileOffset(neighbors_offset),
                         version,
                     },
                     cache.clone(),
                     max_loads,
                     skipm,
                 )?;
+              
                 Ok(MergedNode {
                     hnsw_level,
                     prop: ArcShift::new(prop),

@@ -1,4 +1,4 @@
-use super::types::VectorId;
+use super::types::{MetricResult, VectorId};
 use crate::models::user::{AddUserResp, AuthResp, Statistics, User};
 use rayon::iter::WhileSome;
 use serde::{Deserialize, Serialize};
@@ -65,11 +65,11 @@ pub enum RPCResponseBody {
         insert_stats: Option<Statistics>,
     },
     RespVectorKNN {
-        knn: Option<Vec<(VectorIdValue, f32)>>,
+        knn: Option<Vec<(VectorIdValue, MetricResult)>>,
     },
     RespFetchNeighbors {
         vector: Vector,
-        neighbors: Vec<(VectorIdValue, f32)>,
+        neighbors: Vec<(VectorIdValue, MetricResult)>,
     },
     RespCreateVectorDb {
         result: bool,

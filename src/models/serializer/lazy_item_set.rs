@@ -2,7 +2,7 @@ use super::CustomSerialize;
 use crate::models::{
     cache_loader::NodeRegistry,
     identity_collections::{Identifiable, IdentitySet},
-    lazy_load::{FileIndex, LazyItem, LazyItemSet, SyncPersist, CHUNK_SIZE},
+    lazy_load::{FileIndex, LazyItem, LazyItemSet, SyncPersist, CHUNK_SIZE}, types::{FileOffset, VersionId},
 };
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::collections::HashSet;
@@ -71,7 +71,7 @@ where
     ) -> std::io::Result<Self> {
         match file_index {
             FileIndex::Invalid => Ok(LazyItemSet::new()),
-            FileIndex::Valid { offset, .. } => {
+            FileIndex::Valid { offset: FileOffset(offset), .. } => {
                 if offset == u32::MAX {
                     return Ok(LazyItemSet::new());
                 }
@@ -87,8 +87,8 @@ where
                             continue;
                         }
                         let item_file_index = FileIndex::Valid {
-                            offset: item_offset,
-                            version,
+                            offset: FileOffset(item_offset),
+                            version: VersionId(version),
                         };
                         let item = LazyItem::deserialize(
                             reader,

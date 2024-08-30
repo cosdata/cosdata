@@ -33,9 +33,19 @@ Build the project:
 cargo build --release
 ```
 
-### Self Signed Cerficates
+### Self Signed Certificates
 
-While developing Cosdata, you can use self-signed certificates for testing the APIs, this sections mentions how you can generate and setup them.
+It's recommended to run Cosdata server in HTTPS mode i.e. with TLS
+support. However, during development it might be easier to get it
+running without TLS. To do so, set `server.mode=http` in the
+[config.toml](config.toml) file.
+
+Alternately, you may use self-signed certificates for testing the
+APIs. The paths to the certificate and private key files are
+configured in the [config.toml](config.toml) file.
+
+This sections mentions how you can generate and setup the
+certificates.
 
 #### Generate Certificates
 
@@ -60,13 +70,14 @@ Move certificates to appropriate folders and set permissions:
 
 ```bash
 # Create directories if don't exist
-sudo mkdir -p $SSL_CERT_DIR
-sudo mkdir -p $SSL_CERT_DIR/certs
-sudo mkdir -p $SSL_CERT_DIR/private
+sudo mkdir -p $SSL_CERT_DIR/{certs,private}
 
 # Move certificates
 sudo mv self_signed_certificate.crt $SSL_CERT_DIR/certs/cosdata-ssl.crt
 sudo mv private_key_pkcs8.pem $SSL_CERT_DIR/private/cosdata-ssl.key
+
+# Create 'ssl-cert' group (if if doesn't exist already)
+sudo groupadd ssl-cert
 
 # Change private key file permissions
 sudo chgrp ssl-cert $SSL_CERT_DIR/private/cosdata-ssl.key

@@ -61,7 +61,7 @@ impl fmt::Display for FileIndex {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             FileIndex::Valid { offset, version } => {
-                write!(f, "FileIndex(offset: {}, version: {})", offset, **version)
+                write!(f, "FileIndex(offset: {}, version: {})", offset.0, **version)
             }
             FileIndex::Invalid => write!(f, "FileIndex(Invalid)"),
         }
