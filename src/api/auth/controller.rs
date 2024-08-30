@@ -1,9 +1,12 @@
-use actix_web::{post, web::Json, HttpResponse, Result};
+use actix_web::{web::Json, HttpResponse, Result};
 
 use super::{dtos::LoginCredentials, service};
 
-#[post("/login")]
 pub(crate) async fn login(Json(credentials): Json<LoginCredentials>) -> Result<HttpResponse> {
     let res = service::login(credentials).await?;
-    Ok(HttpResponse::Ok().json(res))
+    Ok(HttpResponse::Ok().body(res))
+}
+
+pub(crate) async fn protected_route() -> HttpResponse {
+    HttpResponse::Ok().body("a message from behind authentication!")
 }

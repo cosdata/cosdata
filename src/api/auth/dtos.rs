@@ -13,5 +13,5 @@ pub(crate) struct LoginCredentials {
 pub struct Claims {
     pub exp: i64,         // Expiry time of the token
     pub iat: i64,         // Issued at time of the token
-    pub email: String, // Email associated with the token
+    pub username: String, // Email associated with the token
 }
