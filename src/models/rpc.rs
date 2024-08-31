@@ -71,8 +71,14 @@ pub enum RPCResponseBody {
         vector: Vector,
         neighbors: Vec<(VectorIdValue, MetricResult)>,
     },
+    #[serde(untagged)]
     RespCreateVectorDb {
-        result: bool,
+        // id: String, // will be added when vector store has an ID
+        name: String,
+        dimensions: usize,
+        min_val: Option<f32>,
+        max_val: Option<f32>,
+        // created_at: String, // will be added when vector store has a creation timestamp
     },
 }
 
