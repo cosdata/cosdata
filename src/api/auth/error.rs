@@ -9,6 +9,7 @@ pub(crate) enum AuthError {
     WrongCredentials,
     FailedToEncodeToken,
     InvalidToken,
+    FailedToExtractTokenFromRequest,
 }
 
 impl Display for AuthError {
@@ -17,6 +18,9 @@ impl Display for AuthError {
             AuthError::WrongCredentials => write!(f, "Wrong Credentials!"),
             AuthError::FailedToEncodeToken => write!(f, "failed to generate an jwt auth token!"),
             AuthError::InvalidToken => write!(f, "Invalid auth token!"),
+            AuthError::FailedToExtractTokenFromRequest => {
+                write!(f, "Failed to extract token from request!")
+            }
         }
     }
 }
@@ -32,6 +36,7 @@ impl ResponseError for AuthError {
             AuthError::WrongCredentials => StatusCode::BAD_REQUEST,
             AuthError::FailedToEncodeToken => StatusCode::INTERNAL_SERVER_ERROR,
             AuthError::InvalidToken => StatusCode::UNAUTHORIZED,
+            AuthError::FailedToExtractTokenFromRequest => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }

@@ -4,6 +4,7 @@ use super::{error::AuthError, service::decode_jwt};
 use std::future::{ready, Ready};
 
 use actix_web::http::header::{self};
+use actix_web::HttpMessage;
 use actix_web::{
     dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform},
     Error,
@@ -55,11 +56,15 @@ where
     fn call(&self, req: ServiceRequest) -> Self::Future {
         let claims = authentication_middleware(&req);
 
-        // authenticated user should be fetched here and passed down with req
+        let claims = match claims {
+            Ok(claims) => claims,
+            Err(e) => return Box::pin(async move { Err(e.into()) }),
+        };
+
+        req.extensions_mut().insert(claims);
 
         let fut = self.service.call(req);
         Box::pin(async move {
-            claims?;
             let res = fut.await?;
             Ok(res)
         })
