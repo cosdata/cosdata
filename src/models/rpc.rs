@@ -73,7 +73,7 @@ pub enum RPCResponseBody {
     },
     #[serde(untagged)]
     RespCreateVectorDb {
-        // id: String, // will be added when vector store has an ID
+        id: String,
         name: String,
         dimensions: usize,
         min_val: Option<f32>,

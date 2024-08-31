@@ -22,6 +22,7 @@ pub(crate) async fn create(web::Json(body): web::Json<CreateVectorDb>) -> HttpRe
 
     match result {
         Ok(vector_store) => HttpResponse::Ok().json(RPCResponseBody::RespCreateVectorDb {
+            id: vector_store.database_name.clone(), // will use the vector store name , till it does have a unique id
             dimensions: vector_store.quant_dim,
             max_val: lower_bound,
             min_val: upper_bound,
