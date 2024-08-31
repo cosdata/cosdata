@@ -29,19 +29,19 @@ where
     type Response = ServiceResponse<B>;
     type Error = Error;
     type InitError = ();
-    type Transform = AuthenticationMiddlewareSerivce<S>;
+    type Transform = AuthenticationMiddlewareService<S>;
     type Future = Ready<Result<Self::Transform, Self::InitError>>;
 
     fn new_transform(&self, service: S) -> Self::Future {
-        ready(Ok(AuthenticationMiddlewareSerivce { service }))
+        ready(Ok(AuthenticationMiddlewareService { service }))
     }
 }
 
-pub(crate) struct AuthenticationMiddlewareSerivce<S> {
+pub(crate) struct AuthenticationMiddlewareService<S> {
     service: S,
 }
 
-impl<S, B> Service<ServiceRequest> for AuthenticationMiddlewareSerivce<S>
+impl<S, B> Service<ServiceRequest> for AuthenticationMiddlewareService<S>
 where
     S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
     S::Future: 'static,
