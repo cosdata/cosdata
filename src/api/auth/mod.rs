@@ -1,7 +1,7 @@
 use actix_web::{web, Scope};
 use controller::protected_route;
 
-mod authentication_middleware;
+pub(crate) mod authentication_middleware;
 mod controller;
 mod dtos;
 mod error;

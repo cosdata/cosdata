@@ -3,7 +3,6 @@ use actix_web::web::Data;
 use actix_web::{
     dev::ServiceRequest, middleware, web, App, Error, HttpRequest, HttpResponse, HttpServer,
 };
-use actix_web_httpauth::{extractors::bearer::BearerAuth, middleware::HttpAuthentication};
 use cosdata::config_loader::{load_config, Host, ServerMode, Ssl};
 use dashmap::DashMap;
 use lmdb::Environment;
@@ -15,7 +14,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::{fs::File, io::BufReader};
 
-use crate::api::auth::auth_module;
+use crate::api::auth::{auth_module, authentication_middleware::AuthenticationMiddleware};
 use crate::models::types::*;
 use crate::{api, WaCustomError};
 use std::env;
@@ -24,14 +23,6 @@ use std::env;
 struct MyObj {
     name: String,
     number: i32,
-}
-
-async fn validator(
-    req: ServiceRequest,
-    credentials: BearerAuth,
-) -> Result<ServiceRequest, (Error, ServiceRequest)> {
-    // println!("cred: {credentials:?}");
-    Ok(req)
 }
 
 async fn extract_item(item: web::Json<MyObj>, req: HttpRequest) -> HttpResponse {
@@ -71,7 +62,6 @@ pub async fn run_actix_server() -> std::io::Result<()> {
     );
 
     let server = HttpServer::new(move || {
-        let auth = HttpAuthentication::bearer(validator);
         App::new()
             // enable logger
             .wrap(middleware::Logger::default())
@@ -83,7 +73,7 @@ pub async fn run_actix_server() -> std::io::Result<()> {
             .service(auth_module())
             .service(
                 web::scope("/vectordb")
-                    .wrap(auth.clone())
+                    .wrap(AuthenticationMiddleware)
                     .service(
                         web::resource("/createdb").route(web::post().to(api::vectordb::create)),
                     )

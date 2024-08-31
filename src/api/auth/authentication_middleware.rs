@@ -15,7 +15,7 @@ use futures_util::future::LocalBoxFuture;
 // 1. Middleware initialization, middleware factory gets called with
 //    next service in chain as parameter.
 // 2. Middleware's call method gets called with normal request.
-pub struct AuthenticationMiddleware;
+pub(crate) struct AuthenticationMiddleware;
 
 // Middleware factory is `Transform` trait
 // `S` - type of the next service
@@ -37,7 +37,7 @@ where
     }
 }
 
-pub struct AuthenticationMiddlewareSerivce<S> {
+pub(crate) struct AuthenticationMiddlewareSerivce<S> {
     service: S,
 }
 
@@ -77,10 +77,7 @@ fn authentication_middleware(req: &ServiceRequest) -> Result<Claims, AuthError> 
     let auth_header = auth_header.to_str().map_err(|_| AuthError::InvalidToken)?;
 
     let mut header = auth_header.split_whitespace();
-    let (_, token) = (
-        header.next(),
-        header.next().ok_or(AuthError::InvalidToken)?.to_string(),
-    );
+    let (_, token) = (header.next(), header.next().ok_or(AuthError::InvalidToken)?);
     let token_data = decode_jwt(token)?;
     Ok(token_data.claims)
 }

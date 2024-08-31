@@ -38,7 +38,7 @@ pub fn encode_jwt(username: &str) -> Result<String, AuthError> {
     .map_err(|_| AuthError::FailedToEncodeToken)
 }
 
-pub fn decode_jwt(jwt_token: String) -> Result<TokenData<Claims>, AuthError> {
+pub fn decode_jwt(jwt_token: &str) -> Result<TokenData<Claims>, AuthError> {
     let secret = "randomStringTypicallyFromEnv".to_string();
 
     let result: Result<TokenData<Claims>, AuthError> = decode(
