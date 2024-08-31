@@ -1,12 +1,13 @@
 use super::CustomSerialize;
 use crate::models::{
+    buffered_io::{BufIoError, BufferManagerFactory},
     cache_loader::NodeRegistry,
     lazy_load::{EagerLazyItem, FileIndex, LazyItem, SyncPersist},
     types::FileOffset,
+    versioning::Hash,
 };
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::collections::HashSet;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{self, SeekFrom};
 use std::sync::Arc;
 
 impl<T, E> CustomSerialize for EagerLazyItem<T, E>
@@ -15,48 +16,69 @@ where
     LazyItem<T>: CustomSerialize,
     E: Clone + CustomSerialize + 'static,
 {
-    fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
-        let start = writer.stream_position()? as u32;
-        self.0.serialize(writer)?;
-        let item_placeholder = writer.stream_position()?;
-        writer.write_u32::<LittleEndian>(0)?;
-        writer.write_u32::<LittleEndian>(*self.1.get_current_version())?;
-        let item_offset = self.1.serialize(writer)?;
-        let end_position = writer.stream_position()?;
+    fn serialize(
+        &self,
+        bufmans: Arc<BufferManagerFactory>,
+        version: Hash,
+        cursor: u64,
+    ) -> Result<u32, BufIoError> {
+        let bufman = bufmans.get(&version)?;
+        let start = bufman.cursor_position(cursor)?;
+        bufman.write_u32_with_cursor(cursor, 0)?;
+        bufman.write_u32_with_cursor(cursor, 0)?;
+        bufman.write_u32_with_cursor(cursor, *self.1.get_current_version())?;
+        let eager_data_offset = self.0.serialize(bufmans.clone(), version, cursor)?;
+        let item_offset = self.1.serialize(bufmans.clone(), version, cursor)?;
+        let end_position = bufman.cursor_position(cursor)?;
 
-        writer.seek(SeekFrom::Start(item_placeholder))?;
-        writer.write_u32::<LittleEndian>(item_offset)?;
-        writer.seek(SeekFrom::Start(end_position))?;
+        bufman.seek_with_cursor(cursor, SeekFrom::Start(start))?;
+        bufman.write_u32_with_cursor(cursor, eager_data_offset)?;
+        bufman.write_u32_with_cursor(cursor, item_offset)?;
+        bufman.seek_with_cursor(cursor, SeekFrom::Start(end_position))?;
 
-        Ok(start)
+        Ok(start as u32)
     }
 
-    fn deserialize<R: Read + Seek>(
-        reader: &mut R,
+    fn deserialize(
+        bufmans: Arc<BufferManagerFactory>,
         file_index: FileIndex,
-        cache: Arc<NodeRegistry<R>>,
+        cache: Arc<NodeRegistry>,
         max_loads: u16,
         skipm: &mut HashSet<u64>,
-    ) -> std::io::Result<Self>
+    ) -> Result<Self, BufIoError>
     where
         Self: Sized,
     {
         match file_index {
-            FileIndex::Invalid => Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
+            FileIndex::Invalid => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
                 "Cannot deserialize EagerLazyItem with an invalid FileIndex",
-            )),
-            FileIndex::Valid { offset, .. } => {
-                reader.seek(SeekFrom::Start(offset.0 as u64))?;
-                let eager_data =
-                    E::deserialize(reader, file_index, cache.clone(), max_loads, skipm)?;
-                let item_offset = reader.read_u32::<LittleEndian>()?;
-                let version = reader.read_u32::<LittleEndian>()?.into();
+            )
+            .into()),
+            FileIndex::Valid { offset, version } => {
+                let bufman = bufmans.get(&version)?;
+                let cursor = bufman.open_cursor()?;
+                bufman.seek_with_cursor(cursor, SeekFrom::Start(offset.0 as u64))?;
+                let eager_data_offset = bufman.read_u32_with_cursor(cursor)?;
+                let item_offset = bufman.read_u32_with_cursor(cursor)?;
+                let eager_data_file_index = FileIndex::Valid {
+                    offset: FileOffset(eager_data_offset),
+                    version,
+                };
+                let version = bufman.read_u32_with_cursor(cursor)?.into();
+                let eager_data = E::deserialize(
+                    bufmans.clone(),
+                    eager_data_file_index,
+                    cache.clone(),
+                    max_loads,
+                    skipm,
+                )?;
                 let item_file_index = FileIndex::Valid {
                     offset: FileOffset(item_offset),
                     version,
                 };
-                let item = LazyItem::deserialize(reader, item_file_index, cache, max_loads, skipm)?;
+                let item =
+                    LazyItem::deserialize(bufmans, item_file_index, cache, max_loads, skipm)?;
                 Ok(Self(eager_data, item))
             }
         }

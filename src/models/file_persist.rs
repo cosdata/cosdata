@@ -1,18 +1,18 @@
+use super::buffered_io::{BufIoError, BufferManagerFactory};
 use super::cache_loader::NodeRegistry;
 use super::common::WaCustomError;
 use super::lazy_load::{FileIndex, LazyItem, SyncPersist};
 use super::types::{BytesToRead, FileOffset, HNSWLevel, MergedNode, NodeProp, VectorId};
-use crate::models::custom_buffered_writer::*;
 use crate::models::serializer::CustomSerialize;
 use arcshift::ArcShift;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{SeekFrom, Write};
 use std::sync::Arc;
 
-pub fn read_node_from_file<R: Read + Seek>(
+pub fn read_node_from_file(
     file_index: FileIndex,
-    cache: Arc<NodeRegistry<R>>,
-) -> std::io::Result<MergedNode> {
+    cache: Arc<NodeRegistry>,
+) -> Result<MergedNode, BufIoError> {
     // Deserialize the MergedNode using the FileIndex
     let node: MergedNode = cache.load_item(file_index.clone())?;
 
@@ -37,13 +37,19 @@ pub fn read_node_from_file<R: Read + Seek>(
 }
 pub fn write_node_to_file(
     lazy_item: &LazyItem<MergedNode>,
-    writer: &mut CustomBufferedWriter,
+    bufmans: Arc<BufferManagerFactory>,
     file_index: Option<FileIndex>,
 ) -> Result<FileIndex, WaCustomError> {
     let mut node_arc = lazy_item
         .get_data()
         .ok_or(WaCustomError::LazyLoadingError("node in null".to_string()))?;
     let node = node_arc.get();
+    let version = match file_index {
+        Some(FileIndex::Valid { version, .. }) => version,
+        _ => lazy_item.get_current_version(),
+    };
+    let bufman = bufmans.get(&version)?;
+    let cursor = bufman.open_cursor()?;
 
     match file_index {
         Some(FileIndex::Valid {
@@ -54,21 +60,17 @@ pub fn write_node_to_file(
                 "About to write at offset {}, version {}, node: {:#?}",
                 offset, *version, node
             );
-            writer
-                .seek(SeekFrom::Start(offset as u64))
-                .map_err(|e| WaCustomError::FsError(e.to_string()))?;
+            bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
         }
         Some(FileIndex::Invalid) | None => {
             println!("About to write node at the end of file: {:#?}", node);
-            writer
-                .seek(SeekFrom::End(0))
-                .map_err(|e| WaCustomError::FsError(e.to_string()))?;
+            bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
         }
     }
 
-    let new_offset = node
-        .serialize(writer)
-        .map_err(|e| WaCustomError::SerializationError(e.to_string()))?;
+    let new_offset = node.serialize(bufmans, version, cursor)?;
+
+    bufman.close_cursor(cursor)?;
 
     // Create and return the new FileIndex
     let new_file_index = FileIndex::Valid {
@@ -83,14 +85,14 @@ pub fn write_node_to_file(
 }
 
 pub fn persist_node_update_loc(
-    ver_file: &mut CustomBufferedWriter,
+    bufmans: Arc<BufferManagerFactory>,
     node: &mut ArcShift<LazyItem<MergedNode>>,
 ) -> Result<(), WaCustomError> {
     let lazy_item = node.get();
     let current_file_index = lazy_item.get_file_index();
 
     // Write the node to file
-    let new_file_index = write_node_to_file(node.get(), ver_file, current_file_index)?;
+    let new_file_index = write_node_to_file(node.get(), bufmans, current_file_index)?;
 
     // Update the file index in the lazy item
     node.rcu(|lazy_item| {

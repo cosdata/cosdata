@@ -1,3 +1,4 @@
+use super::buffered_io::{BufIoError, BufferManagerFactory};
 use super::file_persist::*;
 use super::lazy_load::{FileIndex, LazyItem, LazyItemMap};
 use super::serializer::CustomSerialize;
@@ -6,41 +7,41 @@ use arcshift::ArcShift;
 use dashmap::DashMap;
 use probabilistic_collections::cuckoo::CuckooFilter;
 use std::collections::HashSet;
-use std::io::{Read, Seek};
+use std::io;
+use std::path::Path;
 use std::sync::{atomic::AtomicBool, Arc, RwLock};
 
-pub struct NodeRegistry<R: Read + Seek> {
+pub struct NodeRegistry {
     cuckoo_filter: RwLock<CuckooFilter<u64>>,
     registry: DashMap<u64, LazyItem<MergedNode>>,
-    reader: Arc<RwLock<R>>,
+    bufmans: Arc<BufferManagerFactory>,
 }
 
-impl<R: Read + Seek> NodeRegistry<R> {
-    pub fn new(cuckoo_filter_capacity: usize, reader: R) -> Self {
+impl NodeRegistry {
+    pub fn new(cuckoo_filter_capacity: usize, bufmans: Arc<BufferManagerFactory>) -> Self {
         let cuckoo_filter = CuckooFilter::new(cuckoo_filter_capacity);
         let registry = DashMap::new();
         NodeRegistry {
             cuckoo_filter: RwLock::new(cuckoo_filter),
             registry,
-            reader: Arc::new(RwLock::new(reader)),
+            bufmans,
         }
     }
     pub fn get_object<F>(
         self: Arc<Self>,
         file_index: FileIndex,
-        reader: &mut R,
         load_function: F,
         max_loads: u16,
         skipm: &mut HashSet<u64>,
-    ) -> std::io::Result<LazyItem<MergedNode>>
+    ) -> Result<LazyItem<MergedNode>, BufIoError>
     where
         F: Fn(
-            &mut R,
+            Arc<BufferManagerFactory>,
             FileIndex,
             Arc<Self>,
             u16,
             &mut HashSet<u64>,
-        ) -> std::io::Result<LazyItem<MergedNode>>,
+        ) -> Result<LazyItem<MergedNode>, BufIoError>,
     {
         println!(
             "get_object called with file_index: {:?}, max_loads: {}",
@@ -88,7 +89,7 @@ impl<R: Read + Seek> NodeRegistry<R> {
 
         println!("Calling load_function");
         let item = load_function(
-            reader,
+            self.bufmans.clone(),
             file_index.clone(),
             self.clone(),
             max_loads - 1,
@@ -114,19 +115,19 @@ impl<R: Read + Seek> NodeRegistry<R> {
     pub fn load_item<T: CustomSerialize>(
         self: Arc<Self>,
         file_index: FileIndex,
-    ) -> std::io::Result<T> {
-        let mut reader_lock = self.reader.write().unwrap();
+    ) -> Result<T, BufIoError> {
         let mut skipm: HashSet<u64> = HashSet::new();
 
         if file_index == FileIndex::Invalid {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
                 "Cannot deserialize with an invalid FileIndex",
-            ));
+            )
+            .into());
         };
 
         T::deserialize(
-            &mut *reader_lock,
+            self.bufmans.clone(),
             file_index,
             self.clone(),
             1000,
@@ -154,18 +155,13 @@ impl<R: Read + Seek> NodeRegistry<R> {
 }
 
 pub fn load_cache() {
-    use std::fs::OpenOptions;
-
-    let file = OpenOptions::new()
-        .read(true)
-        .open("0.index")
-        .expect("failed to open");
+    let bufmans = Arc::new(BufferManagerFactory::new(Path::new(".").into()));
 
     let file_index = FileIndex::Valid {
         offset: FileOffset(0),
         version: 0.into(),
     }; // Assuming initial version is 0
-    let cache = Arc::new(NodeRegistry::new(1000, file));
+    let cache = Arc::new(NodeRegistry::new(1000, bufmans));
     match read_node_from_file(file_index.clone(), cache) {
         Ok(_) => println!(
             "Successfully read and printed node from file_index {:?}",

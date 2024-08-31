@@ -1,20 +1,39 @@
-use std::collections::{BTreeMap, HashMap};
-use std::fs::File;
+use dashmap::DashMap;
+use std::collections::HashMap;
+use std::fmt;
+use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 
 use super::lru_cache::LRUCache;
+use super::versioning::Hash;
 
 const BUFFER_SIZE: usize = 8192;
 const FLUSH_THRESHOLD: usize = (BUFFER_SIZE as f32 * 0.7) as usize; // 70% of buffer size
 
-#[allow(unused)]
 #[derive(Debug)]
 pub enum BufIoError {
     Io(io::Error),
     Locking,
     InvalidCursor(u64),
+}
+
+impl From<io::Error> for BufIoError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl fmt::Display for BufIoError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Io(error) => write!(f, "IO error: {}", error),
+            Self::Locking => f.write_str("Locking error"),
+            Self::InvalidCursor(cursor) => write!(f, "Invalid cursor `{}`", cursor),
+        }
+    }
 }
 
 struct BufferRegion {
@@ -56,6 +75,46 @@ impl Cursor {
             position: 0,
             is_eof: false,
         }
+    }
+}
+
+pub struct BufferManagerFactory {
+    bufmans: Arc<DashMap<Hash, Arc<BufferManager>>>,
+    root_path: Arc<Path>,
+}
+
+impl BufferManagerFactory {
+    pub fn new(root_path: Arc<Path>) -> Self {
+        Self {
+            bufmans: Arc::new(DashMap::new()),
+            root_path,
+        }
+    }
+
+    pub fn get(&self, hash: &Hash) -> Result<Arc<BufferManager>, BufIoError> {
+        if let Some(bufman) = self.bufmans.get(hash) {
+            return Ok(bufman.clone());
+        }
+
+        let path = self.root_path.join(format!("{}.index", **hash));
+
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&path)?;
+        let bufman = Arc::new(BufferManager::new(file)?);
+
+        self.bufmans.insert(*hash, bufman.clone());
+
+        Ok(bufman)
+    }
+
+    pub fn flush_all(&self) -> Result<(), BufIoError> {
+        for bufman in self.bufmans.iter() {
+            bufman.flush()?;
+        }
+        Ok(())
     }
 }
 
@@ -131,6 +190,12 @@ impl BufferManager {
         Ok(())
     }
 
+    pub fn read_f32_with_cursor(&self, cursor_id: u64) -> Result<f32, BufIoError> {
+        let mut buffer = [0u8; 4];
+        self.read_with_cursor(cursor_id, &mut buffer)?;
+        Ok(f32::from_le_bytes(buffer))
+    }
+
     pub fn read_u32_with_cursor(&self, cursor_id: u64) -> Result<u32, BufIoError> {
         let mut buffer = [0u8; 4];
         self.read_with_cursor(cursor_id, &mut buffer)?;
@@ -141,6 +206,12 @@ impl BufferManager {
         let mut buffer = [0u8; 2];
         self.read_with_cursor(cursor_id, &mut buffer)?;
         Ok(u16::from_le_bytes(buffer))
+    }
+
+    pub fn read_u8_with_cursor(&self, cursor_id: u64) -> Result<u8, BufIoError> {
+        let mut buffer = [0u8; 1];
+        self.read_with_cursor(cursor_id, &mut buffer)?;
+        Ok(u8::from_le_bytes(buffer))
     }
 
     pub fn cursor_position(&self, cursor_id: u64) -> Result<u64, BufIoError> {
@@ -188,6 +259,26 @@ impl BufferManager {
         cursor.position = curr_pos;
 
         Ok(total_read)
+    }
+
+    pub fn write_f32_with_cursor(&self, cursor_id: u64, value: f32) -> Result<usize, BufIoError> {
+        let buffer = value.to_le_bytes();
+        self.write_with_cursor(cursor_id, &buffer)
+    }
+
+    pub fn write_u32_with_cursor(&self, cursor_id: u64, value: u32) -> Result<usize, BufIoError> {
+        let buffer = value.to_le_bytes();
+        self.write_with_cursor(cursor_id, &buffer)
+    }
+
+    pub fn write_u16_with_cursor(&self, cursor_id: u64, value: u16) -> Result<usize, BufIoError> {
+        let buffer = value.to_le_bytes();
+        self.write_with_cursor(cursor_id, &buffer)
+    }
+
+    pub fn write_u8_with_cursor(&self, cursor_id: u64, value: u8) -> Result<usize, BufIoError> {
+        let buffer = value.to_le_bytes();
+        self.write_with_cursor(cursor_id, &buffer)
     }
 
     pub fn write_with_cursor(&self, cursor_id: u64, buf: &[u8]) -> Result<usize, BufIoError> {

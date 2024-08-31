@@ -1,4 +1,5 @@
 use crate::distance::cosine::CosineSimilarity;
+use crate::models::buffered_io::BufferManager;
 use crate::models::identity_collections::IdentityMapKey;
 use crate::models::lazy_load::*;
 use crate::models::serializer::*;
@@ -8,28 +9,49 @@ use crate::models::versioning::VersionHash;
 use crate::models::versioning::{Version, VersionControl};
 use arcshift::ArcShift;
 use lmdb::Environment;
-use std::io::Cursor;
 use std::sync::Arc;
 use tempfile::tempdir;
+use tempfile::TempDir;
 
-fn get_cache<R: Read + Seek>(reader: R) -> Arc<NodeRegistry<R>> {
-    Arc::new(NodeRegistry::new(1000, reader))
+fn get_cache(bufmans: Arc<BufferManagerFactory>) -> Arc<NodeRegistry> {
+    Arc::new(NodeRegistry::new(1000, bufmans))
+}
+
+fn setup_test(
+    root_version: &Hash,
+) -> (
+    Arc<BufferManagerFactory>,
+    Arc<NodeRegistry>,
+    Arc<BufferManager>,
+    u64,
+    TempDir,
+) {
+    let dir = tempdir().unwrap();
+    let bufmans = Arc::new(BufferManagerFactory::new(dir.as_ref().into()));
+    let cache = get_cache(bufmans.clone());
+    let bufman = bufmans.get(root_version).unwrap();
+    let cursor = bufman.open_cursor().unwrap();
+    (bufmans, cache, bufman, cursor, dir)
 }
 
 #[test]
 fn test_lazy_item_serialization() {
     let node = MergedNode::new(HNSWLevel(2));
-    let lazy_item = LazyItemRef::new(1.into(), node);
+    let root_version = Hash::from(1);
+    let lazy_item = LazyItemRef::new(root_version, node);
 
-    let mut writer = Cursor::new(Vec::new());
-    let offset = lazy_item.serialize(&mut writer).unwrap();
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version);
+
+    let offset = lazy_item
+        .serialize(bufmans.clone(), root_version, cursor)
+        .unwrap();
+    bufman.close_cursor(cursor).unwrap();
+
     let file_index = FileIndex::Valid {
         offset: FileOffset(offset),
-        version: 1.into(),
+        version: root_version,
     };
 
-    let reader = Cursor::new(writer.into_inner());
-    let cache = get_cache(reader);
     let deserialized: LazyItemRef<MergedNode> = cache.load_item(file_index).unwrap();
     let mut deserialized_arc = deserialized.item.clone();
     let mut original_arc = lazy_item.item.clone();
@@ -57,17 +79,21 @@ fn test_lazy_item_serialization() {
 
 #[test]
 fn test_eager_lazy_item_serialization() {
-    let item = EagerLazyItem(10.5, LazyItem::new(1.into(), MergedNode::new(HNSWLevel(2))));
+    let root_version = Hash::from(1);
+    let item = EagerLazyItem(
+        10.5,
+        LazyItem::new(root_version, MergedNode::new(HNSWLevel(2))),
+    );
 
-    let mut writer = Cursor::new(Vec::new());
-    let offset = item.serialize(&mut writer).unwrap();
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version);
+
+    let offset = item.serialize(bufmans, root_version, cursor).unwrap();
+    bufman.close_cursor(cursor).unwrap();
     let file_index = FileIndex::Valid {
         offset: FileOffset(offset),
-        version: 1.into(),
+        version: root_version,
     };
 
-    let reader = Cursor::new(writer.into_inner());
-    let cache = get_cache(reader);
     let deserialized: EagerLazyItem<MergedNode, f32> = cache.load_item(file_index).unwrap();
 
     assert_eq!(item.0, deserialized.0);
@@ -86,20 +112,21 @@ fn test_eager_lazy_item_serialization() {
 
 #[test]
 fn test_lazy_item_set_serialization() {
+    let root_version = Hash::from(0);
     let lazy_items = LazyItemSet::new();
 
     lazy_items.insert(LazyItem::from_data(1.into(), MergedNode::new(HNSWLevel(2))));
     lazy_items.insert(LazyItem::from_data(2.into(), MergedNode::new(HNSWLevel(2))));
 
-    let mut writer = Cursor::new(Vec::new());
-    let offset = lazy_items.serialize(&mut writer).unwrap();
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version);
+
+    let offset = lazy_items.serialize(bufmans, root_version, cursor).unwrap();
+    bufman.close_cursor(cursor).unwrap();
     let file_index = FileIndex::Valid {
         offset: FileOffset(offset),
-        version: 0.into(),
+        version: root_version,
     };
 
-    let reader = Cursor::new(writer.into_inner());
-    let cache = get_cache(reader);
     let deserialized: LazyItemSet<MergedNode> = cache.load_item(file_index).unwrap();
 
     assert_eq!(lazy_items.len(), deserialized.len());
@@ -126,6 +153,7 @@ fn test_lazy_item_set_serialization() {
 
 #[test]
 fn test_eager_lazy_item_set_serialization() {
+    let root_version = Hash::from(0);
     let lazy_items = EagerLazyItemSet::new();
     lazy_items.insert(EagerLazyItem(
         1.0,
@@ -136,15 +164,15 @@ fn test_eager_lazy_item_set_serialization() {
         LazyItem::from_data(2.into(), MergedNode::new(HNSWLevel(2))),
     ));
 
-    let mut writer = Cursor::new(Vec::new());
-    let offset = lazy_items.serialize(&mut writer).unwrap();
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version);
+
+    let offset = lazy_items.serialize(bufmans, root_version, cursor).unwrap();
+    bufman.close_cursor(cursor).unwrap();
     let file_index = FileIndex::Valid {
         offset: FileOffset(offset),
-        version: 0.into(),
+        version: root_version,
     };
 
-    let reader = Cursor::new(writer.into_inner());
-    let cache = get_cache(reader);
     let deserialized: EagerLazyItemSet<MergedNode, f32> = cache.load_item(file_index).unwrap();
 
     assert_eq!(lazy_items.len(), deserialized.len());
@@ -178,17 +206,18 @@ fn test_eager_lazy_item_set_serialization() {
 
 #[test]
 fn test_merged_node_acyclic_serialization() {
+    let root_version = Hash::from(0);
     let node = MergedNode::new(HNSWLevel(2));
 
-    let mut writer = Cursor::new(Vec::new());
-    let offset = node.serialize(&mut writer).unwrap();
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version);
+
+    let offset = node.serialize(bufmans, root_version, cursor).unwrap();
     let file_index = FileIndex::Valid {
         offset: FileOffset(offset),
-        version: 0.into(),
+        version: root_version,
     };
+    bufman.close_cursor(cursor).unwrap();
 
-    let reader = Cursor::new(writer.into_inner());
-    let cache = get_cache(reader);
     let deserialized: MergedNode = cache.load_item(file_index).unwrap();
 
     assert_eq!(node.hnsw_level, deserialized.hnsw_level);
@@ -199,6 +228,7 @@ fn test_merged_node_acyclic_serialization() {
 
 #[test]
 fn test_merged_node_with_neighbors_serialization() {
+    let root_version = Hash::from(0);
     let node = MergedNode::new(HNSWLevel(2));
 
     let neighbor1 = LazyItem::from_data(2.into(), MergedNode::new(HNSWLevel(1)));
@@ -212,15 +242,15 @@ fn test_merged_node_with_neighbors_serialization() {
         MetricResult::CosineSimilarity(CosineSimilarity(0.9)),
     );
 
-    let mut writer = Cursor::new(Vec::new());
-    let offset = node.serialize(&mut writer).unwrap();
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version);
+
+    let offset = node.serialize(bufmans, root_version, cursor).unwrap();
     let file_index = FileIndex::Valid {
         offset: FileOffset(offset),
-        version: 0.into(),
+        version: root_version,
     };
+    bufman.close_cursor(cursor).unwrap();
 
-    let reader = Cursor::new(writer.into_inner());
-    let cache = get_cache(reader);
     let deserialized: MergedNode = cache.load_item(file_index).unwrap();
 
     let original_neighbors = node.get_neighbors();
@@ -260,6 +290,7 @@ fn test_merged_node_with_neighbors_serialization() {
 
 #[test]
 fn test_merged_node_with_parent_child_serialization() {
+    let root_version = Hash::from(0);
     let node = MergedNode::new(HNSWLevel(2));
     let parent = LazyItem::new(2.into(), MergedNode::new(HNSWLevel(3)));
     let child = LazyItem::new(3.into(), MergedNode::new(HNSWLevel(1)));
@@ -267,15 +298,15 @@ fn test_merged_node_with_parent_child_serialization() {
     node.set_parent(parent);
     node.set_child(child);
 
-    let mut writer = Cursor::new(Vec::new());
-    let offset = node.serialize(&mut writer).unwrap();
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version);
+
+    let offset = node.serialize(bufmans, root_version, cursor).unwrap();
     let file_index = FileIndex::Valid {
         offset: FileOffset(offset),
-        version: 0.into(),
+        version: root_version,
     };
+    bufman.close_cursor(cursor).unwrap();
 
-    let reader = Cursor::new(writer.into_inner());
-    let cache = get_cache(reader);
     let deserialized: MergedNode = cache.load_item(file_index).unwrap();
 
     assert!(matches!(
@@ -312,15 +343,17 @@ fn test_lazy_item_with_versions_serialization() {
     let node_v2 = LazyItem::new(v2_hash, MergedNode::new(HNSWLevel(2)));
     node_v0.add_version(branch_id, 2, node_v2).unwrap();
 
-    let mut writer = Cursor::new(Vec::new());
-    let offset = node_v0.serialize(&mut writer).unwrap();
+    let bufmans = Arc::new(BufferManagerFactory::new(temp_dir.as_ref().into()));
+    let cache = get_cache(bufmans.clone());
+    let bufman = bufmans.get(&v0_hash).unwrap();
+    let cursor = bufman.open_cursor().unwrap();
+
+    let offset = node_v0.serialize(bufmans, v0_hash, cursor).unwrap();
     let file_index = FileIndex::Valid {
         offset: FileOffset(offset),
-        version: 0.into(),
+        version: v0_hash,
     };
 
-    let reader = Cursor::new(writer.into_inner());
-    let cache = get_cache(reader);
     let deserialized: LazyItem<MergedNode> = cache.load_item(file_index).unwrap();
 
     assert_eq!(
@@ -331,7 +364,8 @@ fn test_lazy_item_with_versions_serialization() {
 
 #[test]
 fn test_lazy_item_cyclic_serialization() {
-    let node1 = LazyItem::new(1.into(), MergedNode::new(HNSWLevel(2)));
+    let root_version = Hash::from(1);
+    let node1 = LazyItem::new(root_version, MergedNode::new(HNSWLevel(2)));
     let node2 = LazyItem::new(2.into(), MergedNode::new(HNSWLevel(2)));
 
     node1.get_data().unwrap().get().set_parent(node2.clone());
@@ -339,15 +373,15 @@ fn test_lazy_item_cyclic_serialization() {
 
     let lazy_ref = LazyItemRef::from_lazy(node1.clone());
 
-    let mut writer = Cursor::new(Vec::new());
-    let offset = lazy_ref.serialize(&mut writer).unwrap();
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version);
+
+    let offset = lazy_ref.serialize(bufmans, root_version, cursor).unwrap();
     let file_index = FileIndex::Valid {
         offset: FileOffset(offset),
-        version: 1.into(),
+        version: root_version,
     };
+    bufman.close_cursor(cursor).unwrap();
 
-    let reader = Cursor::new(writer.into_inner());
-    let cache = get_cache(reader);
     let deserialized: LazyItem<MergedNode> = cache.load_item(file_index).unwrap();
 
     let mut parent_ref = deserialized.get_data().unwrap().get_parent();
@@ -371,11 +405,12 @@ fn test_lazy_item_cyclic_serialization() {
 
 #[test]
 fn test_lazy_item_complex_cyclic_serialization() {
+    let root_version = Hash::from(1);
     let mut node1 = ArcShift::new(MergedNode::new(HNSWLevel(2)));
     let mut node2 = ArcShift::new(MergedNode::new(HNSWLevel(2)));
     let mut node3 = ArcShift::new(MergedNode::new(HNSWLevel(2)));
 
-    let lazy1 = LazyItem::from_arcshift(1.into(), node1.clone());
+    let lazy1 = LazyItem::from_arcshift(root_version, node1.clone());
     let lazy2 = LazyItem::from_arcshift(2.into(), node2.clone());
     let lazy3 = LazyItem::from_arcshift(3.into(), node3.clone());
 
@@ -391,15 +426,15 @@ fn test_lazy_item_complex_cyclic_serialization() {
 
     let lazy_ref = LazyItemRef::from_lazy(lazy1);
 
-    let mut writer = Cursor::new(Vec::new());
-    let offset = lazy_ref.serialize(&mut writer).unwrap();
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version);
+
+    let offset = lazy_ref.serialize(bufmans, root_version, cursor).unwrap();
     let file_index = FileIndex::Valid {
         offset: FileOffset(offset),
-        version: 1.into(),
+        version: root_version,
     };
+    bufman.close_cursor(cursor).unwrap();
 
-    let reader = Cursor::new(writer.into_inner());
-    let cache = get_cache(reader);
     let deserialized: LazyItemRef<MergedNode> = cache.clone().load_item(file_index).unwrap();
 
     let mut deserialized_data_arc = deserialized.get_data().unwrap();
@@ -446,20 +481,21 @@ fn test_lazy_item_complex_cyclic_serialization() {
 
 #[test]
 fn test_lazy_item_set_linked_chunk_serialization() {
+    let root_version = Hash::from(0);
     let lazy_items = LazyItemSet::new();
     for i in 1..13 {
         lazy_items.insert(LazyItem::from_data(i.into(), MergedNode::new(HNSWLevel(2))));
     }
 
-    let mut writer = Cursor::new(Vec::new());
-    let offset = lazy_items.serialize(&mut writer).unwrap();
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version);
+
+    let offset = lazy_items.serialize(bufmans, root_version, cursor).unwrap();
     let file_index = FileIndex::Valid {
         offset: FileOffset(offset),
-        version: 0.into(),
+        version: root_version,
     };
+    bufman.close_cursor(cursor).unwrap();
 
-    let reader = Cursor::new(writer.into_inner());
-    let cache = get_cache(reader);
     let deserialized: LazyItemSet<MergedNode> = cache.load_item(file_index).unwrap();
 
     assert_eq!(lazy_items.len(), deserialized.len());
@@ -486,6 +522,7 @@ fn test_lazy_item_set_linked_chunk_serialization() {
 
 #[test]
 fn test_eager_lazy_item_set_linked_chunk_serialization() {
+    let root_version = Hash::from(0);
     let lazy_items = EagerLazyItemSet::new();
     for i in 1..13 {
         lazy_items.insert(EagerLazyItem(
@@ -494,15 +531,15 @@ fn test_eager_lazy_item_set_linked_chunk_serialization() {
         ));
     }
 
-    let mut writer = Cursor::new(Vec::new());
-    let offset = lazy_items.serialize(&mut writer).unwrap();
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version);
+
+    let offset = lazy_items.serialize(bufmans, root_version, cursor).unwrap();
     let file_index = FileIndex::Valid {
         offset: FileOffset(offset),
-        version: 0.into(),
+        version: root_version,
     };
+    bufman.close_cursor(cursor).unwrap();
 
-    let reader = Cursor::new(writer.into_inner());
-    let cache = get_cache(reader);
     let deserialized: EagerLazyItemSet<MergedNode, f32> = cache.load_item(file_index).unwrap();
 
     assert_eq!(lazy_items.len(), deserialized.len());
@@ -534,9 +571,9 @@ fn test_eager_lazy_item_set_linked_chunk_serialization() {
     }
 }
 
-fn validate_lazy_item_versions<R: Read + Seek>(
+fn validate_lazy_item_versions(
     vcs: Arc<VersionControl>,
-    cache: Arc<NodeRegistry<R>>,
+    cache: Arc<NodeRegistry>,
     lazy_item: LazyItem<MergedNode>,
     current_version_hash: VersionHash,
 ) {
@@ -584,6 +621,11 @@ fn test_lazy_item_with_versions_serialization_and_validation() {
     let v0_hash = vcs.generate_hash("main", Version::from(0)).unwrap();
     let root = LazyItem::new(v0_hash, MergedNode::new(HNSWLevel(0)));
 
+    let bufmans = Arc::new(BufferManagerFactory::new(temp_dir.as_ref().into()));
+    let cache = get_cache(bufmans.clone());
+    let bufman = bufmans.get(&v0_hash).unwrap();
+    let cursor = bufman.open_cursor().unwrap();
+
     for i in 0..100 {
         let hash = vcs.add_next_version("main").unwrap();
         let next_version = LazyItem::new(hash, MergedNode::new(HNSWLevel(0)));
@@ -591,24 +633,21 @@ fn test_lazy_item_with_versions_serialization_and_validation() {
     }
 
     let root_version_hash = vcs.get_version_hash(&v0_hash).unwrap().unwrap();
-    let empty_reader = Cursor::new(Vec::new());
-    let empty_cache = get_cache(empty_reader);
     validate_lazy_item_versions(
         vcs.clone(),
-        empty_cache,
+        cache.clone(),
         root.clone(),
         root_version_hash.clone(),
     );
 
-    let mut writer = Cursor::new(Vec::new());
-    let offset = root.serialize(&mut writer).unwrap();
+    let offset = root.serialize(bufmans.clone(), v0_hash, cursor).unwrap();
     let file_index = FileIndex::Valid {
         offset: FileOffset(offset),
         version: v0_hash,
     };
+    bufman.close_cursor(cursor).unwrap();
+    bufmans.flush_all().unwrap();
 
-    let reader = Cursor::new(writer.into_inner());
-    let cache = get_cache(reader);
     let deserialized: LazyItem<MergedNode> = cache.clone().load_item(file_index).unwrap();
 
     validate_lazy_item_versions(vcs, cache, deserialized, root_version_hash);
