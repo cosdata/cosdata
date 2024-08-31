@@ -1,3 +1,5 @@
+use crate::config_loader::Config;
+use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::common::*;
 use crate::models::custom_buffered_writer::CustomBufferedWriter;
 use crate::models::file_persist::*;
@@ -11,7 +13,6 @@ use crate::quantization::{Quantization, StorageType};
 use crate::vector_store::*;
 use actix_web::web;
 use arcshift::ArcShift;
-use cosdata::config_loader::Config;
 use lmdb::{DatabaseFlags, Transaction};
 use rand::Rng;
 use rayon::iter::IntoParallelIterator;
@@ -20,6 +21,7 @@ use std::array::TryFromSliceError;
 use std::cell::RefCell;
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -110,8 +112,10 @@ pub async fn init_vector_store(
         }
         nodes.push(nn.clone());
     }
+    // TODO: include db name in the path
+    let bufmans = Arc::new(BufferManagerFactory::new(Path::new(".").into()));
     for (l, nn) in nodes.iter_mut().enumerate() {
-        match persist_node_update_loc(&mut writer, &mut nn.item) {
+        match persist_node_update_loc(bufmans.clone(), &mut nn.item) {
             Ok(_) => (),
             Err(e) => {
                 eprintln!("Failed node persist (init) for node {}: {}", l, e);
@@ -213,25 +217,12 @@ pub fn run_upload(
             .expect("Failed to index embeddings");
     }
 
-    let new_ver = vec_store.vcs.add_next_version("main").expect("LMDB error");
-
-    // Create new version file
-    let ver_file = Rc::new(RefCell::new(
-        OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(format!("{}.index", *new_ver))
-            .map_err(|e| {
-                WaCustomError::DatabaseError(format!("Failed to open new version file: {}", e))
-            })
-            .unwrap(),
-    ));
-
-    let mut writer =
-        CustomBufferedWriter::new(ver_file.clone()).expect("Failed opening custom buffer");
+    let _new_ver = vec_store.vcs.add_next_version("main").expect("LMDB error");
 
     println!("run_upload 333");
-    match auto_commit_transaction(vec_store.clone(), &mut writer) {
+    // TODO: include db name in the path
+    let bufmans = Arc::new(BufferManagerFactory::new(Path::new(".").into()));
+    match auto_commit_transaction(vec_store.clone(), bufmans) {
         Ok(_) => (),
         Err(e) => {
             eprintln!("Failed node persist(nbr1): {}", e);
