@@ -162,6 +162,43 @@ where
     }
 }
 
+pub fn identity_map_key_deserialize_impl(
+    bufmans: Arc<BufferManagerFactory>,
+    file_index: FileIndex,
+) -> Result<IdentityMapKey, BufIoError> {
+    match file_index {
+        FileIndex::Valid {
+            offset: FileOffset(offset),
+            version,
+        } => {
+            let bufman = bufmans.get(&version)?;
+            let cursor = bufman.open_cursor()?;
+            bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
+            let num = bufman.read_u32_with_cursor(cursor)?;
+            if num & MSB == 0 {
+                return Ok(IdentityMapKey::Int(num));
+            }
+            // discard the most significant bit
+            let len = (num << 1) >> 1;
+            let mut bytes = vec![0; len as usize];
+            bufman.read_with_cursor(cursor, &mut bytes)?;
+            let str = String::from_utf8(bytes).map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("Invalid identity map key: {}", e),
+                )
+            })?;
+            bufman.close_cursor(cursor)?;
+            Ok(IdentityMapKey::String(str))
+        }
+        FileIndex::Invalid => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Cannot deserialize IdentityMapKey with an invalid FileIndex",
+        )
+        .into()),
+    }
+}
+
 impl CustomSerialize for IdentityMapKey {
     fn serialize(
         &self,
@@ -194,36 +231,6 @@ impl CustomSerialize for IdentityMapKey {
     where
         Self: Sized,
     {
-        match file_index {
-            FileIndex::Valid {
-                offset: FileOffset(offset),
-                version,
-            } => {
-                let bufman = bufmans.get(&version)?;
-                let cursor = bufman.open_cursor()?;
-                bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
-                let num = bufman.read_u32_with_cursor(cursor)?;
-                if num & MSB == 0 {
-                    return Ok(Self::Int(num));
-                }
-                // discard the most significant bit
-                let len = (num << 1) >> 1;
-                let mut bytes = vec![0; len as usize];
-                bufman.read_with_cursor(cursor, &mut bytes)?;
-                let str = String::from_utf8(bytes).map_err(|e| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!("Invalid identity map key: {}", e),
-                    )
-                })?;
-                bufman.close_cursor(cursor)?;
-                Ok(Self::String(str))
-            }
-            FileIndex::Invalid => Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Cannot deserialize IdentityMapKey with an invalid FileIndex",
-            )
-            .into()),
-        }
+        identity_map_key_deserialize_impl(bufmans, file_index)
     }
 }

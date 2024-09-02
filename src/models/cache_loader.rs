@@ -84,6 +84,7 @@ impl NodeRegistry {
                 persist_flag: Arc::new(AtomicBool::new(true)),
                 versions: LazyItemMap::new(),
                 version_id,
+                serialized_flag: Arc::new(AtomicBool::new(true)),
             });
         }
 

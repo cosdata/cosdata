@@ -36,12 +36,20 @@ impl<T: Identifiable> IdentitySet<T> {
         self.map.iter().map(|(_, value)| value)
     }
 
+    pub fn into_iter(self) -> impl Iterator<Item = T> {
+        self.map.into_iter().map(|(_, value)| value)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
 
     pub fn len(&self) -> usize {
         self.map.len()
+    }
+
+    pub fn remove(&mut self, value: &T) -> Option<T> {
+        self.map.remove(&value.get_id())
     }
 }
 
@@ -85,11 +93,19 @@ impl<T> IdentityMap<T> {
         self.map.iter()
     }
 
+    pub fn into_iter(self) -> impl Iterator<Item = (IdentityMapKey, T)> {
+        self.map.into_iter()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
 
     pub fn len(&self) -> usize {
         self.map.len()
+    }
+
+    pub fn remove(&mut self, key: &IdentityMapKey) -> Option<T> {
+        self.map.remove(key)
     }
 }
