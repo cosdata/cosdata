@@ -31,7 +31,7 @@ pub async fn init_vector_store(
     lower_bound: Option<f32>,
     upper_bound: Option<f32>,
     max_cache_level: u8,
-) -> Result<(), WaCustomError> {
+) -> Result<Arc<VectorStore>, WaCustomError> {
     if name.is_empty() {
         return Err(WaCustomError::InvalidParams);
     }
