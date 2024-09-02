@@ -6,9 +6,6 @@ pub trait SyncPersist {
     fn needs_persistence(&self) -> bool;
 }
 
-type VersionId = u16;
-type HNSWLevel = u8;
-
 pub const CHUNK_SIZE: usize = 5;
 
 #[derive(Debug, Clone)]

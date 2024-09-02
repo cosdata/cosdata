@@ -1,23 +1,30 @@
 use super::CustomSerialize;
 use crate::models::{
+    buffered_io::{BufIoError, BufferManagerFactory},
     cache_loader::NodeRegistry,
-    lazy_load::{EagerLazyItemSet, FileIndex, LazyItemMap, LazyItemRef},
-    types::{BytesToRead, FileOffset, HNSWLevel, MergedNode, PropState, VersionId},
+    lazy_load::{EagerLazyItemSet, FileIndex, LazyItemRef},
+    types::{BytesToRead, FileOffset, HNSWLevel, MergedNode, PropState},
+    versioning::Hash,
 };
 use arcshift::ArcShift;
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::collections::HashSet;
 use std::{
-    io::{Read, Seek, SeekFrom, Write},
+    io::{self, SeekFrom},
     sync::Arc,
 };
 
 impl CustomSerialize for MergedNode {
-    fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
-        let start_offset = writer.stream_position()? as u32;
+    fn serialize(
+        &self,
+        bufmans: Arc<BufferManagerFactory>,
+        version: Hash,
+        cursor: u64,
+    ) -> Result<u32, BufIoError> {
+        let bufman = bufmans.get(&version)?;
+        let start_offset = bufman.cursor_position(cursor)? as u32;
 
         // Serialize basic fields
-        writer.write_u8(self.hnsw_level.0)?;
+        bufman.write_u8_with_cursor(cursor, self.hnsw_level.0)?;
 
         // Serialize prop
         let mut prop = self.prop.clone();
@@ -25,18 +32,19 @@ impl CustomSerialize for MergedNode {
         match &*prop_state {
             PropState::Ready(node_prop) => {
                 if let Some((FileOffset(offset), BytesToRead(length))) = node_prop.location {
-                    writer.write_u32::<LittleEndian>(offset)?;
-                    writer.write_u32::<LittleEndian>(length)?;
+                    bufman.write_u32_with_cursor(cursor, offset)?;
+                    bufman.write_u32_with_cursor(cursor, length)?;
                 } else {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
                         "Ready PropState with no location",
-                    ));
+                    )
+                    .into());
                 }
             }
             PropState::Pending((FileOffset(offset), BytesToRead(length))) => {
-                writer.write_u32::<LittleEndian>(*offset)?;
-                writer.write_u32::<LittleEndian>(*length)?;
+                bufman.write_u32_with_cursor(cursor, *offset)?;
+                bufman.write_u32_with_cursor(cursor, *length)?;
             }
         }
 
@@ -50,104 +58,100 @@ impl CustomSerialize for MergedNode {
         if child_present {
             indicator |= 0b00000010;
         }
-        writer.write_u8(indicator)?;
+        bufman.write_u8_with_cursor(cursor, indicator)?;
 
         // Write placeholders only for present parent and child
         let parent_placeholder = if parent_present {
-            let pos = writer.stream_position()? as u32;
-            writer.write_u32::<LittleEndian>(0)?;
-            writer.write_u16::<LittleEndian>(0)?;
+            let pos = bufman.cursor_position(cursor)? as u32;
+            bufman.write_u32_with_cursor(cursor, 0)?;
+            bufman.write_u32_with_cursor(cursor, 0)?;
             Some(pos)
         } else {
             None
         };
 
         let child_placeholder = if child_present {
-            let pos = writer.stream_position()? as u32;
-            writer.write_u32::<LittleEndian>(0)?;
-            writer.write_u16::<LittleEndian>(0)?;
+            let pos = bufman.cursor_position(cursor)? as u32;
+            bufman.write_u32_with_cursor(cursor, 0)?;
+            bufman.write_u32_with_cursor(cursor, 0)?;
             Some(pos)
         } else {
             None
         };
 
         // Write placeholders for neighbors and versions
-        let neighbors_placeholder = writer.stream_position()? as u32;
-        writer.write_u32::<LittleEndian>(u32::MAX)?;
-        let versions_placeholder = writer.stream_position()? as u32;
-        writer.write_u32::<LittleEndian>(u32::MAX)?;
+        let neighbors_placeholder = bufman.cursor_position(cursor)? as u32;
+        bufman.write_u32_with_cursor(cursor, u32::MAX)?;
 
         // Serialize parent if present
         let parent_offset = if parent_present {
-            Some(self.parent.serialize(writer)?)
+            Some(self.parent.serialize(bufmans.clone(), version, cursor)?)
         } else {
             None
         };
 
         // Serialize child if present
         let child_offset = if child_present {
-            Some(self.child.serialize(writer)?)
+            Some(self.child.serialize(bufmans.clone(), version, cursor)?)
         } else {
             None
         };
 
         // Serialize neighbors
-        let neighbors_offset = self.neighbors.serialize(writer)?;
-
-        // Serialize versions
-        let versions_offset = self.versions.serialize(writer)?;
+        let neighbors_offset = self.neighbors.serialize(bufmans.clone(), version, cursor)?;
 
         // Update placeholders
-        let end_pos = writer.stream_position()?;
+        let end_pos = bufman.cursor_position(cursor)?;
 
         if let (Some(placeholder), Some(offset)) = (parent_placeholder, parent_offset) {
-            writer.seek(SeekFrom::Start(placeholder as u64))?;
-            writer.write_u32::<LittleEndian>(offset)?;
-            writer.write_u16::<LittleEndian>(self.parent.get_current_version().0)?;
+            bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder as u64))?;
+            bufman.write_u32_with_cursor(cursor, offset)?;
+            bufman.write_u32_with_cursor(cursor, *self.parent.get_current_version())?;
         }
 
         if let (Some(placeholder), Some(offset)) = (child_placeholder, child_offset) {
-            writer.seek(SeekFrom::Start(placeholder as u64))?;
-            writer.write_u32::<LittleEndian>(offset)?;
-            writer.write_u16::<LittleEndian>(self.child.get_current_version().0)?;
+            bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder as u64))?;
+            bufman.write_u32_with_cursor(cursor, offset)?;
+            bufman.write_u32_with_cursor(cursor, *self.child.get_current_version())?;
         }
 
-        writer.seek(SeekFrom::Start(neighbors_placeholder as u64))?;
-        writer.write_u32::<LittleEndian>(neighbors_offset)?;
-        writer.seek(SeekFrom::Start(versions_placeholder as u64))?;
-        writer.write_u32::<LittleEndian>(versions_offset)?;
+        bufman.seek_with_cursor(cursor, SeekFrom::Start(neighbors_placeholder as u64))?;
+        bufman.write_u32_with_cursor(cursor, neighbors_offset)?;
 
         // Return to the end of the serialized data
-        writer.seek(SeekFrom::Start(end_pos))?;
+        bufman.seek_with_cursor(cursor, SeekFrom::Start(end_pos))?;
 
         Ok(start_offset)
     }
 
-    fn deserialize<R: Read + Seek>(
-        reader: &mut R,
+    fn deserialize(
+        bufmans: Arc<BufferManagerFactory>,
         file_index: FileIndex,
-        cache: Arc<NodeRegistry<R>>,
+        cache: Arc<NodeRegistry>,
         max_loads: u16,
         skipm: &mut HashSet<u64>,
-    ) -> std::io::Result<Self> {
+    ) -> Result<Self, BufIoError> {
         match file_index {
-            FileIndex::Invalid => Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
+            FileIndex::Invalid => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
                 "Cannot deserialize MergedNode with an invalid FileIndex",
-            )),
+            )
+            .into()),
             FileIndex::Valid {
                 offset: FileOffset(offset),
                 version,
             } => {
-                reader.seek(SeekFrom::Start(offset as u64))?;
+                let bufman = bufmans.get(&version)?;
+                let cursor = bufman.open_cursor()?;
+                bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
                 // Read basic fields
-                let hnsw_level = HNSWLevel(reader.read_u8()?);
+                let hnsw_level = HNSWLevel(bufman.read_u8_with_cursor(cursor)?);
                 // Read prop
-                let prop_offset = FileOffset(reader.read_u32::<LittleEndian>()?);
-                let prop_length = BytesToRead(reader.read_u32::<LittleEndian>()?);
+                let prop_offset = FileOffset(bufman.read_u32_with_cursor(cursor)?);
+                let prop_length = BytesToRead(bufman.read_u32_with_cursor(cursor)?);
                 let prop = PropState::Pending((prop_offset, prop_length));
                 // Read indicator byte
-                let indicator = reader.read_u8()?;
+                let indicator = bufman.read_u8_with_cursor(cursor)?;
                 let parent_present = indicator & 0b00000001 != 0;
                 let child_present = indicator & 0b00000010 != 0;
                 // Read offsets
@@ -155,25 +159,25 @@ impl CustomSerialize for MergedNode {
                 let mut child_offset_and_version = None;
                 if parent_present {
                     parent_offset_and_version = Some((
-                        reader.read_u32::<LittleEndian>()?,
-                        reader.read_u16::<LittleEndian>()?,
+                        bufman.read_u32_with_cursor(cursor)?,
+                        bufman.read_u32_with_cursor(cursor)?.into(),
                     ));
                 }
                 if child_present {
                     child_offset_and_version = Some((
-                        reader.read_u32::<LittleEndian>()?,
-                        reader.read_u16::<LittleEndian>()?,
+                        bufman.read_u32_with_cursor(cursor)?,
+                        bufman.read_u32_with_cursor(cursor)?.into(),
                     ));
                 }
-                let neighbors_offset = reader.read_u32::<LittleEndian>()?;
-                let versions_offset = reader.read_u32::<LittleEndian>()?;
+                let neighbors_offset = bufman.read_u32_with_cursor(cursor)?;
+                bufman.close_cursor(cursor)?;
                 // Deserialize parent
                 let parent = if let Some((offset, version)) = parent_offset_and_version {
                     LazyItemRef::deserialize(
-                        reader,
+                        bufmans.clone(),
                         FileIndex::Valid {
                             offset: FileOffset(offset),
-                            version: VersionId(version),
+                            version,
                         },
                         cache.clone(),
                         max_loads,
@@ -185,10 +189,10 @@ impl CustomSerialize for MergedNode {
                 // Deserialize child
                 let child = if let Some((offset, version)) = child_offset_and_version {
                     LazyItemRef::deserialize(
-                        reader,
+                        bufmans.clone(),
                         FileIndex::Valid {
                             offset: FileOffset(offset),
-                            version: VersionId(version),
+                            version,
                         },
                         cache.clone(),
                         max_loads,
@@ -199,7 +203,7 @@ impl CustomSerialize for MergedNode {
                 };
                 // Deserialize neighbors
                 let neighbors = EagerLazyItemSet::deserialize(
-                    reader,
+                    bufmans,
                     FileIndex::Valid {
                         offset: FileOffset(neighbors_offset),
                         version,
@@ -208,24 +212,13 @@ impl CustomSerialize for MergedNode {
                     max_loads,
                     skipm,
                 )?;
-                // Deserialize versions
-                let versions = LazyItemMap::deserialize(
-                    reader,
-                    FileIndex::Valid {
-                        offset: FileOffset(versions_offset),
-                        version,
-                    },
-                    cache.clone(),
-                    max_loads,
-                    skipm,
-                )?;
+
                 Ok(MergedNode {
                     hnsw_level,
                     prop: ArcShift::new(prop),
                     neighbors,
                     parent,
                     child,
-                    versions,
                 })
             }
         }

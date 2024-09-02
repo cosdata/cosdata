@@ -1,6 +1,6 @@
 use crate::distance::DistanceFunction;
+use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::common::*;
-use crate::models::custom_buffered_writer::CustomBufferedWriter;
 use crate::models::file_persist::*;
 use crate::models::lazy_load::*;
 use crate::models::types::*;
@@ -671,7 +671,7 @@ pub fn _link_prev_version(_prev_loc: Option<u32>, _offset: u32) {
 
 pub fn auto_commit_transaction(
     vec_store: Arc<VectorStore>,
-    buf_writer: &mut CustomBufferedWriter,
+    bufmans: Arc<BufferManagerFactory>,
 ) -> Result<(), WaCustomError> {
     // Retrieve exec_queue_nodes from vec_store
     let mut exec_queue_nodes_arc = vec_store.exec_queue_nodes.clone();
@@ -679,7 +679,7 @@ pub fn auto_commit_transaction(
 
     for node in exec_queue_nodes.iter_mut() {
         println!("auto_commit_txn");
-        persist_node_update_loc(buf_writer, node)?;
+        persist_node_update_loc(bufmans.clone(), node)?;
     }
 
     exec_queue_nodes_arc.update(Vec::new());
@@ -705,7 +705,7 @@ fn insert_node_create_edges(
 
     nn.get().add_ready_neighbors(nbs.clone());
     // TODO: Initialize with appropriate version ID
-    let lz_item = LazyItem::from_arcshift(VersionId(0), nn.clone());
+    let lz_item = LazyItem::from_arcshift(0.into(), nn.clone());
 
     for (nbr1, cs) in nbs.into_iter() {
         if let LazyItem::Valid {
