@@ -1,3 +1,5 @@
+use crate::config_loader::Config;
+use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::common::*;
 use crate::models::custom_buffered_writer::CustomBufferedWriter;
 use crate::models::file_persist::*;
@@ -6,11 +8,11 @@ use crate::models::meta_persist::*;
 use crate::models::rpc::VectorIdValue;
 use crate::models::types::*;
 use crate::models::user::Statistics;
+use crate::models::versioning::VersionControl;
 use crate::quantization::{Quantization, StorageType};
 use crate::vector_store::*;
 use actix_web::web;
 use arcshift::ArcShift;
-use cosdata::config_loader::Config;
 use lmdb::{DatabaseFlags, Transaction};
 use rand::Rng;
 use rayon::iter::IntoParallelIterator;
@@ -19,6 +21,7 @@ use std::array::TryFromSliceError;
 use std::cell::RefCell;
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -88,12 +91,11 @@ pub async fn init_vector_store(
             neighbors: EagerLazyItemSet::new(),
             parent: LazyItemRef::new_invalid(),
             child: LazyItemRef::new_invalid(),
-            versions: LazyItemMap::new(),
         });
 
         // TODO: Initialize with appropriate version ID
-        let lazy_node = LazyItem::from_arcshift(VersionId(0), current_node.clone());
-        let nn = LazyItemRef::from_arcshift(VersionId(0), current_node.clone());
+        let lazy_node = LazyItem::from_arcshift(0.into(), current_node.clone());
+        let nn = LazyItemRef::from_arcshift(0.into(), current_node.clone());
 
         if let Some(prev_node) = prev.item.get().get_data() {
             current_node
@@ -110,8 +112,10 @@ pub async fn init_vector_store(
         }
         nodes.push(nn.clone());
     }
+    // TODO: include db name in the path
+    let bufmans = Arc::new(BufferManagerFactory::new(Path::new(".").into()));
     for (l, nn) in nodes.iter_mut().enumerate() {
-        match persist_node_update_loc(&mut writer, &mut nn.item) {
+        match persist_node_update_loc(bufmans.clone(), &mut nn.item) {
             Ok(_) => (),
             Err(e) => {
                 eprintln!("Failed node persist (init) for node {}: {}", l, e);
@@ -139,6 +143,19 @@ pub async fn init_vector_store(
         .create_db(Some("embeddings"), DatabaseFlags::empty())
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
+    let vcs = Arc::new(
+        VersionControl::new(denv.clone())
+            .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?,
+    );
+
+    let lmdb = MetaDb {
+        env: denv.clone(),
+        metadata_db: Arc::new(metadata_db),
+        embeddings_db: Arc::new(embeddings_db),
+    };
+
+    let hash = store_current_version(&lmdb, vcs.clone(), "main", 0)?;
+
     let vec_store = Arc::new(VectorStore::new(
         exec_queue_nodes,
         max_cache_level,
@@ -147,23 +164,17 @@ pub async fn init_vector_store(
         lp,
         (size / 32) as usize,
         prop_file,
-        MetaDb {
-            env: denv.clone(),
-            metadata_db: Arc::new(metadata_db.clone()),
-            embeddings_db: Arc::new(embeddings_db),
-        },
-        ArcShift::new(None),
+        lmdb,
+        ArcShift::new(Some(hash)),
         Arc::new(QuantizationMetric::Scalar),
         Arc::new(DistanceMetric::Cosine),
         StorageType::UnsignedByte,
+        vcs,
     ));
     ain_env
         .vector_store_map
         .insert(name.clone(), vec_store.clone());
 
-    let result = store_current_version(vec_store.clone(), "main".to_string(), 0);
-    let version_hash = result.expect("Failed to get VersionHash");
-    vec_store.set_current_version(Some(version_hash));
     Ok(vec_store)
 }
 
@@ -208,29 +219,12 @@ pub fn run_upload(
             .expect("Failed to index embeddings");
     }
 
-    // Update version
-    let ver = vec_store
-        .get_current_version()
-        .expect("No current version found");
-    let new_ver = ver.version + 1;
-
-    // Create new version file
-    let ver_file = Rc::new(RefCell::new(
-        OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(format!("{}.index", new_ver))
-            .map_err(|e| {
-                WaCustomError::DatabaseError(format!("Failed to open new version file: {}", e))
-            })
-            .unwrap(),
-    ));
-
-    let mut writer =
-        CustomBufferedWriter::new(ver_file.clone()).expect("Failed opening custom buffer");
+    let _new_ver = vec_store.vcs.add_next_version("main").expect("LMDB error");
 
     println!("run_upload 333");
-    match auto_commit_transaction(vec_store.clone(), &mut writer) {
+    // TODO: include db name in the path
+    let bufmans = Arc::new(BufferManagerFactory::new(Path::new(".").into()));
+    match auto_commit_transaction(vec_store.clone(), bufmans) {
         Ok(_) => (),
         Err(e) => {
             eprintln!("Failed node persist(nbr1): {}", e);

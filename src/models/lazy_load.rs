@@ -1,30 +1,37 @@
 use super::identity_collections::{Identifiable, IdentityMap, IdentityMapKey, IdentitySet};
 use super::serializer::CustomSerialize;
-use super::types::{FileOffset, VersionId, STM};
+use super::types::{FileOffset, MergedNode, STM};
+use super::versioning::*;
 use arcshift::ArcShift;
 use std::fmt;
-use std::hash::Hash;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
 
+fn largest_power_of_4_below(x: u32) -> u32 {
+    if x == 0 {
+        0
+    } else {
+        let msb_position = 31 - x.leading_zeros();
+        msb_position / 2
+    }
+}
+
 pub trait SyncPersist {
     fn set_persistence(&self, flag: bool);
     fn needs_persistence(&self) -> bool;
-    fn get_current_version(&self) -> VersionId;
+    fn get_current_version(&self) -> Hash;
 }
 
 pub const CHUNK_SIZE: usize = 5;
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
 pub enum FileIndex {
-    Valid {
-        offset: FileOffset,
-        version: VersionId,
-    },
+    Valid { offset: FileOffset, version: Hash },
     Invalid,
 }
+
 #[derive(Clone)]
 pub enum LazyItem<T: Clone + 'static> {
     Valid {
@@ -32,7 +39,9 @@ pub enum LazyItem<T: Clone + 'static> {
         file_index: ArcShift<Option<FileIndex>>,
         decay_counter: usize,
         persist_flag: Arc<AtomicBool>,
-        version_id: VersionId,
+        versions: LazyItemMap<T>,
+        version_id: Hash,
+        serialized_flag: Arc<AtomicBool>,
     },
     Invalid,
 }
@@ -53,7 +62,7 @@ impl fmt::Display for FileIndex {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             FileIndex::Valid { offset, version } => {
-                write!(f, "FileIndex(offset: {}, version: {})", offset.0, version.0)
+                write!(f, "FileIndex(offset: {}, version: {})", offset.0, **version)
             }
             FileIndex::Invalid => write!(f, "FileIndex(Invalid)"),
         }
@@ -142,23 +151,25 @@ impl<T: Clone + 'static> SyncPersist for LazyItem<T> {
         }
     }
 
-    fn get_current_version(&self) -> VersionId {
+    fn get_current_version(&self) -> Hash {
         if let Self::Valid { version_id, .. } = self {
             *version_id
         } else {
-            VersionId(0)
+            0.into()
         }
     }
 }
 
 impl<T: Clone + 'static> LazyItem<T> {
-    pub fn new(version_id: VersionId, item: T) -> Self {
+    pub fn new(version_id: Hash, item: T) -> Self {
         Self::Valid {
             data: Some(ArcShift::new(item)),
             file_index: ArcShift::new(None),
             decay_counter: 0,
             persist_flag: Arc::new(AtomicBool::new(true)),
+            versions: LazyItemMap::new(),
             version_id,
+            serialized_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -166,23 +177,27 @@ impl<T: Clone + 'static> LazyItem<T> {
         Self::Invalid
     }
 
-    pub fn from_data(version_id: VersionId, data: T) -> Self {
+    pub fn from_data(version_id: Hash, data: T) -> Self {
         LazyItem::Valid {
             data: Some(ArcShift::new(data)),
             file_index: ArcShift::new(None),
             decay_counter: 0,
             persist_flag: Arc::new(AtomicBool::new(true)),
+            versions: LazyItemMap::new(),
             version_id,
+            serialized_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    pub fn from_arcshift(version_id: VersionId, item: ArcShift<T>) -> Self {
+    pub fn from_arcshift(version_id: Hash, item: ArcShift<T>) -> Self {
         Self::Valid {
             data: Some(item),
             file_index: ArcShift::new(None),
             decay_counter: 0,
             persist_flag: Arc::new(AtomicBool::new(true)),
+            versions: LazyItemMap::new(),
             version_id,
+            serialized_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -219,17 +234,63 @@ impl<T: Clone + 'static> LazyItem<T> {
             file_index.clone().update(new_file_index);
         }
     }
+
+    pub fn add_version(
+        &self,
+        branch_id: BranchId,
+        version: u32,
+        lazy_item: LazyItem<T>,
+    ) -> lmdb::Result<()> {
+        if let Self::Valid {
+            versions,
+            version_id,
+            ..
+        } = self
+        {
+            let branch_last_4_bytes = (*branch_id & 0xFFFFFFFF) as u32;
+            let current_version = **version_id ^ branch_last_4_bytes;
+            let target_diff = version - current_version;
+            let index = largest_power_of_4_below(target_diff);
+            if let Some(existing_version) = versions.get(&IdentityMapKey::Int(index)) {
+                return existing_version.add_version(branch_id, version, lazy_item);
+            } else {
+                versions.insert(IdentityMapKey::Int(index), lazy_item);
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn get_versions(&self) -> Option<LazyItemMap<T>> {
+        if let Self::Valid { versions, .. } = self {
+            Some(versions.clone())
+        } else {
+            None
+        }
+    }
+
+    pub fn set_versions_persistence(&self, flag: bool) {
+        self.set_persistence(flag);
+        if let Some(versions) = self.get_versions() {
+            let mut items_arc = versions.items.clone();
+            for (_, version) in items_arc.get().iter() {
+                version.set_versions_persistence(flag);
+            }
+        }
+    }
 }
 
 impl<T: Clone + 'static> LazyItemRef<T> {
-    pub fn new(version_id: VersionId, item: T) -> Self {
+    pub fn new(version_id: Hash, item: T) -> Self {
         Self {
             item: ArcShift::new(LazyItem::Valid {
                 data: Some(ArcShift::new(item)),
                 file_index: ArcShift::new(None),
                 decay_counter: 0,
                 persist_flag: Arc::new(AtomicBool::new(true)),
+                versions: LazyItemMap::new(),
                 version_id,
+                serialized_flag: Arc::new(AtomicBool::new(false)),
             }),
         }
     }
@@ -240,14 +301,16 @@ impl<T: Clone + 'static> LazyItemRef<T> {
         }
     }
 
-    pub fn from_arcshift(version_id: VersionId, item: ArcShift<T>) -> Self {
+    pub fn from_arcshift(version_id: Hash, item: ArcShift<T>) -> Self {
         Self {
             item: ArcShift::new(LazyItem::Valid {
                 data: Some(item),
                 file_index: ArcShift::new(None),
                 decay_counter: 0,
                 persist_flag: Arc::new(AtomicBool::new(true)),
+                versions: LazyItemMap::new(),
                 version_id,
+                serialized_flag: Arc::new(AtomicBool::new(false)),
             }),
         }
     }
@@ -280,35 +343,44 @@ impl<T: Clone + 'static> LazyItemRef<T> {
         let mut arc = self.item.clone();
 
         arc.rcu(|item| {
-            let (file_index, decay_counter, persist_flag, version_id) = if let LazyItem::Valid {
-                file_index,
-                decay_counter,
-                persist_flag,
-                version_id,
-                ..
-            } = item
-            {
-                (
-                    file_index.clone(),
-                    *decay_counter,
-                    persist_flag.clone(),
-                    *version_id,
-                )
-            } else {
-                (
-                    ArcShift::new(None),
-                    0,
-                    Arc::new(AtomicBool::new(true)),
-                    VersionId(0),
-                )
-            };
+            let (file_index, decay_counter, persist_flag, version_id, versions, serialized_flag) =
+                if let LazyItem::Valid {
+                    file_index,
+                    decay_counter,
+                    persist_flag,
+                    version_id,
+                    versions,
+                    serialized_flag,
+                    ..
+                } = item
+                {
+                    (
+                        file_index.clone(),
+                        *decay_counter,
+                        persist_flag.clone(),
+                        *version_id,
+                        versions.clone(),
+                        serialized_flag.clone(),
+                    )
+                } else {
+                    (
+                        ArcShift::new(None),
+                        0,
+                        Arc::new(AtomicBool::new(true)),
+                        0.into(),
+                        LazyItemMap::new(),
+                        Arc::new(AtomicBool::new(false)),
+                    )
+                };
 
             LazyItem::Valid {
                 data: Some(ArcShift::new(new_data)),
                 file_index,
                 decay_counter,
                 persist_flag,
+                versions,
                 version_id,
+                serialized_flag,
             }
         });
     }
@@ -317,35 +389,49 @@ impl<T: Clone + 'static> LazyItemRef<T> {
         let mut arc = self.item.clone();
 
         arc.rcu(|item| {
-            let (data, decay_counter, persist_flag, version_id) = if let LazyItem::Valid {
-                data,
-                decay_counter,
-                persist_flag,
-                version_id,
-                ..
-            } = item
-            {
-                (
-                    data.clone(),
-                    *decay_counter,
-                    persist_flag.clone(),
-                    *version_id,
-                )
-            } else {
-                (None, 0, Arc::new(AtomicBool::new(true)), VersionId(0))
-            };
+            let (data, decay_counter, persist_flag, version_id, versions, serialized_flag) =
+                if let LazyItem::Valid {
+                    data,
+                    decay_counter,
+                    persist_flag,
+                    version_id,
+                    versions,
+                    serialized_flag,
+                    ..
+                } = item
+                {
+                    (
+                        data.clone(),
+                        *decay_counter,
+                        persist_flag.clone(),
+                        *version_id,
+                        versions.clone(),
+                        serialized_flag.clone(),
+                    )
+                } else {
+                    (
+                        None,
+                        0,
+                        Arc::new(AtomicBool::new(true)),
+                        0.into(),
+                        LazyItemMap::new(),
+                        Arc::new(AtomicBool::new(false)),
+                    )
+                };
 
             LazyItem::Valid {
                 data,
                 file_index: ArcShift::new(new_offset),
                 decay_counter,
                 persist_flag,
+                versions,
                 version_id,
+                serialized_flag,
             }
         });
     }
 
-    pub fn get_current_version(&self) -> VersionId {
+    pub fn get_current_version(&self) -> Hash {
         let mut arc = self.item.clone();
         arc.get().get_current_version()
     }
@@ -459,6 +545,12 @@ impl<T: Clone + 'static> LazyItemMap<T> {
             map
         })
         .unwrap();
+    }
+
+    pub fn get(&self, key: &IdentityMapKey) -> Option<LazyItem<T>> {
+        let mut arc = self.items.clone();
+
+        arc.get().get(key).cloned()
     }
 
     pub fn is_empty(&self) -> bool {
