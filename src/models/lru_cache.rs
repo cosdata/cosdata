@@ -4,6 +4,10 @@ use std::iter::Iterator;
 
 use super::buffered_io::BufIoError;
 
+enum EvictStrategy {
+    Immediate,
+}
+
 pub struct LRUCache<K, V>
 where
     K: Eq + std::hash::Hash + Clone,
@@ -14,6 +18,7 @@ where
     capacity: usize,
     // Global counter
     counter: AtomicU64,
+    evict_strategy: EvictStrategy,
 }
 
 impl<K, V> LRUCache<K, V>
@@ -26,7 +31,7 @@ where
             map: DashMap::new(),
             capacity,
             counter: AtomicU64::new(0),
-
+            evict_strategy: EvictStrategy::Immediate,
         }
     }
 
@@ -42,9 +47,7 @@ where
 
     pub fn insert(&self, key: K, value: V) {
         self.map.insert(key, (value, self.increment_counter()));
-        if self.map.len() > self.capacity {
-            self.evict_lru();
-        }
+        self.evict();
     }
 
     pub fn get_or_insert(&self, key: K, f: impl FnOnce() -> Result<V, BufIoError>) -> Result<V, BufIoError> {
@@ -56,16 +59,22 @@ where
             })
             .map(|v| v.0.clone());
         // @NOTE: We need to clone the value before calling
-        // `self.evict_lru`, that too in a separate block! Otherwise
+        // `self.evict`, that too in a separate block! Otherwise
         // it causes some deadlock
         match res {
             Ok(v) => {
-                if self.map.len() > self.capacity {
-                    self.evict_lru();
-                }
+                self.evict();
                 Ok(v)
             }
             Err(e) => Err(e)
+        }
+    }
+
+    fn evict(&self) {
+        if self.map.len() > self.capacity {
+            match self.evict_strategy {
+                EvictStrategy::Immediate => self.evict_lru(),
+            }
         }
     }
 
