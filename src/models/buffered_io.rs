@@ -422,11 +422,8 @@ impl BufferManager {
     }
 
     pub fn flush(&self) -> Result<(), BufIoError> {
-        for entry in self.regions.iter() {
-            // @TODO: Leaky abstraction. LRUCache's API can be
-            // improved here.
-            let (region, _) = entry.value();
-            self.flush_region(region)?;
+        for region in self.regions.values() {
+            self.flush_region(&region)?;
         }
         self.file
             .write()

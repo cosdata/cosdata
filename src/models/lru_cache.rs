@@ -1,5 +1,6 @@
 use dashmap::DashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::iter::Iterator;
 
 use super::buffered_io::BufIoError;
 
@@ -97,8 +98,29 @@ where
         self.map.iter()
     }
 
+    pub fn values(&self) -> Values<K, V> {
+        Values { iter: self.map.iter() }
+    }
+
     fn increment_counter(&self) -> u64 {
         self.counter.fetch_add(1, Ordering::SeqCst)
+    }
+}
+
+pub struct Values<'a, K: 'a, V: 'a> {
+    iter: dashmap::iter::Iter<'a, K, (V, u64), std::hash::RandomState, DashMap<K, (V, u64)>>,
+}
+
+impl<'a, K, V> Iterator for Values<'a, K, V>
+where
+    K: 'a + Eq + std::hash::Hash + Clone,
+    V: 'a + Clone,
+{
+    type Item = V;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let tuple = self.iter.next();
+        tuple.map(|entry| entry.value().0.clone())
     }
 }
 
@@ -251,4 +273,17 @@ mod tests {
         assert!(size == 2 || size == 3);
     }
 
+    #[test]
+    fn test_values_iterator() {
+        let cache = LRUCache::new(4);
+
+        cache.insert("key1", "value1");
+        cache.insert("key2", "value2");
+        cache.insert("key3", "value3");
+        cache.insert("key4", "value4");
+
+        let mut values = cache.values().collect::<Vec<&'static str>>();
+        values.sort();
+        assert_eq!(vec!["value1", "value2", "value3", "value4"], values);
+    }
 }
