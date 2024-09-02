@@ -26,8 +26,8 @@ impl FromRequest for Claims {
 
     fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
         // Extract the token `Claims` from the request's extensions
-        let claims = req.extensions();
-        match claims.get::<Claims>() {
+        let extensions = req.extensions();
+        match extensions.get::<Claims>() {
             Some(claims) => ok(claims.clone()),
             None => err(AuthError::FailedToExtractTokenFromRequest),
         }
