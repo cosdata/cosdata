@@ -171,9 +171,11 @@ pub async fn init_vector_store(
         StorageType::UnsignedByte,
         vcs,
     ));
-    ain_env.vector_store_map.insert(name.clone(), vec_store);
+    ain_env
+        .vector_store_map
+        .insert(name.clone(), vec_store.clone());
 
-    Ok(())
+    Ok(vec_store)
 }
 
 pub fn run_upload(
