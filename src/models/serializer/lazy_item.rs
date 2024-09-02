@@ -1,7 +1,11 @@
 use super::CustomSerialize;
-use crate::models::lazy_load::FileIndex;
+use crate::models::buffered_io::{BufIoError, BufferManagerFactory};
+use crate::models::lazy_load::LazyItemMap;
 use crate::models::lazy_load::SyncPersist;
+use crate::models::lazy_load::{FileIndex, CHUNK_SIZE};
+use crate::models::serializer::lazy_item_map::identity_map_key_deserialize_impl;
 use crate::models::types::FileOffset;
+use crate::models::versioning::Hash;
 use crate::models::{
     cache_loader::NodeRegistry,
     lazy_load::{LazyItem, LazyItemRef},
@@ -10,16 +14,271 @@ use crate::models::{
 use arcshift::ArcShift;
 use std::collections::HashSet;
 use std::{
-    io::{Read, Seek, SeekFrom, Write},
-    sync::Arc,
+    io::{self, SeekFrom},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
 
+fn update_map<T>(
+    bufmans: Arc<BufferManagerFactory>,
+    version: Hash,
+    cursor: u64,
+    offset: u32,
+    map: &LazyItemMap<T>,
+) -> Result<u32, BufIoError>
+where
+    T: Clone + CustomSerialize + 'static,
+    LazyItem<T>: CustomSerialize,
+{
+    let bufman = bufmans.get(&version)?;
+    let offset = if offset == u32::MAX {
+        if map.is_empty() {
+            return Ok(u32::MAX);
+        }
+
+        // Serialize a new map
+        bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
+        map.serialize(bufmans, version, cursor)?
+    } else {
+        bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
+        let mut items = map.items.clone().get().clone();
+
+        let mut current_chunk = offset;
+
+        // remove the items from `items` which have already been serialized
+        let last_chunk = loop {
+            for i in 0..CHUNK_SIZE {
+                bufman.seek_with_cursor(
+                    cursor,
+                    SeekFrom::Start(current_chunk as u64 + (i as u64 * 12)),
+                )?;
+                let key_offset = bufman.read_u32_with_cursor(cursor)?;
+                let item_offset = bufman.read_u32_with_cursor(cursor)?;
+                if key_offset == u32::MAX {
+                    continue;
+                }
+                let key_file_index = FileIndex::Valid {
+                    offset: FileOffset(key_offset),
+                    version,
+                };
+                let key = identity_map_key_deserialize_impl(bufmans.clone(), key_file_index)?;
+                if let Some(item) = items.remove(&key) {
+                    bufman.seek_with_cursor(cursor, SeekFrom::Start(item_offset as u64))?;
+                    item.serialize(bufmans.clone(), version, cursor)?;
+                }
+            }
+            let prev_chunk = current_chunk;
+            bufman.seek_with_cursor(
+                cursor,
+                SeekFrom::Start(current_chunk as u64 + CHUNK_SIZE as u64 * 12),
+            )?;
+            current_chunk = bufman.read_u32_with_cursor(cursor)?;
+            if current_chunk == u32::MAX {
+                break prev_chunk;
+            }
+        };
+
+        let mut items: Vec<_> = items.into_iter().collect();
+        bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
+        // fill last chunk
+        for i in 0..CHUNK_SIZE {
+            if items.is_empty() {
+                break;
+            }
+            let current_pos = bufman.cursor_position(cursor)?;
+            bufman
+                .seek_with_cursor(cursor, SeekFrom::Start(last_chunk as u64 + (i as u64 * 12)))?;
+            let key_offset = bufman.read_u32_with_cursor(cursor)?;
+            if key_offset != u32::MAX {
+                bufman.seek_with_cursor(cursor, SeekFrom::Start(current_pos))?;
+                continue;
+            }
+            let item = items.remove(0);
+            bufman.seek_with_cursor(cursor, SeekFrom::Start(current_pos))?;
+            let key_offset = item.0.serialize(bufmans.clone(), version, cursor)?;
+            let item_offset = item.1.serialize(bufmans.clone(), version, cursor)?;
+
+            let current_pos = bufman.cursor_position(cursor)?;
+            bufman
+                .seek_with_cursor(cursor, SeekFrom::Start(last_chunk as u64 + (i as u64 * 12)))?;
+            bufman.write_u32_with_cursor(cursor, key_offset)?;
+            bufman.write_u32_with_cursor(cursor, item_offset)?;
+            bufman.write_u32_with_cursor(cursor, *item.1.get_current_version())?;
+
+            bufman.seek_with_cursor(cursor, SeekFrom::Start(current_pos))?;
+        }
+
+        if !items.is_empty() {
+            let total_items = items.len();
+
+            let current_pos = bufman.cursor_position(cursor)?;
+            bufman.seek_with_cursor(
+                cursor,
+                SeekFrom::Start(last_chunk as u64 + (CHUNK_SIZE as u64 * 12)),
+            )?;
+            bufman.write_u32_with_cursor(cursor, current_pos as u32)?;
+            bufman.seek_with_cursor(cursor, SeekFrom::Start(current_pos))?;
+
+            for chunk_start in (0..total_items).step_by(CHUNK_SIZE) {
+                let chunk_end = std::cmp::min(chunk_start + CHUNK_SIZE, total_items);
+                let is_last_chunk = chunk_end == total_items;
+
+                // Write placeholders for item offsets
+                let placeholder_start = bufman.cursor_position(cursor)? as u32;
+                for _ in 0..CHUNK_SIZE {
+                    bufman.write_u32_with_cursor(cursor, u32::MAX)?;
+                    bufman.write_u32_with_cursor(cursor, u32::MAX)?;
+                    bufman.write_u32_with_cursor(cursor, u32::MAX)?;
+                }
+                // Write placeholder for next chunk link
+                let next_chunk_placeholder = bufman.cursor_position(cursor)? as u32;
+                bufman.write_u32_with_cursor(cursor, u32::MAX)?;
+
+                // Serialize items and update placeholders
+                for i in chunk_start..chunk_end {
+                    let key_offset = items[i].0.serialize(bufmans.clone(), version, cursor)?;
+                    let item_offset = items[i].1.serialize(bufmans.clone(), version, cursor)?;
+
+                    let placeholder_pos =
+                        placeholder_start as u64 + ((i - chunk_start) as u64 * 12);
+                    let current_pos = bufman.cursor_position(cursor)?;
+
+                    // Write entry offset
+                    bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_pos))?;
+                    bufman.write_u32_with_cursor(cursor, key_offset)?;
+                    bufman.write_u32_with_cursor(cursor, item_offset)?;
+                    bufman.write_u32_with_cursor(cursor, *items[i].1.get_current_version())?;
+
+                    // Return to the current position
+                    bufman.seek_with_cursor(cursor, SeekFrom::Start(current_pos))?;
+                }
+
+                // Write next chunk link
+                let next_chunk_start = bufman.cursor_position(cursor)? as u32;
+                bufman.seek_with_cursor(cursor, SeekFrom::Start(next_chunk_placeholder as u64))?;
+                if is_last_chunk {
+                    bufman.write_u32_with_cursor(cursor, u32::MAX)?; // Last chunk
+                } else {
+                    bufman.write_u32_with_cursor(cursor, next_chunk_start)?;
+                }
+                bufman.seek_with_cursor(cursor, SeekFrom::Start(next_chunk_start as u64))?;
+            }
+        }
+
+        offset
+    };
+
+    Ok(offset)
+}
+
+fn lazy_item_serialize_impl(
+    node: &MergedNode,
+    versions: &LazyItemMap<MergedNode>,
+    bufmans: Arc<BufferManagerFactory>,
+    version: Hash,
+    cursor: u64,
+    serialized_flag: bool,
+) -> Result<u32, BufIoError> {
+    let bufman = bufmans.get(&version)?;
+    let node_placeholder = bufman.cursor_position(cursor)?;
+    if serialized_flag {
+        let _node_offset = bufman.read_u32_with_cursor(cursor)?;
+        let versions_offset = bufman.read_u32_with_cursor(cursor)?;
+        update_map(bufmans, version, cursor, versions_offset, versions)?;
+    } else {
+        bufman.write_u32_with_cursor(cursor, 0)?;
+        let versions_placeholder = bufman.cursor_position(cursor)?;
+        bufman.write_u32_with_cursor(cursor, 0)?;
+        let node_offset = node.serialize(bufmans.clone(), version, cursor)?;
+        let versions_offset = versions.serialize(bufmans.clone(), version, cursor)?;
+        let end_offset = bufman.cursor_position(cursor)?;
+
+        bufman.seek_with_cursor(cursor, SeekFrom::Start(node_placeholder))?;
+        bufman.write_u32_with_cursor(cursor, node_offset)?;
+        bufman.seek_with_cursor(cursor, SeekFrom::Start(versions_placeholder))?;
+        bufman.write_u32_with_cursor(cursor, versions_offset)?;
+
+        bufman.seek_with_cursor(cursor, SeekFrom::Start(end_offset))?;
+    }
+
+    Ok(node_placeholder as u32)
+}
+
+fn lazy_item_deserialize_impl(
+    bufmans: Arc<BufferManagerFactory>,
+    file_index: FileIndex,
+    cache: Arc<NodeRegistry>,
+    max_loads: u16,
+    skipm: &mut HashSet<u64>,
+) -> Result<LazyItem<MergedNode>, BufIoError> {
+    match file_index {
+        FileIndex::Invalid => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Cannot deserialize MergedNode with an invalid FileIndex",
+        )
+        .into()),
+        FileIndex::Valid { offset, version } => {
+            if offset.0 == u32::MAX {
+                return Ok(LazyItem::Invalid);
+            }
+            let bufman = bufmans.get(&version)?;
+            let cursor = bufman.open_cursor()?;
+            bufman.seek_with_cursor(cursor, SeekFrom::Start(offset.0 as u64))?;
+            let node_offset = bufman.read_u32_with_cursor(cursor)?;
+            let versions_offset = bufman.read_u32_with_cursor(cursor)?;
+            let data = MergedNode::deserialize(
+                bufmans.clone(),
+                FileIndex::Valid {
+                    offset: FileOffset(node_offset),
+                    version,
+                },
+                cache.clone(),
+                max_loads,
+                skipm,
+            )?;
+            let versions = LazyItemMap::deserialize(
+                bufmans.clone(),
+                FileIndex::Valid {
+                    offset: FileOffset(versions_offset),
+                    version,
+                },
+                cache,
+                max_loads,
+                skipm,
+            )?;
+
+            Ok(LazyItem::Valid {
+                data: Some(ArcShift::new(data)),
+                file_index: ArcShift::new(Some(file_index)),
+                decay_counter: 0,
+                persist_flag: Arc::new(AtomicBool::new(true)),
+                versions,
+                version_id: version,
+                serialized_flag: Arc::new(AtomicBool::new(true)),
+            })
+        }
+    }
+}
+
 impl CustomSerialize for LazyItem<MergedNode> {
-    fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
+    fn serialize(
+        &self,
+        bufmans: Arc<BufferManagerFactory>,
+        version: Hash,
+        cursor: u64,
+    ) -> Result<u32, BufIoError> {
         match self {
             Self::Valid {
-                data, file_index, ..
+                data,
+                file_index,
+                versions,
+                version_id,
+                serialized_flag: serialized_flag_arc,
+                ..
             } => {
+                let bufman = bufmans.get(version_id)?;
                 if let Some(existing_file_index) = file_index.clone().get().clone() {
                     if let FileIndex::Valid {
                         offset: FileOffset(offset),
@@ -30,9 +289,26 @@ impl CustomSerialize for LazyItem<MergedNode> {
                             let mut arc = data.clone();
                             let data = arc.get();
                             if self.needs_persistence() {
-                                writer.seek(SeekFrom::Start(offset as u64))?;
+                                let cursor = if version_id == &version {
+                                    cursor
+                                } else {
+                                    bufman.open_cursor()?
+                                };
+                                bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
                                 self.set_persistence(false);
-                                data.serialize(writer)?;
+                                let serialized_flag =
+                                    serialized_flag_arc.swap(true, Ordering::Relaxed);
+                                lazy_item_serialize_impl(
+                                    data,
+                                    versions,
+                                    bufmans,
+                                    *version_id,
+                                    cursor,
+                                    serialized_flag,
+                                )?;
+                                if version_id != &version {
+                                    bufman.close_cursor(cursor)?;
+                                }
                             }
                             return Ok(offset);
                         }
@@ -40,74 +316,80 @@ impl CustomSerialize for LazyItem<MergedNode> {
                 }
 
                 if let Some(data) = &data {
+                    let cursor = if version_id == &version {
+                        cursor
+                    } else {
+                        let cursor = bufman.open_cursor()?;
+                        bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
+                        cursor
+                    };
                     let mut arc = data.clone();
-                    let offset = writer.stream_position()? as u32;
+                    let offset = bufman.cursor_position(cursor)? as u32;
                     let version = self.get_current_version();
+
                     self.set_file_index(Some(FileIndex::Valid {
                         offset: FileOffset(offset),
                         version,
                     }));
+
                     let data = arc.get();
                     self.set_persistence(false);
-                    let offset = data.serialize(writer)?;
+                    let serialized_flag = serialized_flag_arc.swap(true, Ordering::Relaxed);
+                    let offset = lazy_item_serialize_impl(
+                        data,
+                        versions,
+                        bufmans,
+                        *version_id,
+                        cursor,
+                        serialized_flag,
+                    )?;
+                    if version_id != &version {
+                        bufman.close_cursor(cursor)?;
+                    }
                     Ok(offset)
                 } else {
-                    Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
+                    Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
                         "Attempting to serialize LazyItem with no data",
-                    ))
+                    )
+                    .into())
                 }
             }
             Self::Invalid => Ok(u32::MAX),
         }
     }
 
-    fn deserialize<R: Read + Seek>(
-        reader: &mut R,
+    fn deserialize(
+        _reader: Arc<BufferManagerFactory>,
         file_index: FileIndex,
-        cache: Arc<NodeRegistry<R>>,
+        cache: Arc<NodeRegistry>,
         max_loads: u16,
         skipm: &mut HashSet<u64>,
-    ) -> std::io::Result<Self> {
-        match file_index {
-            FileIndex::Valid {
-                offset: FileOffset(offset),
-                ..
-            } => {
-                let _ = NodeRegistry::<R>::combine_index(&file_index);
-                reader.seek(SeekFrom::Start(offset as u64))?;
-                let item = cache.get_object(
-                    file_index,
-                    reader,
-                    MergedNode::deserialize,
-                    max_loads,
-                    skipm,
-                )?;
-                Ok(item)
-            }
-            FileIndex::Invalid => Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "Cannot deserialize with an invalid FileIndex",
-            )),
-        }
+    ) -> Result<Self, BufIoError> {
+        cache.get_object(file_index, lazy_item_deserialize_impl, max_loads, skipm)
     }
 }
 
 impl CustomSerialize for LazyItemRef<MergedNode> {
-    fn serialize<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<u32> {
+    fn serialize(
+        &self,
+        bufmans: Arc<BufferManagerFactory>,
+        version: Hash,
+        cursor: u64,
+    ) -> Result<u32, BufIoError> {
         let mut arc = self.item.clone();
         let lazy_item = arc.get();
-        let offset = lazy_item.serialize(writer)?;
+        let offset = lazy_item.serialize(bufmans, version, cursor)?;
         Ok(offset)
     }
 
-    fn deserialize<R: Read + Seek>(
-        reader: &mut R,
+    fn deserialize(
+        reader: Arc<BufferManagerFactory>,
         file_index: FileIndex,
-        cache: Arc<NodeRegistry<R>>,
+        cache: Arc<NodeRegistry>,
         max_loads: u16,
         skipm: &mut HashSet<u64>,
-    ) -> std::io::Result<Self> {
+    ) -> Result<Self, BufIoError> {
         let lazy = LazyItem::deserialize(reader, file_index, cache, max_loads, skipm)?;
         Ok(LazyItemRef {
             item: ArcShift::new(lazy),

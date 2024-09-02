@@ -2,16 +2,19 @@ use actix_web::{web, HttpResponse};
 
 use crate::{
     api_service::run_upload,
+    config_loader::Config,
     convert_vectors,
     models::{
         rpc::{RPCResponseBody, UpsertVectors},
         types::get_app_env,
     },
 };
-use cosdata::config_loader::Config;
 
 // Route: `/vectordb/upsert`
-pub(crate) async fn upsert(web::Json(body): web::Json<UpsertVectors>,  config: web::Data<Config>) -> HttpResponse {
+pub(crate) async fn upsert(
+    web::Json(body): web::Json<UpsertVectors>,
+    config: web::Data<Config>,
+) -> HttpResponse {
     let env = match get_app_env() {
         Ok(env) => env,
         Err(_) => return HttpResponse::InternalServerError().body("Env initialization error"),
@@ -33,7 +36,7 @@ pub(crate) async fn upsert(web::Json(body): web::Json<UpsertVectors>,  config: w
 
     // Call run_upload with the extracted parameters
     web::block(move || {
-        let __result = run_upload(vec_store, convert_vectors(body.vectors),  config);
+        let __result = run_upload(vec_store, convert_vectors(body.vectors), config);
     })
     .await
     .unwrap();

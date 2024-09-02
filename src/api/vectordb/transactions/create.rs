@@ -1,4 +1,4 @@
-use crate::models::{types::get_app_env, versioning::VersionHasher};
+use crate::models::types::get_app_env;
 use actix_web::{web, HttpResponse};
 use serde_json::json;
 
@@ -13,22 +13,20 @@ pub(crate) async fn create(database_name: web::Path<String>) -> HttpResponse {
         return HttpResponse::NotFound().body("Vector store not found");
     };
 
-    let mut cot_arc = vec_store.current_open_transaction.clone();
+    let mut current_open_transaction_arc = vec_store.current_open_transaction.clone();
 
-    if cot_arc.get().is_some() {
+    if current_open_transaction_arc.get().is_some() {
         return HttpResponse::Conflict()
             .body("Cannot create a new transaction while there's an on-going transaction");
     }
 
-    let ver = vec_store.get_current_version().unwrap();
-    let new_ver = ver.version + 1;
-    let mut hasher = VersionHasher::new();
-    let hash = hasher.generate_hash("main", new_ver, None, None);
-    let transaction_id = hash.hash.clone();
+    let Ok(transaction_id) = vec_store.vcs.add_next_version("main") else {
+        return HttpResponse::InternalServerError().body("LMDB error");
+    };
 
-    cot_arc.update(Some(hash));
+    current_open_transaction_arc.update(Some(transaction_id));
 
     HttpResponse::Ok().json(json!({
-        "transaction_id": transaction_id
+        "transaction_id": *transaction_id
     }))
 }
