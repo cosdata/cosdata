@@ -5,7 +5,7 @@ use actix_web::{
 use std::fmt::Display;
 
 #[derive(Debug)]
-pub(crate) enum AuthError {
+pub enum AuthError {
     WrongCredentials,
     FailedToEncodeToken,
     InvalidToken,
