@@ -28,7 +28,7 @@ pub async fn init_vector_store(
     lower_bound: Option<f32>,
     upper_bound: Option<f32>,
     max_cache_level: u8,
-) -> Result<(), WaCustomError> {
+) -> Result<Arc<VectorStore>, WaCustomError> {
     if name.is_empty() {
         return Err(WaCustomError::InvalidParams);
     }
@@ -164,8 +164,7 @@ pub async fn init_vector_store(
     let result = store_current_version(vec_store.clone(), "main".to_string(), 0);
     let version_hash = result.expect("Failed to get VersionHash");
     vec_store.set_current_version(Some(version_hash));
-
-    Ok(())
+    Ok(vec_store)
 }
 
 pub fn run_upload(

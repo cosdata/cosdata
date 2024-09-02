@@ -21,7 +21,13 @@ pub(crate) async fn create(web::Json(body): web::Json<CreateVectorDb>) -> HttpRe
     let result = init_vector_store(name, size, lower_bound, upper_bound, max_cache_level).await;
 
     match result {
-        Ok(_) => HttpResponse::Ok().json(RPCResponseBody::RespCreateVectorDb { result: true }),
+        Ok(vector_store) => HttpResponse::Ok().json(RPCResponseBody::RespCreateVectorDb {
+            id: vector_store.database_name.clone(), // will use the vector store name , till it does have a unique id
+            dimensions: vector_store.quant_dim,
+            max_val: lower_bound,
+            min_val: upper_bound,
+            name: vector_store.database_name.clone(),
+        }),
         Err(e) => HttpResponse::NotAcceptable().body(format!("Error: {}", e)),
     }
 }
