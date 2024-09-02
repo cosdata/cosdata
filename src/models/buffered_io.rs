@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 
-use super::lru_cache::LRUCache;
+use super::lru_cache::{EvictStrategy, LRUCache};
 use super::versioning::Hash;
 
 const BUFFER_SIZE: usize = 8192;
@@ -130,9 +130,10 @@ impl BufferManager {
     pub fn new(mut file: File) -> io::Result<Self> {
         let file_size = file.seek(SeekFrom::End(0))?;
         file.seek(SeekFrom::Start(0))?;
+        let regions = LRUCache::new(100, EvictStrategy::Probabilistic(32));
         Ok(BufferManager {
             file: Arc::new(RwLock::new(file)),
-            regions: LRUCache::new(100),
+            regions,
             cursors: RwLock::new(HashMap::new()),
             next_cursor_id: AtomicU64::new(0),
             file_size: RwLock::new(file_size),

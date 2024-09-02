@@ -1,11 +1,16 @@
 use dashmap::DashMap;
+use rand::Rng;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::iter::Iterator;
 
 use super::buffered_io::BufIoError;
 
-enum EvictStrategy {
+pub enum EvictStrategy {
+    // Eviction will happen immediately after insertion
     Immediate,
+    // All extra items will be evicted together at a probabilistically
+    // calculated frequency
+    Probabilistic(u16)
 }
 
 pub struct LRUCache<K, V>
@@ -26,12 +31,12 @@ where
     K: Eq + std::hash::Hash + Clone,
     V: Clone,
 {
-    pub fn new(capacity: usize) -> Self {
+    pub fn new(capacity: usize, evict_strategy: EvictStrategy) -> Self {
         LRUCache {
             map: DashMap::new(),
-            capacity,
             counter: AtomicU64::new(0),
-            evict_strategy: EvictStrategy::Immediate,
+            capacity,
+            evict_strategy,
         }
     }
 
@@ -74,6 +79,12 @@ where
         if self.map.len() > self.capacity {
             match self.evict_strategy {
                 EvictStrategy::Immediate => self.evict_lru(),
+                EvictStrategy::Probabilistic(freq) => {
+                    let mut rng = rand::thread_rng();
+                    if rng.gen_range(1..=freq) % freq == 0 {
+                        self.evict_lru_multi();
+                    }
+                },
             }
         }
     }
@@ -99,6 +110,23 @@ where
             let removed = self.map.remove(&key);
             if removed.is_none() {
                 log::warn!("Item already evicted by another thread");
+            }
+        }
+    }
+
+    fn evict_lru_multi(&self) {
+        let num_to_evict = self.map.len() - self.capacity;
+        if num_to_evict > 0 {
+            let mut xs = Vec::new();
+            for entry in self.map.iter() {
+                let (key, (_, counter_val)) = entry.pair();
+                xs.push((key.clone(), counter_val.clone()));
+            }
+            // @TODO: Use a probabilistic approach here as sorting is
+            // an expensive operation.
+            xs.sort_by(|a, b| a.1.cmp(&b.1));
+            for (key, _) in xs.iter().take(num_to_evict) {
+                self.map.remove(&key);
             }
         }
     }
@@ -142,7 +170,7 @@ mod tests {
 
     #[test]
     fn test_basic_usage() {
-        let cache = LRUCache::new(2);
+        let cache = LRUCache::new(2, EvictStrategy::Immediate);
 
         cache.insert("key1", "value1");
         cache.insert("key2", "value2");
@@ -166,7 +194,7 @@ mod tests {
 
     #[test]
     fn test_get_or_insert() {
-        let cache = LRUCache::new(2);
+        let cache = LRUCache::new(2, EvictStrategy::Immediate);
 
         // Insert two values using `try_insert_with`, verifying that
         // the method returns the correct value
@@ -212,7 +240,7 @@ mod tests {
 
     #[test]
     fn test_conc_get_or_insert() {
-        let cache = Arc::new(LRUCache::new(2));
+        let cache = Arc::new(LRUCache::new(2, EvictStrategy::Immediate));
 
         // Try concurrently inserting the same entry from 2 threads
         let t1 = {
@@ -284,7 +312,7 @@ mod tests {
 
     #[test]
     fn test_values_iterator() {
-        let cache = LRUCache::new(4);
+        let cache = LRUCache::new(4, EvictStrategy::Immediate);
 
         cache.insert("key1", "value1");
         cache.insert("key2", "value2");
@@ -295,4 +323,27 @@ mod tests {
         values.sort();
         assert_eq!(vec!["value1", "value2", "value3", "value4"], values);
     }
+
+    #[test]
+    fn test_evict_lru_multi() {
+        // Set a higher value for probabilistic eviction to ensure
+        // it's not triggered automatically here
+        let cache = LRUCache::new(3, EvictStrategy::Probabilistic(1000));
+        cache.insert("key1", "value1");
+        cache.insert("key2", "value2");
+        cache.insert("key3", "value3");
+        match cache.get(&"key1") {
+            Some(v) => assert_eq!("value1", v),
+            None => assert!(false),
+        }
+        cache.insert("key4", "value4");
+
+        // Call evict_lru_multi manually (in actual code it's called
+        // probabilistically)
+        cache.evict_lru_multi();
+
+        assert_eq!(3, cache.map.len());
+        assert!(!cache.map.contains_key(&"key2"));
+    }
+
 }
