@@ -3,6 +3,7 @@ use siphasher::sip::SipHasher24;
 use std::hash::Hasher;
 use std::ops::Deref;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BranchId(u64);
@@ -38,9 +39,22 @@ impl Deref for Version {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Timestamp(u32);
 
+impl From<u32> for Timestamp {
+    fn from(inner: u32) -> Self {
+        Self(inner)
+    }
+}
 
+impl Deref for Timestamp {
+    type Target = u32;
 
+    fn deref(&self) -> &u32 {
+        &self.0
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Hash(u32);
@@ -67,11 +81,22 @@ impl BranchId {
     }
 }
 
+impl Timestamp {
+    fn now() -> Self {
+        Timestamp(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as u32,
+        )
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct VersionHash {
     pub branch: BranchId,
     pub version: Version,
+    pub timestamp: Timestamp,
 }
 
 impl VersionHash {
@@ -79,34 +104,42 @@ impl VersionHash {
         Self {
             branch,
             version,
+            timestamp: Timestamp::now(),
         }
     }
 
     pub fn calculate_hash(&self) -> Hash {
-        let branch_last_4_bytes = (*self.branch & 0xFFFFFFFF) as u32;
-        Hash(branch_last_4_bytes ^ *self.version)
+        let mut hasher = SipHasher24::new();
+        hasher.write(&self.branch.to_le_bytes());
+        hasher.write(&self.version.to_le_bytes());
+        hasher.write(&self.timestamp.to_le_bytes());
+        let hash = (hasher.finish() & 0xFFFFFFFF) as u32;
+        Hash(hash)
     }
 
     fn serialize(&self) -> Vec<u8> {
-        let mut result = Vec::with_capacity(12);
+        let mut result = Vec::with_capacity(16);
 
-        result.extend_from_slice(&self.branch.0.to_be_bytes());
-        result.extend_from_slice(&self.version.0.to_be_bytes());
+        result.extend_from_slice(&self.branch.to_be_bytes());
+        result.extend_from_slice(&self.version.to_be_bytes());
+        result.extend_from_slice(&self.timestamp.to_le_bytes());
 
         result
     }
 
     fn deserialize(bytes: &[u8]) -> Result<Self, &'static str> {
-        if bytes.len() != 12 {
+        if bytes.len() != 16 {
             return Err("Input must be exactly 12 bytes");
         }
 
         let branch = u64::from_be_bytes(bytes[0..8].try_into().unwrap());
         let version = u32::from_be_bytes(bytes[8..12].try_into().unwrap());
+        let timestamp = u32::from_le_bytes(bytes[12..16].try_into().unwrap());
 
         Ok(VersionHash {
             branch: BranchId(branch),
             version: Version(version),
+            timestamp: Timestamp(timestamp),
         })
     }
 }
@@ -126,13 +159,13 @@ impl BranchInfo {
         let mut result = Vec::with_capacity(16 + name_bytes.len());
 
         // Serialize current_version
-        result.extend_from_slice(&self.current_version.0.to_be_bytes());
+        result.extend_from_slice(&self.current_version.to_be_bytes());
 
         // Serialize parent_branch
-        result.extend_from_slice(&self.parent_branch.0.to_be_bytes());
+        result.extend_from_slice(&self.parent_branch.to_be_bytes());
 
         // Serialize parent_version
-        result.extend_from_slice(&self.parent_version.0.to_be_bytes());
+        result.extend_from_slice(&self.parent_version.to_be_bytes());
 
         // Serialize branch_name
         result.extend_from_slice(name_bytes);

@@ -1,6 +1,6 @@
 use super::identity_collections::{Identifiable, IdentityMap, IdentityMapKey, IdentitySet};
 use super::serializer::CustomSerialize;
-use super::types::{FileOffset, MergedNode, STM};
+use super::types::{FileOffset, STM};
 use super::versioning::*;
 use arcshift::ArcShift;
 use std::fmt;
@@ -237,7 +237,7 @@ impl<T: Clone + 'static> LazyItem<T> {
 
     pub fn add_version(
         &self,
-        branch_id: BranchId,
+        vcs: Arc<VersionControl>,
         version: u32,
         lazy_item: LazyItem<T>,
     ) -> lmdb::Result<()> {
@@ -247,12 +247,13 @@ impl<T: Clone + 'static> LazyItem<T> {
             ..
         } = self
         {
-            let branch_last_4_bytes = (*branch_id & 0xFFFFFFFF) as u32;
-            let current_version = **version_id ^ branch_last_4_bytes;
-            let target_diff = version - current_version;
+            let version_hash = vcs
+                .get_version_hash(version_id)?
+                .ok_or(lmdb::Error::NotFound)?;
+            let target_diff = version - *version_hash.version;
             let index = largest_power_of_4_below(target_diff);
             if let Some(existing_version) = versions.get(&IdentityMapKey::Int(index)) {
-                return existing_version.add_version(branch_id, version, lazy_item);
+                return existing_version.add_version(vcs, version, lazy_item);
             } else {
                 versions.insert(IdentityMapKey::Int(index), lazy_item);
             }
