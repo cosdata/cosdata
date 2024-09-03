@@ -1,8 +1,103 @@
-# Cosdata
+<p align="center">
+  <img height="160" src="org/logo.svg" alt="Cosdata">
+</p>
 
-Cosdata is a versatile vector database solution featuring high performance, immutability, and versioning capabilities, catering to a wide range of AI and machine learning applications. Cosdata supports embedding-based search and similarity queries, real-time vector search at scale, and seamless integration with existing ML pipelines.
+<p align="center">
+    <b>RAG 2.0 engine to power AI with hybrid search and knowledge graphs for next-level intelligence.</b>
+</p>
+<p align="center">
+  <a href="https://github.com/cosdata/cosdata/actions"><img src="https://flat.badgen.net/badge/build/passing/green"></a>
+  <a href="https://github.com/cosdata/cosdata/blob/master/LICENSE"><img src="https://flat.badgen.net/static/license/Apache-2.0"></a>
+  <a href="https://www.rust-lang.org/"><img src="https://flat.badgen.net/badge/language/%F0%9F%A6%80%20Rust/yellow"></a>
+  <a href="https://discord.gg/WbSbXYWvta"><img src="https://flat.badgen.net/discord/members/WbSbXYWvta?icon=discord"></a>
+</p>
+</br>
+<p></p>
 
-## Linux Installation Guide
+**Cosdata**: A next-generation AI data platform engineered for exceptional performance. Featuring immutability and version control, it's designed to elevate a wide range of AI and machine learning projects. As an advanced vector database, Cosdata excels in:
+
+- Embedding-based hybrid search, handling both dense and sparse vectors for comprehensive semantic analysis
+- Real-time vector search at scale
+- Seamless integration with existing ML pipelines
+- Leveraging structured knowledge graphs for sophisticated context retrieval
+- Combining explicit relationship queries with vector similarity search
+
+These capabilities ensure the delivery of the most relevant and actionable insights, making Cosdata a powerful tool for AI-driven data management and analysis.
+
+<p align="center">
+<strong><a href="#features">Features</a> • <a href="#getting-started">Getting Started</a> • <a href="#contacts">Contact Us</a> • <a href="#show-your-support">Show Your Support</a>
+
+
+</strong>
+</p>
+
+## Features
+
+### Manage Multi-modal data
+
+- Supports real-time querying and dynamic index updates, ensuring that new multi-modal data (text, images, audio, etc.) is immediately searchable without downtime or delays.
+
+### High performance
+
+- **Indexing**: Experience lightning-fast indexing with our vector database, optimized for handling high-dimensional data at scale. Our advanced indexing algorithms ensure that your sparse and dense vectors are always ready for instant querying, no matter how large or complex your dataset grows.
+
+- **Latency**: Power your applications with lightning-fast search performance—our vector database is engineered to deliver exceptionally fast query responses.
+
+- **Requests per second**: Achieve industry-leading concurrent requests per second (RPS) across different indices with an advanced architecture designed for optimal performance under heavy loads.
+
+### Scalability
+
+- Unlock unbounded scalability with our vector database, engineered to grow alongside your data and query demands. Whether you're handling millions of records or scaling up to massive datasets, enjoy consistent, high-speed performance without compromise
+  
+- Achieve predictable and efficient query performance with our vector database, engineered for near-linear scalability that ensures fast results, even as your data expands.
+
+### Search Relevance
+
+- **Hybrid Search**: Enhance search precision with our vector database, leveraging the power of combined sparse and dense vector searches to deliver highly relevant, context-rich results for complex queries.
+
+- **Knowledge-Graph**: Improve the relevance of your search results by seamlessly combining structured information from knowledge graphs with the nuanced semantics of vector embedding, enabling our vector database to deliver richer and more relevant insights.
+
+### Customizable
+
+- **Configurability**: Gain precise control over your setup with manual configuration of all indexing and querying hyperparameters, enabling you to optimize performance, resource utilization and tailor results to your exact specifications.
+
+- **Dense Vector indexing**: Achieve efficient and precise indexing with our vector database’s optimized HNSW (Hierarchical Navigable Small World) algorithm, designed to enhance search performance and accuracy for large-scale data sets.
+
+- **Sparse vectors**: Expertly designed to work seamlessly with SPLADE-generated sparse vectors, our solution offers superior performance compared to BM25 indices for more precise and meaningful insights.
+
+### Frugal 
+
+- **Resource utilization**: Efficiency is at the core of our vector database, where ingenious provably efficient data structures and algorithms ensure outstanding performance while providing increasingly relevant search results.
+
+- **Scalar quantization**: Configure finer quantization resolutions, including quarter-nary (2-bit) and octal (3-bit), for enhanced compression and improved recall trade-offs, giving you more control over data efficiency and performance.
+
+- **Product quantization**: A pioneering product quantization approach to not only compress data more effectively but also enhance recall performance beyond what scalar quantization offers, optimizing both data efficiency and retrieval recall.
+
+### Enterprise-grade
+
+- **Data isolation**: Experience enterprise-grade privacy with our vector database, providing robust data isolation to ensure secure and consistent access.
+
+- **Data security**: Achieve reliable data security with our vector database, designed with robust safeguards such as role-based-access-control to protect your information and maintain its integrity against unauthorized access and threats.
+
+- **Multiple deployment modes**: Deploy our vector database in various environments—whether at the edge, in a private cloud, public cloud, or serverless setup—providing you with flexible, scalable solutions to meet your unique operational needs. 
+
+- **Reliability**: Cosdata delivers reliable performance and data integrity with fault-tolerance, backup, and recovery features, designed to meet enterprise demands and ensure uninterrupted operation.
+
+- **Versioning**: Experience Git-like version control with our vector database, enabling you to compare search performance, use time travel to access past states, audit data, and effortlessly roll back when necessary.
+
+### Easy to use
+
+- **Auto-configuration of hyper-parameters**: Achieve peak performance with our vector database, utilizing insights-driven auto-configuration of hyperparameters to automatically fine-tune your system for the best results, no manual adjustments needed.
+
+- **Intuitive API**: Elegantly crafted HTTP Restful APIs featuring *"Transactions as a resource"*. Manage all functions of our vector database effortlessly with intuitive HTTP RESTful APIs.
+
+- **Client SDKs in your favourite language**: Access our vector database effortlessly with client SDKs available in multiple programming languages.
+
+- **Powerful and expressive cosQuery language**: Leverage cosQuery, a powerful and expressive declarative query language, to seamlessly query data across vector embedding and knowledge graph, enabling deep and nuanced insights into your data.
+
+
+
+## Getting Started
 
 This guide provides step-by-step instructions for installing Cosdata on Linux systems.
 
@@ -91,3 +186,14 @@ sudo chgrp ssl-cert $SSL_CERT_DIR/private
 # Add yourself to ssl-cert group (you may need to re-login after this)
 newgrp ssl-cert
 ```
+
+## Contacts
+
+- Want to learn more and/or contribute to the project? Join our [Discord channel](https://discord.gg/WbSbXYWvta)
+- For business inquiries, please reach us at [contact@cosdata.io](mailto:contact@cosdata.io)
+
+## Show Your Support
+
+⭐️ If you find this project useful, please give it a star on GitHub! ⭐️
+
+Your support helps us improve and continue developing. Thank you!
