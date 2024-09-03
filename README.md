@@ -1,5 +1,5 @@
 <p align="center">
-  <img height="160" src="org/logo.png" alt="Cosdata">
+  <img src="org/logo.png" alt="Cosdata" style="max-width: 100%; height: auto;">
 </p>
 
 <p align="center">
