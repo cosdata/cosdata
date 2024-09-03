@@ -15,7 +15,7 @@
 </br>
 <p></p>
 
-**Cosdata**: A next-generation AI data platform engineered for exceptional performance. Featuring immutability and version control, it's designed to elevate a wide range of AI and machine learning projects.
+**Cosdata**: A cutting-edge AI data platform engineered for exceptional performance. Featuring immutability and version control, it's designed to elevate a wide range of AI and machine learning projects.
 
 Cosdata is at the forefront of advancing search technology, excelling in critical areas that will define the next generation of search pipelines:
 - **Semantic Search**: Leverage embedding-based hybrid search, seamlessly managing both dense and sparse vectors to deliver deep semantic analysis.
@@ -32,6 +32,7 @@ Cosdata is designed to meet the demands of modern search applications, empowerin
 </p>
 
 ## Features
+
 ### Search Relevance
 - **Hybrid Search**: Enhance search precision with our vector database, leveraging the power of combined sparse and dense vector searches to deliver highly relevant, context-rich results for complex queries.
 - **Knowledge-Graph**: Improve the relevance of your search results by seamlessly combining structured information from knowledge graphs with the nuanced semantics of vector embedding, enabling our vector database to deliver richer and more relevant insights.
@@ -70,7 +71,6 @@ Cosdata is designed to meet the demands of modern search applications, empowerin
 
 ### Manage Multi-modal data
 - Supports real-time querying and dynamic index updates, ensuring that new multi-modal data (text, images, audio, etc.) is immediately searchable without downtime or delays.
-
 
 
 ## Getting Started
