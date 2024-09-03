@@ -1,7 +1,45 @@
-# Cosdata
+<p align="center">
+  <img height="160" src="org/logo.svg" alt="Cosdata">
+</p>
 
-Cosdata is a versatile vector database solution featuring high performance, immutability, and versioning capabilities, catering to a wide range of AI and machine learning applications. Cosdata supports embedding-based search and similarity queries, real-time vector search at scale, and seamless integration with existing ML pipelines.
+<p align="center">
+    <b>RAG 2.0 engine to power AI with hybrid search and knowledge graphs for next-level intelligence.</b>
+</p>
+<p align="center">
+  <a href="https://github.com/cosdata/cosdata/actions"><img src="https://flat.badgen.net/badge/build/passing/green"></a>
+  <a href="https://github.com/cosdata/cosdata/blob/master/LICENSE"><img src="https://flat.badgen.net/static/license/Apache-2.0"></a>
+  <a href="https://www.rust-lang.org/"><img src="https://flat.badgen.net/badge/language/%F0%9F%A6%80%20Rust/yellow"></a>
+  <a href="https://discord.gg/WbSbXYWvta"><img src="https://flat.badgen.net/discord/members/WbSbXYWvta?icon=discord"></a>
+</p>
+</br>
+<p></p>
 
+Introducing **Cosdata**, an advanced AI data platform engineered for high performance, immutability, and versioning, designed to elevate a wide range of AI and machine learning applications. As a vector database, Cosdata excels in embedding-based and hybrid search, handling both dense and sparse vectors for comprehensive semantic search. It provides real-time vector search at scale and integrates seamlessly with existing ML pipelines. Leveraging structured knowledge graphs, Cosdata utilizes sophisticated context retrieval methods to query explicit relationships and apply vector similarity search, ensuring the delivery of the most relevant and actionable insights.
+
+### Manage Multi-modal data
+
+- Supports real-time querying and dynamic index updates, ensuring that new multi-modal data (text, images, audio, etc.) is immediately searchable without downtime or delays.
+
+### High performance
+
+- **Indexing** Experience lightning-fast indexing with our vector database, optimized for handling high-dimensional data at scale. Our advanced indexing algorithms ensure that your sparse and dense vectors are always ready for instant querying, no matter how large or complex your dataset grows.
+
+- **Latency** Power your applications with lightning-fast search performance—our vector database is engineered to deliver exceptionally fast query responses.
+
+- **Requests per second** Achieve industry-leading concurrent requests per second (RPS) across different indices with an advanced architecture designed for optimal performance under heavy loads.
+
+### Scalability
+
+- Unlock unbounded scalability with our vector database, engineered to grow alongside your data and query demands. Whether you're handling millions of records or scaling up to massive datasets, enjoy consistent, high-speed performance without compromise
+  
+- Achieve predictable and efficient query performance with our vector database, engineered for near-linear scalability that ensures fast results, even as your data expands.
+
+### Search Relevance
+
+- **Hybrid Search** Enhance search precision with our vector database, leveraging the power of combined sparse and dense vector searches to deliver highly relevant, context-rich results for complex queries.
+
+- **Knowledge-Graph** Improve the relevance of your search results by seamlessly combining structured information from knowledge graphs with the nuanced semantics of vector embedding, enabling our vector database to deliver richer and more relevant insights.
+  
 ## Linux Installation Guide
 
 This guide provides step-by-step instructions for installing Cosdata on Linux systems.
