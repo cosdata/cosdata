@@ -50,6 +50,8 @@ tracing = "0.1.40"
 toml = "0.8.19"
 
 [dev-dependencies]
+quickcheck = "1.0.3"
+quickcheck_macros = "1.0.0"
 tempfile = "3.10.1"
 
 #[features]
