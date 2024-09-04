@@ -1,27 +1,19 @@
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::{Arc, RwLock};
 
-const POWERS_OF_4: [u32; 12] = [
-    1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304,
-];
+const POWERS_OF_4: [u32; 8] = [1, 4, 16, 64, 256, 1024, 4096, 16384];
 
 /// Returns the largest power of 4 that is less than or equal to `n`.
 /// Iteratively multiplies by 4 until the result exceeds `n`.
-pub fn largest_power_of_4_below(n: u32) -> u32 {
-    let mut power = 1;
-    while power <= n / 4 {
-        power *= 4;
-    }
-    power
-}
-
-/// Returns the index of the power of 4 that matches `x`.
-/// Searches the `POWERS_OF_4` array for the value `x`.
-pub fn power_of_4_with_index(x: u32) -> Option<usize> {
-    if x == 0 {
-        return None;
-    }
-    POWERS_OF_4.iter().position(|&power| power == x)
+pub fn largest_power_of_4_below(n: u32) -> (usize, u32) {
+    assert_ne!(n, 0, "Cannot find largest power of 4 below 0");
+    POWERS_OF_4
+        .into_iter()
+        .enumerate()
+        .rev()
+        .find(|&(_, pow4)| pow4 <= n)
+        .unwrap()
 }
 
 /// Calculates the path from `current_dim_index` to `target_dim_index`.
@@ -31,10 +23,9 @@ fn calculate_path(target_dim_index: u32, current_dim_index: u32) -> Vec<usize> {
     let mut remaining = target_dim_index - current_dim_index;
 
     while remaining > 0 {
-        let largest_power = largest_power_of_4_below(remaining);
-        let child_index = power_of_4_with_index(largest_power).unwrap();
+        let (child_index, pow_4) = largest_power_of_4_below(remaining);
         path.push(child_index);
-        remaining -= largest_power;
+        remaining -= pow_4;
     }
 
     path
@@ -45,8 +36,10 @@ pub struct InvertedIndexItem<T> {
     pub dim_index: u32,
     pub implicit: bool,
     pub data: Vec<(T, usize)>,
-    pub children: [Option<Arc<RwLock<InvertedIndexItem<T>>>>; 8],
+    pub children: [Option<SharedInvertedIndexItem<T>>; 8],
 }
+
+pub type SharedInvertedIndexItem<T> = Arc<RwLock<InvertedIndexItem<T>>>;
 
 impl<T> InvertedIndexItem<T>
 where
@@ -64,42 +57,46 @@ where
     }
 
     /// Finds or creates the node where the data should be inserted.
-    /// Traverses the tree and returns a reference to the node.
+    /// Traverses the tree iteratively and returns a reference to the node.
     fn find_or_create_node(
-        node: Arc<RwLock<InvertedIndexItem<T>>>,
+        node: SharedInvertedIndexItem<T>,
         path: &[usize],
-    ) -> Arc<RwLock<InvertedIndexItem<T>>> {
-        if path.is_empty() {
-            node
-        } else {
-            let child_index = path[0];
-            let mut node_write = node.write().unwrap();
-            if node_write.children[child_index].is_none() {
-                let new_dim_index = node_write.dim_index + POWERS_OF_4[child_index];
-                let new_item = Arc::new(RwLock::new(InvertedIndexItem::new(new_dim_index, true)));
-                node_write.children[child_index] = Some(new_item.clone());
-                new_item
-            } else {
-                node_write.children[child_index].as_ref().unwrap().clone()
-            }
+    ) -> SharedInvertedIndexItem<T> {
+        let mut current_node = node;
+        for &child_index in path {
+            current_node = {
+                let temp_access = current_node.read().unwrap();
+                let child = temp_access.children.get(child_index);
+                let dim_index = temp_access.dim_index;
+                match child {
+                    Some(Some(child_node)) => child_node.clone(),
+                    Some(None) => {
+                        drop(temp_access);
+                        let new_dim_index = dim_index + POWERS_OF_4[child_index];
+                        let new_item =
+                            Arc::new(RwLock::new(InvertedIndexItem::new(new_dim_index, true)));
+                        let mut node_write = current_node.write().unwrap();
+                        node_write.children[child_index] = Some(new_item.clone());
+                        new_item
+                    }
+                    None => panic!("Invalid child index: {}", child_index),
+                }
+            };
         }
+
+        current_node
     }
 
     /// Inserts a value into the index at the specified dimension index.
     /// Calculates the path and delegates to `insert_with_path`.
     pub fn insert(
-        root: Arc<RwLock<InvertedIndexItem<T>>>,
-        target_dim_index: u32,
+        node: SharedInvertedIndexItem<T>,
         value: T,
         vector_id: usize,
     ) -> Result<(), String> {
-        let path = calculate_path(target_dim_index, root.read().unwrap().dim_index);
-        let node = InvertedIndexItem::find_or_create_node(root, &path);
-        let mut node_write = node.write().unwrap();
-        if node_write.implicit {
-            node_write.implicit = false;
-        }
-        node_write.data.push((value, vector_id));
+        let mut node = node.write().unwrap();
+        node.implicit = false;
+        node.data.push((value, vector_id));
         Ok(())
     }
 
@@ -131,12 +128,13 @@ where
 impl<T: Debug> InvertedIndexItem<T> {
     /// Prints the tree structure of the index starting from the current node.
     /// Recursively prints child nodes with increased indentation.
-    pub fn print_tree(&self, depth: usize) {
+    pub fn print_tree(&self, depth: usize, prev_dim_index: u32) {
         let indent = "  ".repeat(depth);
+        let dim_index = prev_dim_index + self.dim_index;
         println!(
             "{}Dimension-Index {}: {}",
             indent,
-            self.dim_index,
+            dim_index,
             if self.implicit {
                 "Implicit"
             } else {
@@ -147,14 +145,15 @@ impl<T: Debug> InvertedIndexItem<T> {
         for (i, child) in self.children.iter().enumerate() {
             if let Some(item) = child {
                 println!("{}-> 4^{} to:", indent, i);
-                item.read().unwrap().print_tree(depth + 1);
+                item.read().unwrap().print_tree(depth + 1, dim_index);
             }
         }
     }
 }
 
+#[derive(Clone)]
 pub struct InvertedIndex<T> {
-    pub root: Arc<RwLock<InvertedIndexItem<T>>>,
+    pub root: SharedInvertedIndexItem<T>,
 }
 
 impl<T> InvertedIndex<T>
@@ -177,7 +176,10 @@ where
     /// Inserts a value into the index at the specified dimension index.
     /// Delegates to the root node's `insert` method.
     pub fn insert(&self, dim_index: u32, value: T, vector_id: usize) -> Result<(), String> {
-        InvertedIndexItem::insert(self.root.clone(), dim_index, value, vector_id)
+        let path = calculate_path(dim_index, self.root.read().unwrap().dim_index);
+        println!("Path: {:?}", path);
+        let node = InvertedIndexItem::find_or_create_node(self.root.clone(), &path);
+        InvertedIndexItem::insert(node, value, vector_id)
     }
 }
 
@@ -185,7 +187,7 @@ impl<T: Debug> InvertedIndex<T> {
     /// Prints the tree structure of the entire index.
     /// Delegates to the root node's `print_tree` method.
     pub fn print_tree(&self) {
-        self.root.read().unwrap().print_tree(0);
+        self.root.read().unwrap().print_tree(0, 0);
     }
 }
 
@@ -195,6 +197,7 @@ impl InvertedIndex<u8> {
     pub fn add_sparse_vector(&self, vector: Vec<u8>, vector_id: usize) -> Result<(), String> {
         for (dim_index, &value) in vector.iter().enumerate() {
             if value != 0 {
+                println!("Inserting value {} at dimension index {}", value, dim_index);
                 self.insert(dim_index as u32, value, vector_id)?;
             }
         }
@@ -202,26 +205,80 @@ impl InvertedIndex<u8> {
     }
 }
 
+pub struct InvertedIndexIterator<T> {
+    stack: Vec<(SharedInvertedIndexItem<T>, usize, usize)>,
+}
+
+impl<T> Iterator for InvertedIndexIterator<T>
+where
+    T: Copy,
+{
+    type Item = (u32, T, usize);
+
+    /// Iterates over the index in depth-first order.
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some((shared_node, node_data_index, child_index)) = self.stack.pop() {
+            let node = shared_node.read().unwrap();
+            if node_data_index < node.data.len() {
+                // iterate node values
+                let (value, vector_id) = node.data[node_data_index];
+                self.stack
+                    .push((shared_node.clone(), node_data_index + 1, child_index));
+                return Some((node.dim_index, value, vector_id));
+            } else {
+                // iterate children
+                if let Some(Some(child)) = node.children.get(child_index) {
+                    self.stack
+                        .push((shared_node.clone(), node_data_index, child_index + 1));
+                    self.stack.push((child.clone(), 0, 0));
+                }
+            }
+        }
+        None
+    }
+}
+
+impl<T> IntoIterator for InvertedIndex<T>
+where
+    T: Copy,
+{
+    type Item = (u32, T, usize);
+
+    type IntoIter = InvertedIndexIterator<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        InvertedIndexIterator {
+            stack: vec![(self.root.clone(), 0, 0)],
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
-    use super::InvertedIndex;
+    use super::*;
 
     use quickcheck::{Arbitrary, Gen};
     use quickcheck_macros::quickcheck;
-    use rand::seq::IteratorRandom;
+    use rand::seq::{index, IteratorRandom};
     use rand::Rng;
     use std::collections::HashMap;
 
     #[test]
-    /// Tests the basic functionality of the `InvertedIndex`.
-    pub fn test_inverted_index() {
-        let inverted_index: InvertedIndex<u8> = InvertedIndex::new();
+    fn test_calculate_path() {
+        assert_eq!(calculate_path(16, 0), vec![2]);
+        assert_eq!(calculate_path(20, 0), vec![2, 1]);
+        assert_eq!(calculate_path(2, 0), vec![0, 0]);
+        assert_eq!(calculate_path(64, 16), vec![2, 2, 2]);
+    }
 
-        let sparse_vector1 = vec![0, 1, 0, 0, 2, 0, 3, 0, 0, 4];
-        let sparse_vector2 = vec![1, 0, 2, 0, 0, 3, 0, 4, 0, 5];
-
-        assert_eq!(inverted_index.add_sparse_vector(sparse_vector1, 0), Ok(()));
-        assert_eq!(inverted_index.add_sparse_vector(sparse_vector2, 1), Ok(()));
+    #[quickcheck]
+    fn prop_calculate_path_correctness(target_dim_index: u32, current_dim_index: u32) -> bool {
+        if target_dim_index < current_dim_index {
+            return true; // Skip invalid cases
+        }
+        let path = calculate_path(target_dim_index, current_dim_index);
+        let sum: u32 = path.iter().map(|&index| POWERS_OF_4[index]).sum();
+        sum == target_dim_index - current_dim_index
     }
 
     #[test]
@@ -232,18 +289,28 @@ mod test {
         let sparse_vector1 = vec![0, 15, 0, 0, 27, 0, 31, 0, 0, 42];
         let sparse_vector2 = vec![1, 0, 23, 0, 0, 38, 0, 45, 0, 56];
 
-        match inverted_index.add_sparse_vector(sparse_vector1, 0) {
-            Ok(_) => println!("Successfully added sparse vector 1"),
-            Err(e) => println!("Error adding sparse vector 1: {}", e),
-        }
-
-        match inverted_index.add_sparse_vector(sparse_vector2, 1) {
-            Ok(_) => println!("Successfully added sparse vector 2"),
-            Err(e) => println!("Error adding sparse vector 2: {}", e),
-        }
+        inverted_index.add_sparse_vector(sparse_vector1, 0).unwrap();
+        inverted_index.add_sparse_vector(sparse_vector2, 1).unwrap();
 
         println!("\nFinal Inverted Index structure:");
         inverted_index.print_tree();
+
+        let values: Vec<(u32, u8, usize)> = inverted_index.clone().into_iter().collect();
+        assert_eq!(values.len(), 9);
+        assert_eq!(
+            values,
+            vec![
+                (0, 1, 1),
+                (1, 15, 0),
+                (2, 23, 1),
+                (4, 27, 0),
+                (5, 38, 1),
+                (6, 31, 0),
+                (7, 45, 1),
+                (9, 42, 0),
+                (9, 56, 1)
+            ]
+        );
     }
 
     // Custom type for generating sparse vectors
