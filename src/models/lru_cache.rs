@@ -5,12 +5,49 @@ use std::iter::Iterator;
 
 use super::buffered_io::BufIoError;
 
+pub struct ProbEviction {
+    // Frequency in terms of no. of calls. E.g. A value of `10` means
+    // eviction will be randomly triggerd once every 10 calls
+    freq: u16,
+    // Parameter to tune the "aggressiveness" of eviction i.e. higher
+    // value means more aggressive
+    lambda: f64,
+}
+
+impl ProbEviction {
+
+    pub fn new(freq: u16) -> Self {
+        Self {
+            freq,
+            lambda: 0.01,
+        }
+    }
+
+    fn should_trigger(&self) -> bool {
+        let mut rng = rand::thread_rng();
+        rng.gen_range(1..=self.freq) % self.freq == 0
+    }
+
+    fn eviction_probability(&self, global_counter: u64, counter_value: u64) -> f64 {
+        let delta = global_counter.saturating_sub(counter_value) as f64;
+        let recency_prob = (-self.lambda * delta).exp();
+        let eviction_prob = 1.0 - recency_prob;
+        eviction_prob
+    }
+
+    fn should_evict(&self, global_counter: u64, counter_value: u64) -> bool {
+        let eviction_prob = self.eviction_probability(global_counter, counter_value);
+        eviction_prob > rand::thread_rng().gen()
+    }
+}
+
+#[allow(unused)]
 pub enum EvictStrategy {
     // Eviction will happen immediately after insertion
     Immediate,
     // All extra items will be evicted together at a probabilistically
     // calculated frequency
-    Probabilistic(u16)
+    Probabilistic(ProbEviction)
 }
 
 pub struct LRUCache<K, V>
@@ -81,12 +118,11 @@ where
 
     fn evict(&self) {
         if self.map.len() > self.capacity {
-            match self.evict_strategy {
+            match &self.evict_strategy {
                 EvictStrategy::Immediate => self.evict_lru(),
-                EvictStrategy::Probabilistic(freq) => {
-                    let mut rng = rand::thread_rng();
-                    if rng.gen_range(1..=freq) % freq == 0 {
-                        self.evict_lru_multi();
+                EvictStrategy::Probabilistic(prob) => {
+                    if prob.should_trigger() {
+                        self.evict_lru_probabilistic(&prob);
                     }
                 },
             }
@@ -118,19 +154,20 @@ where
         }
     }
 
-    fn evict_lru_multi(&self) {
+    fn evict_lru_probabilistic(&self, strategy: &ProbEviction) {
         let num_to_evict = self.map.len() - self.capacity;
         if num_to_evict > 0 {
-            let mut xs = Vec::new();
+            let mut num_evicted = 0;
+            let global_counter = self.counter.load(Ordering::SeqCst);
             for entry in self.map.iter() {
+                if num_evicted > num_to_evict {
+                    break;
+                }
                 let (key, (_, counter_val)) = entry.pair();
-                xs.push((key.clone(), counter_val.clone()));
-            }
-            // @TODO: Use a probabilistic approach here as sorting is
-            // an expensive operation.
-            xs.sort_by(|a, b| a.1.cmp(&b.1));
-            for (key, _) in xs.iter().take(num_to_evict) {
-                self.map.remove(&key);
+                if strategy.should_evict(global_counter, *counter_val) {
+                    self.map.remove(&key);
+                    num_evicted += 1;
+                }
             }
         }
     }
@@ -329,25 +366,15 @@ mod tests {
     }
 
     #[test]
-    fn test_evict_lru_multi() {
-        // Set a higher value for probabilistic eviction to ensure
-        // it's not triggered automatically here
-        let cache = LRUCache::new(3, EvictStrategy::Probabilistic(1000));
-        cache.insert("key1", "value1");
-        cache.insert("key2", "value2");
-        cache.insert("key3", "value3");
-        match cache.get(&"key1") {
-            Some(v) => assert_eq!("value1", v),
-            None => assert!(false),
-        }
-        cache.insert("key4", "value4");
-
-        // Call evict_lru_multi manually (in actual code it's called
-        // probabilistically)
-        cache.evict_lru_multi();
-
-        assert_eq!(3, cache.map.len());
-        assert!(!cache.map.contains_key(&"key2"));
+    fn test_eviction_probability() {
+        let prob = ProbEviction::new(32);
+        let global_counter = 1000;
+        let results = (1..=global_counter)
+            .map(|n| prob.eviction_probability(global_counter, n))
+            .collect::<Vec<f64>>();
+        // Check that the eviction probability reduces with increase
+        // in counter value, i.e. the results vector is sorted in
+        // descending order.
+        assert!(results.as_slice().windows(2).all(|w| w[0] >= w[1]))
     }
-
 }
