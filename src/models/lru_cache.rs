@@ -56,10 +56,12 @@ where
     }
 
     pub fn get_or_insert(&self, key: K, f: impl FnOnce() -> Result<V, BufIoError>) -> Result<V, BufIoError> {
+        let mut inserted = false;
         let res = self.map
             .entry(key)
             .and_modify(|(_, counter)| *counter = self.increment_counter())
-            .or_try_insert_with(move || {
+            .or_try_insert_with(|| {
+                inserted = true;
                 f().map(|v| (v, self.increment_counter()))
             })
             .map(|v| v.0.clone());
@@ -68,7 +70,9 @@ where
         // it causes some deadlock
         match res {
             Ok(v) => {
-                self.evict();
+                if inserted {
+                    self.evict();
+                }
                 Ok(v)
             }
             Err(e) => Err(e)
