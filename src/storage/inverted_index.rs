@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::{Arc, RwLock};
 
@@ -259,8 +258,8 @@ mod test {
 
     use quickcheck::{Arbitrary, Gen};
     use quickcheck_macros::quickcheck;
-    use rand::seq::{index, IteratorRandom};
-    use rand::Rng;
+    
+    
     use std::collections::HashMap;
 
     #[test]
