@@ -2,6 +2,7 @@ mod create;
 mod fetch;
 mod search;
 mod upsert;
+pub(crate) mod collections;
 
 pub(crate) mod transactions;
 
