@@ -64,19 +64,24 @@ where
         let mut current_node = node;
         for &child_index in path {
             current_node = {
-                let temp_access = current_node.read().unwrap();
-                let child = temp_access.children.get(child_index);
-                let dim_index = temp_access.dim_index;
+                let read_guard = current_node.read().unwrap();
+                let child = read_guard.children.get(child_index);
+                let dim_index = read_guard.dim_index;
                 match child {
                     Some(Some(child_node)) => child_node.clone(),
                     Some(None) => {
-                        drop(temp_access);
-                        let new_dim_index = dim_index + POWERS_OF_4[child_index];
-                        let new_item =
-                            Arc::new(RwLock::new(InvertedIndexItem::new(new_dim_index, true)));
-                        let mut node_write = current_node.write().unwrap();
-                        node_write.children[child_index] = Some(new_item.clone());
-                        new_item
+                        drop(read_guard);
+                        let mut write_guard = current_node.write().unwrap();
+                        if let Some(child) = &write_guard.children[child_index] {
+                            // Check if another thread created the child node
+                            child.clone()
+                        } else {
+                            let new_dim_index = dim_index + POWERS_OF_4[child_index];
+                            let new_item =
+                                Arc::new(RwLock::new(InvertedIndexItem::new(new_dim_index, true)));
+                            write_guard.children[child_index] = Some(new_item.clone());
+                            new_item
+                        }
                     }
                     None => panic!("Invalid child index: {}", child_index),
                 }
@@ -258,9 +263,8 @@ mod test {
 
     use quickcheck::{Arbitrary, Gen};
     use quickcheck_macros::quickcheck;
-    
-    
-    use std::collections::HashMap;
+
+    use std::{collections::HashMap, thread};
 
     #[test]
     fn test_calculate_path() {
@@ -372,5 +376,50 @@ mod test {
                 .iter()
                 .all(|(&dim, &value)| index.get(dim as u32, id).map_or(false, |v| v == value))
         })
+    }
+
+    /// Tests for a subtle race condition in `find_or_create_node`.
+    ///
+    /// A thread can acquire read lock on child to check if it exists. If it
+    /// doesn't it drops the lock and acquires a write lock to create the child.
+    /// In between, a different thread could have created the child node.
+    ///
+    /// The race condition is triggered when locking pattern is like this -
+    /// r1, r2, w1, w2.
+    #[test]
+    fn test_find_or_create_race_condition() {
+        for _ in 0..1000 {
+            // Run the test 100 times
+            let root: SharedInvertedIndexItem<u8> =
+                Arc::new(RwLock::new(InvertedIndexItem::new(0, false)));
+            let root_clone1 = root.clone();
+            let root_clone2 = root.clone();
+
+            // Creates child 2 in depth 2 and child 1 in depth 1.
+            let handle2 = thread::spawn(move || {
+                let path = vec![0, 1, 2];
+                InvertedIndexItem::find_or_create_node(root_clone1, &path);
+            });
+
+            // Creates child 1 in depth 1
+            // Can overwrite child 1 created by handle 2
+            let handle1 = thread::spawn(move || {
+                let path = vec![0, 1];
+                InvertedIndexItem::find_or_create_node(root, &path);
+            });
+
+            handle1.join().unwrap();
+            handle2.join().unwrap();
+
+            // Check the final state
+            let node = root_clone2.read().unwrap();
+            assert!(node.children[0].is_some(), "Child 0 should exist");
+
+            let node = node.children[0].as_ref().unwrap().read().unwrap();
+            assert!(node.children[1].is_some(), "Child 1 should exist");
+
+            let node = node.children[1].as_ref().unwrap().read().unwrap();
+            assert!(node.children[2].is_some(), "Child 2 should exist");
+        }
     }
 }
