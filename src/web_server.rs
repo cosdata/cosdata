@@ -3,6 +3,7 @@ use actix_web::web::Data;
 use actix_web::{
     dev::ServiceRequest, middleware, web, App, Error, HttpRequest, HttpResponse, HttpServer,
 };
+use actix_web_httpauth::{extractors::bearer::BearerAuth, middleware::HttpAuthentication};
 use cosdata::config_loader::{load_config, Host, ServerMode, Ssl};
 use dashmap::DashMap;
 use lmdb::Environment;
@@ -15,6 +16,7 @@ use std::sync::Arc;
 use std::{fs::File, io::BufReader};
 
 use crate::api::auth::{auth_module, authentication_middleware::AuthenticationMiddleware};
+use crate::api::vectordb::collections::collections_module;
 use crate::models::types::*;
 use crate::{api, WaCustomError};
 use std::env;
@@ -74,9 +76,7 @@ pub async fn run_actix_server() -> std::io::Result<()> {
             .service(
                 web::scope("/vectordb")
                     .wrap(AuthenticationMiddleware)
-                    .service(
-                        web::resource("/createdb").route(web::post().to(api::vectordb::create)),
-                    )
+                    .service(collections_module())
                     .service(web::resource("/upsert").route(web::post().to(api::vectordb::upsert)))
                     .service(web::resource("/search").route(web::post().to(api::vectordb::search)))
                     .service(web::resource("/fetch").route(web::post().to(api::vectordb::fetch)))

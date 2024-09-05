@@ -10,7 +10,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Define your dynamic variables
 token = None
-host = "http://127.0.0.1:8443"
+host = "https://127.0.0.1:8443"
 base_url = f"{host}/vectordb"
 
 def generate_headers():
@@ -31,9 +31,9 @@ def login():
     
 
 
-# Function to create database
+# Function to create database (collection)
 def create_db(vector_db_name, dimensions, max_val, min_val):
-    url = f"{base_url}/createdb"
+    url = f"{base_url}/collections"
     data = {
         "vector_db_name": vector_db_name,
         "dimensions": dimensions,
@@ -41,6 +41,13 @@ def create_db(vector_db_name, dimensions, max_val, min_val):
         "min_val": min_val,
     }
     response = requests.post(url, headers=generate_headers(), data=json.dumps(data), verify=False)
+    return response.json()
+
+# Function to find a database (collection) by Id 
+def find_collection(id):
+    url = f"{base_url}/collections/{id}"
+
+    response = requests.get(url,headers=generate_headers())
     return response.json()
 
 
@@ -121,8 +128,11 @@ if __name__ == "__main__":
     print("Login Response:", login_response)
 
     
-    create_response = create_db(vector_db_name, dimensions, max_val, min_val)
-    print("Create DB Response:", create_response)
+    create_Collection_response = create_db(vector_db_name, dimensions, max_val, min_val)
+    print("Create Collection(DB) Response:", create_Collection_response)
+
+    find_collection_response = find_collection(create_Collection_response["id"])
+    print("Find Collection(DB) Response:", find_collection_response)
 
     shortlisted_vectors = []
 
