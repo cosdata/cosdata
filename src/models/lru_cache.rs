@@ -1,6 +1,6 @@
 use dashmap::DashMap;
 use rand::Rng;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::iter::Iterator;
 
 use super::buffered_io::BufIoError;
@@ -13,12 +13,12 @@ use super::buffered_io::BufIoError;
 // happened. In that case, the age is calculated taking that into
 // consideration.
 //
-fn counter_age(global_value: u64, item_value: u64) -> u64 {
+fn counter_age(global_value: u32, item_value: u32) -> u32 {
     if global_value >= item_value {
         global_value - item_value
     } else {
         // until wrap around + after wraparound
-        (u64::MAX - item_value) + global_value
+        (u32::MAX - item_value) + global_value
     }
 }
 
@@ -45,14 +45,14 @@ impl ProbEviction {
         rng.gen_range(1..=self.freq) % self.freq == 0
     }
 
-    fn eviction_probability(&self, global_counter: u64, counter_value: u64) -> f64 {
+    fn eviction_probability(&self, global_counter: u32, counter_value: u32) -> f64 {
         let age = counter_age(global_counter, counter_value);
         let recency_prob = (-self.lambda * age as f64).exp();
         let eviction_prob = 1.0 - recency_prob;
         eviction_prob
     }
 
-    fn should_evict(&self, global_counter: u64, counter_value: u64) -> bool {
+    fn should_evict(&self, global_counter: u32, counter_value: u32) -> bool {
         let eviction_prob = self.eviction_probability(global_counter, counter_value);
         eviction_prob > rand::thread_rng().gen()
     }
@@ -73,10 +73,10 @@ where
     V: Clone,
 {
     // Store value and counter value
-    map: DashMap<K, (V, u64)>,
+    map: DashMap<K, (V, u32)>,
     capacity: usize,
     // Global counter
-    counter: AtomicU64,
+    counter: AtomicU32,
     evict_strategy: EvictStrategy,
 }
 
@@ -88,7 +88,7 @@ where
     pub fn new(capacity: usize, evict_strategy: EvictStrategy) -> Self {
         LRUCache {
             map: DashMap::new(),
-            counter: AtomicU64::new(0),
+            counter: AtomicU32::new(0),
             capacity,
             evict_strategy,
         }
@@ -148,7 +148,7 @@ where
 
     fn evict_lru(&self) {
         let mut oldest_key = None;
-        let mut oldest_counter = u64::MAX;
+        let mut oldest_counter = u32::MAX;
 
         for entry in self.map.iter() {
             let (key, (_, counter_val)) = entry.pair();
@@ -189,7 +189,7 @@ where
         }
     }
 
-    pub fn iter(&self) -> dashmap::iter::Iter<K, (V, u64), std::hash::RandomState, DashMap<K, (V, u64)>> {
+    pub fn iter(&self) -> dashmap::iter::Iter<K, (V, u32), std::hash::RandomState, DashMap<K, (V, u32)>> {
         self.map.iter()
     }
 
@@ -197,13 +197,13 @@ where
         Values { iter: self.map.iter() }
     }
 
-    fn increment_counter(&self) -> u64 {
+    fn increment_counter(&self) -> u32 {
         self.counter.fetch_add(1, Ordering::SeqCst)
     }
 }
 
 pub struct Values<'a, K: 'a, V: 'a> {
-    iter: dashmap::iter::Iter<'a, K, (V, u64), std::hash::RandomState, DashMap<K, (V, u64)>>,
+    iter: dashmap::iter::Iter<'a, K, (V, u32), std::hash::RandomState, DashMap<K, (V, u32)>>,
 }
 
 impl<'a, K, V> Iterator for Values<'a, K, V>
@@ -382,7 +382,7 @@ mod tests {
         assert_eq!(vec!["value1", "value2", "value3", "value4"], values);
     }
 
-    fn gen_rand_nums(rng: &mut rand::rngs::ThreadRng, n: u64, min: u64, max: u64) -> Vec<u64> {
+    fn gen_rand_nums(rng: &mut rand::rngs::ThreadRng, n: u64, min: u32, max: u32) -> Vec<u32> {
         (0..n)
             .map(|_| rng.gen_range(min..max))
             .collect()
@@ -403,19 +403,19 @@ mod tests {
         assert!(results.as_slice().windows(2).all(|w| w[0] >= w[1]));
 
         // With wraparound
-        let global_counter = 9_446_744_073_709_551_615u64;
+        let global_counter = 2147483647_u32;
         let mut rng = rand::thread_rng();
         // Generate some counter values before wraparound. These will
-        // be > global_counter and < u64::MAX
-        let mut counter_vals: Vec<u64> = gen_rand_nums(&mut rng, 100, global_counter, u64::MAX);
+        // be > global_counter and < u32::MAX
+        let mut counter_vals: Vec<u32> = gen_rand_nums(&mut rng, 100, global_counter, u32::MAX);
         counter_vals.sort();
         // Generate some counter values after wraparound. These will
         // be > 0 and < global_counter
-        let mut after_wraparound: Vec<u64> = gen_rand_nums(&mut rng, 100, 0, global_counter);
+        let mut after_wraparound: Vec<u32> = gen_rand_nums(&mut rng, 100, 0, global_counter);
         after_wraparound.sort();
         // As the global counter is very large, add some known values
         // closer to the global counter
-        let mut recent: Vec<u64> = (1..=100).map(|n| global_counter - n).collect();
+        let mut recent: Vec<u32> = (1..=100).map(|n| global_counter - n).collect();
         recent.sort();
 
         // Concatenate the above inputs in order
