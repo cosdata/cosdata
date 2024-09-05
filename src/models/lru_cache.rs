@@ -5,6 +5,23 @@ use std::iter::Iterator;
 
 use super::buffered_io::BufIoError;
 
+// Calculates counter age, while considering a possibility of
+// wraparound (with the assumption that wraparound will happen at most
+// once)
+//
+// `global_value` > `item_value` indicates that wraparound has
+// happened. In that case, the age is calculated taking that into
+// consideration.
+//
+fn counter_age(global_value: u64, item_value: u64) -> u64 {
+    if global_value >= item_value {
+        global_value - item_value
+    } else {
+        // until wrap around + after wraparound
+        (u64::MAX - item_value) + global_value
+    }
+}
+
 pub struct ProbEviction {
     // Frequency in terms of no. of calls. E.g. A value of `10` means
     // eviction will be randomly triggerd once every 10 calls
@@ -29,8 +46,8 @@ impl ProbEviction {
     }
 
     fn eviction_probability(&self, global_counter: u64, counter_value: u64) -> f64 {
-        let delta = global_counter.saturating_sub(counter_value) as f64;
-        let recency_prob = (-self.lambda * delta).exp();
+        let age = counter_age(global_counter, counter_value);
+        let recency_prob = (-self.lambda * age as f64).exp();
         let eviction_prob = 1.0 - recency_prob;
         eviction_prob
     }
@@ -365,16 +382,53 @@ mod tests {
         assert_eq!(vec!["value1", "value2", "value3", "value4"], values);
     }
 
+    fn gen_rand_nums(rng: &mut rand::rngs::ThreadRng, n: u64, min: u64, max: u64) -> Vec<u64> {
+        (0..n)
+            .map(|_| rng.gen_range(min..max))
+            .collect()
+    }
+
     #[test]
     fn test_eviction_probability() {
         let prob = ProbEviction::new(32);
+
+        // Without wraparound
         let global_counter = 1000;
         let results = (1..=global_counter)
+            .map(|n| prob.eviction_probability(global_counter, n))
+            .collect::<Vec<f64>>();
+        // Check that the eviction probability reduces with decrease
+        // in counter age, i.e. the results vector is sorted in
+        // descending order.
+        assert!(results.as_slice().windows(2).all(|w| w[0] >= w[1]));
+
+        // With wraparound
+        let global_counter = 9_446_744_073_709_551_615u64;
+        let mut rng = rand::thread_rng();
+        // Generate some counter values before wraparound. These will
+        // be > global_counter and < u64::MAX
+        let mut counter_vals: Vec<u64> = gen_rand_nums(&mut rng, 100, global_counter, u64::MAX);
+        counter_vals.sort();
+        // Generate some counter values after wraparound. These will
+        // be > 0 and < global_counter
+        let mut after_wraparound: Vec<u64> = gen_rand_nums(&mut rng, 100, 0, global_counter);
+        after_wraparound.sort();
+        // As the global counter is very large, add some known values
+        // closer to the global counter
+        let mut recent: Vec<u64> = (1..=100).map(|n| global_counter - n).collect();
+        recent.sort();
+
+        // Concatenate the above inputs in order
+        counter_vals.append(&mut after_wraparound);
+        counter_vals.append(&mut recent);
+
+        let results = counter_vals
+            .into_iter()
             .map(|n| prob.eviction_probability(global_counter, n))
             .collect::<Vec<f64>>();
         // Check that the eviction probability reduces with increase
         // in counter value, i.e. the results vector is sorted in
         // descending order.
-        assert!(results.as_slice().windows(2).all(|w| w[0] >= w[1]))
+        assert!(results.as_slice().windows(2).all(|w| w[0] >= w[1]));
     }
 }
