@@ -4,8 +4,6 @@ use crate::models::types::VectorStore;
 
 use super::{dtos::CreateCollectionDto, error::CollectionsError, repo};
 
-use crate::api_service::init_vector_store;
-
 pub(crate) async fn create_collection(
     create_collection_dto: CreateCollectionDto,
 ) -> Result<Arc<VectorStore>, CollectionsError> {
@@ -19,10 +17,7 @@ pub(crate) async fn create_collection(
     // ---------------------------
     let max_cache_level = 5;
 
-    // Call init_vector_store using web::block
-    let result = init_vector_store(name, size, lower_bound, upper_bound, max_cache_level).await;
-    let result = result.map_err(|e| CollectionsError::FailedToCreateCollection(e.to_string()))?;
-    Ok(result)
+    repo::create_vector_store(name, size, lower_bound, upper_bound, max_cache_level).await
 }
 
 pub(crate) fn get_collection_by_id(
