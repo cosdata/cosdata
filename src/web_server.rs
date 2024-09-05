@@ -1,8 +1,10 @@
 use actix_cors::Cors;
+use actix_web::web::Data;
 use actix_web::{
     dev::ServiceRequest, middleware, web, App, Error, HttpRequest, HttpResponse, HttpServer,
 };
 use actix_web_httpauth::{extractors::bearer::BearerAuth, middleware::HttpAuthentication};
+use cosdata::config_loader::{load_config, Host, ServerMode, Ssl};
 use dashmap::DashMap;
 use lmdb::Environment;
 use rustls::{pki_types::PrivateKeyDer, ServerConfig};
@@ -12,9 +14,9 @@ use std::fs::create_dir_all;
 use std::path::Path;
 use std::sync::Arc;
 use std::{fs::File, io::BufReader};
-use cosdata::config_loader::{load_config, ServerMode, Ssl, Host};
-use actix_web::web::Data;
 
+use crate::api::auth::{auth_module, authentication_middleware::AuthenticationMiddleware};
+use crate::api::vectordb::collections::collections_module;
 use crate::models::types::*;
 use crate::{api, WaCustomError};
 use std::env;
@@ -23,14 +25,6 @@ use std::env;
 struct MyObj {
     name: String,
     number: i32,
-}
-
-async fn validator(
-    req: ServiceRequest,
-    credentials: BearerAuth,
-) -> Result<ServiceRequest, (Error, ServiceRequest)> {
-    // println!("cred: {credentials:?}");
-    Ok(req)
 }
 
 async fn extract_item(item: web::Json<MyObj>, req: HttpRequest) -> HttpResponse {
@@ -57,7 +51,7 @@ pub async fn run_actix_server() -> std::io::Result<()> {
         ServerMode::Http => {
             log::warn!("server.mode=http is not recommended in production");
             None
-        },
+        }
     };
 
     let config_data = Data::new(config);
@@ -70,7 +64,6 @@ pub async fn run_actix_server() -> std::io::Result<()> {
     );
 
     let server = HttpServer::new(move || {
-        let auth = HttpAuthentication::bearer(validator);
         App::new()
             // enable logger
             .wrap(middleware::Logger::default())
@@ -79,16 +72,11 @@ pub async fn run_actix_server() -> std::io::Result<()> {
             .wrap(Cors::permissive())
             // register simple handler, handle all methods
             .app_data(web::JsonConfig::default().limit(4 * 1048576))
-            .route(
-                "/auth/gettoken",
-                web::post().to(crate::api::auth::get_token),
-            )
+            .service(auth_module())
             .service(
                 web::scope("/vectordb")
-                    .wrap(auth.clone())
-                    .service(
-                        web::resource("/createdb").route(web::post().to(api::vectordb::create)),
-                    )
+                    .wrap(AuthenticationMiddleware)
+                    .service(collections_module())
                     .service(web::resource("/upsert").route(web::post().to(api::vectordb::upsert)))
                     .service(web::resource("/search").route(web::post().to(api::vectordb::search)))
                     .service(web::resource("/fetch").route(web::post().to(api::vectordb::fetch)))
@@ -135,9 +123,7 @@ pub async fn run_actix_server() -> std::io::Result<()> {
         Some(tls_config) => server.bind_rustls_0_23(addr, tls_config),
         None => server.bind(addr),
     };
-    server?
-        .run()
-        .await
+    server?.run().await
 }
 
 fn load_rustls_config(ssl_config: &Ssl) -> rustls::ServerConfig {
@@ -150,7 +136,10 @@ fn load_rustls_config(ssl_config: &Ssl) -> rustls::ServerConfig {
 
     // load TLS key/cert files
     let cert_file = &mut BufReader::new(File::open(&ssl_config.cert_file).unwrap_or_else(|_| {
-        eprintln!("Failed to open certificate file: {}", ssl_config.key_file.display());
+        eprintln!(
+            "Failed to open certificate file: {}",
+            ssl_config.key_file.display()
+        );
         std::process::exit(1);
     }));
     let key_file = &mut BufReader::new(File::open(&ssl_config.key_file).unwrap_or_else(|_| {

@@ -9,21 +9,45 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Define your dynamic variables
-token = "8cf11a8cb97b0e002b31197c5808d13e3b18e488234a61946690668db5c5fece"
-base_url = "https://127.0.0.1:8443/vectordb"
-headers = {"Authorization": f"Bearer {token}", "Content-type": "application/json"}
+token = None
+host = "https://127.0.0.1:8443"
+base_url = f"{host}/vectordb"
+
+def generate_headers():
+    return {"Authorization": f"Bearer {token}", "Content-type": "application/json"}
+
+# Function to login with credentials
+def login():
+    url = f"{host}/auth/login"
+    data = {
+    "username": "admin",
+    "password": "admin",
+    "pretty_print": False
+    }
+    response = requests.post(url, headers=generate_headers(), data=json.dumps(data))
+    global token
+    token = response.text
+    return token
+    
 
 
-# Function to create database
+# Function to create database (collection)
 def create_db(vector_db_name, dimensions, max_val, min_val):
-    url = f"{base_url}/createdb"
+    url = f"{base_url}/collections"
     data = {
         "vector_db_name": vector_db_name,
         "dimensions": dimensions,
         "max_val": max_val,
         "min_val": min_val,
     }
-    response = requests.post(url, headers=headers, data=json.dumps(data), verify=False)
+    response = requests.post(url, headers=generate_headers(), data=json.dumps(data), verify=False)
+    return response.json()
+
+# Function to find a database (collection) by Id 
+def find_collection(id):
+    url = f"{base_url}/collections/{id}"
+
+    response = requests.get(url,headers=generate_headers())
     return response.json()
 
 
@@ -31,7 +55,7 @@ def create_db(vector_db_name, dimensions, max_val, min_val):
 def upsert_vector(vector_db_name, vectors):
     url = f"{base_url}/upsert"
     data = {"vector_db_name": vector_db_name, "vectors": vectors}
-    response = requests.post(url, headers=headers, data=json.dumps(data), verify=False)
+    response = requests.post(url, headers=generate_headers(), data=json.dumps(data), verify=False)
     return response.json()
 
 
@@ -39,7 +63,7 @@ def upsert_vector(vector_db_name, vectors):
 def ann_vector(idd, vector_db_name, vector):
     url = f"{base_url}/search"
     data = {"vector_db_name": vector_db_name, "vector": vector}
-    response = requests.post(url, headers=headers, data=json.dumps(data), verify=False)
+    response = requests.post(url, headers=generate_headers(), data=json.dumps(data), verify=False)
     return (idd, response.json())
 
 
@@ -47,7 +71,7 @@ def ann_vector(idd, vector_db_name, vector):
 def fetch_vector(vector_db_name, vector_id):
     url = f"{base_url}/fetch"
     data = {"vector_db_name": vector_db_name, "vector_id": vector_id}
-    response = requests.post(url, headers=headers, data=json.dumps(data), verify=False)
+    response = requests.post(url, headers=generate_headers(), data=json.dumps(data), verify=False)
     return response.json()
 
 
@@ -99,8 +123,16 @@ if __name__ == "__main__":
     rows = 100
     perturbation_degree = 0.25  # Degree of perturbation
 
-    create_response = create_db(vector_db_name, dimensions, max_val, min_val)
-    print("Create DB Response:", create_response)
+    # first login to get the auth jwt token
+    login_response = login()
+    print("Login Response:", login_response)
+
+    
+    create_Collection_response = create_db(vector_db_name, dimensions, max_val, min_val)
+    print("Create Collection(DB) Response:", create_Collection_response)
+
+    find_collection_response = find_collection(create_Collection_response["id"])
+    print("Find Collection(DB) Response:", find_collection_response)
 
     shortlisted_vectors = []
 
