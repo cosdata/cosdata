@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use cosdata::models::types::{get_app_env, VectorStore};
+use crate::models::types::{get_app_env, VectorStore};
 
 use super::error::CollectionsError;
 

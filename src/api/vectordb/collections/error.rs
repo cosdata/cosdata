@@ -7,14 +7,18 @@ use std::fmt::Display;
 #[derive(Debug)]
 pub enum CollectionsError {
     NotFound,
-    FailedToGetAppEnv
+    FailedToGetAppEnv,
+    FailedToCreateCollection(String),
 }
 
 impl Display for CollectionsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CollectionsError::NotFound => write!(f, "Collection Not Found!"),
-            CollectionsError::FailedToGetAppEnv => write!(f, "Failed to get App Env!")
+            CollectionsError::FailedToGetAppEnv => write!(f, "Failed to get App Env!"),
+            CollectionsError::FailedToCreateCollection(msg) => {
+                write!(f, "Failed to create collection due to {}", msg)
+            }
         }
     }
 }
@@ -28,7 +32,8 @@ impl ResponseError for CollectionsError {
     fn status_code(&self) -> StatusCode {
         match self {
             CollectionsError::NotFound => StatusCode::BAD_REQUEST,
-            CollectionsError::FailedToGetAppEnv => StatusCode::INTERNAL_SERVER_ERROR
+            CollectionsError::FailedToGetAppEnv => StatusCode::INTERNAL_SERVER_ERROR,
+            CollectionsError::FailedToCreateCollection(_) => StatusCode::BAD_REQUEST,
         }
     }
 }
