@@ -77,9 +77,6 @@ pub async fn run_actix_server() -> std::io::Result<()> {
                 web::scope("/vectordb")
                     .wrap(AuthenticationMiddleware)
                     .service(collections_module())
-                    .service(
-                        web::resource("/createdb").route(web::post().to(api::vectordb::create)),
-                    )
                     .service(web::resource("/upsert").route(web::post().to(api::vectordb::upsert)))
                     .service(web::resource("/search").route(web::post().to(api::vectordb::search)))
                     .service(web::resource("/fetch").route(web::post().to(api::vectordb::fetch)))
