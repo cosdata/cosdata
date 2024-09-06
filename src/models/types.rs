@@ -131,7 +131,7 @@ impl MetricResult {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub enum DistanceMetric {
     Cosine,
     Euclidean,
