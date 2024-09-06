@@ -1,14 +1,12 @@
-use actix_web::{web, HttpResponse, Scope};
-use dtos::CreateIndexDto;
+use actix_web::{web, Scope};
+use controller::create_index;
 
+mod controller;
+mod service;
 mod dtos;
 
-async fn index(body: web::Json<CreateIndexDto>) -> HttpResponse {
-    HttpResponse::Ok().json(body)
-}
-
 pub(crate) fn indexes_module() -> Scope {
-    let indexes_module = web::scope("/indexes").route("", web::post().to(index));
+    let indexes_module = web::scope("/indexes").route("", web::post().to(create_index));
 
     indexes_module
 }
