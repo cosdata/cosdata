@@ -4,7 +4,9 @@ use actix_web::{
 };
 
 use super::{
-    dtos::{CreateCollectionDto, CreateCollectionDtoResponse, FindCollectionDto},
+    dtos::{
+        CreateCollectionDto, CreateCollectionDtoResponse, FindCollectionDto, GetCollectionsDto,
+    },
     service,
 };
 
@@ -23,6 +25,13 @@ pub(crate) async fn create_collection(
         min_val: upper_bound,
         name: collection.database_name.clone(),
     }))
+}
+
+pub(crate) async fn get_collections(
+    web::Query(get_collections_dto): web::Query<GetCollectionsDto>,
+) -> Result<HttpResponse> {
+    let collections = service::get_collections(get_collections_dto).await?;
+    Ok(HttpResponse::Ok().json(collections))
 }
 
 pub(crate) async fn get_collection_by_id(collection_id: web::Path<String>) -> Result<HttpResponse> {
