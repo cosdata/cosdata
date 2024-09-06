@@ -12,6 +12,10 @@ pub(crate) fn collections_module() -> Scope {
         .route(
             "/{collection_id}",
             web::get().to(controller::get_collection_by_id),
+        )
+        .route(
+            "/{collection_id}",
+            web::delete().to(controller::delete_collection_by_id),
         );
 
     collections_module

@@ -42,3 +42,12 @@ pub(crate) async fn get_collection_by_id(collection_id: web::Path<String>) -> Re
         vector_db_name: collection.database_name.clone(),
     }))
 }
+
+pub(crate) async fn delete_collection_by_id(collection_id: web::Path<String>) -> Result<HttpResponse> {
+    let collection = service::delete_collection_by_id(&collection_id)?;
+    Ok(HttpResponse::Ok().json(FindCollectionDto {
+        id: collection.database_name.clone(),
+        dimensions: collection.quant_dim,
+        vector_db_name: collection.database_name.clone(),
+    }))
+}
