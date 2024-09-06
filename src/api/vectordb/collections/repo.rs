@@ -5,7 +5,10 @@ use crate::{
     models::types::{get_app_env, VectorStore},
 };
 
-use super::error::CollectionsError;
+use super::{
+    dtos::{FindCollectionDto, GetCollectionsDto},
+    error::CollectionsError,
+};
 
 pub(crate) async fn create_vector_store(
     name: String,
@@ -17,6 +20,25 @@ pub(crate) async fn create_vector_store(
     // Call init_vector_store using web::block
     let result = init_vector_store(name, size, lower_bound, upper_bound, max_cache_level).await;
     result.map_err(|e| CollectionsError::FailedToCreateCollection(e.to_string()))
+}
+
+pub(crate) async fn get_vector_stores(
+    _get_collections_dto: GetCollectionsDto,
+) -> Result<Vec<FindCollectionDto>, CollectionsError> {
+    let env = match get_app_env() {
+        Ok(env) => env,
+        Err(_) => return Err(CollectionsError::FailedToGetAppEnv),
+    };
+    let vec_store = env
+        .vector_store_map
+        .iter()
+        .map(|v| FindCollectionDto {
+            id: v.database_name.clone(),
+            dimensions: v.quant_dim,
+            vector_db_name: v.database_name.clone(),
+        })
+        .collect();
+    Ok(vec_store)
 }
 
 pub(crate) fn get_vector_store_by_name(name: &str) -> Result<Arc<VectorStore>, CollectionsError> {
