@@ -130,8 +130,8 @@ impl BufferManager {
     pub fn new(mut file: File) -> io::Result<Self> {
         let file_size = file.seek(SeekFrom::End(0))?;
         file.seek(SeekFrom::Start(0))?;
-        let evict_strat = EvictStrategy::Probabilistic(ProbEviction::new(32));
-        let regions = LRUCache::new(100, evict_strat);
+        let evict_strategy = EvictStrategy::Probabilistic(ProbEviction::new(32));
+        let regions = LRUCache::new(100, evict_strategy);
         Ok(BufferManager {
             file: Arc::new(RwLock::new(file)),
             regions,

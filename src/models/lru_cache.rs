@@ -81,7 +81,7 @@ impl<T> EvictionIndex<T> {
 
 pub struct ProbEviction {
     // Frequency in terms of no. of calls. E.g. A value of `10` means
-    // eviction will be randomly triggerd once every 10 calls
+    // eviction will be randomly triggered once every 10 calls
     freq: u16,
     // Parameter to tune the "aggressiveness" of eviction i.e. higher
     // value means more aggressive
