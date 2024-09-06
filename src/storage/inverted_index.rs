@@ -4,6 +4,8 @@ use std::sync::{Arc, RwLock};
 use crate::models::identity_collections::IdentityMapKey;
 use crate::models::lazy_load::{LazyItem, LazyItemMap};
 
+// TODO: Add more powers for larger jumps
+// TODO: Or switch to dynamic calculation of power of max power of 4
 const POWERS_OF_4: [u32; 8] = [1, 4, 16, 64, 256, 1024, 4096, 16384];
 
 /// Returns the largest power of 4 that is less than or equal to `n`.
@@ -33,6 +35,15 @@ fn calculate_path(target_dim_index: u32, current_dim_index: u32) -> Vec<usize> {
     path
 }
 
+/// [InvertedIndexItem] stores non-zero values at `dim_index` dimension of all input vectors
+///
+/// The `InvertedIndex` struct uses [LazyItemMap] to store data and
+/// references to children.
+///
+/// The use of lazy items internally allows for better performance by deferring the loading of
+/// data until it is actually needed. This can be beneficial when dealing with large amounts of data
+/// or when the data is expensive to load.
+#[derive(Clone)]
 pub struct InvertedIndexItem<T>
 where
     T: Clone + 'static,
@@ -40,8 +51,9 @@ where
     pub dim_index: u32,
     pub implicit: bool,
     pub data: LazyItemMap<T>,
-    pub children: [Option<SharedInvertedIndexItem<T>>; 8],
-    // pub lazy_children: LazyItem<[Option<SharedInvertedIndexItem<T>>; 8]>,
+    // TODO: benchmark if fixed size children array with lazy item refs
+    //  yields better performance
+    pub lazy_children: LazyItemMap<SharedInvertedIndexItem<T>>,
 }
 
 pub type SharedInvertedIndexItem<T> = Arc<RwLock<InvertedIndexItem<T>>>;
@@ -57,8 +69,7 @@ where
             dim_index,
             implicit,
             data: LazyItemMap::new(),
-            children: Default::default(),
-            // lazy_children: LazyItem::new(0.into(), Default::default()),
+            lazy_children: LazyItemMap::new(),
         }
     }
 
@@ -72,25 +83,33 @@ where
         for &child_index in path {
             current_node = {
                 let read_guard = current_node.read().unwrap();
-                let child = read_guard.children.get(child_index);
+                let child = read_guard
+                    .lazy_children
+                    .get(&IdentityMapKey::Int(child_index as u32));
                 let dim_index = read_guard.dim_index;
                 match child {
-                    Some(Some(child_node)) => child_node.clone(),
-                    Some(None) => {
+                    Some(child) => child.get_data().unwrap().get().clone(),
+                    None => {
                         drop(read_guard);
-                        let mut write_guard = current_node.write().unwrap();
-                        if let Some(child) = &write_guard.children[child_index] {
-                            // Check if another thread created the child node
-                            child.clone()
+                        let write_guard = current_node.write().unwrap();
+                        // Double check pattern
+                        // Check if another thread created the child node
+                        if let Some(child) = &write_guard
+                            .lazy_children
+                            .get(&IdentityMapKey::Int(child_index as u32))
+                        {
+                            child.get_data().unwrap().get().clone()
                         } else {
                             let new_dim_index = dim_index + POWERS_OF_4[child_index];
                             let new_item =
                                 Arc::new(RwLock::new(InvertedIndexItem::new(new_dim_index, true)));
-                            write_guard.children[child_index] = Some(new_item.clone());
+                            write_guard.lazy_children.insert(
+                                IdentityMapKey::Int(child_index as u32),
+                                LazyItem::new(0.into(), new_item.clone()),
+                            );
                             new_item
                         }
                     }
-                    None => panic!("Invalid child index: {}", child_index),
                 }
             };
         }
@@ -125,8 +144,11 @@ where
     /// Recursively traverses child nodes or searches the data vector.
     fn get_value(&self, path: &[usize], vector_id: u32) -> Option<T> {
         match path.get(0) {
-            Some(child_index) => self.children[*child_index]
-                .as_ref()?
+            Some(child_index) => self
+                .lazy_children
+                .get(&IdentityMapKey::Int((*child_index) as u32))
+                .map(|data| data.get_data())
+                .flatten()?
                 .read()
                 .ok()?
                 .get_value(&path[1..], vector_id),
@@ -145,7 +167,11 @@ where
 {
     /// Prints the tree structure of the index starting from the current node.
     /// Recursively prints child nodes with increased indentation.
-    pub fn print_tree(&self, depth: usize, prev_dim_index: u32) {
+    ///
+    /// # Safety:
+    /// The function does not modify the structure but accesses internal state.
+    /// It is meant only for debugging and testing purposes
+    pub fn print_tree(&mut self, depth: usize, prev_dim_index: u32) {
         let indent = "  ".repeat(depth);
         let dim_index = prev_dim_index + self.dim_index;
         println!(
@@ -158,11 +184,24 @@ where
                 "Explicit"
             }
         );
-        // println!("{}Data: {:?}", indent, self.data);
-        for (i, child) in self.children.iter().enumerate() {
-            if let Some(item) = child {
+        println!(
+            "{}Data (value, vector_id): {:?}",
+            indent,
+            self.data
+                .items
+                .get()
+                .iter()
+                .map(|(k, v)| {
+                    let val = v.get_data().unwrap().get().clone();
+                    (val, k.clone())
+                })
+                .collect::<Vec<_>>()
+        );
+        for (i, (_, child)) in self.lazy_children.items.get().iter().enumerate() {
+            if let Some(item) = child.get_data() {
                 println!("{}-> 4^{} to:", indent, i);
-                item.read().unwrap().print_tree(depth + 1, dim_index);
+                let item = item.shared_get().clone();
+                item.write().unwrap().print_tree(depth + 1, dim_index);
             }
         }
     }
@@ -197,7 +236,6 @@ where
     /// Delegates to the root node's `insert` method.
     pub fn insert(&self, dim_index: u32, value: T, vector_id: u32) -> Result<(), String> {
         let path = calculate_path(dim_index, self.root.read().unwrap().dim_index);
-        println!("Path: {:?}", path);
         let node = InvertedIndexItem::find_or_create_node(self.root.clone(), &path);
         InvertedIndexItem::insert(node, value, vector_id)
     }
@@ -205,12 +243,12 @@ where
 
 impl<T> InvertedIndex<T>
 where
-    T: Clone + 'static + Debug,
+    T: Debug + Clone + 'static,
 {
     /// Prints the tree structure of the entire index.
     /// Delegates to the root node's `print_tree` method.
-    pub fn print_tree(&self) {
-        self.root.read().unwrap().print_tree(0, 0);
+    pub fn print_tree(&mut self) {
+        self.root.write().unwrap().print_tree(0, 0);
     }
 }
 
@@ -220,7 +258,6 @@ impl InvertedIndex<u8> {
     pub fn add_sparse_vector(&self, vector: Vec<u8>, vector_id: u32) -> Result<(), String> {
         for (dim_index, &value) in vector.iter().enumerate() {
             if value != 0 {
-                println!("Inserting value {} at dimension index {}", value, dim_index);
                 self.insert(dim_index as u32, value, vector_id)?;
             }
         }
@@ -257,8 +294,24 @@ mod test {
 
     #[test]
     /// Prints the structure of the `InvertedIndex` after adding sparse vectors.
-    pub fn print_index() {
-        let inverted_index: InvertedIndex<u8> = InvertedIndex::new();
+    pub fn small_test() {
+        let mut inverted_index: InvertedIndex<u8> = InvertedIndex::new();
+
+        let sparse_vector1 = vec![0, 15];
+
+        inverted_index.add_sparse_vector(sparse_vector1, 0).unwrap();
+
+        println!("\nFinal Inverted Index structure:");
+        inverted_index.print_tree();
+
+        // Look up using dimension index and vector ID
+        assert_eq!(inverted_index.get(1, 0), Some(15));
+    }
+
+    #[test]
+    /// Prints the structure of the `InvertedIndex` after adding sparse vectors.
+    pub fn simple_test() {
+        let mut inverted_index: InvertedIndex<u8> = InvertedIndex::new();
 
         let sparse_vector1 = vec![0, 15, 0, 0, 27, 0, 31, 0, 0, 42];
         let sparse_vector2 = vec![1, 0, 23, 0, 0, 38, 0, 45, 0, 56];
@@ -364,13 +417,40 @@ mod test {
 
             // Check the final state
             let node = root_clone2.read().unwrap();
-            assert!(node.children[0].is_some(), "Child 0 should exist");
+            assert!(
+                node.lazy_children.get(&IdentityMapKey::Int(0)).is_some(),
+                "Child 0 should exist"
+            );
 
-            let node = node.children[0].as_ref().unwrap().read().unwrap();
-            assert!(node.children[1].is_some(), "Child 1 should exist");
+            let node = node
+                .lazy_children
+                .get(&IdentityMapKey::Int(0 as u32))
+                .map(|data| data.get_data())
+                .flatten()
+                .unwrap();
+            let read_guard = node.read().unwrap();
+            assert!(
+                read_guard
+                    .lazy_children
+                    .get(&IdentityMapKey::Int(1 as u32))
+                    .is_some(),
+                "Child 1 should exist"
+            );
 
-            let node = node.children[1].as_ref().unwrap().read().unwrap();
-            assert!(node.children[2].is_some(), "Child 2 should exist");
+            let node = read_guard
+                .lazy_children
+                .get(&IdentityMapKey::Int(1 as u32))
+                .map(|data| data.get_data())
+                .flatten()
+                .unwrap();
+            let read_guard = node.read().unwrap();
+            assert!(
+                read_guard
+                    .lazy_children
+                    .get(&IdentityMapKey::Int(2 as u32))
+                    .is_some(),
+                "Child 2 should exist"
+            );
         }
     }
 }
