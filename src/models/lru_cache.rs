@@ -2,6 +2,7 @@ use dashmap::DashMap;
 use rand::Rng;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::iter::Iterator;
+use std::sync::RwLock;
 
 use super::buffered_io::BufIoError;
 
@@ -19,6 +20,62 @@ fn counter_age(global_value: u32, item_value: u32) -> u32 {
     } else {
         // until wrap around + after wraparound
         (u32::MAX - item_value) + global_value
+    }
+}
+
+pub struct EvictionIndex<T> {
+    inner: [Option<T>; 256],
+}
+
+impl<T> EvictionIndex<T> {
+
+    fn new() -> Self {
+        Self {
+            // @NOTE: Uses inline constants; will only work for msrv =
+            // 1.79.0
+            inner: [const { None }; 256],
+        }
+    }
+
+    fn idx(counter: u32) -> usize {
+        counter as usize % 256
+    }
+
+    fn on_cache_miss(&mut self, counter: u32, key: T) {
+        let i = Self::idx(counter);
+        if self.inner[i].is_none() {
+            self.inner[i] = Some(key);
+        }
+    }
+
+    fn on_cache_hit(&mut self, old_counter: u32, new_counter: u32, key: T) where T: Eq {
+        let i = Self::idx(old_counter);
+        if let Some(x) = &self.inner[i] {
+            if *x == key {
+                self.inner[i] = None;
+                let j = Self::idx(new_counter);
+                if self.inner[j].is_none() {
+                    self.inner[j] = Some(key);
+                }
+            }
+        }
+    }
+
+    fn get_keys(&self, max: u8) -> Vec<(u8, &T)> {
+        let mut result = vec![];
+        for (i, x) in self.inner.iter().enumerate() {
+            if result.len() > max as usize {
+                break;
+            }
+            if let Some(key) = x {
+                result.push((i as u8, key));
+            }
+        }
+        result
+    }
+
+    fn remove(&mut self, idx: u8) {
+        self.inner[idx as usize] = None;
     }
 }
 
@@ -78,6 +135,7 @@ where
     // Global counter
     counter: AtomicU32,
     evict_strategy: EvictStrategy,
+    index: RwLock<EvictionIndex<K>>,
 }
 
 impl<K, V> LRUCache<K, V>
@@ -89,6 +147,7 @@ where
         LRUCache {
             map: DashMap::new(),
             counter: AtomicU32::new(0),
+            index: RwLock::new(EvictionIndex::new()),
             capacity,
             evict_strategy,
         }
@@ -111,12 +170,25 @@ where
 
     pub fn get_or_insert(&self, key: K, f: impl FnOnce() -> Result<V, BufIoError>) -> Result<V, BufIoError> {
         let mut inserted = false;
+        let k1 = key.clone();
+        let k2 = key.clone();
         let res = self.map
             .entry(key)
-            .and_modify(|(_, counter)| *counter = self.increment_counter())
+            .and_modify(|(_, counter)| {
+                let old_counter = counter.clone();
+                let new_counter = self.increment_counter();
+                // @TODO: Error handling
+                let mut index = self.index.write().unwrap();
+                index.on_cache_hit(old_counter, new_counter, k1);
+                *counter = new_counter;
+            })
             .or_try_insert_with(|| {
                 inserted = true;
-                f().map(|v| (v, self.increment_counter()))
+                let counter = self.increment_counter();
+                // @TODO: Error handling
+                let mut index = self.index.write().unwrap();
+                index.on_cache_miss(counter, k2);
+                f().map(|v| (v, counter))
             })
             .map(|v| v.0.clone());
         // @NOTE: We need to clone the value before calling
@@ -138,7 +210,7 @@ where
             match &self.evict_strategy {
                 EvictStrategy::Immediate => self.evict_lru(),
                 EvictStrategy::Probabilistic(prob) => {
-                    if prob.should_trigger() {
+                    if self.map.len() > self.capacity && prob.should_trigger() {
                         self.evict_lru_probabilistic(&prob);
                     }
                 },
@@ -172,20 +244,25 @@ where
     }
 
     fn evict_lru_probabilistic(&self, strategy: &ProbEviction) {
-        let num_to_evict = self.map.len() - self.capacity;
-        if num_to_evict > 0 {
-            let mut num_evicted = 0;
-            let global_counter = self.counter.load(Ordering::SeqCst);
-            for entry in self.map.iter() {
-                if num_evicted > num_to_evict {
-                    break;
-                }
-                let (key, (_, counter_val)) = entry.pair();
-                if strategy.should_evict(global_counter, *counter_val) {
-                    self.map.remove(&key);
-                    num_evicted += 1;
-                }
+        let num_to_evict = strategy.freq;
+        let global_counter = self.counter.load(Ordering::SeqCst);
+        // @TODO: Error handling
+        let index = self.index.read().unwrap();
+        let mut evicted_idxs = Vec::with_capacity(num_to_evict as usize);
+        // @TODO: What if num_to_evict is > 256?
+        for (idx, key) in index.get_keys(num_to_evict as u8) {
+            // @TODO: Remove unwrap
+            let entry = self.map.get(key).unwrap();
+            let (key, (_, counter_val)) = entry.pair();
+            if strategy.should_evict(global_counter, *counter_val) {
+                self.map.remove(&key);
+                evicted_idxs.push(idx);
             }
+        }
+        // @TODO: Error handling
+        let mut index = self.index.write().unwrap();
+        for idx in evicted_idxs {
+            index.remove(idx);
         }
     }
 
@@ -222,7 +299,7 @@ where
 #[cfg(test)]
 mod tests {
 
-    use std::{sync::Arc, thread};
+    use std::{collections::HashMap, sync::Arc, thread};
 
     use super::*;
 
@@ -431,4 +508,77 @@ mod tests {
         // descending order.
         assert!(results.as_slice().windows(2).all(|w| w[0] >= w[1]));
     }
+
+    #[test]
+    fn test_eviction_index() {
+        let mut index: EvictionIndex<u32> = EvictionIndex::new();
+
+        let mut global_counter = 0;
+
+        // A mapping of keys -> counters
+        let mut m: HashMap<u32, u32> = HashMap::new();
+
+        // Simulate insertion of 256 items
+        for i in 1..=256 {
+            index.on_cache_miss(global_counter, i);
+            m.insert(i, global_counter);
+            global_counter += 1;
+        }
+
+        let expected = (1..=256)
+            .map(|x| Some(x))
+            .collect::<Vec<Option<u32>>>();
+
+        // Verify the contents of the index
+        assert_eq!(expected.as_slice(), index.inner);
+
+        // Simulate insertion of 10 more items
+        for i in 257..267 {
+            index.on_cache_miss(global_counter, i);
+            m.insert(i, global_counter);
+            global_counter += 1;
+        }
+
+        // Assert that the index contents are unchanged
+        assert_eq!(expected.as_slice(), index.inner);
+
+        // Simulate `get` for a known item
+        {
+            let x = 147_u32;
+            let new_counter = global_counter;
+            let old_counter = m.insert(x, new_counter).unwrap();
+            let old_id = old_counter as usize % 256;
+
+            assert_eq!(146, old_id);
+
+            // Find value in slot corresponding to new counter
+            let new_id = new_counter as usize % 256;
+            let new_slot_val = index.inner[new_id];
+
+            index.on_cache_hit(old_counter, new_counter, x);
+
+            // Slot corresponding to old counter is cleared
+            assert!(index.inner[old_id].is_none());
+
+            // Slot corresponding to new counter is unchanged
+            assert_eq!(new_slot_val, index.inner[new_id]);
+        }
+
+        // Simulate `get` for another known item such that the new
+        // counter is 256 + 147, so that it matches the same slot in
+        // the index that was emptied earlier
+        {
+            let y = 202_u32;
+            let new_counter = 256 + 146;
+            let old_counter = m.insert(y, new_counter).unwrap();
+            index.on_cache_hit(old_counter, new_counter, y);
+
+            // Slot corresponding to old counter is cleared
+            assert!(index.inner[old_counter as usize % 256].is_none());
+
+            // Slot corresponding to new counter has this value
+            assert_eq!(Some(202), index.inner[new_counter as usize % 256]);
+        }
+    }
+
 }
