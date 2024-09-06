@@ -1,6 +1,9 @@
 use std::fmt::Debug;
 use std::sync::{Arc, RwLock};
 
+use crate::models::identity_collections::IdentityMapKey;
+use crate::models::lazy_load::{LazyItem, LazyItemMap};
+
 const POWERS_OF_4: [u32; 8] = [1, 4, 16, 64, 256, 1024, 4096, 16384];
 
 /// Returns the largest power of 4 that is less than or equal to `n`.
@@ -30,12 +33,15 @@ fn calculate_path(target_dim_index: u32, current_dim_index: u32) -> Vec<usize> {
     path
 }
 
-#[derive(Debug)]
-pub struct InvertedIndexItem<T> {
+pub struct InvertedIndexItem<T>
+where
+    T: Clone + 'static,
+{
     pub dim_index: u32,
     pub implicit: bool,
-    pub data: Vec<(T, usize)>,
+    pub data: LazyItemMap<T>,
     pub children: [Option<SharedInvertedIndexItem<T>>; 8],
+    // pub lazy_children: LazyItem<[Option<SharedInvertedIndexItem<T>>; 8]>,
 }
 
 pub type SharedInvertedIndexItem<T> = Arc<RwLock<InvertedIndexItem<T>>>;
@@ -50,8 +56,9 @@ where
         InvertedIndexItem {
             dim_index,
             implicit,
-            data: Vec::new(),
+            data: LazyItemMap::new(),
             children: Default::default(),
+            // lazy_children: LazyItem::new(0.into(), Default::default()),
         }
     }
 
@@ -96,24 +103,27 @@ where
     pub fn insert(
         node: SharedInvertedIndexItem<T>,
         value: T,
-        vector_id: usize,
+        vector_id: u32,
     ) -> Result<(), String> {
         let mut node = node.write().unwrap();
         node.implicit = false;
-        node.data.push((value, vector_id));
+        node.data.insert(
+            IdentityMapKey::Int(vector_id),
+            LazyItem::new(0.into(), value),
+        );
         Ok(())
     }
 
     /// Retrieves a value from the index at the specified dimension index.
     /// Calculates the path and delegates to `get_value`.
-    pub fn get(&self, dim_index: u32, vector_id: usize) -> Option<T> {
+    pub fn get(&self, dim_index: u32, vector_id: u32) -> Option<T> {
         let path = calculate_path(dim_index, self.dim_index);
         self.get_value(&path, vector_id)
     }
 
     /// Retrieves a value from the index following the specified path.
     /// Recursively traverses child nodes or searches the data vector.
-    fn get_value(&self, path: &[usize], vector_id: usize) -> Option<T> {
+    fn get_value(&self, path: &[usize], vector_id: u32) -> Option<T> {
         match path.get(0) {
             Some(child_index) => self.children[*child_index]
                 .as_ref()?
@@ -122,14 +132,17 @@ where
                 .get_value(&path[1..], vector_id),
             None => self
                 .data
-                .iter()
-                .find(|&&(_, id)| id == vector_id)
-                .map(|(value, _)| *value),
+                .get(&IdentityMapKey::Int(vector_id))
+                .map(|lazy_item| lazy_item.get_data().map(|data| data.shared_get().clone()))
+                .flatten(),
         }
     }
 }
 
-impl<T: Debug> InvertedIndexItem<T> {
+impl<T> InvertedIndexItem<T>
+where
+    T: Debug + Clone,
+{
     /// Prints the tree structure of the index starting from the current node.
     /// Recursively prints child nodes with increased indentation.
     pub fn print_tree(&self, depth: usize, prev_dim_index: u32) {
@@ -145,7 +158,7 @@ impl<T: Debug> InvertedIndexItem<T> {
                 "Explicit"
             }
         );
-        println!("{}Data: {:?}", indent, self.data);
+        // println!("{}Data: {:?}", indent, self.data);
         for (i, child) in self.children.iter().enumerate() {
             if let Some(item) = child {
                 println!("{}-> 4^{} to:", indent, i);
@@ -156,7 +169,10 @@ impl<T: Debug> InvertedIndexItem<T> {
 }
 
 #[derive(Clone)]
-pub struct InvertedIndex<T> {
+pub struct InvertedIndex<T>
+where
+    T: Clone + 'static,
+{
     pub root: SharedInvertedIndexItem<T>,
 }
 
@@ -173,13 +189,13 @@ where
 
     /// Retrieves a value from the index at the specified dimension index.
     /// Delegates to the root node's `get` method.
-    pub fn get(&self, dim_index: u32, vector_id: usize) -> Option<T> {
+    pub fn get(&self, dim_index: u32, vector_id: u32) -> Option<T> {
         self.root.read().unwrap().get(dim_index, vector_id)
     }
 
     /// Inserts a value into the index at the specified dimension index.
     /// Delegates to the root node's `insert` method.
-    pub fn insert(&self, dim_index: u32, value: T, vector_id: usize) -> Result<(), String> {
+    pub fn insert(&self, dim_index: u32, value: T, vector_id: u32) -> Result<(), String> {
         let path = calculate_path(dim_index, self.root.read().unwrap().dim_index);
         println!("Path: {:?}", path);
         let node = InvertedIndexItem::find_or_create_node(self.root.clone(), &path);
@@ -187,7 +203,10 @@ where
     }
 }
 
-impl<T: Debug> InvertedIndex<T> {
+impl<T> InvertedIndex<T>
+where
+    T: Clone + 'static + Debug,
+{
     /// Prints the tree structure of the entire index.
     /// Delegates to the root node's `print_tree` method.
     pub fn print_tree(&self) {
@@ -198,7 +217,7 @@ impl<T: Debug> InvertedIndex<T> {
 impl InvertedIndex<u8> {
     /// Adds a sparse vector to the index.
     /// Iterates over the vector and inserts non-zero values.
-    pub fn add_sparse_vector(&self, vector: Vec<u8>, vector_id: usize) -> Result<(), String> {
+    pub fn add_sparse_vector(&self, vector: Vec<u8>, vector_id: u32) -> Result<(), String> {
         for (dim_index, &value) in vector.iter().enumerate() {
             if value != 0 {
                 println!("Inserting value {} at dimension index {}", value, dim_index);
@@ -206,54 +225,6 @@ impl InvertedIndex<u8> {
             }
         }
         Ok(())
-    }
-}
-
-pub struct InvertedIndexIterator<T> {
-    stack: Vec<(SharedInvertedIndexItem<T>, usize, usize)>,
-}
-
-impl<T> Iterator for InvertedIndexIterator<T>
-where
-    T: Copy,
-{
-    type Item = (u32, T, usize);
-
-    /// Iterates over the index in depth-first order.
-    fn next(&mut self) -> Option<Self::Item> {
-        while let Some((shared_node, node_data_index, child_index)) = self.stack.pop() {
-            let node = shared_node.read().unwrap();
-            if node_data_index < node.data.len() {
-                // iterate node values
-                let (value, vector_id) = node.data[node_data_index];
-                self.stack
-                    .push((shared_node.clone(), node_data_index + 1, child_index));
-                return Some((node.dim_index, value, vector_id));
-            } else {
-                // iterate children
-                if let Some(Some(child)) = node.children.get(child_index) {
-                    self.stack
-                        .push((shared_node.clone(), node_data_index, child_index + 1));
-                    self.stack.push((child.clone(), 0, 0));
-                }
-            }
-        }
-        None
-    }
-}
-
-impl<T> IntoIterator for InvertedIndex<T>
-where
-    T: Copy,
-{
-    type Item = (u32, T, usize);
-
-    type IntoIter = InvertedIndexIterator<T>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        InvertedIndexIterator {
-            stack: vec![(self.root.clone(), 0, 0)],
-        }
     }
 }
 
@@ -298,22 +269,17 @@ mod test {
         println!("\nFinal Inverted Index structure:");
         inverted_index.print_tree();
 
-        let values: Vec<(u32, u8, usize)> = inverted_index.clone().into_iter().collect();
-        assert_eq!(values.len(), 9);
-        assert_eq!(
-            values,
-            vec![
-                (0, 1, 1),
-                (1, 15, 0),
-                (2, 23, 1),
-                (4, 27, 0),
-                (5, 38, 1),
-                (6, 31, 0),
-                (7, 45, 1),
-                (9, 42, 0),
-                (9, 56, 1)
-            ]
-        );
+        // Look up using dimension index and vector ID
+        assert_eq!(inverted_index.get(1, 0), Some(15));
+        assert_eq!(inverted_index.get(4, 0), Some(27));
+        assert_eq!(inverted_index.get(6, 0), Some(31));
+        assert_eq!(inverted_index.get(9, 0), Some(42));
+
+        assert_eq!(inverted_index.get(0, 1), Some(1));
+        assert_eq!(inverted_index.get(2, 1), Some(23));
+        assert_eq!(inverted_index.get(5, 1), Some(38));
+        assert_eq!(inverted_index.get(7, 1), Some(45));
+        assert_eq!(inverted_index.get(9, 1), Some(56));
     }
 
     // Custom type for generating sparse vectors
@@ -343,38 +309,23 @@ mod test {
             .collect()
     }
 
-    /// Property-based test: Verifies insertion correctness and vector ID preservation.
-    #[quickcheck]
-    fn prop_insertion_and_id_correctness(vectors: Vec<SparseVector>) -> bool {
-        let index = InvertedIndex::new();
-        let mut expected = Vec::new();
-
-        for (id, SparseVector(vec)) in vectors.iter().enumerate() {
-            index.add_sparse_vector(vec.clone(), id).unwrap();
-            expected.push(vector_to_hashmap(vec));
-        }
-
-        // Verify all inserted elements are present and associated with correct vector IDs
-        expected.iter().enumerate().all(|(id, map)| {
-            map.iter()
-                .all(|(&dim, &value)| index.get(dim as u32, id).map_or(false, |v| v == value))
-        })
-    }
-
     /// Property-based test: Verifies handling of multiple vectors.
+    /// Property-based test: Verifies insertion correctness and vector ID preservation.
     #[quickcheck]
     fn prop_multiple_vector_handling(vectors: Vec<SparseVector>) -> bool {
         let index = InvertedIndex::new();
 
         for (id, SparseVector(vec)) in vectors.iter().enumerate() {
-            index.add_sparse_vector(vec.clone(), id).unwrap();
+            index.add_sparse_vector(vec.clone(), id as u32).unwrap();
         }
 
         // Verify each vector is stored separately
         vectors.iter().enumerate().all(|(id, SparseVector(vec))| {
-            vector_to_hashmap(vec)
-                .iter()
-                .all(|(&dim, &value)| index.get(dim as u32, id).map_or(false, |v| v == value))
+            vector_to_hashmap(vec).iter().all(|(&dim, &value)| {
+                index
+                    .get(dim as u32, id as u32)
+                    .map_or(false, |v| v == value)
+            })
         })
     }
 
