@@ -17,6 +17,7 @@ use std::{fs::File, io::BufReader};
 
 use crate::api::auth::{auth_module, authentication_middleware::AuthenticationMiddleware};
 use crate::api::vectordb::collections::collections_module;
+use crate::api::vectordb::indexes::indexes_module;
 use crate::models::types::*;
 use crate::{api, WaCustomError};
 use std::env;
@@ -77,6 +78,7 @@ pub async fn run_actix_server() -> std::io::Result<()> {
                 web::scope("/vectordb")
                     .wrap(AuthenticationMiddleware)
                     .service(collections_module())
+                    .service(indexes_module())
                     .service(web::resource("/upsert").route(web::post().to(api::vectordb::upsert)))
                     .service(web::resource("/search").route(web::post().to(api::vectordb::search)))
                     .service(web::resource("/fetch").route(web::post().to(api::vectordb::fetch)))
