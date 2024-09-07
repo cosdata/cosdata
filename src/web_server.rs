@@ -4,7 +4,7 @@ use actix_web::{
     dev::ServiceRequest, middleware, web, App, Error, HttpRequest, HttpResponse, HttpServer,
 };
 use actix_web_httpauth::{extractors::bearer::BearerAuth, middleware::HttpAuthentication};
-use cosdata::config_loader::{load_config, Host, ServerMode, Ssl};
+use crate::config_loader::{load_config, Host, ServerMode, Ssl};
 use dashmap::DashMap;
 use lmdb::Environment;
 use rustls::{pki_types::PrivateKeyDer, ServerConfig};
