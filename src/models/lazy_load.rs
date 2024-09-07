@@ -1,6 +1,6 @@
 use super::identity_collections::{Identifiable, IdentityMap, IdentityMapKey, IdentitySet};
 use super::serializer::CustomSerialize;
-use super::types::{FileOffset, MergedNode, STM};
+use super::types::{FileOffset, STM};
 use super::versioning::*;
 use arcshift::ArcShift;
 use std::fmt;
@@ -209,7 +209,7 @@ impl<T: Clone + 'static> LazyItem<T> {
         matches!(self, Self::Invalid)
     }
 
-    pub fn get_data(&self) -> Option<ArcShift<T>> {
+    pub fn get_lazy_data(&self) -> Option<ArcShift<T>> {
         if let Self::Valid { data, .. } = self {
             return data.clone();
         }
