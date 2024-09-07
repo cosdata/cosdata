@@ -113,7 +113,10 @@ pub async fn init_vector_store(
         nodes.push(nn.clone());
     }
     // TODO: include db name in the path
-    let bufmans = Arc::new(BufferManagerFactory::new(Path::new(".").into()));
+    let bufmans = Arc::new(BufferManagerFactory::new(
+        Path::new(".").into(),
+        |root, ver| root.join(format!("{}.index", **ver)),
+    ));
     for (l, nn) in nodes.iter_mut().enumerate() {
         match persist_node_update_loc(bufmans.clone(), &mut nn.item) {
             Ok(_) => (),
@@ -223,7 +226,10 @@ pub fn run_upload(
 
     println!("run_upload 333");
     // TODO: include db name in the path
-    let bufmans = Arc::new(BufferManagerFactory::new(Path::new(".").into()));
+    let bufmans = Arc::new(BufferManagerFactory::new(
+        Path::new(".").into(),
+        |root, ver| root.join(format!("{}.index", *ver)),
+    ));
     match auto_commit_transaction(vec_store.clone(), bufmans) {
         Ok(_) => (),
         Err(e) => {

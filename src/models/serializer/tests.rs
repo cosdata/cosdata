@@ -27,7 +27,10 @@ fn setup_test(
     TempDir,
 ) {
     let dir = tempdir().unwrap();
-    let bufmans = Arc::new(BufferManagerFactory::new(dir.as_ref().into()));
+    let bufmans = Arc::new(BufferManagerFactory::new(
+        dir.as_ref().into(),
+        |root, ver| root.join(format!("{}.index", **ver)),
+    ));
     let cache = get_cache(bufmans.clone());
     let bufman = bufmans.get(root_version).unwrap();
     let cursor = bufman.open_cursor().unwrap();
@@ -342,7 +345,10 @@ fn test_lazy_item_with_versions_serialization() {
     let node_v2 = LazyItem::new(v2_hash, MergedNode::new(HNSWLevel(2)));
     node_v0.add_version(vcs, 2, node_v2).unwrap();
 
-    let bufmans = Arc::new(BufferManagerFactory::new(temp_dir.as_ref().into()));
+    let bufmans = Arc::new(BufferManagerFactory::new(
+        temp_dir.as_ref().into(),
+        |root, ver| root.join(format!("{}.index", **ver)),
+    ));
     let cache = get_cache(bufmans.clone());
     let bufman = bufmans.get(&v0_hash).unwrap();
     let cursor = bufman.open_cursor().unwrap();
@@ -616,7 +622,10 @@ fn test_lazy_item_with_versions_serialization_and_validation() {
     let v0_hash = vcs.generate_hash("main", Version::from(0)).unwrap();
     let root = LazyItem::new(v0_hash, MergedNode::new(HNSWLevel(0)));
 
-    let bufmans = Arc::new(BufferManagerFactory::new(temp_dir.as_ref().into()));
+    let bufmans = Arc::new(BufferManagerFactory::new(
+        temp_dir.as_ref().into(),
+        |root, ver| root.join(format!("{}.index", **ver)),
+    ));
     let cache = get_cache(bufmans.clone());
     let bufman = bufmans.get(&v0_hash).unwrap();
     let cursor = bufman.open_cursor().unwrap();
@@ -664,7 +673,10 @@ fn test_lazy_item_with_versions_multiple_serialization() {
     let v0_hash = vcs.generate_hash("main", Version::from(0)).unwrap();
     let root = LazyItem::new(v0_hash, MergedNode::new(HNSWLevel(0)));
 
-    let bufmans = Arc::new(BufferManagerFactory::new(temp_dir.as_ref().into()));
+    let bufmans = Arc::new(BufferManagerFactory::new(
+        temp_dir.as_ref().into(),
+        |root, ver| root.join(format!("{}.index", **ver)),
+    ));
     let cache = get_cache(bufmans.clone());
     let bufman = bufmans.get(&v0_hash).unwrap();
     let cursor = bufman.open_cursor().unwrap();

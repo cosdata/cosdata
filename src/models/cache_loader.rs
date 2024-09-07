@@ -157,7 +157,10 @@ impl NodeRegistry {
 
 pub fn load_cache() {
     // TODO: include db name in the path
-    let bufmans = Arc::new(BufferManagerFactory::new(Path::new(".").into()));
+    let bufmans = Arc::new(BufferManagerFactory::new(
+        Path::new(".").into(),
+        |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+    ));
 
     let file_index = FileIndex::Valid {
         offset: FileOffset(0),

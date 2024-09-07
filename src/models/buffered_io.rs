@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 
@@ -81,13 +81,15 @@ impl Cursor {
 pub struct BufferManagerFactory {
     bufmans: Arc<DashMap<Hash, Arc<BufferManager>>>,
     root_path: Arc<Path>,
+    path_function: fn(&Path, &Hash) -> PathBuf,
 }
 
 impl BufferManagerFactory {
-    pub fn new(root_path: Arc<Path>) -> Self {
+    pub fn new(root_path: Arc<Path>, path_function: fn(&Path, &Hash) -> PathBuf) -> Self {
         Self {
             bufmans: Arc::new(DashMap::new()),
             root_path,
+            path_function,
         }
     }
 
@@ -96,7 +98,7 @@ impl BufferManagerFactory {
             return Ok(bufman.clone());
         }
 
-        let path = self.root_path.join(format!("{}.index", **hash));
+        let path = (self.path_function)(&self.root_path, hash);
 
         let file = OpenOptions::new()
             .read(true)
