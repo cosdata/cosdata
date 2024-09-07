@@ -1,7 +1,6 @@
 use crate::config_loader::Config;
 use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::common::*;
-use crate::models::custom_buffered_writer::CustomBufferedWriter;
 use crate::models::file_persist::*;
 use crate::models::lazy_load::*;
 use crate::models::meta_persist::*;
@@ -18,11 +17,8 @@ use rand::Rng;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
 use std::array::TryFromSliceError;
-use std::cell::RefCell;
 use std::fs::OpenOptions;
-use std::io::Write;
 use std::path::Path;
-use std::rc::Rc;
 use std::sync::Arc;
 
 pub async fn init_vector_store(
@@ -38,6 +34,30 @@ pub async fn init_vector_store(
 
     let quantization_metric = Arc::new(QuantizationMetric::Scalar);
     let storage_type = StorageType::UnsignedByte;
+    let ain_env = get_app_env().map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+    let denv = ain_env.persist.clone();
+
+    let metadata_db = denv
+        .create_db(Some("metadata"), DatabaseFlags::empty())
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+    let embeddings_db = denv
+        .create_db(Some("embeddings"), DatabaseFlags::empty())
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+    let vcs = Arc::new(
+        VersionControl::new(denv.clone())
+            .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?,
+    );
+
+    let lmdb = MetaDb {
+        env: denv.clone(),
+        metadata_db: Arc::new(metadata_db),
+        embeddings_db: Arc::new(embeddings_db),
+    };
+
+    let hash = store_current_version(&lmdb, vcs.clone(), "main", 0)?;
 
     let min = lower_bound.unwrap_or(-1.0);
     let max = upper_bound.unwrap_or(1.0);
@@ -64,17 +84,6 @@ pub async fn init_vector_store(
             .expect("Failed to open file for writing"),
     );
 
-    let ver_file = Rc::new(RefCell::new(
-        OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("0.index")
-            .expect("Failed to open file for writing"),
-    ));
-
-    let mut writer =
-        CustomBufferedWriter::new(ver_file.clone()).expect("Failed opening custom buffer");
-
     let mut root: LazyItemRef<MergedNode> = LazyItemRef::new_invalid();
     let mut prev: LazyItemRef<MergedNode> = LazyItemRef::new_invalid();
 
@@ -94,8 +103,8 @@ pub async fn init_vector_store(
         });
 
         // TODO: Initialize with appropriate version ID
-        let lazy_node = LazyItem::from_arcshift(0.into(), current_node.clone());
-        let nn = LazyItemRef::from_arcshift(0.into(), current_node.clone());
+        let lazy_node = LazyItem::from_arcshift(hash, current_node.clone());
+        let nn = LazyItemRef::from_arcshift(hash, current_node.clone());
 
         if let Some(prev_node) = prev.item.get().get_data() {
             current_node
@@ -126,38 +135,12 @@ pub async fn init_vector_store(
         };
     }
 
-    writer
-        .flush()
-        .expect("Final Custom Buffered Writer flush failed ");
+    bufmans.flush_all()?;
     // ---------------------------
     // -- TODO level entry ratio
     // ---------------------------
     let factor_levels = 10.0;
     let lp = Arc::new(generate_tuples(factor_levels, max_cache_level));
-    let ain_env = get_app_env().map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-
-    let denv = ain_env.persist.clone();
-
-    let metadata_db = denv
-        .create_db(Some("metadata"), DatabaseFlags::empty())
-        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-
-    let embeddings_db = denv
-        .create_db(Some("embeddings"), DatabaseFlags::empty())
-        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-
-    let vcs = Arc::new(
-        VersionControl::new(denv.clone())
-            .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?,
-    );
-
-    let lmdb = MetaDb {
-        env: denv.clone(),
-        metadata_db: Arc::new(metadata_db),
-        embeddings_db: Arc::new(embeddings_db),
-    };
-
-    let hash = store_current_version(&lmdb, vcs.clone(), "main", 0)?;
 
     let vec_store = Arc::new(VectorStore::new(
         exec_queue_nodes,
