@@ -520,8 +520,8 @@ pub fn index_embeddings(
 
         if i == current_file_len {
             let new_bufman = bufmans.get(&next_version)?;
-            let cursor = bufman.open_cursor()?;
-            current_file_len = bufman.seek_with_cursor(cursor, SeekFrom::End(0))? as u32;
+            let cursor = new_bufman.open_cursor()?;
+            current_file_len = new_bufman.seek_with_cursor(cursor, SeekFrom::End(0))? as u32;
             if current_file_len == 0 {
                 index(
                     embeddings,
@@ -532,9 +532,9 @@ pub fn index_embeddings(
                 )?;
                 break;
             }
-            bufman.seek_with_cursor(cursor, SeekFrom::Start(0))?;
+            new_bufman.seek_with_cursor(cursor, SeekFrom::Start(0))?;
             current_version = next_version;
-            next_version = Hash::from(bufman.read_u32_with_cursor(cursor)?);
+            next_version = Hash::from(new_bufman.read_u32_with_cursor(cursor)?);
             bufman = new_bufman;
             bufman.close_cursor(cursor)?;
             i = 4;
