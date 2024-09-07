@@ -367,7 +367,7 @@ pub struct VectorStore {
     pub quant_dim: usize,
     pub prop_file: Arc<File>,
     pub lmdb: MetaDb,
-    pub current_version: ArcShift<Option<Hash>>,
+    pub current_version: ArcShift<Hash>,
     pub current_open_transaction: ArcShift<Option<Hash>>,
     pub quantization_metric: Arc<QuantizationMetric>,
     pub distance_metric: Arc<DistanceMetric>,
@@ -385,7 +385,7 @@ impl VectorStore {
         quant_dim: usize,
         prop_file: Arc<File>,
         lmdb: MetaDb,
-        current_version: ArcShift<Option<Hash>>,
+        current_version: ArcShift<Hash>,
         quantization_metric: Arc<QuantizationMetric>,
         distance_metric: Arc<DistanceMetric>,
         storage_type: StorageType,
@@ -409,13 +409,13 @@ impl VectorStore {
         }
     }
     // Get method
-    pub fn get_current_version(&self) -> Option<Hash> {
+    pub fn get_current_version(&self) -> Hash {
         let mut arc = self.current_version.clone();
         arc.get().clone()
     }
 
     // Set method
-    pub fn set_current_version(&self, new_version: Option<Hash>) {
+    pub fn set_current_version(&self, new_version: Hash) {
         let mut arc = self.current_version.clone();
         arc.update(new_version);
     }

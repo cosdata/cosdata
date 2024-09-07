@@ -25,7 +25,7 @@ pub(crate) async fn commit(path_data: web::Path<(String, u32)>) -> HttpResponse 
     vec_store
         .current_version
         .clone()
-        .update(current_open_transaction.clone());
+        .update(current_transaction_id.clone());
     current_open_transaction_arc.update(None);
 
     HttpResponse::Ok().finish()

@@ -168,7 +168,7 @@ pub async fn init_vector_store(
         (size / 32) as usize,
         prop_file,
         lmdb,
-        ArcShift::new(Some(hash)),
+        ArcShift::new(hash),
         Arc::new(QuantizationMetric::Scalar),
         Arc::new(DistanceMetric::Cosine),
         StorageType::UnsignedByte,
