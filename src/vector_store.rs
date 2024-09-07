@@ -814,8 +814,8 @@ fn insert_node_create_edges(
     }
     println!("insert node create edges, queuing nodes");
     if let Some(parent) = parent {
-        lz_item.get_data().unwrap().set_parent(parent.clone());
-        parent.get_data().unwrap().set_child(lz_item.clone());
+        lz_item.get_lazy_data().unwrap().set_parent(parent.clone());
+        parent.get_lazy_data().unwrap().set_child(lz_item.clone());
     }
     queue_node_prop_exec(lz_item.clone(), vec_store.prop_file.clone(), vec_store)?;
 
@@ -873,7 +873,7 @@ fn traverse_find_nearest(
     let node = node_arc.get();
 
     for (index, nref) in node.neighbors.iter().enumerate() {
-        if let Some(mut neighbor_arc) = nref.1.get_data() {
+        if let Some(mut neighbor_arc) = nref.1.get_lazy_data() {
             let neighbor = neighbor_arc.get();
             let mut prop_arc = neighbor.prop.clone();
             let prop_state = prop_arc.get();
