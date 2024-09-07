@@ -77,8 +77,10 @@ pub async fn run_actix_server() -> std::io::Result<()> {
             .service(
                 web::scope("/vectordb")
                     .wrap(AuthenticationMiddleware)
-                    .service(collections_module())
+                    // vectors module must be registereb befor collections module
+                    // as its scope path is more specific than collections module
                     .service(vectors_module())
+                    .service(collections_module())
                     .service(web::resource("/upsert").route(web::post().to(api::vectordb::upsert)))
                     .service(web::resource("/search").route(web::post().to(api::vectordb::search)))
                     .service(web::resource("/fetch").route(web::post().to(api::vectordb::fetch)))
