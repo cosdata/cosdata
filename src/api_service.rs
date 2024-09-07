@@ -1,4 +1,5 @@
 use crate::config_loader::Config;
+use crate::models::buffered_io::BufferManager;
 use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::common::*;
 use crate::models::file_persist::*;
@@ -168,7 +169,22 @@ pub fn run_upload(
     vec_store: Arc<VectorStore>,
     vecxx: Vec<(VectorIdValue, Vec<f32>)>,
     config: web::Data<Config>,
-) -> () {
+) {
+    let current_version = vec_store.get_current_version();
+    let next_version = vec_store.vcs.add_next_version("main").expect("LMDB error");
+    vec_store.set_current_version(next_version);
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(format!("{}.vec_raw", *current_version))
+        .expect("Failed to open file");
+    let bufman = Arc::new(BufferManager::new(file).expect("Failed to create BufferManager"));
+    let cursor = bufman.open_cursor().expect("Failed to open cursor");
+    bufman
+        .write_u32_with_cursor(cursor, *next_version)
+        .expect("Failed to write next_version");
+    bufman.close_cursor(cursor).expect("Failed to close cursor");
     vecxx.into_par_iter().for_each(|(id, vec)| {
         let hash_vec = convert_value(id);
         let vec_emb = RawVectorEmbedding {
@@ -176,8 +192,10 @@ pub fn run_upload(
             hash_vec,
         };
 
-        insert_embedding(vec_store.clone(), &vec_emb).expect("Failed to inert embedding to LMDB");
+        insert_embedding(bufman.clone(), vec_store.clone(), &vec_emb, current_version)
+            .expect("Failed to inert embedding to LMDB");
     });
+    bufman.flush().expect("Failed to flush");
 
     let env = vec_store.lmdb.env.clone();
     let metadata_db = vec_store.lmdb.metadata_db.clone();
@@ -202,9 +220,6 @@ pub fn run_upload(
             .expect("Failed to index embeddings");
     }
 
-    let _new_ver = vec_store.vcs.add_next_version("main").expect("LMDB error");
-
-    println!("run_upload 333");
     // TODO: include db name in the path
     let bufmans = Arc::new(BufferManagerFactory::new(
         Path::new(".").into(),

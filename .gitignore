@@ -14,5 +14,5 @@ index.json
 *~
 _mdb
 *.index
-vec_raw.*
+*.vec_raw
 venv
