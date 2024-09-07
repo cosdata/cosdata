@@ -1,25 +1,15 @@
+use crate::api;
+use crate::api::auth::{auth_module, authentication_middleware::AuthenticationMiddleware};
+use crate::api::vectordb::collections::collections_module;
+use crate::config_loader::{load_config, ServerMode, Ssl};
 use actix_cors::Cors;
 use actix_web::web::Data;
-use actix_web::{
-    dev::ServiceRequest, middleware, web, App, Error, HttpRequest, HttpResponse, HttpServer,
-};
-use actix_web_httpauth::{extractors::bearer::BearerAuth, middleware::HttpAuthentication};
-use cosdata::config_loader::{load_config, Host, ServerMode, Ssl};
-use dashmap::DashMap;
-use lmdb::Environment;
+use actix_web::{middleware, web, App, Error, HttpRequest, HttpResponse, HttpServer};
 use rustls::{pki_types::PrivateKeyDer, ServerConfig};
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use serde::{Deserialize, Serialize};
-use std::fs::create_dir_all;
-use std::path::Path;
-use std::sync::Arc;
-use std::{fs::File, io::BufReader};
-
-use crate::api::auth::{auth_module, authentication_middleware::AuthenticationMiddleware};
-use crate::api::vectordb::collections::collections_module;
-use crate::models::types::*;
-use crate::{api, WaCustomError};
 use std::env;
+use std::{fs::File, io::BufReader};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct MyObj {
