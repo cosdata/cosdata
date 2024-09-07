@@ -17,7 +17,7 @@ pub(crate) async fn create_vector(
         .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
 
     // error cases that happens within run_upload is not handled
-    // this method always return a successfull response with the data sent by the user
+    // this method always return a successful response with the data sent by the user
     run_upload(
         collection,
         vec![(
