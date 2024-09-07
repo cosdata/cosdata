@@ -420,9 +420,18 @@ impl VectorStore {
         arc.update(new_version);
     }
 }
+
+// Quantized vector embedding
+#[derive(Debug, Clone, PartialEq)]
+pub struct QuantizedVectorEmbedding {
+    pub quantized_vec: Arc<Storage>,
+    pub hash_vec: VectorId,
+}
+
+// Raw vector embedding
 #[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize, PartialEq)]
-pub struct VectorEmbedding {
-    pub raw_vec: Arc<Storage>,
+pub struct RawVectorEmbedding {
+    pub raw_vec: Vec<f32>,
     pub hash_vec: VectorId,
 }
 

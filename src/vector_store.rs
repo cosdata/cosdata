@@ -4,6 +4,7 @@ use crate::models::common::*;
 use crate::models::file_persist::*;
 use crate::models::lazy_load::*;
 use crate::models::types::*;
+use crate::quantization::Quantization;
 use crate::storage::Storage;
 use arcshift::ArcShift;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
@@ -24,7 +25,7 @@ use std::sync::Arc;
 
 pub fn ann_search(
     vec_store: Arc<VectorStore>,
-    vector_emb: VectorEmbedding,
+    vector_emb: QuantizedVectorEmbedding,
     cur_entry: LazyItem<MergedNode>,
     cur_level: i8,
 ) -> Result<Option<Vec<(LazyItem<MergedNode>, MetricResult)>>, WaCustomError> {
@@ -32,7 +33,7 @@ pub fn ann_search(
         return Ok(Some(vec![]));
     }
 
-    let fvec = vector_emb.raw_vec.clone();
+    let fvec = vector_emb.quantized_vec.clone();
     let mut skipm = HashSet::new();
     skipm.insert(vector_emb.hash_vec.clone());
 
@@ -233,7 +234,7 @@ fn load_neighbor_from_db(
 
 pub fn write_embedding<W: Write + Seek>(
     writer: &mut W,
-    emb: &VectorEmbedding,
+    emb: &RawVectorEmbedding,
 ) -> Result<u32, WaCustomError> {
     // TODO: select a better value for `N` (number of bytes to pre-allocate)
     let serialized = rkyv::to_bytes::<_, 256>(emb)
@@ -259,7 +260,7 @@ pub fn write_embedding<W: Write + Seek>(
 fn read_embedding<R: Read + Seek>(
     reader: &mut R,
     offset: u32,
-) -> Result<(VectorEmbedding, u32), WaCustomError> {
+) -> Result<(RawVectorEmbedding, u32), WaCustomError> {
     reader
         .seek(SeekFrom::Start(offset as u64))
         .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?;
@@ -287,7 +288,7 @@ fn read_embedding<R: Read + Seek>(
 
 pub fn insert_embedding(
     vec_store: Arc<VectorStore>,
-    emb: &VectorEmbedding,
+    emb: &RawVectorEmbedding,
 ) -> Result<(), WaCustomError> {
     let env = vec_store.lmdb.env.clone();
     let embedding_db = vec_store.lmdb.embeddings_db.clone();
@@ -411,9 +412,18 @@ pub fn index_embeddings(
             // TODO: handle the errors
             let results: Vec<()> = embeddings
                 .into_par_iter()
-                .map(|embedding| {
+                .map(|raw_emb| {
                     let lp = &vec_store.levels_prob;
                     let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
+                    let quantized_vec = Arc::new(
+                        vec_store
+                            .quantization_metric
+                            .quantize(&raw_emb.raw_vec, vec_store.storage_type),
+                    );
+                    let embedding = QuantizedVectorEmbedding {
+                        quantized_vec,
+                        hash_vec: raw_emb.hash_vec,
+                    };
 
                     index_embedding(
                         vec_store.clone(),
@@ -479,7 +489,7 @@ pub fn index_embeddings(
 pub fn index_embedding(
     vec_store: Arc<VectorStore>,
     parent: Option<LazyItem<MergedNode>>,
-    vector_emb: VectorEmbedding,
+    vector_emb: QuantizedVectorEmbedding,
     cur_entry: LazyItem<MergedNode>,
     cur_level: i8,
     max_insert_level: i8,
@@ -488,7 +498,7 @@ pub fn index_embedding(
         return Ok(());
     }
 
-    let fvec = vector_emb.raw_vec.clone();
+    let fvec = vector_emb.quantized_vec.clone();
     let mut skipm = HashSet::new();
     skipm.insert(vector_emb.hash_vec.clone());
 
@@ -874,27 +884,20 @@ fn traverse_find_nearest(
 
 #[cfg(test)]
 mod tests {
-    use std::{io::Cursor, sync::Arc};
-
+    use super::{read_embedding, write_embedding, RawVectorEmbedding};
+    use crate::models::types::VectorId;
     use rand::{distributions::Uniform, rngs::ThreadRng, thread_rng, Rng};
+    use std::io::Cursor;
 
-    use crate::{
-        models::types::{VectorEmbedding, VectorId},
-        quantization::{scalar::ScalarQuantization, Quantization, StorageType},
-    };
-
-    use super::{read_embedding, write_embedding};
-
-    fn get_random_embedding(rng: &mut ThreadRng) -> VectorEmbedding {
+    fn get_random_embedding(rng: &mut ThreadRng) -> RawVectorEmbedding {
         let range = Uniform::new(-1.0, 1.0);
 
-        let vector: Vec<f32> = (0..rng.gen_range(100..200))
+        let raw_vec: Vec<f32> = (0..rng.gen_range(100..200))
             .into_iter()
             .map(|_| rng.sample(&range))
             .collect();
-        let raw_vec = Arc::new(ScalarQuantization.quantize(&vector, StorageType::UnsignedByte));
 
-        VectorEmbedding {
+        RawVectorEmbedding {
             raw_vec,
             hash_vec: VectorId::Int(rng.gen()),
         }
@@ -917,8 +920,7 @@ mod tests {
     #[test]
     fn test_embeddings_serialization() {
         let mut rng = thread_rng();
-        let embeddings: Vec<VectorEmbedding> =
-            (0..20).map(|_| get_random_embedding(&mut rng)).collect();
+        let embeddings: Vec<_> = (0..20).map(|_| get_random_embedding(&mut rng)).collect();
 
         let mut writer = Cursor::new(Vec::new());
 

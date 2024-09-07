@@ -27,6 +27,7 @@ impl NodeRegistry {
             bufmans,
         }
     }
+
     pub fn get_object<F>(
         self: Arc<Self>,
         file_index: FileIndex,
@@ -159,7 +160,7 @@ pub fn load_cache() {
     // TODO: include db name in the path
     let bufmans = Arc::new(BufferManagerFactory::new(
         Path::new(".").into(),
-        |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+        |root, ver| root.join(format!("{}.index", **ver)),
     ));
 
     let file_index = FileIndex::Valid {

@@ -188,11 +188,8 @@ pub fn run_upload(
 ) -> () {
     vecxx.into_par_iter().for_each(|(id, vec)| {
         let hash_vec = convert_value(id);
-        let storage = vec_store
-            .quantization_metric
-            .quantize(&vec, vec_store.storage_type);
-        let vec_emb = VectorEmbedding {
-            raw_vec: Arc::new(storage),
+        let vec_emb = RawVectorEmbedding {
+            raw_vec: vec,
             hash_vec,
         };
 
@@ -228,7 +225,7 @@ pub fn run_upload(
     // TODO: include db name in the path
     let bufmans = Arc::new(BufferManagerFactory::new(
         Path::new(".").into(),
-        |root, ver| root.join(format!("{}.index", *ver)),
+        |root, ver| root.join(format!("{}.index", **ver)),
     ));
     match auto_commit_transaction(vec_store.clone(), bufmans) {
         Ok(_) => (),
@@ -249,8 +246,8 @@ pub async fn ann_vector_query(
         .quantization_metric
         .quantize(&query, vector_store.storage_type);
 
-    let vec_emb = VectorEmbedding {
-        raw_vec: Arc::new(vector_list.clone()),
+    let vec_emb = QuantizedVectorEmbedding {
+        quantized_vec: Arc::new(vector_list.clone()),
         hash_vec: vec_hash.clone(),
     };
 
