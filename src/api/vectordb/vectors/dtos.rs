@@ -1,14 +1,17 @@
 use serde::{Deserialize, Serialize};
 
+use crate::models::rpc::VectorIdValue;
+
 #[derive(Deserialize)]
 pub(crate) struct CreateVectorDto {
-    pub id: String,
-    pub values: Vec<u8>,
+    pub id: VectorIdValue,
+    pub values: Vec<f32>,
 }
 
+
 #[derive(Serialize)]
-pub(crate) struct VectorResponseDto {
-    pub id: String,
-    pub values: Vec<u8>,
-    pub created_at: String,
+pub(crate) struct CreateVectorResponseDto {
+    pub id: VectorIdValue,
+    pub values: Vec<f32>,
+    // pub created_at: String
 }
