@@ -41,7 +41,7 @@ pub fn write_node_to_file(
     file_index: Option<FileIndex>,
 ) -> Result<FileIndex, WaCustomError> {
     let mut node_arc = lazy_item
-        .get_data()
+        .get_lazy_data()
         .ok_or(WaCustomError::LazyLoadingError("node in null".to_string()))?;
     let node = node_arc.get();
     let version = match file_index {
