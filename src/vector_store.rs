@@ -421,12 +421,12 @@ pub fn index_embeddings(
 
     txn.abort();
 
-    let mut index = |embeddings: Vec<RawVectorEmbedding>,
+    let mut index = |embeddings: Vec<(RawVectorEmbedding, Hash)>,
                      last_embedding_offset: EmbeddingOffset|
      -> Result<(), WaCustomError> {
         let results: Vec<()> = embeddings
             .into_par_iter()
-            .map(|raw_emb| {
+            .map(|(raw_emb, version)| {
                 let lp = &vec_store.levels_prob;
                 let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
                 let quantized_vec = Arc::new(
@@ -446,6 +446,7 @@ pub fn index_embeddings(
                     vec_store.root_vec.item.clone().get().clone(),
                     vec_store.max_cache_level.try_into().unwrap(),
                     iv.try_into().unwrap(),
+                    version,
                 )
                 .expect("index_embedding failed");
             })
@@ -515,7 +516,7 @@ pub fn index_embeddings(
 
     loop {
         let (embedding, next) = read_embedding(bufman.clone(), i)?;
-        embeddings.push(embedding);
+        embeddings.push((embedding, current_version));
         i = next;
 
         if i == current_file_len {
@@ -562,6 +563,7 @@ pub fn index_embedding(
     cur_entry: LazyItem<MergedNode>,
     cur_level: i8,
     max_insert_level: i8,
+    version: Hash,
 ) -> Result<(), WaCustomError> {
     if cur_level == -1 {
         return Ok(());
@@ -652,6 +654,7 @@ pub fn index_embedding(
             vector_emb.hash_vec.clone(),
             z,
             cur_level,
+            version,
         )
         .expect("Failed insert_node_create_edges");
         index_embedding(
@@ -661,6 +664,7 @@ pub fn index_embedding(
             z_clone[0].clone(),
             cur_level - 1,
             max_insert_level,
+            version,
         )?;
     } else {
         index_embedding(
@@ -670,6 +674,7 @@ pub fn index_embedding(
             z_clone[0].clone(),
             cur_level - 1,
             max_insert_level,
+            version,
         )?;
     }
 
@@ -773,6 +778,7 @@ fn insert_node_create_edges(
     hs: VectorId,
     nbs: Vec<(LazyItem<MergedNode>, MetricResult)>,
     cur_level: i8,
+    version: Hash,
 ) -> Result<LazyItem<MergedNode>, WaCustomError> {
     let node_prop = NodeProp {
         id: hs.clone(),
@@ -784,7 +790,7 @@ fn insert_node_create_edges(
 
     nn.get().add_ready_neighbors(nbs.clone());
     // TODO: Initialize with appropriate version ID
-    let lz_item = LazyItem::from_arcshift(0.into(), nn.clone());
+    let lz_item = LazyItem::from_arcshift(version, nn.clone());
 
     for (nbr1, cs) in nbs.into_iter() {
         if let LazyItem::Valid {
