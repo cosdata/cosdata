@@ -120,8 +120,8 @@ impl VersionHash {
     fn serialize(&self) -> Vec<u8> {
         let mut result = Vec::with_capacity(16);
 
-        result.extend_from_slice(&self.branch.to_be_bytes());
-        result.extend_from_slice(&self.version.to_be_bytes());
+        result.extend_from_slice(&self.branch.to_le_bytes());
+        result.extend_from_slice(&self.version.to_le_bytes());
         result.extend_from_slice(&self.timestamp.to_le_bytes());
 
         result
@@ -129,11 +129,11 @@ impl VersionHash {
 
     fn deserialize(bytes: &[u8]) -> Result<Self, &'static str> {
         if bytes.len() != 16 {
-            return Err("Input must be exactly 12 bytes");
+            return Err("Input must be exactly 16 bytes");
         }
 
-        let branch = u64::from_be_bytes(bytes[0..8].try_into().unwrap());
-        let version = u32::from_be_bytes(bytes[8..12].try_into().unwrap());
+        let branch = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
+        let version = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
         let timestamp = u32::from_le_bytes(bytes[12..16].try_into().unwrap());
 
         Ok(VersionHash {
@@ -159,13 +159,13 @@ impl BranchInfo {
         let mut result = Vec::with_capacity(16 + name_bytes.len());
 
         // Serialize current_version
-        result.extend_from_slice(&self.current_version.to_be_bytes());
+        result.extend_from_slice(&self.current_version.to_le_bytes());
 
         // Serialize parent_branch
-        result.extend_from_slice(&self.parent_branch.to_be_bytes());
+        result.extend_from_slice(&self.parent_branch.to_le_bytes());
 
         // Serialize parent_version
-        result.extend_from_slice(&self.parent_version.to_be_bytes());
+        result.extend_from_slice(&self.parent_version.to_le_bytes());
 
         // Serialize branch_name
         result.extend_from_slice(name_bytes);
@@ -179,13 +179,13 @@ impl BranchInfo {
         }
 
         // Deserialize current_version
-        let current_version = Version(u32::from_be_bytes(bytes[0..4].try_into().unwrap()));
+        let current_version = Version(u32::from_le_bytes(bytes[0..4].try_into().unwrap()));
 
         // Deserialize parent_branch
-        let parent_branch = BranchId(u64::from_be_bytes(bytes[4..12].try_into().unwrap()));
+        let parent_branch = BranchId(u64::from_le_bytes(bytes[4..12].try_into().unwrap()));
 
         // Deserialize parent_version
-        let parent_version = Version(u32::from_be_bytes(bytes[12..16].try_into().unwrap()));
+        let parent_version = Version(u32::from_le_bytes(bytes[12..16].try_into().unwrap()));
 
         let branch_name =
             String::from_utf8(bytes[16..].to_vec()).map_err(|_| "Invalid UTF-8 in branch name")?;
