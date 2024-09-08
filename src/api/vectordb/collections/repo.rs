@@ -19,7 +19,9 @@ pub(crate) async fn create_vector_store(
     result.map_err(|e| CollectionsError::FailedToCreateCollection(e.to_string()))
 }
 
-pub(crate) fn get_vector_store_by_name(name: &str) -> Result<Arc<VectorStore>, CollectionsError> {
+pub(crate) async fn get_vector_store_by_name(
+    name: &str,
+) -> Result<Arc<VectorStore>, CollectionsError> {
     let env = match get_app_env() {
         Ok(env) => env,
         Err(_) => return Err(CollectionsError::FailedToGetAppEnv),

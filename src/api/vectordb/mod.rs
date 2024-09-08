@@ -1,4 +1,5 @@
 pub(crate) mod collections;
+pub(crate) mod vectors;
 mod fetch;
 mod search;
 mod upsert;

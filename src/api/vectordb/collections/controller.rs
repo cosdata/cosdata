@@ -26,7 +26,7 @@ pub(crate) async fn create_collection(
 }
 
 pub(crate) async fn get_collection_by_id(collection_id: web::Path<String>) -> Result<HttpResponse> {
-    let collection = service::get_collection_by_id(&collection_id)?;
+    let collection = service::get_collection_by_id(&collection_id).await?;
     Ok(HttpResponse::Ok().json(FindCollectionDto {
         id: collection.database_name.clone(),
         dimensions: collection.quant_dim,
