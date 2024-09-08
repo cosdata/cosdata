@@ -3,7 +3,7 @@ mod controller;
 mod dtos;
 mod error;
 mod repo;
-pub(crate) mod service;
+mod service;
 
 pub(crate) fn collections_module() -> Scope {
     let collections_module = web::scope("/collections")
