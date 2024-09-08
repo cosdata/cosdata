@@ -20,9 +20,9 @@ pub(crate) async fn create_collection(
     repo::create_vector_store(name, size, lower_bound, upper_bound, max_cache_level).await
 }
 
-pub(crate) async fn get_collection_by_id(
+pub(crate) fn get_collection_by_id(
     collection_id: &str,
 ) -> Result<Arc<VectorStore>, CollectionsError> {
-    let store = repo::get_vector_store_by_name(collection_id).await?;
+    let store = repo::get_vector_store_by_name(collection_id)?;
     Ok(store)
 }
