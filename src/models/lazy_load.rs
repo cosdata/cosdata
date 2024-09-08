@@ -1,6 +1,8 @@
+use super::cache_loader::NodeRegistry;
+use super::common::WaCustomError;
 use super::identity_collections::{Identifiable, IdentityMap, IdentityMapKey, IdentitySet};
 use super::serializer::CustomSerialize;
-use super::types::{FileOffset, MergedNode, STM};
+use super::types::{FileOffset, STM};
 use super::versioning::*;
 use arcshift::ArcShift;
 use std::fmt;
@@ -209,7 +211,7 @@ impl<T: Clone + 'static> LazyItem<T> {
         matches!(self, Self::Invalid)
     }
 
-    pub fn get_data(&self) -> Option<ArcShift<T>> {
+    pub fn get_lazy_data(&self) -> Option<ArcShift<T>> {
         if let Self::Valid { data, .. } = self {
             return data.clone();
         }
@@ -276,6 +278,56 @@ impl<T: Clone + 'static> LazyItem<T> {
             for (_, version) in items_arc.get().iter() {
                 version.set_versions_persistence(flag);
             }
+        }
+    }
+}
+
+impl<T: Clone + CustomSerialize + 'static> LazyItem<T> {
+    pub fn try_get_data(&self, cache: Arc<NodeRegistry>) -> Result<ArcShift<T>, WaCustomError> {
+        if let Self::Valid {
+            data, file_index, ..
+        } = self
+        {
+            if let Some(data) = data {
+                return Ok(data.clone());
+            }
+
+            let Some(file_index) = file_index.clone().get().clone() else {
+                return Err(WaCustomError::LazyLoadingError(
+                    "LazyItem offset is None".to_string(),
+                ));
+            };
+
+            let deserialized = cache.load_item(file_index)?;
+
+            Ok(ArcShift::new(deserialized))
+        } else {
+            return Err(WaCustomError::LazyLoadingError(
+                "LazyItem is invalid".to_string(),
+            ));
+        }
+    }
+
+    pub fn get_data(&self, cache: Arc<NodeRegistry>) -> ArcShift<T> {
+        if let Self::Valid {
+            data, file_index, ..
+        } = self
+        {
+            if let Some(data) = data {
+                return data.clone();
+            }
+
+            let file_index = file_index
+                .clone()
+                .get()
+                .clone()
+                .expect("LazyItem offset is None");
+
+            let deserialized = cache.load_item(file_index).expect("Deserialization error");
+
+            ArcShift::new(deserialized)
+        } else {
+            panic!("LazyItem is invalid");
         }
     }
 }

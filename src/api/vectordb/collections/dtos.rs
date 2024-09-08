@@ -27,3 +27,6 @@ pub(crate) struct CreateCollectionDtoResponse {
     pub max_val: Option<f32>,
     // pub created_at: String, // will be added when vector store has a creation timestamp
 }
+
+#[derive(Deserialize)]
+pub(crate) struct GetCollectionsDto {}

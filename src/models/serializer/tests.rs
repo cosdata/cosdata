@@ -99,7 +99,7 @@ fn test_eager_lazy_item_serialization() {
     assert_eq!(item.0, deserialized.0);
 
     if let (Some(mut node_arc), Some(mut deserialized_arc)) =
-        (item.1.get_data(), deserialized.1.get_data())
+        (item.1.get_lazy_data(), deserialized.1.get_lazy_data())
     {
         let node = node_arc.get();
         let deserialized = deserialized_arc.get();
@@ -368,8 +368,16 @@ fn test_lazy_item_cyclic_serialization() {
     let node1 = LazyItem::new(root_version, MergedNode::new(HNSWLevel(2)));
     let node2 = LazyItem::new(2.into(), MergedNode::new(HNSWLevel(2)));
 
-    node1.get_data().unwrap().get().set_parent(node2.clone());
-    node2.get_data().unwrap().get().set_child(node1.clone());
+    node1
+        .get_lazy_data()
+        .unwrap()
+        .get()
+        .set_parent(node2.clone());
+    node2
+        .get_lazy_data()
+        .unwrap()
+        .get()
+        .set_child(node1.clone());
 
     let lazy_ref = LazyItemRef::from_lazy(node1.clone());
 
@@ -384,7 +392,7 @@ fn test_lazy_item_cyclic_serialization() {
 
     let deserialized: LazyItem<MergedNode> = cache.load_item(file_index).unwrap();
 
-    let mut parent_ref = deserialized.get_data().unwrap().get_parent();
+    let mut parent_ref = deserialized.get_lazy_data().unwrap().get_parent();
 
     // Deserialize the parent
     if let LazyItem::Valid {
@@ -582,7 +590,7 @@ fn validate_lazy_item_versions(
     for i in 0..versions.len() {
         let key = IdentityMapKey::Int(i as u32);
         let version = versions.get(&key).unwrap();
-        let version = if version.get_data().is_none() {
+        let version = if version.get_lazy_data().is_none() {
             let file_index = version.get_file_index().unwrap();
             cache.clone().load_item(file_index).unwrap()
         } else {

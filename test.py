@@ -24,7 +24,7 @@ def login():
     "password": "admin",
     "pretty_print": False
     }
-    response = requests.post(url, headers=generate_headers(), data=json.dumps(data))
+    response = requests.post(url, headers=generate_headers(), data=json.dumps(data), verify=False)
     global token
     token = response.text
     return token
@@ -47,7 +47,7 @@ def create_db(vector_db_name, dimensions, max_val, min_val):
 def find_collection(id):
     url = f"{base_url}/collections/{id}"
 
-    response = requests.get(url,headers=generate_headers())
+    response = requests.get(url,headers=generate_headers(), verify=False)
     return response.json()
 
 
