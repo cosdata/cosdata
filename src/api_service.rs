@@ -225,12 +225,14 @@ pub fn run_upload(
         Path::new(".").into(),
         |root, ver| root.join(format!("{}.index", **ver)),
     ));
-    match auto_commit_transaction(vec_store.clone(), bufmans) {
+    match auto_commit_transaction(vec_store.clone(), bufmans.clone()) {
         Ok(_) => (),
         Err(e) => {
             eprintln!("Failed node persist(nbr1): {}", e);
         }
     };
+
+    bufmans.flush_all().expect("Failed to flush");
 }
 
 pub async fn ann_vector_query(
