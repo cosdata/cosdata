@@ -181,7 +181,7 @@ pub async fn init_vector_store(
 pub fn run_upload(
     vec_store: Arc<VectorStore>,
     vecxx: Vec<(VectorIdValue, Vec<f32>)>,
-    config: web::Data<Config>,
+    config: Arc<Config>,
 ) -> () {
     vecxx.into_par_iter().for_each(|(id, vec)| {
         let hash_vec = convert_value(id);

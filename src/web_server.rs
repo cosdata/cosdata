@@ -1,6 +1,7 @@
 use crate::api;
 use crate::api::auth::{auth_module, authentication_middleware::AuthenticationMiddleware};
 use crate::api::vectordb::collections::collections_module;
+use crate::api::vectordb::vectors::vectors_module;
 use crate::config_loader::{load_config, ServerMode, Ssl};
 use actix_cors::Cors;
 use actix_web::web::Data;
@@ -8,8 +9,10 @@ use actix_web::{middleware, web, App, Error, HttpRequest, HttpResponse, HttpServ
 use rustls::{pki_types::PrivateKeyDer, ServerConfig};
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use serde::{Deserialize, Serialize};
-use std::env;
 use std::{fs::File, io::BufReader};
+
+use crate::api::vectordb::indexes::indexes_module;
+use std::env;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct MyObj {
@@ -66,7 +69,11 @@ pub async fn run_actix_server() -> std::io::Result<()> {
             .service(
                 web::scope("/vectordb")
                     .wrap(AuthenticationMiddleware)
+                    // vectors module must be registereb before collections module
+                    // as its scope path is more specific than collections module
+                    .service(vectors_module())
                     .service(collections_module())
+                    .service(indexes_module())
                     .service(web::resource("/upsert").route(web::post().to(api::vectordb::upsert)))
                     .service(web::resource("/search").route(web::post().to(api::vectordb::search)))
                     .service(web::resource("/fetch").route(web::post().to(api::vectordb::fetch)))
