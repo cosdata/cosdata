@@ -1,8 +1,7 @@
 use dashmap::DashMap;
 use rand::Rng;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::iter::Iterator;
-use std::sync::RwLock;
 
 use super::buffered_io::BufIoError;
 
@@ -23,17 +22,17 @@ fn counter_age(global_value: u32, item_value: u32) -> u32 {
     }
 }
 
-pub struct EvictionIndex<T> {
-    inner: [Option<T>; 256],
+pub struct EvictionIndex {
+    inner: [AtomicU64; 256],
 }
 
-impl<T> EvictionIndex<T> {
+impl EvictionIndex {
 
     fn new() -> Self {
         Self {
             // @NOTE: Uses inline constants; will only work for msrv =
             // 1.79.0
-            inner: [const { None }; 256],
+            inner: core::array::from_fn(|_| AtomicU64::new(u64::MAX)),
         }
     }
 
@@ -41,41 +40,48 @@ impl<T> EvictionIndex<T> {
         counter as usize % 256
     }
 
-    fn on_cache_miss(&mut self, counter: u32, key: T) {
+    fn is_empty(&self, idx: usize) -> bool {
+        self.inner[idx as usize].load(Ordering::SeqCst) == u64::MAX
+    }
+
+    fn clear(&self, idx: usize) {
+        self.inner[idx].store(u64::MAX, Ordering::SeqCst)
+    }
+
+    fn on_cache_miss(&self, counter: u32, key: u64) {
         let i = Self::idx(counter);
-        if self.inner[i].is_none() {
-            self.inner[i] = Some(key);
+        if self.is_empty(i) {
+            self.inner[i].store(key, Ordering::SeqCst);
         }
     }
 
-    fn on_cache_hit(&mut self, old_counter: u32, new_counter: u32, key: T) where T: Eq {
+    fn on_cache_hit(&self, old_counter: u32, new_counter: u32, key: u64) {
         let i = Self::idx(old_counter);
-        if let Some(x) = &self.inner[i] {
-            if *x == key {
-                self.inner[i] = None;
-                let j = Self::idx(new_counter);
-                if self.inner[j].is_none() {
-                    self.inner[j] = Some(key);
-                }
+        if self.inner[i].load(Ordering::SeqCst) == key {
+            self.clear(i);
+            let j = Self::idx(new_counter);
+            if self.is_empty(j) {
+                self.inner[j].store(key, Ordering::SeqCst);
             }
         }
     }
 
-    fn get_keys(&self, max: u8) -> Vec<(u8, &T)> {
+    fn get_keys(&self, max: u8) -> Vec<(u8, u64)> {
         let mut result = vec![];
         for (i, x) in self.inner.iter().enumerate() {
             if result.len() > max as usize {
                 break;
             }
-            if let Some(key) = x {
+            let key = x.load(Ordering::SeqCst);
+            if key < u64::MAX {
                 result.push((i as u8, key));
             }
         }
         result
     }
 
-    fn remove(&mut self, idx: u8) {
-        self.inner[idx as usize] = None;
+    fn remove(&self, idx: u8) {
+        self.clear(idx as usize)
     }
 }
 
@@ -126,7 +132,7 @@ pub enum EvictStrategy {
 
 pub struct LRUCache<K, V>
 where
-    K: Eq + std::hash::Hash + Clone,
+    K: Eq + std::hash::Hash + Clone + Into<u64> + From<u64>,
     V: Clone,
 {
     // Store value and counter value
@@ -135,19 +141,19 @@ where
     // Global counter
     counter: AtomicU32,
     evict_strategy: EvictStrategy,
-    index: RwLock<EvictionIndex<K>>,
+    index: EvictionIndex,
 }
 
 impl<K, V> LRUCache<K, V>
 where
-    K: Eq + std::hash::Hash + Clone,
+    K: Eq + std::hash::Hash + Clone + Into<u64> + From<u64>,
     V: Clone,
 {
     pub fn new(capacity: usize, evict_strategy: EvictStrategy) -> Self {
         LRUCache {
             map: DashMap::new(),
             counter: AtomicU32::new(0),
-            index: RwLock::new(EvictionIndex::new()),
+            index: EvictionIndex::new(),
             capacity,
             evict_strategy,
         }
@@ -177,17 +183,13 @@ where
             .and_modify(|(_, counter)| {
                 let old_counter = counter.clone();
                 let new_counter = self.increment_counter();
-                // @TODO: Error handling
-                let mut index = self.index.write().unwrap();
-                index.on_cache_hit(old_counter, new_counter, k1);
+                self.index.on_cache_hit(old_counter, new_counter, k1.into());
                 *counter = new_counter;
             })
             .or_try_insert_with(|| {
                 inserted = true;
                 let counter = self.increment_counter();
-                // @TODO: Error handling
-                let mut index = self.index.write().unwrap();
-                index.on_cache_miss(counter, k2);
+                self.index.on_cache_miss(counter, k2.into());
                 f().map(|v| (v, counter))
             })
             .map(|v| v.0.clone());
@@ -246,23 +248,19 @@ where
     fn evict_lru_probabilistic(&self, strategy: &ProbEviction) {
         let num_to_evict = strategy.freq;
         let global_counter = self.counter.load(Ordering::SeqCst);
-        // @TODO: Error handling
-        let index = self.index.read().unwrap();
         let mut evicted_idxs = Vec::with_capacity(num_to_evict as usize);
         // @TODO: What if num_to_evict is > 256?
-        for (idx, key) in index.get_keys(num_to_evict as u8) {
+        for (idx, key) in self.index.get_keys(num_to_evict as u8) {
             // @TODO: Remove unwrap
-            let entry = self.map.get(key).unwrap();
+            let entry = self.map.get(&K::from(key)).unwrap();
             let (key, (_, counter_val)) = entry.pair();
             if strategy.should_evict(global_counter, *counter_val) {
                 self.map.remove(&key);
                 evicted_idxs.push(idx);
             }
         }
-        // @TODO: Error handling
-        let mut index = self.index.write().unwrap();
         for idx in evicted_idxs {
-            index.remove(idx);
+            self.index.remove(idx);
         }
     }
 
@@ -305,41 +303,41 @@ mod tests {
 
     #[test]
     fn test_basic_usage() {
-        let cache = LRUCache::new(2, EvictStrategy::Immediate);
+        let cache: LRUCache<u64, &'static str> = LRUCache::new(2, EvictStrategy::Immediate);
 
-        cache.insert("key1", "value1");
-        cache.insert("key2", "value2");
+        cache.insert(1, "value1");
+        cache.insert(2, "value2");
 
-        match cache.get(&"key1") {
+        match cache.get(&1) {
             Some(v) => assert_eq!("value1", v),
             None => assert!(false),
         }
 
-        cache.insert("key3", "value3"); // This should evict key2
+        cache.insert(3, "value3"); // This should evict key2
 
-        match cache.get(&"key3") {
+        match cache.get(&3) {
             Some(v) => assert_eq!("value3", v),
             None => assert!(false),
         }
 
         // Verify that key2 is evicted
         assert_eq!(2, cache.map.len());
-        assert!(!cache.map.contains_key(&"key2"));
+        assert!(!cache.map.contains_key(&2));
     }
 
     #[test]
     fn test_get_or_insert() {
-        let cache = LRUCache::new(2, EvictStrategy::Immediate);
+        let cache: LRUCache<u64, &'static str> = LRUCache::new(2, EvictStrategy::Immediate);
 
         // Insert two values using `try_insert_with`, verifying that
         // the method returns the correct value
-        let x = cache.get_or_insert("key1", || {
+        let x = cache.get_or_insert(1, || {
             Ok("value1")
         });
         assert_eq!("value1", x.unwrap());
         assert_eq!(1, cache.map.len());
 
-        let y = cache.get_or_insert("key2", || {
+        let y = cache.get_or_insert(2, || {
             Ok("value2")
         });
         assert_eq!("value2", y.unwrap());
@@ -347,7 +345,7 @@ mod tests {
 
         // Try getting key1 again. The closure shouldn't get executed
         // this time.
-        let x1 = cache.get_or_insert("key1", || {
+        let x1 = cache.get_or_insert(1, || {
             // This code will not be executed
             assert!(false);
             Err(BufIoError::Locking)
@@ -355,18 +353,18 @@ mod tests {
         assert!(x1.is_ok_and(|x| x == "value1"));
 
         // Insert a third value. It will cause key2 to be evicted
-        let z = cache.get_or_insert("key3", || {
+        let z = cache.get_or_insert(3, || {
             Ok("value3")
         });
         assert_eq!("value3", z.unwrap());
 
         // Verify that key2 is evicted
         assert_eq!(2, cache.map.len());
-        assert!(!cache.map.contains_key(&"key2"));
+        assert!(!cache.map.contains_key(&2));
 
         // Verify that error during insertion doesn't result in
         // evictions
-        match cache.get_or_insert("key4", || Err(BufIoError::Locking)) {
+        match cache.get_or_insert(4, || Err(BufIoError::Locking)) {
             Err(BufIoError::Locking) => assert!(true),
             _ => assert!(false),
         }
@@ -375,13 +373,14 @@ mod tests {
 
     #[test]
     fn test_conc_get_or_insert() {
-        let cache = Arc::new(LRUCache::new(2, EvictStrategy::Immediate));
+        let inner: LRUCache<u64, &'static str> = LRUCache::new(2, EvictStrategy::Immediate);
+        let cache = Arc::new(inner);
 
         // Try concurrently inserting the same entry from 2 threads
         let t1 = {
             let c = cache.clone();
             thread::spawn(move || {
-                let x = c.get_or_insert("key1", || {
+                let x = c.get_or_insert(1, || {
                     Ok("value1")
                 });
                 assert_eq!("value1", x.unwrap());
@@ -391,7 +390,7 @@ mod tests {
         let t2 = {
             let c = cache.clone();
             thread::spawn(move || {
-                let x = c.get_or_insert("key1", || {
+                let x = c.get_or_insert(1, || {
                     Ok("value1")
                 });
                 assert_eq!("value1", x.unwrap());
@@ -404,7 +403,7 @@ mod tests {
         assert_eq!(1, cache.map.len());
 
         // Insert 2nd entry
-        let y = cache.get_or_insert("key2", || {
+        let y = cache.get_or_insert(2, || {
             Ok("value2")
         });
         assert_eq!("value2", y.unwrap());
@@ -414,7 +413,7 @@ mod tests {
         let t3 = {
             let c = cache.clone();
             thread::spawn(move || {
-                let x = c.get_or_insert("key3", || {
+                let x = c.get_or_insert(3, || {
                     Ok("value3")
                 });
                 assert_eq!("value3", x.unwrap());
@@ -424,7 +423,7 @@ mod tests {
         let t4 = {
             let c = cache.clone();
             thread::spawn(move || {
-                let x = c.get_or_insert("key4", || {
+                let x = c.get_or_insert(4, || {
                     Ok("value4")
                 });
                 assert_eq!("value4", x.unwrap());
@@ -447,12 +446,12 @@ mod tests {
 
     #[test]
     fn test_values_iterator() {
-        let cache = LRUCache::new(4, EvictStrategy::Immediate);
+        let cache: LRUCache<u64, &'static str> = LRUCache::new(4, EvictStrategy::Immediate);
 
-        cache.insert("key1", "value1");
-        cache.insert("key2", "value2");
-        cache.insert("key3", "value3");
-        cache.insert("key4", "value4");
+        cache.insert(1, "value1");
+        cache.insert(2, "value2");
+        cache.insert(3, "value3");
+        cache.insert(4, "value4");
 
         let mut values = cache.values().collect::<Vec<&'static str>>();
         values.sort();
@@ -511,12 +510,12 @@ mod tests {
 
     #[test]
     fn test_eviction_index() {
-        let mut index: EvictionIndex<u32> = EvictionIndex::new();
+        let index: EvictionIndex = EvictionIndex::new();
 
         let mut global_counter = 0;
 
         // A mapping of keys -> counters
-        let mut m: HashMap<u32, u32> = HashMap::new();
+        let mut m: HashMap<u64, u32> = HashMap::new();
 
         // Simulate insertion of 256 items
         for i in 1..=256 {
@@ -525,12 +524,14 @@ mod tests {
             global_counter += 1;
         }
 
-        let expected = (1..=256)
-            .map(|x| Some(x))
-            .collect::<Vec<Option<u32>>>();
+        let expected = (1..=256).collect::<Vec<u64>>();
+        let actual = index.inner.
+            iter()
+            .map(|x| AtomicU64::load(x, Ordering::SeqCst))
+            .collect::<Vec<u64>>();
 
         // Verify the contents of the index
-        assert_eq!(expected.as_slice(), index.inner);
+        assert_eq!(expected, actual);
 
         // Simulate insertion of 10 more items
         for i in 257..267 {
@@ -539,12 +540,17 @@ mod tests {
             global_counter += 1;
         }
 
+        let actual2 = index.inner.
+            iter()
+            .map(|x| AtomicU64::load(x, Ordering::SeqCst))
+            .collect::<Vec<u64>>();
+
         // Assert that the index contents are unchanged
-        assert_eq!(expected.as_slice(), index.inner);
+        assert_eq!(expected, actual2);
 
         // Simulate `get` for a known item
         {
-            let x = 147_u32;
+            let x = 147_u64;
             let new_counter = global_counter;
             let old_counter = m.insert(x, new_counter).unwrap();
             let old_id = old_counter as usize % 256;
@@ -553,31 +559,31 @@ mod tests {
 
             // Find value in slot corresponding to new counter
             let new_id = new_counter as usize % 256;
-            let new_slot_val = index.inner[new_id];
+            let new_slot_val = index.inner[new_id].load(Ordering::SeqCst);
 
             index.on_cache_hit(old_counter, new_counter, x);
 
             // Slot corresponding to old counter is cleared
-            assert!(index.inner[old_id].is_none());
+            assert_eq!(u64::MAX, index.inner[old_id].load(Ordering::SeqCst));
 
             // Slot corresponding to new counter is unchanged
-            assert_eq!(new_slot_val, index.inner[new_id]);
+            assert_eq!(new_slot_val, index.inner[new_id].load(Ordering::SeqCst));
         }
 
         // Simulate `get` for another known item such that the new
         // counter is 256 + 147, so that it matches the same slot in
         // the index that was emptied earlier
         {
-            let y = 202_u32;
+            let y = 202_u64;
             let new_counter = 256 + 146;
             let old_counter = m.insert(y, new_counter).unwrap();
             index.on_cache_hit(old_counter, new_counter, y);
 
             // Slot corresponding to old counter is cleared
-            assert!(index.inner[old_counter as usize % 256].is_none());
+            assert_eq!(u64::MAX, index.inner[old_counter as usize % 256].load(Ordering::SeqCst));
 
             // Slot corresponding to new counter has this value
-            assert_eq!(Some(202), index.inner[new_counter as usize % 256]);
+            assert_eq!(202, index.inner[new_counter as usize % 256].load(Ordering::SeqCst));
         }
     }
 
