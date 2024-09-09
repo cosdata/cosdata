@@ -1,7 +1,6 @@
 pub mod buffered_io;
 pub mod cache_loader;
 pub mod common;
-pub mod custom_buffered_writer;
 pub mod dot_product;
 pub mod dry_run_writer;
 pub mod encoding_format;
@@ -16,6 +15,3 @@ pub mod serializer;
 pub mod types;
 pub mod user;
 pub mod versioning;
-
-#[cfg(test)]
-mod custom_buffered_writer_tests;
