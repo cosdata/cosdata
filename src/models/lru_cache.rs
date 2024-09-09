@@ -86,9 +86,9 @@ impl EvictionIndex {
 }
 
 pub struct ProbEviction {
-    // Frequency in terms of no. of calls. E.g. A value of `10` means
-    // eviction will be randomly triggered once every 10 calls
-    freq: u16,
+    // Probability of eviction per call. E.g. A value of 0.1 means
+    // eviction will be randomly triggered with 10% probability on each call
+    prob: f64,
     // Parameter to tune the "aggressiveness" of eviction i.e. higher
     // value means more aggressive
     lambda: f64,
@@ -96,16 +96,15 @@ pub struct ProbEviction {
 
 impl ProbEviction {
 
-    pub fn new(freq: u16) -> Self {
+    pub fn new(prob: f64) -> Self {
         Self {
-            freq,
+            prob,
             lambda: 0.01,
         }
     }
 
     fn should_trigger(&self) -> bool {
-        let mut rng = rand::thread_rng();
-        rng.gen_range(1..=self.freq) % self.freq == 0
+        self.prob > rand::thread_rng().gen()
     }
 
     fn eviction_probability(&self, global_counter: u32, counter_value: u32) -> f64 {
@@ -246,17 +245,17 @@ where
     }
 
     fn evict_lru_probabilistic(&self, strategy: &ProbEviction) {
-        let num_to_evict = strategy.freq;
+        let num_to_evict = (1.0_f64 / strategy.prob) as u8;
         let global_counter = self.counter.load(Ordering::SeqCst);
         let mut evicted_idxs = Vec::with_capacity(num_to_evict as usize);
         // @TODO: What if num_to_evict is > 256?
         for (idx, key) in self.index.get_keys(num_to_evict as u8) {
-            // @TODO: Remove unwrap
-            let entry = self.map.get(&K::from(key)).unwrap();
-            let (key, (_, counter_val)) = entry.pair();
-            if strategy.should_evict(global_counter, *counter_val) {
-                self.map.remove(&key);
-                evicted_idxs.push(idx);
+            if let Some(entry) = self.map.get(&K::from(key)) {
+                let (key, (_, counter_val)) = entry.pair();
+                if strategy.should_evict(global_counter, *counter_val) {
+                    self.map.remove(&key);
+                    evicted_idxs.push(idx);
+                }
             }
         }
         for idx in evicted_idxs {
@@ -466,7 +465,7 @@ mod tests {
 
     #[test]
     fn test_eviction_probability() {
-        let prob = ProbEviction::new(32);
+        let prob = ProbEviction::new(0.03125);
 
         // Without wraparound
         let global_counter = 1000;
