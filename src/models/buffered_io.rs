@@ -1,4 +1,5 @@
 use dashmap::DashMap;
+use half::f16;
 use std::collections::HashMap;
 use std::fmt;
 use std::fs::{File, OpenOptions};
@@ -130,7 +131,9 @@ impl BufferManager {
     pub fn new(mut file: File) -> io::Result<Self> {
         let file_size = file.seek(SeekFrom::End(0))?;
         file.seek(SeekFrom::Start(0))?;
-        let evict_strategy = EvictStrategy::Probabilistic(ProbEviction::new(0.03125));
+        let evict_strategy = EvictStrategy::Probabilistic(
+            ProbEviction::new(f16::from_f32_const(0.03125))
+        );
         let regions = LRUCache::new(100, evict_strategy);
         Ok(BufferManager {
             file: Arc::new(RwLock::new(file)),

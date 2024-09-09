@@ -1,5 +1,6 @@
 use dashmap::DashMap;
 use rand::Rng;
+use half::f16;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::iter::Iterator;
 
@@ -88,28 +89,28 @@ impl EvictionIndex {
 pub struct ProbEviction {
     // Probability of eviction per call. E.g. A value of 0.1 means
     // eviction will be randomly triggered with 10% probability on each call
-    prob: f64,
+    prob: f16,
     // Parameter to tune the "aggressiveness" of eviction i.e. higher
     // value means more aggressive
-    lambda: f64,
+    lambda: f16,
 }
 
 impl ProbEviction {
 
-    pub fn new(prob: f64) -> Self {
+    pub fn new(prob: f16) -> Self {
         Self {
             prob,
-            lambda: 0.01,
+            lambda: f16::from_f32_const(0.01),
         }
     }
 
     fn should_trigger(&self) -> bool {
-        self.prob > rand::thread_rng().gen()
+        self.prob > f16::from_f32(rand::thread_rng().gen())
     }
 
-    fn eviction_probability(&self, global_counter: u32, counter_value: u32) -> f64 {
+    fn eviction_probability(&self, global_counter: u32, counter_value: u32) -> f32 {
         let age = counter_age(global_counter, counter_value);
-        let recency_prob = (-self.lambda * age as f64).exp();
+        let recency_prob = (-self.lambda.to_f32() * age as f32).exp();
         let eviction_prob = 1.0 - recency_prob;
         eviction_prob
     }
@@ -245,7 +246,7 @@ where
     }
 
     fn evict_lru_probabilistic(&self, strategy: &ProbEviction) {
-        let num_to_evict = (1.0_f64 / strategy.prob) as u8;
+        let num_to_evict = (1.0_f32 / strategy.prob.to_f32()) as u8;
         let global_counter = self.counter.load(Ordering::SeqCst);
         let mut evicted_idxs = Vec::with_capacity(num_to_evict as usize);
         // @TODO: What if num_to_evict is > 256?
@@ -465,13 +466,13 @@ mod tests {
 
     #[test]
     fn test_eviction_probability() {
-        let prob = ProbEviction::new(0.03125);
+        let prob = ProbEviction::new(f16::from_f32_const(0.03125));
 
         // Without wraparound
         let global_counter = 1000;
         let results = (1..=global_counter)
             .map(|n| prob.eviction_probability(global_counter, n))
-            .collect::<Vec<f64>>();
+            .collect::<Vec<f32>>();
         // Check that the eviction probability reduces with decrease
         // in counter age, i.e. the results vector is sorted in
         // descending order.
@@ -500,7 +501,7 @@ mod tests {
         let results = counter_vals
             .into_iter()
             .map(|n| prob.eviction_probability(global_counter, n))
-            .collect::<Vec<f64>>();
+            .collect::<Vec<f32>>();
         // Check that the eviction probability reduces with increase
         // in counter value, i.e. the results vector is sorted in
         // descending order.
