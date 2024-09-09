@@ -168,7 +168,7 @@ pub async fn init_vector_store(
 pub fn run_upload(
     vec_store: Arc<VectorStore>,
     vecxx: Vec<(VectorIdValue, Vec<f32>)>,
-    config: web::Data<Config>,
+    config: Arc<Config>,
 ) {
     let current_version = vec_store.get_current_version();
     let next_version = vec_store.vcs.add_next_version("main").expect("LMDB error");
@@ -185,6 +185,7 @@ pub fn run_upload(
         .write_u32_with_cursor(cursor, *next_version)
         .expect("Failed to write next_version");
     bufman.close_cursor(cursor).expect("Failed to close cursor");
+
     vecxx.into_par_iter().for_each(|(id, vec)| {
         let hash_vec = convert_value(id);
         let vec_emb = RawVectorEmbedding {
