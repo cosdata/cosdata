@@ -1,6 +1,5 @@
 use crate::config_loader::Config;
-use crate::models::buffered_io::BufferManager;
-use crate::models::buffered_io::BufferManagerFactory;
+use crate::models::buffered_io::*;
 use crate::models::common::*;
 use crate::models::file_persist::*;
 use crate::models::lazy_load::*;
@@ -11,7 +10,6 @@ use crate::models::user::Statistics;
 use crate::models::versioning::VersionControl;
 use crate::quantization::{Quantization, StorageType};
 use crate::vector_store::*;
-use actix_web::web;
 use arcshift::ArcShift;
 use lmdb::{DatabaseFlags, Transaction};
 use rand::Rng;
@@ -82,7 +80,7 @@ pub async fn init_vector_store(
             .create(true)
             .append(true)
             .open("prop.data")
-            .expect("Failed to open file for writing"),
+            .map_err(|e| WaCustomError::FsError(e.to_string()))?,
     );
 
     let mut root: LazyItemRef<MergedNode> = LazyItemRef::new_invalid();
@@ -167,41 +165,45 @@ pub async fn init_vector_store(
 
 pub fn run_upload(
     vec_store: Arc<VectorStore>,
-    vecxx: Vec<(VectorIdValue, Vec<f32>)>,
+    vecs: Vec<(VectorIdValue, Vec<f32>)>,
     config: Arc<Config>,
-) {
+) -> Result<(), WaCustomError> {
     let current_version = vec_store.get_current_version();
-    let next_version = vec_store.vcs.add_next_version("main").expect("LMDB error");
+    let next_version = vec_store
+        .vcs
+        .add_next_version("main")
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
     vec_store.set_current_version(next_version);
     let file = OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .open(format!("{}.vec_raw", *current_version))
-        .expect("Failed to open file");
-    let bufman = Arc::new(BufferManager::new(file).expect("Failed to create BufferManager"));
-    let cursor = bufman.open_cursor().expect("Failed to open cursor");
-    bufman
-        .write_u32_with_cursor(cursor, *next_version)
-        .expect("Failed to write next_version");
-    bufman.close_cursor(cursor).expect("Failed to close cursor");
+        .map_err(|e| WaCustomError::FsError(e.to_string()))?;
+    let bufman = Arc::new(BufferManager::new(file).map_err(BufIoError::Io)?);
+    let cursor = bufman.open_cursor()?;
+    bufman.write_u32_with_cursor(cursor, *next_version)?;
+    bufman.close_cursor(cursor)?;
 
-    vecxx.into_par_iter().for_each(|(id, vec)| {
-        let hash_vec = convert_value(id);
-        let vec_emb = RawVectorEmbedding {
-            raw_vec: vec,
-            hash_vec,
-        };
+    vecs.into_par_iter()
+        .map(|(id, vec)| {
+            let hash_vec = convert_value(id);
+            let vec_emb = RawVectorEmbedding {
+                raw_vec: vec,
+                hash_vec,
+            };
 
-        insert_embedding(bufman.clone(), vec_store.clone(), &vec_emb, current_version)
-            .expect("Failed to inert embedding to LMDB");
-    });
-    bufman.flush().expect("Failed to flush");
+            insert_embedding(bufman.clone(), vec_store.clone(), &vec_emb, current_version)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    bufman.flush()?;
 
     let env = vec_store.lmdb.env.clone();
     let metadata_db = vec_store.lmdb.metadata_db.clone();
 
-    let txn = env.begin_rw_txn().expect("Failed to begin transaction");
+    let txn = env
+        .begin_rw_txn()
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
     let count_unindexed = txn
         .get(*metadata_db, &"count_unindexed")
@@ -211,14 +213,12 @@ pub fn run_upload(
                 WaCustomError::DeserializationError(e.to_string())
             })?;
             Ok(u32::from_le_bytes(bytes))
-        })
-        .expect("Failed to retrieve `count_unindexed`");
+        })?;
 
     txn.abort();
 
     if count_unindexed >= config.upload_threshold {
-        index_embeddings(vec_store.clone(), config.upload_process_batch_size)
-            .expect("Failed to index embeddings");
+        index_embeddings(vec_store.clone(), config.upload_process_batch_size)?;
     }
 
     // TODO: include db name in the path
@@ -226,14 +226,11 @@ pub fn run_upload(
         Path::new(".").into(),
         |root, ver| root.join(format!("{}.index", **ver)),
     ));
-    match auto_commit_transaction(vec_store.clone(), bufmans.clone()) {
-        Ok(_) => (),
-        Err(e) => {
-            eprintln!("Failed node persist(nbr1): {}", e);
-        }
-    };
 
-    bufmans.flush_all().expect("Failed to flush");
+    auto_commit_transaction(vec_store.clone(), bufmans.clone())?;
+    bufmans.flush_all()?;
+
+    Ok(())
 }
 
 pub async fn ann_vector_query(
