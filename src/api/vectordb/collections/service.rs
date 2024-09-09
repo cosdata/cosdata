@@ -31,16 +31,16 @@ pub(crate) async fn get_collections(
     Ok(collections)
 }
 
-pub(crate) fn get_collection_by_id(
+pub(crate) async fn get_collection_by_id(
     collection_id: &str,
 ) -> Result<Arc<VectorStore>, CollectionsError> {
-    let store = repo::get_vector_store_by_name(collection_id)?;
+    let store = repo::get_vector_store_by_name(collection_id).await?;
     Ok(store)
 }
 
-pub(crate) fn delete_collection_by_id(
+pub(crate) async fn delete_collection_by_id(
     collection_id: &str,
 ) -> Result<Arc<VectorStore>, CollectionsError> {
-    let store = repo::delete_vector_store_by_name(collection_id)?;
+    let store = repo::delete_vector_store_by_name(collection_id).await?;
     Ok(store)
 }

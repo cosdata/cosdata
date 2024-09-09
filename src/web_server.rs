@@ -1,6 +1,7 @@
 use crate::api;
 use crate::api::auth::{auth_module, authentication_middleware::AuthenticationMiddleware};
 use crate::api::vectordb::collections::collections_module;
+use crate::api::vectordb::vectors::vectors_module;
 use crate::config_loader::{load_config, ServerMode, Ssl};
 use actix_cors::Cors;
 use actix_web::web::Data;
@@ -66,6 +67,9 @@ pub async fn run_actix_server() -> std::io::Result<()> {
             .service(
                 web::scope("/vectordb")
                     .wrap(AuthenticationMiddleware)
+                    // vectors module must be registereb before collections module
+                    // as its scope path is more specific than collections module
+                    .service(vectors_module())
                     .service(collections_module())
                     .service(web::resource("/upsert").route(web::post().to(api::vectordb::upsert)))
                     .service(web::resource("/search").route(web::post().to(api::vectordb::search)))

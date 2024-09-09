@@ -41,7 +41,9 @@ pub(crate) async fn get_vector_stores(
     Ok(vec_store)
 }
 
-pub(crate) fn get_vector_store_by_name(name: &str) -> Result<Arc<VectorStore>, CollectionsError> {
+pub(crate) async fn get_vector_store_by_name(
+    name: &str,
+) -> Result<Arc<VectorStore>, CollectionsError> {
     let env = match get_app_env() {
         Ok(env) => env,
         Err(_) => return Err(CollectionsError::FailedToGetAppEnv),
@@ -57,7 +59,7 @@ pub(crate) fn get_vector_store_by_name(name: &str) -> Result<Arc<VectorStore>, C
     Ok(vec_store)
 }
 
-pub(crate) fn delete_vector_store_by_name(
+pub(crate) async fn delete_vector_store_by_name(
     name: &str,
 ) -> Result<Arc<VectorStore>, CollectionsError> {
     let env = match get_app_env() {
