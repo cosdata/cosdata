@@ -247,20 +247,31 @@ where
 
     fn evict_lru_probabilistic(&self, strategy: &ProbEviction) {
         let num_to_evict = (1.0_f32 / strategy.prob.to_f32()) as u8;
-        let global_counter = self.counter.load(Ordering::SeqCst);
-        let mut evicted_idxs = Vec::with_capacity(num_to_evict as usize);
-        // @TODO: What if num_to_evict is > 256?
-        for (idx, key) in self.index.get_keys(num_to_evict as u8) {
-            if let Some(entry) = self.map.get(&K::from(key)) {
-                let (key, (_, counter_val)) = entry.pair();
-                if strategy.should_evict(global_counter, *counter_val) {
-                    self.map.remove(&key);
-                    evicted_idxs.push(idx);
+        if num_to_evict > 0 {
+            let global_counter = self.counter.load(Ordering::SeqCst);
+            let mut pairs_to_evict = Vec::with_capacity(num_to_evict as usize);
+            // @TODO: What if num_to_evict is > 256?
+            for (idx, key) in self.index.get_keys(num_to_evict as u8) {
+                if pairs_to_evict.len() as u8 >= num_to_evict {
+                    break
+                }
+                if let Some(entry) = self.map.get(&K::from(key)) {
+                    let (key, (_, counter_val)) = entry.pair();
+                    if strategy.should_evict(global_counter, *counter_val) {
+                        // @NOTE: We need to collect the keys in a
+                        // vector and remove them from the dashmap
+                        // later. Directly calling the `remove` method
+                        // here causes a deadlock because of the
+                        // existing reference into the dashmap. See
+                        // `DashMap.remove` docs for more info.
+                        pairs_to_evict.push((idx, key.clone()));
+                    }
                 }
             }
-        }
-        for idx in evicted_idxs {
-            self.index.remove(idx);
+            for (idx, key) in pairs_to_evict {
+                self.map.remove(&key);
+                self.index.remove(idx);
+            }
         }
     }
 
