@@ -112,54 +112,55 @@ where
         cache: Arc<NodeRegistry>,
     ) -> ArcShift<InvertedIndexItem<T>> {
         let mut current_node = node;
+        let thread_id = std::thread::current().id();
+        println!("[{:?}] Path {:?}", thread_id, path);
         for &child_index in path {
-            current_node = {
-                let dim_index = current_node.dim_index;
-                let child = current_node
-                    .lazy_children
-                    .get(&IdentityMapKey::Int(child_index as u32))
-                    .map(|data| data.get_data(cache.clone()));
-                match child {
-                    Some(child) => child,
-                    None => {
-                        let new_dim_index = dim_index + POWERS_OF_4[child_index];
-                        let new_child = InvertedIndexItem::insert_new_child(
-                            current_node,
-                            new_dim_index,
-                            child_index as u32,
-                        );
-                        new_child.get_data(cache.clone())
+            let new_dim_index = current_node.dim_index + POWERS_OF_4[child_index];
+            println!("[{:?}] New child at index: {}", thread_id, child_index);
+            let key = IdentityMapKey::Int(child_index as u32);
+            let mut child = None;
+            let mut updated = false;
+            let mut no_mod = false;
+            let mut iter = 0;
+
+            while !no_mod && !updated {
+                println!(
+                    "[{:?}] iter: {} len children for current node: {}",
+                    std::thread::current().id(),
+                    iter,
+                    current_node.lazy_children.len()
+                );
+                updated = current_node.rcu_maybe(|current| {
+                    if let Some(existing_child) = current.lazy_children.get(&key) {
+                        child = Some(existing_child.clone());
+                        println!("[{:?}] Child exists", thread_id);
+                        no_mod = true;
+                        None // No change needed
+                    } else {
+                        let new_child =
+                            LazyItem::new(0.into(), InvertedIndexItem::new(new_dim_index, true));
+                        child = Some(new_child.clone());
+                        let new_item = current.clone();
+                        println!("[{:?}] Creating child", thread_id);
+                        new_item.lazy_children.insert(key.clone(), new_child);
+                        Some(new_item) // Return the updated item
                     }
-                }
-            };
+                });
+                iter += 1;
+            }
+
+            println!(
+                "[{:?}] iter: {} found/created child. Number of children for current node: {}",
+                std::thread::current().id(),
+                iter,
+                current_node.lazy_children.len()
+            );
+            current_node = child
+                .expect("Expected valid child after updating current node")
+                .get_data(cache.clone())
         }
 
         current_node
-    }
-
-    fn insert_new_child(
-        mut node: ArcShift<InvertedIndexItem<T>>,
-        new_dim_index: u32,
-        child_index: u32,
-    ) -> LazyItem<InvertedIndexItem<T>> {
-        let item = InvertedIndexItem::new(new_dim_index, true);
-        let new_child = LazyItem::new(0.into(), item);
-        let key = IdentityMapKey::Int(child_index as u32);
-        let mut updated = false;
-
-        while !updated {
-            // Attempt to update using rcu
-            updated = node.rcu(|current| {
-                // Create a new InvertedIndexItem with the updates
-                let mut new_item = (*current).clone();
-                new_item
-                    .lazy_children
-                    .insert(key.clone(), new_child.clone());
-                new_item
-            });
-        }
-
-        new_child
     }
 
     /// Inserts a value into the index at the specified dimension index.
@@ -458,26 +459,25 @@ mod test {
     #[test]
     fn test_find_or_create_race_condition() {
         for _ in 0..1000 {
-            // Run the test 100 times
             let root: ArcShift<InvertedIndexItem<f32>> =
                 ArcShift::new(InvertedIndexItem::new(0, false));
             let root_clone1 = root.clone();
-            let root_clone2 = root.clone();
+            let mut root_clone2 = root.clone();
             let bufmans = Arc::new(BufferManagerFactory::new(Path::new(".").into()));
             let cache = Arc::new(NodeRegistry::new(1000, bufmans));
             let cache1 = cache.clone();
             let cache2 = cache.clone();
 
-            // Creates child 2 in depth 2 and child 1 in depth 1.
+            // Creates child 1 in depth 1 and child 0 in depth 0.
             let handle2 = thread::spawn(move || {
-                let path = vec![0, 1, 2];
+                let path = vec![0, 1];
                 InvertedIndexItem::find_or_create_node(root_clone1, &path, cache1);
             });
 
-            // Creates child 1 in depth 1
-            // Can overwrite child 1 created by handle 2
+            // Creates child 0 in depth 0 but no other child
+            // Can overwrite child 0's children created by handle 2
             let handle1 = thread::spawn(move || {
-                let path = vec![0, 1];
+                let path = vec![0];
                 InvertedIndexItem::find_or_create_node(root, &path, cache2);
             });
 
@@ -485,38 +485,22 @@ mod test {
             handle2.join().unwrap();
 
             // Check the final state
+            root_clone2.reload();
             let node = root_clone2.shared_get();
-            assert!(
-                node.lazy_children.get(&IdentityMapKey::Int(0)).is_some(),
-                "Child 0 should exist"
-            );
 
-            let node = node
+            let child_0 = node
                 .lazy_children
                 .get(&IdentityMapKey::Int(0 as u32))
-                .map(|data| data.get_data(cache.clone()))
-                .unwrap();
-            assert!(
-                node.shared_get()
-                    .lazy_children
-                    .get(&IdentityMapKey::Int(1 as u32))
-                    .is_some(),
-                "Child 1 should exist"
-            );
+                .map(|data| data.get_data(cache.clone()));
+            assert!(child_0.is_some(), "Child 0 should exist");
+            let child_0 = child_0.unwrap();
 
-            let node = node
+            let child_1 = child_0
                 .shared_get()
                 .lazy_children
                 .get(&IdentityMapKey::Int(1 as u32))
-                .map(|data| data.get_data(cache.clone()))
-                .unwrap();
-            assert!(
-                node.shared_get()
-                    .lazy_children
-                    .get(&IdentityMapKey::Int(2 as u32))
-                    .is_some(),
-                "Child 2 should exist"
-            );
+                .map(|data| data.get_data(cache.clone()));
+            assert!(child_1.is_some(), "Child 1 should exist");
         }
     }
 }
