@@ -112,52 +112,18 @@ where
         cache: Arc<NodeRegistry>,
     ) -> ArcShift<InvertedIndexItem<T>> {
         let mut current_node = node;
-        let thread_id = std::thread::current().id();
-        println!("[{:?}] Path {:?}", thread_id, path);
         for &child_index in path {
             let new_dim_index = current_node.dim_index + POWERS_OF_4[child_index];
-            println!("[{:?}] New child at index: {}", thread_id, child_index);
             let key = IdentityMapKey::Int(child_index as u32);
-            let mut child = None;
-            let mut updated = false;
-            let mut no_mod = false;
-            let mut iter = 0;
-
-            while !no_mod && !updated {
-                println!(
-                    "[{:?}] iter: {} len children for current node: {}",
-                    std::thread::current().id(),
-                    iter,
-                    current_node.lazy_children.len()
-                );
-                updated = current_node.rcu_maybe(|current| {
-                    if let Some(existing_child) = current.lazy_children.get(&key) {
-                        child = Some(existing_child.clone());
-                        println!("[{:?}] Child exists", thread_id);
-                        no_mod = true;
-                        None // No change needed
-                    } else {
-                        let new_child =
-                            LazyItem::new(0.into(), InvertedIndexItem::new(new_dim_index, true));
-                        child = Some(new_child.clone());
-                        let new_item = current.clone();
-                        println!("[{:?}] Creating child", thread_id);
-                        new_item.lazy_children.insert(key.clone(), new_child);
-                        Some(new_item) // Return the updated item
-                    }
-                });
-                iter += 1;
-            }
-
-            println!(
-                "[{:?}] iter: {} found/created child. Number of children for current node: {}",
-                std::thread::current().id(),
-                iter,
-                current_node.lazy_children.len()
-            );
-            current_node = child
-                .expect("Expected valid child after updating current node")
-                .get_data(cache.clone())
+            let new_child = LazyItem::new(0.into(), InvertedIndexItem::new(new_dim_index, true));
+            current_node
+                .lazy_children
+                .checked_insert(key.clone(), new_child);
+            current_node = current_node
+                .lazy_children
+                .get(&key)
+                .map(|lazy_item| lazy_item.get_data(cache.clone()))
+                .expect("Child should exist");
         }
 
         current_node

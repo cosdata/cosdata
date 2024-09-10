@@ -495,6 +495,15 @@ where
         self.arcshift.update(new_value);
     }
 
+    /// Update the value inside the ArcShift using a transactional update function.
+    ///
+    /// Internally it uses [ArcShift::rcu] and performs a fixed amount of retries
+    /// before giving up and returning an error.
+    ///
+    /// TODO: Consider making the api more ergonomic. Strict and non-strict
+    /// failure can be made into separate error types so that the caller
+    /// does not need to check the boolean value to figure out if the
+    /// update succeeded or not.
     pub fn transactional_update<F>(&mut self, mut update_fn: F) -> Result<bool, WaCustomError>
     where
         F: FnMut(&T) -> T,
@@ -503,6 +512,8 @@ where
         let mut tries = 0;
 
         while !updated {
+            // TODO: consider using rcu_maybe to avoid unncessary updates
+            // that will require changing update check semantics
             updated = self.arcshift.rcu(|t| update_fn(t));
 
             if !updated {
