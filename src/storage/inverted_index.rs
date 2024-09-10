@@ -434,12 +434,14 @@ mod test {
             let cache1 = cache.clone();
             let cache2 = cache.clone();
 
+            // Insert a value for dimension 5
             // Creates child 1 in depth 1 and child 0 in depth 0.
             let handle2 = thread::spawn(move || {
                 let path = vec![0, 1];
                 InvertedIndexItem::find_or_create_node(root_clone1, &path, cache1);
             });
 
+            // Insert a value for dimension 1
             // Creates child 0 in depth 0 but no other child
             // Can overwrite child 0's children created by handle 2
             let handle1 = thread::spawn(move || {
