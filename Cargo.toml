@@ -84,3 +84,8 @@ harness = false
 [[bench]]
 name = "lru_cache_benchmark"
 harness = false
+
+[[bench]]
+name = "inverted_index_benchmark"
+harness = false
+
