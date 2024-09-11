@@ -80,3 +80,7 @@ harness = false
 [[bench]]
 name = "lookup_table_benchmark"
 harness = false
+
+[[bench]]
+name = "lru_cache_benchmark"
+harness = false
