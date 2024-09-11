@@ -1,4 +1,5 @@
 use dashmap::DashMap;
+use half::f16;
 use std::collections::HashMap;
 use std::fmt;
 use std::fs::{File, OpenOptions};
@@ -7,7 +8,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 
-use super::lru_cache::LRUCache;
+use super::lru_cache::{EvictStrategy, LRUCache, ProbEviction};
 use super::versioning::Hash;
 
 const BUFFER_SIZE: usize = 8192;
@@ -130,9 +131,13 @@ impl BufferManager {
     pub fn new(mut file: File) -> io::Result<Self> {
         let file_size = file.seek(SeekFrom::End(0))?;
         file.seek(SeekFrom::Start(0))?;
+        let evict_strategy = EvictStrategy::Probabilistic(
+            ProbEviction::new(f16::from_f32_const(0.03125))
+        );
+        let regions = LRUCache::new(100, evict_strategy);
         Ok(BufferManager {
             file: Arc::new(RwLock::new(file)),
-            regions: LRUCache::new(100),
+            regions,
             cursors: RwLock::new(HashMap::new()),
             next_cursor_id: AtomicU64::new(0),
             file_size: RwLock::new(file_size),
@@ -422,11 +427,8 @@ impl BufferManager {
     }
 
     pub fn flush(&self) -> Result<(), BufIoError> {
-        for entry in self.regions.iter() {
-            // @TODO: Leaky abstraction. LRUCache's API can be
-            // improved here.
-            let (region, _) = entry.value();
-            self.flush_region(region)?;
+        for region in self.regions.values() {
+            self.flush_region(&region)?;
         }
         self.file
             .write()

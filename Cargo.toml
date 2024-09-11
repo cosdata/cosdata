@@ -16,7 +16,6 @@ bs58 = "0.5.1"
 byteorder = "1.5.0"
 cbor = "0.4.1"
 chrono = "0.4.38"
-criterion = "0.5.1"
 dashmap = "5.5.3"
 env_logger = "0.11.3"
 futures = "0.3.30"
@@ -51,6 +50,7 @@ toml = "0.8.19"
 jsonwebtoken = "9.3.0"
 
 [dev-dependencies]
+criterion = "0.5.1"
 quickcheck = "1.0.3"
 quickcheck_macros = "1.0.0"
 tempfile = "3.10.1"
@@ -79,4 +79,8 @@ harness = false
 
 [[bench]]
 name = "lookup_table_benchmark"
+harness = false
+
+[[bench]]
+name = "lru_cache_benchmark"
 harness = false
