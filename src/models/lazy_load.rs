@@ -5,6 +5,7 @@ use super::serializer::CustomSerialize;
 use super::types::{FileOffset, STM};
 use super::versioning::*;
 use arcshift::ArcShift;
+use core::panic;
 use std::fmt;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -588,6 +589,9 @@ impl<T: Clone + 'static> LazyItemMap<T> {
         }
     }
 
+    /// Inserts a new item into the map
+    ///
+    /// Overwrites an existing item if the key already exists
     pub fn insert(&self, key: IdentityMapKey, value: LazyItem<T>) {
         let mut arc = self.items.clone();
 
@@ -597,6 +601,25 @@ impl<T: Clone + 'static> LazyItemMap<T> {
             map
         })
         .unwrap();
+    }
+
+    /// Inserts a new key value pair into the map if the key does not already exist
+    ///
+    /// Note: Concurrent updates should use checked_insert to avoid overwriting
+    /// updates from other threads.
+    pub fn checked_insert(&self, key: IdentityMapKey, default: LazyItem<T>) {
+        let mut arc = self.items.clone();
+
+        arc.transactional_update(|map| {
+            let mut new_map = map.clone();
+            if !new_map.contains(&key) {
+                new_map.insert(key.clone(), default.clone());
+                new_map
+            } else {
+                new_map
+            }
+        })
+        .expect("Map update should succeed");
     }
 
     pub fn get(&self, key: &IdentityMapKey) -> Option<LazyItem<T>> {
