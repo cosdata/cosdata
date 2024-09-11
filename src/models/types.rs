@@ -512,7 +512,7 @@ where
         let mut tries = 0;
 
         while !updated {
-            // TODO: consider using rcu_maybe to avoid unncessary updates
+            // TODO: consider using rcu_maybe to avoid unnecessary updates
             // that will require changing update check semantics
             updated = self.arcshift.rcu(|t| update_fn(t));
 

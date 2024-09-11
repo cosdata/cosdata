@@ -42,7 +42,7 @@ pub enum LazyItem<T: Clone + 'static> {
         file_index: ArcShift<Option<FileIndex>>,
         decay_counter: usize,
         persist_flag: Arc<AtomicBool>,
-        versions: LazyItemMap<T>,
+        versions: LazyItemVec<T>,
         version_id: Hash,
         serialized_flag: Arc<AtomicBool>,
     },
@@ -175,7 +175,7 @@ impl<T: Clone + 'static> LazyItem<T> {
             file_index: ArcShift::new(None),
             decay_counter: 0,
             persist_flag: Arc::new(AtomicBool::new(true)),
-            versions: LazyItemMap::new(),
+            versions: LazyItemVec::new(),
             version_id,
             serialized_flag: Arc::new(AtomicBool::new(false)),
         }
@@ -191,7 +191,7 @@ impl<T: Clone + 'static> LazyItem<T> {
             file_index: ArcShift::new(None),
             decay_counter: 0,
             persist_flag: Arc::new(AtomicBool::new(true)),
-            versions: LazyItemMap::new(),
+            versions: LazyItemVec::new(),
             version_id,
             serialized_flag: Arc::new(AtomicBool::new(false)),
         }
@@ -203,7 +203,7 @@ impl<T: Clone + 'static> LazyItem<T> {
             file_index: ArcShift::new(None),
             decay_counter: 0,
             persist_flag: Arc::new(AtomicBool::new(true)),
-            versions: LazyItemMap::new(),
+            versions: LazyItemVec::new(),
             version_id,
             serialized_flag: Arc::new(AtomicBool::new(false)),
         }
@@ -259,17 +259,17 @@ impl<T: Clone + 'static> LazyItem<T> {
             let current_version = **version_id ^ branch_last_4_bytes;
             let target_diff = version - current_version;
             let index = largest_power_of_4_below(target_diff);
-            if let Some(existing_version) = versions.get(&IdentityMapKey::Int(index)) {
+            if let Some(existing_version) = versions.get(index as usize) {
                 return existing_version.add_version(branch_id, version, lazy_item);
             } else {
-                versions.insert(IdentityMapKey::Int(index), lazy_item);
+                versions.insert(index as usize, lazy_item);
             }
         }
 
         Ok(())
     }
 
-    pub fn get_versions(&self) -> Option<LazyItemMap<T>> {
+    pub fn get_versions(&self) -> Option<LazyItemVec<T>> {
         if let Self::Valid { versions, .. } = self {
             Some(versions.clone())
         } else {
@@ -281,7 +281,7 @@ impl<T: Clone + 'static> LazyItem<T> {
         self.set_persistence(flag);
         if let Some(versions) = self.get_versions() {
             let mut items_arc = versions.items.clone();
-            for (_, version) in items_arc.get().iter() {
+            for version in items_arc.get().iter() {
                 version.set_versions_persistence(flag);
             }
         }
@@ -346,7 +346,7 @@ impl<T: Clone + 'static> LazyItemRef<T> {
                 file_index: ArcShift::new(None),
                 decay_counter: 0,
                 persist_flag: Arc::new(AtomicBool::new(true)),
-                versions: LazyItemMap::new(),
+                versions: LazyItemVec::new(),
                 version_id,
                 serialized_flag: Arc::new(AtomicBool::new(false)),
             }),
@@ -366,7 +366,7 @@ impl<T: Clone + 'static> LazyItemRef<T> {
                 file_index: ArcShift::new(None),
                 decay_counter: 0,
                 persist_flag: Arc::new(AtomicBool::new(true)),
-                versions: LazyItemMap::new(),
+                versions: LazyItemVec::new(),
                 version_id,
                 serialized_flag: Arc::new(AtomicBool::new(false)),
             }),
@@ -426,7 +426,7 @@ impl<T: Clone + 'static> LazyItemRef<T> {
                         0,
                         Arc::new(AtomicBool::new(true)),
                         0.into(),
-                        LazyItemMap::new(),
+                        LazyItemVec::new(),
                         Arc::new(AtomicBool::new(false)),
                     )
                 };
@@ -472,7 +472,7 @@ impl<T: Clone + 'static> LazyItemRef<T> {
                         0,
                         Arc::new(AtomicBool::new(true)),
                         0.into(),
-                        LazyItemMap::new(),
+                        LazyItemVec::new(),
                         Arc::new(AtomicBool::new(false)),
                     )
                 };

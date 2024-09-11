@@ -1,6 +1,6 @@
 use super::buffered_io::{BufIoError, BufferManagerFactory};
 use super::file_persist::*;
-use super::lazy_load::{FileIndex, LazyItem, LazyItemMap};
+use super::lazy_load::{FileIndex, LazyItem, LazyItemVec};
 use super::serializer::CustomSerialize;
 use super::types::*;
 use arcshift::ArcShift;
@@ -82,7 +82,7 @@ impl NodeRegistry {
                 file_index: ArcShift::new(Some(file_index)),
                 decay_counter: 0,
                 persist_flag: Arc::new(AtomicBool::new(true)),
-                versions: LazyItemMap::new(),
+                versions: LazyItemVec::new(),
                 version_id,
                 serialized_flag: Arc::new(AtomicBool::new(true)),
             });
