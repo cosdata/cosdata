@@ -139,6 +139,11 @@ pub struct LazyItemMap<T: Clone + 'static> {
     pub items: STM<IdentityMap<LazyItem<T>>>,
 }
 
+#[derive(Clone)]
+pub struct LazyItemVec<T: Clone + 'static> {
+    pub items: STM<Vec<LazyItem<T>>>,
+}
+
 impl<T: Clone + 'static> SyncPersist for LazyItem<T> {
     fn set_persistence(&self, flag: bool) {
         if let Self::Valid { persist_flag, .. } = self {
@@ -636,5 +641,101 @@ impl<T: Clone + 'static> LazyItemMap<T> {
     pub fn len(&self) -> usize {
         let mut arc = self.items.clone();
         arc.get().len()
+    }
+}
+
+impl<T: Clone + 'static> LazyItemVec<T> {
+    pub fn new() -> Self {
+        Self {
+            items: STM::new(Vec::new(), 1, true),
+        }
+    }
+
+    pub fn from_vec(vec: Vec<LazyItem<T>>) -> Self {
+        Self {
+            items: STM::new(vec, 1, true),
+        }
+    }
+
+    pub fn push(&self, item: LazyItem<T>) {
+        let mut items = self.items.clone();
+        items
+            .transactional_update(|old| {
+                let mut new = old.clone();
+                new.push(item.clone());
+                new
+            })
+            .unwrap();
+    }
+
+    pub fn pop(&self) -> Option<LazyItem<T>> {
+        let mut return_value = None;
+        let mut items = self.items.clone();
+
+        items
+            .transactional_update(|old| {
+                let mut new = old.clone();
+                return_value = new.pop();
+                new
+            })
+            .unwrap();
+
+        return_value
+    }
+
+    pub fn get(&self, index: usize) -> Option<LazyItem<T>> {
+        let mut items = self.items.clone();
+        items.get().get(index).cloned()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = LazyItem<T>> {
+        let mut items = self.items.clone();
+        items.get().clone().into_iter()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        let mut items = self.items.clone();
+        items.get().is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        let mut items = self.items.clone();
+        items.get().len()
+    }
+
+    pub fn remove(&self, index: usize) -> Option<LazyItem<T>> {
+        let mut return_value = None;
+        let mut items = self.items.clone();
+
+        items
+            .transactional_update(|old| {
+                let mut new = old.clone();
+                if index < new.len() {
+                    return_value = Some(new.remove(index));
+                } else {
+                    return_value = None;
+                }
+                new
+            })
+            .unwrap();
+
+        return_value
+    }
+
+    pub fn insert(&self, index: usize, item: LazyItem<T>) {
+        let mut items = self.items.clone();
+
+        items
+            .transactional_update(|old| {
+                let mut new = old.clone();
+                new.insert(index, item.clone());
+                new
+            })
+            .unwrap();
+    }
+
+    pub fn clear(&self) {
+        let mut items = self.items.clone();
+        items.transactional_update(|_| Vec::new()).unwrap();
     }
 }
