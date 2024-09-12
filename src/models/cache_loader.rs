@@ -101,7 +101,7 @@ impl NodeRegistry {
         println!("load_function returned successfully");
 
         println!("Trying to get or insert item into registry");
-        let cached_item = self.registry.get_or_insert(combined_index.clone(), || {
+        let cached_item = self.registry.get_or_insert::<BufIoError>(combined_index.clone(), || {
             Ok(item)
         })?;
 
