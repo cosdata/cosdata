@@ -159,21 +159,36 @@ where
         }
     }
 
+    /// Returns an entry from the cache
+    ///
+    /// None will be returned if the cache doesn't contain the key
     pub fn get(&self, key: &K) -> Option<V> {
         if let Some(mut entry) = self.map.get_mut(key) {
             let (value, counter_val) = entry.value_mut();
-            *counter_val = self.increment_counter();
+            let old_counter = *counter_val;
+            let new_counter = self.increment_counter();
+            *counter_val = new_counter;
+            self.index.on_cache_hit(old_counter, new_counter, key.clone().into());
             Some(value.clone())
         } else {
             None
         }
     }
 
+    /// Inserts an entry into the cache
+    ///
+    /// Note that if the entry is already present in cache, it will be
+    /// overwritten
     pub fn insert(&self, key: K, value: V) {
-        self.map.insert(key, (value, self.increment_counter()));
+        let counter = self.increment_counter();
+        self.map.insert(key.clone(), (value, counter));
+        self.index.on_cache_miss(counter, key.into());
         self.evict();
     }
 
+    /// Gets the value from the cache if it exists, else tries to
+    /// insert the result of the fn `f` into the cache and returns the
+    /// same
     pub fn get_or_insert(&self, key: K, f: impl FnOnce() -> Result<V, BufIoError>) -> Result<V, BufIoError> {
         let mut inserted = false;
         let k1 = key.clone();
