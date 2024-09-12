@@ -159,6 +159,14 @@ where
         }
     }
 
+    // Constructs a new LRUCache with probabilistic eviction strategy
+    pub fn with_prob_eviction(capacity: usize, prob: f32) -> Self {
+        let strategy = EvictStrategy::Probabilistic(
+            ProbEviction::new(f16::from_f32_const(prob))
+        );
+        Self::new(capacity, strategy)
+    }
+
     /// Returns an entry from the cache
     ///
     /// None will be returned if the cache doesn't contain the key
