@@ -424,16 +424,25 @@ pub fn index_embeddings(
     let mut index = |embeddings: Vec<(RawVectorEmbedding, Hash)>,
                      last_embedding_offset: EmbeddingOffset|
      -> Result<(), WaCustomError> {
+        let mut quantization_arc = vec_store.quantization_metric.clone();
+        if quantization_arc.get().needs_training() {
+            let quantization = quantization_arc.get();
+            let mut new_quantization = quantization.clone();
+            let vectors: Vec<&[f32]> = embeddings
+                .iter()
+                .map(|embedding| &embedding.0.raw_vec as &[f32])
+                .collect();
+            new_quantization.train(&vectors)?;
+            quantization_arc.update(new_quantization);
+        }
+        let quantization = quantization_arc.get();
         let results: Vec<()> = embeddings
             .into_par_iter()
             .map(|(raw_emb, version)| {
                 let lp = &vec_store.levels_prob;
                 let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
-                let quantized_vec = Arc::new(
-                    vec_store
-                        .quantization_metric
-                        .quantize(&raw_emb.raw_vec, vec_store.storage_type),
-                );
+                let quantized_vec =
+                    Arc::new(quantization.quantize(&raw_emb.raw_vec, vec_store.storage_type));
                 let embedding = QuantizedVectorEmbedding {
                     quantized_vec,
                     hash_vec: raw_emb.hash_vec,
@@ -789,7 +798,6 @@ fn insert_node_create_edges(
     nn.get().set_prop_ready(Arc::new(node_prop));
 
     nn.get().add_ready_neighbors(nbs.clone());
-    // TODO: Initialize with appropriate version ID
     let lz_item = LazyItem::from_arcshift(version, nn.clone());
 
     for (nbr1, cs) in nbs.into_iter() {

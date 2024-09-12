@@ -31,7 +31,7 @@ impl Quantization for ScalarQuantization {
         }
     }
 
-    fn train(&mut self, _vectors: &[Vec<f32>]) -> Result<(), QuantizationError> {
+    fn train(&mut self, _vectors: &[&[f32]]) -> Result<(), QuantizationError> {
         // Scalar quantization doesn't require training
         Ok(())
     } // Implementation here

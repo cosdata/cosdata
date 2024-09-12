@@ -1,12 +1,12 @@
 use super::{Quantization, QuantizationError, StorageType};
 use crate::storage::Storage;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ProductQuantization {
-    centroids: Option<Centroid>,
+    pub centroids: Option<Centroid>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Centroid {
     pub number_of_centroids: u16,
     pub centroids: Vec<u16>,
@@ -19,8 +19,8 @@ impl Quantization for ProductQuantization {
         unimplemented!("Product quantization not implemented yet")
     }
 
-    fn train(&mut self, vectors: &[Vec<f32>]) -> Result<(), QuantizationError> {
         // Implement k-means clustering for product quantization
+    fn train(&mut self, vectors: &[&[f32]]) -> Result<(), QuantizationError> {
         // This is where you'd compute and store the centroids
         unimplemented!("K-means clustering for product quantization not implemented yet")
     }

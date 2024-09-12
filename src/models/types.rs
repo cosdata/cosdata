@@ -11,7 +11,7 @@ use crate::models::lazy_load::*;
 use crate::models::versioning::*;
 use crate::quantization::product::ProductQuantization;
 use crate::quantization::scalar::ScalarQuantization;
-use crate::quantization::{Quantization, StorageType};
+use crate::quantization::{Quantization, QuantizationError, StorageType};
 use crate::storage::Storage;
 use arcshift::ArcShift;
 use dashmap::DashMap;
@@ -163,7 +163,7 @@ impl DistanceFunction for DistanceMetric {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum QuantizationMetric {
     Scalar,
     Product(ProductQuantization),
@@ -177,13 +177,19 @@ impl Quantization for QuantizationMetric {
         }
     }
 
-    fn train(
-        &mut self,
-        vectors: &[Vec<f32>],
-    ) -> Result<(), crate::quantization::QuantizationError> {
+    fn train(&mut self, vectors: &[&[f32]]) -> Result<(), QuantizationError> {
         match self {
             Self::Scalar => ScalarQuantization.train(vectors),
             Self::Product(product) => product.train(vectors),
+        }
+    }
+}
+
+impl QuantizationMetric {
+    pub fn needs_training(&self) -> bool {
+        match self {
+            Self::Scalar => false,
+            Self::Product(product) => product.centroids.is_none(),
         }
     }
 }
@@ -369,7 +375,7 @@ pub struct VectorStore {
     pub lmdb: MetaDb,
     pub current_version: ArcShift<Hash>,
     pub current_open_transaction: ArcShift<Option<Hash>>,
-    pub quantization_metric: Arc<QuantizationMetric>,
+    pub quantization_metric: ArcShift<QuantizationMetric>,
     pub distance_metric: Arc<DistanceMetric>,
     pub storage_type: StorageType,
     pub vcs: Arc<VersionControl>,
@@ -386,7 +392,7 @@ impl VectorStore {
         prop_file: Arc<File>,
         lmdb: MetaDb,
         current_version: ArcShift<Hash>,
-        quantization_metric: Arc<QuantizationMetric>,
+        quantization_metric: ArcShift<QuantizationMetric>,
         distance_metric: Arc<DistanceMetric>,
         storage_type: StorageType,
         vcs: Arc<VersionControl>,
