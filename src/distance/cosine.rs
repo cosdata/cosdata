@@ -9,8 +9,8 @@ pub struct CosineDistance(pub f32);
 impl DistanceFunction for CosineDistance {
     type Item = Self;
     fn calculate(&self, _x: &Storage, _y: &Storage) -> Result<Self::Item, DistanceError> {
-        // placeholder method to be implemented
-        Err(DistanceError::CalculationError)
+        // TODO: Implement cosine distance
+        unimplemented!("Cosine distance is not implemented yet");
     }
 }
 
@@ -31,9 +31,8 @@ impl DistanceFunction for CosineSimilarity {
                     quant_vec: _vec_y,
                 },
             ) => {
-                // Implement cosine similarity for UnsignedByte storage
-                //unimplemented!("Cosine similarity for UnsignedByte not implemented yet")
-                Ok(CosineSimilarity(0.0))
+                // TODO: Implement cosine similarity for UnsignedByte storage
+                unimplemented!("Cosine similarity for UnsignedByte is not implemented yet");
             }
             (
                 Storage::SubByte {
@@ -64,8 +63,8 @@ impl DistanceFunction for CosineSimilarity {
                 }
             }
             (Storage::HalfPrecisionFP { .. }, Storage::HalfPrecisionFP { .. }) => {
-                // Implement cosine similarity for HalfPrecisionFP storage
-                unimplemented!("Cosine similarity for HalfPrecisionFP not implemented yet")
+                // TODO: Implement cosine similarity for HalfPrecisionFP storage
+                unimplemented!("Cosine similarity for HalfPrecisionFP is not implemented yet");
             }
             _ => Err(DistanceError::StorageMismatch),
         }

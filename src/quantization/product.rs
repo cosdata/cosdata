@@ -15,13 +15,13 @@ pub struct Centroid {
 impl Quantization for ProductQuantization {
     // Implementation here
     fn quantize(&self, vector: &[f32], storage_type: StorageType) -> Storage {
-        // Implement product quantization logic here
-        unimplemented!("Product quantization not implemented yet")
+        // TODO: Implement product quantization logic here
+        unimplemented!("Product quantization is not implemented yet");
     }
 
-        // Implement k-means clustering for product quantization
     fn train(&mut self, vectors: &[&[f32]]) -> Result<(), QuantizationError> {
+        // TODO: Implement k-means clustering for product quantization
         // This is where you'd compute and store the centroids
-        unimplemented!("K-means clustering for product quantization not implemented yet")
+        unimplemented!("K-means clustering for product quantization is not implemented yet");
     }
 }

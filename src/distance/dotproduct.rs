@@ -28,7 +28,8 @@ impl DistanceFunction for DotProductDistance {
                 },
             ) => Ok(DotProductDistance(dot_product_f16(vec_x, vec_y))),
             (Storage::SubByte { .. }, Storage::SubByte { .. }) => {
-                Err(DistanceError::CalculationError) // Implement if needed
+                // TODO: Implement dot product distance for SubByte storage
+                unimplemented!("Dot product distance for SubByte is not implemented yet");
             }
             _ => Err(DistanceError::StorageMismatch),
         }

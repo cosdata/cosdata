@@ -16,7 +16,8 @@ impl Quantization for ScalarQuantization {
             }
             StorageType::SubByte(resolution) => {
                 let quant_vec: Vec<_> = quantize_to_u8_bits(vector, resolution);
-                let mag = 0; //implement todo
+                // TODO: compute magnitude
+                let mag = 0;
                 Storage::SubByte {
                     mag,
                     quant_vec,
@@ -34,5 +35,5 @@ impl Quantization for ScalarQuantization {
     fn train(&mut self, _vectors: &[&[f32]]) -> Result<(), QuantizationError> {
         // Scalar quantization doesn't require training
         Ok(())
-    } // Implementation here
+    }
 }

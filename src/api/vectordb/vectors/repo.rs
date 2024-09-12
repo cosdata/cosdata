@@ -16,9 +16,8 @@ pub(crate) async fn create_vector(
         .await
         .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
 
-    // error cases that happens within run_upload is not handled
-    // this method always return a successful response with the data sent by the user
-    run_upload(
+    // TODO: handle the error
+    let _ = run_upload(
         collection,
         vec![(
             create_vector_dto.id.clone(),
