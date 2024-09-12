@@ -463,7 +463,7 @@ pub fn get_app_env() -> Result<Arc<AppEnv>, WaCustomError> {
 
 #[derive(Clone)]
 pub struct STM<T: 'static> {
-    arcshift: ArcShift<T>,
+    pub arcshift: ArcShift<T>,
     max_retries: usize,
     strict: bool,
 }
@@ -528,7 +528,8 @@ where
                 }
 
                 // Apply backoff before the next retry attempt
-                backoff(tries);
+                // backoff(tries);
+                std::thread::yield_now();
                 tries += 1;
             }
         }

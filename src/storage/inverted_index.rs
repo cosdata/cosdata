@@ -116,14 +116,15 @@ where
             let new_dim_index = current_node.dim_index + POWERS_OF_4[child_index];
             let key = IdentityMapKey::Int(child_index as u32);
             let new_child = LazyItem::new(0.into(), InvertedIndexItem::new(new_dim_index, true));
-            current_node
-                .lazy_children
-                .checked_insert(key.clone(), new_child);
-            current_node = current_node
-                .lazy_children
-                .get(&key)
-                .map(|lazy_item| lazy_item.get_data(cache.clone()))
-                .expect("Child should exist");
+            loop {
+                if let Some(child) = current_node
+                    .lazy_children
+                    .checked_insert(key.clone(), new_child.clone())
+                {
+                    current_node = child.get_data(cache.clone());
+                    break;
+                }
+            }
         }
 
         current_node
