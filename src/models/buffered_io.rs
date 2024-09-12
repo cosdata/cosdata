@@ -162,7 +162,7 @@ impl BufferManager {
 
     fn get_or_create_region(&self, position: u64) -> Result<Arc<BufferRegion>, BufIoError> {
         let start = position - (position % BUFFER_SIZE as u64);
-        self.regions.get_or_insert(start, || {
+        let cached_region = self.regions.get_or_insert(start, || {
             let mut region = BufferRegion::new(start);
             let mut file = self.file.write().map_err(|_| BufIoError::Locking)?;
             file.seek(SeekFrom::Start(start)).map_err(BufIoError::Io)?;
@@ -170,7 +170,8 @@ impl BufferManager {
             let bytes_read = file.read(&mut buffer[..]).map_err(BufIoError::Io)?;
             region.end.store(bytes_read, Ordering::SeqCst);
             Ok(Arc::new(region))
-        })
+        });
+        cached_region.map(|r| r.inner())
     }
 
     fn flush_region(&self, region: &BufferRegion) -> Result<(), BufIoError> {

@@ -144,6 +144,23 @@ where
     index: EvictionIndex,
 }
 
+/// Wrapper for the value that's returned from the LRUCache when
+/// trying to get_or_insert in a single operation. Useful for
+/// indicating whether there was a cache hit or a miss.
+pub enum CachedValue<V> {
+    Hit(V),
+    Miss(V),
+}
+
+impl<V> CachedValue<V> {
+    pub fn inner(self) -> V {
+        match self {
+            Self::Hit(v) => v,
+            Self::Miss(v) => v,
+        }
+    }
+}
+
 impl<K, V> LRUCache<K, V>
 where
     K: Eq + std::hash::Hash + Clone + Into<u64> + From<u64>,
@@ -197,7 +214,7 @@ where
     /// Gets the value from the cache if it exists, else tries to
     /// insert the result of the fn `f` into the cache and returns the
     /// same
-    pub fn get_or_insert(&self, key: K, f: impl FnOnce() -> Result<V, BufIoError>) -> Result<V, BufIoError> {
+    pub fn get_or_insert(&self, key: K, f: impl FnOnce() -> Result<V, BufIoError>) -> Result<CachedValue<V>, BufIoError> {
         let mut inserted = false;
         let k1 = key.clone();
         let k2 = key.clone();
@@ -223,8 +240,10 @@ where
             Ok(v) => {
                 if inserted {
                     self.evict();
+                    Ok(CachedValue::Miss(v))
+                } else {
+                    Ok(CachedValue::Hit(v))
                 }
-                Ok(v)
             }
             Err(e) => Err(e)
         }
@@ -367,13 +386,13 @@ mod tests {
         // the method returns the correct value
         let x = cache.get_or_insert(1, || {
             Ok("value1")
-        });
+        }).map(|entry| entry.inner());
         assert_eq!("value1", x.unwrap());
         assert_eq!(1, cache.map.len());
 
         let y = cache.get_or_insert(2, || {
             Ok("value2")
-        });
+        }).map(|entry| entry.inner());
         assert_eq!("value2", y.unwrap());
         assert_eq!(2, cache.map.len());
 
@@ -383,13 +402,13 @@ mod tests {
             // This code will not be executed
             assert!(false);
             Err(BufIoError::Locking)
-        });
+        }).map(|entry| entry.inner());
         assert!(x1.is_ok_and(|x| x == "value1"));
 
         // Insert a third value. It will cause key2 to be evicted
         let z = cache.get_or_insert(3, || {
             Ok("value3")
-        });
+        }).map(|entry| entry.inner());
         assert_eq!("value3", z.unwrap());
 
         // Verify that key2 is evicted
@@ -416,7 +435,7 @@ mod tests {
             thread::spawn(move || {
                 let x = c.get_or_insert(1, || {
                     Ok("value1")
-                });
+                }).map(|entry| entry.inner());
                 assert_eq!("value1", x.unwrap());
             })
         };
@@ -426,7 +445,7 @@ mod tests {
             thread::spawn(move || {
                 let x = c.get_or_insert(1, || {
                     Ok("value1")
-                });
+                }).map(|entry| entry.inner());
                 assert_eq!("value1", x.unwrap());
             })
         };
@@ -439,7 +458,7 @@ mod tests {
         // Insert 2nd entry
         let y = cache.get_or_insert(2, || {
             Ok("value2")
-        });
+        }).map(|entry| entry.inner());
         assert_eq!("value2", y.unwrap());
         assert_eq!(2, cache.map.len());
 
@@ -449,7 +468,7 @@ mod tests {
             thread::spawn(move || {
                 let x = c.get_or_insert(3, || {
                     Ok("value3")
-                });
+                }).map(|entry| entry.inner());
                 assert_eq!("value3", x.unwrap());
             })
         };
@@ -459,7 +478,7 @@ mod tests {
             thread::spawn(move || {
                 let x = c.get_or_insert(4, || {
                     Ok("value4")
-                });
+                }).map(|entry| entry.inner());
                 assert_eq!("value4", x.unwrap());
             })
         };
