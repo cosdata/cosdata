@@ -13,12 +13,21 @@ use crate::vector_store::*;
 use arcshift::ArcShift;
 use lmdb::{DatabaseFlags, Transaction};
 use rand::Rng;
-use rayon::iter::IntoParallelIterator;
-use rayon::iter::ParallelIterator;
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::array::TryFromSliceError;
 use std::fs::OpenOptions;
 use std::path::Path;
 use std::sync::Arc;
+
+pub fn infer_storage_type_from_dim(dim: usize) -> StorageType {
+    if dim < 256 {
+        StorageType::HalfPrecisionFP
+    } else if dim < 512 {
+        StorageType::UnsignedByte
+    } else {
+        StorageType::SubByte(2)
+    }
+}
 
 pub async fn init_vector_store(
     name: String,
@@ -32,7 +41,7 @@ pub async fn init_vector_store(
     }
 
     let quantization_metric = Arc::new(QuantizationMetric::Scalar);
-    let storage_type = StorageType::UnsignedByte;
+    let storage_type = infer_storage_type_from_dim(size);
     let ain_env = get_app_env().map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
     let denv = ain_env.persist.clone();
@@ -101,7 +110,6 @@ pub async fn init_vector_store(
             child: LazyItemRef::new_invalid(),
         });
 
-        // TODO: Initialize with appropriate version ID
         let lazy_node = LazyItem::from_arcshift(hash, current_node.clone());
         let nn = LazyItemRef::from_arcshift(hash, current_node.clone());
 
@@ -151,9 +159,9 @@ pub async fn init_vector_store(
         prop_file,
         lmdb,
         ArcShift::new(hash),
-        Arc::new(QuantizationMetric::Scalar),
+        ArcShift::new(QuantizationMetric::Scalar),
         Arc::new(DistanceMetric::Cosine),
-        StorageType::UnsignedByte,
+        storage_type,
         vcs,
     ));
     ain_env
