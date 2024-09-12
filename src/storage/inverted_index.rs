@@ -132,27 +132,10 @@ where
 
     /// Inserts a value into the index at the specified dimension index.
     /// Calculates the path and delegates to `insert_with_path`.
-    pub fn insert(
-        mut node: ArcShift<InvertedIndexItem<T>>,
-        value: T,
-        vector_id: u32,
-    ) -> Result<(), String> {
-        let mut updated = false;
-        while !updated {
-            // Attempt to update using rcu
-            updated = node.rcu(|current| {
-                // Create a new InvertedIndexItem with the updates
-                let mut new_item = (*current).clone();
-                new_item.implicit = false;
-                new_item.data.insert(
-                    IdentityMapKey::Int(vector_id),
-                    LazyItem::new(0.into(), value.clone()),
-                );
-                new_item
-            });
-        }
-
-        Ok(())
+    pub fn insert(node: ArcShift<InvertedIndexItem<T>>, value: T, vector_id: u32) {
+        let key = IdentityMapKey::Int(vector_id);
+        let value = LazyItem::new(0.into(), value.clone());
+        node.data.insert(key, value);
     }
 
     /// Retrieves a value from the index at the specified dimension index.
@@ -261,7 +244,7 @@ where
 
     /// Inserts a value into the index at the specified dimension index.
     /// Delegates to the root node's `insert` method.
-    pub fn insert(&self, dim_index: u32, value: T, vector_id: u32) -> Result<(), String> {
+    pub fn insert(&self, dim_index: u32, value: T, vector_id: u32) {
         let path = calculate_path(dim_index, self.root.dim_index);
         let node =
             InvertedIndexItem::find_or_create_node(self.root.clone(), &path, self.cache.clone());
@@ -287,7 +270,6 @@ impl InvertedIndex<f32> {
         for (dim_index, &value) in vector.iter().enumerate() {
             if value != 0.0 {
                 self.insert(dim_index as u32, value, vector_id)
-                    .expect("Insert value in inverted index");
             }
         }
         Ok(())

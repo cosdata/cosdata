@@ -67,8 +67,7 @@ fn benchmark_sequential_inserts(c: &mut Criterion) {
 
 fn benchmark_parallel_inserts(c: &mut Criterion) {
     let dimensions = 1000; // Increased dimensions
-                           // let vector_counts = [1000, 10000, 100000];
-    let vector_counts = [1000];
+    let vector_counts = [1000, 10000, 100000];
 
     let mut group = c.benchmark_group("Insert sparse vectors");
     group.sample_size(10);

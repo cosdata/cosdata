@@ -584,7 +584,7 @@ impl<T: Clone + Identifiable<Id = u64> + 'static> LazyItemSet<T> {
 impl<T: Clone + 'static> LazyItemMap<T> {
     pub fn new() -> Self {
         Self {
-            items: STM::new(IdentityMap::new(), 1, true),
+            items: STM::new(IdentityMap::new(), 5, true),
         }
     }
 

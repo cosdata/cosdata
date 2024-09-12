@@ -471,7 +471,7 @@ pub struct STM<T: 'static> {
 fn backoff(iteration: usize) {
     let spins = 1 << iteration;
     for _ in 0..spins {
-        spin_loop();
+        std::thread::yield_now();
     }
 }
 
@@ -528,8 +528,7 @@ where
                 }
 
                 // Apply backoff before the next retry attempt
-                // backoff(tries);
-                std::thread::yield_now();
+                backoff(tries);
                 tries += 1;
             }
         }
