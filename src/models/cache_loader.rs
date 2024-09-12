@@ -1,10 +1,12 @@
+use crate::models::lru_cache::CachedValue;
+
 use super::buffered_io::{BufIoError, BufferManagerFactory};
 use super::file_persist::*;
 use super::lazy_load::{FileIndex, LazyItem, LazyItemVec};
+use super::lru_cache::LRUCache;
 use super::serializer::CustomSerialize;
 use super::types::*;
 use arcshift::ArcShift;
-use dashmap::DashMap;
 use probabilistic_collections::cuckoo::CuckooFilter;
 use std::collections::HashSet;
 use std::io;
@@ -13,14 +15,14 @@ use std::sync::{atomic::AtomicBool, Arc, RwLock};
 
 pub struct NodeRegistry {
     cuckoo_filter: RwLock<CuckooFilter<u64>>,
-    registry: DashMap<u64, LazyItem<MergedNode>>,
+    registry: LRUCache<u64, LazyItem<MergedNode>>,
     bufmans: Arc<BufferManagerFactory>,
 }
 
 impl NodeRegistry {
     pub fn new(cuckoo_filter_capacity: usize, bufmans: Arc<BufferManagerFactory>) -> Self {
         let cuckoo_filter = CuckooFilter::new(cuckoo_filter_capacity);
-        let registry = DashMap::new();
+        let registry = LRUCache::with_prob_eviction(1000, 0.03125);
         NodeRegistry {
             cuckoo_filter: RwLock::new(cuckoo_filter),
             registry,
@@ -98,19 +100,24 @@ impl NodeRegistry {
         )?;
         println!("load_function returned successfully");
 
-        if let Some(obj) = self.registry.get(&combined_index) {
-            println!("Object found in registry after load, returning");
-            return Ok(obj.clone());
+        println!("Trying to get or insert item into registry");
+        let cached_item = self.registry.get_or_insert::<BufIoError>(combined_index.clone(), || {
+            Ok(item)
+        })?;
+
+        match cached_item {
+            CachedValue::Hit(item) => {
+                println!("Object found in registry after load, returning");
+                Ok(item)
+            }
+            CachedValue::Miss(item) => {
+                println!("Inserting key into cuckoo_filter");
+                self.cuckoo_filter.write().unwrap().insert(&combined_index);
+
+                println!("Returning newly created LazyItem");
+                Ok(item)
+            }
         }
-
-        println!("Inserting key into cuckoo_filter");
-        self.cuckoo_filter.write().unwrap().insert(&combined_index);
-
-        println!("Inserting item into registry");
-        self.registry.insert(combined_index, item.clone());
-
-        println!("Returning newly created LazyItem");
-        Ok(item)
     }
 
     pub fn load_item<T: CustomSerialize>(
