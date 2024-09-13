@@ -13,12 +13,21 @@ use std::sync::{
 };
 
 fn largest_power_of_4_below(x: u32) -> u32 {
-    if x == 0 {
-        0
-    } else {
-        let msb_position = 31 - x.leading_zeros();
-        msb_position / 2
-    }
+    // This function is used to calculate the largest power of 4 (4^n) such that
+    // 4^n <= x, where x represents the gap between the current version and the
+    // target version in our version control system.
+    //
+    // The system uses an exponentially spaced versioning scheme, where each
+    // checkpoint is spaced by powers of 4 (1, 4, 16, 64, etc.). This minimizes
+    // the number of intermediate versions stored, allowing efficient lookups
+    // and updates by focusing only on meaningful checkpoints.
+    //
+    // The input x should not be zero because finding a "largest power of 4 below zero"
+    // is undefined, as zero does not have any significant bits for such a calculation.
+    assert_ne!(x, 0, "x should not be zero");
+
+    let msb_position = 31 - x.leading_zeros(); // Find the most significant bit's position
+    msb_position / 2 // Return the power index of the largest 4^n ≤ x
 }
 
 pub trait SyncPersist {
@@ -36,16 +45,43 @@ pub enum FileIndex {
 }
 
 #[derive(Clone)]
+// As the name suggests, this is a wrapper for lazy-loading the inner data. Its
+// serialization/deserialization mechanisms are designed to handle cyclic data while minimizing
+// redundant re-serializations, ensuring optimal performance.
 pub enum LazyItem<T: Clone + 'static> {
     Valid {
+        // Holds the actual data. Wrapped in an `Option` to indicate whether the data is loaded.
         data: Option<ArcShift<T>>,
+        // Pointer to the file offset where the data is stored. Used for lazy loading the data when
+        // needed. If the data is not loaded, this index retrieves it from persistent storage.
         file_index: ArcShift<Option<FileIndex>>,
+        // Tracks the lifespan the item.
         decay_counter: usize,
+        // Prevents infinite serialization loops when handling cyclic data. This flag indicates
+        // whether the `LazyItem` has already been serialized during the current cycle, ensuring
+        // the data isn't serialized multiple times. It must be reset after the whole serialization
+        // cycle is complete.
         persist_flag: Arc<AtomicBool>,
+        // Each element in `versions` is `4^n` versions ahead of the current version:
+        // - 0th element is 1 version ahead (`4^0`)
+        // - 1st element is 4 versions ahead (`4^1`)
+        // - 2nd element is 16 versions ahead (`4^2`), etc.
+        //
+        // This exponential spacing aids in:
+        // 1. **Efficient lookups**: The predictable gaps make version navigation fast.
+        // 2. **Scalability**: The exponential structure keeps the history compact for large
+        // version sets.
+        //
+        // `LazyItemVec` is ideal for maintaining sequential versions with fast access by index.
         versions: LazyItemVec<T>,
+        // Hash value representing the current version.
         version_id: Hash,
+        // Indicates if this `LazyItem` has ever been serialized. Unlike `persist_flag`, this flag
+        // should not be reset. It avoids re-serializing the entire `LazyItem` if it's already
+        // been serialized once, as only the `versions` field might change.
         serialized_flag: Arc<AtomicBool>,
     },
+    // Marks the item as invalid or unavailable.
     Invalid,
 }
 
@@ -136,11 +172,28 @@ where
 
 #[derive(Clone)]
 pub struct LazyItemMap<T: Clone + 'static> {
+    // A map-like structure that uses `IdentityMap` to store `LazyItem`s.
+    // This allows efficient access and management of items using unique keys.
+    // `STM` implies concurrent updates and access management with Software Transactional Memory.
+    //
+    // Use Case:
+    // - Suitable for scenarios requiring fast, direct access to items based on unique keys.
+    // - Ideal for non-sequential or sparse data where items are frequently added or removed.
+    // - Provides O(1) average time complexity for lookups, insertions, and deletions.
     pub items: STM<IdentityMap<LazyItem<T>>>,
 }
 
 #[derive(Clone)]
 pub struct LazyItemVec<T: Clone + 'static> {
+    // A vector-based structure to store `LazyItem`s in a sequential manner.
+    // This allows for ordered access and is useful for data where indices follow a pattern,
+    // such as powers of 4 in version control systems.
+    // `STM` implies concurrent updates and access management with Software Transactional Memory.
+    //
+    // Use Case:
+    // - Ideal for ordered or sequential data where the index has a meaningful relationship.
+    // - Suitable for systems where data is accessed or updated in a linear, ordered fashion.
+    // - Provides O(1) time complexity for access by index and efficient memory usage if managed properly.
     pub items: STM<Vec<LazyItem<T>>>,
 }
 
@@ -255,13 +308,22 @@ impl<T: Clone + 'static> LazyItem<T> {
             ..
         } = self
         {
+            // Extract the last 4 bytes of the branch_id to compute the version offset
             let branch_last_4_bytes = (*branch_id & 0xFFFFFFFF) as u32;
             let current_version = **version_id ^ branch_last_4_bytes;
+
+            // Calculate the difference between the target version and the current version
             let target_diff = version - current_version;
+
+            // Use the largest power of 4 below the target difference to find the appropriate
+            // checkpoint for storing this new version.
             let index = largest_power_of_4_below(target_diff);
+
+            // If a version already exists at the calculated index, recursively add the new version.
             if let Some(existing_version) = versions.get(index as usize) {
                 return existing_version.add_version(branch_id, version, lazy_item);
             } else {
+                // Insert the new version at the calculated index if none exists there yet.
                 versions.insert(index as usize, lazy_item);
             }
         }
