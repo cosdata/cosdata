@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use crate::{api::vectordb::collections, api_service::run_upload, config_loader::Config};
+use crate::{
+    api::vectordb::collections, api_service::run_upload, config_loader::Config,
+    models::types::VectorId,
+};
 
 use super::{
     dtos::{CreateVectorDto, CreateVectorResponseDto},
@@ -33,7 +36,7 @@ pub(crate) async fn create_vector(
 
 pub(crate) async fn get_vector_by_id(
     _collection_id: &str,
-    _vector_id: &str,
+    _vector_id: VectorId,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
     Err(VectorsError::NotFound)?
 }
