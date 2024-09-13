@@ -36,7 +36,7 @@ fn generate_random_sparse_vectors(num_records: usize, dimensions: usize) -> Vec<
 
 fn main() {
     let dimensions = 1000; // Increased dimensions
-    let num_vectors = 10_000;
+    let num_vectors = 1000;
 
     // Generate random sparse vectors
     let records = generate_random_sparse_vectors(num_vectors, dimensions);

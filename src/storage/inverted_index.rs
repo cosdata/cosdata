@@ -3,6 +3,7 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 
 use arcshift::ArcShift;
+use dashmap::DashMap;
 
 use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::cache_loader::NodeRegistry;
@@ -56,7 +57,7 @@ where
 {
     pub dim_index: u32,
     pub implicit: bool,
-    pub data: LazyItemMap<T>,
+    pub data: Arc<DashMap<IdentityMapKey, LazyItem<T>>>,
     // TODO: benchmark if fixed size children array with lazy item refs
     //  yields better performance
     pub lazy_children: LazyItemMap<InvertedIndexItem<T>>,
@@ -99,7 +100,7 @@ where
         InvertedIndexItem {
             dim_index,
             implicit,
-            data: LazyItemMap::new(),
+            data: Arc::new(DashMap::new()),
             lazy_children: LazyItemMap::new(),
         }
     }
