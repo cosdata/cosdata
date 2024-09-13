@@ -130,9 +130,10 @@ impl BufferManager {
     pub fn new(mut file: File) -> io::Result<Self> {
         let file_size = file.seek(SeekFrom::End(0))?;
         file.seek(SeekFrom::Start(0))?;
+        let regions = LRUCache::with_prob_eviction(100, 0.03125);
         Ok(BufferManager {
             file: Arc::new(RwLock::new(file)),
-            regions: LRUCache::new(100),
+            regions,
             cursors: RwLock::new(HashMap::new()),
             next_cursor_id: AtomicU64::new(0),
             file_size: RwLock::new(file_size),
@@ -161,7 +162,7 @@ impl BufferManager {
 
     fn get_or_create_region(&self, position: u64) -> Result<Arc<BufferRegion>, BufIoError> {
         let start = position - (position % BUFFER_SIZE as u64);
-        self.regions.get_or_insert(start, || {
+        let cached_region = self.regions.get_or_insert::<BufIoError>(start, || {
             let mut region = BufferRegion::new(start);
             let mut file = self.file.write().map_err(|_| BufIoError::Locking)?;
             file.seek(SeekFrom::Start(start)).map_err(BufIoError::Io)?;
@@ -169,7 +170,8 @@ impl BufferManager {
             let bytes_read = file.read(&mut buffer[..]).map_err(BufIoError::Io)?;
             region.end.store(bytes_read, Ordering::SeqCst);
             Ok(Arc::new(region))
-        })
+        });
+        cached_region.map(|r| r.inner())
     }
 
     fn flush_region(&self, region: &BufferRegion) -> Result<(), BufIoError> {
@@ -422,11 +424,8 @@ impl BufferManager {
     }
 
     pub fn flush(&self) -> Result<(), BufIoError> {
-        for entry in self.regions.iter() {
-            // @TODO: Leaky abstraction. LRUCache's API can be
-            // improved here.
-            let (region, _) = entry.value();
-            self.flush_region(region)?;
+        for region in self.regions.values() {
+            self.flush_region(&region)?;
         }
         self.file
             .write()

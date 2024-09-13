@@ -1,6 +1,5 @@
 use crate::distance::cosine::CosineSimilarity;
 use crate::models::buffered_io::BufferManager;
-use crate::models::identity_collections::IdentityMapKey;
 use crate::models::lazy_load::*;
 use crate::models::serializer::*;
 use crate::models::types::*;
@@ -10,8 +9,7 @@ use crate::models::versioning::{Version, VersionControl};
 use arcshift::ArcShift;
 use lmdb::Environment;
 use std::sync::Arc;
-use tempfile::tempdir;
-use tempfile::TempDir;
+use tempfile::{tempdir, TempDir};
 
 fn get_cache(bufmans: Arc<BufferManagerFactory>) -> Arc<NodeRegistry> {
     Arc::new(NodeRegistry::new(1000, bufmans))
@@ -588,8 +586,7 @@ fn validate_lazy_item_versions(
     let versions = lazy_item.get_versions().unwrap();
 
     for i in 0..versions.len() {
-        let key = IdentityMapKey::Int(i as u32);
-        let version = versions.get(&key).unwrap();
+        let version = versions.get(i).unwrap();
         let version = if version.get_lazy_data().is_none() {
             let file_index = version.get_file_index().unwrap();
             cache.clone().load_item(file_index).unwrap()

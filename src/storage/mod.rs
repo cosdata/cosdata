@@ -1,3 +1,5 @@
+pub mod inverted_index;
+
 use half::f16;
 use serde::{Deserialize, Serialize};
 

@@ -5,6 +5,7 @@ use super::serializer::CustomSerialize;
 use super::types::{FileOffset, STM};
 use super::versioning::*;
 use arcshift::ArcShift;
+use core::panic;
 use std::fmt;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -41,7 +42,7 @@ pub enum LazyItem<T: Clone + 'static> {
         file_index: ArcShift<Option<FileIndex>>,
         decay_counter: usize,
         persist_flag: Arc<AtomicBool>,
-        versions: LazyItemMap<T>,
+        versions: LazyItemVec<T>,
         version_id: Hash,
         serialized_flag: Arc<AtomicBool>,
     },
@@ -138,6 +139,11 @@ pub struct LazyItemMap<T: Clone + 'static> {
     pub items: STM<IdentityMap<LazyItem<T>>>,
 }
 
+#[derive(Clone)]
+pub struct LazyItemVec<T: Clone + 'static> {
+    pub items: STM<Vec<LazyItem<T>>>,
+}
+
 impl<T: Clone + 'static> SyncPersist for LazyItem<T> {
     fn set_persistence(&self, flag: bool) {
         if let Self::Valid { persist_flag, .. } = self {
@@ -169,7 +175,7 @@ impl<T: Clone + 'static> LazyItem<T> {
             file_index: ArcShift::new(None),
             decay_counter: 0,
             persist_flag: Arc::new(AtomicBool::new(true)),
-            versions: LazyItemMap::new(),
+            versions: LazyItemVec::new(),
             version_id,
             serialized_flag: Arc::new(AtomicBool::new(false)),
         }
@@ -185,7 +191,7 @@ impl<T: Clone + 'static> LazyItem<T> {
             file_index: ArcShift::new(None),
             decay_counter: 0,
             persist_flag: Arc::new(AtomicBool::new(true)),
-            versions: LazyItemMap::new(),
+            versions: LazyItemVec::new(),
             version_id,
             serialized_flag: Arc::new(AtomicBool::new(false)),
         }
@@ -197,7 +203,7 @@ impl<T: Clone + 'static> LazyItem<T> {
             file_index: ArcShift::new(None),
             decay_counter: 0,
             persist_flag: Arc::new(AtomicBool::new(true)),
-            versions: LazyItemMap::new(),
+            versions: LazyItemVec::new(),
             version_id,
             serialized_flag: Arc::new(AtomicBool::new(false)),
         }
@@ -253,17 +259,17 @@ impl<T: Clone + 'static> LazyItem<T> {
             let current_version = **version_id ^ branch_last_4_bytes;
             let target_diff = version - current_version;
             let index = largest_power_of_4_below(target_diff);
-            if let Some(existing_version) = versions.get(&IdentityMapKey::Int(index)) {
+            if let Some(existing_version) = versions.get(index as usize) {
                 return existing_version.add_version(branch_id, version, lazy_item);
             } else {
-                versions.insert(IdentityMapKey::Int(index), lazy_item);
+                versions.insert(index as usize, lazy_item);
             }
         }
 
         Ok(())
     }
 
-    pub fn get_versions(&self) -> Option<LazyItemMap<T>> {
+    pub fn get_versions(&self) -> Option<LazyItemVec<T>> {
         if let Self::Valid { versions, .. } = self {
             Some(versions.clone())
         } else {
@@ -275,7 +281,7 @@ impl<T: Clone + 'static> LazyItem<T> {
         self.set_persistence(flag);
         if let Some(versions) = self.get_versions() {
             let mut items_arc = versions.items.clone();
-            for (_, version) in items_arc.get().iter() {
+            for version in items_arc.get().iter() {
                 version.set_versions_persistence(flag);
             }
         }
@@ -340,7 +346,7 @@ impl<T: Clone + 'static> LazyItemRef<T> {
                 file_index: ArcShift::new(None),
                 decay_counter: 0,
                 persist_flag: Arc::new(AtomicBool::new(true)),
-                versions: LazyItemMap::new(),
+                versions: LazyItemVec::new(),
                 version_id,
                 serialized_flag: Arc::new(AtomicBool::new(false)),
             }),
@@ -360,7 +366,7 @@ impl<T: Clone + 'static> LazyItemRef<T> {
                 file_index: ArcShift::new(None),
                 decay_counter: 0,
                 persist_flag: Arc::new(AtomicBool::new(true)),
-                versions: LazyItemMap::new(),
+                versions: LazyItemVec::new(),
                 version_id,
                 serialized_flag: Arc::new(AtomicBool::new(false)),
             }),
@@ -420,7 +426,7 @@ impl<T: Clone + 'static> LazyItemRef<T> {
                         0,
                         Arc::new(AtomicBool::new(true)),
                         0.into(),
-                        LazyItemMap::new(),
+                        LazyItemVec::new(),
                         Arc::new(AtomicBool::new(false)),
                     )
                 };
@@ -466,7 +472,7 @@ impl<T: Clone + 'static> LazyItemRef<T> {
                         0,
                         Arc::new(AtomicBool::new(true)),
                         0.into(),
-                        LazyItemMap::new(),
+                        LazyItemVec::new(),
                         Arc::new(AtomicBool::new(false)),
                     )
                 };
@@ -588,6 +594,9 @@ impl<T: Clone + 'static> LazyItemMap<T> {
         }
     }
 
+    /// Inserts a new item into the map
+    ///
+    /// Overwrites an existing item if the key already exists
     pub fn insert(&self, key: IdentityMapKey, value: LazyItem<T>) {
         let mut arc = self.items.clone();
 
@@ -597,6 +606,25 @@ impl<T: Clone + 'static> LazyItemMap<T> {
             map
         })
         .unwrap();
+    }
+
+    /// Inserts a new key value pair into the map if the key does not already exist
+    ///
+    /// Note: Concurrent updates should use checked_insert to avoid overwriting
+    /// updates from other threads.
+    pub fn checked_insert(&self, key: IdentityMapKey, default: LazyItem<T>) {
+        let mut arc = self.items.clone();
+
+        arc.transactional_update(|map| {
+            let mut new_map = map.clone();
+            if !new_map.contains(&key) {
+                new_map.insert(key.clone(), default.clone());
+                new_map
+            } else {
+                new_map
+            }
+        })
+        .expect("Map update should succeed");
     }
 
     pub fn get(&self, key: &IdentityMapKey) -> Option<LazyItem<T>> {
@@ -613,5 +641,101 @@ impl<T: Clone + 'static> LazyItemMap<T> {
     pub fn len(&self) -> usize {
         let mut arc = self.items.clone();
         arc.get().len()
+    }
+}
+
+impl<T: Clone + 'static> LazyItemVec<T> {
+    pub fn new() -> Self {
+        Self {
+            items: STM::new(Vec::new(), 1, true),
+        }
+    }
+
+    pub fn from_vec(vec: Vec<LazyItem<T>>) -> Self {
+        Self {
+            items: STM::new(vec, 1, true),
+        }
+    }
+
+    pub fn push(&self, item: LazyItem<T>) {
+        let mut items = self.items.clone();
+        items
+            .transactional_update(|old| {
+                let mut new = old.clone();
+                new.push(item.clone());
+                new
+            })
+            .unwrap();
+    }
+
+    pub fn pop(&self) -> Option<LazyItem<T>> {
+        let mut return_value = None;
+        let mut items = self.items.clone();
+
+        items
+            .transactional_update(|old| {
+                let mut new = old.clone();
+                return_value = new.pop();
+                new
+            })
+            .unwrap();
+
+        return_value
+    }
+
+    pub fn get(&self, index: usize) -> Option<LazyItem<T>> {
+        let mut items = self.items.clone();
+        items.get().get(index).cloned()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = LazyItem<T>> {
+        let mut items = self.items.clone();
+        items.get().clone().into_iter()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        let mut items = self.items.clone();
+        items.get().is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        let mut items = self.items.clone();
+        items.get().len()
+    }
+
+    pub fn remove(&self, index: usize) -> Option<LazyItem<T>> {
+        let mut return_value = None;
+        let mut items = self.items.clone();
+
+        items
+            .transactional_update(|old| {
+                let mut new = old.clone();
+                if index < new.len() {
+                    return_value = Some(new.remove(index));
+                } else {
+                    return_value = None;
+                }
+                new
+            })
+            .unwrap();
+
+        return_value
+    }
+
+    pub fn insert(&self, index: usize, item: LazyItem<T>) {
+        let mut items = self.items.clone();
+
+        items
+            .transactional_update(|old| {
+                let mut new = old.clone();
+                new.insert(index, item.clone());
+                new
+            })
+            .unwrap();
+    }
+
+    pub fn clear(&self) {
+        let mut items = self.items.clone();
+        items.transactional_update(|_| Vec::new()).unwrap();
     }
 }

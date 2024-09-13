@@ -1,0 +1,424 @@
+* Rule Evaluation Engine for Cos Query Language
+
+** Overview
+The Rule Evaluation Engine is responsible for applying rules to the knowledge graph, deriving new facts, and managing materialized views, all while ensuring consistency with the defined schema.
+
+** Main Components
+1. Schema Manager
+2. Rule Parser
+3. Fact Matcher
+4. Unification Engine
+5. Inference Engine
+6. Materialization Manager
+
+** Key Concepts in Cos Query Language
+
+*** Schema Definition
+Cos allows defining schemas for entities and relationships. These schemas must be used to validate facts and rules.
+
+Example:
+#+BEGIN_SRC c
+define entity person as
+    name: string,
+    age: int;
+
+define relationship knows as
+    (knower: person, known: person),
+    since: date;
+#+END_SRC
+
+*** Fact Matching
+Fact matching is directly used in Cos. In the `match` clause of rules and queries, fact patterns are specified to match against known facts in the graph database.
+
+Example:
+#+BEGIN_SRC c
+match
+    $person isa person (
+        name: $name,
+        age: $age
+    )
+#+END_SRC
+
+*** Variables and Bindings
+Variables in Cos are placeholders that can represent different values. They are typically used in rules to express patterns or relationships that can match multiple concrete facts. In Cos, variables are represented as strings prefixed with a "$" character.
+
+For example, in a rule like:
+#+BEGIN_SRC c
+define rule parent_child as
+    match
+        ($parent, $child) forms parent
+    infer
+        ($child, $parent) forms has_parent;
+#+END_SRC
+
+$parent and $child are variables. This rule can be read as =if $parent is a parent of $child, then $child has $parent as a parent=.
+
+Bindings are associations between variables and specific values. When a rule is being evaluated, the system tries to find concrete values (from the existing facts) that can replace the variables in a way that makes the rule true.
+
+For example, given the fact =($John, $Mary) forms parent=, and trying to match it with the rule above, we would create the following bindings:
+   =$parent -> John=
+   =$child -> Mary=
+
+The process of creating these associations is called "unification".
+
+**** How Bindings and Variables Work in Rule Evaluation
+
+1. Pattern Matching:
+   When evaluating a rule, the system tries to match the patterns in the rule body against known facts. Variables in these patterns can match any value.
+
+2. Unification:
+   As patterns are matched, variables get bound to specific values. This process goes through each term in the pattern and the matching fact:
+   - If the term is a constant (not a variable), it must match exactly.
+   - If the term is a variable:
+     - If it's not yet bound, it gets bound to the corresponding value in the fact.
+     - If it's already bound, the bound value must match the corresponding value in the fact.
+
+3. Consistency:
+   Once a variable is bound, it must keep the same value throughout the evaluation of a single rule. This ensures logical consistency.
+
+4. Generating New Facts:
+   After all patterns in a rule body are successfully matched and all variables are bound, these bindings are used to generate a new fact based on the rule head.
+
+5. Scope:
+   Bindings are typically scoped to a single rule evaluation. When we move on to evaluate another rule or another way to match the same rule, we start with a fresh set of bindings.
+
+6. Recursive Rules:
+   In recursive rules, bindings from one "layer" of recursion are used to generate facts that may then match variables in the next "layer", allowing the recursion to progress.
+
+Example:
+Consider this rule and these facts:
+#+BEGIN_SRC c
+define rule grandparent as
+    match
+        ($X, $Y) forms parent,
+        ($Y, $Z) forms parent
+    infer
+        ($X, $Z) forms grandparent;
+
+// Facts
+($John, $Mary) forms parent;
+($Mary, $Bob) forms parent;
+#+END_SRC
+
+When evaluating this rule:
+1. We first try to match =($X, $Y) forms parent= with known facts.
+   We match with =($John, $Mary) forms parent=, creating bindings: =$X -> John, $Y -> Mary=
+2. Then we try to match =($Y, $Z) forms parent= with known facts, using our current bindings.
+   =($Mary, $Bob) forms parent= matches, adding the binding: =$Z -> Bob=
+3. Now we have all variables bound: =$X -> John, $Y -> Mary, $Z -> Bob=
+4. We use these bindings to generate a new fact from the rule head:
+   =($John, $Bob)= forms grandparent
+
+This process of matching patterns, creating and maintaining bindings, and using them to generate new facts is at the core of how rule-based inference systems work.
+
+*** Unification
+While not explicitly mentioned in the Cos syntax, the process of unification is implicit in how Cos matches fact patterns. The language uses variables (prefixed with $) that get bound to values as patterns are matched.
+
+*** Consistency
+This principle holds in Cos. Once a variable is bound within a rule or query, it maintains that value throughout the evaluation.
+
+*** Generating New Facts
+In Cos, this is done in the `infer` clause of rules. The bound variables from the `match` clause are used to create new facts or relationships.
+
+Example:
+#+BEGIN_SRC c
+define rule high_earner as
+    match
+        $person isa person (
+            name: $name
+        ),
+        ($person, $company) forms employment (
+            salary: $salary
+        ),
+        $salary > 100000
+    infer
+        $person (
+            category: "high_earner"
+        );
+#+END_SRC
+
+*** Scope
+This concept applies in Cos as well. Bindings are scoped to individual rule evaluations or query executions.
+
+*** Recursive Rules
+Cos supports recursive rules, and the concept of bindings from one layer of recursion feeding into the next applies here too.
+
+Example:
+#+BEGIN_SRC c
+define rule reachable_indirect as
+    match
+        (from: $city1, to: $intermediate) forms reachable,
+        (from: $intermediate, to: $city2) forms reachable,
+        $city1 != $city2
+    infer
+        materialize (from: $city1, to: $city2) forms reachable;
+#+END_SRC
+
+*** Declarative Style
+Cos uses a more declarative style where the unification and binding processes are implicit in the `match` and `infer` clauses, rather than being explicit function calls like `unify` or `apply_bindings`.
+
+*** Materialization Control
+Cos introduces concepts like `materialize` and `derive` for controlling how inferred facts are handled, which adds an extra dimension to how the results of rule evaluation are managed.
+
+** Detailed Component Breakdown
+
+*** Schema Manager
+**** Purpose
+Manage schema definitions and validate facts and rules against the schema.
+**** Implementation
+#+BEGIN_SRC rust
+use std::collections::HashMap;
+
+#[derive(Clone, Debug)]
+struct AttributeType {
+    name: String,
+    data_type: DataType,
+}
+
+#[derive(Clone, Debug)]
+struct EntitySchema {
+    name: String,
+    attributes: Vec<AttributeType>,
+}
+
+#[derive(Clone, Debug)]
+struct RelationshipSchema {
+    name: String,
+    roles: Vec<(String, String)>, // (role_name, entity_type)
+    attributes: Vec<AttributeType>,
+}
+
+struct SchemaManager {
+    entities: HashMap<String, EntitySchema>,
+    relationships: HashMap<String, RelationshipSchema>,
+}
+
+impl SchemaManager {
+    fn validate_fact(&self, fact: &Fact) -> Result<(), ValidationError> {
+        match fact {
+            Fact::Entity(entity) => self.validate_entity(entity),
+            Fact::Relationship(rel) => self.validate_relationship(rel),
+        }
+    }
+
+    fn validate_entity(&self, entity: &Entity) -> Result<(), ValidationError> {
+        let schema = self.entities.get(&entity.type_name)
+            .ok_or(ValidationError::UnknownEntityType(entity.type_name.clone()))?;
+        
+        // Check if all required attributes are present and of correct type
+        for attr in &schema.attributes {
+            if let Some(value) = entity.attributes.get(&attr.name) {
+                if !value.matches_type(&attr.data_type) {
+                    return Err(ValidationError::TypeMismatch(attr.name.clone()));
+                }
+            } else {
+                return Err(ValidationError::MissingAttribute(attr.name.clone()));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_relationship(&self, rel: &Relationship) -> Result<(), ValidationError> {
+        // Similar implementation to validate_entity, but for relationships
+        // ...
+    }
+
+    fn validate_rule(&self, rule: &Rule) -> Result<(), ValidationError> {
+        // Validate all fact patterns in the rule's match clause
+        for pattern in &rule.patterns {
+            self.validate_fact_pattern(pattern)?;
+        }
+        
+        // Validate all inferred facts in the rule's infer clause
+        for inference in &rule.inferences {
+            self.validate_fact_pattern(&inference.fact_pattern)?;
+        }
+        
+        Ok(())
+    }
+
+    fn validate_fact_pattern(&self, pattern: &FactPattern) -> Result<(), ValidationError> {
+        // Similar to validate_fact, but allow for variables in place of concrete values
+        // ...
+    }
+}
+#+END_SRC
+
+*** Rule Parser
+**** Purpose
+Convert Cos rule definitions into an internal representation and validate against the schema.
+**** Implementation
+#+BEGIN_SRC rust
+#[derive(Clone, Debug)]
+struct FactPattern {
+    entity_type: String,
+    variable: String,
+    constraints: HashMap<String, Value>,
+}
+
+#[derive(Clone, Debug)]
+struct Rule {
+    name: String,
+    patterns: Vec<FactPattern>,
+    inferences: Vec<Inference>,
+}
+
+fn parse_and_validate_rule(rule_str: &str, schema_manager: &SchemaManager) -> Result<Rule, ParseError> {
+    let rule = parse_rule(rule_str)?;
+    schema_manager.validate_rule(&rule)?;
+    Ok(rule)
+}
+
+fn parse_rule(rule_str: &str) -> Result<Rule, ParseError> {
+    // Implementation details...
+}
+#+END_SRC
+
+*** Fact Matcher
+**** Purpose
+Match fact patterns against the knowledge graph.
+**** Implementation
+#+BEGIN_SRC rust
+struct KnowledgeGraph {
+    // Simplified representation
+    entities: HashMap<String, Vec<Entity>>,
+    relationships: Vec<Relationship>,
+}
+
+fn match_facts(patterns: &[FactPattern], kg: &KnowledgeGraph) -> Vec<Binding> {
+    let mut bindings = Vec::new();
+    for pattern in patterns {
+        let matches = find_matches(pattern, kg);
+        bindings = combine_bindings(bindings, matches);
+    }
+    bindings
+}
+#+END_SRC
+
+*** Unification Engine
+**** Purpose
+Manage variable bindings and ensure consistency across fact patterns.
+**** Implementation
+#+BEGIN_SRC rust
+type Binding = HashMap<String, Value>;
+
+fn unify(binding1: &Binding, binding2: &Binding) -> Option<Binding> {
+    let mut unified = binding1.clone();
+    for (var, val) in binding2 {
+        match unified.get(var) {
+            Some(existing_val) if existing_val != val => return None,
+            None => { unified.insert(var.clone(), val.clone()); },
+            _ => {}
+        }
+    }
+    Some(unified)
+}
+#+END_SRC
+
+*** Inference Engine
+**** Purpose
+Apply rules to derive new facts based on matched patterns.
+**** Implementation
+#+BEGIN_SRC rust
+enum InferenceType {
+    Derive,
+    Materialize,
+}
+
+struct Inference {
+    inference_type: InferenceType,
+    fact_pattern: FactPattern,
+}
+
+fn apply_inference(inference: &Inference, bindings: &[Binding], kg: &mut KnowledgeGraph, schema_manager: &SchemaManager) -> Result<(), InferenceError> {
+    for binding in bindings {
+        let new_fact = create_new_fact(&inference.fact_pattern, binding);
+        schema_manager.validate_fact(&new_fact)?;
+        match inference.inference_type {
+            InferenceType::Derive => {
+                // Store derivation logic for on-demand computation
+                kg.add_derivation(new_fact);
+            },
+            InferenceType::Materialize => {
+                // Directly add new fact to the knowledge graph
+                kg.add_fact(new_fact);
+            }
+        }
+    }
+    Ok(())
+}
+#+END_SRC
+
+*** Materialization Manager
+**** Purpose
+Manage materialized views and update them when base facts change.
+**** Implementation
+#+BEGIN_SRC rust
+struct MaterializedView {
+    rule: Rule,
+    facts: Vec<Fact>,
+}
+
+impl KnowledgeGraph {
+    fn update_materialized_views(&mut self, changed_facts: &[Fact], schema_manager: &SchemaManager) -> Result<(), MaterializationError> {
+        for view in &mut self.materialized_views {
+            let affected = view.rule.patterns.iter().any(|p| is_affected_by(p, changed_facts));
+            if affected {
+                let new_facts = recompute_view(&view.rule, self)?;
+                for fact in &new_facts {
+                    schema_manager.validate_fact(fact)?;
+                }
+                view.facts = new_facts;
+            }
+        }
+        Ok(())
+    }
+}
+#+END_SRC
+
+** Rule Evaluation Process
+1. Parse and validate the rule definition against the schema
+2. For each rule:
+   a. Match fact patterns against the knowledge graph
+   b. Unify variable bindings
+   c. Apply inferences based on matched patterns, validating new facts against the schema
+   d. Update materialized views if necessary, validating all new facts
+3. Repeat the process until no new facts are derived (for recursive rules)
+
+** Main Evaluation Loop
+#+BEGIN_SRC rust
+fn evaluate_rules(rules: &[Rule], kg: &mut KnowledgeGraph, schema_manager: &SchemaManager) -> Result<(), EvaluationError> {
+    let mut changes = true;
+    while changes {
+        changes = false;
+        for rule in rules {
+            let bindings = match_facts(&rule.patterns, kg);
+            for inference in &rule.inferences {
+                let new_facts_count = kg.fact_count();
+                apply_inference(inference, &bindings, kg, schema_manager)?;
+                if kg.fact_count() > new_facts_count {
+                    changes = true;
+                }
+            }
+        }
+    }
+    kg.update_materialized_views(&[], schema_manager)?;  // Update all views after evaluation
+    Ok(())
+}
+#+END_SRC
+
+** Optimizations
+- Implement indexing on the knowledge graph for faster fact matching
+- Use a dependency graph to determine rule evaluation order
+- Implement incremental evaluation for more efficient updates
+- Use parallel processing for independent rule evaluations
+
+** Error Handling
+- Implement robust error handling for parse errors, validation errors, runtime errors, and infinite recursion detection
+- Provide clear error messages to aid in debugging rule definitions and schema violations
+
+** Future Enhancements
+- Support for negation in rule patterns
+- Implement stratification for handling negation in recursive rules
+- Add support for aggregation functions in rule inferences
+- Implement a query planner for optimizing complex rule evaluations
