@@ -10,6 +10,7 @@ pub(crate) enum VectorsError {
     FailedToGetAppEnv,
     FailedToCreateVector(String),
     NotImplemented,
+    InternalServerError,
 }
 
 impl Display for VectorsError {
@@ -22,6 +23,9 @@ impl Display for VectorsError {
             }
             VectorsError::NotImplemented => {
                 write!(f, "This is not supported yet!")
+            }
+            VectorsError::InternalServerError => {
+                write!(f, "internal server error while trying to fetch vector!")
             }
         }
     }
@@ -38,7 +42,8 @@ impl ResponseError for VectorsError {
             VectorsError::NotFound => StatusCode::BAD_REQUEST,
             VectorsError::FailedToGetAppEnv => StatusCode::INTERNAL_SERVER_ERROR,
             VectorsError::FailedToCreateVector(_) => StatusCode::BAD_REQUEST,
-            Self::NotImplemented => StatusCode::BAD_REQUEST,
+            VectorsError::NotImplemented => StatusCode::BAD_REQUEST,
+            VectorsError::InternalServerError => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }
