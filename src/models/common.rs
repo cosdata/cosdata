@@ -291,7 +291,13 @@ fn to_float_flag(x: f32, bits_per_value: usize, step: f32) -> Vec<bool> {
 }
 
 pub fn simp_quant(v: &[f32]) -> Vec<u8> {
-    v.iter().map(|&x| (x * 255.0).round() as u8).collect()
+    v.iter().map(|&x| {
+        let mut y: f32 = x;
+        if x < 0.0 {
+            y += 1.0;
+        }
+        (y * 255.0).round() as u8
+    }).collect()
 }
 
 pub fn mag_square_u8(vec: &[u8]) -> u32 {

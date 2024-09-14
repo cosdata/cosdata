@@ -328,7 +328,13 @@ These functions handle the quantization of floating-point vectors.
     let mut quantized_vec = Vec::with_capacity(length);
 
     for &x in vec {
-        quantized_vec.push((x * 255.0).round() as u8);
+        quantized_vec.push({
+                        let mut y: f32 = x;
+                        if x < 0.0 {
+                            y += 1.0;
+                        }
+                        (y * 255.0).round() as u8
+                    });
     }
 
     quantized_vec

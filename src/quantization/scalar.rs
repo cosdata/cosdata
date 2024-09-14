@@ -10,7 +10,16 @@ impl Quantization for ScalarQuantization {
     fn quantize(&self, vector: &[f32], storage_type: StorageType) -> Storage {
         match storage_type {
             StorageType::UnsignedByte => {
-                let quant_vec: Vec<_> = vector.iter().map(|&x| (x * 255.0).round() as u8).collect();
+                let quant_vec: Vec<_> = vector
+                    .iter()
+                    .map(|&x| {
+                        let mut y: f32 = x;
+                        if x < 0.0 {
+                            y += 1.0;
+                        }
+                        (y * 255.0).round() as u8
+                    })
+                    .collect();
                 let mag = quant_vec.iter().map(|&x| x as u32 * x as u32).sum();
                 Storage::UnsignedByte { mag, quant_vec }
             }

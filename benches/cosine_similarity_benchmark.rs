@@ -28,7 +28,13 @@ fn oct_quant(v: &[f32]) -> Vec<u8> {
 }
 
 fn simp_quant(v: &[f32]) -> Vec<u8> {
-    v.iter().map(|&x| (x * 255.0).round() as u8).collect()
+    v.iter().map(|&x| {
+        let mut y: f32 = x;
+        if x < 0.0 {
+            y += 1.0;
+        }
+        (y * 255.0).round() as u8
+    }).collect()
 }
 
 fn cos_sim_binary(a: &[u32], b: &[u32]) -> f32 {
