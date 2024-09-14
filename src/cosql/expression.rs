@@ -200,7 +200,6 @@ pub fn parse_binary_expression_rest(
 
             input = new_input;
         } else {
-            println!("breaking, input: {:?}", input);
             break;
         }
     }

@@ -33,7 +33,8 @@ mod tests {
 
     #[test]
     fn test_entity_definition_parser() {
-        // the `parse_entity_definition` function assumes the `define entity` part is already consumed
+        // the `parse_entity_definition` function assumes the `define entity` part is already
+        // consumed
         let values = [
             (
                 "person as
