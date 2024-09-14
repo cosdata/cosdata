@@ -78,6 +78,7 @@ pub fn parse_relationship_pattern(input: &str) -> IResult<&str, RelationshipPatt
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cosql::{insertion::Attribute, value::Date, Value};
 
     #[test]
     fn test_role_assignment_parser() {
@@ -151,6 +152,70 @@ mod tests {
 
         for (source, expected) in values {
             let (_, parsed) = parse_roles1(source).unwrap();
+
+            assert_eq!(parsed, expected);
+        }
+    }
+
+    #[test]
+    fn test_relationship_pattern_parser() {
+        let values = [
+            (
+                "(
+                    $person1,
+                    $company1
+                ) forms works_in (
+                    since: 2-10-1999
+                )",
+                RelationshipPattern {
+                    variable: None,
+                    roles: vec![
+                        Role {
+                            role: None,
+                            entity: "person1".to_string(),
+                        },
+                        Role {
+                            role: None,
+                            entity: "company1".to_string(),
+                        },
+                    ],
+                    relationship_type: "works_in".to_string(),
+                    attributes: vec![Attribute {
+                        name: "since".to_string(),
+                        value: Value::Date(Date(2, 10, 1999)),
+                    }],
+                },
+            ),
+            (
+                "$relation1 (
+                    from: $city1,
+                    to: $city2
+                ) forms reachable (
+                    distance: $dist
+                )",
+                RelationshipPattern {
+                    variable: Some("relation1".to_string()),
+                    roles: vec![
+                        Role {
+                            role: Some("from".to_string()),
+                            entity: "city1".to_string(),
+                        },
+                        Role {
+                            role: Some("to".to_string()),
+                            entity: "city2".to_string(),
+                        },
+                    ],
+                    relationship_type: "reachable".to_string(),
+                    attributes: vec![Attribute {
+                        name: "distance".to_string(),
+                        value: Value::Variable("dist".to_string()),
+                    }],
+                },
+            ),
+        ];
+
+        for (source, expected) in values {
+            let (_, parsed) = parse_relationship_pattern(source).unwrap();
 
             assert_eq!(parsed, expected);
         }
