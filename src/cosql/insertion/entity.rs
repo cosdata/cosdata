@@ -2,7 +2,7 @@ use nom::{
     bytes::complete::tag, character::complete::char, combinator::map, sequence::tuple, IResult,
 };
 
-use crate::cosql::common::{parse_identifier, ws};
+use crate::cosql::common::{parse_identifier, parse_variable, ws};
 
 use super::{parse_attributes1, Attributes};
 
@@ -16,14 +16,13 @@ pub struct EntityInsertion {
 pub fn parse_entity_insertion(input: &str) -> IResult<&str, EntityInsertion> {
     map(
         tuple((
-            ws(char('$')),
-            ws(parse_identifier),
+            ws(parse_variable),
             ws(tag("isa")),
             ws(parse_identifier),
             parse_attributes1,
             ws(char(';')),
         )),
-        |(_, variable, _, entity_type, attributes, _)| EntityInsertion {
+        |(variable, _, entity_type, attributes, _)| EntityInsertion {
             variable: variable.to_string(),
             entity_type: entity_type.to_string(),
             attributes,

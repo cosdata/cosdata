@@ -8,7 +8,7 @@ use nom::{
 };
 
 use super::{
-    common::{parse_identifier, ws},
+    common::{parse_variable, ws},
     expression::parse_expression,
     Expression,
 };
@@ -30,11 +30,7 @@ pub fn parse_compute_clauses(input: &str) -> IResult<&str, ComputeClauses> {
 
 pub fn parse_compute_clause(input: &str) -> IResult<&str, ComputeClause> {
     map(
-        tuple((
-            preceded(char('$'), ws(parse_identifier)),
-            ws(char('=')),
-            parse_expression,
-        )),
+        tuple((ws(parse_variable), ws(char('=')), parse_expression)),
         |(variable, _, expression)| ComputeClause {
             variable: variable.to_string(),
             expression,

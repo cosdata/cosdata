@@ -1,9 +1,7 @@
-use nom::{
-    bytes::complete::tag, character::complete::char, combinator::map, sequence::tuple, IResult,
-};
+use nom::{bytes::complete::tag, combinator::map, sequence::tuple, IResult};
 
 use crate::cosql::{
-    common::{parse_identifier, ws},
+    common::{parse_identifier, parse_variable, ws},
     insertion::{parse_attributes0, Attributes},
 };
 
@@ -17,13 +15,12 @@ pub struct EntityInference {
 pub fn parse_entity_inference(input: &str) -> IResult<&str, EntityInference> {
     map(
         tuple((
-            ws(char('$')),
-            ws(parse_identifier),
+            ws(parse_variable),
             ws(tag("isa")),
             ws(parse_identifier),
             ws(parse_attributes0),
         )),
-        |(_, variable, _, entity_type, attributes)| EntityInference {
+        |(variable, _, entity_type, attributes)| EntityInference {
             variable: variable.to_string(),
             entity_type: entity_type.to_string(),
             attributes,

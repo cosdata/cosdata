@@ -2,8 +2,8 @@ use nom::{
     bytes::complete::tag,
     character::complete::char,
     combinator::{map, opt},
-    multi::separated_list1,
-    sequence::{delimited, tuple},
+    multi::{separated_list0, separated_list1},
+    sequence::{delimited, terminated, tuple},
     IResult,
 };
 
@@ -49,14 +49,14 @@ pub fn parse_role_assignments(input: &str) -> IResult<&str, RoleAssignments> {
 pub fn parse_relationship_pattern(input: &str) -> IResult<&str, RelationshipPattern> {
     map(
         tuple((
-            opt(tuple((ws(char('$')), ws(parse_identifier)))),
-            parse_role_assignments,
+            opt(ws(parse_variable)),
+            parse_roles1,
             ws(tag("forms")),
             ws(parse_identifier),
             opt(parse_attributes0),
         )),
         |(variable, roles, _, relationship_type, attributes)| RelationshipPattern {
-            variable: variable.map(|(_, v)| v.to_string()),
+            variable: variable.map(|v| v.to_string()),
             roles,
             relationship_type: relationship_type.to_string(),
             attributes: attributes.unwrap_or_default(),
