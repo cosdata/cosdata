@@ -12,36 +12,47 @@ use crate::cosql::{
     insertion::{parse_attributes0, Attributes},
 };
 
-pub type RoleAssignments = Vec<RoleAssignment>;
+pub type Roles = Vec<Role>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RoleAssignment {
-    pub role: String,
+pub struct Role {
+    pub role: Option<String>,
     pub entity: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RelationshipPattern {
     pub variable: Option<String>,
-    pub roles: RoleAssignments,
+    pub roles: Roles,
     pub relationship_type: String,
     pub attributes: Attributes,
 }
 
-pub fn parse_role_assignment(input: &str) -> IResult<&str, RoleAssignment> {
+pub fn parse_role(input: &str) -> IResult<&str, Role> {
     map(
-        tuple((ws(parse_identifier), ws(char(':')), ws(parse_variable))),
-        |(role, _, entity)| RoleAssignment {
-            role: role.to_string(),
+        tuple((
+            opt(terminated(ws(parse_identifier), ws(char(':')))),
+            ws(parse_variable),
+        )),
+        |(role, entity)| Role {
+            role: role.map(ToString::to_string),
             entity: entity.to_string(),
         },
     )(input)
 }
 
-pub fn parse_role_assignments(input: &str) -> IResult<&str, RoleAssignments> {
+pub fn parse_roles1(input: &str) -> IResult<&str, Roles> {
     delimited(
         ws(char('(')),
-        separated_list1(ws(char(',')), parse_role_assignment),
+        separated_list1(ws(char(',')), parse_role),
+        ws(char(')')),
+    )(input)
+}
+
+pub fn parse_roles0(input: &str) -> IResult<&str, Roles> {
+    delimited(
+        ws(char('(')),
+        separated_list0(ws(char(',')), parse_role),
         ws(char(')')),
     )(input)
 }
@@ -73,22 +84,29 @@ mod tests {
         let values = [
             (
                 "project: $rust_project",
-                RoleAssignment {
-                    role: "project".to_string(),
+                Role {
+                    role: Some("project".to_string()),
                     entity: "rust_project".to_string(),
                 },
             ),
             (
                 "assignee: $rust_dev",
-                RoleAssignment {
-                    role: "assignee".to_string(),
+                Role {
+                    role: Some("assignee".to_string()),
                     entity: "rust_dev".to_string(),
+                },
+            ),
+            (
+                "$person1",
+                Role {
+                    role: None,
+                    entity: "person1".to_string(),
                 },
             ),
         ];
 
         for (source, expected) in values {
-            let (_, parsed) = parse_role_assignment(source).unwrap();
+            let (_, parsed) = parse_role(source).unwrap();
 
             assert_eq!(parsed, expected);
         }
@@ -103,12 +121,12 @@ mod tests {
                     assignee: $rust_dev
                 )",
                 vec![
-                    RoleAssignment {
-                        role: "project".to_string(),
+                    Role {
+                        role: Some("project".to_string()),
                         entity: "rust_project".to_string(),
                     },
-                    RoleAssignment {
-                        role: "assignee".to_string(),
+                    Role {
+                        role: Some("assignee".to_string()),
                         entity: "rust_dev".to_string(),
                     },
                 ],
@@ -119,12 +137,12 @@ mod tests {
                     department: $department1
                 )",
                 vec![
-                    RoleAssignment {
-                        role: "employee".to_string(),
+                    Role {
+                        role: Some("employee".to_string()),
                         entity: "rust_dev".to_string(),
                     },
-                    RoleAssignment {
-                        role: "department".to_string(),
+                    Role {
+                        role: Some("department".to_string()),
                         entity: "department1".to_string(),
                     },
                 ],
@@ -132,7 +150,7 @@ mod tests {
         ];
 
         for (source, expected) in values {
-            let (_, parsed) = parse_role_assignments(source).unwrap();
+            let (_, parsed) = parse_roles1(source).unwrap();
 
             assert_eq!(parsed, expected);
         }

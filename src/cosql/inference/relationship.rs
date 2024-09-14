@@ -11,9 +11,9 @@ use crate::cosql::{
     pattern::relationship::{parse_roles1, Roles},
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RelationshipInference {
-    pub roles: RoleAssignments,
+    pub roles: Roles,
     pub relationship_type: String,
     pub attributes: Attributes,
 }

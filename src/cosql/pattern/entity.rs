@@ -6,7 +6,7 @@ use nom::{
 };
 
 use crate::cosql::{
-    common::{parse_identifier, ws},
+    common::{parse_identifier, parse_variable, ws},
     insertion::{parse_attributes0, Attributes},
 };
 

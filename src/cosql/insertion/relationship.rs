@@ -8,7 +8,7 @@ use nom::{
 
 use crate::cosql::{
     common::{parse_identifier, parse_variable, ws},
-    pattern::relationship::{parse_role_assignments, RoleAssignments},
+    pattern::relationship::{parse_roles1, Roles},
 };
 
 use super::{parse_attributes0, Attributes};
@@ -16,7 +16,7 @@ use super::{parse_attributes0, Attributes};
 #[derive(Debug, Clone, PartialEq)]
 pub struct RelationshipInsertion {
     pub variable: String,
-    pub roles: RoleAssignments,
+    pub roles: Roles,
     pub relationship_type: String,
     pub attributes: Attributes,
 }
@@ -25,7 +25,7 @@ pub fn parse_relationship_insertion(input: &str) -> IResult<&str, RelationshipIn
     map(
         tuple((
             ws(parse_variable),
-            parse_role_assignments,
+            parse_roles1,
             ws(tag("forms")),
             ws(parse_identifier),
             opt(parse_attributes0),
@@ -43,7 +43,7 @@ pub fn parse_relationship_insertion(input: &str) -> IResult<&str, RelationshipIn
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cosql::{insertion::Attribute, pattern::relationship::RoleAssignment, Value};
+    use crate::cosql::{insertion::Attribute, pattern::relationship::Role, Value};
 
     #[test]
     fn test_relationship_insertion_parser() {
@@ -56,12 +56,12 @@ mod tests {
                 RelationshipInsertion {
                     variable: "relation1".to_string(),
                     roles: vec![
-                        RoleAssignment {
-                            role: "project".to_string(),
+                        Role {
+                            role: Some("project".to_string()),
                             entity: "rust_project".to_string(),
                         },
-                        RoleAssignment {
-                            role: "assignee".to_string(),
+                        Role {
+                            role: Some("assignee".to_string()),
                             entity: "rust_dev".to_string(),
                         },
                     ],
@@ -79,12 +79,12 @@ mod tests {
                 RelationshipInsertion {
                     variable: "relation2".to_string(),
                     roles: vec![
-                        RoleAssignment {
-                            role: "employee".to_string(),
+                        Role {
+                            role: Some("employee".to_string()),
                             entity: "rust_dev".to_string(),
                         },
-                        RoleAssignment {
-                            role: "department".to_string(),
+                        Role {
+                            role: Some("department".to_string()),
                             entity: "department1".to_string(),
                         },
                     ],
