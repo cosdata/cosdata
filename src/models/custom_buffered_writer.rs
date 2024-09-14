@@ -1,4 +1,3 @@
-use byteorder::{LittleEndian, WriteBytesExt};
 use std::cell::RefCell;
 use std::fs::File;
 use std::io::{self, Seek, SeekFrom, Write};

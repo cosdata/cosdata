@@ -1,3 +1,4 @@
+pub mod buffered_io;
 pub mod cache_loader;
 pub mod common;
 pub mod custom_buffered_writer;
@@ -8,6 +9,7 @@ pub mod file_persist;
 pub mod identity_collections;
 pub mod lazy_load;
 pub mod lookup_table;
+pub mod lru_cache;
 pub mod meta_persist;
 pub mod rpc;
 pub mod serializer;

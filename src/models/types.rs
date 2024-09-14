@@ -1,3 +1,5 @@
+use super::versioning::VersionControl;
+use crate::distance::cosine::CosineSimilarity;
 use crate::distance::DistanceError;
 use crate::distance::{
     cosine::CosineDistance, dotproduct::DotProductDistance, euclidean::EuclideanDistance,
@@ -6,7 +8,7 @@ use crate::distance::{
 use crate::models::common::*;
 use crate::models::identity_collections::*;
 use crate::models::lazy_load::*;
-use crate::models::versioning::VersionHash;
+use crate::models::versioning::*;
 use crate::quantization::product::ProductQuantization;
 use crate::quantization::scalar::ScalarQuantization;
 use crate::quantization::{Quantization, StorageType};
@@ -17,20 +19,19 @@ use lmdb::{Database, Environment};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs::*;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{DefaultHasher, Hash as StdHash, Hasher};
+use std::hint::spin_loop;
 use std::path::Path;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, OnceLock,
-};
+use std::sync::{Arc, OnceLock};
 
-pub type HNSWLevel = u8;
-pub type FileOffset = u32;
-pub type BytesToRead = u32;
-pub type VersionId = u16;
-pub type CosineSimilarity = f32;
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct HNSWLevel(pub u8);
 
-pub type Item<T> = ArcShift<T>;
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct FileOffset(pub u32);
+
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, Hash)]
+pub struct BytesToRead(pub u32);
 
 #[derive(Clone)]
 pub struct Neighbour {
@@ -59,7 +60,6 @@ impl Identifiable for MergedNode {
 }
 
 pub type PropPersistRef = (FileOffset, BytesToRead);
-pub type NodeFileRef = FileOffset;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeProp {
@@ -68,7 +68,7 @@ pub struct NodeProp {
     pub location: Option<PropPersistRef>,
 }
 
-impl Hash for NodeProp {
+impl StdHash for NodeProp {
     fn hash<H>(&self, state: &mut H)
     where
         H: Hasher,
@@ -102,17 +102,36 @@ pub enum VectorId {
 
 #[derive(Clone)]
 pub struct MergedNode {
-    pub version_id: VersionId,
     pub hnsw_level: HNSWLevel,
-    pub prop: Item<PropState>,
-    pub neighbors: EagerLazyItemSet<MergedNode, f32>,
+    pub prop: ArcShift<PropState>,
+    pub neighbors: EagerLazyItemSet<MergedNode, MetricResult>,
     pub parent: LazyItemRef<MergedNode>,
     pub child: LazyItemRef<MergedNode>,
-    pub versions: LazyItemMap<MergedNode>,
-    pub persist_flag: Arc<AtomicBool>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub enum MetricResult {
+    CosineSimilarity(CosineSimilarity),
+    CosineDistance(CosineDistance),
+    EuclideanDistance(EuclideanDistance),
+    HammingDistance(HammingDistance),
+    DotProductDistance(DotProductDistance),
+}
+
+impl MetricResult {
+    // gets the bare numerical value stored in the type
+    pub fn get_value(&self) -> f32 {
+        match self {
+            MetricResult::CosineSimilarity(value) => value.0,
+            MetricResult::CosineDistance(value) => value.0,
+            MetricResult::EuclideanDistance(value) => value.0,
+            MetricResult::HammingDistance(value) => value.0,
+            MetricResult::DotProductDistance(value) => value.0,
+        }
+    }
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub enum DistanceMetric {
     Cosine,
     Euclidean,
@@ -121,12 +140,25 @@ pub enum DistanceMetric {
 }
 
 impl DistanceFunction for DistanceMetric {
-    fn calculate(&self, x: &Storage, y: &Storage) -> Result<f32, DistanceError> {
+    type Item = MetricResult;
+    fn calculate(&self, x: &Storage, y: &Storage) -> Result<Self::Item, DistanceError> {
         match self {
-            Self::Cosine => CosineDistance.calculate(x, y),
-            Self::Euclidean => EuclideanDistance.calculate(x, y),
-            Self::Hamming => HammingDistance.calculate(x, y),
-            Self::DotProduct => DotProductDistance.calculate(x, y),
+            Self::Cosine => {
+                let value = CosineSimilarity(0.0).calculate(x, y)?;
+                Ok(MetricResult::CosineSimilarity(value))
+            }
+            Self::Euclidean => {
+                let value = EuclideanDistance(0.0).calculate(x, y)?;
+                Ok(MetricResult::EuclideanDistance(value))
+            }
+            Self::Hamming => {
+                let value = HammingDistance(0.0).calculate(x, y)?;
+                Ok(MetricResult::HammingDistance(value))
+            }
+            Self::DotProduct => {
+                let value = DotProductDistance(0.0).calculate(x, y)?;
+                Ok(MetricResult::DotProductDistance(value))
+            }
         }
     }
 }
@@ -157,22 +189,18 @@ impl Quantization for QuantizationMetric {
 }
 
 impl MergedNode {
-    pub fn new(version_id: VersionId, hnsw_level: HNSWLevel) -> Self {
+    pub fn new(hnsw_level: HNSWLevel) -> Self {
         MergedNode {
-            version_id,
             hnsw_level,
-            prop: Item::new(PropState::Pending((0, 0))),
+            prop: ArcShift::new(PropState::Pending((FileOffset(0), BytesToRead(0)))),
             neighbors: EagerLazyItemSet::new(),
             parent: LazyItemRef::new_invalid(),
             child: LazyItemRef::new_invalid(),
-            versions: LazyItemMap::new(),
-            persist_flag: Arc::new(AtomicBool::new(true)),
         }
     }
 
-    pub fn add_ready_neighbor(&self, neighbor: LazyItem<MergedNode>, cosine_similarity: f32) {
-        self.neighbors
-            .insert(EagerLazyItem(cosine_similarity, neighbor));
+    pub fn add_ready_neighbor(&self, neighbor: LazyItem<MergedNode>, distance: MetricResult) {
+        self.neighbors.insert(EagerLazyItem(distance, neighbor));
     }
 
     pub fn set_parent(&self, parent: LazyItem<MergedNode>) {
@@ -185,29 +213,14 @@ impl MergedNode {
         arc.update(child);
     }
 
-    pub fn add_ready_neighbors(&self, neighbors_list: Vec<(LazyItem<MergedNode>, f32)>) {
-        for (neighbor, cosine_similarity) in neighbors_list {
-            self.add_ready_neighbor(neighbor, cosine_similarity);
+    pub fn add_ready_neighbors(&self, neighbors_list: Vec<(LazyItem<MergedNode>, MetricResult)>) {
+        for (neighbor, distance) in neighbors_list {
+            self.add_ready_neighbor(neighbor, distance);
         }
     }
 
-    pub fn get_neighbors(&self) -> EagerLazyItemSet<MergedNode, f32> {
+    pub fn get_neighbors(&self) -> EagerLazyItemSet<MergedNode, MetricResult> {
         self.neighbors.clone()
-    }
-
-    // pub fn set_neighbors(&self, new_neighbors: IdentitySet<EagerLazyItem<MergedNode, f32>>) {
-    //     let mut arc = self.neighbors.items.clone();
-    //     arc.update(new_neighbors);
-    // }
-
-    pub fn add_version(&self, version: Item<MergedNode>) {
-        let lazy_item = LazyItem::from_item(version);
-        // TODO: look at the id
-        self.versions.insert(IdentityMapKey::Int(0), lazy_item);
-    }
-
-    pub fn get_versions(&self) -> LazyItemMap<MergedNode> {
-        self.versions.clone()
     }
 
     pub fn get_parent(&self) -> LazyItemRef<MergedNode> {
@@ -220,7 +233,14 @@ impl MergedNode {
 
     pub fn set_prop_location(&self, new_location: PropPersistRef) {
         let mut arc = self.prop.clone();
-        arc.update(PropState::Pending(new_location));
+        arc.rcu(|prop| match prop {
+            PropState::Pending(_) => PropState::Pending(new_location),
+            PropState::Ready(prop) => {
+                let mut new_prop = NodeProp::clone(&prop);
+                new_prop.location = Some(new_location);
+                PropState::Ready(Arc::new(new_prop))
+            }
+        });
     }
 
     pub fn get_prop_location(&self) -> Option<PropPersistRef> {
@@ -247,16 +267,6 @@ impl MergedNode {
     }
 }
 
-impl SyncPersist for MergedNode {
-    fn set_persistence(&self, flag: bool) {
-        self.persist_flag.store(flag, Ordering::Relaxed);
-    }
-
-    fn needs_persistence(&self) -> bool {
-        self.persist_flag.load(Ordering::Relaxed)
-    }
-}
-
 // Implementing the std::fmt::Display trait for VectorId
 impl fmt::Display for VectorId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -267,19 +277,42 @@ impl fmt::Display for VectorId {
     }
 }
 
-// impl fmt::Display for MergedNode {
-//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//         write!(f, "MergedNode {{ version_id: {}, hnsw_level: {}, prop: {:?}, neighbors: {:?}, parent: {:?}, child: {:?}, version_ref: {:?} }}",
-//             self.version_id,
-//             self.hnsw_level,
-//             self.prop.read().unwrap(),
-//             self.neighbors,
-//             self.parent,
-//             self.child,
-//             self.versions
-//         )
-//     }
-// }
+impl fmt::Debug for MergedNode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "MergedNode {{")?;
+        // writeln!(f, "  version_id: {},", self.version_id.0)?;
+        writeln!(f, "  hnsw_level: {},", self.hnsw_level.0)?;
+
+        // Display PropState
+        write!(f, "  prop: ")?;
+        let mut prop_arc = self.prop.clone();
+        let prop = match prop_arc.get() {
+            PropState::Ready(node_prop) => format!("Ready {{ id: {} }}", node_prop.id),
+            PropState::Pending(_) => "Pending".to_string(),
+        };
+        f.debug_struct("MergedNode")
+            .field("hnsw_level", &self.hnsw_level)
+            .field("prop", &prop)
+            .field("neighbors", &self.neighbors.len())
+            .field(
+                "parent",
+                if self.parent.is_valid() {
+                    &"Valid"
+                } else {
+                    &"Invalid"
+                },
+            )
+            .field(
+                "child",
+                if self.child.is_valid() {
+                    &"Valid"
+                } else {
+                    &"Invalid"
+                },
+            )
+            .finish()
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum VectorQt {
@@ -312,10 +345,10 @@ impl VectorQt {
     }
 }
 
-pub type SizeBytes = u32;
+pub struct SizeBytes(pub u32);
 
 // needed to flatten and get uniques
-pub type ExecQueueUpdate = Item<Vec<Item<LazyItem<MergedNode>>>>;
+pub type ExecQueueUpdate = STM<Vec<ArcShift<LazyItem<MergedNode>>>>;
 
 #[derive(Debug, Clone)]
 pub struct MetaDb {
@@ -334,11 +367,12 @@ pub struct VectorStore {
     pub quant_dim: usize,
     pub prop_file: Arc<File>,
     pub lmdb: MetaDb,
-    pub current_version: Item<Option<VersionHash>>,
-    pub current_open_transaction: Item<Option<VersionHash>>,
+    pub current_version: ArcShift<Option<Hash>>,
+    pub current_open_transaction: ArcShift<Option<Hash>>,
     pub quantization_metric: Arc<QuantizationMetric>,
     pub distance_metric: Arc<DistanceMetric>,
     pub storage_type: StorageType,
+    pub vcs: Arc<VersionControl>,
 }
 
 impl VectorStore {
@@ -351,10 +385,11 @@ impl VectorStore {
         quant_dim: usize,
         prop_file: Arc<File>,
         lmdb: MetaDb,
-        current_version: Item<Option<VersionHash>>,
+        current_version: ArcShift<Option<Hash>>,
         quantization_metric: Arc<QuantizationMetric>,
         distance_metric: Arc<DistanceMetric>,
         storage_type: StorageType,
+        vcs: Arc<VersionControl>,
     ) -> Self {
         VectorStore {
             exec_queue_nodes,
@@ -366,20 +401,21 @@ impl VectorStore {
             prop_file,
             lmdb,
             current_version,
-            current_open_transaction: Item::new(None),
+            current_open_transaction: ArcShift::new(None),
             quantization_metric,
             distance_metric,
             storage_type,
+            vcs,
         }
     }
     // Get method
-    pub fn get_current_version(&self) -> Option<VersionHash> {
+    pub fn get_current_version(&self) -> Option<Hash> {
         let mut arc = self.current_version.clone();
         arc.get().clone()
     }
 
     // Set method
-    pub fn set_current_version(&self, new_version: Option<VersionHash>) {
+    pub fn set_current_version(&self, new_version: Option<Hash>) {
         let mut arc = self.current_version.clone();
         arc.update(new_version);
     }
@@ -411,7 +447,7 @@ pub fn get_app_env() -> Result<Arc<AppEnv>, WaCustomError> {
             create_dir_all(&path).map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
             // Initialize the environment
             let env = Environment::new()
-                .set_max_dbs(2)
+                .set_max_dbs(4)
                 .set_map_size(10485760) // Set the maximum size of the database to 10MB
                 .open(&path)
                 .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
@@ -423,4 +459,80 @@ pub fn get_app_env() -> Result<Arc<AppEnv>, WaCustomError> {
             }))
         })
         .clone()
+}
+
+#[derive(Clone)]
+pub struct STM<T: 'static> {
+    pub arcshift: ArcShift<T>,
+    max_retries: usize,
+    strict: bool,
+}
+
+fn backoff(iteration: usize) {
+    let spins = 1 << iteration;
+    for _ in 0..spins {
+        std::thread::yield_now();
+    }
+}
+
+impl<T> STM<T>
+where
+    T: 'static,
+{
+    pub fn new(initial_value: T, max_retries: usize, strict: bool) -> Self {
+        Self {
+            arcshift: ArcShift::new(initial_value),
+            max_retries,
+            strict,
+        }
+    }
+
+    pub fn get(&mut self) -> &T {
+        self.arcshift.get()
+    }
+
+    pub fn update(&mut self, new_value: T) {
+        self.arcshift.update(new_value);
+    }
+
+    /// Update the value inside the ArcShift using a transactional update function.
+    ///
+    /// Internally it uses [ArcShift::rcu] and performs a fixed amount of retries
+    /// before giving up and returning an error.
+    ///
+    /// TODO: Consider making the api more ergonomic. Strict and non-strict
+    /// failure can be made into separate error types so that the caller
+    /// does not need to check the boolean value to figure out if the
+    /// update succeeded or not.
+    pub fn transactional_update<F>(&mut self, mut update_fn: F) -> Result<bool, WaCustomError>
+    where
+        F: FnMut(&T) -> T,
+    {
+        let mut updated = false;
+        let mut tries = 0;
+
+        while !updated {
+            // TODO: consider using rcu_maybe to avoid unnecessary updates
+            // that will require changing update check semantics
+            updated = self.arcshift.rcu(|t| update_fn(t));
+
+            if !updated {
+                if tries >= self.max_retries {
+                    if !self.strict {
+                        return Ok(false);
+                    }
+
+                    return Err(WaCustomError::LockError(
+                        "Unable to update data inside ArcShift".to_string(),
+                    ));
+                }
+
+                // Apply backoff before the next retry attempt
+                backoff(tries);
+                tries += 1;
+            }
+        }
+
+        Ok(updated)
+    }
 }

@@ -1,34 +1,23 @@
+use crate::api;
+use crate::api::auth::{auth_module, authentication_middleware::AuthenticationMiddleware};
+use crate::api::vectordb::collections::collections_module;
+use crate::api::vectordb::vectors::vectors_module;
+use crate::config_loader::{load_config, ServerMode, Ssl};
 use actix_cors::Cors;
-use actix_web::{
-    dev::ServiceRequest, middleware, web, App, Error, HttpRequest, HttpResponse, HttpServer,
-};
-use actix_web_httpauth::{extractors::bearer::BearerAuth, middleware::HttpAuthentication};
-use dashmap::DashMap;
-use lmdb::Environment;
+use actix_web::web::Data;
+use actix_web::{middleware, web, App, Error, HttpRequest, HttpResponse, HttpServer};
 use rustls::{pki_types::PrivateKeyDer, ServerConfig};
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use serde::{Deserialize, Serialize};
-use std::fs::create_dir_all;
-use std::path::Path;
-use std::sync::Arc;
 use std::{fs::File, io::BufReader};
 
-use crate::models::types::*;
-use crate::{api, WaCustomError};
+use crate::api::vectordb::indexes::indexes_module;
 use std::env;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct MyObj {
     name: String,
     number: i32,
-}
-
-async fn validator(
-    req: ServiceRequest,
-    credentials: BearerAuth,
-) -> Result<ServiceRequest, (Error, ServiceRequest)> {
-    // println!("cred: {credentials:?}");
-    Ok(req)
 }
 
 async fn extract_item(item: web::Json<MyObj>, req: HttpRequest) -> HttpResponse {
@@ -48,13 +37,26 @@ async fn index_manual(body: web::Bytes) -> Result<HttpResponse, Error> {
 #[actix_web::main]
 pub async fn run_actix_server() -> std::io::Result<()> {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
+    let config = load_config();
 
-    let config = load_rustls_config();
+    let tls = match &config.server.mode {
+        ServerMode::Https => Some(load_rustls_config(&config.server.ssl)),
+        ServerMode::Http => {
+            log::warn!("server.mode=http is not recommended in production");
+            None
+        }
+    };
 
-    log::info!("starting HTTPS server at https://localhost:8443");
+    let config_data = Data::new(config);
+    let app_state = config_data.clone();
+    log::info!(
+        "starting HTTPS server at {}://{}:{}",
+        &config_data.server.mode.protocol(),
+        &config_data.server.host,
+        &config_data.server.port
+    );
 
-    HttpServer::new(move || {
-        let auth = HttpAuthentication::bearer(validator);
+    let server = HttpServer::new(move || {
         App::new()
             // enable logger
             .wrap(middleware::Logger::default())
@@ -63,16 +65,15 @@ pub async fn run_actix_server() -> std::io::Result<()> {
             .wrap(Cors::permissive())
             // register simple handler, handle all methods
             .app_data(web::JsonConfig::default().limit(4 * 1048576))
-            .route(
-                "/auth/gettoken",
-                web::post().to(crate::api::auth::get_token),
-            )
+            .service(auth_module())
             .service(
                 web::scope("/vectordb")
-                    .wrap(auth.clone())
-                    .service(
-                        web::resource("/createdb").route(web::post().to(api::vectordb::create)),
-                    )
+                    .wrap(AuthenticationMiddleware)
+                    // vectors module must be registereb before collections module
+                    // as its scope path is more specific than collections module
+                    .service(vectors_module())
+                    .service(collections_module())
+                    .service(indexes_module())
                     .service(web::resource("/upsert").route(web::post().to(api::vectordb::upsert)))
                     .service(web::resource("/search").route(web::post().to(api::vectordb::search)))
                     .service(web::resource("/fetch").route(web::post().to(api::vectordb::fetch)))
@@ -101,6 +102,8 @@ pub async fn run_actix_server() -> std::io::Result<()> {
                             ),
                     ),
             )
+            .app_data(app_state.clone())
+
         // .service(web::resource("/index").route(web::post().to(index)))
         // .service(
         //     web::resource("/extractor")
@@ -110,13 +113,17 @@ pub async fn run_actix_server() -> std::io::Result<()> {
         // )
         // .service(web::resource("/manual").route(web::post().to(index_manual)))
         // .service(web::resource("/").route(web::post().to(index)))
-    })
-    .bind_rustls_0_23("127.0.0.1:8443", config)?
-    .run()
-    .await
+    });
+
+    let addr = config_data.server.listen_address();
+    let server = match tls {
+        Some(tls_config) => server.bind_rustls_0_23(addr, tls_config),
+        None => server.bind(addr),
+    };
+    server?.run().await
 }
 
-fn load_rustls_config() -> rustls::ServerConfig {
+fn load_rustls_config(ssl_config: &Ssl) -> rustls::ServerConfig {
     rustls::crypto::aws_lc_rs::default_provider()
         .install_default()
         .unwrap();
@@ -124,28 +131,16 @@ fn load_rustls_config() -> rustls::ServerConfig {
     // init server config builder with safe defaults
     let mut config = ServerConfig::builder().with_no_client_auth();
 
-    let key = "SSL_CERT_DIR";
-    let ssl_cert_dir = match env::var_os(key) {
-        Some(val) => val.into_string().unwrap_or_else(|_| {
-            eprintln!("{key} is not a valid UTF-8 string.");
-            std::process::exit(1);
-        }),
-        None => {
-            eprintln!("{key} is not defined in the environment.");
-            std::process::exit(1);
-        }
-    };
-
-    let cert_file_path = format!("{}/certs/cosdata-ssl.crt", ssl_cert_dir);
-    let key_file_path = format!("{}/private/cosdata-ssl.key", ssl_cert_dir);
-
     // load TLS key/cert files
-    let cert_file = &mut BufReader::new(File::open(&cert_file_path).unwrap_or_else(|_| {
-        eprintln!("Failed to open certificate file: {}", cert_file_path);
+    let cert_file = &mut BufReader::new(File::open(&ssl_config.cert_file).unwrap_or_else(|_| {
+        eprintln!(
+            "Failed to open certificate file: {}",
+            ssl_config.key_file.display()
+        );
         std::process::exit(1);
     }));
-    let key_file = &mut BufReader::new(File::open(&key_file_path).unwrap_or_else(|_| {
-        eprintln!("Failed to open key file: {}", key_file_path);
+    let key_file = &mut BufReader::new(File::open(&ssl_config.key_file).unwrap_or_else(|_| {
+        eprintln!("Failed to open key file: {}", ssl_config.key_file.display());
         std::process::exit(1);
     }));
 

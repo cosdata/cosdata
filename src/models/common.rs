@@ -1,13 +1,13 @@
+use super::buffered_io::BufIoError;
 use super::dot_product::x86_64::dot_product_u8_avx2;
 use super::lazy_load::LazyItem;
 use super::rpc::VectorIdValue;
-use super::types::{MergedNode, VectorId};
+use super::types::{MergedNode, MetricResult, VectorId};
 use crate::distance::DistanceError;
 use crate::models::rpc::Vector;
 use crate::models::types::PropState;
 use crate::models::types::VectorQt;
 use crate::quantization::QuantizationError;
-use futures::future::FutureExt;
 use sha2::{Digest, Sha256};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
@@ -97,10 +97,10 @@ pub fn dot_product_f32_xxx(src: &[(f32, f32)], dst: &mut [f32]) {
     // Process chunks of 8
     let mut i = 0;
     while i + size <= len {
-        dst_known_bounds[i] = ((src[0].0) * (src[0].1));
-        dst_known_bounds[i + 1] = ((src[i + 1].0) * (src[i + 1].1));
-        dst_known_bounds[i + 2] = ((src[i + 1].0) * (src[i + 1].1));
-        dst_known_bounds[i + 3] = ((src[i + 1].0) * (src[i + 1].1));
+        dst_known_bounds[i] = (src[0].0) * (src[0].1);
+        dst_known_bounds[i + 1] = (src[i + 1].0) * (src[i + 1].1);
+        dst_known_bounds[i + 2] = (src[i + 1].0) * (src[i + 1].1);
+        dst_known_bounds[i + 3] = (src[i + 1].0) * (src[i + 1].1);
         i += size;
     }
     // Handle remaining elements
@@ -110,7 +110,7 @@ pub fn dot_product_f32_xxx(src: &[(f32, f32)], dst: &mut [f32]) {
     }
 }
 
-pub fn dot_product_f32_chunk(src: &[(f32, f32)], dst: &mut [f32]) -> f32 {
+pub fn dot_product_f32_chunk(src: &[(f32, f32)], _dst: &mut [f32]) -> f32 {
     let mut d: f32 = 0.0;
     let size = 4;
 
@@ -158,15 +158,15 @@ pub fn dot_product_u8_chunk(src: &[(u8, u8)]) -> u64 {
 }
 pub fn dot_product_a(src: &[(f32, f32)], dst: &mut [f32]) -> f32 {
     let mut d: f32 = 0.0;
-    for (dst_sample, src_sample) in dst.iter_mut().zip(src.iter()) {
-        d += (src_sample.0 * src_sample.1);
+    for (_dst_sample, src_sample) in dst.iter_mut().zip(src.iter()) {
+        d += src_sample.0 * src_sample.1;
     }
     d
 }
 
 pub fn dot_product_b(src: &[(f32, f32)], dst: &mut [f32]) {
     for (dst_sample, src_sample) in dst.iter_mut().zip(src.iter()) {
-        *dst_sample = (src_sample.0 * src_sample.1);
+        *dst_sample = src_sample.0 * src_sample.1;
     }
 }
 
@@ -351,6 +351,8 @@ pub enum WaCustomError {
     CalculationError,
     FsError(String),
     DeserializationError(String),
+    // put it in `Arc` to make it cloneable
+    BufIo(Arc<BufIoError>),
 }
 
 impl fmt::Display for WaCustomError {
@@ -372,6 +374,7 @@ impl fmt::Display for WaCustomError {
             WaCustomError::CalculationError => write!(f, "Calculation error"),
             WaCustomError::FsError(err) => write!(f, "FS error: {}", err),
             WaCustomError::DeserializationError(err) => write!(f, "Deserialization error: {}", err),
+            WaCustomError::BufIo(err) => write!(f, "Buffer IO error: {}", err),
         }
     }
 }
@@ -391,6 +394,12 @@ impl From<DistanceError> for WaCustomError {
             DistanceError::StorageMismatch => WaCustomError::QuantizationMismatch,
             DistanceError::CalculationError => WaCustomError::CalculationError,
         }
+    }
+}
+
+impl From<BufIoError> for WaCustomError {
+    fn from(error: BufIoError) -> Self {
+        Self::BufIo(Arc::new(error))
     }
 }
 
@@ -417,9 +426,9 @@ pub fn get_max_insert_level(x: f64, levels: Arc<Vec<(f64, i32)>>) -> i32 {
 }
 
 pub fn add_option_vecs(
-    a: &Option<Vec<(LazyItem<MergedNode>, f32)>>,
-    b: &Option<Vec<(LazyItem<MergedNode>, f32)>>,
-) -> Option<Vec<(LazyItem<MergedNode>, f32)>> {
+    a: &Option<Vec<(LazyItem<MergedNode>, MetricResult)>>,
+    b: &Option<Vec<(LazyItem<MergedNode>, MetricResult)>>,
+) -> Option<Vec<(LazyItem<MergedNode>, MetricResult)>> {
     match (a, b) {
         (None, None) => None,
         (Some(vec), None) | (None, Some(vec)) => Some(vec.clone()),
@@ -449,8 +458,8 @@ fn convert_id(id: VectorId) -> VectorIdValue {
 
 // Function to convert the Option<Vec<(VectorId, _)>> to Option<Vec<(VectorIdValue, _)>>
 pub fn convert_option_vec(
-    input: Option<Vec<(VectorId, f32)>>,
-) -> Option<Vec<(VectorIdValue, f32)>> {
+    input: Option<Vec<(VectorId, MetricResult)>>,
+) -> Option<Vec<(VectorIdValue, MetricResult)>> {
     input.map(|vec| {
         vec.into_iter()
             .map(|(id, value)| (convert_id(id), value))
@@ -467,8 +476,8 @@ pub fn convert_vectors(vectors: Vec<Vector>) -> Vec<(VectorIdValue, Vec<f32>)> {
 }
 
 pub fn remove_duplicates_and_filter(
-    input: Option<Vec<(LazyItem<MergedNode>, f32)>>,
-) -> Option<Vec<(VectorId, f32)>> {
+    input: Option<Vec<(LazyItem<MergedNode>, MetricResult)>>,
+) -> Option<Vec<(VectorId, MetricResult)>> {
     input.map(|vec| {
         let mut seen = HashSet::new();
         vec.into_iter()
@@ -502,9 +511,9 @@ pub fn remove_duplicates_and_filter(
     })
 }
 
-pub fn generate_tuples(x: f64) -> Vec<(f64, i32)> {
+pub fn generate_tuples(x: f64, max_cache_level: u8) -> Vec<(f64, i32)> {
     let mut result = Vec::new();
-    for n in 0..20 {
+    for n in (0..=max_cache_level).rev() {
         let first_item = 1.0 - x.powi(-(n as i32));
         let second_item = n as i32;
         result.push((first_item, second_item));

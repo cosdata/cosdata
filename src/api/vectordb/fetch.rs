@@ -33,7 +33,7 @@ pub(crate) async fn fetch(web::Json(body): web::Json<FetchNeighbors>) -> HttpRes
                 let response_data = RPCResponseBody::RespFetchNeighbors {
                     neighbors: neig
                         .iter()
-                        .map(|(vid, x)| (VectorIdValue::from(vid.clone()), *x))
+                        .map(|(vid, x)| (VectorIdValue::from(vid.clone()), x.clone()))
                         .collect(),
                     vector: Vector {
                         id: nvid,
