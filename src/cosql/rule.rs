@@ -7,13 +7,13 @@ use super::{
     ComputeClauses, Inferences, Patterns,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum InferenceType {
     Derive,
     Materialize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Rule {
     pub name: String,
     pub patterns: Patterns,
@@ -50,4 +50,149 @@ pub fn parse_rule(input: &str) -> IResult<&str, Rule> {
     };
 
     Ok((input, rule))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cosql::{
+        condition::{BinaryCondition, BinaryConditionOperator, Condition},
+        inference::relationship::RelationshipInference,
+        pattern::relationship::{RelationshipPattern, Role},
+        Inference, Pattern, Value,
+    };
+
+    #[test]
+    fn test_inference_type_parser() {
+        let values = [
+            ("derive", InferenceType::Derive),
+            ("materialize", InferenceType::Materialize),
+        ];
+
+        for (source, expected) in values {
+            let (_, parsed) = parse_inference_type(source).unwrap();
+
+            assert_eq!(parsed, expected);
+        }
+    }
+
+    #[test]
+    fn test_rule_parser() {
+        // the `parse_rule` function assumes the `define rule` part is already consumed
+        let values = [
+            (
+                "reachable_direct as
+                    match
+                        (from: $city1, to: $city2) forms direct_flight
+                    infer
+                        materialize (from: $city1, to: $city2) forms reachable;",
+                Rule {
+                    name: "reachable_direct".to_string(),
+                    patterns: vec![Pattern::RelationshipPattern(RelationshipPattern {
+                        variable: None,
+                        roles: vec![
+                            Role {
+                                role: Some("from".to_string()),
+                                entity: "city1".to_string(),
+                            },
+                            Role {
+                                role: Some("to".to_string()),
+                                entity: "city2".to_string(),
+                            },
+                        ],
+                        relationship_type: "direct_flight".to_string(),
+                        attributes: vec![],
+                    })],
+                    compute_clauses: None,
+                    inference_type: InferenceType::Materialize,
+                    inferences: vec![Inference::RelationshipInference(RelationshipInference {
+                        roles: vec![
+                            Role {
+                                role: Some("from".to_string()),
+                                entity: "city1".to_string(),
+                            },
+                            Role {
+                                role: Some("to".to_string()),
+                                entity: "city2".to_string(),
+                            },
+                        ],
+                        relationship_type: "reachable".to_string(),
+                        attributes: vec![],
+                    })],
+                },
+            ),
+            (
+                "reachable_indirect as
+                    match
+                        (from: $city1, to: $intermediate) forms reachable,
+                        (from: $intermediate, to: $city2) forms reachable,
+                        $city1 != $city2
+                    infer
+                        materialize (from: $city1, to: $city2) forms reachable;",
+                Rule {
+                    name: "reachable_indirect".to_string(),
+                    patterns: vec![
+                        Pattern::RelationshipPattern(RelationshipPattern {
+                            variable: None,
+                            roles: vec![
+                                Role {
+                                    role: Some("from".to_string()),
+                                    entity: "city1".to_string(),
+                                },
+                                Role {
+                                    role: Some("to".to_string()),
+                                    entity: "intermediate".to_string(),
+                                },
+                            ],
+                            relationship_type: "reachable".to_string(),
+                            attributes: vec![],
+                        }),
+                        Pattern::RelationshipPattern(RelationshipPattern {
+                            variable: None,
+                            roles: vec![
+                                Role {
+                                    role: Some("from".to_string()),
+                                    entity: "intermediate".to_string(),
+                                },
+                                Role {
+                                    role: Some("to".to_string()),
+                                    entity: "city2".to_string(),
+                                },
+                            ],
+                            relationship_type: "reachable".to_string(),
+                            attributes: vec![],
+                        }),
+                        Pattern::Condition(Condition::Binary(BinaryCondition {
+                            left: "city1".to_string(),
+                            operator: BinaryConditionOperator::Inequality,
+                            right: Value::Variable("city2".to_string()),
+                        })),
+                    ],
+
+                    compute_clauses: None,
+                    inference_type: InferenceType::Materialize,
+                    inferences: vec![Inference::RelationshipInference(RelationshipInference {
+                        roles: vec![
+                            Role {
+                                role: Some("from".to_string()),
+                                entity: "city1".to_string(),
+                            },
+                            Role {
+                                role: Some("to".to_string()),
+                                entity: "city2".to_string(),
+                            },
+                        ],
+                        relationship_type: "reachable".to_string(),
+                        attributes: vec![],
+                    })],
+                },
+            ),
+        ];
+
+        for (source, expected) in values {
+            let (_, parsed) = parse_rule(source).unwrap();
+
+            assert_eq!(parsed, expected);
+        }
+    }
 }
