@@ -33,3 +33,71 @@ pub fn parse_relationship_inference(input: &str) -> IResult<&str, RelationshipIn
         },
     )(input)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cosql::{insertion::Attribute, pattern::relationship::Role, value::Date, Value};
+
+    #[test]
+    fn test_relationship_inference_parser() {
+        let values = [
+            (
+                "(
+                    $person1,
+                    $company1
+                ) forms works_in (
+                    since: 2-10-1999
+                )",
+                RelationshipInference {
+                    roles: vec![
+                        Role {
+                            role: None,
+                            entity: "person1".to_string(),
+                        },
+                        Role {
+                            role: None,
+                            entity: "company1".to_string(),
+                        },
+                    ],
+                    relationship_type: "works_in".to_string(),
+                    attributes: vec![Attribute {
+                        name: "since".to_string(),
+                        value: Value::Date(Date(2, 10, 1999)),
+                    }],
+                },
+            ),
+            (
+                "(
+                    from: $city1,
+                    to: $city2
+                ) forms reachable (
+                    distance: $dist
+                )",
+                RelationshipInference {
+                    roles: vec![
+                        Role {
+                            role: Some("from".to_string()),
+                            entity: "city1".to_string(),
+                        },
+                        Role {
+                            role: Some("to".to_string()),
+                            entity: "city2".to_string(),
+                        },
+                    ],
+                    relationship_type: "reachable".to_string(),
+                    attributes: vec![Attribute {
+                        name: "distance".to_string(),
+                        value: Value::Variable("dist".to_string()),
+                    }],
+                },
+            ),
+        ];
+
+        for (source, expected) in values {
+            let (_, parsed) = parse_relationship_inference(source).unwrap();
+
+            assert_eq!(parsed, expected);
+        }
+    }
+}
