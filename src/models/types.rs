@@ -463,7 +463,7 @@ pub fn get_app_env() -> Result<Arc<AppEnv>, WaCustomError> {
 
 #[derive(Clone)]
 pub struct STM<T: 'static> {
-    arcshift: ArcShift<T>,
+    pub arcshift: ArcShift<T>,
     max_retries: usize,
     strict: bool,
 }
@@ -471,7 +471,7 @@ pub struct STM<T: 'static> {
 fn backoff(iteration: usize) {
     let spins = 1 << iteration;
     for _ in 0..spins {
-        spin_loop();
+        std::thread::yield_now();
     }
 }
 
