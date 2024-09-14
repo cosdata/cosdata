@@ -11,10 +11,10 @@ use crate::cosql::common::{parse_identifier, ws};
 
 use super::{parse_attribute_definition, AttributeDefinitions};
 
-pub type Roles = Vec<Role>;
+pub type RoleDefinitions = Vec<RoleDefinition>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Role {
+pub struct RoleDefinition {
     pub name: String,
     pub entity_type: String,
 }
@@ -22,30 +22,30 @@ pub struct Role {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelationshipDefinition {
     pub name: String,
-    pub roles: Roles,
+    pub roles: RoleDefinitions,
     pub attributes: AttributeDefinitions,
 }
 
-pub fn parse_roles0(input: &str) -> IResult<&str, Roles> {
+pub fn parse_role_definitions0(input: &str) -> IResult<&str, RoleDefinitions> {
     delimited(
         ws(char('(')),
-        separated_list0(ws(char(',')), parse_role),
+        separated_list0(ws(char(',')), parse_role_definition),
         ws(char(')')),
     )(input)
 }
 
-pub fn parse_roles1(input: &str) -> IResult<&str, Roles> {
+pub fn parse_role_definitions1(input: &str) -> IResult<&str, RoleDefinitions> {
     delimited(
         ws(char('(')),
-        separated_list1(ws(char(',')), parse_role),
+        separated_list1(ws(char(',')), parse_role_definition),
         ws(char(')')),
     )(input)
 }
 
-pub fn parse_role(input: &str) -> IResult<&str, Role> {
+pub fn parse_role_definition(input: &str) -> IResult<&str, RoleDefinition> {
     map(
         tuple((ws(parse_identifier), ws(char(':')), ws(parse_identifier))),
-        |(name, _, entity_type)| Role {
+        |(name, _, entity_type)| RoleDefinition {
             name: name.to_string(),
             entity_type: entity_type.to_string(),
         },
@@ -57,7 +57,7 @@ pub fn parse_relationship_definition(input: &str) -> IResult<&str, RelationshipD
         tuple((
             ws(parse_identifier),
             ws(tag("as")),
-            parse_roles0,
+            parse_role_definitions0,
             opt(preceded(
                 ws(char(',')),
                 separated_list0(ws(char(',')), parse_attribute_definition),
@@ -78,18 +78,18 @@ mod tests {
     use crate::cosql::{definition::AttributeDefinition, DataType};
 
     #[test]
-    fn test_role_parser() {
+    fn test_role_definition_parser() {
         let values = [
             (
                 "project: project",
-                Role {
+                RoleDefinition {
                     name: "project".to_string(),
                     entity_type: "project".to_string(),
                 },
             ),
             (
                 "assignee: person",
-                Role {
+                RoleDefinition {
                     name: "assignee".to_string(),
                     entity_type: "person".to_string(),
                 },
@@ -97,23 +97,23 @@ mod tests {
         ];
 
         for (source, expected) in values {
-            let (_, parsed) = parse_role(source).unwrap();
+            let (_, parsed) = parse_role_definition(source).unwrap();
 
             assert_eq!(parsed, expected);
         }
     }
 
     #[test]
-    fn test_roles_parser() {
+    fn test_role_definitions_parser() {
         let values = [
             (
                 "(project: project, assignee: person)",
                 vec![
-                    Role {
+                    RoleDefinition {
                         name: "project".to_string(),
                         entity_type: "project".to_string(),
                     },
-                    Role {
+                    RoleDefinition {
                         name: "assignee".to_string(),
                         entity_type: "person".to_string(),
                     },
@@ -122,11 +122,11 @@ mod tests {
             (
                 "(employee: person, department: department)",
                 vec![
-                    Role {
+                    RoleDefinition {
                         name: "employee".to_string(),
                         entity_type: "person".to_string(),
                     },
-                    Role {
+                    RoleDefinition {
                         name: "department".to_string(),
                         entity_type: "department".to_string(),
                     },
@@ -135,7 +135,7 @@ mod tests {
         ];
 
         for (source, expected) in values {
-            let (_, parsed) = parse_roles1(source).unwrap();
+            let (_, parsed) = parse_role_definitions1(source).unwrap();
 
             assert_eq!(parsed, expected);
         }
@@ -143,18 +143,19 @@ mod tests {
 
     #[test]
     fn test_relationship_definition_parser() {
-        // the `parse_relationship_definition` function assumes the `define relationship`
+        // the `parse_relationship_definition` function assumes the `define relationship` part is
+        // already consumed
         let values = [
             (
                 "assigned_to as (project: project, assignee: person);",
                 RelationshipDefinition {
                     name: "assigned_to".to_string(),
                     roles: vec![
-                        Role {
+                        RoleDefinition {
                             name: "project".to_string(),
                             entity_type: "project".to_string(),
                         },
-                        Role {
+                        RoleDefinition {
                             name: "assignee".to_string(),
                             entity_type: "person".to_string(),
                         },
@@ -167,11 +168,11 @@ mod tests {
                 RelationshipDefinition {
                     name: "works_in".to_string(),
                     roles: vec![
-                        Role {
+                        RoleDefinition {
                             name: "employee".to_string(),
                             entity_type: "person".to_string(),
                         },
-                        Role {
+                        RoleDefinition {
                             name: "department".to_string(),
                             entity_type: "department".to_string(),
                         },
