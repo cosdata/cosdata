@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use crate::config_loader::Config;
+use crate::{config_loader::Config, models::rpc::VectorIdValue};
 
 use super::{
-    dtos::{CreateVectorDto, CreateVectorResponseDto},
+    dtos::{CreateVectorDto, CreateVectorResponseDto, UpdateVectorDto, UpdateVectorResponseDto},
     error::VectorsError,
     repo,
 };
@@ -21,4 +21,13 @@ pub(crate) async fn get_vector_by_id(
     vector_id: &str,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
     repo::get_vector_by_id(collection_id, vector_id).await
+}
+
+pub(crate) async fn update_vector_by_id(
+    collection_id: &str,
+    vector_id: VectorIdValue,
+    update_vector_dto: UpdateVectorDto,
+    config: Arc<Config>,
+) -> Result<UpdateVectorResponseDto, VectorsError> {
+    repo::update_vector(collection_id, vector_id, update_vector_dto, config).await
 }
