@@ -279,6 +279,91 @@ impl EmbeddingOffset {
     }
 }
 
+/// Retrieves a raw embedding vector from the vector store by its ID.
+///
+/// This function performs the following steps to retrieve the embedding:
+/// 1. Begins a read-write transaction with the LMDB environment.
+/// 2. Retrieves the serialized offset of the embedding from the database using the provided `vector_id`.
+/// 3. Deserializes the offset to obtain the embedding offset and version.
+/// 4. Uses a `BufferManagerFactory` to create a buffer manager for the appropriate version.
+/// 5. Reads the embedding from the buffer using the offset.
+///
+/// # Arguments
+///
+/// * `vec_store` - An `Arc`-wrapped `VectorStore` instance, which contains the LMDB environment and database for embeddings.
+/// * `vector_id` - The ID of the vector whose embedding is to be retrieved.
+///
+/// # Returns
+///
+/// * `Ok(RawVectorEmbedding)` - On success, returns the embedding associated with the given `vector_id`.
+/// * `Err(WaCustomError)` - On failure, returns a custom error indicating the reason for the failure.
+///
+/// # Errors
+///
+/// This function may return an `Err` variant of `WaCustomError` in cases where:
+/// * There is an error beginning the LMDB transaction (e.g., database access issues).
+/// * The `vector_id` does not exist in the database, leading to a failure when retrieving the serialized offset.
+/// * Deserialization of the embedding offset fails.
+/// * There are issues with accessing or reading from the buffer manager.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+/// use std::path::Path;
+/// use my_crate::{VectorStore, get_embedding_by_id, RawVectorEmbedding, WaCustomError, VectorId};
+///
+/// let vec_store = Arc::new(VectorStore::new());
+/// let vector_id = VectorId::Int(42); // Example vector ID
+/// match get_embedding_by_id(vec_store.clone(), vector_id) {
+///     Ok(embedding) => println!("Embedding: {:?}", embedding),
+///     Err(err) => eprintln!("Error retrieving embedding: {:?}", err),
+/// }
+/// ```
+///
+/// # Panics
+///
+/// This function does not panic.
+///
+/// # Notes
+///
+/// Ensure that the buffer manager and the database are correctly initialized and configured before calling this function.
+/// The function assumes the existence of methods and types like `EmbeddingOffset::deserialize`, `BufferManagerFactory::new`, and `read_embedding` which should be implemented correctly.
+pub fn get_embedding_by_id(
+    vec_store: Arc<VectorStore>,
+    vector_id: VectorId,
+) -> Result<RawVectorEmbedding, WaCustomError> {
+    let env = vec_store.lmdb.env.clone();
+    let embedding_db = vec_store.lmdb.embeddings_db.clone();
+
+    let txn = env
+        .begin_rw_txn()
+        .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
+
+    let offset_serialized = txn
+        .get(*embedding_db, &vector_id.to_string())
+        .map_err(|e| {
+            WaCustomError::DatabaseError(format!(
+                "Failed to get serialized embedding offset: {}",
+                e
+            ))
+        })?;
+
+    let embedding_offset = EmbeddingOffset::deserialize(offset_serialized)
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+    let bufmans = BufferManagerFactory::new(Path::new(".").into(), |root, ver| {
+        root.join(format!("{}.vec_raw", **ver))
+    });
+
+    let offset = embedding_offset.offset;
+    let current_version = embedding_offset.version;
+    let bufman = bufmans.get(&current_version)?;
+    let (embedding, _next) = read_embedding(bufman.clone(), offset)?;
+
+    Ok(embedding)
+}
+
 fn read_embedding(
     bufman: Arc<BufferManager>,
     offset: u32,

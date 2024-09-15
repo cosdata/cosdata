@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::config_loader::Config;
+use crate::{config_loader::Config, models::types::VectorId};
 
 use super::{
     dtos::{CreateVectorDto, CreateVectorResponseDto},
@@ -18,7 +18,7 @@ pub(crate) async fn create_vector(
 
 pub(crate) async fn get_vector_by_id(
     collection_id: &str,
-    vector_id: &str,
+    vector_id: VectorId,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
     repo::get_vector_by_id(collection_id, vector_id).await
 }

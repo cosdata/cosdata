@@ -1,6 +1,12 @@
 use std::sync::Arc;
 
-use crate::{api::vectordb::collections, api_service::run_upload, config_loader::Config};
+use crate::{
+    api::vectordb::collections,
+    api_service::run_upload,
+    config_loader::Config,
+    models::{rpc::VectorIdValue, types::VectorId},
+    vector_store::get_embedding_by_id,
+};
 
 use super::{
     dtos::{CreateVectorDto, CreateVectorResponseDto},
@@ -32,8 +38,23 @@ pub(crate) async fn create_vector(
 }
 
 pub(crate) async fn get_vector_by_id(
-    _collection_id: &str,
-    _vector_id: &str,
+    collection_id: &str,
+    vector_id: VectorId,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
-    Err(VectorsError::NotFound)?
+    let vec_store = collections::service::get_collection_by_id(collection_id)
+        .await
+        .map_err(|_| VectorsError::NotFound)?;
+
+    let embedding = get_embedding_by_id(vec_store, vector_id)
+        .map_err(|e| VectorsError::DatabaseError(e.to_string()))?;
+
+    let id = match embedding.hash_vec {
+        VectorId::Int(v) => VectorIdValue::IntValue(v),
+        VectorId::Str(v) => VectorIdValue::StringValue(v),
+    };
+
+    Ok(CreateVectorResponseDto {
+        id,
+        values: embedding.raw_vec,
+    })
 }
