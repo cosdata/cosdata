@@ -393,9 +393,9 @@ dependencies = [
 
 [[package]]
 name = "arcshift"
-version = "0.1.7"
+version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43d331936e5e395b6a3173357d302fbfea6077307cbc4e1c1a596814c1e74855"
+checksum = "623c657cd8b8cda80e942bdc4deedd4db812dded38f8940bd1a2fd77efeb8e55"
 
 [[package]]
 name = "async-channel"
@@ -962,6 +962,7 @@ dependencies = [
  "lazy_static",
  "lmdb",
  "log",
+ "nom",
  "once_cell",
  "probabilistic-collections",
  "quickcheck",
