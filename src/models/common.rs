@@ -290,14 +290,17 @@ fn to_float_flag(x: f32, bits_per_value: usize, step: f32) -> Vec<bool> {
     result
 }
 
-pub fn simp_quant(v: &[f32]) -> Vec<u8> {
-    v.iter().map(|&x| {
+pub fn simp_quant(v: &[f32]) -> Result<Vec<u8>, QuantizationError> {
+    let out_of_range = v.iter().any(|&x| x > 1.0 || x < -1.0 );
+    if out_of_range {return Err(QuantizationError::InvalidInput(String::from("values sent in vector for simp_quant are out of range [-1,+1]")));}
+    let vec= v.iter().map(|&x| {
         let mut y: f32 = x;
         if x < 0.0 {
             y += 1.0;
         }
         (y * 255.0).round() as u8
-    }).collect()
+    }).collect();
+    Ok(vec)
 }
 
 pub fn mag_square_u8(vec: &[u8]) -> u32 {
@@ -388,7 +391,7 @@ impl fmt::Display for WaCustomError {
 impl From<QuantizationError> for WaCustomError {
     fn from(value: QuantizationError) -> Self {
         match value {
-            QuantizationError::InvalidInput => WaCustomError::InvalidParams,
+            QuantizationError::InvalidInput(_) => WaCustomError::InvalidParams,
             QuantizationError::TrainingFailed => WaCustomError::TrainingFailed,
         }
     }

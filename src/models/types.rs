@@ -11,7 +11,7 @@ use crate::models::lazy_load::*;
 use crate::models::versioning::*;
 use crate::quantization::product::ProductQuantization;
 use crate::quantization::scalar::ScalarQuantization;
-use crate::quantization::{Quantization, StorageType};
+use crate::quantization::{Quantization, QuantizationError,StorageType};
 use crate::storage::Storage;
 use arcshift::ArcShift;
 use dashmap::DashMap;
@@ -170,7 +170,7 @@ pub enum QuantizationMetric {
 }
 
 impl Quantization for QuantizationMetric {
-    fn quantize(&self, vector: &[f32], storage_type: StorageType) -> Storage {
+    fn quantize(&self, vector: &[f32], storage_type: StorageType) -> Result<Storage, QuantizationError> {
         match self {
             Self::Scalar => ScalarQuantization.quantize(vector, storage_type),
             Self::Product(product) => product.quantize(vector, storage_type),
@@ -329,7 +329,7 @@ pub enum VectorQt {
 
 impl VectorQt {
     pub fn unsigned_byte(vec: &[f32]) -> Self {
-        let quant_vec = simp_quant(vec);
+        let quant_vec = simp_quant(vec).inspect_err(|x| println!("{:?}",x)).unwrap();
         let mag = mag_square_u8(&quant_vec);
         Self::UnsignedByte { mag, quant_vec }
     }

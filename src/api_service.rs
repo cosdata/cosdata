@@ -52,7 +52,8 @@ pub async fn init_vector_store(
     let vec_hash = VectorId::Int(-1);
 
     let exec_queue_nodes: ExecQueueUpdate = STM::new(Vec::new(), 1, true);
-    let vector_list = Arc::new(quantization_metric.quantize(&vec, storage_type));
+    let res = quantization_metric.quantize(&vec, storage_type).inspect_err(|x| println!("{:?}",x));
+    let vector_list = Arc::new(res.or_else(|e| return Err(WaCustomError::from(e))).unwrap());
 
     // Note that setting .write(true).append(true) has the same effect
     // as setting only .append(true)
@@ -187,7 +188,7 @@ pub fn run_upload(
         let hash_vec = convert_value(id);
         let storage = vec_store
             .quantization_metric
-            .quantize(&vec, vec_store.storage_type);
+            .quantize(&vec, vec_store.storage_type).inspect_err(|x|println!("{:?}",x)).unwrap();
         let vec_emb = VectorEmbedding {
             raw_vec: Arc::new(storage),
             hash_vec,
@@ -241,7 +242,7 @@ pub async fn ann_vector_query(
     let root = &vector_store.root_vec;
     let vector_list = vector_store
         .quantization_metric
-        .quantize(&query, vector_store.storage_type);
+        .quantize(&query, vector_store.storage_type).or_else(|e|{ println!("{:?}",e); return Err(WaCustomError::from(e))}).unwrap();
 
     let vec_emb = VectorEmbedding {
         raw_vec: Arc::new(vector_list.clone()),

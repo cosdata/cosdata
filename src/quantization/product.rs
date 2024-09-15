@@ -14,7 +14,7 @@ pub struct Centroid {
 
 impl Quantization for ProductQuantization {
     // Implementation here
-    fn quantize(&self, vector: &[f32], storage_type: StorageType) -> Storage {
+    fn quantize(&self, vector: &[f32], storage_type: StorageType) -> Result<Storage,QuantizationError> {
         // Implement product quantization logic here
         unimplemented!("Product quantization not implemented yet")
     }

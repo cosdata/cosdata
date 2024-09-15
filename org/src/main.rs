@@ -256,8 +256,10 @@ fn cosine_similarity_new(x: &VectorQt, y: &VectorQt) -> f32 {
     dot_product / (magnitude_vec1 * magnitude_vec2)
 }
 
-fn quantize_to_u8(vec: &[f32], u32: length) -> Vec<u8> {
+fn quantize_to_u8(vec: &[f32], u32: length) -> Result<Vec<u8>, QuantizationError> {
     let mut quantized_vec = Vec::with_capacity(length);
+    let out_of_range = vec.iter().any(|&x| x > 1.0 || x < -1.0 );
+    if out_of_range {return Err(QuantizationError::InvalidInput(String::from("values sent in vector for quantization are out of range [-1,+1]")));}
 
     for &x in vec {
         quantized_vec.push({

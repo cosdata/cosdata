@@ -892,7 +892,7 @@ mod tests {
             .into_iter()
             .map(|_| rng.sample(&range))
             .collect();
-        let raw_vec = Arc::new(ScalarQuantization.quantize(&vector, StorageType::UnsignedByte));
+        let raw_vec = Arc::new(ScalarQuantization.quantize(&vector, StorageType::UnsignedByte).inspect_err(|x| println!("Error : {:?}",x)).unwrap());
 
         VectorEmbedding {
             raw_vec,

@@ -27,14 +27,17 @@ fn oct_quant(v: &[f32]) -> Vec<u8> {
         .collect()
 }
 
-fn simp_quant(v: &[f32]) -> Vec<u8> {
-    v.iter().map(|&x| {
+fn simp_quant(v: &[f32]) -> Result<Vec<u8>, String>{
+    let out_of_range = v.iter().any(|&x| x > 1.0 || x < -1.0 );
+    if out_of_range {return Err(String::from("values sent in vector for simp_quant are out of range [-1,+1]"));}
+    let vec = v.iter().map(|&x| {
         let mut y: f32 = x;
         if x < 0.0 {
             y += 1.0;
         }
         (y * 255.0).round() as u8
-    }).collect()
+    }).collect();
+    Ok(vec)
 }
 
 fn cos_sim_binary(a: &[u32], b: &[u32]) -> f32 {
@@ -122,8 +125,8 @@ fn benchmark_u8(c: &mut Criterion) {
             let i2 = rng.gen_range(0..100);
             let v1 = black_box(&vectors[i1]);
             let v2 = black_box(&vectors[i2]);
-            let sv1 = simp_quant(v1);
-            let sv2 = simp_quant(v2);
+            let sv1 = simp_quant(v1).inspect_err(|x|println!("{:?}",x)).unwrap();
+            let sv2 = simp_quant(v2).inspect_err(|x|println!("{:?}",x)).unwrap();
             cos_sim_u8(&sv1, &sv2)
         })
     });

@@ -7,9 +7,11 @@ use half::f16;
 pub struct ScalarQuantization;
 
 impl Quantization for ScalarQuantization {
-    fn quantize(&self, vector: &[f32], storage_type: StorageType) -> Storage {
+    fn quantize(&self, vector: &[f32], storage_type: StorageType) -> Result<Storage, QuantizationError> {
         match storage_type {
             StorageType::UnsignedByte => {
+                let out_of_range = vector.iter().any(|&x| x > 1.0 || x < -1.0 );
+                if out_of_range {return Err(QuantizationError::InvalidInput(String::from("values sent in vector for Quantization are out of range [-1,+1]")));}
                 let quant_vec: Vec<_> = vector
                     .iter()
                     .map(|&x| {
@@ -21,21 +23,21 @@ impl Quantization for ScalarQuantization {
                     })
                     .collect();
                 let mag = quant_vec.iter().map(|&x| x as u32 * x as u32).sum();
-                Storage::UnsignedByte { mag, quant_vec }
+               Ok( Storage::UnsignedByte { mag, quant_vec })
             }
             StorageType::SubByte(resolution) => {
                 let quant_vec: Vec<_> = quantize_to_u8_bits(vector, resolution);
                 let mag = 0; //implement todo
-                Storage::SubByte {
+               Ok( Storage::SubByte {
                     mag,
                     quant_vec,
                     resolution,
-                }
+                })
             }
             StorageType::HalfPrecisionFP => {
                 let quant_vec = vector.iter().map(|&x| f16::from_f32(x)).collect();
                 let mag = vector.iter().map(|&x| x * x).sum();
-                Storage::HalfPrecisionFP { mag, quant_vec }
+              Ok(  Storage::HalfPrecisionFP { mag, quant_vec })
             }
         }
     }
