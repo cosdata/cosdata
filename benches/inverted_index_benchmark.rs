@@ -1,20 +1,9 @@
 use std::collections::BTreeSet;
 
-use cosdata::storage::inverted_index::InvertedIndex;
+use cosdata::{models::types::SparseVector, storage::inverted_index::InvertedIndex};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use rayon::prelude::*;
-
-struct SparseVector {
-    vector_id: u32,
-    entries: Vec<(u32, f32)>,
-}
-
-impl SparseVector {
-    fn new(vector_id: u32, entries: Vec<(u32, f32)>) -> Self {
-        Self { vector_id, entries }
-    }
-}
 
 // Function to generate multiple random sparse vectors
 fn generate_random_sparse_vectors(num_records: usize, dimensions: usize) -> Vec<SparseVector> {
@@ -98,10 +87,7 @@ fn benchmark_parallel_inserts(c: &mut Criterion) {
                 b.iter(|| {
                     let inverted_index: InvertedIndex<f32> = InvertedIndex::new();
                     records.par_iter().for_each(|record| {
-                        let vector_id = record.vector_id;
-                        record.entries.iter().for_each(|entry| {
-                            let _ = inverted_index.insert(entry.0, entry.1, vector_id);
-                        });
+                        let _ = inverted_index.add_sparse_vector(record.clone());
                     });
                 });
             },
