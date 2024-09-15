@@ -646,7 +646,7 @@ impl<T: Clone + Identifiable<Id = u64> + 'static> LazyItemSet<T> {
 impl<T: Clone + 'static> LazyItemMap<T> {
     pub fn new() -> Self {
         Self {
-            items: STM::new(IdentityMap::new(), 1, true),
+            items: STM::new(IdentityMap::new(), 5, true),
         }
     }
 
@@ -672,21 +672,27 @@ impl<T: Clone + 'static> LazyItemMap<T> {
 
     /// Inserts a new key value pair into the map if the key does not already exist
     ///
+    /// Return the new value if the key did not exist, otherwise return the existing value
+    ///
     /// Note: Concurrent updates should use checked_insert to avoid overwriting
     /// updates from other threads.
-    pub fn checked_insert(&self, key: IdentityMapKey, default: LazyItem<T>) {
+    pub fn checked_insert(&self, key: IdentityMapKey, default: LazyItem<T>) -> Option<LazyItem<T>> {
         let mut arc = self.items.clone();
 
-        arc.transactional_update(|map| {
-            let mut new_map = map.clone();
-            if !new_map.contains(&key) {
-                new_map.insert(key.clone(), default.clone());
-                new_map
-            } else {
-                new_map
-            }
-        })
-        .expect("Map update should succeed");
+        let (_, new_child) = arc.arcshift.rcu_project(
+            |map| {
+                (!map.contains(&key))
+                    .then(|| {
+                        let mut new_map = map.clone();
+                        new_map.insert(key.clone(), default.clone());
+                        Some(new_map)
+                    })
+                    .flatten()
+            },
+            |item| item.get(&key).map(|item| item.clone()),
+        );
+
+        new_child
     }
 
     pub fn get(&self, key: &IdentityMapKey) -> Option<LazyItem<T>> {

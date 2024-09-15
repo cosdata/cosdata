@@ -3,6 +3,7 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 
 use arcshift::ArcShift;
+use dashmap::DashMap;
 
 use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::cache_loader::NodeRegistry;
@@ -56,7 +57,7 @@ where
 {
     pub dim_index: u32,
     pub implicit: bool,
-    pub data: LazyItemMap<T>,
+    pub data: Arc<DashMap<IdentityMapKey, LazyItem<T>>>,
     // TODO: benchmark if fixed size children array with lazy item refs
     //  yields better performance
     pub lazy_children: LazyItemMap<InvertedIndexItem<T>>,
@@ -99,7 +100,7 @@ where
         InvertedIndexItem {
             dim_index,
             implicit,
-            data: LazyItemMap::new(),
+            data: Arc::new(DashMap::new()),
             lazy_children: LazyItemMap::new(),
         }
     }
@@ -116,14 +117,15 @@ where
             let new_dim_index = current_node.dim_index + POWERS_OF_4[child_index];
             let key = IdentityMapKey::Int(child_index as u32);
             let new_child = LazyItem::new(0.into(), InvertedIndexItem::new(new_dim_index, true));
-            current_node
-                .lazy_children
-                .checked_insert(key.clone(), new_child);
-            current_node = current_node
-                .lazy_children
-                .get(&key)
-                .map(|lazy_item| lazy_item.get_data(cache.clone()))
-                .expect("Child should exist");
+            loop {
+                if let Some(child) = current_node
+                    .lazy_children
+                    .checked_insert(key.clone(), new_child.clone())
+                {
+                    current_node = child.get_data(cache.clone());
+                    break;
+                }
+            }
         }
 
         current_node
@@ -131,27 +133,10 @@ where
 
     /// Inserts a value into the index at the specified dimension index.
     /// Calculates the path and delegates to `insert_with_path`.
-    pub fn insert(
-        mut node: ArcShift<InvertedIndexItem<T>>,
-        value: T,
-        vector_id: u32,
-    ) -> Result<(), String> {
-        let mut updated = false;
-        while !updated {
-            // Attempt to update using rcu
-            updated = node.rcu(|current| {
-                // Create a new InvertedIndexItem with the updates
-                let mut new_item = (*current).clone();
-                new_item.implicit = false;
-                new_item.data.insert(
-                    IdentityMapKey::Int(vector_id),
-                    LazyItem::new(0.into(), value.clone()),
-                );
-                new_item
-            });
-        }
-
-        Ok(())
+    pub fn insert(node: ArcShift<InvertedIndexItem<T>>, value: T, vector_id: u32) {
+        let key = IdentityMapKey::Int(vector_id);
+        let value = LazyItem::new(0.into(), value.clone());
+        node.data.insert(key, value);
     }
 
     /// Retrieves a value from the index at the specified dimension index.
@@ -260,7 +245,7 @@ where
 
     /// Inserts a value into the index at the specified dimension index.
     /// Delegates to the root node's `insert` method.
-    pub fn insert(&self, dim_index: u32, value: T, vector_id: u32) -> Result<(), String> {
+    pub fn insert(&self, dim_index: u32, value: T, vector_id: u32) {
         let path = calculate_path(dim_index, self.root.dim_index);
         let node =
             InvertedIndexItem::find_or_create_node(self.root.clone(), &path, self.cache.clone());
@@ -286,7 +271,6 @@ impl InvertedIndex<f32> {
         for (dim_index, &value) in vector.iter().enumerate() {
             if value != 0.0 {
                 self.insert(dim_index as u32, value, vector_id)
-                    .expect("Insert value in inverted index");
             }
         }
         Ok(())
