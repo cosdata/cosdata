@@ -962,6 +962,7 @@ dependencies = [
  "lazy_static",
  "lmdb",
  "log",
+ "nom",
  "once_cell",
  "probabilistic-collections",
  "quickcheck",
