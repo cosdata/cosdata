@@ -1,17 +1,15 @@
 use std::collections::BTreeSet;
 
-use cosdata::storage::inverted_index::InvertedIndex;
+use cosdata::{models::types::SparseVector, storage::inverted_index::InvertedIndex};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use rayon::prelude::*;
 
 // Function to generate multiple random sparse vectors
-fn generate_random_sparse_vectors(num_records: usize, dimensions: usize) -> Vec<Vec<f32>> {
+fn generate_random_sparse_vectors(num_records: usize, dimensions: usize) -> Vec<SparseVector> {
     let mut rng = StdRng::seed_from_u64(2024);
-    let mut records: Vec<Vec<f32>> = Vec::with_capacity(num_records);
+    let mut records: Vec<SparseVector> = Vec::with_capacity(num_records);
 
     for _ in 0..num_records {
-        let mut record = vec![0.0; dimensions];
-
         // Calculate the number of non-zero elements (5% to 10% of dimensions)
         let num_nonzero = rng
             .gen_range((dimensions as f32 * 0.05) as usize..=(dimensions as f32 * 0.10) as usize);
@@ -24,11 +22,13 @@ fn generate_random_sparse_vectors(num_records: usize, dimensions: usize) -> Vec<
         }
 
         // Generate random values for the nonzero indices
+        let mut record = Vec::with_capacity(num_nonzero);
         for index in unique_indices {
-            record[index] = rng.gen();
+            let value = rng.gen();
+            record.push((index as u32, value));
         }
 
-        records.push(record);
+        records.push(SparseVector::new(rng.gen(), record));
     }
 
     records
@@ -42,7 +42,7 @@ fn main() {
     let records = generate_random_sparse_vectors(num_vectors, dimensions);
 
     let inverted_index: InvertedIndex<f32> = InvertedIndex::new();
-    records.par_iter().enumerate().for_each(|(id, record)| {
-        let _ = inverted_index.add_sparse_vector(record.to_vec(), id as u32);
+    records.par_iter().for_each(|record| {
+        let _ = inverted_index.add_sparse_vector(record.clone());
     });
 }
