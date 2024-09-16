@@ -31,3 +31,10 @@ pub(crate) async fn update_vector_by_id(
 ) -> Result<UpdateVectorResponseDto, VectorsError> {
     repo::update_vector(collection_id, vector_id, update_vector_dto, config).await
 }
+
+pub(crate) async fn delete_vector_by_id(
+    collection_id: &str,
+    vector_id: VectorIdValue,
+) -> Result<CreateVectorResponseDto, VectorsError> {
+    repo::delete_vector_by_id(collection_id, vector_id).await
+}

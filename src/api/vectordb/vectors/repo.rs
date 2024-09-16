@@ -64,3 +64,10 @@ pub(crate) async fn update_vector(
         values: update_vector_dto.values,
     })
 }
+
+pub(crate) async fn delete_vector_by_id(
+    _collection_id: &str,
+    _vector_id: VectorIdValue,
+) -> Result<CreateVectorResponseDto, VectorsError> {
+    Err(VectorsError::NotImplemented)?
+}
