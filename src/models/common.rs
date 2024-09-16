@@ -291,16 +291,22 @@ fn to_float_flag(x: f32, bits_per_value: usize, step: f32) -> Vec<bool> {
 }
 
 pub fn simp_quant(v: &[f32]) -> Result<Vec<u8>, QuantizationError> {
-    let out_of_range = v.iter().any(|&x| x > 1.0 || x < -1.0 );
-    if out_of_range {return Err(QuantizationError::InvalidInput(String::from("values sent in vector for simp_quant are out of range [-1,+1]")));}
-    let vec= v.iter().map(|&x| {
-        let mut y: f32 = x;
-        if x < 0.0 {
-            y += 1.0;
-        }
-        (y * 255.0).round() as u8
-    }).collect();
-    Ok(vec)
+    let (out_of_range, has_negative) = v.iter().fold((false, false), |(oor, neg), &x| {
+        (oor || x > 1.0 || x < -1.0, neg || x < 0.0)
+    });
+    if out_of_range {
+        return Err(QuantizationError::InvalidInput(String::from(
+            "Values sent in vector for simp_quant are out of range [-1,+1]",
+        )));
+    }
+    let res: Vec<u8> = v
+        .iter()
+        .map(|&x| {
+            let y = if has_negative { x + 1.0 } else { x };
+            (y * 255.0).round() as u8
+        })
+        .collect();
+    Ok(res)
 }
 
 pub fn mag_square_u8(vec: &[u8]) -> u32 {

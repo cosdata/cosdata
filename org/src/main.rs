@@ -258,20 +258,24 @@ fn cosine_similarity_new(x: &VectorQt, y: &VectorQt) -> f32 {
 
 fn quantize_to_u8(vec: &[f32], u32: length) -> Result<Vec<u8>, QuantizationError> {
     let mut quantized_vec = Vec::with_capacity(length);
-    let out_of_range = vec.iter().any(|&x| x > 1.0 || x < -1.0 );
-    if out_of_range {return Err(QuantizationError::InvalidInput(String::from("values sent in vector for quantization are out of range [-1,+1]")));}
-
-    for &x in vec {
-        quantized_vec.push({
-            let mut y: f32 = x;
-            if x < 0.0 {
-                y += 1.0;
-            }
-            (y * 255.0).round() as u8
-        });
+    let (out_of_range, has_negative) = v.iter().fold((false, false), |(oor, neg), &x| {
+        (oor || x > 1.0 || x < -1.0, neg || x < 0.0)
+    });
+    if out_of_range {
+        return Err(QuantizationError(String::from(
+            "values sent in vector for quantization are out of range [-1,+1]",
+        )));
     }
 
-    quantized_vec
+    let quantized_vec: Vec<u8> = v
+        .iter()
+        .map(|&x| {
+            let y = if has_negative { x + 1.0 } else { x };
+            (y * 255.0).round() as u8
+        })
+        .collect();
+
+    Ok(quantized_vec)
 }
 
 fn quantize_and_combine(vec: &[f32], u32: length) -> Vec<u8> {
