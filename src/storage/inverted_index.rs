@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use arcshift::ArcShift;
 use dashmap::DashMap;
@@ -10,6 +10,7 @@ use crate::models::cache_loader::NodeRegistry;
 use crate::models::identity_collections::IdentityMapKey;
 use crate::models::lazy_load::{LazyItem, LazyItemMap};
 use crate::models::serializer::CustomSerialize;
+use crate::models::types::SparseVector;
 
 // TODO: Add more powers for larger jumps
 // TODO: Or switch to dynamic calculation of power of max power of 4
@@ -245,7 +246,7 @@ where
 
     /// Inserts a value into the index at the specified dimension index.
     /// Delegates to the root node's `insert` method.
-    pub fn insert(&self, dim_index: u32, value: T, vector_id: u32) {
+    fn insert(&self, dim_index: u32, value: T, vector_id: u32) {
         let path = calculate_path(dim_index, self.root.dim_index);
         let node =
             InvertedIndexItem::find_or_create_node(self.root.clone(), &path, self.cache.clone());
@@ -266,11 +267,11 @@ where
 
 impl InvertedIndex<f32> {
     /// Adds a sparse vector to the index.
-    /// Iterates over the vector and inserts non-zero values.
-    pub fn add_sparse_vector(&self, vector: Vec<f32>, vector_id: u32) -> Result<(), String> {
-        for (dim_index, &value) in vector.iter().enumerate() {
-            if value != 0.0 {
-                self.insert(dim_index as u32, value, vector_id)
+    pub fn add_sparse_vector(&self, vector: SparseVector) -> Result<(), String> {
+        let vector_id = vector.vector_id;
+        for (dim_index, value) in vector.entries.iter() {
+            if *value != 0.0 {
+                self.insert(*dim_index, *value, vector_id);
             }
         }
         Ok(())
@@ -284,7 +285,10 @@ mod test {
     use quickcheck::{Arbitrary, Gen};
     use quickcheck_macros::quickcheck;
 
-    use std::{collections::HashMap, thread};
+    use std::{
+        collections::{BTreeMap, HashMap},
+        thread,
+    };
 
     #[test]
     fn test_calculate_path() {
@@ -309,9 +313,9 @@ mod test {
     pub fn small_test() {
         let mut inverted_index: InvertedIndex<f32> = InvertedIndex::new();
 
-        let sparse_vector1 = vec![0.0, 15.0];
+        let sparse_vector1 = SparseVector::new(0, vec![(0, 0.0), (1, 15.0)]);
 
-        inverted_index.add_sparse_vector(sparse_vector1, 0).unwrap();
+        inverted_index.add_sparse_vector(sparse_vector1).unwrap();
 
         println!("\nFinal Inverted Index structure:");
         inverted_index.print_tree();
@@ -325,11 +329,14 @@ mod test {
     pub fn simple_test() {
         let mut inverted_index: InvertedIndex<f32> = InvertedIndex::new();
 
-        let sparse_vector1 = vec![0.0, 15.0, 0.0, 0.0, 27.0, 0.0, 31.0, 0.0, 0.0, 42.0];
-        let sparse_vector2 = vec![1.0, 0.0, 23.0, 0.0, 0.0, 38.0, 0.0, 45.0, 0.0, 56.0];
+        let sparse_vector1 = SparseVector::new(0, vec![(1, 15.0), (4, 27.0), (6, 31.0), (9, 42.0)]);
+        let sparse_vector2 = SparseVector::new(
+            1,
+            vec![(0, 1.0), (2, 23.0), (5, 38.0), (7, 45.0), (9, 56.0)],
+        );
 
-        inverted_index.add_sparse_vector(sparse_vector1, 0).unwrap();
-        inverted_index.add_sparse_vector(sparse_vector2, 1).unwrap();
+        inverted_index.add_sparse_vector(sparse_vector1).unwrap();
+        inverted_index.add_sparse_vector(sparse_vector2).unwrap();
 
         println!("\nFinal Inverted Index structure:");
         inverted_index.print_tree();
@@ -347,25 +354,27 @@ mod test {
         assert_eq!(inverted_index.get(9, 1), Some(56.0));
     }
 
-    // Custom type for generating sparse vectors
-    #[derive(Clone, Debug)]
-    struct SparseVector(Vec<f32>);
-
     impl Arbitrary for SparseVector {
         /// Generates arbitrary sparse vectors for testing.
         fn arbitrary(g: &mut Gen) -> Self {
             let size = usize::arbitrary(g) % (20 - 10) + 10;
-            let mut vec = vec![0.0; size];
+            let mut vec: Vec<(u32, f32)> = Vec::with_capacity(size);
+            let mut entries: BTreeMap<usize, f32> = BTreeMap::new();
+
             for _ in 0..size / 4 {
                 // Make it sparse by only setting ~25% of elements
                 let index = usize::arbitrary(g) % size;
-                let mut val = f32::arbitrary(g);
-                if val.is_nan() {
-                    val = 0.0
+                let val = f32::arbitrary(g);
+                if !val.is_nan() && val != 0.0 {
+                    entries.insert(index, val);
                 };
-                vec[index] = val;
             }
-            SparseVector(vec)
+
+            for (index, &val) in entries.iter() {
+                vec.push((*index as u32, val));
+            }
+
+            SparseVector::new(rand::random(), vec)
         }
     }
 
@@ -384,17 +393,17 @@ mod test {
     fn prop_multiple_vector_handling(vectors: Vec<SparseVector>) -> bool {
         let index = InvertedIndex::new();
 
-        for (id, SparseVector(vec)) in vectors.iter().enumerate() {
-            index.add_sparse_vector(vec.clone(), id as u32).unwrap();
+        for vector in &vectors {
+            let _ = index.add_sparse_vector(vector.clone());
         }
 
         // Verify each vector is stored separately
-        vectors.iter().enumerate().all(|(id, SparseVector(vec))| {
-            vector_to_hashmap(vec).iter().all(|(&dim, &value)| {
-                index
-                    .get(dim as u32, id as u32)
-                    .map_or(false, |v| v == value)
-            })
+        vectors.iter().all(|vector| {
+            let id = vector.vector_id;
+            vector
+                .entries
+                .iter()
+                .all(|(dim, value)| index.get(*dim, id).map_or(false, |v| v == *value))
         })
     }
 

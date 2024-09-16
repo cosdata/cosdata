@@ -1,21 +1,20 @@
 use std::collections::BTreeSet;
 
-use cosdata::storage::inverted_index::InvertedIndex;
+use cosdata::{models::types::SparseVector, storage::inverted_index::InvertedIndex};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use rayon::prelude::*;
 
 // Function to generate multiple random sparse vectors
-fn generate_random_sparse_vectors(num_records: usize, dimensions: usize) -> Vec<Vec<f32>> {
+fn generate_random_sparse_vectors(num_records: usize, dimensions: usize) -> Vec<SparseVector> {
     let mut rng = StdRng::seed_from_u64(2024);
-    let mut records: Vec<Vec<f32>> = Vec::with_capacity(num_records);
+    let mut records: Vec<SparseVector> = Vec::with_capacity(num_records);
 
-    for _ in 0..num_records {
-        let mut record = vec![0.0; dimensions];
-
+    for vector_id in 0..num_records {
         // Calculate the number of non-zero elements (5% to 10% of dimensions)
         let num_nonzero = rng
             .gen_range((dimensions as f32 * 0.05) as usize..=(dimensions as f32 * 0.10) as usize);
+        let mut entries: Vec<(u32, f32)> = Vec::with_capacity(num_nonzero);
 
         // BTreeSet is used to store unique indices of nonzero values in sorted order
         let mut unique_indices = BTreeSet::new();
@@ -25,11 +24,12 @@ fn generate_random_sparse_vectors(num_records: usize, dimensions: usize) -> Vec<
         }
 
         // Generate random values for the nonzero indices
-        for index in unique_indices {
-            record[index] = rng.gen();
+        for dim_index in unique_indices {
+            let value = rng.gen();
+            entries.push((dim_index as u32, value));
         }
 
-        records.push(record);
+        records.push(SparseVector::new(vector_id as u32, entries));
     }
 
     records
@@ -54,8 +54,10 @@ fn benchmark_sequential_inserts(c: &mut Criterion) {
             |b, records| {
                 b.iter(|| {
                     let inverted_index: InvertedIndex<f32> = InvertedIndex::new();
-                    for (id, record) in records.iter().enumerate() {
-                        let _ = inverted_index.add_sparse_vector(record.to_vec(), id as u32);
+                    for record in records.iter() {
+                        for entry in record.entries.iter() {
+                            let _ = inverted_index.insert(entry.0, entry.1, record.vector_id);
+                        }
                     }
                 });
             },
@@ -84,8 +86,8 @@ fn benchmark_parallel_inserts(c: &mut Criterion) {
             |b, records| {
                 b.iter(|| {
                     let inverted_index: InvertedIndex<f32> = InvertedIndex::new();
-                    records.par_iter().enumerate().for_each(|(id, record)| {
-                        let _ = inverted_index.add_sparse_vector(record.to_vec(), id as u32);
+                    records.par_iter().for_each(|record| {
+                        let _ = inverted_index.add_sparse_vector(record.clone());
                     });
                 });
             },

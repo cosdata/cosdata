@@ -536,3 +536,15 @@ where
         Ok(updated)
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct SparseVector {
+    pub vector_id: u32,
+    pub entries: Vec<(u32, f32)>,
+}
+
+impl SparseVector {
+    pub fn new(vector_id: u32, entries: Vec<(u32, f32)>) -> Self {
+        Self { vector_id, entries }
+    }
+}
