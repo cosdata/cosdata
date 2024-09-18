@@ -440,6 +440,7 @@ mod tests {
 
     use super::*;
     use std::thread;
+    use quickcheck_macros::quickcheck;
     use tempfile::tempfile;
 
     #[test]
@@ -485,14 +486,24 @@ mod tests {
         bufman.close_cursor(cursor1).unwrap();
     }
 
-    /// Create a large tmp content file about (5 * BUFFER_SIZE + 150)
-    /// in size
+    /// Test util function to create a temp file of size calculated
+    /// from `num_regions` and `extra` bytes after that.
+    ///
+    /// E.g. `create_tmp_file(5, 20)` will create a temp file with 5
+    /// regions of BUFFER_SIZE and 20 more bytes in addition to it.
     fn create_tmp_file(num_regions: u8, extra: u16) -> io::Result<File> {
         let mut file = tempfile()?;
         file.write_all(&vec![
             0_u8;
             (BUFFER_SIZE * num_regions as usize) + extra as usize
         ])?;
+        Ok(file)
+    }
+
+    /// Test util function to create a temp file of a specific size
+    fn create_tmp_file_of_size(size: u16) -> io::Result<File> {
+        let mut file = tempfile()?;
+        file.write_all(&vec![0_u8; size as usize])?;
         Ok(file)
     }
 
@@ -1065,5 +1076,89 @@ mod tests {
 
         // Verify that `bufman.file_size` remain the same
         assert_eq!((BUFFER_SIZE + 10) as u64, *bufman.file_size.read().unwrap());
+    }
+
+    // Prop test for `get_or_create_region` to check that
+    // `region.start` is a multiple of BUFFER_SIZE
+    #[quickcheck]
+    fn prop_get_or_create_region_start(pos: u16) -> bool {
+        let file = create_tmp_file_of_size(u16::MAX).unwrap();
+        let bufman = BufferManager::new(file).unwrap();
+        let region = bufman.get_or_create_region(pos as u64).unwrap();
+        region.start % (BUFFER_SIZE as u64) == 0
+    }
+
+    // Prop test for `get_or_create_region` to check that
+    // `region.buffer` size is at most equal to BUFFER_SIZE
+    #[quickcheck]
+    fn prop_get_or_create_region_buffer_size(pos: u16) -> bool {
+        let file = create_tmp_file_of_size(u16::MAX).unwrap();
+        let bufman = BufferManager::new(file).unwrap();
+        let region = bufman.get_or_create_region(pos as u64).unwrap();
+        let buffer = region.buffer.read().unwrap();
+        buffer.len() <= BUFFER_SIZE
+    }
+
+    // Prop test for `get_or_create_region` to check that
+    // `region.end` is at most equal to BUFFER_SIZE
+    #[quickcheck]
+    fn prop_get_or_create_region_end(pos: u16) -> bool {
+        let file = create_tmp_file_of_size(u16::MAX).unwrap();
+        let bufman = BufferManager::new(file).unwrap();
+        let region = bufman.get_or_create_region(pos as u64).unwrap();
+        region.end.load(Ordering::SeqCst) <= BUFFER_SIZE
+    }
+
+    // Prop test for `read_with_cursor` to check that the return value
+    // (total bytes read) is at most equal to the size of the input
+    // buffer
+    #[quickcheck]
+    fn prop_read_with_cursor(size: u16) -> bool {
+        let bufsize = size as usize;
+        let file = create_tmp_file_of_size(u16::MAX).unwrap();
+        let bufman = BufferManager::new(file).unwrap();
+        let mut buffer = vec![0; bufsize];
+        let cursor = bufman.open_cursor().unwrap();
+        let bytes_read = bufman.read_with_cursor(cursor, &mut buffer[..]).unwrap();
+        bufman.close_cursor(cursor).unwrap();
+        bytes_read <= bufsize
+    }
+
+    // Prop test for `write_with_cursor` to check that the return
+    // value (total bytes written) is exactly equal to the size of the
+    // output buffer
+    #[quickcheck]
+    fn prop_write_with_cursor(size: u16) -> bool {
+        let bufsize = size as usize;
+        let file = create_tmp_file_of_size(0).unwrap();
+        let bufman = BufferManager::new(file).unwrap();
+        let mut buffer = vec![0; bufsize];
+        let cursor = bufman.open_cursor().unwrap();
+        let bytes_written = bufman.write_with_cursor(cursor, &mut buffer[..]).unwrap();
+        bufman.close_cursor(cursor).unwrap();
+        bytes_written == bufsize
+    }
+
+    // Prop test for `write_with_cursor` to check that all regions
+    // that are written to are dirty
+    #[quickcheck]
+    fn prop_write_then_read(size: u16) -> bool {
+        let bufsize = size as usize;
+        let file = create_tmp_file_of_size(0).unwrap();
+        let bufman = BufferManager::new(file).unwrap();
+
+        // Write to the file
+        let mut input_buffer = vec![1; bufsize];
+        let cursor = bufman.open_cursor().unwrap();
+        bufman.write_with_cursor(cursor, &mut input_buffer[..]).unwrap();
+        bufman.close_cursor(cursor).unwrap();
+
+        // Read from the file
+        let mut output_buffer = vec![0; bufsize];
+        let cursor = bufman.open_cursor().unwrap();
+        bufman.read_with_cursor(cursor, &mut output_buffer[..]).unwrap();
+        bufman.close_cursor(cursor).unwrap();
+
+        output_buffer[..bufsize] == input_buffer[..bufsize]
     }
 }
