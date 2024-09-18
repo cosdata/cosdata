@@ -402,21 +402,22 @@ impl BufferManager {
             .get_mut(&cursor_id)
             .ok_or_else(|| BufIoError::InvalidCursor(cursor_id))?;
 
-        let new_position = match pos {
-            SeekFrom::Start(abs) => {
-                cursor.is_eof = false;
-                abs
-            }
-            SeekFrom::End(rel) => {
-                // Mark that this cursor is at the end of file
-                cursor.is_eof = true;
-                // file_size.read()
-                (*self.file_size.read().map_err(|_| BufIoError::Locking)? as i64 + rel) as u64
-            }
-            SeekFrom::Current(rel) => {
-                cursor.is_eof = false;
-                (cursor.position as i64 + rel) as u64
-            }
+        let new_position = {
+            // @NOTE: We don't need a write lock here as we're setting
+            // the `is_eof` flag on the cursor. The
+            // `write_with_cursor` method checks whether this flag is
+            // set for the cursor and in that case, updates the
+            // current position if required after taking a write lock.
+            let file_size = self.file_size.read().map_err(|_| BufIoError::Locking)?;
+            let new_pos = match pos {
+                SeekFrom::Start(abs) => abs,
+                SeekFrom::End(rel) => (*file_size as i64 + rel) as u64,
+                SeekFrom::Current(rel) => (cursor.position as i64 + rel) as u64,
+            };
+            // Set `is_eof` flag for cursor if the new position is at
+            // or ahead of EOF
+            cursor.is_eof = new_pos >= *file_size;
+            new_pos
         };
 
         cursor.position = new_position;
@@ -1110,8 +1111,7 @@ mod tests {
             let cursors = bufman.cursors.read().unwrap();
             let c = cursors.get(&cursor).unwrap();
             assert_eq!(filesize as u64, c.position);
-            // @TODO: Fix code to make the following assertion pass
-            // assert!(c.is_eof);
+            assert!(c.is_eof);
         }
 
         // Test SeekFrom::End cases
@@ -1139,8 +1139,7 @@ mod tests {
             let cursors = bufman.cursors.read().unwrap();
             let c = cursors.get(&cursor).unwrap();
             assert_eq!(filesize as u64 - 115, c.position);
-            // @TODO: Fix code to make the following assertion pass
-            // assert!(!c.is_eof);
+            assert!(!c.is_eof);
         }
 
         // Test SeekFrom::Current cases
@@ -1182,8 +1181,7 @@ mod tests {
             let cursors = bufman.cursors.read().unwrap();
             let c = cursors.get(&cursor).unwrap();
             assert_eq!(filesize as u64, c.position);
-            // @TODO: Fix code to make the following assertion pass
-            // assert!(c.is_eof);
+            assert!(c.is_eof);
         }
 
         bufman.close_cursor(cursor).unwrap();
