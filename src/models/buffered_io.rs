@@ -292,23 +292,31 @@ impl BufferManager {
             (cursor.position, cursor.is_eof)
         };
 
+        let input_size = buf.len();
+
         let mut curr_pos = cursor_info.0;
         let cursor_is_at_eof = cursor_info.1;
+        let will_cross_eof = cursor_is_at_eof || {
+            let file_size = self.file_size.read().map_err(|_| BufIoError::Locking)?;
+            curr_pos + input_size as u64 >= *file_size
+        };
 
         let mut total_written = 0;
-        if cursor_is_at_eof {
-            // This means we're appending to a file. Some
-            // synchronization is required here because threads will
-            // call seek and then write in two separate calls. Hence
-            // it needs to be ensured that multiple threads are not
-            // updating the `file_size` field at the same
-            // time. Additionally, we also need to handle the case
-            // where `file_size` changes between `seek_with_cursor`
-            // and `write_with_cursor` calls for the same cursor. This
-            // is done as follows:
+        if will_cross_eof {
+            // This means we're either appending to a file or the
+            // input buffer size is large enough to go beyond
+            // EOF. Some synchronization is required here because
+            // threads will call seek and then write in two separate
+            // calls. Hence it needs to be ensured that multiple
+            // threads are not updating the `file_size` field at the
+            // same time. Additionally, we also need to handle the
+            // case where `file_size` changes between
+            // `seek_with_cursor` and `write_with_cursor` calls for
+            // the same cursor. This is done as follows:
             //
             // 1. take a write lock on file_size
-            // 2. check that cursor position = file size, if not sync it
+            // 2. if the cursor is at EOF, check that cursor position
+            //    = file size, if not sync it
             // 3. start writing in a while loop
             // 4. After the loop, write fize_size = curr_position
             // 5. Release the lock
@@ -318,11 +326,11 @@ impl BufferManager {
 
             // println!("Cursor Id = {cursor_id}; Position = {curr_pos}; File Size = {}", *file_size);
 
-            if curr_pos < *file_size {
+            if cursor_is_at_eof && curr_pos < *file_size {
                 curr_pos = *file_size;
             }
 
-            while total_written < buf.len() {
+            while total_written < input_size {
                 let region = self.get_or_create_region(curr_pos)?;
                 {
                     // @NOTE: Here we need a separate scope because the
@@ -331,7 +339,7 @@ impl BufferManager {
                     let mut buffer = region.buffer.write().map_err(|_| BufIoError::Locking)?;
                     let buffer_pos = (curr_pos - region.start) as usize;
                     let available = BUFFER_SIZE - buffer_pos;
-                    let to_write = (buf.len() - total_written).min(available);
+                    let to_write = (input_size - total_written).min(available);
                     buffer[buffer_pos..buffer_pos + to_write]
                         .copy_from_slice(&buf[total_written..total_written + to_write]);
                     region.end.store(
@@ -348,7 +356,7 @@ impl BufferManager {
         } else {
             // println!("Cursor Id = {cursor_id}; Position = {curr_pos};");
 
-            while total_written < buf.len() {
+            while total_written < input_size {
                 let region = self.get_or_create_region(curr_pos)?;
                 {
                     // @NOTE: Here we need a separate scope because the
@@ -357,7 +365,7 @@ impl BufferManager {
                     let mut buffer = region.buffer.write().map_err(|_| BufIoError::Locking)?;
                     let buffer_pos = (curr_pos - region.start) as usize;
                     let available = BUFFER_SIZE - buffer_pos;
-                    let to_write = (buf.len() - total_written).min(available);
+                    let to_write = (input_size - total_written).min(available);
                     buffer[buffer_pos..buffer_pos + to_write]
                         .copy_from_slice(&buf[total_written..total_written + to_write]);
                     region.end.store(
