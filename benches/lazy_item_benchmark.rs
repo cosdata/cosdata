@@ -62,7 +62,7 @@ fn lazy_item_benchmark(c: &mut Criterion) {
     });
 
     //Retriving random value between (0..16) from each Lazy map from a List of 1000 LazyItemMap, with 75% probablity to pick from (0..8)
-    group.bench_function(BenchmarkId::new("LazyItemMap_Retrival", 1000), |b| {
+    group.bench_function(BenchmarkId::new("LazyItemMap_Retrieval", 1000), |b| {
         b.iter(|| {
             for lazy_map in list_lazy_map.iter() {
                 let index = get_biased_random_index();
