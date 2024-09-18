@@ -1,0 +1,216 @@
+#+TITLE: Separation of Storage and Compute in Cosdata
+#+AUTHOR: Nithin Mani
+#+DATE: 18-09-2024
+
+* Introduction
+
+The Cosdata project implements a sophisticated vector database system that leverages the separation of storage and compute paradigm. This architectural approach allows for better scalability, performance, and resource utilization in cloud-based environments. The system utilizes a columnar storage format for efficient data representation and querying, along with advanced versioning and node serialization techniques.
+
+* Core Components
+
+** Storage Layer
+   The storage layer is responsible for persistent data storage and basic I/O operations.
+
+*** Key Components
+    - File system storage
+    - Columnar storage format
+    - Direct file pointer references
+
+*** Responsibilities
+    - Storing serialized data structures
+    - Maintaining version information
+    - Handling low-level I/O operations
+    - Efficient storage of property graph data in columnar format
+    - Managing direct file pointers for efficient data traversal
+
+*** Versioning and Historical Data
+    - Custom versioning system using direct file pointers
+    - Efficient storage and retrieval of multiple data versions
+    - Supports historical data access without full data duplication
+
+*** Columnar Storage Format
+    The storage layer utilizes a columnar format that combines property graph concepts with efficient storage.
+
+**** Structure
+     - Columns for different properties and relationships (e.g., person:name, event:title, attends=>event)
+     - Indexed columns for efficient lookups
+     - Separation of low-cardinality and high-cardinality data
+
+**** Benefits
+     - Efficient storage and querying of properties across many entities
+     - Flexible representation of relationships
+     - Supports both analytical queries and graph traversals
+
+**** Example Columns
+     - person:name (string values)
+     - person:gender (low-cardinality, 'm' or 'f')
+     - event:title (string values)
+     - attends=>event (relationship, stored as arrays of IDs)
+     - Various attribute columns (e.g., p:a:0, p:a:1, etc.)
+
+*** MergedNode Serialization Structure
+    A byte-wise serialized structure for efficient storage and retrieval of hierarchical node data.
+
+**** Key Features
+     - Lazy Loading: Components like Parent, Child, Neighbors, and Versions can be loaded on-demand.
+     - Flexibility: Accommodates variable-sized data and optional components.
+     - Efficiency: Chunked structure for Neighbors and Versions allows partial loading of large collections.
+     - Hierarchical: Supports parent-child relationships between nodes.
+     - Direct File Pointers: Uses offsets for efficient traversal without key-value lookups.
+
+**** Structure Components
+     - Main Node Structure (Version ID, HNSW Level, Offsets, Indicator Byte)
+     - Property Data
+     - Parent and Child Nodes (optional)
+     - Neighbors and Versions (implemented as LazyItems with chunked structure)
+
+** Compute Layer
+   The compute layer manages data processing, caching, and high-level operations.
+
+*** Key Components
+    - BufferManager
+    - LazyItem and LazyItemMap
+    - VersionControl
+    - NodeRegistry
+    - Custom data structures (e.g., MergedNode)
+
+*** Responsibilities
+    - Data processing and manipulation
+    - Caching and memory management
+    - Lazy loading of data
+    - Version control logic
+    - Query processing
+    - Interpretation and traversal of columnar data
+
+*** Version Control System
+    An efficient version tree structure for managing multiple versions of data.
+
+**** Key Features
+     - Uses powers of 4 for efficient version spacing
+     - Supports rapid insertion and retrieval of versions
+     - Allows for efficient traversal between versions
+     - Interfaces with the storage layer's versioning system for efficient data retrieval
+     - Allows for "time-travel" queries to access historical data states
+
+**** Implementation Details
+     - VersionNode structure with version number, data, and pointers
+     - Efficient insertion algorithm using largest power of 4 below version difference
+     - Supports printing and traversal of the version graph
+
+* Key Aspects of Separation
+
+** 1. Data Access Abstraction
+   - BufferManager provides a high-level interface for data access
+   - LazyItem and LazyItemRef abstract the details of data loading
+   - Compute layer interprets columnar format and direct file pointers for efficient querying
+
+** 2. Lazy Loading
+   - Implemented in LazyItem, LazyItemMap, and LazyItemVec
+   - Allows for on-demand loading of data from storage to compute
+   - Utilizes direct file pointers for efficient data retrieval
+
+** 3. Caching
+   - LRU cache implementation in the compute layer
+   - BufferRegions cache frequently accessed data
+   - Can cache frequently accessed columns or partial column data
+
+** 4. Versioning
+   - VersionControl manages version logic in the compute layer
+   - Versions are persistently stored in the storage layer
+   - Utilizes an efficient version tree structure for rapid version management
+
+** 5. Serialization and Deserialization
+   - CustomSerialize trait implements conversion between in-memory and storage representations
+   - Handled in the compute layer, with results stored in the storage layer
+   - Includes logic for translating between object-oriented and columnar representations
+   - Utilizes direct file pointers for efficient data structure serialization
+
+** 6. Buffered I/O
+   - CustomBufferedWriter optimizes write operations
+   - Implemented in the compute layer to reduce storage layer access
+   - Optimized for columnar data access patterns and direct file pointer usage
+
+** 7. Concurrency Management
+   - Compute layer handles concurrent access to data
+   - Uses atomic operations and lock-free data structures
+   - Columnar format and direct file pointers allow for efficient concurrent access
+
+** 8. Resource Optimization
+   - Compute layer implements strategies like probabilistic eviction
+   - Lazy loading minimizes unnecessary data transfer from storage
+   - Direct file pointers reduce lookup overhead for related data
+
+* Implementation Details
+
+** BufferManager (buffered_io.rs)
+   - Manages read/write operations with buffering
+   - Implements cursor-based access for concurrent operations
+   - Optimized for efficient access to columnar data and direct file pointers
+
+** LRU Cache (lru_cache.rs)
+   - Caches frequently accessed data in the compute layer
+   - Implements probabilistic eviction strategy
+
+** Lazy Loading (lazy_load.rs, lazy_item.rs, lazy_item_map.rs)
+   - Implements on-demand loading of data structures
+   - Manages versioning and serialization of lazy-loaded items
+   - Utilizes direct file pointers for efficient data retrieval
+
+** Version Control (versioning.rs, version_tree.rs)
+   - Manages branch and version information
+   - Implements hash generation for version identification
+   - Utilizes an efficient version tree structure based on powers of 4
+
+** Node Management (node.rs, node_serialization.org)
+   - Implements serialization and deserialization of complex node structures
+   - Manages lazy loading of node components
+   - Uses direct file pointers for efficient node traversal and data access
+
+** Custom Buffered Writer (custom_buffered_writer.rs)
+   - Optimizes write operations with buffering
+   - Handles data conversion before writing to storage
+   - Supports efficient writing of direct file pointers
+
+* Benefits of Separation
+
+** Scalability
+   - Independent scaling of storage and compute resources
+   - Ability to handle large datasets with limited compute resources
+   - Efficient version management allows for scalable historical data storage
+
+** Performance
+   - Reduced latency through caching and lazy loading
+   - Optimized I/O operations with buffering
+   - Efficient querying and analytics on columnar data
+   - Rapid version traversal and retrieval
+
+** Flexibility
+   - Easy to adapt to different storage backends
+   - Compute logic can be updated independently of storage
+   - Versioning system allows for flexible data evolution
+
+** Resource Efficiency
+   - On-demand data loading reduces memory usage
+   - Compute resources used more efficiently
+   - Direct file pointers reduce lookup overhead
+
+* Challenges and Considerations
+
+** Consistency
+   - Ensuring data consistency between storage and compute layers
+   - Managing versioning across distributed systems
+   - Maintaining consistency in columnar format during updates
+
+** Complexity
+   - Increased system complexity due to separation
+   - Need for careful coordination between layers
+   - Complexity in managing and updating direct file pointers
+
+** Latency
+   - Potential for increased latency when data is not cached
+   - Need for optimized lazy loading strategies
+   - Balancing between row-based and column-based access patterns
+
+* Conclusion
+
+The separation of storage and compute in the Cosdata project, combined with a columnar storage format, efficient versioning system, and direct file pointer usage, enables a highly scalable and efficient vector database system. By carefully managing data access, caching, and processing in the compute layer while leveraging persistent columnar storage and advanced serialization techniques for data durability and efficient querying, the system achieves a balance between performance and resource utilization. This architecture provides a solid foundation for handling large-scale data operations in cloud environments, supporting both analytical queries and graph-based operations with efficient version management.
