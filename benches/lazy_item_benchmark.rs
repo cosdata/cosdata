@@ -52,8 +52,8 @@ fn lazy_item_benchmark(c: &mut Criterion) {
     let list_lazy_vec = create_lazy_item_vec_list(16, 1000);
     let list_lazy_map = create_lazy_item_map_list(16, 1000);
 
-    //Retriving random value between (0..16) from each Lazy vector from a List of 1000 LazyItemVec, with 75% probablity to pick from (0..8)
-    group.bench_function(BenchmarkId::new("LazyItemVec_Retrival", 1000), |b| {
+    //Retrieving random value between (0..16) from each Lazy vector from a List of 1000 LazyItemVec, with 75% probability to pick from (0..8)
+    group.bench_function(BenchmarkId::new("LazyItemVec_Retrieval", 1000), |b| {
         b.iter(|| {
             for lazy_vec in list_lazy_vec.iter() {
                 lazy_vec.get(get_biased_random_index());
@@ -61,7 +61,7 @@ fn lazy_item_benchmark(c: &mut Criterion) {
         });
     });
 
-    //Retriving random value between (0..16) from each Lazy map from a List of 1000 LazyItemMap, with 75% probablity to pick from (0..8)
+    //Retrieving random value between (0..16) from each Lazy map from a List of 1000 LazyItemMap, with 75% probability to pick from (0..8)
     group.bench_function(BenchmarkId::new("LazyItemMap_Retrieval", 1000), |b| {
         b.iter(|| {
             for lazy_map in list_lazy_map.iter() {
