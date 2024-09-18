@@ -70,6 +70,42 @@ fn lazy_item_benchmark(c: &mut Criterion) {
             }
         });
     });
+
+    let index_count = 16;
+    //Inserting index value of (0..16) as String in each Lazy_vector and then adding them to create a list of 1000 Lazy_vectors.
+    group.bench_function(BenchmarkId::new("LazyItemVec_Insertion", 1000), |b| {
+        b.iter(|| {
+            let mut lazy_vec_list: Vec<LazyItemVec<String>> = Vec::new();
+            for _ in 0..1000 {
+                let lazy_vec: LazyItemVec<String> = LazyItemVec::new();
+                for i in 0..index_count {
+                    let version_id = Hash::from(i);
+                    let item = LazyItem::new(version_id, i.to_string());
+                    lazy_vec.insert(i as usize, item);
+                }
+                lazy_vec_list.push(lazy_vec);
+            }
+        });
+    });
+
+    //Inserting index value of (0..16) as String in each Lazy_item_map and then adding them to create a list of 1000 Lazy_map.
+    group.bench_function(BenchmarkId::new("LazyItemMap_Insertion", 1000), |b| {
+        b.iter(|| {
+            let mut lazy_map_list: Vec<LazyItemMap<String>> = Vec::new();
+            for _ in 0..1000 {
+                let lazy_map: LazyItemMap<String> = LazyItemMap::new();
+                for i in 0..index_count {
+                    let version_id = Hash::from(i);
+                    let item = LazyItem::new(version_id, i.to_string());
+                    lazy_map.insert(IdentityMapKey::Int(i), item);
+                }
+                lazy_map_list.push(lazy_map);
+            }
+        });
+    });
+
+
+
 }
 
 criterion_group!(benches, lazy_item_benchmark);
