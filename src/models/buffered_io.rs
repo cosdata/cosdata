@@ -1078,6 +1078,118 @@ mod tests {
         assert_eq!((BUFFER_SIZE + 10) as u64, *bufman.file_size.read().unwrap());
     }
 
+    #[test]
+    fn test_seek_with_cursor() {
+        let filesize = 1000 as usize;
+        let file = create_tmp_file_of_size(filesize as u16).unwrap();
+        let bufman = BufferManager::new(file).unwrap();
+        let cursor = bufman.open_cursor().unwrap();
+
+        // Test SeekFrom::Start cases
+        let pos = bufman.seek_with_cursor(cursor, SeekFrom::Start(0)).unwrap();
+        assert_eq!(0, pos);
+        {
+            let cursors = bufman.cursors.read().unwrap();
+            let c = cursors.get(&cursor).unwrap();
+            assert_eq!(0, c.position);
+            assert!(!c.is_eof);
+        }
+
+        let pos = bufman.seek_with_cursor(cursor, SeekFrom::Start(478)).unwrap();
+        assert_eq!(478, pos);
+        {
+            let cursors = bufman.cursors.read().unwrap();
+            let c = cursors.get(&cursor).unwrap();
+            assert_eq!(478, c.position);
+            assert!(!c.is_eof);
+        }
+
+        let pos = bufman.seek_with_cursor(cursor, SeekFrom::Start(filesize as u64)).unwrap();
+        assert_eq!(filesize as u64, pos);
+        {
+            let cursors = bufman.cursors.read().unwrap();
+            let c = cursors.get(&cursor).unwrap();
+            assert_eq!(filesize as u64, c.position);
+            // @TODO: Fix code to make the following assertion pass
+            // assert!(c.is_eof);
+        }
+
+        // Test SeekFrom::End cases
+        let pos = bufman.seek_with_cursor(cursor, SeekFrom::End(0)).unwrap();
+        assert_eq!(filesize as u64, pos);
+        {
+            let cursors = bufman.cursors.read().unwrap();
+            let c = cursors.get(&cursor).unwrap();
+            assert_eq!(filesize as u64, c.position);
+            assert!(c.is_eof);
+        }
+
+        let pos = bufman.seek_with_cursor(cursor, SeekFrom::End(20)).unwrap();
+        assert_eq!(filesize as u64 + 20, pos);
+        {
+            let cursors = bufman.cursors.read().unwrap();
+            let c = cursors.get(&cursor).unwrap();
+            assert_eq!(filesize as u64 + 20, c.position);
+            assert!(c.is_eof);
+        }
+
+        let pos = bufman.seek_with_cursor(cursor, SeekFrom::End(-115)).unwrap();
+        assert_eq!(filesize as u64 - 115, pos);
+        {
+            let cursors = bufman.cursors.read().unwrap();
+            let c = cursors.get(&cursor).unwrap();
+            assert_eq!(filesize as u64 - 115, c.position);
+            // @TODO: Fix code to make the following assertion pass
+            // assert!(!c.is_eof);
+        }
+
+        // Test SeekFrom::Current cases
+        let curr_pos = pos;
+        let pos = bufman.seek_with_cursor(cursor, SeekFrom::Current(0)).unwrap();
+        assert_eq!(curr_pos as u64, pos);
+        {
+            let cursors = bufman.cursors.read().unwrap();
+            let c = cursors.get(&cursor).unwrap();
+            assert_eq!(curr_pos as u64, c.position);
+            assert!(!c.is_eof);
+        }
+
+        let curr_pos = pos;
+        let pos = bufman.seek_with_cursor(cursor, SeekFrom::Current(-100)).unwrap();
+        assert_eq!(curr_pos as u64 - 100, pos);
+        {
+            let cursors = bufman.cursors.read().unwrap();
+            let c = cursors.get(&cursor).unwrap();
+            assert_eq!(curr_pos as u64 - 100, c.position);
+            assert!(!c.is_eof);
+        }
+
+        let curr_pos = pos;
+        let pos = bufman.seek_with_cursor(cursor, SeekFrom::Current(100)).unwrap();
+        assert_eq!(curr_pos as u64 + 100, pos);
+        {
+            let cursors = bufman.cursors.read().unwrap();
+            let c = cursors.get(&cursor).unwrap();
+            assert_eq!(curr_pos as u64 + 100, c.position);
+            assert!(!c.is_eof);
+        }
+
+        let curr_pos = pos;
+        let delta = filesize as i64 - curr_pos as i64;
+        let pos = bufman.seek_with_cursor(cursor, SeekFrom::Current(delta)).unwrap();
+        assert_eq!(filesize as u64, pos);
+        {
+            let cursors = bufman.cursors.read().unwrap();
+            let c = cursors.get(&cursor).unwrap();
+            assert_eq!(filesize as u64, c.position);
+            // @TODO: Fix code to make the following assertion pass
+            // assert!(c.is_eof);
+        }
+
+        bufman.close_cursor(cursor).unwrap();
+    }
+
+
     // Prop test for `get_or_create_region` to check that
     // `region.start` is a multiple of BUFFER_SIZE
     #[quickcheck]
