@@ -1279,4 +1279,31 @@ mod tests {
 
         output_buffer[..bufsize] == input_buffer[..bufsize]
     }
+
+    // For seek_with_cursor, we just verify that it doesn't crash with
+    // u16 type for filesize and position.
+
+    fn check_seek_with_cursor_doesnt_crash(filesize: u16, pos: SeekFrom) -> bool {
+        let file = create_tmp_file_of_size(filesize).unwrap();
+        let bufman = BufferManager::new(file).unwrap();
+        let cursor = bufman.open_cursor().unwrap();
+        let result = bufman.seek_with_cursor(cursor, pos);
+        bufman.close_cursor(cursor).unwrap();
+        result.is_ok()
+    }
+
+    #[quickcheck]
+    fn prop_seek_with_cursor_from_start(filesize: u16, pos: u16) -> bool {
+        check_seek_with_cursor_doesnt_crash(filesize, SeekFrom::Start(pos as u64))
+    }
+
+    #[quickcheck]
+    fn prop_seek_with_cursor_from_end(filesize: u16, pos: i16) -> bool {
+        check_seek_with_cursor_doesnt_crash(filesize, SeekFrom::End(pos as i64))
+    }
+
+    #[quickcheck]
+    fn prop_seek_with_cursor_from_current(filesize: u16, pos: i16) -> bool {
+        check_seek_with_cursor_doesnt_crash(filesize, SeekFrom::Current(pos as i64))
+    }
 }
