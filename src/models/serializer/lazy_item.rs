@@ -1,5 +1,6 @@
 use super::CustomSerialize;
 use crate::models::buffered_io::{BufIoError, BufferManagerFactory};
+use crate::models::cache_loader::Cacheable;
 use crate::models::lazy_load::LazyItemVec;
 use crate::models::lazy_load::SyncPersist;
 use crate::models::lazy_load::{FileIndex, CHUNK_SIZE};
@@ -28,8 +29,7 @@ fn update_map<T>(
     map: &LazyItemVec<T>,
 ) -> Result<u32, BufIoError>
 where
-    T: Clone + CustomSerialize + 'static,
-    LazyItem<T>: CustomSerialize,
+    T: Clone + CustomSerialize + Cacheable + 'static,
 {
     let bufman = bufmans.get(&version)?;
     let offset = if offset == u32::MAX {
@@ -162,9 +162,9 @@ where
     Ok(offset)
 }
 
-fn lazy_item_serialize_impl(
-    node: &MergedNode,
-    versions: &LazyItemVec<MergedNode>,
+fn lazy_item_serialize_impl<T: Cacheable + CustomSerialize>(
+    node: &T,
+    versions: &LazyItemVec<T>,
     bufmans: Arc<BufferManagerFactory>,
     version: Hash,
     cursor: u64,
@@ -200,13 +200,13 @@ fn lazy_item_serialize_impl(
     Ok(node_placeholder as u32)
 }
 
-fn lazy_item_deserialize_impl(
+fn lazy_item_deserialize_impl<T: Cacheable + CustomSerialize + Clone>(
     bufmans: Arc<BufferManagerFactory>,
     file_index: FileIndex,
     cache: Arc<NodeRegistry>,
     max_loads: u16,
     skipm: &mut HashSet<u64>,
-) -> Result<LazyItem<MergedNode>, BufIoError> {
+) -> Result<LazyItem<T>, BufIoError> {
     match file_index {
         FileIndex::Invalid => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -222,7 +222,7 @@ fn lazy_item_deserialize_impl(
             bufman.seek_with_cursor(cursor, SeekFrom::Start(offset.0 as u64))?;
             let node_offset = bufman.read_u32_with_cursor(cursor)?;
             let versions_offset = bufman.read_u32_with_cursor(cursor)?;
-            let data = MergedNode::deserialize(
+            let data = T::deserialize(
                 bufmans.clone(),
                 FileIndex::Valid {
                     offset: FileOffset(node_offset),
@@ -256,7 +256,7 @@ fn lazy_item_deserialize_impl(
     }
 }
 
-impl CustomSerialize for LazyItem<MergedNode> {
+impl<T: Cacheable + CustomSerialize> CustomSerialize for LazyItem<T> {
     fn serialize(
         &self,
         bufmans: Arc<BufferManagerFactory>,

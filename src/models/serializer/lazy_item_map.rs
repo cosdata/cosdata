@@ -1,13 +1,10 @@
 use super::CustomSerialize;
 use crate::models::buffered_io::{BufIoError, BufferManagerFactory};
+use crate::models::cache_loader::{Cacheable, NodeRegistry};
 use crate::models::identity_collections::{IdentityMap, IdentityMapKey};
-use crate::models::lazy_load::{FileIndex, LazyItemMap, SyncPersist};
+use crate::models::lazy_load::{FileIndex, LazyItem, LazyItemMap, SyncPersist, CHUNK_SIZE};
 use crate::models::types::FileOffset;
 use crate::models::versioning::Hash;
-use crate::models::{
-    cache_loader::NodeRegistry,
-    lazy_load::{LazyItem, CHUNK_SIZE},
-};
 use std::collections::HashSet;
 use std::{
     io::{self, SeekFrom},
@@ -18,8 +15,7 @@ const MSB: u32 = 1 << 31;
 
 impl<T> CustomSerialize for LazyItemMap<T>
 where
-    T: Clone + CustomSerialize + 'static,
-    LazyItem<T>: CustomSerialize,
+    T: Cacheable + Clone + CustomSerialize + 'static,
 {
     fn serialize(
         &self,
