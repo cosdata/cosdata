@@ -91,3 +91,6 @@ harness = false
 name = "inverted_index_benchmark"
 harness = false
 
+[[bench]]
+name = "lazy_item_benchmark"
+harness = false

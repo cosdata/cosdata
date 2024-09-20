@@ -246,7 +246,7 @@ where
 
     /// Inserts a value into the index at the specified dimension index.
     /// Delegates to the root node's `insert` method.
-    fn insert(&self, dim_index: u32, value: T, vector_id: u32) {
+    pub fn insert(&self, dim_index: u32, value: T, vector_id: u32) {
         let path = calculate_path(dim_index, self.root.dim_index);
         let node =
             InvertedIndexItem::find_or_create_node(self.root.clone(), &path, self.cache.clone());
