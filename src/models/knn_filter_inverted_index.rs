@@ -1,14 +1,10 @@
+use crate::storage::inverted_index::InvertedIndexItem;
 use std::cmp::Ordering::Equal;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
-use std::collections::HashMap;
 use std::ops::Mul;
 
-use crate::storage::inverted_index::InvertedIndexItem;
-
-use super::dot_product;
-
-struct ScoredCandidate(f32, u32); // (score, candidate_id)
+pub struct ScoredCandidate(f32, u32); // (score, candidate_id)
 
 impl ScoredCandidate {
     fn new(score: f32, candidate_id: u32) -> Self {
@@ -54,8 +50,8 @@ impl<T> InvertedIndexItem<T>
 where
     T: Clone + 'static + Mul<Output = T> + Into<f32>,
 {
-    // Calculate distance using dot product
-    fn calculate_distance(&self, neighbour: &InvertedIndexItem<T>) -> f32 {
+    // Calculate distance using dot product between self and InvertedIndexItem
+    pub fn calculate_distance(&self, neighbour: &InvertedIndexItem<T>) -> f32 {
         let res: Vec<Option<f32>> = self
             .data
             .iter()
@@ -97,7 +93,7 @@ where
     }
 
     // Function to find k-nearest neighbors sorted by distance(dot product) for array of InvertedIndex items.
-    fn find_k_nearest_neighbours(
+    pub fn find_k_nearest_neighbours(
         &self,
         k: usize,
         items: &[InvertedIndexItem<T>],
