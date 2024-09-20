@@ -20,10 +20,20 @@ pub(crate) struct UpdateVectorDto {
     pub values: Vec<f32>,
 }
 
-
 #[derive(Serialize)]
 pub(crate) struct UpdateVectorResponseDto {
     pub id: VectorIdValue,
     pub values: Vec<f32>,
     // pub created_at: String
+}
+
+#[derive(Serialize)]
+pub(crate) struct SimilarVector {
+    pub id: VectorIdValue,
+    pub score: f32,
+}
+
+#[derive(Serialize)]
+pub(crate) struct FindSimilarVectorsResponseDto {
+    pub results: Vec<SimilarVector>,
 }

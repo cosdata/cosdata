@@ -6,7 +6,10 @@ use crate::{
 };
 
 use super::{
-    dtos::{CreateVectorDto, CreateVectorResponseDto, UpdateVectorDto, UpdateVectorResponseDto},
+    dtos::{
+        CreateVectorDto, CreateVectorResponseDto, SimilarVector, UpdateVectorDto,
+        UpdateVectorResponseDto,
+    },
     error::VectorsError,
 };
 
@@ -63,4 +66,11 @@ pub(crate) async fn update_vector(
         id: vector_id,
         values: update_vector_dto.values,
     })
+}
+
+pub(crate) async fn find_similar_vectors() -> Result<Vec<SimilarVector>, VectorsError> {
+    Ok(vec![SimilarVector {
+        id: VectorIdValue::IntValue(23),
+        score: 0.23,
+    }])
 }

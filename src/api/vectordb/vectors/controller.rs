@@ -37,3 +37,8 @@ pub(crate) async fn update_vector_by_id(
     .await?;
     Ok(HttpResponse::Ok().json(vector))
 }
+
+pub(crate) async fn find_similar_vectors() -> Result<HttpResponse> {
+    let similar_vectors = service::find_similar_vectors().await?;
+    Ok(HttpResponse::Ok().json(similar_vectors))
+}
