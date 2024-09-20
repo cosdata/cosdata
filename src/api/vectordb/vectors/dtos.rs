@@ -27,6 +27,12 @@ pub(crate) struct UpdateVectorResponseDto {
     // pub created_at: String
 }
 
+#[derive(Deserialize)]
+pub(crate) struct FindSimilarVectorsDto {
+    pub vector: Vec<f32>,
+    pub k: i32,
+}
+
 #[derive(Serialize)]
 pub(crate) struct SimilarVector {
     pub id: VectorIdValue,

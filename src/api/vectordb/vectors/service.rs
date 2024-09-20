@@ -4,8 +4,8 @@ use crate::{config_loader::Config, models::rpc::VectorIdValue};
 
 use super::{
     dtos::{
-        CreateVectorDto, CreateVectorResponseDto, FindSimilarVectorsResponseDto, UpdateVectorDto,
-        UpdateVectorResponseDto,
+        CreateVectorDto, CreateVectorResponseDto, FindSimilarVectorsDto,
+        FindSimilarVectorsResponseDto, UpdateVectorDto, UpdateVectorResponseDto,
     },
     error::VectorsError,
     repo,
@@ -35,8 +35,10 @@ pub(crate) async fn update_vector_by_id(
     repo::update_vector(collection_id, vector_id, update_vector_dto, config).await
 }
 
-pub(crate) async fn find_similar_vectors() -> Result<FindSimilarVectorsResponseDto, VectorsError> {
-    let similar_vectors = repo::find_similar_vectors().await?;
+pub(crate) async fn find_similar_vectors(
+    find_similar_vectors: FindSimilarVectorsDto,
+) -> Result<FindSimilarVectorsResponseDto, VectorsError> {
+    let similar_vectors = repo::find_similar_vectors(find_similar_vectors).await?;
 
     Ok(FindSimilarVectorsResponseDto {
         results: similar_vectors,
