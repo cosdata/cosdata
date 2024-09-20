@@ -3,6 +3,10 @@ mod commit;
 mod controller;
 mod create;
 mod delete;
+mod dtos;
+mod error;
+mod repo;
+mod service;
 mod update;
 mod upsert;
 
