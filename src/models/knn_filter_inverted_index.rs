@@ -65,12 +65,8 @@ where
                             .and_then(|neighbour_value| {
                                 if neighbour_value.is_valid() {
                                     neighbour_value.get_lazy_data().map(|neighbour_data| {
-                                        (self_data.clone().try_into_inner().unwrap().into() as f32)
-                                            * (neighbour_data
-                                                .clone()
-                                                .try_into_inner()
-                                                .unwrap()
-                                                .into()
+                                        (self_data.try_into_inner().unwrap().into() as f32)
+                                            * (neighbour_data.try_into_inner().unwrap().into()
                                                 as f32)
                                     })
                                 } else {
