@@ -1,9 +1,12 @@
+use std::cmp::Ordering::Equal;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::collections::HashMap;
 use std::ops::Mul;
 
 use crate::storage::inverted_index::InvertedIndexItem;
+
+use super::dot_product;
 
 struct ScoredCandidate(f32, u32); // (score, candidate_id)
 
@@ -53,56 +56,62 @@ where
 {
     // Calculate distance using dot product
     fn calculate_distance(&self, neighbour: &InvertedIndexItem<T>) -> f32 {
-        let self_inverted_index_data = self.data.iter();
-        let mut vec_map_self = HashMap::new();
-        let mut vec_map_neighbour = HashMap::new();
-
-        for xmap in self_inverted_index_data {
-            let vector_id = xmap.key().clone();
-            let vec_id_neighbour = vector_id.clone();
-            if xmap.value().is_valid() {
-                if let Some(value) = xmap.value().get_lazy_data() {
-                    vec_map_self.insert(vector_id, value);
+        let res: Vec<Option<f32>> = self
+            .data
+            .iter()
+            .map(|self_value| {
+                let identity_map_key = self_value.key();
+                if self_value.is_valid() {
+                    self_value.get_lazy_data().and_then(|self_data| {
+                        neighbour
+                            .data
+                            .get(identity_map_key)
+                            .and_then(|neighbour_value| {
+                                if neighbour_value.is_valid() {
+                                    neighbour_value.get_lazy_data().map(|neighbour_data| {
+                                        (self_data.clone().try_into_inner().unwrap().into() as f32)
+                                            * (neighbour_data
+                                                .clone()
+                                                .try_into_inner()
+                                                .unwrap()
+                                                .into()
+                                                as f32)
+                                    })
+                                } else {
+                                    None
+                                }
+                            })
+                    })
+                } else {
+                    None
                 }
-            }
-
-            if let Some(res) = neighbour.data.get(&vec_id_neighbour) {
-                if res.is_valid() {
-                    if let Some(val) = res.get_lazy_data() {
-                        vec_map_neighbour.insert(vec_id_neighbour, val);
-                    }
-                }
-            };
-        }
-        // Calculating the dot product of vec_map_self and vec_map_neighbour
+            })
+            .collect();
         let mut dot_product = 0.0;
-        for (key, value_self) in &vec_map_self {
-            if let Some(value_neighbour) = vec_map_neighbour.get(key) {
-                // Perform the multiplication and accumulate the dot product
-                dot_product += (value_self.clone().try_into_inner().unwrap().into())
-                    * (value_neighbour.clone()).try_into_inner().unwrap().into();
+        let _ = res.iter().map(|x| {
+            if let Some(i) = x {
+                dot_product += i;
             }
-        }
-
+        });
         dot_product
     }
 
     // Function to find k-nearest neighbors sorted by distance(dot product) for array of InvertedIndex items.
-    fn find_k_nearest_neighbors(
+    fn find_k_nearest_neighbours(
         &self,
         k: usize,
         items: &[InvertedIndexItem<T>],
     ) -> Result<Vec<ScoredCandidate>, String> {
         if k > items.len() {
-            return Err(String::from("K value sent is greater than the number of neighbours, Please check!"));
+            return Err(String::from(
+                "K value sent is greater than the number of neighbours, Please check!",
+            ));
         }
         let mut scored_candidates: Vec<ScoredCandidate> = items
             .iter()
             .map(|item| ScoredCandidate(self.calculate_distance(item), item.dim_index))
             .collect();
-        scored_candidates.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-        let mut res: Vec<ScoredCandidate> = Vec::new();
-        let _ = scored_candidates.into_iter().take(k).map(|x| res.push(x));
-        Ok(res)
+        scored_candidates.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Equal));
+        Ok(scored_candidates.into_iter().take(k).collect())
     }
 }
