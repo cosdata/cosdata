@@ -18,6 +18,10 @@ pub(crate) use upsert::upsert;
 
 pub(crate) fn transactions_module() -> Scope {
     let transactions_module = web::scope("/collections/{collection_id}/transactions")
-        .route("", web::post().to(controller::create_transaction));
+        .route("", web::post().to(controller::create_transaction))
+        .route(
+            "/{transaction_id}/commit",
+            web::post().to(controller::commit_transaction),
+        );
     transactions_module
 }
