@@ -9,3 +9,11 @@ pub(crate) async fn create_transaction(
     let transaction = service::create_transaction(&collection_id).await?;
     Ok(HttpResponse::Ok().json(transaction))
 }
+
+pub(crate) async fn abort_transaction(
+    params: web::Path<(String, String)>,
+) -> Result<HttpResponse, TransactionError> {
+    let (collection_id, transaction_id) = params.into_inner();
+    let _ = service::abort_transaction(&collection_id, &transaction_id).await?;
+    Ok(HttpResponse::NoContent().finish())
+}
