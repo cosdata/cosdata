@@ -14,8 +14,6 @@ pub(crate) async fn commit_transaction(
     params: web::Path<(String, String)>,
 ) -> Result<HttpResponse, TransactionError> {
     let (collection_id, transaction_id) = params.into_inner();
-    Ok(HttpResponse::Ok().body(format!(
-        "collection {}, transaction {}",
-        collection_id, transaction_id
-    )))
+    let _ = service::commit_transaction(&collection_id, &transaction_id).await?;
+    Ok(HttpResponse::NoContent().finish())
 }
