@@ -3,7 +3,10 @@ use std::sync::Arc;
 use crate::{config_loader::Config, models::rpc::VectorIdValue};
 
 use super::{
-    dtos::{CreateVectorDto, CreateVectorResponseDto, UpdateVectorDto, UpdateVectorResponseDto},
+    dtos::{
+        CreateVectorDto, CreateVectorResponseDto, FindSimilarVectorsDto,
+        FindSimilarVectorsResponseDto, UpdateVectorDto, UpdateVectorResponseDto,
+    },
     error::VectorsError,
     repo,
 };
@@ -30,6 +33,16 @@ pub(crate) async fn update_vector_by_id(
     config: Arc<Config>,
 ) -> Result<UpdateVectorResponseDto, VectorsError> {
     repo::update_vector(collection_id, vector_id, update_vector_dto, config).await
+}
+
+pub(crate) async fn find_similar_vectors(
+    find_similar_vectors: FindSimilarVectorsDto,
+) -> Result<FindSimilarVectorsResponseDto, VectorsError> {
+    let similar_vectors = repo::find_similar_vectors(find_similar_vectors).await?;
+
+    Ok(FindSimilarVectorsResponseDto {
+        results: similar_vectors,
+    })
 }
 
 pub(crate) async fn delete_vector_by_id(

@@ -6,7 +6,10 @@ use crate::{
 };
 
 use super::{
-    dtos::{CreateVectorDto, CreateVectorResponseDto, UpdateVectorDto, UpdateVectorResponseDto},
+    dtos::{
+        CreateVectorDto, CreateVectorResponseDto, FindSimilarVectorsDto, SimilarVector,
+        UpdateVectorDto, UpdateVectorResponseDto,
+    },
     error::VectorsError,
 };
 
@@ -63,6 +66,20 @@ pub(crate) async fn update_vector(
         id: vector_id,
         values: update_vector_dto.values,
     })
+}
+
+pub(crate) async fn find_similar_vectors(
+    find_similar_vectors: FindSimilarVectorsDto,
+) -> Result<Vec<SimilarVector>, VectorsError> {
+    if find_similar_vectors.vector.len() == 0 {
+        return Err(VectorsError::FailedToFindSimilarVectors(
+            "Vector shouldn't be empty".to_string(),
+        ));
+    }
+    Ok(vec![SimilarVector {
+        id: VectorIdValue::IntValue(find_similar_vectors.k),
+        score: find_similar_vectors.vector[0],
+    }])
 }
 
 pub(crate) async fn delete_vector_by_id(

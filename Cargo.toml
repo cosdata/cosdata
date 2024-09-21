@@ -2,7 +2,7 @@
 name = "cosdata"
 version = "0.1.0"
 edition = "2021"
-default-run = "cosdata" 
+default-run = "cosdata"
 
 [dependencies]
 actix-cors = "0.7.0"
@@ -16,7 +16,7 @@ bincode = "1.3.3"
 bs58 = "0.5.1"
 byteorder = "1.5.0"
 cbor = "0.4.1"
-chrono = "0.4.38"
+chrono = { version = "0.4.38", features = ["serde"] }
 dashmap = "5.5.3"
 env_logger = "0.11.3"
 futures = "0.3.30"
