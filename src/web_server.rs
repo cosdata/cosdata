@@ -1,6 +1,7 @@
 use crate::api;
 use crate::api::auth::{auth_module, authentication_middleware::AuthenticationMiddleware};
 use crate::api::vectordb::collections::collections_module;
+use crate::api::vectordb::transactions::transactions_module;
 use crate::api::vectordb::vectors::vectors_module;
 use crate::config_loader::{load_config, ServerMode, Ssl};
 use actix_cors::Cors;
@@ -72,6 +73,7 @@ pub async fn run_actix_server() -> std::io::Result<()> {
                     // vectors module must be registereb before collections module
                     // as its scope path is more specific than collections module
                     .service(vectors_module())
+                    .service(transactions_module())
                     .service(collections_module())
                     .service(indexes_module())
                     .service(web::resource("/upsert").route(web::post().to(api::vectordb::upsert)))
@@ -79,7 +81,6 @@ pub async fn run_actix_server() -> std::io::Result<()> {
                     .service(web::resource("/fetch").route(web::post().to(api::vectordb::fetch)))
                     .service(
                         web::scope("{database_name}/transactions")
-                            .route("/", web::post().to(api::vectordb::transactions::create))
                             .route(
                                 "/{transaction_id}/upsert",
                                 web::post().to(api::vectordb::transactions::upsert),
