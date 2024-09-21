@@ -103,7 +103,7 @@ where
             .iter()
             .map(|item| ScoredCandidate(self.calculate_distance(item), item.dim_index))
             .collect();
-        scored_candidates.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Equal));
+        scored_candidates.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Equal));
         Ok(scored_candidates.into_iter().take(k).collect())
     }
 }
