@@ -10,6 +10,7 @@ pub(crate) enum VectorsError {
     FailedToGetAppEnv,
     FailedToCreateVector(String),
     FailedToUpdateVector(String),
+    FailedToFindSimilarVectors(String),
     NotImplemented,
 }
 
@@ -19,13 +20,16 @@ impl Display for VectorsError {
             VectorsError::NotFound => write!(f, "Vector Not Found!"),
             VectorsError::FailedToGetAppEnv => write!(f, "Failed to get App Env!"),
             VectorsError::FailedToCreateVector(msg) => {
-                write!(f, "Failed to create vector due to {}", msg)
+                write!(f, "Failed to create vector due to: {}", msg)
             }
             VectorsError::NotImplemented => {
                 write!(f, "This is not supported yet!")
             }
             VectorsError::FailedToUpdateVector(msg) => {
-                write!(f, "Failed to update vector due to {}", msg)
+                write!(f, "Failed to update vector due to: {}", msg)
+            }
+            VectorsError::FailedToFindSimilarVectors(msg) => {
+                write!(f, "Failed to find similar vectors due to: {}", msg)
             }
         }
     }
@@ -44,6 +48,7 @@ impl ResponseError for VectorsError {
             VectorsError::FailedToCreateVector(_) => StatusCode::BAD_REQUEST,
             Self::NotImplemented => StatusCode::BAD_REQUEST,
             VectorsError::FailedToUpdateVector(_) => StatusCode::BAD_REQUEST,
+            VectorsError::FailedToFindSimilarVectors(_) => StatusCode::BAD_REQUEST,
         }
     }
 }

@@ -2,7 +2,7 @@ use crate::{config_loader::Config, models::rpc::VectorIdValue};
 use actix_web::{web, HttpResponse, Result};
 
 use super::{
-    dtos::{CreateVectorDto, UpdateVectorDto},
+    dtos::{CreateVectorDto, FindSimilarVectorsDto, UpdateVectorDto},
     service,
 };
 
@@ -36,4 +36,11 @@ pub(crate) async fn update_vector_by_id(
     )
     .await?;
     Ok(HttpResponse::Ok().json(vector))
+}
+
+pub(crate) async fn find_similar_vectors(
+    web::Json(find_similar_vectors): web::Json<FindSimilarVectorsDto>,
+) -> Result<HttpResponse> {
+    let similar_vectors = service::find_similar_vectors(find_similar_vectors).await?;
+    Ok(HttpResponse::Ok().json(similar_vectors))
 }
