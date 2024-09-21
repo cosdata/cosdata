@@ -1,7 +1,7 @@
 use super::CustomSerialize;
 use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
-    cache_loader::NodeRegistry,
+    cache_loader::{Cacheable, NodeRegistry},
     lazy_load::{EagerLazyItem, FileIndex, LazyItem, SyncPersist},
     types::FileOffset,
     versioning::Hash,
@@ -12,8 +12,7 @@ use std::sync::Arc;
 
 impl<T, E> CustomSerialize for EagerLazyItem<T, E>
 where
-    T: Clone + 'static,
-    LazyItem<T>: CustomSerialize,
+    T: Cacheable + CustomSerialize + Clone + 'static,
     E: Clone + CustomSerialize + 'static,
 {
     fn serialize(
