@@ -1,4 +1,3 @@
-mod abort;
 mod commit;
 mod controller;
 mod delete;
@@ -9,7 +8,6 @@ mod service;
 mod update;
 mod upsert;
 
-pub(crate) use abort::abort;
 use actix_web::{web, Scope};
 pub(crate) use commit::commit;
 pub(crate) use delete::delete;
