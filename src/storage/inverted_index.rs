@@ -6,7 +6,7 @@ use arcshift::ArcShift;
 use dashmap::DashMap;
 
 use crate::models::buffered_io::BufferManagerFactory;
-use crate::models::cache_loader::NodeRegistry;
+use crate::models::cache_loader::{Cacheable, NodeRegistry};
 use crate::models::identity_collections::IdentityMapKey;
 use crate::models::lazy_load::{LazyItem, LazyItemMap};
 use crate::models::serializer::CustomSerialize;
@@ -64,36 +64,10 @@ where
     pub lazy_children: LazyItemMap<InvertedIndexItem<T>>,
 }
 
-impl<T> CustomSerialize for InvertedIndexItem<T>
-where
-    T: Clone + 'static,
-{
-    fn serialize(
-        &self,
-        bufmans: Arc<crate::models::buffered_io::BufferManagerFactory>,
-        version: crate::models::versioning::Hash,
-        cursor: u64,
-    ) -> Result<u32, crate::models::buffered_io::BufIoError> {
-        todo!()
-    }
-
-    fn deserialize(
-        bufmans: Arc<crate::models::buffered_io::BufferManagerFactory>,
-        file_index: crate::models::lazy_load::FileIndex,
-        cache: Arc<crate::models::cache_loader::NodeRegistry>,
-        max_loads: u16,
-        skipm: &mut std::collections::HashSet<u64>,
-    ) -> Result<Self, crate::models::buffered_io::BufIoError>
-    where
-        Self: Sized,
-    {
-        todo!()
-    }
-}
-
 impl<T> InvertedIndexItem<T>
 where
-    T: Clone + CustomSerialize + 'static,
+    T: Clone + Cacheable + CustomSerialize + 'static,
+    InvertedIndexItem<T>: CustomSerialize,
 {
     /// Creates a new `InvertedIndexItem` with the given dimension index and implicit flag.
     /// Initializes the data vector and children array.
@@ -219,12 +193,13 @@ where
     T: Clone + 'static,
 {
     pub root: ArcShift<InvertedIndexItem<T>>,
-    cache: Arc<NodeRegistry>,
+    pub cache: Arc<NodeRegistry>,
 }
 
 impl<T> InvertedIndex<T>
 where
-    T: Clone + CustomSerialize + 'static,
+    T: Cacheable + Clone + CustomSerialize + 'static,
+    InvertedIndexItem<T>: CustomSerialize,
 {
     /// Creates a new `InvertedIndex` with an initial root node.
     pub fn new() -> Self {
