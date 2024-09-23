@@ -8,7 +8,7 @@ use dashmap::DashMap;
 use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::cache_loader::NodeRegistry;
 use crate::models::identity_collections::IdentityMapKey;
-use crate::models::lazy_load::{LazyItem, LazyItemMap};
+use crate::models::lazy_load::{LazyItem, LazyItemArray, LazyItemMap};
 use crate::models::serializer::CustomSerialize;
 use crate::models::types::SparseVector;
 
@@ -59,9 +59,7 @@ where
     pub dim_index: u32,
     pub implicit: bool,
     pub data: Arc<DashMap<IdentityMapKey, LazyItem<T>>>,
-    // TODO: benchmark if fixed size children array with lazy item refs
-    //  yields better performance
-    pub lazy_children: LazyItemMap<InvertedIndexItem<T>>,
+    pub lazy_children: LazyItemArray<InvertedIndexItem<T>, 16>,
 }
 
 impl<T> CustomSerialize for InvertedIndexItem<T>
@@ -102,7 +100,7 @@ where
             dim_index,
             implicit,
             data: Arc::new(DashMap::new()),
-            lazy_children: LazyItemMap::new(),
+            lazy_children: LazyItemArray::new(),
         }
     }
 
@@ -116,12 +114,11 @@ where
         let mut current_node = node;
         for &child_index in path {
             let new_dim_index = current_node.dim_index + POWERS_OF_4[child_index];
-            let key = IdentityMapKey::Int(child_index as u32);
             let new_child = LazyItem::new(0.into(), InvertedIndexItem::new(new_dim_index, true));
             loop {
                 if let Some(child) = current_node
                     .lazy_children
-                    .checked_insert(key.clone(), new_child.clone())
+                    .checked_insert(child_index, new_child.clone())
                 {
                     current_node = child.get_data(cache.clone());
                     break;
@@ -153,7 +150,7 @@ where
         match path.get(0) {
             Some(child_index) => self
                 .lazy_children
-                .get(&IdentityMapKey::Int((*child_index) as u32))
+                .get(*child_index)
                 .map(|data| {
                     data.get_data(cache.clone())
                         .get_value(&path[1..], vector_id, cache)
@@ -451,7 +448,7 @@ mod test {
 
             let child_0 = node
                 .lazy_children
-                .get(&IdentityMapKey::Int(0 as u32))
+                .get(0)
                 .map(|data| data.get_data(cache.clone()));
             assert!(child_0.is_some(), "Child 0 should exist");
             let child_0 = child_0.unwrap();
@@ -459,7 +456,7 @@ mod test {
             let child_1 = child_0
                 .shared_get()
                 .lazy_children
-                .get(&IdentityMapKey::Int(1 as u32))
+                .get(1)
                 .map(|data| data.get_data(cache.clone()));
             assert!(child_1.is_some(), "Child 1 should exist");
         }
