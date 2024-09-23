@@ -60,16 +60,15 @@ where
             .map(|self_value| {
                 let identity_map_key = self_value.key();
                 if self_value.is_valid() {
-                    self_value.get_lazy_data().and_then(|self_data| {
+                    self_value.get_lazy_data().and_then(|mut self_data| {
                         neighbour
                             .data
                             .get(identity_map_key)
                             .and_then(|neighbour_value| {
                                 if neighbour_value.is_valid() {
-                                    neighbour_value.get_lazy_data().map(|neighbour_data| {
-                                        (self_data.try_into_inner().unwrap().into() as f32)
-                                            * (neighbour_data.try_into_inner().unwrap().into()
-                                                as f32)
+                                    neighbour_value.get_lazy_data().map(|mut neighbour_data| {
+                                        (self_data.get().clone().into() as f32)
+                                            * (neighbour_data.get().clone().into() as f32)
                                     })
                                 } else {
                                     None
