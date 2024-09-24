@@ -43,7 +43,7 @@ impl KNNQuery {
     pub fn search(&self, index: &InvertedIndex<f32>) -> Vec<KNNResult> {
         let dot_products: DashMap<IdentityMapKey, f32> = DashMap::new();
 
-        // Iterate over the query vector dimensions parallely with rayon
+        // Iterate over the query vector dimensions concurrently with rayon
         self.query_vector
             .entries
             .par_iter()
