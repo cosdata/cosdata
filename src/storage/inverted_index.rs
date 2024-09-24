@@ -219,7 +219,7 @@ where
     T: Clone + 'static,
 {
     pub root: ArcShift<InvertedIndexItem<T>>,
-    cache: Arc<NodeRegistry>,
+    pub cache: Arc<NodeRegistry>,
 }
 
 impl<T> InvertedIndex<T>
@@ -234,6 +234,21 @@ where
             root: ArcShift::new(InvertedIndexItem::new(0, false)),
             cache,
         }
+    }
+
+    /// Finds the node at a given dimension
+    /// Traverses the tree iteratively and returns a reference to the node.
+    pub fn find_node(&self, dim_index: u32) -> Option<ArcShift<InvertedIndexItem<T>>> {
+        let mut current_node = self.root.clone();
+        let path = calculate_path(dim_index, self.root.dim_index);
+        for child_index in path {
+            let child = current_node
+                .lazy_children
+                .get(&IdentityMapKey::Int(child_index as u32))?;
+            current_node = child.get_data(self.cache.clone());
+        }
+
+        Some(current_node)
     }
 
     /// Retrieves a value from the index at the specified dimension index.
