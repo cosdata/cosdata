@@ -1,7 +1,13 @@
 use serde::{Deserialize, Serialize};
 
 use super::{DistanceError, DistanceFunction};
-use crate::storage::Storage;
+use crate::{
+    models::dot_product::{
+        dot_product_binary, dot_product_f16, dot_product_octal, dot_product_quaternary,
+        dot_product_u8,
+    },
+    storage::Storage,
+};
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Serialize)]
 pub struct CosineDistance(pub f32);
@@ -23,16 +29,18 @@ impl DistanceFunction for CosineSimilarity {
         match (x, y) {
             (
                 Storage::UnsignedByte {
-                    mag: _mag_x,
-                    quant_vec: _vec_x,
+                    mag: x_mag,
+                    quant_vec: x_vec,
                 },
                 Storage::UnsignedByte {
-                    mag: _mag_y,
-                    quant_vec: _vec_y,
+                    mag: y_mag,
+                    quant_vec: y_vec,
                 },
             ) => {
-                // TODO: Implement cosine similarity for UnsignedByte storage
-                unimplemented!("Cosine similarity for UnsignedByte is not implemented yet");
+                let dot_product = dot_product_u8(x_vec, y_vec) as f32;
+                let x_mag = (*x_mag as f32).sqrt();
+                let y_mag = (*y_mag as f32).sqrt();
+                cosine_similarity_from_dot_product(dot_product, x_mag, y_mag)
             }
             (
                 Storage::SubByte {
@@ -49,56 +57,41 @@ impl DistanceFunction for CosineSimilarity {
                 if x_res != y_res {
                     return Err(DistanceError::StorageMismatch);
                 }
-                match *x_res {
-                    1 => {
-                        let dot_product = dot_product_binary(x_vec, y_vec, *x_res)
-                            .expect("Failed computing dot product");
-                        cosine_similarity_from_dot_product(dot_product, *x_mag, *y_mag)
+                let dot_product = match *x_res {
+                    1 => dot_product_binary(x_vec, y_vec, *x_res),
+                    2 => dot_product_quaternary(x_vec, y_vec, *x_res),
+                    3 => dot_product_octal(x_vec, y_vec, *x_res),
+                    _ => {
+                        return Err(DistanceError::CalculationError);
                     }
-                    2 => {
-                        let dot_product = dot_product_quaternary(x_vec, y_vec, *x_res);
-                        cosine_similarity_from_dot_product(dot_product, *x_mag, *y_mag)
-                    }
-                    _ => Err(DistanceError::CalculationError),
-                }
+                };
+                cosine_similarity_from_dot_product(dot_product, *x_mag, *y_mag)
             }
-            (Storage::HalfPrecisionFP { .. }, Storage::HalfPrecisionFP { .. }) => {
-                // TODO: Implement cosine similarity for HalfPrecisionFP storage
-                unimplemented!("Cosine similarity for HalfPrecisionFP is not implemented yet");
+            (
+                Storage::HalfPrecisionFP {
+                    mag: x_mag,
+                    quant_vec: x_vec,
+                },
+                Storage::HalfPrecisionFP {
+                    mag: y_mag,
+                    quant_vec: y_vec,
+                },
+            ) => {
+                let dot_product = dot_product_f16(x_vec, y_vec);
+                cosine_similarity_from_dot_product(dot_product, *x_mag, *y_mag)
             }
             _ => Err(DistanceError::StorageMismatch),
         }
     }
 }
 
-fn dot_product_binary(
-    x_vec: &[Vec<u8>],
-    y_vec: &[Vec<u8>],
-    resolution: u8,
-) -> Result<f32, DistanceError> {
-    let parts = 2_usize.pow(resolution as u32);
-
-    let mut final_result: usize = 0;
-
-    for index in 0..parts {
-        let sum: usize = x_vec[index]
-            .iter()
-            .zip(&y_vec[index])
-            .map(|(&x_item, &y_item)| (x_item & y_item).count_ones() as usize)
-            .sum();
-        final_result += sum << index;
-    }
-
-    let dot_product = final_result;
-    Ok(dot_product as f32)
-}
-
 fn cosine_similarity_from_dot_product(
     dot_product: f32,
-    mag_x: u32,
-    mag_y: u32,
+    x_mag: f32,
+    y_mag: f32,
 ) -> Result<CosineSimilarity, DistanceError> {
-    let denominator = (mag_x as f32).sqrt() * (mag_y as f32).sqrt();
+    let denominator = x_mag * y_mag;
+
     if denominator == 0.0 {
         Err(DistanceError::CalculationError)
     } else {
@@ -106,29 +99,6 @@ fn cosine_similarity_from_dot_product(
     }
 }
 
-fn dot_product_quaternary(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], resolution: u8) -> f32 {
-    assert_eq!(resolution, 2);
-
-    let dot_product: u32 = x_vec[0]
-        .iter()
-        .zip(&x_vec[1])
-        .zip(y_vec[0].iter().zip(&y_vec[1]))
-        .enumerate()
-        .map(|(_i, ((&x_lsb, &x_msb), (&y_lsb, &y_msb)))| {
-            let lsbs = (x_lsb & y_lsb).count_ones();
-            let mid1 = x_lsb & y_msb;
-            let mid2 = y_lsb & x_msb;
-            let carry = (mid1 & mid2).count_ones();
-            let msbs = (x_msb & y_msb).count_ones();
-            let mid = (mid1 ^ mid2).count_ones();
-
-            let result = (msbs << 2) + (carry << 2) + (mid << 1) + lsbs;
-            result
-        })
-        .sum();
-
-    dot_product as f32
-}
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 

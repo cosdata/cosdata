@@ -16,8 +16,8 @@ impl Quantization for ScalarQuantization {
             }
             StorageType::SubByte(resolution) => {
                 let quant_vec: Vec<_> = quantize_to_u8_bits(vector, resolution);
-                // TODO: compute magnitude
-                let mag = 0;
+                let mag_sqr: f32 = vector.iter().map(|x| x * x).sum();
+                let mag = mag_sqr.sqrt();
                 Storage::SubByte {
                     mag,
                     quant_vec,
