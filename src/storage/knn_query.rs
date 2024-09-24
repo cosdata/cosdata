@@ -1,8 +1,10 @@
 use crate::models::identity_collections::IdentityMapKey;
 use crate::models::types::SparseVector;
 use dashmap::DashMap;
+use rayon::prelude::*;
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::BinaryHeap;
+use std::sync::Mutex;
 
 use super::inverted_index::InvertedIndex;
 
@@ -39,41 +41,44 @@ impl KNNQuery {
     }
 
     pub fn search(&self, index: &InvertedIndex<f32>) -> Vec<KNNResult> {
-        let mut dot_products: HashMap<IdentityMapKey, f32> = HashMap::new();
+        let dot_products: DashMap<IdentityMapKey, f32> = DashMap::new();
 
-        // Iterate over the query vector dimensions
-        for &(dim_index, dim_value) in &self.query_vector.entries {
-            if let Some(node) = index.find_node(dim_index) {
-                // Get all data for this dimension
-                let data: &DashMap<IdentityMapKey, crate::models::lazy_load::LazyItem<f32>> =
-                    &node.shared_get().data;
+        // Iterate over the query vector dimensions parallely with rayon
+        self.query_vector
+            .entries
+            .par_iter()
+            .for_each(|&(dim_index, dim_value)| {
+                if let Some(node) = index.find_node(dim_index) {
+                    // Get all data for this dimension
+                    let data: &DashMap<IdentityMapKey, crate::models::lazy_load::LazyItem<f32>> =
+                        &node.shared_get().data;
 
-                // Iterate over the DashMap
-                for entry in data.iter() {
-                    let vector_id = entry.key();
-                    let value = entry.value().get_data(index.cache.clone());
-                    let dot_product = dot_products.entry(vector_id.clone()).or_insert(0.0);
-                    *dot_product += dim_value * *value;
+                    // Iterate over the DashMap concurrently
+                    data.iter().par_bridge().for_each(|entry| {
+                        let vector_id = entry.key();
+                        let value = entry.value().get_data(index.cache.clone());
+                        let mut dot_product = dot_products.entry(vector_id.clone()).or_insert(0.0);
+                        *dot_product += dim_value * *value;
+                    });
                 }
-            }
-        }
+            });
 
-        // Create a min-heap to keep track of the top K results
-        let mut heap = BinaryHeap::with_capacity(K + 1);
+        // Create a min-heap within a Mutex to keep track of the top K results concurrently
+        let heap = Mutex::new(BinaryHeap::with_capacity(K + 1));
 
-        // Process the dot products and maintain the top K results
-        for (vector_id, sim_score) in dot_products.iter() {
+        // Process the dot products and maintain the top K results, Pushing dot_products concurrently into heap.
+        dot_products.iter().par_bridge().for_each(|x| {
+            let mut heap = heap.lock().unwrap();
             heap.push(KNNResult {
-                vector_id: vector_id.clone(),
-                similarity: *sim_score,
+                vector_id: x.key().clone(),
+                similarity: *x.value(),
             });
             if heap.len() > K {
                 heap.pop();
             }
-        }
+        });
 
-        // Convert the heap to a vector and reverse it to get descending order
-        let mut results: Vec<KNNResult> = heap.into_vec();
+        let mut results = heap.lock().unwrap().clone().into_vec();
         results.sort_by(|a, b| {
             b.similarity
                 .partial_cmp(&a.similarity)
