@@ -40,7 +40,7 @@ impl KNNQuery {
         KNNQuery { query_vector }
     }
 
-    pub fn concurent_search(&self, index: &InvertedIndex<f32>) -> Vec<KNNResult> {
+    pub fn concurrent_search(&self, index: &InvertedIndex<f32>) -> Vec<KNNResult> {
         let dot_products: DashMap<IdentityMapKey, f32> = DashMap::new();
 
         // Iterate over the query vector dimensions concurrently with rayon
@@ -213,7 +213,7 @@ mod tests {
         assert!(results[0].similarity > results[1].similarity);
 
         // Perform the KNN search with concurrency
-        let results_concurrent = knn_query.concurent_search(&index);
+        let results_concurrent = knn_query.concurrent_search(&index);
 
         assert_eq!(results_concurrent.len(), 2); // We expect 2 results because only 3 vectors have matching dimensions
         assert_eq!(results_concurrent[0].vector_id, IdentityMapKey::Int(1)); // Vector 1 should be the most similar
