@@ -11,7 +11,7 @@ use super::inverted_index::InvertedIndex;
 const K: usize = 5;
 
 #[derive(Debug, Clone, PartialEq)]
-struct KNNResult {
+pub struct KNNResult {
     vector_id: IdentityMapKey,
     similarity: f32,
 }
@@ -30,7 +30,7 @@ impl Ord for KNNResult {
     }
 }
 
-struct KNNQuery {
+pub struct KNNQuery {
     /// Query vector is a pair of non-zero values and its dimension
     query_vector: SparseVector,
 }
