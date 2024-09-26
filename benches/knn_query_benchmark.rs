@@ -4,79 +4,119 @@ use cosdata::storage::{
     knn_query::{KNNQuery, KNNResult},
 };
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use rand::{rngs::StdRng, Rng, SeedableRng};
+use std::collections::BTreeSet;
 
-use rand::Rng;
+const NUM_OF_VECTORS: usize = 10000;
+const NUM_OF_DIMENSIONS: usize = 2000;
 
-const NUM_OF_VECTORS: u32 = 10000;
-const NUM_OF_DIMENSIONS: u32 = 200;
-const RANGE_OF_VALUES: (f32, f32) = (0.0, 3.0);
+// Function to generate multiple random sparse vectors
+fn generate_random_sparse_vectors(num_records: usize, dimensions: usize) -> Vec<SparseVector> {
+    let mut rng = StdRng::seed_from_u64(2024);
+    let mut records: Vec<SparseVector> = Vec::with_capacity(num_records);
 
-fn create_random_sparse_vector(
-    vector_id: u32,
-    num_dimensions: u32,
-    value_range: (f32, f32),
-) -> SparseVector {
-    let mut rng = rand::thread_rng();
-    let no_of_entries = rng.gen_range(0..num_dimensions); // Randomly generating number of entries per vector
-    let mut entries = Vec::new();
-    // (dim,value),(dim,value),... no_of_entries
-    for _ in 0..no_of_entries {
-        let dim: u32 = rng.gen_range(0..num_dimensions); // Randomly generating dimensions in entries
-        let value: f32 = rng.gen_range(value_range.0..value_range.1); // Randomly generating values in entries
-        entries.push((dim, value));
+    for vector_id in 0..num_records {
+        // Calculate the number of non-zero elements (5% to 10% of dimensions)
+        let num_nonzero = rng
+            .gen_range((dimensions as f32 * 0.05) as usize..=(dimensions as f32 * 0.10) as usize);
+        let mut entries: Vec<(u32, f32)> = Vec::with_capacity(num_nonzero);
+
+        // BTreeSet is used to store unique indices of nonzero values in sorted order
+        let mut unique_indices = BTreeSet::new();
+        while unique_indices.len() < num_nonzero {
+            let index = rng.gen_range(0..dimensions);
+            unique_indices.insert(index);
+        }
+
+        // Generate random values for the nonzero indices
+        for dim_index in unique_indices {
+            let value = rng.gen();
+            entries.push((dim_index as u32, value));
+        }
+
+        records.push(SparseVector::new(vector_id as u32, entries));
     }
-    SparseVector::new(vector_id, entries)
+
+    records
 }
 
-fn create_inverted_index(
-    num_dimensions: u32,
-    num_vectors: u32,
-    value_range: (f32, f32),
-) -> InvertedIndex<f32> {
+// Returns inverted_index and query vector
+fn create_inverted_index_and_query_vector(
+    num_dimensions: usize,
+    num_vectors: usize,
+) -> (InvertedIndex<f32>, SparseVector) {
     let inverted_index = InvertedIndex::new();
 
-    for vector_id in 1..num_vectors {
-        let vec = create_random_sparse_vector(vector_id, num_dimensions, value_range);
+    let mut original_vectors: Vec<SparseVector> =
+        generate_random_sparse_vectors(num_vectors as usize, num_dimensions as usize);
+    let query_vector = original_vectors.pop().unwrap();
+
+    let mut final_vectors = Vec::new(); // Final 1million vectors generated after perturbation
+    let mut current_id = 10_001; // Starting from 10,001 to ensure unique IDs
+
+    for vector in original_vectors {
+        // We create 100 new sparse vecs from each of original 10000 vecs. 10000 * 100 = 1million final
+        let mut new_vectors = perturb_vector(&vector, 0.5, current_id);
+        final_vectors.append(&mut new_vectors);
+        current_id += 100; // Move to the next block of 100 IDs
+    }
+
+    for vector in final_vectors {
         inverted_index
-            .add_sparse_vector(vec)
+            .add_sparse_vector(vector)
             .unwrap_or_else(|e| println!("Error : {:?}", e));
     }
 
-    inverted_index
+    (inverted_index, query_vector)
+}
+
+// This function creates 100 new sparse_vecs from appending to original from 10001 to 1million
+fn perturb_vector(
+    vector: &SparseVector,
+    perturbation_degree: f32,
+    start_id: u32,
+) -> Vec<SparseVector> {
+    let mut rng = rand::thread_rng();
+    let mut new_vectors = Vec::new();
+
+    for i in 0..100 {
+        let new_vector_id = start_id + i; // Generating unique ID for each new vector
+        let mut new_entries = Vec::with_capacity(vector.entries.len());
+
+        for &(dim, val) in &vector.entries {
+            let perturbation = rng.gen_range(-perturbation_degree..=perturbation_degree);
+            let new_val = (val + perturbation).clamp(0.0, 5.0);
+            new_entries.push((dim, new_val));
+        }
+
+        new_vectors.push(SparseVector {
+            vector_id: new_vector_id,
+            entries: new_entries,
+        });
+    }
+
+    new_vectors //sending 100 new vectors from each sparse_vector received
 }
 
 fn knn_query_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("knn query benchmark");
     group.sample_size(10);
 
-    let test_sparse_vector = create_random_sparse_vector(0, NUM_OF_DIMENSIONS, RANGE_OF_VALUES);
-    let test_index = create_inverted_index(NUM_OF_DIMENSIONS, NUM_OF_VECTORS, RANGE_OF_VALUES);
-    let knn_query = KNNQuery::new(test_sparse_vector);
+    let (inverted_index, query_vector) =
+        create_inverted_index_and_query_vector(NUM_OF_DIMENSIONS, NUM_OF_VECTORS + 1);
+    let knn_query = KNNQuery::new(query_vector);
 
-    // ALl benchmarks have
     // Benchmarking Knn_query_sequential with index and concurrency
     group.bench_function(BenchmarkId::new("Knn_query_concurrent", 1000), |b| {
         b.iter(|| {
-            let res: Vec<KNNResult> = knn_query.concurrent_search(&test_index);
+            let _res: Vec<KNNResult> = knn_query.concurrent_search(&inverted_index);
         });
     });
 
     // Benchmarking Knn_query_sequential with index and no concurrency
     group.bench_function(BenchmarkId::new("Knn_query_sequential", 1000), |b| {
         b.iter(|| {
-            let res = knn_query.sequential_search(&test_index);
-        });
-    });
-
-    // Benchmarking Knn_query_brute with no index and no concurrency
-    group.bench_function(BenchmarkId::new("Knn_query_brute", 1000), |b| {
-        b.iter(|| {
-            let mut sparse_vecs = Vec::new();
-            for i in 0..NUM_OF_VECTORS {
-                let svec = create_random_sparse_vector(i, NUM_OF_DIMENSIONS, RANGE_OF_VALUES);
-                sparse_vecs.push(svec);
-            }
-            let res = knn_query.brute_search(sparse_vecs);
+            let _res = knn_query.sequential_search(&inverted_index);
         });
     });
 }
