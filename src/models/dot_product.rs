@@ -41,8 +41,7 @@ fn dot_product_quaternary_simple(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], res: u8) 
         .iter()
         .zip(&x_vec[1])
         .zip(y_vec[0].iter().zip(&y_vec[1]))
-        .enumerate()
-        .map(|(_i, ((&x_lsb, &x_msb), (&y_lsb, &y_msb)))| {
+        .map(|((&x_lsb, &x_msb), (&y_lsb, &y_msb))| {
             let lsbs = (x_lsb & y_lsb).count_ones();
             let mid1 = x_lsb & y_msb;
             let mid2 = y_lsb & x_msb;
@@ -68,23 +67,30 @@ fn dot_product_octal_simple(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], res: u8) -> f3
         .zip(&x_vec[1])
         .zip(&x_vec[2])
         .zip(y_vec[0].iter().zip(&y_vec[1]).zip(&y_vec[2]))
-        .enumerate()
-        .map(
-            |(_i, (((&x_lsb, &x_mid), &x_msb), ((&y_lsb, &y_mid), &y_msb)))| {
-                let lsbs = (x_lsb & y_lsb).count_ones();
-                let mids = (x_mid & y_mid).count_ones();
-                let msbs = (x_msb & y_msb).count_ones();
-                let mid1 = x_lsb & y_mid;
-                let mid2 = y_lsb & x_mid;
-                let carry1 = x_lsb & y_msb;
-                let carry2 = y_lsb & x_msb;
-                let carry_mid = (mid1 ^ mid2).count_ones();
-                let carry = (carry1 & carry2).count_ones();
+        .map(|(((&x_lsb, &x_mid), &x_msb), ((&y_lsb, &y_mid), &y_msb))| {
+            let lsbs = (x_lsb & y_lsb).count_ones();
 
-                let result = (msbs << 3) + (carry << 3) + (carry_mid << 2) + (mids << 1) + lsbs;
-                result
-            },
-        )
+            let mid1 = x_lsb & y_mid;
+            let mid2 = y_lsb & x_mid;
+            let mid_carry1 = (mid1 & mid2).count_ones();
+            let mid = (mid1 ^ mid2).count_ones();
+
+            let high1 = x_lsb & y_msb;
+            let high2 = y_lsb & x_msb;
+            let high3 = x_mid & y_mid;
+            let high_carry1 = ((high1 & high2) | (high1 & high3) | (high2 & high3)).count_ones();
+            let high = (high1 ^ high2 ^ high3).count_ones();
+
+            let msbs = (x_msb & y_msb).count_ones();
+
+            let result = (msbs << 3)
+                + (high_carry1 << 3)
+                + (high << 2)
+                + (mid_carry1 << 2)
+                + (mid << 1)
+                + lsbs;
+            result
+        })
         .sum();
 
     dot_product as f32
