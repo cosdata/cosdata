@@ -56,7 +56,7 @@ pub(crate) async fn commit_transaction(
     vec_store
         .current_version
         .clone()
-        .update(current_open_transaction.clone());
+        .update(current_transaction_id);
     current_open_transaction_arc.update(None);
 
     Ok(())

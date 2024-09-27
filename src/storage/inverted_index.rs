@@ -203,7 +203,10 @@ where
 {
     /// Creates a new `InvertedIndex` with an initial root node.
     pub fn new() -> Self {
-        let bufmans = Arc::new(BufferManagerFactory::new(Path::new(".").into()));
+        let bufmans = Arc::new(BufferManagerFactory::new(
+            Path::new(".").into(),
+            |root, ver| root.join(format!("{}.index", **ver)),
+        ));
         let cache = Arc::new(NodeRegistry::new(1000, bufmans));
         InvertedIndex {
             root: ArcShift::new(InvertedIndexItem::new(0, false)),
@@ -412,7 +415,10 @@ mod test {
                 ArcShift::new(InvertedIndexItem::new(0, false));
             let root_clone1 = root.clone();
             let mut root_clone2 = root.clone();
-            let bufmans = Arc::new(BufferManagerFactory::new(Path::new(".").into()));
+            let bufmans = Arc::new(BufferManagerFactory::new(
+                Path::new(".").into(),
+                |root, ver| root.join(format!("{}.index", **ver)),
+            ));
             let cache = Arc::new(NodeRegistry::new(1000, bufmans));
             let cache1 = cache.clone();
             let cache2 = cache.clone();
