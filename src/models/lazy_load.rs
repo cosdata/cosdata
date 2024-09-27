@@ -298,7 +298,7 @@ impl<T: Clone + 'static> LazyItem<T> {
 
     pub fn add_version(
         &self,
-        branch_id: BranchId,
+        vcs: Arc<VersionControl>,
         version: u32,
         lazy_item: LazyItem<T>,
     ) -> lmdb::Result<()> {
@@ -308,12 +308,12 @@ impl<T: Clone + 'static> LazyItem<T> {
             ..
         } = self
         {
-            // Extract the last 4 bytes of the branch_id to compute the version offset
-            let branch_last_4_bytes = (*branch_id & 0xFFFFFFFF) as u32;
-            let current_version = **version_id ^ branch_last_4_bytes;
-
+            // Retrieve current version from LMDB
+            let version_hash = vcs
+                .get_version_hash(version_id)?
+                .ok_or(lmdb::Error::NotFound)?;
             // Calculate the difference between the target version and the current version
-            let target_diff = version - current_version;
+            let target_diff = version - *version_hash.version;
 
             // Use the largest power of 4 below the target difference to find the appropriate
             // checkpoint for storing this new version.
@@ -321,7 +321,7 @@ impl<T: Clone + 'static> LazyItem<T> {
 
             // If a version already exists at the calculated index, recursively add the new version.
             if let Some(existing_version) = versions.get(index as usize) {
-                return existing_version.add_version(branch_id, version, lazy_item);
+                return existing_version.add_version(vcs, version, lazy_item);
             } else {
                 // Insert the new version at the calculated index if none exists there yet.
                 versions.insert(index as usize, lazy_item);
