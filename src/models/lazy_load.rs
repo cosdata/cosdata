@@ -5,6 +5,7 @@ use super::serializer::CustomSerialize;
 use super::types::{FileOffset, STM};
 use super::versioning::*;
 use arcshift::ArcShift;
+use core::panic;
 use std::fmt;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -12,12 +13,21 @@ use std::sync::{
 };
 
 fn largest_power_of_4_below(x: u32) -> u32 {
-    if x == 0 {
-        0
-    } else {
-        let msb_position = 31 - x.leading_zeros();
-        msb_position / 2
-    }
+    // This function is used to calculate the largest power of 4 (4^n) such that
+    // 4^n <= x, where x represents the gap between the current version and the
+    // target version in our version control system.
+    //
+    // The system uses an exponentially spaced versioning scheme, where each
+    // checkpoint is spaced by powers of 4 (1, 4, 16, 64, etc.). This minimizes
+    // the number of intermediate versions stored, allowing efficient lookups
+    // and updates by focusing only on meaningful checkpoints.
+    //
+    // The input x should not be zero because finding a "largest power of 4 below zero"
+    // is undefined, as zero does not have any significant bits for such a calculation.
+    assert_ne!(x, 0, "x should not be zero");
+
+    let msb_position = 31 - x.leading_zeros(); // Find the most significant bit's position
+    msb_position / 2 // Return the power index of the largest 4^n ≤ x
 }
 
 pub trait SyncPersist {
@@ -35,16 +45,43 @@ pub enum FileIndex {
 }
 
 #[derive(Clone)]
+// As the name suggests, this is a wrapper for lazy-loading the inner data. Its
+// serialization/deserialization mechanisms are designed to handle cyclic data while minimizing
+// redundant re-serializations, ensuring optimal performance.
 pub enum LazyItem<T: Clone + 'static> {
     Valid {
+        // Holds the actual data. Wrapped in an `Option` to indicate whether the data is loaded.
         data: Option<ArcShift<T>>,
+        // Pointer to the file offset where the data is stored. Used for lazy loading the data when
+        // needed. If the data is not loaded, this index retrieves it from persistent storage.
         file_index: ArcShift<Option<FileIndex>>,
+        // Tracks the lifespan the item.
         decay_counter: usize,
+        // Prevents infinite serialization loops when handling cyclic data. This flag indicates
+        // whether the `LazyItem` has already been serialized during the current cycle, ensuring
+        // the data isn't serialized multiple times. It must be reset after the whole serialization
+        // cycle is complete.
         persist_flag: Arc<AtomicBool>,
-        versions: LazyItemMap<T>,
+        // Each element in `versions` is `4^n` versions ahead of the current version:
+        // - 0th element is 1 version ahead (`4^0`)
+        // - 1st element is 4 versions ahead (`4^1`)
+        // - 2nd element is 16 versions ahead (`4^2`), etc.
+        //
+        // This exponential spacing aids in:
+        // 1. **Efficient lookups**: The predictable gaps make version navigation fast.
+        // 2. **Scalability**: The exponential structure keeps the history compact for large
+        // version sets.
+        //
+        // `LazyItemVec` is ideal for maintaining sequential versions with fast access by index.
+        versions: LazyItemVec<T>,
+        // Hash value representing the current version.
         version_id: Hash,
+        // Indicates if this `LazyItem` has ever been serialized. Unlike `persist_flag`, this flag
+        // should not be reset. It avoids re-serializing the entire `LazyItem` if it's already
+        // been serialized once, as only the `versions` field might change.
         serialized_flag: Arc<AtomicBool>,
     },
+    // Marks the item as invalid or unavailable.
     Invalid,
 }
 
@@ -135,7 +172,29 @@ where
 
 #[derive(Clone)]
 pub struct LazyItemMap<T: Clone + 'static> {
+    // A map-like structure that uses `IdentityMap` to store `LazyItem`s.
+    // This allows efficient access and management of items using unique keys.
+    // `STM` implies concurrent updates and access management with Software Transactional Memory.
+    //
+    // Use Case:
+    // - Suitable for scenarios requiring fast, direct access to items based on unique keys.
+    // - Ideal for non-sequential or sparse data where items are frequently added or removed.
+    // - Provides O(1) average time complexity for lookups, insertions, and deletions.
     pub items: STM<IdentityMap<LazyItem<T>>>,
+}
+
+#[derive(Clone)]
+pub struct LazyItemVec<T: Clone + 'static> {
+    // A vector-based structure to store `LazyItem`s in a sequential manner.
+    // This allows for ordered access and is useful for data where indices follow a pattern,
+    // such as powers of 4 in version control systems.
+    // `STM` implies concurrent updates and access management with Software Transactional Memory.
+    //
+    // Use Case:
+    // - Ideal for ordered or sequential data where the index has a meaningful relationship.
+    // - Suitable for systems where data is accessed or updated in a linear, ordered fashion.
+    // - Provides O(1) time complexity for access by index and efficient memory usage if managed properly.
+    pub items: STM<Vec<LazyItem<T>>>,
 }
 
 impl<T: Clone + 'static> SyncPersist for LazyItem<T> {
@@ -169,7 +228,7 @@ impl<T: Clone + 'static> LazyItem<T> {
             file_index: ArcShift::new(None),
             decay_counter: 0,
             persist_flag: Arc::new(AtomicBool::new(true)),
-            versions: LazyItemMap::new(),
+            versions: LazyItemVec::new(),
             version_id,
             serialized_flag: Arc::new(AtomicBool::new(false)),
         }
@@ -185,7 +244,7 @@ impl<T: Clone + 'static> LazyItem<T> {
             file_index: ArcShift::new(None),
             decay_counter: 0,
             persist_flag: Arc::new(AtomicBool::new(true)),
-            versions: LazyItemMap::new(),
+            versions: LazyItemVec::new(),
             version_id,
             serialized_flag: Arc::new(AtomicBool::new(false)),
         }
@@ -197,7 +256,7 @@ impl<T: Clone + 'static> LazyItem<T> {
             file_index: ArcShift::new(None),
             decay_counter: 0,
             persist_flag: Arc::new(AtomicBool::new(true)),
-            versions: LazyItemMap::new(),
+            versions: LazyItemVec::new(),
             version_id,
             serialized_flag: Arc::new(AtomicBool::new(false)),
         }
@@ -249,22 +308,30 @@ impl<T: Clone + 'static> LazyItem<T> {
             ..
         } = self
         {
+            // Retrieve current version from LMDB
             let version_hash = vcs
                 .get_version_hash(version_id)?
                 .ok_or(lmdb::Error::NotFound)?;
+            // Calculate the difference between the target version and the current version
             let target_diff = version - *version_hash.version;
+
+            // Use the largest power of 4 below the target difference to find the appropriate
+            // checkpoint for storing this new version.
             let index = largest_power_of_4_below(target_diff);
-            if let Some(existing_version) = versions.get(&IdentityMapKey::Int(index)) {
+
+            // If a version already exists at the calculated index, recursively add the new version.
+            if let Some(existing_version) = versions.get(index as usize) {
                 return existing_version.add_version(vcs, version, lazy_item);
             } else {
-                versions.insert(IdentityMapKey::Int(index), lazy_item);
+                // Insert the new version at the calculated index if none exists there yet.
+                versions.insert(index as usize, lazy_item);
             }
         }
 
         Ok(())
     }
 
-    pub fn get_versions(&self) -> Option<LazyItemMap<T>> {
+    pub fn get_versions(&self) -> Option<LazyItemVec<T>> {
         if let Self::Valid { versions, .. } = self {
             Some(versions.clone())
         } else {
@@ -276,7 +343,7 @@ impl<T: Clone + 'static> LazyItem<T> {
         self.set_persistence(flag);
         if let Some(versions) = self.get_versions() {
             let mut items_arc = versions.items.clone();
-            for (_, version) in items_arc.get().iter() {
+            for version in items_arc.get().iter() {
                 version.set_versions_persistence(flag);
             }
         }
@@ -341,7 +408,7 @@ impl<T: Clone + 'static> LazyItemRef<T> {
                 file_index: ArcShift::new(None),
                 decay_counter: 0,
                 persist_flag: Arc::new(AtomicBool::new(true)),
-                versions: LazyItemMap::new(),
+                versions: LazyItemVec::new(),
                 version_id,
                 serialized_flag: Arc::new(AtomicBool::new(false)),
             }),
@@ -361,7 +428,7 @@ impl<T: Clone + 'static> LazyItemRef<T> {
                 file_index: ArcShift::new(None),
                 decay_counter: 0,
                 persist_flag: Arc::new(AtomicBool::new(true)),
-                versions: LazyItemMap::new(),
+                versions: LazyItemVec::new(),
                 version_id,
                 serialized_flag: Arc::new(AtomicBool::new(false)),
             }),
@@ -421,7 +488,7 @@ impl<T: Clone + 'static> LazyItemRef<T> {
                         0,
                         Arc::new(AtomicBool::new(true)),
                         0.into(),
-                        LazyItemMap::new(),
+                        LazyItemVec::new(),
                         Arc::new(AtomicBool::new(false)),
                     )
                 };
@@ -467,7 +534,7 @@ impl<T: Clone + 'static> LazyItemRef<T> {
                         0,
                         Arc::new(AtomicBool::new(true)),
                         0.into(),
-                        LazyItemMap::new(),
+                        LazyItemVec::new(),
                         Arc::new(AtomicBool::new(false)),
                     )
                 };
@@ -579,7 +646,7 @@ impl<T: Clone + Identifiable<Id = u64> + 'static> LazyItemSet<T> {
 impl<T: Clone + 'static> LazyItemMap<T> {
     pub fn new() -> Self {
         Self {
-            items: STM::new(IdentityMap::new(), 1, true),
+            items: STM::new(IdentityMap::new(), 5, true),
         }
     }
 
@@ -589,6 +656,9 @@ impl<T: Clone + 'static> LazyItemMap<T> {
         }
     }
 
+    /// Inserts a new item into the map
+    ///
+    /// Overwrites an existing item if the key already exists
     pub fn insert(&self, key: IdentityMapKey, value: LazyItem<T>) {
         let mut arc = self.items.clone();
 
@@ -598,6 +668,31 @@ impl<T: Clone + 'static> LazyItemMap<T> {
             map
         })
         .unwrap();
+    }
+
+    /// Inserts a new key value pair into the map if the key does not already exist
+    ///
+    /// Return the new value if the key did not exist, otherwise return the existing value
+    ///
+    /// Note: Concurrent updates should use checked_insert to avoid overwriting
+    /// updates from other threads.
+    pub fn checked_insert(&self, key: IdentityMapKey, default: LazyItem<T>) -> Option<LazyItem<T>> {
+        let mut arc = self.items.clone();
+
+        let (_, new_child) = arc.arcshift.rcu_project(
+            |map| {
+                (!map.contains(&key))
+                    .then(|| {
+                        let mut new_map = map.clone();
+                        new_map.insert(key.clone(), default.clone());
+                        Some(new_map)
+                    })
+                    .flatten()
+            },
+            |item| item.get(&key).map(|item| item.clone()),
+        );
+
+        new_child
     }
 
     pub fn get(&self, key: &IdentityMapKey) -> Option<LazyItem<T>> {
@@ -614,5 +709,101 @@ impl<T: Clone + 'static> LazyItemMap<T> {
     pub fn len(&self) -> usize {
         let mut arc = self.items.clone();
         arc.get().len()
+    }
+}
+
+impl<T: Clone + 'static> LazyItemVec<T> {
+    pub fn new() -> Self {
+        Self {
+            items: STM::new(Vec::new(), 1, true),
+        }
+    }
+
+    pub fn from_vec(vec: Vec<LazyItem<T>>) -> Self {
+        Self {
+            items: STM::new(vec, 1, true),
+        }
+    }
+
+    pub fn push(&self, item: LazyItem<T>) {
+        let mut items = self.items.clone();
+        items
+            .transactional_update(|old| {
+                let mut new = old.clone();
+                new.push(item.clone());
+                new
+            })
+            .unwrap();
+    }
+
+    pub fn pop(&self) -> Option<LazyItem<T>> {
+        let mut return_value = None;
+        let mut items = self.items.clone();
+
+        items
+            .transactional_update(|old| {
+                let mut new = old.clone();
+                return_value = new.pop();
+                new
+            })
+            .unwrap();
+
+        return_value
+    }
+
+    pub fn get(&self, index: usize) -> Option<LazyItem<T>> {
+        let mut items = self.items.clone();
+        items.get().get(index).cloned()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = LazyItem<T>> {
+        let mut items = self.items.clone();
+        items.get().clone().into_iter()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        let mut items = self.items.clone();
+        items.get().is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        let mut items = self.items.clone();
+        items.get().len()
+    }
+
+    pub fn remove(&self, index: usize) -> Option<LazyItem<T>> {
+        let mut return_value = None;
+        let mut items = self.items.clone();
+
+        items
+            .transactional_update(|old| {
+                let mut new = old.clone();
+                if index < new.len() {
+                    return_value = Some(new.remove(index));
+                } else {
+                    return_value = None;
+                }
+                new
+            })
+            .unwrap();
+
+        return_value
+    }
+
+    pub fn insert(&self, index: usize, item: LazyItem<T>) {
+        let mut items = self.items.clone();
+
+        items
+            .transactional_update(|old| {
+                let mut new = old.clone();
+                new.insert(index, item.clone());
+                new
+            })
+            .unwrap();
+    }
+
+    pub fn clear(&self) {
+        let mut items = self.items.clone();
+        items.transactional_update(|_| Vec::new()).unwrap();
     }
 }

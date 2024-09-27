@@ -393,9 +393,9 @@ dependencies = [
 
 [[package]]
 name = "arcshift"
-version = "0.1.7"
+version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43d331936e5e395b6a3173357d302fbfea6077307cbc4e1c1a596814c1e74855"
+checksum = "623c657cd8b8cda80e942bdc4deedd4db812dded38f8940bd1a2fd77efeb8e55"
 
 [[package]]
 name = "async-channel"
@@ -820,6 +820,7 @@ dependencies = [
  "iana-time-zone",
  "js-sys",
  "num-traits",
+ "serde",
  "wasm-bindgen",
  "windows-targets 0.52.6",
 ]
@@ -952,7 +953,7 @@ dependencies = [
  "chrono",
  "criterion",
  "dashmap",
- "env_logger",
+ "env_logger 0.11.3",
  "futures",
  "futures-util",
  "half 2.4.1",
@@ -962,8 +963,11 @@ dependencies = [
  "lazy_static",
  "lmdb",
  "log",
+ "nom",
  "once_cell",
  "probabilistic-collections",
+ "quickcheck",
+ "quickcheck_macros",
  "rancor",
  "rand 0.8.5",
  "rayon",
@@ -1152,6 +1156,16 @@ name = "env_filter"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a009aa4810eb158359dda09d0c87378e4bbb89b5a801f016885a4707ba24f7ea"
+dependencies = [
+ "log",
+ "regex",
+]
+
+[[package]]
+name = "env_logger"
+version = "0.8.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a19187fea3ac7e84da7dacf48de0c45d63c6a76f9490dae389aead16c243fce3"
 dependencies = [
  "log",
  "regex",
@@ -2189,6 +2203,28 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.70",
+]
+
+[[package]]
+name = "quickcheck"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "588f6378e4dd99458b60ec275b4477add41ce4fa9f64dcba6f15adccb19b50d6"
+dependencies = [
+ "env_logger 0.8.4",
+ "log",
+ "rand 0.8.5",
+]
+
+[[package]]
+name = "quickcheck_macros"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b22a693222d716a9587786f37ac3f6b4faedb5b80c23914e7303ff5a1d8016e9"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
 ]
 
 [[package]]

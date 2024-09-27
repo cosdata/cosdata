@@ -432,7 +432,8 @@ pub fn index_embeddings(
                 let quantized_vec = Arc::new(
                     vec_store
                         .quantization_metric
-                        .quantize(&raw_emb.raw_vec, vec_store.storage_type),
+                        .quantize(&raw_emb.raw_vec, vec_store.storage_type)
+                        .expect("Quantization failed"),
                 );
                 let embedding = QuantizedVectorEmbedding {
                     quantized_vec,

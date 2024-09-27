@@ -8,10 +8,38 @@ pub(crate) struct CreateVectorDto {
     pub values: Vec<f32>,
 }
 
-
 #[derive(Serialize)]
 pub(crate) struct CreateVectorResponseDto {
     pub id: VectorIdValue,
     pub values: Vec<f32>,
     // pub created_at: String
+}
+
+#[derive(Deserialize)]
+pub(crate) struct UpdateVectorDto {
+    pub values: Vec<f32>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct UpdateVectorResponseDto {
+    pub id: VectorIdValue,
+    pub values: Vec<f32>,
+    // pub created_at: String
+}
+
+#[derive(Deserialize)]
+pub(crate) struct FindSimilarVectorsDto {
+    pub vector: Vec<f32>,
+    pub k: i32,
+}
+
+#[derive(Serialize)]
+pub(crate) struct SimilarVector {
+    pub id: VectorIdValue,
+    pub score: f32,
+}
+
+#[derive(Serialize)]
+pub(crate) struct FindSimilarVectorsResponseDto {
+    pub results: Vec<SimilarVector>,
 }

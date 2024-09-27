@@ -71,7 +71,7 @@ pub async fn init_vector_store(
     let vec_hash = VectorId::Int(-1);
 
     let exec_queue_nodes: ExecQueueUpdate = STM::new(Vec::new(), 1, true);
-    let vector_list = Arc::new(quantization_metric.quantize(&vec, storage_type));
+    let vector_list = Arc::new(quantization_metric.quantize(&vec, storage_type)?);
 
     // Note that setting .write(true).append(true) has the same effect
     // as setting only .append(true)
@@ -184,7 +184,6 @@ pub fn run_upload(
     let cursor = bufman.open_cursor()?;
     bufman.write_u32_with_cursor(cursor, *next_version)?;
     bufman.close_cursor(cursor)?;
-
     vecs.into_par_iter()
         .map(|(id, vec)| {
             let hash_vec = convert_value(id);
@@ -242,7 +241,7 @@ pub async fn ann_vector_query(
     let root = &vector_store.root_vec;
     let vector_list = vector_store
         .quantization_metric
-        .quantize(&query, vector_store.storage_type);
+        .quantize(&query, vector_store.storage_type)?;
 
     let vec_emb = QuantizedVectorEmbedding {
         quantized_vec: Arc::new(vector_list.clone()),

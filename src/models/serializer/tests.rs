@@ -1,17 +1,17 @@
 use crate::distance::cosine::CosineSimilarity;
 use crate::models::buffered_io::BufferManager;
-use crate::models::identity_collections::IdentityMapKey;
 use crate::models::lazy_load::*;
 use crate::models::serializer::*;
 use crate::models::types::*;
 use crate::models::versioning::BranchId;
 use crate::models::versioning::VersionHash;
 use crate::models::versioning::{Version, VersionControl};
+use crate::storage::Storage;
 use arcshift::ArcShift;
+use half::f16;
 use lmdb::Environment;
 use std::sync::Arc;
-use tempfile::tempdir;
-use tempfile::TempDir;
+use tempfile::{tempdir, TempDir};
 
 fn get_cache(bufmans: Arc<BufferManagerFactory>) -> Arc<NodeRegistry> {
     Arc::new(NodeRegistry::new(1000, bufmans))
@@ -593,8 +593,7 @@ fn validate_lazy_item_versions(
     let versions = lazy_item.get_versions().unwrap();
 
     for i in 0..versions.len() {
-        let key = IdentityMapKey::Int(i as u32);
-        let version = versions.get(&key).unwrap();
+        let version = versions.get(i).unwrap();
         let version = if version.get_lazy_data().is_none() {
             let file_index = version.get_file_index().unwrap();
             cache.clone().load_item(file_index).unwrap()
@@ -784,3 +783,43 @@ fn test_version_hashing_function_uniqueness() {
 
     assert_eq!(versions.iter().count(), 1000);
 }
+
+#[test]
+fn test_storage_serialization() {
+    let storages = [
+        Storage::UnsignedByte {
+            mag: 10,
+            quant_vec: vec![0, 1, 4],
+        },
+        Storage::SubByte {
+            mag: 34,
+            quant_vec: vec![vec![55, 35], vec![56, 23]],
+            resolution: 2,
+        },
+        Storage::HalfPrecisionFP {
+            mag: 4234.34,
+            quant_vec: vec![f16::from_f32(534.324), f16::from_f32(6453.3)],
+        },
+    ];
+    let (bufmans, cache, bufman, cursor, _dir) = setup_test(&1.into());
+    bufman.close_cursor(cursor).unwrap();
+
+    for (version, storage) in storages.into_iter().enumerate() {
+        let version = Hash::from(version as u32);
+        let bufman = bufmans.get(&version).unwrap();
+        let cursor = bufman.open_cursor().unwrap();
+        let offset = storage.serialize(bufmans.clone(), version, cursor).unwrap();
+        let file_index = FileIndex::Valid {
+            offset: FileOffset(offset),
+            version,
+        };
+        let deserialized: Storage = cache.clone().load_item(file_index).unwrap();
+
+        assert_eq!(deserialized, storage);
+    }
+}
+
+// #[test]
+// fn test_inverted_index_item_serialization() {
+//     let item = InvertedIndex::new();
+// }

@@ -1,11 +1,16 @@
+mod dashmap;
 mod eager_lazy_item;
 mod eager_lazy_item_set;
+mod inverted_index;
+mod inverted_index_item;
 mod lazy_item;
 mod lazy_item_map;
 mod lazy_item_set;
+mod lazy_item_vec;
 mod metric_distance;
 mod neighbour;
 mod node;
+mod storage;
 mod vector;
 
 #[cfg(test)]
@@ -19,22 +24,21 @@ use std::collections::HashSet;
 use std::io::{self, SeekFrom};
 use std::sync::Arc;
 
-pub trait CustomSerialize {
+pub trait CustomSerialize: Sized {
     fn serialize(
         &self,
         bufmans: Arc<BufferManagerFactory>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError>;
+
     fn deserialize(
         bufmans: Arc<BufferManagerFactory>,
         file_index: FileIndex,
         cache: Arc<NodeRegistry>,
         max_loads: u16,
         skipm: &mut HashSet<u64>,
-    ) -> Result<Self, BufIoError>
-    where
-        Self: Sized;
+    ) -> Result<Self, BufIoError>;
 }
 
 impl CustomSerialize for f32 {

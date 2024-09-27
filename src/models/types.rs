@@ -11,7 +11,7 @@ use crate::models::lazy_load::*;
 use crate::models::versioning::*;
 use crate::quantization::product::ProductQuantization;
 use crate::quantization::scalar::ScalarQuantization;
-use crate::quantization::{Quantization, StorageType};
+use crate::quantization::{Quantization, QuantizationError,StorageType};
 use crate::storage::Storage;
 use arcshift::ArcShift;
 use dashmap::DashMap;
@@ -170,7 +170,7 @@ pub enum QuantizationMetric {
 }
 
 impl Quantization for QuantizationMetric {
-    fn quantize(&self, vector: &[f32], storage_type: StorageType) -> Storage {
+    fn quantize(&self, vector: &[f32], storage_type: StorageType) -> Result<Storage, QuantizationError> {
         match self {
             Self::Scalar => ScalarQuantization.quantize(vector, storage_type),
             Self::Product(product) => product.quantize(vector, storage_type),
@@ -329,7 +329,7 @@ pub enum VectorQt {
 
 impl VectorQt {
     pub fn unsigned_byte(vec: &[f32]) -> Self {
-        let quant_vec = simp_quant(vec);
+        let quant_vec = simp_quant(vec).inspect_err(|x| println!("{:?}",x)).unwrap();
         let mag = mag_square_u8(&quant_vec);
         Self::UnsignedByte { mag, quant_vec }
     }
@@ -472,7 +472,7 @@ pub fn get_app_env() -> Result<Arc<AppEnv>, WaCustomError> {
 
 #[derive(Clone)]
 pub struct STM<T: 'static> {
-    arcshift: ArcShift<T>,
+    pub arcshift: ArcShift<T>,
     max_retries: usize,
     strict: bool,
 }
@@ -480,7 +480,7 @@ pub struct STM<T: 'static> {
 fn backoff(iteration: usize) {
     let spins = 1 << iteration;
     for _ in 0..spins {
-        spin_loop();
+        std::thread::yield_now();
     }
 }
 
@@ -504,6 +504,15 @@ where
         self.arcshift.update(new_value);
     }
 
+    /// Update the value inside the ArcShift using a transactional update function.
+    ///
+    /// Internally it uses [ArcShift::rcu] and performs a fixed amount of retries
+    /// before giving up and returning an error.
+    ///
+    /// TODO: Consider making the api more ergonomic. Strict and non-strict
+    /// failure can be made into separate error types so that the caller
+    /// does not need to check the boolean value to figure out if the
+    /// update succeeded or not.
     pub fn transactional_update<F>(&mut self, mut update_fn: F) -> Result<bool, WaCustomError>
     where
         F: FnMut(&T) -> T,
@@ -512,6 +521,8 @@ where
         let mut tries = 0;
 
         while !updated {
+            // TODO: consider using rcu_maybe to avoid unnecessary updates
+            // that will require changing update check semantics
             updated = self.arcshift.rcu(|t| update_fn(t));
 
             if !updated {
@@ -532,5 +543,17 @@ where
         }
 
         Ok(updated)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SparseVector {
+    pub vector_id: u32,
+    pub entries: Vec<(u32, f32)>,
+}
+
+impl SparseVector {
+    pub fn new(vector_id: u32, entries: Vec<(u32, f32)>) -> Self {
+        Self { vector_id, entries }
     }
 }

@@ -1,26 +1,114 @@
+use crate::models::lru_cache::CachedValue;
+use crate::storage::inverted_index::InvertedIndexItem;
+use crate::storage::Storage;
+
 use super::buffered_io::{BufIoError, BufferManagerFactory};
 use super::file_persist::*;
-use super::lazy_load::{FileIndex, LazyItem, LazyItemMap};
+use super::lazy_load::{FileIndex, LazyItem, LazyItemVec};
+use super::lru_cache::LRUCache;
 use super::serializer::CustomSerialize;
 use super::types::*;
 use arcshift::ArcShift;
-use dashmap::DashMap;
 use probabilistic_collections::cuckoo::CuckooFilter;
 use std::collections::HashSet;
 use std::io;
 use std::path::Path;
 use std::sync::{atomic::AtomicBool, Arc, RwLock};
 
+#[derive(Clone)]
+pub enum CacheItem {
+    MergedNode(LazyItem<MergedNode>),
+    Storage(LazyItem<Storage>),
+    InvertedIndexItemWithStorage(LazyItem<InvertedIndexItem<Storage>>),
+    Float(LazyItem<f32>),
+    InvertedIndexItemWithFloat(LazyItem<InvertedIndexItem<f32>>),
+}
+
+pub trait Cacheable: Clone + 'static {
+    fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>>;
+    fn into_cache_item(item: LazyItem<Self>) -> CacheItem;
+}
+
+impl Cacheable for MergedNode {
+    fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
+        if let CacheItem::MergedNode(item) = cache_item {
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
+        CacheItem::MergedNode(item)
+    }
+}
+
+impl Cacheable for Storage {
+    fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
+        if let CacheItem::Storage(item) = cache_item {
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
+        CacheItem::Storage(item)
+    }
+}
+
+impl Cacheable for InvertedIndexItem<Storage> {
+    fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
+        if let CacheItem::InvertedIndexItemWithStorage(item) = cache_item {
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
+        CacheItem::InvertedIndexItemWithStorage(item)
+    }
+}
+
+impl Cacheable for f32 {
+    fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
+        if let CacheItem::Float(item) = cache_item {
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
+        CacheItem::Float(item)
+    }
+}
+
+impl Cacheable for InvertedIndexItem<f32> {
+    fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
+        if let CacheItem::InvertedIndexItemWithFloat(item) = cache_item {
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
+        CacheItem::InvertedIndexItemWithFloat(item)
+    }
+}
+
 pub struct NodeRegistry {
     cuckoo_filter: RwLock<CuckooFilter<u64>>,
-    registry: DashMap<u64, LazyItem<MergedNode>>,
+    registry: LRUCache<u64, CacheItem>,
     bufmans: Arc<BufferManagerFactory>,
 }
 
 impl NodeRegistry {
     pub fn new(cuckoo_filter_capacity: usize, bufmans: Arc<BufferManagerFactory>) -> Self {
         let cuckoo_filter = CuckooFilter::new(cuckoo_filter_capacity);
-        let registry = DashMap::new();
+        let registry = LRUCache::with_prob_eviction(1000, 0.03125);
         NodeRegistry {
             cuckoo_filter: RwLock::new(cuckoo_filter),
             registry,
@@ -28,13 +116,13 @@ impl NodeRegistry {
         }
     }
 
-    pub fn get_object<F>(
+    pub fn get_object<T: Cacheable, F>(
         self: Arc<Self>,
         file_index: FileIndex,
         load_function: F,
         max_loads: u16,
         skipm: &mut HashSet<u64>,
-    ) -> Result<LazyItem<MergedNode>, BufIoError>
+    ) -> Result<LazyItem<T>, BufIoError>
     where
         F: Fn(
             Arc<BufferManagerFactory>,
@@ -42,7 +130,7 @@ impl NodeRegistry {
             Arc<Self>,
             u16,
             &mut HashSet<u64>,
-        ) -> Result<LazyItem<MergedNode>, BufIoError>,
+        ) -> Result<LazyItem<T>, BufIoError>,
     {
         println!(
             "get_object called with file_index: {:?}, max_loads: {}",
@@ -59,8 +147,10 @@ impl NodeRegistry {
             if cuckoo_filter.contains(&combined_index) {
                 println!("FileIndex found in cuckoo_filter");
                 if let Some(obj) = self.registry.get(&combined_index) {
-                    println!("Object found in registry, returning");
-                    return Ok(obj.clone());
+                    if let Some(item) = T::from_cache_item(obj) {
+                        println!("Object found in registry, returning");
+                        return Ok(item);
+                    }
                 } else {
                     println!("Object not found in registry despite being in cuckoo_filter");
                 }
@@ -83,7 +173,7 @@ impl NodeRegistry {
                 file_index: ArcShift::new(Some(file_index)),
                 decay_counter: 0,
                 persist_flag: Arc::new(AtomicBool::new(true)),
-                versions: LazyItemMap::new(),
+                versions: LazyItemVec::new(),
                 version_id,
                 serialized_flag: Arc::new(AtomicBool::new(true)),
             });
@@ -99,19 +189,24 @@ impl NodeRegistry {
         )?;
         println!("load_function returned successfully");
 
-        if let Some(obj) = self.registry.get(&combined_index) {
-            println!("Object found in registry after load, returning");
-            return Ok(obj.clone());
+        println!("Trying to get or insert item into registry");
+        let cached_item = self
+            .registry
+            .get_or_insert::<BufIoError>(combined_index.clone(), || Ok(T::into_cache_item(item)))?;
+
+        match cached_item {
+            CachedValue::Hit(item) => {
+                println!("Object found in registry after load, returning");
+                Ok(T::from_cache_item(item).unwrap())
+            }
+            CachedValue::Miss(item) => {
+                println!("Inserting key into cuckoo_filter");
+                self.cuckoo_filter.write().unwrap().insert(&combined_index);
+
+                println!("Returning newly created LazyItem");
+                Ok(T::from_cache_item(item).unwrap())
+            }
         }
-
-        println!("Inserting key into cuckoo_filter");
-        self.cuckoo_filter.write().unwrap().insert(&combined_index);
-
-        println!("Inserting item into registry");
-        self.registry.insert(combined_index, item.clone());
-
-        println!("Returning newly created LazyItem");
-        Ok(item)
     }
 
     pub fn load_item<T: CustomSerialize>(

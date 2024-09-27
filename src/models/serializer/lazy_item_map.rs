@@ -1,13 +1,10 @@
 use super::CustomSerialize;
 use crate::models::buffered_io::{BufIoError, BufferManagerFactory};
+use crate::models::cache_loader::{Cacheable, NodeRegistry};
 use crate::models::identity_collections::{IdentityMap, IdentityMapKey};
-use crate::models::lazy_load::{FileIndex, LazyItemMap, SyncPersist};
+use crate::models::lazy_load::{FileIndex, LazyItem, LazyItemMap, SyncPersist, CHUNK_SIZE};
 use crate::models::types::FileOffset;
 use crate::models::versioning::Hash;
-use crate::models::{
-    cache_loader::NodeRegistry,
-    lazy_load::{LazyItem, CHUNK_SIZE},
-};
 use std::collections::HashSet;
 use std::{
     io::{self, SeekFrom},
@@ -18,8 +15,7 @@ const MSB: u32 = 1 << 31;
 
 impl<T> CustomSerialize for LazyItemMap<T>
 where
-    T: Clone + CustomSerialize + 'static,
-    LazyItem<T>: CustomSerialize,
+    T: Cacheable + Clone + CustomSerialize + 'static,
 {
     fn serialize(
         &self,
@@ -162,43 +158,6 @@ where
     }
 }
 
-pub fn identity_map_key_deserialize_impl(
-    bufmans: Arc<BufferManagerFactory>,
-    file_index: FileIndex,
-) -> Result<IdentityMapKey, BufIoError> {
-    match file_index {
-        FileIndex::Valid {
-            offset: FileOffset(offset),
-            version,
-        } => {
-            let bufman = bufmans.get(&version)?;
-            let cursor = bufman.open_cursor()?;
-            bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
-            let num = bufman.read_u32_with_cursor(cursor)?;
-            if num & MSB == 0 {
-                return Ok(IdentityMapKey::Int(num));
-            }
-            // discard the most significant bit
-            let len = (num << 1) >> 1;
-            let mut bytes = vec![0; len as usize];
-            bufman.read_with_cursor(cursor, &mut bytes)?;
-            let str = String::from_utf8(bytes).map_err(|e| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("Invalid identity map key: {}", e),
-                )
-            })?;
-            bufman.close_cursor(cursor)?;
-            Ok(IdentityMapKey::String(str))
-        }
-        FileIndex::Invalid => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Cannot deserialize IdentityMapKey with an invalid FileIndex",
-        )
-        .into()),
-    }
-}
-
 impl CustomSerialize for IdentityMapKey {
     fn serialize(
         &self,
@@ -231,6 +190,36 @@ impl CustomSerialize for IdentityMapKey {
     where
         Self: Sized,
     {
-        identity_map_key_deserialize_impl(bufmans, file_index)
+        match file_index {
+            FileIndex::Valid {
+                offset: FileOffset(offset),
+                version,
+            } => {
+                let bufman = bufmans.get(&version)?;
+                let cursor = bufman.open_cursor()?;
+                bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
+                let num = bufman.read_u32_with_cursor(cursor)?;
+                if num & MSB == 0 {
+                    return Ok(IdentityMapKey::Int(num));
+                }
+                // discard the most significant bit
+                let len = (num << 1) >> 1;
+                let mut bytes = vec![0; len as usize];
+                bufman.read_with_cursor(cursor, &mut bytes)?;
+                let str = String::from_utf8(bytes).map_err(|e| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("Invalid identity map key: {}", e),
+                    )
+                })?;
+                bufman.close_cursor(cursor)?;
+                Ok(IdentityMapKey::String(str))
+            }
+            FileIndex::Invalid => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Cannot deserialize IdentityMapKey with an invalid FileIndex",
+            )
+            .into()),
+        }
     }
 }

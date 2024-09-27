@@ -110,11 +110,9 @@
      - Description: Delete a vector
      - Response: 204 No Content
 
-*** Search
-
 **** Search Vectors
      - Method: POST
-     - Path: =/collections/{collection_id}/search=
+     - Path: =/collections/{collection_id}/vectors/search=
      - Description: Search for similar vectors
      - Request Body:
        #+BEGIN_SRC json

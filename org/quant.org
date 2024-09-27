@@ -326,12 +326,20 @@ These functions handle the quantization of floating-point vectors.
 #+BEGIN_SRC rust :tangle "src/main.rs"
  fn quantize_to_u8(vec: &[f32], u32: length) -> Vec<u8> {
     let mut quantized_vec = Vec::with_capacity(length);
-
-    for &x in vec {
-        quantized_vec.push((x * 255.0).round() as u8);
+    let (out_of_range, has_negative) = vec.iter().fold((false, false), |(oor, neg), &x| {
+        (oor || x > 1.0 || x < -1.0, neg || x < 0.0)
+    });
+    if out_of_range {
+        return Err(String::from(
+            "values sent in vector for simp_quant are out of range [-1,+1]",
+        ));
     }
 
-    quantized_vec
+    let res: Vec<u8> = v.iter().map(|&x| {
+        let y = if has_negative { x + 1.0 } else { x };
+        (y * 255.0).round() as u8
+    }).collect();
+    res
 } 
 #+END_SRC
 

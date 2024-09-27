@@ -132,9 +132,10 @@ impl BufferManager {
     pub fn new(mut file: File) -> io::Result<Self> {
         let file_size = file.seek(SeekFrom::End(0))?;
         file.seek(SeekFrom::Start(0))?;
+        let regions = LRUCache::with_prob_eviction(100, 0.03125);
         Ok(BufferManager {
             file: Arc::new(RwLock::new(file)),
-            regions: LRUCache::new(100),
+            regions,
             cursors: RwLock::new(HashMap::new()),
             next_cursor_id: AtomicU64::new(0),
             file_size: RwLock::new(file_size),
@@ -163,7 +164,7 @@ impl BufferManager {
 
     fn get_or_create_region(&self, position: u64) -> Result<Arc<BufferRegion>, BufIoError> {
         let start = position - (position % BUFFER_SIZE as u64);
-        self.regions.get_or_insert(start, || {
+        let cached_region = self.regions.get_or_insert::<BufIoError>(start, || {
             let mut region = BufferRegion::new(start);
             let mut file = self.file.write().map_err(|_| BufIoError::Locking)?;
             file.seek(SeekFrom::Start(start)).map_err(BufIoError::Io)?;
@@ -171,7 +172,8 @@ impl BufferManager {
             let bytes_read = file.read(&mut buffer[..]).map_err(BufIoError::Io)?;
             region.end.store(bytes_read, Ordering::SeqCst);
             Ok(Arc::new(region))
-        })
+        });
+        cached_region.map(|r| r.inner())
     }
 
     fn flush_region(&self, region: &BufferRegion) -> Result<(), BufIoError> {
@@ -292,23 +294,31 @@ impl BufferManager {
             (cursor.position, cursor.is_eof)
         };
 
+        let input_size = buf.len();
+
         let mut curr_pos = cursor_info.0;
         let cursor_is_at_eof = cursor_info.1;
+        let will_cross_eof = cursor_is_at_eof || {
+            let file_size = self.file_size.read().map_err(|_| BufIoError::Locking)?;
+            curr_pos + input_size as u64 >= *file_size
+        };
 
         let mut total_written = 0;
-        if cursor_is_at_eof {
-            // This means we're appending to a file. Some
-            // synchronization is required here because threads will
-            // call seek and then write in two separate calls. Hence
-            // it needs to be ensured that multiple threads are not
-            // updating the `file_size` field at the same
-            // time. Additionally, we also need to handle the case
-            // where `file_size` changes between `seek_with_cursor`
-            // and `write_with_cursor` calls for the same cursor. This
-            // is done as follows:
+        if will_cross_eof {
+            // This means we're either appending to a file or the
+            // input buffer size is large enough to go beyond
+            // EOF. Some synchronization is required here because
+            // threads will call seek and then write in two separate
+            // calls. Hence it needs to be ensured that multiple
+            // threads are not updating the `file_size` field at the
+            // same time. Additionally, we also need to handle the
+            // case where `file_size` changes between
+            // `seek_with_cursor` and `write_with_cursor` calls for
+            // the same cursor. This is done as follows:
             //
             // 1. take a write lock on file_size
-            // 2. check that cursor position = file size, if not sync it
+            // 2. if the cursor is at EOF, check that cursor position
+            //    = file size, if not sync it
             // 3. start writing in a while loop
             // 4. After the loop, write fize_size = curr_position
             // 5. Release the lock
@@ -318,11 +328,11 @@ impl BufferManager {
 
             // println!("Cursor Id = {cursor_id}; Position = {curr_pos}; File Size = {}", *file_size);
 
-            if curr_pos < *file_size {
+            if cursor_is_at_eof && curr_pos < *file_size {
                 curr_pos = *file_size;
             }
 
-            while total_written < buf.len() {
+            while total_written < input_size {
                 let region = self.get_or_create_region(curr_pos)?;
                 {
                     // @NOTE: Here we need a separate scope because the
@@ -331,7 +341,7 @@ impl BufferManager {
                     let mut buffer = region.buffer.write().map_err(|_| BufIoError::Locking)?;
                     let buffer_pos = (curr_pos - region.start) as usize;
                     let available = BUFFER_SIZE - buffer_pos;
-                    let to_write = (buf.len() - total_written).min(available);
+                    let to_write = (input_size - total_written).min(available);
                     buffer[buffer_pos..buffer_pos + to_write]
                         .copy_from_slice(&buf[total_written..total_written + to_write]);
                     region.end.store(
@@ -348,7 +358,7 @@ impl BufferManager {
         } else {
             // println!("Cursor Id = {cursor_id}; Position = {curr_pos};");
 
-            while total_written < buf.len() {
+            while total_written < input_size {
                 let region = self.get_or_create_region(curr_pos)?;
                 {
                     // @NOTE: Here we need a separate scope because the
@@ -357,7 +367,7 @@ impl BufferManager {
                     let mut buffer = region.buffer.write().map_err(|_| BufIoError::Locking)?;
                     let buffer_pos = (curr_pos - region.start) as usize;
                     let available = BUFFER_SIZE - buffer_pos;
-                    let to_write = (buf.len() - total_written).min(available);
+                    let to_write = (input_size - total_written).min(available);
                     buffer[buffer_pos..buffer_pos + to_write]
                         .copy_from_slice(&buf[total_written..total_written + to_write]);
                     region.end.store(
@@ -402,21 +412,22 @@ impl BufferManager {
             .get_mut(&cursor_id)
             .ok_or_else(|| BufIoError::InvalidCursor(cursor_id))?;
 
-        let new_position = match pos {
-            SeekFrom::Start(abs) => {
-                cursor.is_eof = false;
-                abs
-            }
-            SeekFrom::End(rel) => {
-                // Mark that this cursor is at the end of file
-                cursor.is_eof = true;
-                // file_size.read()
-                (*self.file_size.read().map_err(|_| BufIoError::Locking)? as i64 + rel) as u64
-            }
-            SeekFrom::Current(rel) => {
-                cursor.is_eof = false;
-                (cursor.position as i64 + rel) as u64
-            }
+        let new_position = {
+            // @NOTE: We don't need a write lock here as we're setting
+            // the `is_eof` flag on the cursor. The
+            // `write_with_cursor` method checks whether this flag is
+            // set for the cursor and in that case, updates the
+            // current position if required after taking a write lock.
+            let file_size = self.file_size.read().map_err(|_| BufIoError::Locking)?;
+            let new_pos = match pos {
+                SeekFrom::Start(abs) => abs,
+                SeekFrom::End(rel) => (*file_size as i64 + rel) as u64,
+                SeekFrom::Current(rel) => (cursor.position as i64 + rel) as u64,
+            };
+            // Set `is_eof` flag for cursor if the new position is at
+            // or ahead of EOF
+            cursor.is_eof = new_pos >= *file_size;
+            new_pos
         };
 
         cursor.position = new_position;
@@ -424,11 +435,8 @@ impl BufferManager {
     }
 
     pub fn flush(&self) -> Result<(), BufIoError> {
-        for entry in self.regions.iter() {
-            // @TODO: Leaky abstraction. LRUCache's API can be
-            // improved here.
-            let (region, _) = entry.value();
-            self.flush_region(region)?;
+        for region in self.regions.values() {
+            self.flush_region(&region)?;
         }
         self.file
             .write()
@@ -443,6 +451,7 @@ mod tests {
 
     use super::*;
     use std::thread;
+    use quickcheck_macros::quickcheck;
     use tempfile::tempfile;
 
     #[test]
@@ -488,14 +497,24 @@ mod tests {
         bufman.close_cursor(cursor1).unwrap();
     }
 
-    /// Create a large tmp content file about (5 * BUFFER_SIZE + 150)
-    /// in size
+    /// Test util function to create a temp file of size calculated
+    /// from `num_regions` and `extra` bytes after that.
+    ///
+    /// E.g. `create_tmp_file(5, 20)` will create a temp file with 5
+    /// regions of BUFFER_SIZE and 20 more bytes in addition to it.
     fn create_tmp_file(num_regions: u8, extra: u16) -> io::Result<File> {
         let mut file = tempfile()?;
         file.write_all(&vec![
             0_u8;
             (BUFFER_SIZE * num_regions as usize) + extra as usize
         ])?;
+        Ok(file)
+    }
+
+    /// Test util function to create a temp file of a specific size
+    fn create_tmp_file_of_size(size: u16) -> io::Result<File> {
+        let mut file = tempfile()?;
+        file.write_all(&vec![0_u8; size as usize])?;
         Ok(file)
     }
 
@@ -1068,5 +1087,225 @@ mod tests {
 
         // Verify that `bufman.file_size` remain the same
         assert_eq!((BUFFER_SIZE + 10) as u64, *bufman.file_size.read().unwrap());
+    }
+
+    #[test]
+    fn test_seek_with_cursor() {
+        let filesize = 1000 as usize;
+        let file = create_tmp_file_of_size(filesize as u16).unwrap();
+        let bufman = BufferManager::new(file).unwrap();
+        let cursor = bufman.open_cursor().unwrap();
+
+        // Test SeekFrom::Start cases
+        let pos = bufman.seek_with_cursor(cursor, SeekFrom::Start(0)).unwrap();
+        assert_eq!(0, pos);
+        {
+            let cursors = bufman.cursors.read().unwrap();
+            let c = cursors.get(&cursor).unwrap();
+            assert_eq!(0, c.position);
+            assert!(!c.is_eof);
+        }
+
+        let pos = bufman.seek_with_cursor(cursor, SeekFrom::Start(478)).unwrap();
+        assert_eq!(478, pos);
+        {
+            let cursors = bufman.cursors.read().unwrap();
+            let c = cursors.get(&cursor).unwrap();
+            assert_eq!(478, c.position);
+            assert!(!c.is_eof);
+        }
+
+        let pos = bufman.seek_with_cursor(cursor, SeekFrom::Start(filesize as u64)).unwrap();
+        assert_eq!(filesize as u64, pos);
+        {
+            let cursors = bufman.cursors.read().unwrap();
+            let c = cursors.get(&cursor).unwrap();
+            assert_eq!(filesize as u64, c.position);
+            assert!(c.is_eof);
+        }
+
+        // Test SeekFrom::End cases
+        let pos = bufman.seek_with_cursor(cursor, SeekFrom::End(0)).unwrap();
+        assert_eq!(filesize as u64, pos);
+        {
+            let cursors = bufman.cursors.read().unwrap();
+            let c = cursors.get(&cursor).unwrap();
+            assert_eq!(filesize as u64, c.position);
+            assert!(c.is_eof);
+        }
+
+        let pos = bufman.seek_with_cursor(cursor, SeekFrom::End(20)).unwrap();
+        assert_eq!(filesize as u64 + 20, pos);
+        {
+            let cursors = bufman.cursors.read().unwrap();
+            let c = cursors.get(&cursor).unwrap();
+            assert_eq!(filesize as u64 + 20, c.position);
+            assert!(c.is_eof);
+        }
+
+        let pos = bufman.seek_with_cursor(cursor, SeekFrom::End(-115)).unwrap();
+        assert_eq!(filesize as u64 - 115, pos);
+        {
+            let cursors = bufman.cursors.read().unwrap();
+            let c = cursors.get(&cursor).unwrap();
+            assert_eq!(filesize as u64 - 115, c.position);
+            assert!(!c.is_eof);
+        }
+
+        // Test SeekFrom::Current cases
+        let curr_pos = pos;
+        let pos = bufman.seek_with_cursor(cursor, SeekFrom::Current(0)).unwrap();
+        assert_eq!(curr_pos as u64, pos);
+        {
+            let cursors = bufman.cursors.read().unwrap();
+            let c = cursors.get(&cursor).unwrap();
+            assert_eq!(curr_pos as u64, c.position);
+            assert!(!c.is_eof);
+        }
+
+        let curr_pos = pos;
+        let pos = bufman.seek_with_cursor(cursor, SeekFrom::Current(-100)).unwrap();
+        assert_eq!(curr_pos as u64 - 100, pos);
+        {
+            let cursors = bufman.cursors.read().unwrap();
+            let c = cursors.get(&cursor).unwrap();
+            assert_eq!(curr_pos as u64 - 100, c.position);
+            assert!(!c.is_eof);
+        }
+
+        let curr_pos = pos;
+        let pos = bufman.seek_with_cursor(cursor, SeekFrom::Current(100)).unwrap();
+        assert_eq!(curr_pos as u64 + 100, pos);
+        {
+            let cursors = bufman.cursors.read().unwrap();
+            let c = cursors.get(&cursor).unwrap();
+            assert_eq!(curr_pos as u64 + 100, c.position);
+            assert!(!c.is_eof);
+        }
+
+        let curr_pos = pos;
+        let delta = filesize as i64 - curr_pos as i64;
+        let pos = bufman.seek_with_cursor(cursor, SeekFrom::Current(delta)).unwrap();
+        assert_eq!(filesize as u64, pos);
+        {
+            let cursors = bufman.cursors.read().unwrap();
+            let c = cursors.get(&cursor).unwrap();
+            assert_eq!(filesize as u64, c.position);
+            assert!(c.is_eof);
+        }
+
+        bufman.close_cursor(cursor).unwrap();
+    }
+
+
+    // Prop test for `get_or_create_region` to check that
+    // `region.start` is a multiple of BUFFER_SIZE
+    #[quickcheck]
+    fn prop_get_or_create_region_start(pos: u16) -> bool {
+        let file = create_tmp_file_of_size(u16::MAX).unwrap();
+        let bufman = BufferManager::new(file).unwrap();
+        let region = bufman.get_or_create_region(pos as u64).unwrap();
+        region.start % (BUFFER_SIZE as u64) == 0
+    }
+
+    // Prop test for `get_or_create_region` to check that
+    // `region.buffer` size is at most equal to BUFFER_SIZE
+    #[quickcheck]
+    fn prop_get_or_create_region_buffer_size(pos: u16) -> bool {
+        let file = create_tmp_file_of_size(u16::MAX).unwrap();
+        let bufman = BufferManager::new(file).unwrap();
+        let region = bufman.get_or_create_region(pos as u64).unwrap();
+        let buffer = region.buffer.read().unwrap();
+        buffer.len() <= BUFFER_SIZE
+    }
+
+    // Prop test for `get_or_create_region` to check that
+    // `region.end` is at most equal to BUFFER_SIZE
+    #[quickcheck]
+    fn prop_get_or_create_region_end(pos: u16) -> bool {
+        let file = create_tmp_file_of_size(u16::MAX).unwrap();
+        let bufman = BufferManager::new(file).unwrap();
+        let region = bufman.get_or_create_region(pos as u64).unwrap();
+        region.end.load(Ordering::SeqCst) <= BUFFER_SIZE
+    }
+
+    // Prop test for `read_with_cursor` to check that the return value
+    // (total bytes read) is at most equal to the size of the input
+    // buffer
+    #[quickcheck]
+    fn prop_read_with_cursor(size: u16) -> bool {
+        let bufsize = size as usize;
+        let file = create_tmp_file_of_size(u16::MAX).unwrap();
+        let bufman = BufferManager::new(file).unwrap();
+        let mut buffer = vec![0; bufsize];
+        let cursor = bufman.open_cursor().unwrap();
+        let bytes_read = bufman.read_with_cursor(cursor, &mut buffer[..]).unwrap();
+        bufman.close_cursor(cursor).unwrap();
+        bytes_read <= bufsize
+    }
+
+    // Prop test for `write_with_cursor` to check that the return
+    // value (total bytes written) is exactly equal to the size of the
+    // output buffer
+    #[quickcheck]
+    fn prop_write_with_cursor(size: u16) -> bool {
+        let bufsize = size as usize;
+        let file = create_tmp_file_of_size(0).unwrap();
+        let bufman = BufferManager::new(file).unwrap();
+        let mut buffer = vec![0; bufsize];
+        let cursor = bufman.open_cursor().unwrap();
+        let bytes_written = bufman.write_with_cursor(cursor, &mut buffer[..]).unwrap();
+        bufman.close_cursor(cursor).unwrap();
+        bytes_written == bufsize
+    }
+
+    // Prop test for `write_with_cursor` to check that all regions
+    // that are written to are dirty
+    #[quickcheck]
+    fn prop_write_then_read(size: u16) -> bool {
+        let bufsize = size as usize;
+        let file = create_tmp_file_of_size(0).unwrap();
+        let bufman = BufferManager::new(file).unwrap();
+
+        // Write to the file
+        let mut input_buffer = vec![1; bufsize];
+        let cursor = bufman.open_cursor().unwrap();
+        bufman.write_with_cursor(cursor, &mut input_buffer[..]).unwrap();
+        bufman.close_cursor(cursor).unwrap();
+
+        // Read from the file
+        let mut output_buffer = vec![0; bufsize];
+        let cursor = bufman.open_cursor().unwrap();
+        bufman.read_with_cursor(cursor, &mut output_buffer[..]).unwrap();
+        bufman.close_cursor(cursor).unwrap();
+
+        output_buffer[..bufsize] == input_buffer[..bufsize]
+    }
+
+    // For seek_with_cursor, we just verify that it doesn't crash with
+    // u16 type for filesize and position.
+
+    fn check_seek_with_cursor_doesnt_crash(filesize: u16, pos: SeekFrom) -> bool {
+        let file = create_tmp_file_of_size(filesize).unwrap();
+        let bufman = BufferManager::new(file).unwrap();
+        let cursor = bufman.open_cursor().unwrap();
+        let result = bufman.seek_with_cursor(cursor, pos);
+        bufman.close_cursor(cursor).unwrap();
+        result.is_ok()
+    }
+
+    #[quickcheck]
+    fn prop_seek_with_cursor_from_start(filesize: u16, pos: u16) -> bool {
+        check_seek_with_cursor_doesnt_crash(filesize, SeekFrom::Start(pos as u64))
+    }
+
+    #[quickcheck]
+    fn prop_seek_with_cursor_from_end(filesize: u16, pos: i16) -> bool {
+        check_seek_with_cursor_doesnt_crash(filesize, SeekFrom::End(pos as i64))
+    }
+
+    #[quickcheck]
+    fn prop_seek_with_cursor_from_current(filesize: u16, pos: i16) -> bool {
+        check_seek_with_cursor_doesnt_crash(filesize, SeekFrom::Current(pos as i64))
     }
 }
