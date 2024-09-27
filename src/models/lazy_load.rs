@@ -830,6 +830,17 @@ impl<T: Clone + 'static, const N: usize> LazyItemArray<T, N> {
         }
     }
 
+    pub fn from_vec(vec: Vec<Option<LazyItem<T>>>) -> Self {
+        let arr = LazyItemArray::new();
+        let _ = vec.iter().enumerate().map(|(index, value)| {
+            match value {
+                Some(val) => arr.insert(index, val.clone()),
+                None => {}
+            };
+        });
+        return arr;
+    }
+
     pub fn insert(&self, index: usize, value: LazyItem<T>) {
         let mut arc = self.items.clone();
 
@@ -863,5 +874,10 @@ impl<T: Clone + 'static, const N: usize> LazyItemArray<T, N> {
     pub fn get(&self, index: usize) -> Option<LazyItem<T>> {
         let mut arc = self.items.clone();
         arc.get().get(index).cloned().flatten()
+    }
+
+    pub fn is_empty(&mut self) -> bool {
+        let mut arc = self.items.clone();
+        arc.get().iter().all(Option::is_none)
     }
 }
