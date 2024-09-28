@@ -1,3 +1,6 @@
+pub mod inverted_index;
+pub mod knn_query;
+
 use half::f16;
 use serde::{Deserialize, Serialize};
 

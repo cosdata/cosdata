@@ -27,8 +27,21 @@ fn oct_quant(v: &[f32]) -> Vec<u8> {
         .collect()
 }
 
-fn simp_quant(v: &[f32]) -> Vec<u8> {
-    v.iter().map(|&x| (x * 255.0).round() as u8).collect()
+fn simp_quant(v: &[f32]) -> Result<Vec<u8>, String> {
+    let (out_of_range, has_negative) = v.iter().fold((false, false), |(oor, neg), &x| {
+        (oor || x > 1.0 || x < -1.0, neg || x < 0.0)
+    });
+    if out_of_range {
+        return Err(String::from(
+            "Values sent in vector for simp_quant are out of range [-1,+1]",
+        ));
+    }
+
+    let res: Vec<u8> = v.iter().map(|&x| {
+        let y = if has_negative { x + 1.0 } else { x };
+        (y * 255.0).round() as u8
+    }).collect();
+    Ok(res)
 }
 
 fn cos_sim_binary(a: &[u32], b: &[u32]) -> f32 {
@@ -116,8 +129,8 @@ fn benchmark_u8(c: &mut Criterion) {
             let i2 = rng.gen_range(0..100);
             let v1 = black_box(&vectors[i1]);
             let v2 = black_box(&vectors[i2]);
-            let sv1 = simp_quant(v1);
-            let sv2 = simp_quant(v2);
+            let sv1 = simp_quant(v1).inspect_err(|x| println!("{:?}", x)).unwrap();
+            let sv2 = simp_quant(v2).inspect_err(|x| println!("{:?}", x)).unwrap();
             cos_sim_u8(&sv1, &sv2)
         })
     });

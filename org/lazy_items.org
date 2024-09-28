@@ -1,6 +1,6 @@
 #+TITLE: LazyItems Serialization Structure
-#+AUTHOR: Nithin
-#+DATE: [2023-05-11 Thu]
+#+AUTHOR: Nithin 
+#+DATE: [2024-09-26 Thu]
 
 * LazyItems File Structure
 
@@ -8,80 +8,89 @@
 File Layout:
 ┌─────────────────────────────────────────────────────────────────────────────────────┐
 │ LazyItems Start                                                                     │
-├─────────────┬───────────────────────────────────────────────┬───────────────────────┤
-│ Item Count  │ Chunk 1                                       │ Chunk 2               │
-│ (4 bytes)   │                                               │                       │
-├─────────────┼───────────────────────┬───────────────────────┼───────────────────────┤
-│    7        │ Placeholders + Link   │ Items                 │ Placeholders + Link   │
-│             │ (6 * 4 bytes)         │                       │ (6 * 4 bytes)         │
-├─────────────┼───────┬───────┬───────┼───────┬───────┬───────┼───────┬───────┬───────┤
-│             │ PH1   │ ...   │ Next  │ Item1 │ ...   │ Item5 │ PH6   │ PH7   │ Next  │
-│             │       │       │ Chunk │       │       │       │       │       │ Chunk │
-└─────────────┴───────┴───────┴───────┴───────┴───────┴───────┴───────┴───────┴───────┘
+├───────────────────────┬───────────────────────┬───────────────────────┬─────────────┤
+│ Chunk 1               │ Chunk 2               │ Item Data (Variable)  │             │
+├───────────────────────┼───────────────────────┼───────────────────────┤             │
+│ PH1 PH2 PH3 PH4 PH5 N │ PH6 PH7 PH8 PH9 PH10 N│ Item1 Item2 Item3 ... │             │
+└───────────────────────┴───────────────────────┴───────────────────────┴─────────────┘
 
-PH = Placeholder (4 bytes each)
-Next Chunk = Offset to the next chunk (4 bytes)
+PH = Placeholder (8 bytes each: 4 for offset, 4 for version)
+N = Next Chunk link (4 bytes)
 #+END_SRC
 
 * Detailed Breakdown
 
-** 1. Item Count (4 bytes)
+** 1. Chunk Structure
+   #+BEGIN_SRC
+   ┌────────┬────────┬────────┬────────┬────────┬────────┐
+   │  PH1   │  PH2   │  PH3   │  PH4   │  PH5   │   N    │ (Placeholders + Next Chunk Link)
+   └────────┴────────┴────────┴────────┴────────┴────────┘
+   #+END_SRC
 
-#+BEGIN_SRC
-┌────────┐
-│   7    │ (32-bit integer)
-└────────┘
-#+END_SRC
+   - Each placeholder (PH) is 8 bytes:
+     - 4 bytes for item offset
+     - 4 bytes for item version
+   - Next Chunk link (N) is 4 bytes
 
-** 2. Chunk 1
-
-#+BEGIN_SRC
-┌────────┬────────┬────────┬────────┬────────┬────────┐
-│  PH1   │  PH2   │  PH3   │  PH4   │  PH5   │  Next  │ (Placeholders + Next Chunk Link, each 4 bytes)
-└────────┴────────┴────────┴────────┴────────┴────────┘
-┌──────────────┐┌──────────────┐┌──────────────┐┌──────────────┐┌──────────────┐
-│    Item 1    ││    Item 2    ││    Item 3    ││    Item 4    ││    Item 5    │ (Variable size)
-└──────────────┘└──────────────┘└──────────────┘└──────────────┘└──────────────┘
-#+END_SRC
-
-** 3. Chunk 2
-
-#+BEGIN_SRC
-┌────────┬────────┬────────┬────────┬────────┬────────┐
-│  PH6   │  PH7   │  0xFFFFFFFF     │  0xFFFFFFFF     │ (Placeholders + Next Chunk Link, each 4 bytes)
-└────────┴────────┴────────┴────────┴────────┴────────┘
-┌──────────────┐┌──────────────┐
-│    Item 6    ││    Item 7    │ (Variable size)
-└──────────────┘└──────────────┘
-#+END_SRC
+** 2. LazyItem Structure
+   #+BEGIN_SRC
+   ┌────────────┬────────────┬──────────────────────────┬──────────────────────────┐
+   │ Node Offset│ Versions   │     Serialized Node      │    Serialized Versions   │
+   └────────────┴────────────┴──────────────────────────┴──────────────────────────┘
+    4 bytes       4 bytes      Variable size             Variable size
+   #+END_SRC
 
 * Notes
 
-- Each placeholder (PH) is a 32-bit integer offset pointing to the start of its corresponding item.
-- Items are serialized immediately after their chunk's placeholders and next chunk link.
-- Unused placeholders in the last chunk are filled with ~u32::MAX~ (0xFFFFFFFF).
-- The "Next Chunk" link in the last chunk is also set to ~u32::MAX~.
-- The actual size of each serialized item may vary.
-- ~CHUNK_SIZE~ is set to 5 in this example.
+- Chunks are not necessarily contiguous in memory.
+- Items are not necessarily contiguous with their placeholders or with each other.
+- The "Next Chunk" link points to the next set of placeholders, which could be anywhere in the file.
+- Within each LazyItem, the Node Offset and Versions fields point to their respective serialized data, which could be located anywhere in the file.
+- ~CHUNK_SIZE~ is set to 5 in this implementation.
+- Unused placeholders in the last chunk are filled with ~u32::MAX~ (0xFFFFFFFF) for both offset and version.
+- The "Next Chunk" link in the last chunk is set to ~u32::MAX~.
 
 * Serialization Process
 
-1. Write the total item count (7 in this case).
-2. For each chunk:
-   a. Write placeholders (initially all ~u32::MAX~).
-   b. Write the next chunk link (initially ~u32::MAX~).
-   c. Serialize each item, updating its placeholder with the actual offset.
+1. For each chunk:
+   a. Write placeholders (8 bytes each):
+      - Write item offset (4 bytes, initially ~u32::MAX~)
+      - Write item version (4 bytes, initially ~u32::MAX~)
+   b. Write the next chunk link (4 bytes, initially ~u32::MAX~).
+   c. Serialize items and update placeholders:
+      - Update item offset (4 bytes)
+      - Update item version (4 bytes)
    d. Update the next chunk link with the offset of the next chunk (or leave as ~u32::MAX~ if it's the last chunk).
+
+2. For each LazyItem:
+   a. Write node offset (4 bytes)
+   b. Write versions offset (4 bytes)
+   c. Serialize the node data
+   d. Serialize the versions data
+
+3. For LazyItemMap, serialize IdentityMapKey:
+   a. Write type flag (4 bytes)
+   b. Write data (4 bytes for Int, variable length for String)
 
 * Deserialization Process
 
-1. Read the item count.
-2. Start with the first chunk:
-   a. Read placeholders and next chunk link.
-   b. For each non-~u32::MAX~ placeholder:
-      - Deserialize the item from that offset.
-   c. If there are more items to read and the next chunk link is not ~u32::MAX~:
-      - Move to the next chunk and repeat from step 2a.
-   d. If all items have been read or the next chunk link is ~u32::MAX~, stop.
+1. Start with the first chunk:
+   a. Read placeholders (8 bytes each) and next chunk link (4 bytes).
+   b. For each placeholder:
+      - Read item offset (4 bytes)
+      - Read item version (4 bytes)
+      - If offset is not ~u32::MAX~:
+        + Deserialize the LazyItem:
+          * Read node offset (4 bytes)
+          * Read versions offset (4 bytes)
+          * Deserialize node data
+          * Deserialize versions data
+   c. If the next chunk link is not ~u32::MAX~:
+      - Move to the next chunk and repeat from step 1a.
+   d. If the next chunk link is ~u32::MAX~, stop.
 
-This structure allows for efficient random access and skipping of chunks, while still supporting lazy loading and updates to individual items without rewriting the entire structure.
+2. For LazyItemMap, deserialize IdentityMapKey:
+   a. Read type flag (4 bytes)
+   b. Based on flag, read either 4-byte integer or variable-length string
+
+This structure allows for efficient random access, lazy loading of items, and supports versioning. It provides flexibility for updating individual items without rewriting the entire structure, and accommodates both vector-like and map-like collections.

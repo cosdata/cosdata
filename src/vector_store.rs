@@ -526,8 +526,11 @@ pub fn index_embeddings(
             .map(|(raw_emb, version)| {
                 let lp = &vec_store.levels_prob;
                 let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
-                let quantized_vec =
-                    Arc::new(quantization.quantize(&raw_emb.raw_vec, vec_store.storage_type));
+                let quantized_vec = Arc::new(
+                    quantization
+                        .quantize(&raw_emb.raw_vec, vec_store.storage_type)
+                        .expect("Quantization failed"),
+                );
                 let embedding = QuantizedVectorEmbedding {
                     quantized_vec,
                     hash_vec: raw_emb.hash_vec,
@@ -881,8 +884,8 @@ fn insert_node_create_edges(
     };
     let mut nn = ArcShift::new(MergedNode::new(HNSWLevel(cur_level as u8)));
     nn.get().set_prop_ready(Arc::new(node_prop));
-
     nn.get().add_ready_neighbors(nbs.clone());
+
     let lz_item = LazyItem::from_arcshift(version, nn.clone());
 
     for (nbr1, cs) in nbs.into_iter() {

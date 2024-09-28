@@ -1,0 +1,772 @@
+#+TITLE: Cos Graph Query Language Specification
+#+AUTHOR: Nithin Mani
+#+DATE: [2024-08-08]
+
+* Schema Definition
+
+** Entity Definition
+#+BEGIN_SRC c
+define entity <entity_name> as
+    <attribute_name>: <data_type>
+    [, <attribute_name>: <data_type>]*;
+#+END_SRC
+
+Example:
+#+BEGIN_SRC c
+define entity person as
+    name: string
+    , age: int
+    , email: string;
+
+define entity company as
+    name: string
+    , founded_year: int;
+#+END_SRC
+
+** Relationship Definition
+#+BEGIN_SRC c
+define relationship <relationship_name> as
+    (<role1>: <entity_type1>, <role2>: <entity_type2>[, <role3>: <entity_type3>]*),
+    [attribute1: <data_type1>,
+     attribute2: <data_type2>,
+     ...];
+#+END_SRC
+- Roles and their associated entity types are enclosed in parentheses.
+- Multiple roles are separated by commas.
+- Optional attributes can be defined after the roles, each on a new line.
+- The definition ends with a semicolon.
+
+Example (binary relationship):
+#+BEGIN_SRC c
+define relationship works_in as
+    (employee: person, department: department);
+
+define relationship manages as
+    (manager: person, department: department);
+
+define relationship assigned_to as
+    (employee: person, project: project);
+
+// Example with attributes
+define relationship employment as
+    (employee: person, employer: company),
+    start_date: date,
+    salary: double;
+#+END_SRC
+
+Example (primitive ternary relationship)
+#+begin_src c
+// can't be decomposed into binaries
+define relationship contributes_research as
+    (author: person,
+     research_entity: research_entity, // survey, workshop, talk
+     domain: domain),
+    date: date; //in-exhaustive attrs
+#+end_src
+
+*** Note: Relationship Definitions (Schema Level):
+
+- These are like blueprints or templates for relationships.
+- They define the structure: what types of entities can participate and what attributes the relationship can have.
+- They're part of the schema, similar to how we define entity types.
+
+
+
+* Data Manipulation
+
+** Entity Instance Insertion
+#+BEGIN_SRC c
+insert $<variable_name> isa <entity_type> (
+    <attribute_name>: <value>
+    [, <attribute_name>: <value>]*
+);
+#+END_SRC
+
+Example:
+#+BEGIN_SRC c
+insert $john isa person (
+    name: "John Doe"
+    , age: 30
+    , email: "john@example.com"
+);
+
+insert $techcorp isa company (
+    name: "TechCorp"
+    , founded_year: 2000
+);
+#+END_SRC
+
+** Relationship Instance Insertion
+#+BEGIN_SRC c
+insert $<variable_name> (
+    <role_name>: $<entity_variable> 
+    [, <role_name>: $<entity_variable>]*
+) forms <relationship_type> (
+    <attribute_name>: <value>
+    [, <attribute_name>: <value>]*
+);
+#+END_SRC
+
+Example (binary relationship):
+#+BEGIN_SRC c
+insert $job1 (
+    employee: $john,
+    employer: $techcorp
+) forms employment (
+    salary: 100000.00
+    , start_date: 2022-03-01
+);
+#+END_SRC
+
+Example (ternary relationship):
+#+BEGIN_SRC c
+insert $assignment1 (
+    employee: $john,
+    project: $ai_project,
+    department: $tech_dept
+) forms project_assignment (
+    role: "Lead Developer"
+    , start_date: 2023-01-20
+);
+#+END_SRC
+
+
+*** Note: Relationship Instances (Data Level):
+
+- These are actual connections between specific entities in your data.
+- They can be created directly (like when inserting data) or inferred by rules.
+
+  #+begin_src c
+// Relationship Definition (Schema Level)
+define relationship employment as
+    (employee: person, employer: company),
+    start_date: date,
+    salary: double;
+
+// Direct Insertion of a Relationship Instance (Data Level)
+insert
+    ($john, $techcorp) forms employment (
+        start_date: 2023-01-15,
+        salary: 75000.00
+    );
+
+// Rule that Infers a Relationship Instance (Data Level)
+define rule infer_management as
+    match
+        $dept isa department (
+            name: $dept_name,
+            head: $manager_name
+        ),
+        $employee isa person (
+            name: $manager_name
+        ),
+        ($employee, $dept) forms works_in
+    infer derive
+        ($employee, $dept) forms manages;
+  #+end_src
+* Querying
+
+** Basic Query Structure
+#+BEGIN_SRC c
+match
+    $<variable> isa <entity_type> (
+        <attribute_name>: <value_or_variable>
+        [, <attribute_name>: <value_or_variable>]*
+    )
+    [, $<relationship_variable> (
+        <role_name>: $<entity_variable> 
+        [, <role_name>: $<entity_variable>]*
+    ) forms <relationship_type> (
+        <attribute_name>: <value_or_variable>
+        [, <attribute_name>: <value_or_variable>]*
+    )]*
+get $<variable> [, $<variable>]*;
+#+END_SRC
+
+Example (querying a ternary relationship):
+#+BEGIN_SRC c
+match
+    $employee isa person (
+        name: $name
+    ),
+    $project isa project (
+        name: "AI Initiative"
+    ),
+    $assignment (
+        employee: $employee,
+        project: $project,
+        department: $dept
+    ) forms project_assignment (
+        start_date: $start_date
+    ),
+    $dept isa department (
+        name: "Tech Department"
+    )
+get $name, $start_date;
+#+END_SRC
+
+* Rules
+
+Rules allow us to define new relationships or entities based on existing ones. They are similar to views in relational databases or derived predicates in Datalog.
+
+** Rule Definition
+#+BEGIN_SRC c
+define rule <rule_name> as
+    match
+        <pattern1>,
+        <pattern2>,
+        ...
+    infer
+        <conclusion>;
+#+END_SRC
+
+** Example: Transitive Closure of Flight Connections
+
+Let's consider a scenario where we have direct flights between cities, and we want to find all reachable destinations, including those requiring multiple flights.
+
+#+BEGIN_SRC c
+// Base case: A city is reachable if there's a direct flight
+define rule reachable_direct as
+    match
+        (from: $city1, to: $city2) forms direct_flight
+    infer
+        materialize (from: $city1, to: $city2) forms reachable;
+
+// Recursive case: A city is reachable if we can reach an intermediate city
+define rule reachable_indirect as
+    match
+        (from: $city1, to: $intermediate) forms reachable,
+        (from: $intermediate, to: $city2) forms reachable,
+        $city1 != $city2  // Prevent trivial cycles
+    infer
+        materialize (from: $city1, to: $city2) forms reachable;
+#+END_SRC
+
+These rules define a new `reachable` relationship:
+1. The first rule establishes that any direct flight makes the destination reachable.
+2. The second rule recursively defines that if we can reach an intermediate city, and from there reach a final destination, then that final destination is reachable from the starting city.
+
+We can then use this in queries:
+
+#+BEGIN_SRC c
+match
+    $start isa city (
+        name: "New York"
+    ),
+    $end isa city (
+        name: $destination
+    ),
+    (from: $start, to: $end) forms reachable
+get $destination;
+#+END_SRC
+
+This query would return all cities reachable from New York, whether by direct flights or any number of connections.
+
+** Using Rules with Attributes
+
+We can extend this example to include distance:
+
+#+BEGIN_SRC c
+  define relationship direct_flight (
+      from: city,
+      to: city)
+  (
+      distance: int
+  );
+
+  // Base case with distance
+  define rule reachable_direct as
+      match
+          (from: $city1, to: $city2) forms direct_flight (
+              distance: $dist
+          )
+      infer
+          materialize (from: $city1, to: $city2) forms reachable (
+              distance: $dist
+          );
+
+  // Recursive case with distance
+  define rule reachable_indirect as
+      match
+          (from: $city1, to: $intermediate) forms reachable (
+              distance: $dist1
+          ),
+          (from: $intermediate, to: $city2) forms reachable (
+              distance: $dist2
+          ),
+          $city1 != $city2
+      infer
+          materialize (from: $city1, to: $city2) forms reachable (
+              distance: ($dist1 + $dist2)
+          );
+#+END_SRC
+
+
+Now we can query for reachable cities within a certain distance:
+#+BEGIN_SRC c
+match
+    $start isa city (
+        name: "New York"
+    ),
+    $end isa city (
+        name: $destination
+    ),
+    (from: $start, to: $end) forms reachable (
+        distance: $dist
+    ),
+    $dist < 5000
+get $destination, $dist;
+#+END_SRC
+
+This query would return all cities reachable from New York within a distance of 5000 units, along with the total distance.
+
+*** Entity and Relationship Usage in Rules
+
+In the match and infer clauses:
+
+- For entities, use =isa=:
+  #+BEGIN_SRC c
+  $variable isa entity_type (
+      attribute: $value,
+      [attribute: $value]*
+  )
+  #+END_SRC
+
+- For relationships, use =forms=:
+  #+BEGIN_SRC c
+  ($variable1, $variable2) forms relationship_type
+  #+END_SRC
+
+This distinction clarifies when we're dealing with entities (isa) versus 
+relationships (forms) in our rules.
+
+#+begin_src c
+define rule infer_close_collaboration as
+    match
+        $employee1 isa person (
+            name: $name1
+        ),
+        $employee2 isa person (
+            name: $name2
+        ),
+        $project isa project (
+            name: $project_name
+        ),
+        ($employee1, $project) forms assigned_to,
+        ($employee2, $project) forms assigned_to,
+        $employee1 != $employee2
+    infer derive
+        ($employee1, $employee2) forms close_collaborator (
+            project: $project_name
+        );
+#+end_src
+
+* Inferred Relationships:
+By default, the system will determine whether to materialize inferred relationships or compute them on-demand based on internal heuristics. Users can override this behavior by specifying 'materialize' or 'derive' in the 'infer' clause of a rule. Materialized inferences will be explicitly stored and updated when relevant base data changes. Derived inferences will be computed when queried.
+
+
+#+begin_src c
+define rule colleagues as
+    match
+        $emp1 (employee: $person1, employer: $company) isa employment,
+        $emp2 (employee: $person2, employer: $company) isa employment,
+        $person1 != $person2
+    infer [materialize | derive]
+        ($person1, $person2) isa colleague;
+#+end_src
+
+* Inference Syntax for Schema Evolution:
+
+To add new attributes to existing entities in a rule's inference, 
+use the 'extend' clause followed by the entity variable:
+
+#+BEGIN_SRC c
+infer [derive | materialize]
+    extend $entity_var (
+        attribute_name: attribute_value
+        [, attribute_name: attribute_value]*
+    );
+#+END_SRC
+
+- =derive= in our language means:
+
+The dynamic, on-demand computation of data.
+This computed data is not stored persistently but generated when needed.
+It can involve:
+- Adding new attributes to existing entities
+- Creating entirely new entities or relationships based on existing data
+- Transforming existing data into new forms
+
+#+BEGIN_SRC c
+define rule fahrenheit_to_celsius as
+    match
+        $temp_f isa temperature (
+            value: $fahrenheit,
+            unit: "Fahrenheit"
+        )
+    compute
+        $celsius = ($fahrenheit - 32) * 5 / 9
+    infer derive
+        $temp_f (
+            celsius_value: $celsius
+        );
+
+#+END_SRC
+
+
+#+begin_src c
+// Adding multiple attributes to an existing entity
+define rule enrich_person_data as
+    match
+        $person isa person (
+            name: $name,
+            birth_year: $year
+        )
+    compute
+        $age = current_year() - $year,
+        $generation = categorize_generation($year)
+    infer derive
+        $person (
+            age: $age,
+            generation: $generation
+        );
+
+// Creating a new entity
+define rule create_celsius_reading as
+    match
+        $temp_f isa temperature (
+            value: $fahrenheit,
+            unit: "Fahrenheit",
+            timestamp: $time
+        )
+    compute
+        $celsius = ($fahrenheit - 32) * 5 / 9
+    infer materialize
+        $temp_c isa temperature (
+            value: $celsius,
+            unit: "Celsius",
+            timestamp: $time,
+            original_reading: $temp_f
+        );
+#+end_src
+Inference Syntax for Entity and Relationship Creation/Derivation:
+
+To create/derive a new entity in a rule's inference:
+#+BEGIN_SRC c
+infer [derive | materialize]
+    $new_entity isa entity_type (
+        attribute_name: attribute_value
+        [, attribute_name: attribute_value]*
+    );
+#+END_SRC
+
+To create/derive a new relationship in a rule's inference:
+#+BEGIN_SRC c
+infer [derive | materialize]
+    ($role1: $entity1, $role2: $entity2 [, $role3: $entity3]*) forms relationship_type (
+        attribute_name: attribute_value
+        [, attribute_name: attribute_value]*
+    );
+#+END_SRC
+
+'derive' indicates that the inferred entity or relationship is computed on-demand.
+'materialize' indicates that the inferred entity or relationship is stored persistently.
+
+#+BEGIN_SRC c
+define rule celsius_conversion as
+    match
+        $temp_f isa temperature (
+            value: $fahrenheit,
+            unit: "Fahrenheit"
+        )
+    compute
+        $celsius = ($fahrenheit - 32) * 5 / 9
+    infer derive
+        $temp_f (
+            celsius_value: $celsius
+        );
+
+define rule create_friendship as
+    match
+        $person1 isa person (
+            name: $name1
+        ),
+        $person2 isa person (
+            name: $name2
+        ),
+        (actor: $person1, target: $person2) forms social_interaction (
+            count: $count
+        )
+    compute
+        $friendship_strength = calculate_strength($count)
+    infer materialize
+        ($friend1: $person1, $friend2: $person2) forms friendship (
+            strength: $friendship_strength,
+            formed_at: current_timestamp()
+        );
+#+END_SRC
+
+* Joins
+
+** Entity and Relationship Definitions
+
+Let's start by defining our entities and relationships:
+
+#+BEGIN_SRC c
+define entity person as
+    name: string,
+    email: string;
+
+define entity department as
+    name: string,
+    budget: double;
+
+define entity project as
+    name: string,
+    start_date: date,
+    end_date: date;
+
+define relationship works_in as
+    employee: person,
+    department: department;
+
+define relationship manages as
+    manager: person,
+    department: department;
+
+define relationship assigned_to as
+    employee: person,
+    project: project;
+#+END_SRC
+
+** Complex Query Example
+
+Here's a query that demonstrates joining across multiple entities:
+
+*** Query Description
+
+Find all managers who work in departments with a budget over 1 million and are also assigned to projects ending in 2023, along with their department names and project names.
+
+*** Query Syntax
+
+#+BEGIN_SRC c
+match
+    $manager isa person (
+        name: $manager_name,
+        email: $manager_email
+    ),
+    $department isa department (
+        name: $dept_name,
+        budget: $budget
+    ),
+    $project isa project (
+        name: $project_name,
+        end_date: $end_date
+    ),
+    (manager: $manager, department: $department) forms manages,
+    (employee: $manager, department: $department) forms works_in,
+    (employee: $manager, project: $project) forms assigned_to,
+    $budget > 1000000,
+    $end_date >= date("2023-01-01") and $end_date <= date("2023-12-31")
+get $manager_name, $manager_email, $dept_name, $project_name;
+#+END_SRC
+
+*** Rule Definition Using the Complex Query
+
+Here's how you might use this query in a rule:
+
+#+BEGIN_SRC c
+define rule find_high_budget_managers_on_2023_projects as
+    match
+        $manager isa person (
+            name: $manager_name,
+            email: $manager_email
+        ),
+        $department isa department (
+            name: $dept_name,
+            budget: $budget
+        ),
+        $project isa project (
+            name: $project_name,
+            end_date: $end_date
+        ),
+        (manager: $manager, department: $department) forms manages,
+        (employee: $manager, department: $department) forms works_in,
+        (employee: $manager, project: $project) forms assigned_to,
+        $budget > 1000000,
+        $end_date >= date("2023-01-01") and $end_date <= date("2023-12-31")
+    infer derive
+        $result isa manager_project_summary (
+            manager_name: $manager_name,
+            manager_email: $manager_email,
+            department_name: $dept_name,
+            project_name: $project_name
+        );
+#+END_SRC
+
+This rule creates derived ~manager_project_summary~ entities based on the complex join across person, department, and project entities.
+
+* Query vs Rule
+
+In our knowledge graph query language, there are two primary approaches to working with data:
+1. Direct Querying (Match/Get)
+2. Rule-Based Inference (Rule/Match/Infer)
+
+This document explains the differences, use cases, and examples of each approach.
+
+** Match/Get (Direct Querying)
+
+*** Syntax
+#+BEGIN_SRC
+match
+    // pattern matching
+get
+    // variables to retrieve
+#+END_SRC
+
+*** Purpose
+- Used for direct, one-time queries to retrieve existing data.
+
+*** Characteristics
+- Executed immediately when you run the query.
+- Results are returned to the user but not stored in the database.
+- Typically used for simpler, direct data retrieval.
+- Each query is standalone.
+
+*** When to Use
+1. For ad-hoc queries where you need immediate results.
+2. When exploring data or testing hypotheses.
+3. For simple data retrieval that doesn't require complex inference.
+4. When you don't need to persist the results or reuse the query logic.
+
+*** Example
+#+BEGIN_SRC c
+match
+    $person isa person (
+        name: $name,
+        age: $age
+    ),
+    $age > 30
+get $name, $age;
+#+END_SRC
+
+** Rule/Match/Infer (Rule-Based Inference)
+
+*** Syntax
+#+BEGIN_SRC c
+define rule rule_name as
+    match
+        // pattern matching
+    infer [derive | materialize]
+        // new data to infer
+#+END_SRC
+
+*** Purpose
+- Used to define reusable patterns for inferring new data or relationships.
+
+*** Characteristics
+- Defined once, then automatically applied whenever relevant data changes or when explicitly invoked.
+- Results can be derived on-demand (with 'derive') or stored persistently (with 'materialize').
+- Can encapsulate more complex logic and multi-step inferences.
+- Rules can be reused across different contexts and combined with other rules.
+
+*** When to Use
+1. For complex inferences that you want to automate and reuse.
+2. When you need to derive new data based on existing data.
+3. For maintaining derived properties that should be updated whenever base data changes.
+4. When implementing business logic that should be consistently applied across your database.
+
+*** Example
+#+BEGIN_SRC c
+define rule categorize_senior_employees as
+    match
+        $employee isa person (
+            name: $name,
+            hire_date: $hire_date
+        ),
+        $years_employed = years_between($hire_date, current_date()),
+        $years_employed >= 10
+    infer derive
+        $employee (
+            employee_category: "Senior"
+       );
+#+END_SRC
+
+* Key Differences
+
+| Aspect             | Match/Get (Direct Querying)        | Rule/Match/Infer (Rule-Based Inference)         |
+|--------------------+------------------------------------+-------------------------------------------------|
+| Execution          | Immediate                          | Defined once, applied automatically or manually |
+| Result Persistence | Not stored                         | Can be derived or materialized                  |
+| Complexity         | Typically simpler                  | Can handle more complex logic                   |
+| Reusability        | Standalone queries                 | Reusable across contexts                        |
+| Use Case           | Ad-hoc data retrieval and analysis | Implementing persistent business logic          |
+
+* Custom or System Procedure (cos_proc)
+
+The cos_proc keyword is used to invoke built-in or user-defined functions 
+within rules. These functions can perform complex operations, including 
+inferring relationships and modifying the knowledge graph.
+
+Syntax:
+Either all unnamed:
+#+BEGIN_SRC
+cos_proc function_name(arg1, arg2, arg3, ...)
+#+END_SRC
+
+Or all named:
+#+BEGIN_SRC
+cos_proc function_name(param1: value1, param2: value2, param3: value3, ...)
+#+END_SRC
+
+- function_name: Name of the built-in or user-defined function
+- In the unnamed style, the order of arguments is significant
+- In the named style, the order of arguments is not significant
+
+Mixing named and unnamed parameters in the same function call is not allowed.
+
+#+begin_src c
+define rule infer_collaboration as
+    match
+        $emp1 isa employee,
+        $emp2 isa employee,
+        $emp1 != $emp2
+    cos_proc calculate_collaboration($emp1, $emp2, global.projects, "last_6_months", 0.7)
+#+end_src
+
+#+begin_src c
+define rule infer_proximity as
+    match
+        $person1 isa person (
+            location: $loc1
+        ),
+        $person2 isa person (
+            location: $loc2
+        ),
+        $person1 != $person2
+    cos_proc proximity_check(person1: $person1, person2: $person2, loc1: $loc1, 
+                             loc2: $loc2, max_distance: 5.0)
+#+end_src
+* Data Types
+
+- ~string~: Text data
+- ~int~: Integer numbers
+- ~double~: Floating-point numbers
+- ~date~: Date in the format YYYY-MM-DD
+- ~boolean~: True or false values
+
+* Comments
+
+Single-line comments start with ~//~:
+#+BEGIN_SRC
+// This is a single-line comment
+#+END_SRC
+
+Multi-line comments are enclosed in ~/*~ and ~*/~:
+#+BEGIN_SRC
+/*
+This is a
+multi-line comment
+*/
+#+END_SRC
+

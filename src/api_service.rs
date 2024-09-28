@@ -44,7 +44,7 @@ pub async fn init_vector_store(
         return Err(WaCustomError::InvalidParams);
     }
 
-    let quantization_metric = Arc::new(QuantizationMetric::Scalar);
+    let quantization_metric = QuantizationMetric::Scalar;
     let storage_type = auto_config_storage_type(size);
     let ain_env = get_app_env().map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
@@ -84,7 +84,7 @@ pub async fn init_vector_store(
     let vec_hash = VectorId::Int(-1);
 
     let exec_queue_nodes: ExecQueueUpdate = STM::new(Vec::new(), 1, true);
-    let vector_list = Arc::new(quantization_metric.quantize(&vec, storage_type));
+    let vector_list = Arc::new(quantization_metric.quantize(&vec, storage_type)?);
 
     // Note that setting .write(true).append(true) has the same effect
     // as setting only .append(true)
@@ -163,7 +163,7 @@ pub async fn init_vector_store(
         prop_file,
         lmdb,
         ArcShift::new(hash),
-        ArcShift::new(QuantizationMetric::Scalar),
+        ArcShift::new(quantization_metric),
         Arc::new(DistanceMetric::Cosine),
         storage_type,
         vcs,
@@ -254,7 +254,7 @@ pub async fn ann_vector_query(
     let root = &vector_store.root_vec;
     let vector_list = vector_store
         .quantization_metric
-        .quantize(&query, vector_store.storage_type);
+        .quantize(&query, vector_store.storage_type)?;
 
     let vec_emb = QuantizedVectorEmbedding {
         quantized_vec: Arc::new(vector_list.clone()),

@@ -9,6 +9,8 @@ pub(crate) enum VectorsError {
     NotFound,
     FailedToGetAppEnv,
     FailedToCreateVector(String),
+    FailedToUpdateVector(String),
+    FailedToFindSimilarVectors(String),
     NotImplemented,
     DatabaseError(String),
     InternalServerError,
@@ -20,14 +22,20 @@ impl Display for VectorsError {
             VectorsError::NotFound => write!(f, "Vector Not Found!"),
             VectorsError::FailedToGetAppEnv => write!(f, "Failed to get App Env!"),
             VectorsError::FailedToCreateVector(msg) => {
-                write!(f, "Failed to create vector due to {}", msg)
+                write!(f, "Failed to create vector due to: {}", msg)
             }
             VectorsError::NotImplemented => {
                 write!(f, "This is not supported yet!")
             }
-            VectorsError::DatabaseError(msg) => write!(f, "failed to fetch vector due to: {}", msg),
+            VectorsError::DatabaseError(msg) => write!(f, "Failed to fetch vector due to: {}", msg),
             VectorsError::InternalServerError => {
-                write!(f, "internal server error while trying to fetch vector!")
+                write!(f, "Internal server error while trying to fetch vector!")
+            }
+            VectorsError::FailedToUpdateVector(msg) => {
+                write!(f, "Failed to update vector due to: {}", msg)
+            }
+            VectorsError::FailedToFindSimilarVectors(msg) => {
+                write!(f, "Failed to find similar vectors due to: {}", msg)
             }
         }
     }
@@ -41,12 +49,14 @@ impl ResponseError for VectorsError {
     }
     fn status_code(&self) -> StatusCode {
         match self {
-            VectorsError::NotFound => StatusCode::BAD_REQUEST,
-            VectorsError::FailedToGetAppEnv => StatusCode::INTERNAL_SERVER_ERROR,
-            VectorsError::FailedToCreateVector(_) => StatusCode::BAD_REQUEST,
-            VectorsError::NotImplemented => StatusCode::BAD_REQUEST,
-            VectorsError::DatabaseError(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            VectorsError::InternalServerError => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::NotFound => StatusCode::BAD_REQUEST,
+            Self::FailedToGetAppEnv => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::FailedToCreateVector(_) => StatusCode::BAD_REQUEST,
+            Self::NotImplemented => StatusCode::BAD_REQUEST,
+            Self::DatabaseError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::InternalServerError => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::FailedToUpdateVector(_) => StatusCode::BAD_REQUEST,
+            Self::FailedToFindSimilarVectors(_) => StatusCode::BAD_REQUEST,
         }
     }
 }

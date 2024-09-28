@@ -1,9 +1,15 @@
 use std::sync::Arc;
 
-use crate::{config_loader::Config, models::types::VectorId};
+use crate::{
+    config_loader::Config,
+    models::{rpc::VectorIdValue, types::VectorId},
+};
 
 use super::{
-    dtos::{CreateVectorDto, CreateVectorResponseDto},
+    dtos::{
+        CreateVectorDto, CreateVectorResponseDto, FindSimilarVectorsDto,
+        FindSimilarVectorsResponseDto, UpdateVectorDto, UpdateVectorResponseDto,
+    },
     error::VectorsError,
     repo,
 };
@@ -21,4 +27,23 @@ pub(crate) async fn get_vector_by_id(
     vector_id: VectorId,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
     repo::get_vector_by_id(collection_id, vector_id).await
+}
+
+pub(crate) async fn update_vector_by_id(
+    collection_id: &str,
+    vector_id: VectorIdValue,
+    update_vector_dto: UpdateVectorDto,
+    config: Arc<Config>,
+) -> Result<UpdateVectorResponseDto, VectorsError> {
+    repo::update_vector(collection_id, vector_id, update_vector_dto, config).await
+}
+
+pub(crate) async fn find_similar_vectors(
+    find_similar_vectors: FindSimilarVectorsDto,
+) -> Result<FindSimilarVectorsResponseDto, VectorsError> {
+    let similar_vectors = repo::find_similar_vectors(find_similar_vectors).await?;
+
+    Ok(FindSimilarVectorsResponseDto {
+        results: similar_vectors,
+    })
 }
