@@ -64,11 +64,13 @@ impl KNNQuery {
             });
 
         // Create a min-heap within a Mutex to keep track of the top K results concurrently
-        let heap = Mutex::new(BinaryHeap::with_capacity(K + 1));
+        // let heap = Mutex::new(BinaryHeap::with_capacity(K + 1));
+        // Do not use mutex and concurrency to avoid bottlenecks while pushing result
+        let mut heap = BinaryHeap::with_capacity(K + 1);
 
-        // Process the dot products and maintain the top K results, Pushing dot_products concurrently into heap.
-        dot_products.iter().par_bridge().for_each(|x| {
-            let mut heap = heap.lock().expect("Panic due to lock over heap value");
+        // Process the dot products and maintain the top K results, Pushing dot_products into heap.
+        dot_products.iter().for_each(|x| {
+            // let mut heap = heap.lock().expect("Panic due to lock over heap value");
             heap.push(KNNResult {
                 vector_id: x.key().clone(),
                 similarity: *x.value(),
@@ -78,7 +80,9 @@ impl KNNQuery {
             }
         });
 
-        let mut results = heap.lock().unwrap().clone().into_vec();
+        // let mut results = heap.lock().unwrap().clone().into_vec();
+        let mut results = heap.clone().into_vec();
+
         results.sort_by(|a, b| {
             b.similarity
                 .partial_cmp(&a.similarity)
