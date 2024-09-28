@@ -10,7 +10,7 @@ use crate::{
     models::{
         buffered_io::{BufIoError, BufferManagerFactory},
         cache_loader::{Cacheable, NodeRegistry},
-        lazy_load::FileIndex,
+        lazy_load::{FileIndex, LazyItemArray},
         types::FileOffset,
         versioning::Hash,
     },
