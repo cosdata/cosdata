@@ -197,6 +197,20 @@ pub struct LazyItemVec<T: Clone + 'static> {
     pub items: STM<Vec<LazyItem<T>>>,
 }
 
+#[derive(Clone)]
+pub struct LazyItemArray<T: Clone + 'static, const N: usize> {
+    // An array-based structure to store `LazyItem`s with a fixed size.
+    // This allows for a fixed number of items to be stored, providing a predictable and
+    // memory-efficient way to manage a specific number of items.
+    // `STM` implies concurrent updates and access management with Software Transactional Memory.
+    //
+    // Use Case:
+    // - Ideal for scenarios where a fixed number of items need to be managed, such as children in
+    // an inverted index or versions in a version control system.
+    // - Provides O(1) time complexity for access by index and efficient memory usage.
+    pub items: STM<[Option<LazyItem<T>>; N]>,
+}
+
 impl<T: Clone + 'static> SyncPersist for LazyItem<T> {
     fn set_persistence(&self, flag: bool) {
         if let Self::Valid { persist_flag, .. } = self {
@@ -805,5 +819,65 @@ impl<T: Clone + 'static> LazyItemVec<T> {
     pub fn clear(&self) {
         let mut items = self.items.clone();
         items.transactional_update(|_| Vec::new()).unwrap();
+    }
+}
+
+impl<T: Clone + 'static, const N: usize> LazyItemArray<T, N> {
+    pub fn new() -> Self {
+        let arr: [Option<LazyItem<T>>; N] = std::array::from_fn(|_| None);
+        Self {
+            items: STM::new(arr, 1, true),
+        }
+    }
+
+    pub fn from_vec(vec: Vec<Option<LazyItem<T>>>) -> Self {
+        let arr = LazyItemArray::new();
+        let _ = vec.iter().enumerate().map(|(index, value)| {
+            match value {
+                Some(val) => arr.insert(index, val.clone()),
+                None => {}
+            };
+        });
+        return arr;
+    }
+
+    pub fn insert(&self, index: usize, value: LazyItem<T>) {
+        let mut arc = self.items.clone();
+
+        arc.transactional_update(|set| {
+            let mut arr = set.clone();
+            arr[index] = Some(value.clone());
+            arr
+        })
+        .unwrap();
+    }
+
+    pub fn checked_insert(&self, index: usize, value: LazyItem<T>) -> Option<LazyItem<T>> {
+        let mut arc = self.items.clone();
+
+        let (_, new_child) = arc.arcshift.rcu_project(
+            |arr| {
+                (arr.get(index).unwrap().is_none())
+                    .then(|| {
+                        let mut new_arr = arr.clone();
+                        new_arr[index] = Some(value.clone());
+                        Some(new_arr)
+                    })
+                    .flatten()
+            },
+            |item| item.get(index).map(|item| item.clone()),
+        );
+
+        new_child.flatten()
+    }
+
+    pub fn get(&self, index: usize) -> Option<LazyItem<T>> {
+        let mut arc = self.items.clone();
+        arc.get().get(index).cloned().flatten()
+    }
+
+    pub fn is_empty(&mut self) -> bool {
+        let mut arc = self.items.clone();
+        arc.get().iter().all(Option::is_none)
     }
 }
