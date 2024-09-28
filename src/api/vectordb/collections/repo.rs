@@ -15,10 +15,10 @@ pub(crate) async fn create_vector_store(
     size: usize,
     lower_bound: Option<f32>,
     upper_bound: Option<f32>,
-    max_cache_level: u8,
+    num_layers: u8,
 ) -> Result<Arc<VectorStore>, CollectionsError> {
     // Call init_vector_store using web::block
-    let result = init_vector_store(name, size, lower_bound, upper_bound, max_cache_level).await;
+    let result = init_vector_store(name, size, lower_bound, upper_bound, num_layers).await;
     result.map_err(|e| CollectionsError::FailedToCreateCollection(e.to_string()))
 }
 
@@ -34,7 +34,7 @@ pub(crate) async fn get_vector_stores(
         .iter()
         .map(|v| FindCollectionDto {
             id: v.database_name.clone(),
-            dimensions: v.quant_dim,
+            dimensions: v.dim,
             vector_db_name: v.database_name.clone(),
         })
         .collect();

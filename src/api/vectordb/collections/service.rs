@@ -16,12 +16,9 @@ pub(crate) async fn create_collection(
     let size = create_collection_dto.dimensions as usize;
     let lower_bound = create_collection_dto.min_val;
     let upper_bound = create_collection_dto.max_val;
-    // ---------------------------
-    // -- TODO Maximum cache level
-    // ---------------------------
-    let max_cache_level = 5;
+    let num_layers = 5;
 
-    repo::create_vector_store(name, size, lower_bound, upper_bound, max_cache_level).await
+    repo::create_vector_store(name, size, lower_bound, upper_bound, num_layers).await
 }
 
 pub(crate) async fn get_collections(

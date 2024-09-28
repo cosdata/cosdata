@@ -132,6 +132,7 @@ impl MetricResult {
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DistanceMetric {
     Cosine,
     Euclidean,
@@ -369,47 +370,67 @@ pub struct MetaDb {
     pub embeddings_db: Arc<Database>,
 }
 
+#[derive(Debug, Clone)]
+pub struct HNSWHyperParams {
+    pub m: usize,
+    pub ef_construction: usize,
+    pub ef_search: usize,
+    pub num_layers: u8,
+    pub max_cache_size: usize,
+}
+
+impl Default for HNSWHyperParams {
+    fn default() -> Self {
+        Self {
+            m: 16,
+            ef_construction: 100,
+            ef_search: 15,
+            num_layers: 5,
+            max_cache_size: 1000,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct VectorStore {
     pub exec_queue_nodes: ExecQueueUpdate,
-    pub max_cache_level: u8,
     pub database_name: String,
     pub root_vec: LazyItemRef<MergedNode>,
     pub levels_prob: Arc<Vec<(f64, i32)>>,
-    pub quant_dim: usize,
+    pub dim: usize,
     pub prop_file: Arc<File>,
     pub lmdb: MetaDb,
     pub current_version: ArcShift<Hash>,
     pub current_open_transaction: ArcShift<Option<Hash>>,
     pub quantization_metric: ArcShift<QuantizationMetric>,
-    pub distance_metric: Arc<DistanceMetric>,
-    pub storage_type: StorageType,
+    pub distance_metric: ArcShift<DistanceMetric>,
+    pub storage_type: ArcShift<StorageType>,
     pub vcs: Arc<VersionControl>,
+    pub hnsw_params: ArcShift<HNSWHyperParams>,
 }
 
 impl VectorStore {
     pub fn new(
         exec_queue_nodes: ExecQueueUpdate,
-        max_cache_level: u8,
         database_name: String,
         root_vec: LazyItemRef<MergedNode>,
         levels_prob: Arc<Vec<(f64, i32)>>,
-        quant_dim: usize,
+        dim: usize,
         prop_file: Arc<File>,
         lmdb: MetaDb,
         current_version: ArcShift<Hash>,
         quantization_metric: ArcShift<QuantizationMetric>,
-        distance_metric: Arc<DistanceMetric>,
-        storage_type: StorageType,
+        distance_metric: ArcShift<DistanceMetric>,
+        storage_type: ArcShift<StorageType>,
         vcs: Arc<VersionControl>,
+        num_layers: u8,
     ) -> Self {
         VectorStore {
             exec_queue_nodes,
-            max_cache_level,
             database_name,
             root_vec,
             levels_prob,
-            quant_dim,
+            dim,
             prop_file,
             lmdb,
             current_version,
@@ -418,6 +439,10 @@ impl VectorStore {
             distance_metric,
             storage_type,
             vcs,
+            hnsw_params: ArcShift::new(HNSWHyperParams {
+                num_layers,
+                ..Default::default()
+            }),
         }
     }
     // Get method

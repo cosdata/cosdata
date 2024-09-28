@@ -38,7 +38,7 @@ pub async fn init_vector_store(
     size: usize,
     lower_bound: Option<f32>,
     upper_bound: Option<f32>,
-    max_cache_level: u8,
+    num_layers: u8,
 ) -> Result<Arc<VectorStore>, WaCustomError> {
     if name.is_empty() {
         return Err(WaCustomError::InvalidParams);
@@ -100,7 +100,7 @@ pub async fn init_vector_store(
     let mut prev: LazyItemRef<MergedNode> = LazyItemRef::new_invalid();
 
     let mut nodes = Vec::new();
-    for l in (0..=max_cache_level).rev() {
+    for l in (0..=num_layers).rev() {
         let prop = Arc::new(NodeProp {
             id: vec_hash.clone(),
             value: vector_list.clone(),
@@ -151,23 +151,24 @@ pub async fn init_vector_store(
     // -- TODO level entry ratio
     // ---------------------------
     let factor_levels = 10.0;
-    let lp = Arc::new(generate_tuples(factor_levels, max_cache_level));
+    let lp = Arc::new(generate_tuples(factor_levels, num_layers));
 
     let vec_store = Arc::new(VectorStore::new(
         exec_queue_nodes,
-        max_cache_level,
         name.clone(),
         root,
         lp,
-        (size / 32) as usize,
+        size,
         prop_file,
         lmdb,
         ArcShift::new(hash),
         ArcShift::new(quantization_metric),
-        Arc::new(DistanceMetric::Cosine),
-        storage_type,
+        ArcShift::new(DistanceMetric::Cosine),
+        ArcShift::new(storage_type),
         vcs,
+        num_layers,
     ));
+
     ain_env
         .vector_store_map
         .insert(name.clone(), vec_store.clone());
@@ -254,7 +255,7 @@ pub async fn ann_vector_query(
     let root = &vector_store.root_vec;
     let vector_list = vector_store
         .quantization_metric
-        .quantize(&query, vector_store.storage_type)?;
+        .quantize(&query, *vector_store.storage_type.clone().get())?;
 
     let vec_emb = QuantizedVectorEmbedding {
         quantized_vec: Arc::new(vector_list.clone()),
@@ -265,7 +266,13 @@ pub async fn ann_vector_query(
         vec_store.clone(),
         vec_emb,
         root.item.clone().get().clone(),
-        vec_store.max_cache_level.try_into().unwrap(),
+        vec_store
+            .hnsw_params
+            .clone()
+            .get()
+            .num_layers
+            .try_into()
+            .unwrap(),
     )?;
     let output = remove_duplicates_and_filter(results);
     Ok(output)

@@ -1,7 +1,7 @@
 use super::{Quantization, QuantizationError, StorageType};
 use crate::storage::Storage;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ProductQuantization {
     pub centroids: Option<Centroid>,
 }

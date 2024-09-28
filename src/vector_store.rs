@@ -10,6 +10,7 @@ use crate::storage::Storage;
 use arcshift::ArcShift;
 use lmdb::Transaction;
 use lmdb::WriteFlags;
+use rand::{thread_rng, Rng};
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
 use smallvec::SmallVec;
@@ -24,12 +25,8 @@ pub fn ann_search(
     vec_store: Arc<VectorStore>,
     vector_emb: QuantizedVectorEmbedding,
     cur_entry: LazyItem<MergedNode>,
-    cur_level: i8,
+    cur_level: u8,
 ) -> Result<Option<Vec<(LazyItem<MergedNode>, MetricResult)>>, WaCustomError> {
-    if cur_level == -1 {
-        return Ok(Some(vec![]));
-    }
-
     let fvec = vector_emb.quantized_vec.clone();
     let mut skipm = HashSet::new();
     skipm.insert(vector_emb.hash_vec.clone());
@@ -96,12 +93,16 @@ pub fn ann_search(
         z
     };
 
-    let result = ann_search(
-        vec_store.clone(),
-        vector_emb.clone(),
-        z[0].0.clone(),
-        cur_level - 1,
-    )?;
+    let result = if cur_level == 0 {
+        Some(vec![])
+    } else {
+        ann_search(
+            vec_store.clone(),
+            vector_emb.clone(),
+            z[0].0.clone(),
+            cur_level - 1,
+        )?
+    };
 
     Ok(add_option_vecs(&result, &Some(z)))
 }
@@ -112,7 +113,7 @@ pub fn vector_fetch(
 ) -> Result<Vec<Option<(VectorId, Vec<(VectorId, MetricResult)>)>>, WaCustomError> {
     let mut results = Vec::new();
 
-    for lev in 0..vec_store.max_cache_level {
+    for lev in 0..=vec_store.hnsw_params.clone().get().num_layers {
         let maybe_res = load_vector_id_lsmdb(HNSWLevel(lev), vector_id.clone());
         let neighbors = match maybe_res {
             LazyItem::Valid {
@@ -175,6 +176,7 @@ pub fn vector_fetch(
     }
     Ok(results)
 }
+
 fn load_node_from_persist(
     _offset: FileIndex,
     _vec_store: &Arc<VectorStore>,
@@ -528,7 +530,7 @@ pub fn index_embeddings(
                 let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
                 let quantized_vec = Arc::new(
                     quantization
-                        .quantize(&raw_emb.raw_vec, vec_store.storage_type)
+                        .quantize(&raw_emb.raw_vec, *vec_store.storage_type.clone().get())
                         .expect("Quantization failed"),
                 );
                 let embedding = QuantizedVectorEmbedding {
@@ -541,7 +543,7 @@ pub fn index_embeddings(
                     None,
                     embedding,
                     vec_store.root_vec.item.clone().get().clone(),
-                    vec_store.max_cache_level.try_into().unwrap(),
+                    vec_store.hnsw_params.clone().num_layers.try_into().unwrap(),
                     iv.try_into().unwrap(),
                     version,
                 )
@@ -658,14 +660,10 @@ pub fn index_embedding(
     parent: Option<LazyItem<MergedNode>>,
     vector_emb: QuantizedVectorEmbedding,
     cur_entry: LazyItem<MergedNode>,
-    cur_level: i8,
-    max_insert_level: i8,
+    cur_level: u8,
+    max_insert_level: u8,
     version: Hash,
 ) -> Result<(), WaCustomError> {
-    if cur_level == -1 {
-        return Ok(());
-    }
-
     let fvec = vector_emb.quantized_vec.clone();
     let mut skipm = HashSet::new();
     skipm.insert(vector_emb.hash_vec.clone());
@@ -743,7 +741,7 @@ pub fn index_embedding(
 
     let z_clone: Vec<_> = z.iter().map(|(first, _)| first.clone()).collect();
 
-    if cur_level <= max_insert_level {
+    let parent = if cur_level <= max_insert_level {
         let parent = insert_node_create_edges(
             vec_store.clone(),
             parent,
@@ -754,19 +752,15 @@ pub fn index_embedding(
             version,
         )
         .expect("Failed insert_node_create_edges");
-        index_embedding(
-            vec_store.clone(),
-            Some(parent),
-            vector_emb.clone(),
-            z_clone[0].clone(),
-            cur_level - 1,
-            max_insert_level,
-            version,
-        )?;
+        Some(parent)
     } else {
+        None
+    };
+
+    if cur_level != 0 {
         index_embedding(
             vec_store.clone(),
-            None,
+            parent,
             vector_emb.clone(),
             z_clone[0].clone(),
             cur_level - 1,
@@ -874,7 +868,7 @@ fn insert_node_create_edges(
     fvec: Arc<Storage>,
     hs: VectorId,
     nbs: Vec<(LazyItem<MergedNode>, MetricResult)>,
-    cur_level: i8,
+    cur_level: u8,
     version: Hash,
 ) -> Result<LazyItem<MergedNode>, WaCustomError> {
     let node_prop = NodeProp {
@@ -882,7 +876,7 @@ fn insert_node_create_edges(
         value: fvec.clone(),
         location: None,
     };
-    let mut nn = ArcShift::new(MergedNode::new(HNSWLevel(cur_level as u8)));
+    let mut nn = ArcShift::new(MergedNode::new(HNSWLevel(cur_level)));
     nn.get().set_prop_ready(Arc::new(node_prop));
     nn.get().add_ready_neighbors(nbs.clone());
 
@@ -909,7 +903,7 @@ fn insert_node_create_edges(
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
 
-            neighbor_list.truncate(20);
+            neighbor_list.truncate(vec_store.hnsw_params.clone().get().m);
 
             nbr1_node.get().add_ready_neighbors(neighbor_list);
         }
@@ -931,7 +925,7 @@ fn traverse_find_nearest(
     hs: VectorId,
     hops: u8,
     skipm: &mut HashSet<VectorId>,
-    cur_level: i8,
+    cur_level: u8,
     skip_hop: bool,
 ) -> Result<Vec<(LazyItem<MergedNode>, MetricResult)>, WaCustomError> {
     let mut tasks: SmallVec<[Vec<(LazyItem<MergedNode>, MetricResult)>; 24]> = SmallVec::new();
@@ -1006,7 +1000,12 @@ fn traverse_find_nearest(
                     .calculate(&fvec, &node_prop.value)?;
 
                 let full_hops = 30;
-                if hops <= tapered_total_hops(full_hops, cur_level as u8, vec_store.max_cache_level)
+                if hops
+                    <= tapered_total_hops(
+                        full_hops,
+                        cur_level,
+                        vec_store.hnsw_params.clone().get().num_layers,
+                    )
                 {
                     let mut z = traverse_find_nearest(
                         vec_store.clone(),
@@ -1051,6 +1050,30 @@ fn traverse_find_nearest(
     });
 
     Ok(nn.into_iter().take(5).collect())
+}
+
+// TODO(a-rustacean): finish it!!
+pub fn reindex_embeddings(vec_store: Arc<VectorStore>) -> Result<(), WaCustomError> {
+    // TODO(a-rustacean): store the min & max in the `VectorStore` in the collection creation step and use here
+    let min = -1.0;
+    let max = 1.0;
+    let vec = (0..vec_store.dim)
+        .map(|_| {
+            let mut rng = thread_rng();
+
+            let number: f32 = rng.gen_range(min..max);
+            number
+        })
+        .collect::<Vec<f32>>();
+    let vec_hash = VectorId::Int(-1);
+    let mut quantization_metric_arc = vec_store.quantization_metric.clone();
+    let quantization_metric = quantization_metric_arc.get();
+
+    let vector_list =
+        Arc::new(quantization_metric.quantize(&vec, *vec_store.storage_type.clone().get())?);
+
+    // TODO(a-rustacean): implement the rest
+    todo!()
 }
 
 #[cfg(test)]

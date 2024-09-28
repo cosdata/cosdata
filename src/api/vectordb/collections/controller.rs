@@ -1,7 +1,4 @@
-use actix_web::{
-    web::{self},
-    HttpResponse, Result,
-};
+use actix_web::{web, HttpResponse, Result};
 
 use super::{
     dtos::{
@@ -20,7 +17,7 @@ pub(crate) async fn create_collection(
 
     Ok(HttpResponse::Ok().json(CreateCollectionDtoResponse {
         id: collection.database_name.clone(), // will use the vector store name , till it does have a unique id
-        dimensions: collection.quant_dim,
+        dimensions: collection.dim,
         max_val: lower_bound,
         min_val: upper_bound,
         name: collection.database_name.clone(),
@@ -38,16 +35,18 @@ pub(crate) async fn get_collection_by_id(collection_id: web::Path<String>) -> Re
     let collection = service::get_collection_by_id(&collection_id).await?;
     Ok(HttpResponse::Ok().json(FindCollectionDto {
         id: collection.database_name.clone(),
-        dimensions: collection.quant_dim,
+        dimensions: collection.dim,
         vector_db_name: collection.database_name.clone(),
     }))
 }
 
-pub(crate) async fn delete_collection_by_id(collection_id: web::Path<String>) -> Result<HttpResponse> {
+pub(crate) async fn delete_collection_by_id(
+    collection_id: web::Path<String>,
+) -> Result<HttpResponse> {
     let collection = service::delete_collection_by_id(&collection_id).await?;
     Ok(HttpResponse::Ok().json(FindCollectionDto {
         id: collection.database_name.clone(),
-        dimensions: collection.quant_dim,
+        dimensions: collection.dim,
         vector_db_name: collection.database_name.clone(),
     }))
 }
