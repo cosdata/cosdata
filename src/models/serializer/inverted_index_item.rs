@@ -10,7 +10,7 @@ use crate::{
     models::{
         buffered_io::{BufIoError, BufferManagerFactory},
         cache_loader::{Cacheable, NodeRegistry},
-        lazy_load::{FileIndex, LazyItemMap},
+        lazy_load::FileIndex,
         types::FileOffset,
         versioning::Hash,
     },
@@ -88,7 +88,7 @@ where
                     offset: FileOffset(children_offset),
                     version,
                 };
-                let lazy_children = LazyItemMap::deserialize(
+                let lazy_children = LazyItemArray::deserialize(
                     bufmans,
                     children_file_index,
                     cache,

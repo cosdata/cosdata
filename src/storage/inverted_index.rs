@@ -8,7 +8,7 @@ use dashmap::DashMap;
 use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::cache_loader::{Cacheable, NodeRegistry};
 use crate::models::identity_collections::IdentityMapKey;
-use crate::models::lazy_load::{LazyItem, LazyItemArray, LazyItemMap};
+use crate::models::lazy_load::{LazyItem, LazyItemArray};
 use crate::models::serializer::CustomSerialize;
 use crate::models::types::SparseVector;
 
@@ -217,9 +217,7 @@ where
         let mut current_node = self.root.clone();
         let path = calculate_path(dim_index, self.root.dim_index);
         for child_index in path {
-            let child = current_node
-                .lazy_children
-                .get(&IdentityMapKey::Int(child_index as u32))?;
+            let child = current_node.lazy_children.get(child_index)?;
             current_node = child.get_data(self.cache.clone());
         }
 
