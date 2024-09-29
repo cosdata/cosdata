@@ -819,6 +819,88 @@ fn test_storage_serialization() {
     }
 }
 
+#[test]
+fn test_lazy_item_vec_serialization() {
+    let root_version = Hash::from(0);
+    let lazy_items = LazyItemVec::new();
+
+    lazy_items.push(LazyItem::from_data(1.into(), MergedNode::new(HNSWLevel(2))));
+    lazy_items.push(LazyItem::from_data(2.into(), MergedNode::new(HNSWLevel(2))));
+
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version);
+
+    let offset = lazy_items.serialize(bufmans, root_version, cursor).unwrap();
+    bufman.close_cursor(cursor).unwrap();
+    let file_index = FileIndex::Valid {
+        offset: FileOffset(offset),
+        version: root_version,
+    };
+
+    let deserialized: LazyItemSet<MergedNode> = cache.load_item(file_index).unwrap();
+
+    assert_eq!(lazy_items.len(), deserialized.len());
+    for (original, deserialized) in lazy_items.iter().zip(deserialized.iter()) {
+        match (original, deserialized) {
+            (
+                LazyItem::Valid {
+                    data: Some(mut original_arc),
+                    ..
+                },
+                LazyItem::Valid {
+                    data: Some(mut deserialized_arc),
+                    ..
+                },
+            ) => {
+                let original = original_arc.get();
+                let deserialized = deserialized_arc.get();
+                assert_eq!(original.hnsw_level, deserialized.hnsw_level);
+            }
+            _ => panic!("Deserialization mismatch"),
+        }
+    }
+}
+
+#[test]
+fn test_lazy_item_vec_linked_chunk_serialization() {
+    let root_version = Hash::from(0);
+    let lazy_items = LazyItemVec::new();
+    for i in 1..13 {
+        lazy_items.push(LazyItem::from_data(i.into(), MergedNode::new(HNSWLevel(2))));
+    }
+
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version);
+
+    let offset = lazy_items.serialize(bufmans, root_version, cursor).unwrap();
+    let file_index = FileIndex::Valid {
+        offset: FileOffset(offset),
+        version: root_version,
+    };
+    bufman.close_cursor(cursor).unwrap();
+
+    let deserialized: LazyItemSet<MergedNode> = cache.load_item(file_index).unwrap();
+
+    assert_eq!(lazy_items.len(), deserialized.len());
+    for (original, deserialized) in lazy_items.iter().zip(deserialized.iter()) {
+        match (original, deserialized) {
+            (
+                LazyItem::Valid {
+                    data: Some(mut original_arc),
+                    ..
+                },
+                LazyItem::Valid {
+                    data: Some(mut deserialized_arc),
+                    ..
+                },
+            ) => {
+                let original = original_arc.get();
+                let deserialized = deserialized_arc.get();
+                assert_eq!(original.hnsw_level, deserialized.hnsw_level);
+            }
+            _ => panic!("Deserialization mismatch"),
+        }
+    }
+}
+
 // #[test]
 // fn test_inverted_index_item_serialization() {
 //     let item = InvertedIndex::new();
