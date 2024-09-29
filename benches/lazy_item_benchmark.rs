@@ -103,9 +103,6 @@ fn lazy_item_benchmark(c: &mut Criterion) {
             }
         });
     });
-
-
-
 }
 
 criterion_group!(benches, lazy_item_benchmark);

@@ -94,3 +94,7 @@ harness = false
 [[bench]]
 name = "lazy_item_benchmark"
 harness = false
+
+[[bench]]
+name = "knn_query_benchmark"
+harness = false
