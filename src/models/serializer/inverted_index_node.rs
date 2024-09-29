@@ -14,15 +14,15 @@ use crate::{
         types::FileOffset,
         versioning::Hash,
     },
-    storage::inverted_index::InvertedIndexItem,
+    storage::inverted_index::InvertedIndexNode,
 };
 
 use super::CustomSerialize;
 
-impl<T> CustomSerialize for InvertedIndexItem<T>
+impl<T> CustomSerialize for InvertedIndexNode<T>
 where
     T: Cacheable + CustomSerialize + Clone + 'static,
-    InvertedIndexItem<T>: Cacheable,
+    InvertedIndexNode<T>: Cacheable,
 {
     fn serialize(
         &self,

@@ -9,7 +9,7 @@ use crate::{
         lazy_load::FileIndex,
         versioning::Hash,
     },
-    storage::inverted_index::{InvertedIndex, InvertedIndexItem},
+    storage::inverted_index::{InvertedIndex, InvertedIndexNode},
 };
 
 use super::CustomSerialize;
@@ -17,7 +17,7 @@ use super::CustomSerialize;
 impl<T> CustomSerialize for InvertedIndex<T>
 where
     T: Clone + CustomSerialize + 'static,
-    InvertedIndexItem<T>: CustomSerialize,
+    InvertedIndexNode<T>: CustomSerialize,
 {
     fn serialize(
         &self,
@@ -36,10 +36,11 @@ where
         max_loads: u16,
         skipm: &mut HashSet<u64>,
     ) -> Result<Self, BufIoError> {
-        let root = InvertedIndexItem::deserialize(bufmans, file_index, cache.clone(), max_loads, skipm)?;
+        let root =
+            InvertedIndexNode::deserialize(bufmans, file_index, cache.clone(), max_loads, skipm)?;
         Ok(Self {
             root: ArcShift::new(root),
-            cache
+            cache,
         })
     }
 }

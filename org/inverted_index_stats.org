@@ -6,15 +6,15 @@ use std::sync::{Arc, Mutex};
 use rand::Rng;
 
 #[derive(Debug)]
-struct InvertedIndexItem {
+struct InvertedIndexNode {
     dim_index: u32,
     explicit: bool,
-    pointers: Vec<Option<Arc<Mutex<InvertedIndexItem>>>>,
+    pointers: Vec<Option<Arc<Mutex<InvertedIndexNode>>>>,
 }
 
-impl InvertedIndexItem {
+impl InvertedIndexNode {
     fn new(dim_index: u32, explicit: bool) -> Self {
-        InvertedIndexItem {
+        InvertedIndexNode {
             dim_index,
             explicit,
             pointers: vec![None; 8], // Space for exponents 0 to 7 (1 to 16384)
@@ -39,7 +39,7 @@ impl InvertedIndexItem {
             let (_, exponent) = path[path_index];
             let new_dim_index = self.dim_index + 4u32.pow(exponent);
             if new_dim_index == target_dim_index {
-                let new_item = Arc::new(Mutex::new(InvertedIndexItem::new(new_dim_index, true)));
+                let new_item = Arc::new(Mutex::new(InvertedIndexNode::new(new_dim_index, true)));
                 self.pointers[exponent as usize] = Some(new_item);
                 return Ok(());
             }
@@ -49,7 +49,7 @@ impl InvertedIndexItem {
         let next_dim_index = self.dim_index + 4u32.pow(exponent);
 
         if self.pointers[exponent as usize].is_none() {
-            let new_item = Arc::new(Mutex::new(InvertedIndexItem::new(next_dim_index, false)));
+            let new_item = Arc::new(Mutex::new(InvertedIndexNode::new(next_dim_index, false)));
             self.pointers[exponent as usize] = Some(new_item);
         }
 
@@ -73,13 +73,13 @@ impl InvertedIndexItem {
 }
 
 struct InvertedIndex {
-    root: Arc<Mutex<InvertedIndexItem>>,
+    root: Arc<Mutex<InvertedIndexNode>>,
 }
 
 impl InvertedIndex {
     fn new() -> Self {
         InvertedIndex {
-            root: Arc::new(Mutex::new(InvertedIndexItem::new(0, true)))
+            root: Arc::new(Mutex::new(InvertedIndexNode::new(0, true)))
         }
     }
 
@@ -92,7 +92,7 @@ impl InvertedIndex {
     }
 
     fn count_nodes(&self) -> (u32, u32) {
-        fn count_recursive(node: &InvertedIndexItem) -> (u32, u32) {
+        fn count_recursive(node: &InvertedIndexNode) -> (u32, u32) {
             let mut implicit = 0;
             let mut explicit = 0;
 
@@ -169,7 +169,7 @@ The statistics computation in this code is performed by the `count_nodes` method
 
 1. The `count_nodes` method initializes the counting process by calling a recursive helper function `count_recursive` on the root node of the inverted index.
 
-2. The `count_recursive` function takes an `InvertedIndexItem` as input and returns a tuple of two `u32` values: (implicit_count, explicit_count).
+2. The `count_recursive` function takes an `InvertedIndexNode` as input and returns a tuple of two `u32` values: (implicit_count, explicit_count).
 
 3. For each node, the function first checks if it's explicit or implicit:
    - If explicit, it increments the explicit count.

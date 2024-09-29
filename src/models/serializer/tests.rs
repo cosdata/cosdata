@@ -902,6 +902,6 @@ fn test_lazy_item_vec_linked_chunk_serialization() {
 }
 
 // #[test]
-// fn test_inverted_index_item_serialization() {
+// fn test_inverted_index_node_serialization() {
 //     let item = InvertedIndex::new();
 // }

@@ -2,24 +2,24 @@
 
 ** Overview
 This Rust code implements an inverted index data structure using a tree-like structure. The main components are:
-- InvertedIndexItem: Represents a node in the tree
+- InvertedIndexNode: Represents a node in the tree
 - InvertedIndex: The main data structure that holds the root node
 - Helper functions for tree traversal and power-of-4 calculations
 
 ** Data Structures
 
-*** InvertedIndexItem
+*** InvertedIndexNode
 #+BEGIN_SRC rust
 #[derive(Debug)]
-struct InvertedIndexItem {
+struct InvertedIndexNode {
     dim_index: u32,
     implicit: bool,
-    pointers: Vec<Option<Arc<Mutex<InvertedIndexItem>>>>,
+    pointers: Vec<Option<Arc<Mutex<InvertedIndexNode>>>>,
 }
 
-impl InvertedIndexItem {
+impl InvertedIndexNode {
     fn new(dim_index: u32, implicit: bool) -> Self {
-        InvertedIndexItem {
+        InvertedIndexNode {
             dim_index,
             implicit,
             pointers: vec![None; 8], // Space for exponents 0 to 7 (1 to 16384)
@@ -46,7 +46,7 @@ impl InvertedIndexItem {
         let next_dim_index = self.dim_index + 4u32.pow(exponent);
 
         if self.pointers[exponent as usize].is_none() {
-            let new_item = Arc::new(Mutex::new(InvertedIndexItem::new(next_dim_index, true)));
+            let new_item = Arc::new(Mutex::new(InvertedIndexNode::new(next_dim_index, true)));
             self.pointers[exponent as usize] = Some(new_item);
         }
 
@@ -74,13 +74,13 @@ impl InvertedIndexItem {
 *** InvertedIndex
 #+BEGIN_SRC rust
 struct InvertedIndex {
-    root: Arc<Mutex<InvertedIndexItem>>,
+    root: Arc<Mutex<InvertedIndexNode>>,
 }
 
 impl InvertedIndex {
     fn new() -> Self {
         InvertedIndex {
-            root: Arc::new(Mutex::new(InvertedIndexItem::new(0, false)))
+            root: Arc::new(Mutex::new(InvertedIndexNode::new(0, false)))
         }
     }
 

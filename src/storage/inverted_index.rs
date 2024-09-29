@@ -43,7 +43,7 @@ fn calculate_path(target_dim_index: u32, current_dim_index: u32) -> Vec<usize> {
     path
 }
 
-/// [InvertedIndexItem] stores non-zero values at `dim_index` dimension of all input vectors
+/// [InvertedIndexNode] stores non-zero values at `dim_index` dimension of all input vectors
 ///
 /// The `InvertedIndex` struct uses [LazyItemMap] to store data and
 /// references to children.
@@ -52,25 +52,26 @@ fn calculate_path(target_dim_index: u32, current_dim_index: u32) -> Vec<usize> {
 /// data until it is actually needed. This can be beneficial when dealing with large amounts of data
 /// or when the data is expensive to load.
 #[derive(Clone)]
-pub struct InvertedIndexItem<T>
+pub struct InvertedIndexNode<T>
+// Earlier InvertedIndexItem
 where
     T: Clone + 'static,
 {
     pub dim_index: u32,
     pub implicit: bool,
     pub data: Arc<DashMap<IdentityMapKey, LazyItem<T>>>,
-    pub lazy_children: LazyItemArray<InvertedIndexItem<T>, 16>,
+    pub lazy_children: LazyItemArray<InvertedIndexNode<T>, 16>,
 }
 
-impl<T> InvertedIndexItem<T>
+impl<T> InvertedIndexNode<T>
 where
     T: Clone + Cacheable + CustomSerialize + 'static,
-    InvertedIndexItem<T>: CustomSerialize,
+    InvertedIndexNode<T>: CustomSerialize,
 {
-    /// Creates a new `InvertedIndexItem` with the given dimension index and implicit flag.
+    /// Creates a new `InvertedIndexNode` with the given dimension index and implicit flag.
     /// Initializes the data vector and children array.
     pub fn new(dim_index: u32, implicit: bool) -> Self {
-        InvertedIndexItem {
+        InvertedIndexNode {
             dim_index,
             implicit,
             data: Arc::new(DashMap::new()),
@@ -81,14 +82,14 @@ where
     /// Finds or creates the node where the data should be inserted.
     /// Traverses the tree iteratively and returns a reference to the node.
     fn find_or_create_node(
-        node: ArcShift<InvertedIndexItem<T>>,
+        node: ArcShift<InvertedIndexNode<T>>,
         path: &[usize],
         cache: Arc<NodeRegistry>,
-    ) -> ArcShift<InvertedIndexItem<T>> {
+    ) -> ArcShift<InvertedIndexNode<T>> {
         let mut current_node = node;
         for &child_index in path {
             let new_dim_index = current_node.dim_index + POWERS_OF_4[child_index];
-            let new_child = LazyItem::new(0.into(), InvertedIndexItem::new(new_dim_index, true));
+            let new_child = LazyItem::new(0.into(), InvertedIndexNode::new(new_dim_index, true));
             loop {
                 if let Some(child) = current_node
                     .lazy_children
@@ -105,7 +106,7 @@ where
 
     /// Inserts a value into the index at the specified dimension index.
     /// Calculates the path and delegates to `insert_with_path`.
-    pub fn insert(node: ArcShift<InvertedIndexItem<T>>, value: T, vector_id: u32) {
+    pub fn insert(node: ArcShift<InvertedIndexNode<T>>, value: T, vector_id: u32) {
         let key = IdentityMapKey::Int(vector_id);
         let value = LazyItem::new(0.into(), value.clone());
         node.data.insert(key, value);
@@ -138,7 +139,7 @@ where
     }
 }
 
-impl<T> InvertedIndexItem<T>
+impl<T> InvertedIndexNode<T>
 where
     T: Debug + CustomSerialize + Clone,
 {
@@ -189,14 +190,14 @@ pub struct InvertedIndex<T>
 where
     T: Clone + 'static,
 {
-    pub root: ArcShift<InvertedIndexItem<T>>,
+    pub root: ArcShift<InvertedIndexNode<T>>,
     pub cache: Arc<NodeRegistry>,
 }
 
 impl<T> InvertedIndex<T>
 where
     T: Cacheable + Clone + CustomSerialize + 'static,
-    InvertedIndexItem<T>: CustomSerialize,
+    InvertedIndexNode<T>: CustomSerialize,
 {
     /// Creates a new `InvertedIndex` with an initial root node.
     pub fn new() -> Self {
@@ -206,14 +207,14 @@ where
         ));
         let cache = Arc::new(NodeRegistry::new(1000, bufmans));
         InvertedIndex {
-            root: ArcShift::new(InvertedIndexItem::new(0, false)),
+            root: ArcShift::new(InvertedIndexNode::new(0, false)),
             cache,
         }
     }
 
     /// Finds the node at a given dimension
     /// Traverses the tree iteratively and returns a reference to the node.
-    pub fn find_node(&self, dim_index: u32) -> Option<ArcShift<InvertedIndexItem<T>>> {
+    pub fn find_node(&self, dim_index: u32) -> Option<ArcShift<InvertedIndexNode<T>>> {
         let mut current_node = self.root.clone();
         let path = calculate_path(dim_index, self.root.dim_index);
         for child_index in path {
@@ -237,8 +238,8 @@ where
     pub fn insert(&self, dim_index: u32, value: T, vector_id: u32) {
         let path = calculate_path(dim_index, self.root.dim_index);
         let node =
-            InvertedIndexItem::find_or_create_node(self.root.clone(), &path, self.cache.clone());
-        InvertedIndexItem::insert(node, value, vector_id)
+            InvertedIndexNode::find_or_create_node(self.root.clone(), &path, self.cache.clone());
+        InvertedIndexNode::insert(node, value, vector_id)
     }
 }
 
@@ -406,8 +407,8 @@ mod test {
     #[test]
     fn test_find_or_create_race_condition() {
         for _ in 0..1000 {
-            let root: ArcShift<InvertedIndexItem<f32>> =
-                ArcShift::new(InvertedIndexItem::new(0, false));
+            let root: ArcShift<InvertedIndexNode<f32>> =
+                ArcShift::new(InvertedIndexNode::new(0, false));
             let root_clone1 = root.clone();
             let mut root_clone2 = root.clone();
             let bufmans = Arc::new(BufferManagerFactory::new(
@@ -422,7 +423,7 @@ mod test {
             // Creates child 1 in depth 1 and child 0 in depth 0.
             let handle2 = thread::spawn(move || {
                 let path = vec![0, 1];
-                InvertedIndexItem::find_or_create_node(root_clone1, &path, cache1);
+                InvertedIndexNode::find_or_create_node(root_clone1, &path, cache1);
             });
 
             // Insert a value for dimension 1
@@ -430,7 +431,7 @@ mod test {
             // Can overwrite child 0's children created by handle 2
             let handle1 = thread::spawn(move || {
                 let path = vec![0];
-                InvertedIndexItem::find_or_create_node(root, &path, cache2);
+                InvertedIndexNode::find_or_create_node(root, &path, cache2);
             });
 
             handle1.join().unwrap();

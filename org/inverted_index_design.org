@@ -50,7 +50,7 @@ We'll use a modified version of the ~InvertedIndex~ structure from the [[./inver
 
 #+BEGIN_SRC rust
 struct InvertedIndex {
-    root: Arc<Mutex<InvertedIndexItem>>,
+    root: Arc<Mutex<InvertedIndexNode>>,
 }
 #+END_SRC
 
@@ -68,7 +68,7 @@ let inverted_index = InvertedIndex::new();
 fn add_dim_index(&self, dim_index: u32, value: f32, vector_id: u32) -> Result<(), String> {
     // Implementation needed:
     // - Modify the existing add_dim_index method to include value and vector_id
-    // - Update the InvertedIndexItem structure to store (value, vector_id) tuples
+    // - Update the InvertedIndexNode structure to store (value, vector_id) tuples
     // - Adjust the insertion logic to handle the additional data
 }
 
@@ -76,7 +76,7 @@ fn add_dim_index(&self, dim_index: u32, value: f32, vector_id: u32) -> Result<()
 inverted_index.add_dim_index(dimension_index, value, vector_id)?;
 #+END_SRC
 
-Note: The existing code in inverted_index_ds.org will need to be modified to accommodate this change. The ~InvertedIndexItem~ structure should be updated to store a list of (value, vector_id) tuples, and the insertion logic should be adjusted accordingly.
+Note: The existing code in inverted_index_ds.org will need to be modified to accommodate this change. The ~InvertedIndexNode~ structure should be updated to store a list of (value, vector_id) tuples, and the insertion logic should be adjusted accordingly.
 
 3. Create a quantized property list:
 

@@ -2,7 +2,7 @@ mod dashmap;
 mod eager_lazy_item;
 mod eager_lazy_item_set;
 mod inverted_index;
-mod inverted_index_item;
+mod inverted_index_node;
 mod lazy_item;
 mod lazy_item_array;
 mod lazy_item_map;

@@ -1,5 +1,5 @@
 use crate::models::lru_cache::CachedValue;
-use crate::storage::inverted_index::InvertedIndexItem;
+use crate::storage::inverted_index::InvertedIndexNode;
 use crate::storage::Storage;
 
 use super::buffered_io::{BufIoError, BufferManagerFactory};
@@ -19,9 +19,9 @@ use std::sync::{atomic::AtomicBool, Arc, RwLock};
 pub enum CacheItem {
     MergedNode(LazyItem<MergedNode>),
     Storage(LazyItem<Storage>),
-    InvertedIndexItemWithStorage(LazyItem<InvertedIndexItem<Storage>>),
+    InvertedIndexNodeWithStorage(LazyItem<InvertedIndexNode<Storage>>),
     Float(LazyItem<f32>),
-    InvertedIndexItemWithFloat(LazyItem<InvertedIndexItem<f32>>),
+    InvertedIndexNodeWithFloat(LazyItem<InvertedIndexNode<f32>>),
 }
 
 pub trait Cacheable: Clone + 'static {
@@ -57,9 +57,9 @@ impl Cacheable for Storage {
     }
 }
 
-impl Cacheable for InvertedIndexItem<Storage> {
+impl Cacheable for InvertedIndexNode<Storage> {
     fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
-        if let CacheItem::InvertedIndexItemWithStorage(item) = cache_item {
+        if let CacheItem::InvertedIndexNodeWithStorage(item) = cache_item {
             Some(item)
         } else {
             None
@@ -67,7 +67,7 @@ impl Cacheable for InvertedIndexItem<Storage> {
     }
 
     fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
-        CacheItem::InvertedIndexItemWithStorage(item)
+        CacheItem::InvertedIndexNodeWithStorage(item)
     }
 }
 
@@ -85,9 +85,9 @@ impl Cacheable for f32 {
     }
 }
 
-impl Cacheable for InvertedIndexItem<f32> {
+impl Cacheable for InvertedIndexNode<f32> {
     fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
-        if let CacheItem::InvertedIndexItemWithFloat(item) = cache_item {
+        if let CacheItem::InvertedIndexNodeWithFloat(item) = cache_item {
             Some(item)
         } else {
             None
@@ -95,7 +95,7 @@ impl Cacheable for InvertedIndexItem<f32> {
     }
 
     fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
-        CacheItem::InvertedIndexItemWithFloat(item)
+        CacheItem::InvertedIndexNodeWithFloat(item)
     }
 }
 
