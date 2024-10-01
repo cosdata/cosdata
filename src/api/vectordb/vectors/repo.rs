@@ -20,8 +20,6 @@ pub(crate) async fn create_vector(
         .await
         .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
 
-    // error cases that happens within run_upload is not handled
-    // this method always return a successful response with the data sent by the user
     run_upload(
         collection,
         vec![(
@@ -29,7 +27,7 @@ pub(crate) async fn create_vector(
             create_vector_dto.values.clone(),
         )],
         config,
-    );
+    ).map_err(VectorsError::WaCustom)?;
     Ok(CreateVectorResponseDto {
         id: create_vector_dto.id,
         values: create_vector_dto.values,
@@ -53,13 +51,11 @@ pub(crate) async fn update_vector(
         .await
         .map_err(|e| VectorsError::FailedToUpdateVector(e.to_string()))?;
 
-    // error cases that happens within run_upload is not handled
-    // this method always return a successful response with the data sent by the user
     run_upload(
         collection,
         vec![(vector_id.clone(), update_vector_dto.values.clone())],
         config,
-    );
+    ).map_err(VectorsError::WaCustom)?;
     Ok(UpdateVectorResponseDto {
         id: vector_id,
         values: update_vector_dto.values,
