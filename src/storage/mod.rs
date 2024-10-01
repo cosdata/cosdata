@@ -1,5 +1,7 @@
-pub mod inverted_index;
-pub mod knn_query;
+pub mod inverted_index_new;
+pub mod inverted_index_old;
+pub mod knn_query_new;
+pub mod knn_query_old;
 
 use half::f16;
 use serde::{Deserialize, Serialize};

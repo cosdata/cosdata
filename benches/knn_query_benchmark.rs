@@ -1,7 +1,7 @@
 use cosdata::models::types::SparseVector;
 use cosdata::storage::{
-    inverted_index::InvertedIndex,
-    knn_query::{KNNQuery, KNNResult},
+    inverted_index_old::InvertedIndex,
+    knn_query_old::{KNNQuery, KNNResult},
 };
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use rand::{rngs::StdRng, Rng, SeedableRng};
