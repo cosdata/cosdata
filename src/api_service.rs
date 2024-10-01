@@ -201,7 +201,7 @@ pub fn run_upload(
     let metadata_db = vec_store.lmdb.metadata_db.clone();
 
     let txn = env
-        .begin_rw_txn()
+        .begin_ro_txn()
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
     let count_unindexed = txn
