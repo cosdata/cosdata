@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use crate::{
     api::vectordb::collections, api_service::run_upload, config_loader::Config,
     models::rpc::VectorIdValue,
@@ -16,7 +14,7 @@ use super::{
 pub(crate) async fn create_vector(
     collection_id: &str,
     create_vector_dto: CreateVectorDto,
-    config: Arc<Config>,
+    config: &Config,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
     let collection = collections::service::get_collection_by_id(collection_id)
         .await
@@ -49,7 +47,7 @@ pub(crate) async fn update_vector(
     collection_id: &str,
     vector_id: VectorIdValue,
     update_vector_dto: UpdateVectorDto,
-    config: Arc<Config>,
+    config: &Config,
 ) -> Result<UpdateVectorResponseDto, VectorsError> {
     let collection = collections::service::get_collection_by_id(collection_id)
         .await

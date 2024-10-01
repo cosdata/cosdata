@@ -166,7 +166,7 @@ pub async fn init_vector_store(
 pub fn run_upload(
     vec_store: Arc<VectorStore>,
     vecs: Vec<(VectorIdValue, Vec<f32>)>,
-    config: Arc<Config>,
+    config: &Config,
 ) -> Result<(), WaCustomError> {
     let current_version = vec_store.get_current_version();
     let next_version = vec_store
