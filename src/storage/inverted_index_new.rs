@@ -41,6 +41,8 @@ fn calculate_path(target_dim_index: u32, current_dim_index: u32) -> Vec<usize> {
     path
 }
 
+/// [InvertedIndexNode] (earlier InvertedIndexItem) is a node in InvertedIndexNew structure
+/// data in InvertedIndexNode holds list of Vec_Ids corresponding to the quantized u8 value (which is the index of array)
 #[derive(Clone)]
 pub struct InvertedIndexNode {
     pub dim_index: u32,
@@ -135,6 +137,7 @@ impl InvertedIndexNode {
     }
 }
 
+/// [InvertedIndexNew] is a improved version which only holds quantized u8 values instead of f32 inside [InvertedIndexNode]
 #[derive(Clone)]
 pub struct InvertedIndexNew {
     pub root: ArcShift<InvertedIndexNode>,
@@ -167,12 +170,14 @@ impl InvertedIndexNew {
         Some(current_node)
     }
 
+    //Fetches quantized u8 value for a dim_index and vector_Id present at respective node in index
     pub fn get(&self, dim_index: u32, vector_id: u32) -> Option<u8> {
         self.root
             .shared_get()
             .get(dim_index, vector_id, self.cache.clone())
     }
 
+    //Inserts vec_id, quantized value u8 at particular node based on path
     pub fn insert(&self, dim_index: u32, value: f32, vector_id: u32) {
         let path = calculate_path(dim_index, self.root.dim_index);
         let node =
