@@ -9,7 +9,7 @@ use crate::{
         lazy_load::FileIndex,
         versioning::Hash,
     },
-    storage::inverted_index::{InvertedIndex, InvertedIndexItem},
+    storage::inverted_index_old::{InvertedIndex, InvertedIndexItem},
 };
 
 use super::CustomSerialize;
@@ -36,10 +36,11 @@ where
         max_loads: u16,
         skipm: &mut HashSet<u64>,
     ) -> Result<Self, BufIoError> {
-        let root = InvertedIndexItem::deserialize(bufmans, file_index, cache.clone(), max_loads, skipm)?;
+        let root =
+            InvertedIndexItem::deserialize(bufmans, file_index, cache.clone(), max_loads, skipm)?;
         Ok(Self {
             root: ArcShift::new(root),
-            cache
+            cache,
         })
     }
 }

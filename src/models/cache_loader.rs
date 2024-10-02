@@ -1,5 +1,5 @@
 use crate::models::lru_cache::CachedValue;
-use crate::storage::inverted_index::InvertedIndexItem;
+use crate::storage::inverted_index_old::InvertedIndexItem;
 use crate::storage::Storage;
 
 use super::buffered_io::{BufIoError, BufferManagerFactory};

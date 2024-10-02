@@ -14,7 +14,7 @@ use crate::{
         types::FileOffset,
         versioning::Hash,
     },
-    storage::inverted_index::InvertedIndexItem,
+    storage::inverted_index_old::InvertedIndexItem,
 };
 
 use super::CustomSerialize;
