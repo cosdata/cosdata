@@ -1,7 +1,7 @@
-pub mod inverted_index_new;
 pub mod inverted_index_old;
-pub mod knn_query_new;
+pub mod inverted_index_sparse_ann;
 pub mod knn_query_old;
+pub mod sparse_ann_query;
 
 use half::f16;
 use serde::{Deserialize, Serialize};
