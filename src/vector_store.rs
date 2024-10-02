@@ -507,23 +507,34 @@ pub fn index_embeddings(
     let mut bufman = bufmans.get(&current_version)?;
     let cursor = bufman.open_cursor()?;
     let mut current_file_len = bufman.seek_with_cursor(cursor, SeekFrom::End(0))? as u32;
+    bufman.close_cursor(cursor)?;
     if current_file_len == 0 {
         return Ok(());
     }
-    bufman.seek_with_cursor(cursor, SeekFrom::Start(0))?;
-    let mut next_version = Hash::from(bufman.read_u32_with_cursor(cursor)?);
-    bufman.close_cursor(cursor)?;
+    let version_hash = vec_store
+        .vcs
+        .get_version_hash(&current_version)
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?
+        .ok_or_else(|| WaCustomError::DatabaseError("VersionHash not found".to_string()))?;
+    let mut global_next_version = version_hash.next_version;
     let mut embeddings = Vec::new();
 
     loop {
-        let (embedding, next) = read_embedding(bufman.clone(), i)?;
-        embeddings.push((embedding, current_version));
-        i = next;
-
         if i == current_file_len {
+            let Some(next_version) = global_next_version else {
+                index(
+                    embeddings,
+                    EmbeddingOffset {
+                        version: current_version,
+                        offset: i,
+                    },
+                )?;
+                break;
+            };
             let new_bufman = bufmans.get(&next_version)?;
             let cursor = new_bufman.open_cursor()?;
             current_file_len = new_bufman.seek_with_cursor(cursor, SeekFrom::End(0))? as u32;
+            new_bufman.close_cursor(cursor)?;
             if current_file_len == 0 {
                 index(
                     embeddings,
@@ -534,13 +545,20 @@ pub fn index_embeddings(
                 )?;
                 break;
             }
-            new_bufman.seek_with_cursor(cursor, SeekFrom::Start(0))?;
             current_version = next_version;
-            next_version = Hash::from(new_bufman.read_u32_with_cursor(cursor)?);
+            let version_hash = vec_store
+                .vcs
+                .get_version_hash(&current_version)
+                .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?
+                .ok_or_else(|| WaCustomError::DatabaseError("VersionHash not found".to_string()))?;
+            global_next_version = version_hash.next_version;
             bufman = new_bufman;
-            bufman.close_cursor(cursor)?;
-            i = 4;
+            i = 0;
         }
+
+        let (embedding, next) = read_embedding(bufman.clone(), i)?;
+        embeddings.push((embedding, current_version));
+        i = next;
 
         if embeddings.len() == upload_process_batch_size {
             index(

@@ -169,11 +169,6 @@ pub fn run_upload(
     config: Arc<Config>,
 ) -> Result<(), WaCustomError> {
     let current_version = vec_store.get_current_version();
-    let next_version = vec_store
-        .vcs
-        .add_next_version("main")
-        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-    vec_store.set_current_version(next_version);
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -181,9 +176,6 @@ pub fn run_upload(
         .open(format!("{}.vec_raw", *current_version))
         .map_err(|e| WaCustomError::FsError(e.to_string()))?;
     let bufman = Arc::new(BufferManager::new(file).map_err(BufIoError::Io)?);
-    let cursor = bufman.open_cursor()?;
-    bufman.write_u32_with_cursor(cursor, *next_version)?;
-    bufman.close_cursor(cursor)?;
     vecs.into_par_iter()
         .map(|(id, vec)| {
             let hash_vec = convert_value(id);
@@ -228,6 +220,11 @@ pub fn run_upload(
 
     auto_commit_transaction(vec_store.clone(), bufmans.clone())?;
     bufmans.flush_all()?;
+    let next_version = vec_store
+        .vcs
+        .add_next_version("main")
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+    vec_store.set_current_version(next_version);
 
     Ok(())
 }

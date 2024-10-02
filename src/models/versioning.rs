@@ -97,6 +97,7 @@ pub struct VersionHash {
     pub branch: BranchId,
     pub version: Version,
     pub timestamp: Timestamp,
+    pub next_version: Option<Hash>,
 }
 
 impl VersionHash {
@@ -105,6 +106,7 @@ impl VersionHash {
             branch,
             version,
             timestamp: Timestamp::now(),
+            next_version: None,
         }
     }
 
@@ -118,28 +120,39 @@ impl VersionHash {
     }
 
     fn serialize(&self) -> Vec<u8> {
-        let mut result = Vec::with_capacity(16);
+        let mut result = Vec::with_capacity(if self.next_version.is_some() { 20 } else { 16 });
 
         result.extend_from_slice(&self.branch.to_le_bytes());
         result.extend_from_slice(&self.version.to_le_bytes());
         result.extend_from_slice(&self.timestamp.to_le_bytes());
 
+        if let Some(next_version) = &self.next_version {
+            result.extend_from_slice(&next_version.to_le_bytes());
+        }
+
         result
     }
 
     fn deserialize(bytes: &[u8]) -> Result<Self, &'static str> {
-        if bytes.len() != 16 {
-            return Err("Input must be exactly 16 bytes");
+        if bytes.len() != 16 && bytes.len() != 20 {
+            return Err("Input must be either 16 or 20 bytes");
         }
 
         let branch = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
         let version = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
         let timestamp = u32::from_le_bytes(bytes[12..16].try_into().unwrap());
 
+        let next_version = if bytes.len() == 20 {
+            Some(Hash(u32::from_le_bytes(bytes[16..20].try_into().unwrap())))
+        } else {
+            None
+        };
+
         Ok(VersionHash {
             branch: BranchId(branch),
             version: Version(version),
             timestamp: Timestamp(timestamp),
+            next_version,
         })
     }
 }
@@ -148,6 +161,7 @@ impl VersionHash {
 pub struct BranchInfo {
     branch_name: String,
     current_version: Version,
+    current_version_hash: Hash,
     parent_branch: BranchId,
     parent_version: Version,
 }
@@ -156,10 +170,13 @@ impl BranchInfo {
     fn serialize(&self) -> Vec<u8> {
         let name_bytes = self.branch_name.as_bytes();
 
-        let mut result = Vec::with_capacity(16 + name_bytes.len());
+        let mut result = Vec::with_capacity(20 + name_bytes.len());
 
         // Serialize current_version
         result.extend_from_slice(&self.current_version.to_le_bytes());
+
+        // Serialize current_version_hash
+        result.extend_from_slice(&self.current_version_hash.to_le_bytes());
 
         // Serialize parent_branch
         result.extend_from_slice(&self.parent_branch.to_le_bytes());
@@ -174,18 +191,21 @@ impl BranchInfo {
     }
 
     fn deserialize(bytes: &[u8]) -> Result<Self, &'static str> {
-        if bytes.len() < 16 {
-            return Err("Input must be at least 16 bytes");
+        if bytes.len() < 20 {
+            return Err("Input must be at least 20 bytes");
         }
 
         // Deserialize current_version
         let current_version = Version(u32::from_le_bytes(bytes[0..4].try_into().unwrap()));
 
+        // Deserialize current_version
+        let current_version_hash = Hash(u32::from_le_bytes(bytes[4..8].try_into().unwrap()));
+
         // Deserialize parent_branch
-        let parent_branch = BranchId(u64::from_le_bytes(bytes[4..12].try_into().unwrap()));
+        let parent_branch = BranchId(u64::from_le_bytes(bytes[8..16].try_into().unwrap()));
 
         // Deserialize parent_version
-        let parent_version = Version(u32::from_le_bytes(bytes[12..16].try_into().unwrap()));
+        let parent_version = Version(u32::from_le_bytes(bytes[16..20].try_into().unwrap()));
 
         let branch_name =
             String::from_utf8(bytes[16..].to_vec()).map_err(|_| "Invalid UTF-8 in branch name")?;
@@ -193,6 +213,7 @@ impl BranchInfo {
         Ok(BranchInfo {
             branch_name,
             current_version,
+            current_version_hash,
             parent_branch,
             parent_version,
         })
@@ -210,9 +231,13 @@ pub struct VersionControl {
 impl VersionControl {
     pub fn new(env: Arc<Environment>) -> lmdb::Result<Self> {
         let main_branch_id = BranchId::new("main");
+        let current_version = Version(0);
+        let version_hash = VersionHash::new(main_branch_id, current_version);
+        let current_version_hash = version_hash.calculate_hash();
         let branch_info = BranchInfo {
             branch_name: "main".to_string(),
-            current_version: Version(0),
+            current_version,
+            current_version_hash,
             parent_branch: main_branch_id,
             parent_version: Version(0),
         };
@@ -250,27 +275,53 @@ impl VersionControl {
 
     pub fn add_next_version(&self, branch_name: &str) -> lmdb::Result<Hash> {
         let branch_id = BranchId::new(branch_name);
-        let key = branch_id.to_le_bytes();
+        let branch_key = branch_id.to_le_bytes();
 
         let mut txn = self.env.begin_rw_txn()?;
-        let bytes = txn.get(self.branches_db, &key)?;
+        let bytes = txn.get(self.branches_db, &branch_key)?;
 
-        let mut branch_info: BranchInfo = BranchInfo::deserialize(bytes).unwrap();
-        let new_version = Version(*branch_info.current_version + 1);
-        branch_info.current_version = new_version;
+        let mut branch_info = BranchInfo::deserialize(bytes).unwrap();
+
+        // Update current version
+        let current_version_key = branch_info.current_version_hash.to_le_bytes();
+        let bytes = txn.get(self.versions_db, &current_version_key)?;
+
+        let mut current_version_hash = VersionHash::deserialize(bytes).unwrap();
+
+        let next_version = Version(*branch_info.current_version + 1);
+        let version_hash = VersionHash::new(branch_id, next_version);
+        let next_version_hash = version_hash.calculate_hash();
+
+        current_version_hash.next_version = Some(next_version_hash);
+
+        let bytes = current_version_hash.serialize();
+        txn.put(
+            self.versions_db,
+            &current_version_key,
+            &bytes,
+            WriteFlags::empty(),
+        )?;
+
+        // Update branch indo
+        branch_info.current_version = next_version;
+        branch_info.current_version_hash = next_version_hash;
         let bytes = branch_info.serialize();
 
-        txn.put(self.branches_db, &key, &bytes, WriteFlags::empty())?;
-        let version_hash = VersionHash::new(branch_id, new_version);
-        let hash = version_hash.calculate_hash();
+        txn.put(self.branches_db, &branch_key, &bytes, WriteFlags::empty())?;
 
-        let key = hash.to_le_bytes();
+        // Create next version
+        let next_version_key = next_version_hash.to_le_bytes();
         let bytes = version_hash.serialize();
 
-        txn.put(self.versions_db, &key, &bytes, WriteFlags::empty())?;
+        txn.put(
+            self.versions_db,
+            &next_version_key,
+            &bytes,
+            WriteFlags::empty(),
+        )?;
         txn.commit()?;
 
-        Ok(hash)
+        Ok(next_version_hash)
     }
 
     pub fn create_new_branch(
@@ -280,6 +331,9 @@ impl VersionControl {
     ) -> lmdb::Result<()> {
         let branch_id = BranchId::new(branch_name);
         let parent_branch_id = BranchId::new(parent_branch_name);
+        let current_version = Version(0);
+        let version_hash = VersionHash::new(branch_id, current_version);
+        let current_version_hash = version_hash.calculate_hash();
         let key = branch_id.to_le_bytes();
         let parent_key = parent_branch_id.to_le_bytes();
 
@@ -294,7 +348,8 @@ impl VersionControl {
 
         let new_branch_info = BranchInfo {
             branch_name: branch_name.to_string(),
-            current_version: Version(0),
+            current_version,
+            current_version_hash,
             parent_branch: parent_branch_id,
             parent_version: parent_info.current_version,
         };
