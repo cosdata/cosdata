@@ -1,6 +1,7 @@
+use std::sync::Arc;
+
 use crate::{
-    api::vectordb::collections, api_service::run_upload, config_loader::Config,
-    models::rpc::VectorIdValue,
+    api::vectordb::collections, api_service::run_upload, app_context::AppContext, config_loader::Config, models::rpc::VectorIdValue
 };
 
 use super::{
@@ -12,21 +13,21 @@ use super::{
 };
 
 pub(crate) async fn create_vector(
+    ctx: Arc<AppContext>,
     collection_id: &str,
     create_vector_dto: CreateVectorDto,
-    config: &Config,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
     let collection = collections::service::get_collection_by_id(collection_id)
         .await
         .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
 
     run_upload(
+        ctx,
         collection,
         vec![(
             create_vector_dto.id.clone(),
             create_vector_dto.values.clone(),
         )],
-        config,
     ).map_err(VectorsError::WaCustom)?;
     Ok(CreateVectorResponseDto {
         id: create_vector_dto.id,
@@ -42,19 +43,19 @@ pub(crate) async fn get_vector_by_id(
 }
 
 pub(crate) async fn update_vector(
+    ctx: Arc<AppContext>,
     collection_id: &str,
     vector_id: VectorIdValue,
     update_vector_dto: UpdateVectorDto,
-    config: &Config,
 ) -> Result<UpdateVectorResponseDto, VectorsError> {
     let collection = collections::service::get_collection_by_id(collection_id)
         .await
         .map_err(|e| VectorsError::FailedToUpdateVector(e.to_string()))?;
 
     run_upload(
+        ctx,
         collection,
         vec![(vector_id.clone(), update_vector_dto.values.clone())],
-        config,
     ).map_err(VectorsError::WaCustom)?;
     Ok(UpdateVectorResponseDto {
         id: vector_id,

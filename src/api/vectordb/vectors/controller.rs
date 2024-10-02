@@ -12,9 +12,9 @@ pub(crate) async fn create_vector(
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse> {
     let vector = service::create_vector(
+        ctx.into_inner(),
         &collection_id,
         create_vector_dto,
-        &ctx.into_inner().config,
     ).await?;
     Ok(HttpResponse::Ok().json(vector))
 }
@@ -32,10 +32,10 @@ pub(crate) async fn update_vector_by_id(
 ) -> Result<HttpResponse> {
     let (collection_id, vector_id) = path.into_inner();
     let vector = service::update_vector_by_id(
+        ctx.into_inner(),
         &collection_id,
         VectorIdValue::StringValue(vector_id),
         update_vector_dto,
-        &ctx.into_inner().config,
     )
     .await?;
     Ok(HttpResponse::Ok().json(vector))

@@ -1,3 +1,4 @@
+use crate::app_context::AppContext;
 use crate::config_loader::Config;
 use crate::models::buffered_io::*;
 use crate::models::common::*;
@@ -164,9 +165,9 @@ pub async fn init_vector_store(
 }
 
 pub fn run_upload(
+    ctx: Arc<AppContext>,
     vec_store: Arc<VectorStore>,
     vecs: Vec<(VectorIdValue, Vec<f32>)>,
-    config: &Config,
 ) -> Result<(), WaCustomError> {
     let current_version = vec_store.get_current_version();
     let next_version = vec_store
@@ -216,8 +217,8 @@ pub fn run_upload(
 
     txn.abort();
 
-    if count_unindexed >= config.upload_threshold {
-        index_embeddings(vec_store.clone(), config.upload_process_batch_size)?;
+    if count_unindexed >= ctx.config.upload_threshold {
+        index_embeddings(vec_store.clone(), ctx.config.upload_process_batch_size)?;
     }
 
     // TODO: include db name in the path
