@@ -365,6 +365,9 @@ impl<T: Clone + 'static> LazyItem<T> {
 }
 
 impl<T: Clone + CustomSerialize + 'static> LazyItem<T> {
+    // @TODO: This function uses the `load_item` method of
+    // NodeRegistry, which doesn't seem to be using the cache. May be
+    // `get_object` is the correct method to use here.
     pub fn try_get_data(&self, cache: Arc<NodeRegistry>) -> Result<ArcShift<T>, WaCustomError> {
         if let Self::Valid {
             data, file_index, ..

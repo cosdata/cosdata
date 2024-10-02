@@ -218,7 +218,11 @@ pub fn run_upload(
     txn.abort();
 
     if count_unindexed >= ctx.config.upload_threshold {
-        index_embeddings(vec_store.clone(), ctx.config.upload_process_batch_size)?;
+        index_embeddings(
+            ctx.node_registry.clone(),
+            vec_store.clone(),
+            ctx.config.upload_process_batch_size
+        )?;
     }
 
     // TODO: include db name in the path

@@ -16,7 +16,7 @@ fn init_node_registry() -> NodeRegistry {
 #[allow(unused)]
 pub struct AppContext {
     pub config: Config,
-    pub node_registry: NodeRegistry,
+    pub node_registry: Arc<NodeRegistry>,
 }
 
 impl AppContext {
@@ -24,7 +24,7 @@ impl AppContext {
     pub fn new(config: Config) -> Self {
         Self {
             config,
-            node_registry: init_node_registry(),
+            node_registry: Arc::new(init_node_registry()),
         }
     }
 }

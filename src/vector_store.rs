@@ -1,5 +1,6 @@
 use crate::distance::DistanceFunction;
 use crate::models::buffered_io::{BufferManager, BufferManagerFactory};
+use crate::models::cache_loader::NodeRegistry;
 use crate::models::common::*;
 use crate::models::file_persist::*;
 use crate::models::lazy_load::*;
@@ -381,6 +382,7 @@ pub fn insert_embedding(
 }
 
 pub fn index_embeddings(
+    node_registry: Arc<NodeRegistry>,
     vec_store: Arc<VectorStore>,
     upload_process_batch_size: usize,
 ) -> Result<(), WaCustomError> {
@@ -441,6 +443,7 @@ pub fn index_embeddings(
                 };
 
                 index_embedding(
+                    node_registry.clone(),
                     vec_store.clone(),
                     None,
                     embedding,
@@ -558,6 +561,7 @@ pub fn index_embeddings(
 }
 
 pub fn index_embedding(
+    node_registry: Arc<NodeRegistry>,
     vec_store: Arc<VectorStore>,
     parent: Option<LazyItem<MergedNode>>,
     vector_emb: QuantizedVectorEmbedding,
@@ -585,11 +589,11 @@ pub fn index_embedding(
         } => {
             if let Some(file_index) = file_index.get() {
                 match file_index {
-                    FileIndex::Valid { offset, .. } => {
-                        return Err(WaCustomError::LazyLoadingError(format!(
-                            "Node at offset {} needs to be loaded",
-                            offset.0
-                        )));
+                    FileIndex::Valid { .. } => {
+                        // @TODO: Confirm that `try_get_data` method
+                        // is not just retrieving the data but also
+                        // caching it.
+                        cur_entry.try_get_data(node_registry.clone())?
                     }
                     FileIndex::Invalid => {
                         return Err(WaCustomError::NodeError(
@@ -649,6 +653,7 @@ pub fn index_embedding(
 
     if cur_level <= max_insert_level {
         let parent = insert_node_create_edges(
+            node_registry.clone(),
             vec_store.clone(),
             parent,
             fvec,
@@ -659,6 +664,7 @@ pub fn index_embedding(
         )
         .expect("Failed insert_node_create_edges");
         index_embedding(
+            node_registry,
             vec_store.clone(),
             Some(parent),
             vector_emb.clone(),
@@ -669,6 +675,7 @@ pub fn index_embedding(
         )?;
     } else {
         index_embedding(
+            node_registry,
             vec_store.clone(),
             None,
             vector_emb.clone(),
@@ -683,6 +690,7 @@ pub fn index_embedding(
 }
 
 pub fn queue_node_prop_exec(
+    node_registry: Arc<NodeRegistry>,
     lznode: LazyItem<MergedNode>,
     prop_file: Arc<File>,
     vec_store: Arc<VectorStore>,
@@ -700,11 +708,12 @@ pub fn queue_node_prop_exec(
         } => {
             if let Some(file_index) = file_index.clone().get().clone() {
                 match file_index {
-                    FileIndex::Valid { offset, .. } => {
-                        return Err(WaCustomError::LazyLoadingError(format!(
-                            "Node at offset {} needs to be loaded",
-                            offset.0
-                        )));
+                    FileIndex::Valid { .. } => {
+                        // @TODO: Confirm that `try_get_data` method
+                        // is not just retrieving the data but also
+                        // caching it.
+                        let node = lznode.try_get_data(node_registry.clone())?;
+                        (node, Some(file_index))
                     }
                     FileIndex::Invalid => {
                         return Err(WaCustomError::NodeError("Node is null".to_string()));
@@ -773,6 +782,7 @@ pub fn auto_commit_transaction(
 }
 
 fn insert_node_create_edges(
+    node_registry: Arc<NodeRegistry>,
     vec_store: Arc<VectorStore>,
     parent: Option<LazyItem<MergedNode>>,
     fvec: Arc<Storage>,
@@ -824,7 +834,12 @@ fn insert_node_create_edges(
         lz_item.get_lazy_data().unwrap().set_parent(parent.clone());
         parent.get_lazy_data().unwrap().set_child(lz_item.clone());
     }
-    queue_node_prop_exec(lz_item.clone(), vec_store.prop_file.clone(), vec_store)?;
+    queue_node_prop_exec(
+        node_registry,
+        lz_item.clone(),
+        vec_store.prop_file.clone(),
+        vec_store
+    )?;
 
     Ok(lz_item)
 }
