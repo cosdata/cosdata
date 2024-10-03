@@ -383,6 +383,7 @@ pub fn insert_embedding(
 
 pub fn index_embeddings(
     node_registry: Arc<NodeRegistry>,
+    vec_raw_manager: &BufferManagerFactory,
     vec_store: Arc<VectorStore>,
     upload_process_batch_size: usize,
 ) -> Result<(), WaCustomError> {
@@ -501,13 +502,9 @@ pub fn index_embeddings(
         Ok(())
     };
 
-    let bufmans = BufferManagerFactory::new(Path::new(".").into(), |root, ver| {
-        root.join(format!("{}.vec_raw", **ver))
-    });
-
     let mut i = next_file_offset.offset;
     let mut current_version = next_file_offset.version;
-    let mut bufman = bufmans.get(&current_version)?;
+    let mut bufman = vec_raw_manager.get(&current_version)?;
     let cursor = bufman.open_cursor()?;
     let mut current_file_len = bufman.seek_with_cursor(cursor, SeekFrom::End(0))? as u32;
     if current_file_len == 0 {
@@ -524,7 +521,7 @@ pub fn index_embeddings(
         i = next;
 
         if i == current_file_len {
-            let new_bufman = bufmans.get(&next_version)?;
+            let new_bufman = vec_raw_manager.get(&next_version)?;
             let cursor = new_bufman.open_cursor()?;
             current_file_len = new_bufman.seek_with_cursor(cursor, SeekFrom::End(0))? as u32;
             if current_file_len == 0 {

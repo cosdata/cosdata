@@ -171,13 +171,8 @@ pub fn run_upload(
         .add_next_version("main")
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
     vec_store.set_current_version(next_version);
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .open(format!("{}.vec_raw", *current_version))
-        .map_err(|e| WaCustomError::FsError(e.to_string()))?;
-    let bufman = Arc::new(BufferManager::new(file).map_err(BufIoError::Io)?);
+    let bufman = ctx.vec_raw_manager.get(&current_version)
+        .map_err(|e| WaCustomError::BufIo(Arc::new(e)))?;
     let cursor = bufman.open_cursor()?;
     bufman.write_u32_with_cursor(cursor, *next_version)?;
     bufman.close_cursor(cursor)?;
@@ -216,6 +211,7 @@ pub fn run_upload(
     if count_unindexed >= ctx.config.upload_threshold {
         index_embeddings(
             ctx.node_registry.clone(),
+            &ctx.vec_raw_manager,
             vec_store.clone(),
             ctx.config.upload_process_batch_size
         )?;
