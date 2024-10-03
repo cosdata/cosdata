@@ -44,3 +44,10 @@ pub(crate) async fn find_similar_vectors(
         results: similar_vectors,
     })
 }
+
+pub(crate) async fn delete_vector_by_id(
+    collection_id: &str,
+    vector_id: VectorIdValue,
+) -> Result<CreateVectorResponseDto, VectorsError> {
+    repo::delete_vector_by_id(collection_id, vector_id).await
+}
