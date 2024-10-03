@@ -1,5 +1,4 @@
 use crate::app_context::AppContext;
-use crate::config_loader::Config;
 use crate::models::buffered_io::*;
 use crate::models::common::*;
 use crate::models::file_persist::*;
@@ -18,10 +17,10 @@ use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
 use std::array::TryFromSliceError;
 use std::fs::OpenOptions;
-use std::path::Path;
 use std::sync::Arc;
 
 pub async fn init_vector_store(
+    ctx: Arc<AppContext>,
     name: String,
     size: usize,
     lower_bound: Option<f32>,
@@ -122,10 +121,7 @@ pub async fn init_vector_store(
         nodes.push(nn.clone());
     }
     // TODO: include db name in the path
-    let bufmans = Arc::new(BufferManagerFactory::new(
-        Path::new(".").into(),
-        |root, ver| root.join(format!("{}.index", **ver)),
-    ));
+    let bufmans = &ctx.index_manager;
     for (l, nn) in nodes.iter_mut().enumerate() {
         match persist_node_update_loc(bufmans.clone(), &mut nn.item) {
             Ok(_) => (),
@@ -225,14 +221,8 @@ pub fn run_upload(
         )?;
     }
 
-    // TODO: include db name in the path
-    let bufmans = Arc::new(BufferManagerFactory::new(
-        Path::new(".").into(),
-        |root, ver| root.join(format!("{}.index", **ver)),
-    ));
-
-    auto_commit_transaction(vec_store.clone(), bufmans.clone())?;
-    bufmans.flush_all()?;
+    auto_commit_transaction(vec_store.clone(), ctx.index_manager.clone())?;
+    ctx.index_manager.flush_all()?;
 
     Ok(())
 }
