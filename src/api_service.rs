@@ -1,5 +1,4 @@
 use crate::app_context::AppContext;
-use crate::models::buffered_io::*;
 use crate::models::common::*;
 use crate::models::file_persist::*;
 use crate::models::lazy_load::*;
@@ -211,6 +210,7 @@ pub fn run_upload(
     if count_unindexed >= ctx.config.upload_threshold {
         index_embeddings(
             ctx.node_registry.clone(),
+            ctx.index_manager.clone(),
             &ctx.vec_raw_manager,
             vec_store.clone(),
             ctx.config.upload_process_batch_size

@@ -18,7 +18,6 @@ use std::array::TryFromSliceError;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::SeekFrom;
-use std::path::Path;
 use std::sync::Arc;
 
 pub fn ann_search(
@@ -383,6 +382,7 @@ pub fn insert_embedding(
 
 pub fn index_embeddings(
     node_registry: Arc<NodeRegistry>,
+    index_manager: Arc<BufferManagerFactory>,
     vec_raw_manager: &BufferManagerFactory,
     vec_store: Arc<VectorStore>,
     upload_process_batch_size: usize,
@@ -445,6 +445,7 @@ pub fn index_embeddings(
 
                 index_embedding(
                     node_registry.clone(),
+                    index_manager.clone(),
                     vec_store.clone(),
                     None,
                     embedding,
@@ -559,6 +560,7 @@ pub fn index_embeddings(
 
 pub fn index_embedding(
     node_registry: Arc<NodeRegistry>,
+    index_manager: Arc<BufferManagerFactory>,
     vec_store: Arc<VectorStore>,
     parent: Option<LazyItem<MergedNode>>,
     vector_emb: QuantizedVectorEmbedding,
@@ -587,10 +589,10 @@ pub fn index_embedding(
             if let Some(file_index) = file_index.get() {
                 match file_index {
                     FileIndex::Valid { .. } => {
-                        // @TODO: Confirm that `try_get_data` method
-                        // is not just retrieving the data but also
-                        // caching it.
-                        cur_entry.try_get_data(node_registry.clone())?
+                        cur_entry.try_get_data(
+                            node_registry.clone(),
+                            index_manager.clone()
+                        )?
                     }
                     FileIndex::Invalid => {
                         return Err(WaCustomError::NodeError(
@@ -636,10 +638,17 @@ pub fn index_embedding(
         true,
     )?;
 
+    // @DOUBT: May be this distance can be calculated only if z is
+    // empty
     let dist = vec_store
         .distance_metric
         .calculate(&fvec, &node_prop.value)?;
 
+    // @DOUBT: Perhaps, traverse_find_nearest can itself handle this
+    // case. Because, logically not finding nearest nodes doesn't make
+    // sense given that cur_entry is not optional (root node always
+    // exists). In that case cur_entry will be the nearest which is
+    // how that case is being handled below.
     let z = if z.is_empty() {
         vec![(cur_entry.clone(), dist)]
     } else {
@@ -651,6 +660,7 @@ pub fn index_embedding(
     if cur_level <= max_insert_level {
         let parent = insert_node_create_edges(
             node_registry.clone(),
+            index_manager.clone(),
             vec_store.clone(),
             parent,
             fvec,
@@ -662,6 +672,7 @@ pub fn index_embedding(
         .expect("Failed insert_node_create_edges");
         index_embedding(
             node_registry,
+            index_manager,
             vec_store.clone(),
             Some(parent),
             vector_emb.clone(),
@@ -673,6 +684,7 @@ pub fn index_embedding(
     } else {
         index_embedding(
             node_registry,
+            index_manager,
             vec_store.clone(),
             None,
             vector_emb.clone(),
@@ -688,6 +700,7 @@ pub fn index_embedding(
 
 pub fn queue_node_prop_exec(
     node_registry: Arc<NodeRegistry>,
+    index_manager: Arc<BufferManagerFactory>,
     lznode: LazyItem<MergedNode>,
     prop_file: Arc<File>,
     vec_store: Arc<VectorStore>,
@@ -709,7 +722,7 @@ pub fn queue_node_prop_exec(
                         // @TODO: Confirm that `try_get_data` method
                         // is not just retrieving the data but also
                         // caching it.
-                        let node = lznode.try_get_data(node_registry.clone())?;
+                        let node = lznode.try_get_data(node_registry.clone(), index_manager)?;
                         (node, Some(file_index))
                     }
                     FileIndex::Invalid => {
@@ -780,6 +793,7 @@ pub fn auto_commit_transaction(
 
 fn insert_node_create_edges(
     node_registry: Arc<NodeRegistry>,
+    index_manager: Arc<BufferManagerFactory>,
     vec_store: Arc<VectorStore>,
     parent: Option<LazyItem<MergedNode>>,
     fvec: Arc<Storage>,
@@ -833,6 +847,7 @@ fn insert_node_create_edges(
     }
     queue_node_prop_exec(
         node_registry,
+        index_manager,
         lz_item.clone(),
         vec_store.prop_file.clone(),
         vec_store

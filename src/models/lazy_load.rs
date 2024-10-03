@@ -1,4 +1,5 @@
-use super::cache_loader::NodeRegistry;
+use super::buffered_io::BufferManagerFactory;
+use super::cache_loader::{Cacheable, NodeRegistry};
 use super::common::WaCustomError;
 use super::identity_collections::{Identifiable, IdentityMap, IdentityMapKey, IdentitySet};
 use super::serializer::CustomSerialize;
@@ -6,6 +7,7 @@ use super::types::{FileOffset, STM};
 use super::versioning::*;
 use arcshift::ArcShift;
 use core::panic;
+use std::collections::HashSet;
 use std::fmt;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -364,11 +366,12 @@ impl<T: Clone + 'static> LazyItem<T> {
     }
 }
 
-impl<T: Clone + CustomSerialize + 'static> LazyItem<T> {
-    // @TODO: This function uses the `load_item` method of
-    // NodeRegistry, which doesn't seem to be using the cache. May be
-    // `get_object` is the correct method to use here.
-    pub fn try_get_data(&self, cache: Arc<NodeRegistry>) -> Result<ArcShift<T>, WaCustomError> {
+impl<T: Clone + CustomSerialize + Cacheable + 'static> LazyItem<T> {
+    pub fn try_get_data(
+        &self,
+        cache: Arc<NodeRegistry>,
+        index_manager: Arc<BufferManagerFactory>
+    ) -> Result<ArcShift<T>, WaCustomError> {
         if let Self::Valid {
             data, file_index, ..
         } = self
@@ -377,15 +380,31 @@ impl<T: Clone + CustomSerialize + 'static> LazyItem<T> {
                 return Ok(data.clone());
             }
 
-            let Some(file_index) = file_index.clone().get().clone() else {
-                return Err(WaCustomError::LazyLoadingError(
+            let mut file_index_arc = file_index.clone();
+            let offset = file_index_arc.get().as_ref()
+                .ok_or(WaCustomError::LazyLoadingError(
                     "LazyItem offset is None".to_string(),
-                ));
-            };
+                ))?;
+            let item: LazyItem<T> = LazyItem::deserialize(
+                index_manager,
+                offset.clone(),
+                cache,
+                1000,
+                &mut HashSet::new()
+            ).map_err(|e| WaCustomError::BufIo(Arc::new(e)))?;
+            match item {
+                Self::Valid { data, .. } => {
+                    data.ok_or(WaCustomError::LazyLoadingError(
+                        "Deserialized LazyItem is None".to_string()
+                    ))
+                },
+                Self::Invalid => {
+                    return Err(WaCustomError::LazyLoadingError(
+                        "Deserialized LazyItem is invalid".to_string(),
+                    ));
+                },
+            }
 
-            let deserialized = cache.load_item(file_index)?;
-
-            Ok(ArcShift::new(deserialized))
         } else {
             return Err(WaCustomError::LazyLoadingError(
                 "LazyItem is invalid".to_string(),

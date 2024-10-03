@@ -65,7 +65,7 @@ where
 impl<T> InvertedIndexItem<T>
 where
     T: Clone + Cacheable + CustomSerialize + 'static,
-    InvertedIndexItem<T>: CustomSerialize,
+    InvertedIndexItem<T>: CustomSerialize + Cacheable,
 {
     /// Creates a new `InvertedIndexItem` with the given dimension index and implicit flag.
     /// Initializes the data vector and children array.
@@ -196,7 +196,7 @@ where
 impl<T> InvertedIndex<T>
 where
     T: Cacheable + Clone + CustomSerialize + 'static,
-    InvertedIndexItem<T>: CustomSerialize,
+    InvertedIndexItem<T>: CustomSerialize + Cacheable,
 {
     /// Creates a new `InvertedIndex` with an initial root node.
     pub fn new() -> Self {
