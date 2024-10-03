@@ -1,5 +1,6 @@
 use crate::models::lru_cache::CachedValue;
 use crate::storage::inverted_index_old::InvertedIndexItem;
+use crate::storage::inverted_index_sparse_ann::{InvertedIndexSparseAnn, InvertedIndexSparseAnnNode};
 use crate::storage::Storage;
 
 use super::buffered_io::{BufIoError, BufferManagerFactory};
@@ -21,7 +22,10 @@ pub enum CacheItem {
     Storage(LazyItem<Storage>),
     InvertedIndexItemWithStorage(LazyItem<InvertedIndexItem<Storage>>),
     Float(LazyItem<f32>),
+    Unsigned32(LazyItem<u32>),
     InvertedIndexItemWithFloat(LazyItem<InvertedIndexItem<f32>>),
+    InvertedIndexSparseAnnNode(LazyItem<InvertedIndexSparseAnnNode>),
+    InvertedIndexSparseAnn(LazyItem<InvertedIndexSparseAnn>),
 }
 
 pub trait Cacheable: Clone + 'static {
@@ -85,6 +89,20 @@ impl Cacheable for f32 {
     }
 }
 
+impl Cacheable for u32 {
+    fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
+        if let CacheItem::Unsigned32(item) = cache_item {
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
+        CacheItem::Unsigned32(item)
+    }
+}
+
 impl Cacheable for InvertedIndexItem<f32> {
     fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
         if let CacheItem::InvertedIndexItemWithFloat(item) = cache_item {
@@ -96,6 +114,34 @@ impl Cacheable for InvertedIndexItem<f32> {
 
     fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
         CacheItem::InvertedIndexItemWithFloat(item)
+    }
+}
+
+impl Cacheable for InvertedIndexSparseAnnNode {
+    fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
+        if let CacheItem::InvertedIndexSparseAnnNode(item) = cache_item {
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
+        CacheItem::InvertedIndexSparseAnnNode(item)
+    }
+}
+
+impl Cacheable for InvertedIndexSparseAnn {
+    fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
+        if let CacheItem::InvertedIndexSparseAnn(item) = cache_item {
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
+        CacheItem::InvertedIndexSparseAnn(item)
     }
 }
 
