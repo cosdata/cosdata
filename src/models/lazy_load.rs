@@ -421,7 +421,7 @@ impl<T: Clone + 'static> LazyItem<T> {
                 let (latest_version, relative_local_version_number) = last.get_latest_version();
                 return (
                     latest_version,
-                    (1u32 << (versions.len() as u32 * 2)) + relative_local_version_number,
+                    (1u32 << ((versions.len() - 1) as u32 * 2)) + relative_local_version_number,
                 );
             }
         };
