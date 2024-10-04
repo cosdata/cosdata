@@ -1,5 +1,4 @@
-use crate::config_loader::Config;
-use crate::models::buffered_io::*;
+use crate::app_context::AppContext;
 use crate::models::common::*;
 use crate::models::file_persist::*;
 use crate::models::lazy_load::*;
@@ -17,10 +16,10 @@ use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
 use std::array::TryFromSliceError;
 use std::fs::OpenOptions;
-use std::path::Path;
 use std::sync::Arc;
 
 pub async fn init_vector_store(
+    ctx: Arc<AppContext>,
     name: String,
     size: usize,
     lower_bound: Option<f32>,
@@ -121,10 +120,7 @@ pub async fn init_vector_store(
         nodes.push(nn.clone());
     }
     // TODO: include db name in the path
-    let bufmans = Arc::new(BufferManagerFactory::new(
-        Path::new(".").into(),
-        |root, ver| root.join(format!("{}.index", **ver)),
-    ));
+    let bufmans = &ctx.index_manager;
     for (l, nn) in nodes.iter_mut().enumerate() {
         match persist_node_update_loc(bufmans.clone(), &mut nn.item) {
             Ok(_) => (),
@@ -164,9 +160,9 @@ pub async fn init_vector_store(
 }
 
 pub fn run_upload(
+    ctx: Arc<AppContext>,
     vec_store: Arc<VectorStore>,
     vecs: Vec<(VectorIdValue, Vec<f32>)>,
-    config: Arc<Config>,
 ) -> Result<(), WaCustomError> {
     let current_version = vec_store.get_current_version();
     let next_version = vec_store
@@ -174,13 +170,8 @@ pub fn run_upload(
         .add_next_version("main")
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
     vec_store.set_current_version(next_version);
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .open(format!("{}.vec_raw", *current_version))
-        .map_err(|e| WaCustomError::FsError(e.to_string()))?;
-    let bufman = Arc::new(BufferManager::new(file).map_err(BufIoError::Io)?);
+    let bufman = ctx.vec_raw_manager.get(&current_version)
+        .map_err(|e| WaCustomError::BufIo(Arc::new(e)))?;
     let cursor = bufman.open_cursor()?;
     bufman.write_u32_with_cursor(cursor, *next_version)?;
     bufman.close_cursor(cursor)?;
@@ -201,7 +192,7 @@ pub fn run_upload(
     let metadata_db = vec_store.lmdb.metadata_db.clone();
 
     let txn = env
-        .begin_rw_txn()
+        .begin_ro_txn()
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
     let count_unindexed = txn
@@ -216,18 +207,18 @@ pub fn run_upload(
 
     txn.abort();
 
-    if count_unindexed >= config.upload_threshold {
-        index_embeddings(vec_store.clone(), config.upload_process_batch_size)?;
+    if count_unindexed >= ctx.config.upload_threshold {
+        index_embeddings(
+            ctx.node_registry.clone(),
+            ctx.index_manager.clone(),
+            &ctx.vec_raw_manager,
+            vec_store.clone(),
+            ctx.config.upload_process_batch_size
+        )?;
     }
 
-    // TODO: include db name in the path
-    let bufmans = Arc::new(BufferManagerFactory::new(
-        Path::new(".").into(),
-        |root, ver| root.join(format!("{}.index", **ver)),
-    ));
-
-    auto_commit_transaction(vec_store.clone(), bufmans.clone())?;
-    bufmans.flush_all()?;
+    auto_commit_transaction(vec_store.clone(), ctx.index_manager.clone())?;
+    ctx.index_manager.flush_all()?;
 
     Ok(())
 }
