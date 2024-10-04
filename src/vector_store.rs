@@ -561,6 +561,7 @@ pub fn index_embedding(
 
     let mut cur_node_arc = cur_entry
         .get_latest_version()
+        .0
         .get_data(node_registry.clone());
     let cur_node = cur_node_arc.get();
 
@@ -878,7 +879,7 @@ fn traverse_find_nearest(
 ) -> Result<Vec<(LazyItem<MergedNode>, MetricResult)>, WaCustomError> {
     let mut tasks: SmallVec<[Vec<(LazyItem<MergedNode>, MetricResult)>; 24]> = SmallVec::new();
 
-    let mut node_arc = vtm.get_latest_version().get_data(node_registry.clone());
+    let mut node_arc = vtm.get_latest_version().0.get_data(node_registry.clone());
     let node = node_arc.get();
 
     for (index, nref) in node.neighbors.iter().enumerate() {
