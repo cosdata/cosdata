@@ -17,3 +17,11 @@ pub(crate) async fn commit_transaction(
     let _ = service::commit_transaction(&collection_id, &transaction_id).await?;
     Ok(HttpResponse::NoContent().finish())
 }
+
+pub(crate) async fn abort_transaction(
+    params: web::Path<(String, String)>,
+) -> Result<HttpResponse, TransactionError> {
+    let (collection_id, transaction_id) = params.into_inner();
+    let _ = service::abort_transaction(&collection_id, &transaction_id).await?;
+    Ok(HttpResponse::NoContent().finish())
+}
