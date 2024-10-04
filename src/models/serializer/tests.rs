@@ -6,7 +6,9 @@ use crate::models::types::*;
 use crate::models::versioning::BranchId;
 use crate::models::versioning::VersionHash;
 use crate::models::versioning::{Version, VersionControl};
+use crate::storage::Storage;
 use arcshift::ArcShift;
+use half::f16;
 use lmdb::Environment;
 use std::sync::Arc;
 use tempfile::{tempdir, TempDir};
@@ -25,7 +27,10 @@ fn setup_test(
     TempDir,
 ) {
     let dir = tempdir().unwrap();
-    let bufmans = Arc::new(BufferManagerFactory::new(dir.as_ref().into()));
+    let bufmans = Arc::new(BufferManagerFactory::new(
+        dir.as_ref().into(),
+        |root, ver| root.join(format!("{}.index", **ver)),
+    ));
     let cache = get_cache(bufmans.clone());
     let bufman = bufmans.get(root_version).unwrap();
     let cursor = bufman.open_cursor().unwrap();
@@ -328,20 +333,22 @@ fn test_lazy_item_with_versions_serialization() {
             .unwrap(),
     );
     let vcs = Arc::new(VersionControl::new(env).unwrap());
-    let branch_id = BranchId::new("main");
 
     let v0_hash = vcs.generate_hash("main", 0.into()).unwrap();
     let node_v0 = LazyItem::new(v0_hash, MergedNode::new(HNSWLevel(2)));
 
     let v1_hash = vcs.add_next_version("main").unwrap();
     let node_v1 = LazyItem::new(v1_hash, MergedNode::new(HNSWLevel(2)));
-    node_v0.add_version(branch_id, 1, node_v1).unwrap();
+    node_v0.add_version(vcs.clone(), 1, node_v1).unwrap();
 
     let v2_hash = vcs.add_next_version("main").unwrap();
     let node_v2 = LazyItem::new(v2_hash, MergedNode::new(HNSWLevel(2)));
-    node_v0.add_version(branch_id, 2, node_v2).unwrap();
+    node_v0.add_version(vcs, 2, node_v2).unwrap();
 
-    let bufmans = Arc::new(BufferManagerFactory::new(temp_dir.as_ref().into()));
+    let bufmans = Arc::new(BufferManagerFactory::new(
+        temp_dir.as_ref().into(),
+        |root, ver| root.join(format!("{}.index", **ver)),
+    ));
     let cache = get_cache(bufmans.clone());
     let bufman = bufmans.get(&v0_hash).unwrap();
     let cursor = bufman.open_cursor().unwrap();
@@ -618,12 +625,14 @@ fn test_lazy_item_with_versions_serialization_and_validation() {
             .unwrap(),
     );
     let vcs = Arc::new(VersionControl::new(env).unwrap());
-    let branch_id = BranchId::new("main");
 
     let v0_hash = vcs.generate_hash("main", Version::from(0)).unwrap();
     let root = LazyItem::new(v0_hash, MergedNode::new(HNSWLevel(0)));
 
-    let bufmans = Arc::new(BufferManagerFactory::new(temp_dir.as_ref().into()));
+    let bufmans = Arc::new(BufferManagerFactory::new(
+        temp_dir.as_ref().into(),
+        |root, ver| root.join(format!("{}.index", **ver)),
+    ));
     let cache = get_cache(bufmans.clone());
     let bufman = bufmans.get(&v0_hash).unwrap();
     let cursor = bufman.open_cursor().unwrap();
@@ -631,7 +640,7 @@ fn test_lazy_item_with_versions_serialization_and_validation() {
     for i in 0..100 {
         let hash = vcs.add_next_version("main").unwrap();
         let next_version = LazyItem::new(hash, MergedNode::new(HNSWLevel(0)));
-        root.add_version(branch_id, i + 1, next_version).unwrap();
+        root.add_version(vcs.clone(), i + 1, next_version).unwrap();
     }
 
     let root_version_hash = vcs.get_version_hash(&v0_hash).unwrap().unwrap();
@@ -667,12 +676,14 @@ fn test_lazy_item_with_versions_multiple_serialization() {
             .unwrap(),
     );
     let vcs = Arc::new(VersionControl::new(env).unwrap());
-    let branch_id = BranchId::new("main");
 
     let v0_hash = vcs.generate_hash("main", Version::from(0)).unwrap();
     let root = LazyItem::new(v0_hash, MergedNode::new(HNSWLevel(0)));
 
-    let bufmans = Arc::new(BufferManagerFactory::new(temp_dir.as_ref().into()));
+    let bufmans = Arc::new(BufferManagerFactory::new(
+        temp_dir.as_ref().into(),
+        |root, ver| root.join(format!("{}.index", **ver)),
+    ));
     let cache = get_cache(bufmans.clone());
     let bufman = bufmans.get(&v0_hash).unwrap();
     let cursor = bufman.open_cursor().unwrap();
@@ -681,7 +692,7 @@ fn test_lazy_item_with_versions_multiple_serialization() {
     for i in 0..25 {
         let hash = vcs.add_next_version("main").unwrap();
         let next_version = LazyItem::new(hash, MergedNode::new(HNSWLevel(0)));
-        root.add_version(branch_id, i + 1, next_version).unwrap();
+        root.add_version(vcs.clone(), i + 1, next_version).unwrap();
     }
 
     validate_lazy_item_versions(
@@ -697,7 +708,7 @@ fn test_lazy_item_with_versions_multiple_serialization() {
     for i in 25..50 {
         let hash = vcs.add_next_version("main").unwrap();
         let next_version = LazyItem::new(hash, MergedNode::new(HNSWLevel(0)));
-        root.add_version(branch_id, i + 1, next_version).unwrap();
+        root.add_version(vcs.clone(), i + 1, next_version).unwrap();
     }
 
     validate_lazy_item_versions(
@@ -714,7 +725,7 @@ fn test_lazy_item_with_versions_multiple_serialization() {
     for i in 50..75 {
         let hash = vcs.add_next_version("main").unwrap();
         let next_version = LazyItem::new(hash, MergedNode::new(HNSWLevel(0)));
-        root.add_version(branch_id, i + 1, next_version).unwrap();
+        root.add_version(vcs.clone(), i + 1, next_version).unwrap();
     }
 
     validate_lazy_item_versions(
@@ -732,7 +743,7 @@ fn test_lazy_item_with_versions_multiple_serialization() {
     for i in 75..100 {
         let hash = vcs.add_next_version("main").unwrap();
         let next_version = LazyItem::new(hash, MergedNode::new(HNSWLevel(0)));
-        root.add_version(branch_id, i + 1, next_version).unwrap();
+        root.add_version(vcs.clone(), i + 1, next_version).unwrap();
     }
     validate_lazy_item_versions(
         vcs.clone(),
@@ -772,3 +783,125 @@ fn test_version_hashing_function_uniqueness() {
 
     assert_eq!(versions.iter().count(), 1000);
 }
+
+#[test]
+fn test_storage_serialization() {
+    let storages = [
+        Storage::UnsignedByte {
+            mag: 10,
+            quant_vec: vec![0, 1, 4],
+        },
+        Storage::SubByte {
+            mag: 34,
+            quant_vec: vec![vec![55, 35], vec![56, 23]],
+            resolution: 2,
+        },
+        Storage::HalfPrecisionFP {
+            mag: 4234.34,
+            quant_vec: vec![f16::from_f32(534.324), f16::from_f32(6453.3)],
+        },
+    ];
+    let (bufmans, cache, bufman, cursor, _dir) = setup_test(&1.into());
+    bufman.close_cursor(cursor).unwrap();
+
+    for (version, storage) in storages.into_iter().enumerate() {
+        let version = Hash::from(version as u32);
+        let bufman = bufmans.get(&version).unwrap();
+        let cursor = bufman.open_cursor().unwrap();
+        let offset = storage.serialize(bufmans.clone(), version, cursor).unwrap();
+        let file_index = FileIndex::Valid {
+            offset: FileOffset(offset),
+            version,
+        };
+        let deserialized: Storage = cache.clone().load_item(file_index).unwrap();
+
+        assert_eq!(deserialized, storage);
+    }
+}
+
+#[test]
+fn test_lazy_item_vec_serialization() {
+    let root_version = Hash::from(0);
+    let lazy_items = LazyItemVec::new();
+
+    lazy_items.push(LazyItem::from_data(1.into(), MergedNode::new(HNSWLevel(2))));
+    lazy_items.push(LazyItem::from_data(2.into(), MergedNode::new(HNSWLevel(2))));
+
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version);
+
+    let offset = lazy_items.serialize(bufmans, root_version, cursor).unwrap();
+    bufman.close_cursor(cursor).unwrap();
+    let file_index = FileIndex::Valid {
+        offset: FileOffset(offset),
+        version: root_version,
+    };
+
+    let deserialized: LazyItemSet<MergedNode> = cache.load_item(file_index).unwrap();
+
+    assert_eq!(lazy_items.len(), deserialized.len());
+    for (original, deserialized) in lazy_items.iter().zip(deserialized.iter()) {
+        match (original, deserialized) {
+            (
+                LazyItem::Valid {
+                    data: Some(mut original_arc),
+                    ..
+                },
+                LazyItem::Valid {
+                    data: Some(mut deserialized_arc),
+                    ..
+                },
+            ) => {
+                let original = original_arc.get();
+                let deserialized = deserialized_arc.get();
+                assert_eq!(original.hnsw_level, deserialized.hnsw_level);
+            }
+            _ => panic!("Deserialization mismatch"),
+        }
+    }
+}
+
+#[test]
+fn test_lazy_item_vec_linked_chunk_serialization() {
+    let root_version = Hash::from(0);
+    let lazy_items = LazyItemVec::new();
+    for i in 1..13 {
+        lazy_items.push(LazyItem::from_data(i.into(), MergedNode::new(HNSWLevel(2))));
+    }
+
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version);
+
+    let offset = lazy_items.serialize(bufmans, root_version, cursor).unwrap();
+    let file_index = FileIndex::Valid {
+        offset: FileOffset(offset),
+        version: root_version,
+    };
+    bufman.close_cursor(cursor).unwrap();
+
+    let deserialized: LazyItemSet<MergedNode> = cache.load_item(file_index).unwrap();
+
+    assert_eq!(lazy_items.len(), deserialized.len());
+    for (original, deserialized) in lazy_items.iter().zip(deserialized.iter()) {
+        match (original, deserialized) {
+            (
+                LazyItem::Valid {
+                    data: Some(mut original_arc),
+                    ..
+                },
+                LazyItem::Valid {
+                    data: Some(mut deserialized_arc),
+                    ..
+                },
+            ) => {
+                let original = original_arc.get();
+                let deserialized = deserialized_arc.get();
+                assert_eq!(original.hnsw_level, deserialized.hnsw_level);
+            }
+            _ => panic!("Deserialization mismatch"),
+        }
+    }
+}
+
+// #[test]
+// fn test_inverted_index_item_serialization() {
+//     let item = InvertedIndex::new();
+// }

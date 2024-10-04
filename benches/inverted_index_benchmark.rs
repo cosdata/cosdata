@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use cosdata::{models::types::SparseVector, storage::inverted_index::InvertedIndex};
+use cosdata::{models::types::SparseVector, storage::inverted_index_old::InvertedIndex};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use rayon::prelude::*;

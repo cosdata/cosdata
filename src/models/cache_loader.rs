@@ -1,5 +1,6 @@
 use crate::models::lru_cache::CachedValue;
-use crate::storage::inverted_index::InvertedIndexItem;
+use crate::storage::inverted_index_old::InvertedIndexItem;
+use crate::storage::inverted_index_sparse_ann::{InvertedIndexSparseAnn, InvertedIndexSparseAnnNode};
 use crate::storage::Storage;
 
 use super::buffered_io::{BufIoError, BufferManagerFactory};
@@ -18,7 +19,13 @@ use std::sync::{atomic::AtomicBool, Arc, RwLock};
 #[derive(Clone)]
 pub enum CacheItem {
     MergedNode(LazyItem<MergedNode>),
-    InvertedIndexItem(LazyItem<InvertedIndexItem<Storage>>),
+    Storage(LazyItem<Storage>),
+    InvertedIndexItemWithStorage(LazyItem<InvertedIndexItem<Storage>>),
+    Float(LazyItem<f32>),
+    Unsigned32(LazyItem<u32>),
+    InvertedIndexItemWithFloat(LazyItem<InvertedIndexItem<f32>>),
+    InvertedIndexSparseAnnNode(LazyItem<InvertedIndexSparseAnnNode>),
+    InvertedIndexSparseAnn(LazyItem<InvertedIndexSparseAnn>),
 }
 
 pub trait Cacheable: Clone + 'static {
@@ -40,9 +47,9 @@ impl Cacheable for MergedNode {
     }
 }
 
-impl Cacheable for InvertedIndexItem<Storage> {
+impl Cacheable for Storage {
     fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
-        if let CacheItem::InvertedIndexItem(item) = cache_item {
+        if let CacheItem::Storage(item) = cache_item {
             Some(item)
         } else {
             None
@@ -50,7 +57,91 @@ impl Cacheable for InvertedIndexItem<Storage> {
     }
 
     fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
-        CacheItem::InvertedIndexItem(item)
+        CacheItem::Storage(item)
+    }
+}
+
+impl Cacheable for InvertedIndexItem<Storage> {
+    fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
+        if let CacheItem::InvertedIndexItemWithStorage(item) = cache_item {
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
+        CacheItem::InvertedIndexItemWithStorage(item)
+    }
+}
+
+impl Cacheable for f32 {
+    fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
+        if let CacheItem::Float(item) = cache_item {
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
+        CacheItem::Float(item)
+    }
+}
+
+impl Cacheable for u32 {
+    fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
+        if let CacheItem::Unsigned32(item) = cache_item {
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
+        CacheItem::Unsigned32(item)
+    }
+}
+
+impl Cacheable for InvertedIndexItem<f32> {
+    fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
+        if let CacheItem::InvertedIndexItemWithFloat(item) = cache_item {
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
+        CacheItem::InvertedIndexItemWithFloat(item)
+    }
+}
+
+impl Cacheable for InvertedIndexSparseAnnNode {
+    fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
+        if let CacheItem::InvertedIndexSparseAnnNode(item) = cache_item {
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
+        CacheItem::InvertedIndexSparseAnnNode(item)
+    }
+}
+
+impl Cacheable for InvertedIndexSparseAnn {
+    fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
+        if let CacheItem::InvertedIndexSparseAnn(item) = cache_item {
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
+        CacheItem::InvertedIndexSparseAnn(item)
     }
 }
 
@@ -70,6 +161,7 @@ impl NodeRegistry {
             bufmans,
         }
     }
+
     pub fn get_object<T: Cacheable, F>(
         self: Arc<Self>,
         file_index: FileIndex,
@@ -207,7 +299,10 @@ impl NodeRegistry {
 
 pub fn load_cache() {
     // TODO: include db name in the path
-    let bufmans = Arc::new(BufferManagerFactory::new(Path::new(".").into()));
+    let bufmans = Arc::new(BufferManagerFactory::new(
+        Path::new(".").into(),
+        |root, ver| root.join(format!("{}.index", **ver)),
+    ));
 
     let file_index = FileIndex::Valid {
         offset: FileOffset(0),

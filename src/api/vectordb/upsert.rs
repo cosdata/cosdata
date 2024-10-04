@@ -1,19 +1,16 @@
 use actix_web::{web, HttpResponse};
 
 use crate::{
-    api_service::run_upload,
-    config_loader::Config,
-    convert_vectors,
-    models::{
+    api_service::run_upload, app_context::AppContext, convert_vectors, models::{
         rpc::{RPCResponseBody, UpsertVectors},
         types::get_app_env,
-    },
+    }
 };
 
 // Route: `/vectordb/upsert`
 pub(crate) async fn upsert(
     web::Json(body): web::Json<UpsertVectors>,
-    config: web::Data<Config>,
+    ctx: web::Data<AppContext>,
 ) -> HttpResponse {
     let env = match get_app_env() {
         Ok(env) => env,
@@ -37,9 +34,9 @@ pub(crate) async fn upsert(
     // Call run_upload with the extracted parameters
     web::block(move || {
         let __result = run_upload(
+            ctx.into_inner(),
             vec_store,
             convert_vectors(body.vectors),
-            config.into_inner(),
         );
     })
     .await

@@ -6,9 +6,9 @@ use arcshift::ArcShift;
 use dashmap::DashMap;
 
 use crate::models::buffered_io::BufferManagerFactory;
-use crate::models::cache_loader::NodeRegistry;
+use crate::models::cache_loader::{Cacheable, NodeRegistry};
 use crate::models::identity_collections::IdentityMapKey;
-use crate::models::lazy_load::{LazyItem, LazyItemMap};
+use crate::models::lazy_load::{LazyItem, LazyItemArray};
 use crate::models::serializer::CustomSerialize;
 use crate::models::types::SparseVector;
 
@@ -59,41 +59,13 @@ where
     pub dim_index: u32,
     pub implicit: bool,
     pub data: Arc<DashMap<IdentityMapKey, LazyItem<T>>>,
-    // TODO: benchmark if fixed size children array with lazy item refs
-    //  yields better performance
-    pub lazy_children: LazyItemMap<InvertedIndexItem<T>>,
-}
-
-impl<T> CustomSerialize for InvertedIndexItem<T>
-where
-    T: Clone + 'static,
-{
-    fn serialize(
-        &self,
-        bufmans: Arc<crate::models::buffered_io::BufferManagerFactory>,
-        version: crate::models::versioning::Hash,
-        cursor: u64,
-    ) -> Result<u32, crate::models::buffered_io::BufIoError> {
-        todo!()
-    }
-
-    fn deserialize(
-        bufmans: Arc<crate::models::buffered_io::BufferManagerFactory>,
-        file_index: crate::models::lazy_load::FileIndex,
-        cache: Arc<crate::models::cache_loader::NodeRegistry>,
-        max_loads: u16,
-        skipm: &mut std::collections::HashSet<u64>,
-    ) -> Result<Self, crate::models::buffered_io::BufIoError>
-    where
-        Self: Sized,
-    {
-        todo!()
-    }
+    pub lazy_children: LazyItemArray<InvertedIndexItem<T>, 16>,
 }
 
 impl<T> InvertedIndexItem<T>
 where
-    T: Clone + CustomSerialize + 'static,
+    T: Clone + Cacheable + CustomSerialize + 'static,
+    InvertedIndexItem<T>: CustomSerialize + Cacheable,
 {
     /// Creates a new `InvertedIndexItem` with the given dimension index and implicit flag.
     /// Initializes the data vector and children array.
@@ -102,7 +74,7 @@ where
             dim_index,
             implicit,
             data: Arc::new(DashMap::new()),
-            lazy_children: LazyItemMap::new(),
+            lazy_children: LazyItemArray::new(),
         }
     }
 
@@ -116,12 +88,11 @@ where
         let mut current_node = node;
         for &child_index in path {
             let new_dim_index = current_node.dim_index + POWERS_OF_4[child_index];
-            let key = IdentityMapKey::Int(child_index as u32);
             let new_child = LazyItem::new(0.into(), InvertedIndexItem::new(new_dim_index, true));
             loop {
                 if let Some(child) = current_node
                     .lazy_children
-                    .checked_insert(key.clone(), new_child.clone())
+                    .checked_insert(child_index, new_child.clone())
                 {
                     current_node = child.get_data(cache.clone());
                     break;
@@ -153,7 +124,7 @@ where
         match path.get(0) {
             Some(child_index) => self
                 .lazy_children
-                .get(&IdentityMapKey::Int((*child_index) as u32))
+                .get(*child_index)
                 .map(|data| {
                     data.get_data(cache.clone())
                         .get_value(&path[1..], vector_id, cache)
@@ -219,21 +190,38 @@ where
     T: Clone + 'static,
 {
     pub root: ArcShift<InvertedIndexItem<T>>,
-    cache: Arc<NodeRegistry>,
+    pub cache: Arc<NodeRegistry>,
 }
 
 impl<T> InvertedIndex<T>
 where
-    T: Clone + CustomSerialize + 'static,
+    T: Cacheable + Clone + CustomSerialize + 'static,
+    InvertedIndexItem<T>: CustomSerialize + Cacheable,
 {
     /// Creates a new `InvertedIndex` with an initial root node.
     pub fn new() -> Self {
-        let bufmans = Arc::new(BufferManagerFactory::new(Path::new(".").into()));
+        let bufmans = Arc::new(BufferManagerFactory::new(
+            Path::new(".").into(),
+            |root, ver| root.join(format!("{}.index", **ver)),
+        ));
         let cache = Arc::new(NodeRegistry::new(1000, bufmans));
         InvertedIndex {
             root: ArcShift::new(InvertedIndexItem::new(0, false)),
             cache,
         }
+    }
+
+    /// Finds the node at a given dimension
+    /// Traverses the tree iteratively and returns a reference to the node.
+    pub fn find_node(&self, dim_index: u32) -> Option<ArcShift<InvertedIndexItem<T>>> {
+        let mut current_node = self.root.clone();
+        let path = calculate_path(dim_index, self.root.dim_index);
+        for child_index in path {
+            let child = current_node.lazy_children.get(child_index)?;
+            current_node = child.get_data(self.cache.clone());
+        }
+
+        Some(current_node)
     }
 
     /// Retrieves a value from the index at the specified dimension index.
@@ -422,7 +410,10 @@ mod test {
                 ArcShift::new(InvertedIndexItem::new(0, false));
             let root_clone1 = root.clone();
             let mut root_clone2 = root.clone();
-            let bufmans = Arc::new(BufferManagerFactory::new(Path::new(".").into()));
+            let bufmans = Arc::new(BufferManagerFactory::new(
+                Path::new(".").into(),
+                |root, ver| root.join(format!("{}.index", **ver)),
+            ));
             let cache = Arc::new(NodeRegistry::new(1000, bufmans));
             let cache1 = cache.clone();
             let cache2 = cache.clone();
@@ -451,7 +442,7 @@ mod test {
 
             let child_0 = node
                 .lazy_children
-                .get(&IdentityMapKey::Int(0 as u32))
+                .get(0)
                 .map(|data| data.get_data(cache.clone()));
             assert!(child_0.is_some(), "Child 0 should exist");
             let child_0 = child_0.unwrap();
@@ -459,7 +450,7 @@ mod test {
             let child_1 = child_0
                 .shared_get()
                 .lazy_children
-                .get(&IdentityMapKey::Int(1 as u32))
+                .get(1)
                 .map(|data| data.get_data(cache.clone()));
             assert!(child_1.is_some(), "Child 1 should exist");
         }

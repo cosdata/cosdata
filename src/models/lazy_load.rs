@@ -1,4 +1,5 @@
-use super::cache_loader::NodeRegistry;
+use super::buffered_io::BufferManagerFactory;
+use super::cache_loader::{Cacheable, NodeRegistry};
 use super::common::WaCustomError;
 use super::identity_collections::{Identifiable, IdentityMap, IdentityMapKey, IdentitySet};
 use super::serializer::CustomSerialize;
@@ -6,6 +7,7 @@ use super::types::{FileOffset, STM};
 use super::versioning::*;
 use arcshift::ArcShift;
 use core::panic;
+use std::collections::HashSet;
 use std::fmt;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -197,6 +199,20 @@ pub struct LazyItemVec<T: Clone + 'static> {
     pub items: STM<Vec<LazyItem<T>>>,
 }
 
+#[derive(Clone)]
+pub struct LazyItemArray<T: Clone + 'static, const N: usize> {
+    // An array-based structure to store `LazyItem`s with a fixed size.
+    // This allows for a fixed number of items to be stored, providing a predictable and
+    // memory-efficient way to manage a specific number of items.
+    // `STM` implies concurrent updates and access management with Software Transactional Memory.
+    //
+    // Use Case:
+    // - Ideal for scenarios where a fixed number of items need to be managed, such as children in
+    // an inverted index or versions in a version control system.
+    // - Provides O(1) time complexity for access by index and efficient memory usage.
+    pub items: STM<[Option<LazyItem<T>>; N]>,
+}
+
 impl<T: Clone + 'static> SyncPersist for LazyItem<T> {
     fn set_persistence(&self, flag: bool) {
         if let Self::Valid { persist_flag, .. } = self {
@@ -298,7 +314,7 @@ impl<T: Clone + 'static> LazyItem<T> {
 
     pub fn add_version(
         &self,
-        branch_id: BranchId,
+        vcs: Arc<VersionControl>,
         version: u32,
         lazy_item: LazyItem<T>,
     ) -> lmdb::Result<()> {
@@ -308,12 +324,12 @@ impl<T: Clone + 'static> LazyItem<T> {
             ..
         } = self
         {
-            // Extract the last 4 bytes of the branch_id to compute the version offset
-            let branch_last_4_bytes = (*branch_id & 0xFFFFFFFF) as u32;
-            let current_version = **version_id ^ branch_last_4_bytes;
-
+            // Retrieve current version from LMDB
+            let version_hash = vcs
+                .get_version_hash(version_id)?
+                .ok_or(lmdb::Error::NotFound)?;
             // Calculate the difference between the target version and the current version
-            let target_diff = version - current_version;
+            let target_diff = version - *version_hash.version;
 
             // Use the largest power of 4 below the target difference to find the appropriate
             // checkpoint for storing this new version.
@@ -321,7 +337,7 @@ impl<T: Clone + 'static> LazyItem<T> {
 
             // If a version already exists at the calculated index, recursively add the new version.
             if let Some(existing_version) = versions.get(index as usize) {
-                return existing_version.add_version(branch_id, version, lazy_item);
+                return existing_version.add_version(vcs, version, lazy_item);
             } else {
                 // Insert the new version at the calculated index if none exists there yet.
                 versions.insert(index as usize, lazy_item);
@@ -350,8 +366,12 @@ impl<T: Clone + 'static> LazyItem<T> {
     }
 }
 
-impl<T: Clone + CustomSerialize + 'static> LazyItem<T> {
-    pub fn try_get_data(&self, cache: Arc<NodeRegistry>) -> Result<ArcShift<T>, WaCustomError> {
+impl<T: Clone + CustomSerialize + Cacheable + 'static> LazyItem<T> {
+    pub fn try_get_data(
+        &self,
+        cache: Arc<NodeRegistry>,
+        index_manager: Arc<BufferManagerFactory>
+    ) -> Result<ArcShift<T>, WaCustomError> {
         if let Self::Valid {
             data, file_index, ..
         } = self
@@ -360,15 +380,31 @@ impl<T: Clone + CustomSerialize + 'static> LazyItem<T> {
                 return Ok(data.clone());
             }
 
-            let Some(file_index) = file_index.clone().get().clone() else {
-                return Err(WaCustomError::LazyLoadingError(
+            let mut file_index_arc = file_index.clone();
+            let offset = file_index_arc.get().as_ref()
+                .ok_or(WaCustomError::LazyLoadingError(
                     "LazyItem offset is None".to_string(),
-                ));
-            };
+                ))?;
+            let item: LazyItem<T> = LazyItem::deserialize(
+                index_manager,
+                offset.clone(),
+                cache,
+                1000,
+                &mut HashSet::new()
+            ).map_err(|e| WaCustomError::BufIo(Arc::new(e)))?;
+            match item {
+                Self::Valid { data, .. } => {
+                    data.ok_or(WaCustomError::LazyLoadingError(
+                        "Deserialized LazyItem is None".to_string()
+                    ))
+                },
+                Self::Invalid => {
+                    return Err(WaCustomError::LazyLoadingError(
+                        "Deserialized LazyItem is invalid".to_string(),
+                    ));
+                },
+            }
 
-            let deserialized = cache.load_item(file_index)?;
-
-            Ok(ArcShift::new(deserialized))
         } else {
             return Err(WaCustomError::LazyLoadingError(
                 "LazyItem is invalid".to_string(),
@@ -805,5 +841,65 @@ impl<T: Clone + 'static> LazyItemVec<T> {
     pub fn clear(&self) {
         let mut items = self.items.clone();
         items.transactional_update(|_| Vec::new()).unwrap();
+    }
+}
+
+impl<T: Clone + 'static, const N: usize> LazyItemArray<T, N> {
+    pub fn new() -> Self {
+        let arr: [Option<LazyItem<T>>; N] = std::array::from_fn(|_| None);
+        Self {
+            items: STM::new(arr, 1, true),
+        }
+    }
+
+    pub fn from_vec(vec: Vec<Option<LazyItem<T>>>) -> Self {
+        let arr = LazyItemArray::new();
+        let _ = vec.iter().enumerate().map(|(index, value)| {
+            match value {
+                Some(val) => arr.insert(index, val.clone()),
+                None => {}
+            };
+        });
+        return arr;
+    }
+
+    pub fn insert(&self, index: usize, value: LazyItem<T>) {
+        let mut arc = self.items.clone();
+
+        arc.transactional_update(|set| {
+            let mut arr = set.clone();
+            arr[index] = Some(value.clone());
+            arr
+        })
+        .unwrap();
+    }
+
+    pub fn checked_insert(&self, index: usize, value: LazyItem<T>) -> Option<LazyItem<T>> {
+        let mut arc = self.items.clone();
+
+        let (_, new_child) = arc.arcshift.rcu_project(
+            |arr| {
+                (arr.get(index).unwrap().is_none())
+                    .then(|| {
+                        let mut new_arr = arr.clone();
+                        new_arr[index] = Some(value.clone());
+                        Some(new_arr)
+                    })
+                    .flatten()
+            },
+            |item| item.get(index).map(|item| item.clone()),
+        );
+
+        new_child.flatten()
+    }
+
+    pub fn get(&self, index: usize) -> Option<LazyItem<T>> {
+        let mut arc = self.items.clone();
+        arc.get().get(index).cloned().flatten()
+    }
+
+    pub fn is_empty(&mut self) -> bool {
+        let mut arc = self.items.clone();
+        arc.get().iter().all(Option::is_none)
     }
 }

@@ -183,7 +183,6 @@ if __name__ == "__main__":
 
     # End time
     end_time = time.time()
-    exit()
 
     # Apply perturbations to shortlisted vectors
     # for i in range(len(shortlisted_vectors)):
@@ -230,7 +229,7 @@ if __name__ == "__main__":
 
 
     if best_matches:
-        best_match_average = sum(best_matches) / len(best_matches)
+        best_match_average = sum(m["CosineSimilarity"] for m in best_matches) / len(best_matches)
         print(f"\n\nBest Match Average: {best_match_average}")
     else:
         print("No valid matches found.")
