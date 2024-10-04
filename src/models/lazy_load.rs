@@ -320,15 +320,12 @@ impl<T: Clone + 'static> LazyItem<T> {
         let hash = self.get_current_version();
         // Retrieve current version from LMDB
         let version_hash = vcs.get_version_hash(&hash)?.ok_or(lmdb::Error::NotFound)?;
-        let latest_version = self.get_latest_version().get_current_version();
-        let latest_version_hash = vcs
-            .get_version_hash(&latest_version)?
-            .ok_or(lmdb::Error::NotFound)?;
+        let latest_local_version_number = self.get_latest_version().1;
         self.add_version_inner(
             vcs,
             lazy_item,
             version_hash,
-            *latest_version_hash.version + 1,
+            latest_local_version_number + 1,
         )
     }
 
@@ -417,13 +414,18 @@ impl<T: Clone + 'static> LazyItem<T> {
         prev.get_version_inner(vcs.clone(), version, prev_version_hash)
     }
 
-    pub fn get_latest_version(&self) -> LazyItem<T> {
+    // returns (latest version of current node, local version number)
+    pub fn get_latest_version(&self) -> (LazyItem<T>, u32) {
         if let Self::Valid { versions, .. } = self {
             if let Some(last) = versions.last() {
-                return last.get_latest_version();
+                let (latest_version, relative_local_version_number) = last.get_latest_version();
+                return (
+                    latest_version,
+                    (1u32 << versions.len() as u32) + relative_local_version_number,
+                );
             }
-        }
-        self.clone()
+        };
+        (self.clone(), 0)
     }
 
     pub fn set_versions_persistence(&self, flag: bool) {
@@ -441,7 +443,7 @@ impl<T: Clone + CustomSerialize + Cacheable + 'static> LazyItem<T> {
     pub fn try_get_data(
         &self,
         cache: Arc<NodeRegistry>,
-        index_manager: Arc<BufferManagerFactory>
+        index_manager: Arc<BufferManagerFactory>,
     ) -> Result<ArcShift<T>, WaCustomError> {
         if let Self::Valid {
             data, file_index, ..
@@ -452,7 +454,9 @@ impl<T: Clone + CustomSerialize + Cacheable + 'static> LazyItem<T> {
             }
 
             let mut file_index_arc = file_index.clone();
-            let offset = file_index_arc.get().as_ref()
+            let offset = file_index_arc
+                .get()
+                .as_ref()
                 .ok_or(WaCustomError::LazyLoadingError(
                     "LazyItem offset is None".to_string(),
                 ))?;
@@ -461,21 +465,19 @@ impl<T: Clone + CustomSerialize + Cacheable + 'static> LazyItem<T> {
                 offset.clone(),
                 cache,
                 1000,
-                &mut HashSet::new()
-            ).map_err(|e| WaCustomError::BufIo(Arc::new(e)))?;
+                &mut HashSet::new(),
+            )
+            .map_err(|e| WaCustomError::BufIo(Arc::new(e)))?;
             match item {
-                Self::Valid { data, .. } => {
-                    data.ok_or(WaCustomError::LazyLoadingError(
-                        "Deserialized LazyItem is None".to_string()
-                    ))
-                },
+                Self::Valid { data, .. } => data.ok_or(WaCustomError::LazyLoadingError(
+                    "Deserialized LazyItem is None".to_string(),
+                )),
                 Self::Invalid => {
                     return Err(WaCustomError::LazyLoadingError(
                         "Deserialized LazyItem is invalid".to_string(),
                     ));
-                },
+                }
             }
-
         } else {
             return Err(WaCustomError::LazyLoadingError(
                 "LazyItem is invalid".to_string(),
