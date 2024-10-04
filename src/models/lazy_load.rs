@@ -353,6 +353,48 @@ impl<T: Clone + 'static> LazyItem<T> {
         }
     }
 
+    pub fn get_version(
+        &self,
+        vcs: Arc<VersionControl>,
+        version: u32,
+    ) -> lmdb::Result<Option<LazyItem<T>>> {
+        if let Self::Valid {
+            versions,
+            version_id,
+            ..
+        } = self
+        {
+            let version_hash = vcs
+                .get_version_hash(version_id)?
+                .ok_or(lmdb::Error::NotFound)?;
+            if version == *version_hash.version {
+                return Ok(Some(self.clone()));
+            }
+            let target_diff = version - *version_hash.version;
+            let index = largest_power_of_4_below(target_diff);
+            let Some(version_at_index) = versions.get(index as usize) else {
+                return Ok(None);
+            };
+            let power = 1u32 << (index * 2);
+            if power == target_diff {
+                Ok(Some(version_at_index))
+            } else {
+                version_at_index.get_version(vcs, version)
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn get_latest_version(&self) -> LazyItem<T> {
+        if let Self::Valid { versions, .. } = self {
+            if let Some(last) = versions.last() {
+                return last.get_latest_version();
+            }
+        }
+        self.clone()
+    }
+
     pub fn set_versions_persistence(&self, flag: bool) {
         self.set_persistence(flag);
         if let Some(versions) = self.get_versions() {
@@ -768,6 +810,11 @@ impl<T: Clone + 'static> LazyItemVec<T> {
     pub fn get(&self, index: usize) -> Option<LazyItem<T>> {
         let mut items = self.items.clone();
         items.get().get(index).cloned()
+    }
+
+    pub fn last(&self) -> Option<LazyItem<T>> {
+        let mut items = self.items.clone();
+        items.get().last().cloned()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = LazyItem<T>> {

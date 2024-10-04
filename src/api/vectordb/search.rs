@@ -1,9 +1,13 @@
+use std::{path::Path, sync::Arc};
+
 use actix_web::{web, HttpResponse};
 
 use crate::{
     api_service::ann_vector_query,
     convert_option_vec,
     models::{
+        buffered_io::BufferManagerFactory,
+        cache_loader::NodeRegistry,
         rpc::{RPCResponseBody, VectorANN},
         types::get_app_env,
     },
@@ -24,7 +28,20 @@ pub(crate) async fn search(web::Json(body): web::Json<VectorANN>) -> HttpRespons
         }
     };
 
-    let result = match ann_vector_query(vec_store.clone(), body.vector).await {
+    let result = match ann_vector_query(
+        vec_store.clone(),
+        // TODO: use global cache
+        Arc::new(NodeRegistry::new(
+            1000,
+            Arc::new(BufferManagerFactory::new(
+                Path::new(".").into(),
+                |root, ver| root.join(format!("{}.index", **ver)),
+            )),
+        )),
+        body.vector,
+    )
+    .await
+    {
         Ok(result) => result,
         Err(err) => return HttpResponse::InternalServerError().body(err.to_string()),
     };

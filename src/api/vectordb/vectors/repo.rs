@@ -1,8 +1,10 @@
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use crate::{
-    api::vectordb::collections, api_service::run_upload, config_loader::Config,
-    models::rpc::VectorIdValue,
+    api::vectordb::collections,
+    api_service::run_upload,
+    config_loader::Config,
+    models::{buffered_io::BufferManagerFactory, cache_loader::NodeRegistry, rpc::VectorIdValue},
 };
 
 use super::{
@@ -22,10 +24,17 @@ pub(crate) async fn create_vector(
         .await
         .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
 
-    // error cases that happens within run_upload is not handled
-    // this method always return a successful response with the data sent by the user
+    // TODO: handle the error
     run_upload(
         collection,
+        // TODO: use global cache
+        Arc::new(NodeRegistry::new(
+            1000,
+            Arc::new(BufferManagerFactory::new(
+                Path::new(".").into(),
+                |root, ver| root.join(format!("{}.index", **ver)),
+            )),
+        )),
         vec![(
             create_vector_dto.id.clone(),
             create_vector_dto.values.clone(),
@@ -55,10 +64,17 @@ pub(crate) async fn update_vector(
         .await
         .map_err(|e| VectorsError::FailedToUpdateVector(e.to_string()))?;
 
-    // error cases that happens within run_upload is not handled
-    // this method always return a successful response with the data sent by the user
+    // TODO: handle the error
     run_upload(
         collection,
+        // TODO: use global cache
+        Arc::new(NodeRegistry::new(
+            1000,
+            Arc::new(BufferManagerFactory::new(
+                Path::new(".").into(),
+                |root, ver| root.join(format!("{}.index", **ver)),
+            )),
+        )),
         vec![(vector_id.clone(), update_vector_dto.values.clone())],
         config,
     );

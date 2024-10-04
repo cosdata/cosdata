@@ -1,5 +1,6 @@
 use crate::config_loader::Config;
 use crate::models::buffered_io::*;
+use crate::models::cache_loader::NodeRegistry;
 use crate::models::common::*;
 use crate::models::file_persist::*;
 use crate::models::lazy_load::*;
@@ -165,15 +166,15 @@ pub async fn init_vector_store(
 
 pub fn run_upload(
     vec_store: Arc<VectorStore>,
+    cache: Arc<NodeRegistry>,
     vecs: Vec<(VectorIdValue, Vec<f32>)>,
     config: Arc<Config>,
 ) -> Result<(), WaCustomError> {
-    let current_version = vec_store.get_current_version();
-    let next_version = vec_store
+    let current_version = vec_store
         .vcs
         .add_next_version("main")
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-    vec_store.set_current_version(next_version);
+    vec_store.set_current_version(current_version);
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -181,9 +182,6 @@ pub fn run_upload(
         .open(format!("{}.vec_raw", *current_version))
         .map_err(|e| WaCustomError::FsError(e.to_string()))?;
     let bufman = Arc::new(BufferManager::new(file).map_err(BufIoError::Io)?);
-    let cursor = bufman.open_cursor()?;
-    bufman.write_u32_with_cursor(cursor, *next_version)?;
-    bufman.close_cursor(cursor)?;
     vecs.into_par_iter()
         .map(|(id, vec)| {
             let hash_vec = convert_value(id);
@@ -217,7 +215,7 @@ pub fn run_upload(
     txn.abort();
 
     if count_unindexed >= config.upload_threshold {
-        index_embeddings(vec_store.clone(), config.upload_process_batch_size)?;
+        index_embeddings(vec_store.clone(), cache, config.upload_process_batch_size)?;
     }
 
     // TODO: include db name in the path
@@ -234,6 +232,7 @@ pub fn run_upload(
 
 pub async fn ann_vector_query(
     vec_store: Arc<VectorStore>,
+    cache: Arc<NodeRegistry>,
     query: Vec<f32>,
 ) -> Result<Option<Vec<(VectorId, MetricResult)>>, WaCustomError> {
     let vector_store = vec_store.clone();
@@ -250,9 +249,10 @@ pub async fn ann_vector_query(
 
     let results = ann_search(
         vec_store.clone(),
+        cache,
         vec_emb,
         root.item.clone().get().clone(),
-        vec_store.max_cache_level.try_into().unwrap(),
+        HNSWLevel(vec_store.max_cache_level),
     )?;
     let output = remove_duplicates_and_filter(results);
     Ok(output)

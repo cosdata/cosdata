@@ -1,3 +1,5 @@
+use std::{path::Path, sync::Arc};
+
 use actix_web::{web, HttpResponse};
 
 use crate::{
@@ -5,6 +7,8 @@ use crate::{
     config_loader::Config,
     convert_vectors,
     models::{
+        buffered_io::BufferManagerFactory,
+        cache_loader::NodeRegistry,
         rpc::{RPCResponseBody, UpsertVectors},
         types::get_app_env,
     },
@@ -36,8 +40,17 @@ pub(crate) async fn upsert(
 
     // Call run_upload with the extracted parameters
     web::block(move || {
-        let __result = run_upload(
+        // TODO: handle the error
+        run_upload(
             vec_store,
+            // TODO: use global cache
+            Arc::new(NodeRegistry::new(
+                1000,
+                Arc::new(BufferManagerFactory::new(
+                    Path::new(".").into(),
+                    |root, ver| root.join(format!("{}.index", **ver)),
+                )),
+            )),
             convert_vectors(body.vectors),
             config.into_inner(),
         );
