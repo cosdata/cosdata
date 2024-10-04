@@ -11,6 +11,7 @@ mod lazy_item_set;
 mod lazy_item_vec;
 mod metric_distance;
 mod neighbour;
+mod new_struct;
 mod node;
 mod storage;
 mod vector;

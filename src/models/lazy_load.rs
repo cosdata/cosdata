@@ -213,6 +213,11 @@ pub struct LazyItemArray<T: Clone + 'static, const N: usize> {
     pub items: STM<[Option<LazyItem<T>>; N]>,
 }
 
+#[derive(Clone)]
+pub struct NewStruct {
+    pub items: Vec<(Box<[Option<u32>; 64]>, bool)>,
+}
+
 impl<T: Clone + 'static> SyncPersist for LazyItem<T> {
     fn set_persistence(&self, flag: bool) {
         if let Self::Valid { persist_flag, .. } = self {
@@ -370,7 +375,7 @@ impl<T: Clone + CustomSerialize + Cacheable + 'static> LazyItem<T> {
     pub fn try_get_data(
         &self,
         cache: Arc<NodeRegistry>,
-        index_manager: Arc<BufferManagerFactory>
+        index_manager: Arc<BufferManagerFactory>,
     ) -> Result<ArcShift<T>, WaCustomError> {
         if let Self::Valid {
             data, file_index, ..
@@ -381,7 +386,9 @@ impl<T: Clone + CustomSerialize + Cacheable + 'static> LazyItem<T> {
             }
 
             let mut file_index_arc = file_index.clone();
-            let offset = file_index_arc.get().as_ref()
+            let offset = file_index_arc
+                .get()
+                .as_ref()
                 .ok_or(WaCustomError::LazyLoadingError(
                     "LazyItem offset is None".to_string(),
                 ))?;
@@ -390,21 +397,19 @@ impl<T: Clone + CustomSerialize + Cacheable + 'static> LazyItem<T> {
                 offset.clone(),
                 cache,
                 1000,
-                &mut HashSet::new()
-            ).map_err(|e| WaCustomError::BufIo(Arc::new(e)))?;
+                &mut HashSet::new(),
+            )
+            .map_err(|e| WaCustomError::BufIo(Arc::new(e)))?;
             match item {
-                Self::Valid { data, .. } => {
-                    data.ok_or(WaCustomError::LazyLoadingError(
-                        "Deserialized LazyItem is None".to_string()
-                    ))
-                },
+                Self::Valid { data, .. } => data.ok_or(WaCustomError::LazyLoadingError(
+                    "Deserialized LazyItem is None".to_string(),
+                )),
                 Self::Invalid => {
                     return Err(WaCustomError::LazyLoadingError(
                         "Deserialized LazyItem is invalid".to_string(),
                     ));
-                },
+                }
             }
-
         } else {
             return Err(WaCustomError::LazyLoadingError(
                 "LazyItem is invalid".to_string(),
@@ -901,5 +906,35 @@ impl<T: Clone + 'static, const N: usize> LazyItemArray<T, N> {
     pub fn is_empty(&mut self) -> bool {
         let mut arc = self.items.clone();
         arc.get().iter().all(Option::is_none)
+    }
+}
+
+impl NewStruct {
+    pub fn new() -> Self {
+        Self { items: Vec::new() }
+    }
+
+    pub fn insert(&mut self, vec_id: u32, value: u32) {
+        let insert_dimension = vec_id % 64;
+        let insert_index = vec_id / 64;
+
+        if self.items.len() <= insert_index as usize {
+            self.items
+                .resize(insert_index as usize + 1, (Box::new([None; 64]), false));
+        }
+
+        self.items[insert_index as usize].0[insert_dimension as usize] = Some(value);
+        self.items[insert_index as usize].1 = false;
+    }
+
+    pub fn get(&self, vec_id: u32) -> Option<u32> {
+        let insert_dimension = vec_id % 64;
+        let insert_index = vec_id / 64;
+
+        if self.items.len() <= insert_index as usize {
+            return None;
+        }
+
+        self.items[insert_index as usize].0[insert_dimension as usize]
     }
 }
