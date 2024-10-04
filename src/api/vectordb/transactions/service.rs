@@ -1,10 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    api::vectordb::vectors::{
-        self,
-        dtos::{CreateVectorDto, CreateVectorResponseDto},
-    },
+    api::vectordb::vectors::dtos::{CreateVectorDto, CreateVectorResponseDto},
     app_context::AppContext,
 };
 
@@ -26,11 +23,9 @@ pub(crate) async fn commit_transaction(
 pub(crate) async fn create_vector_in_transaction(
     ctx: Arc<AppContext>,
     collection_id: &str,
+    transaction_id: &str,
     create_vector_dto: CreateVectorDto,
 ) -> Result<CreateVectorResponseDto, TransactionError> {
-    let vector =
-        vectors::service::create_vector_without_committing(ctx, collection_id, create_vector_dto)
-            .await
-            .map_err(|e| TransactionError::FailedToCreateVector(e.to_string()))?;
-    Ok(vector)
+    repo::create_vector_without_committing(ctx, collection_id, transaction_id, create_vector_dto)
+        .await
 }

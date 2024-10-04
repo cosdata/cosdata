@@ -3,8 +3,8 @@ use actix_web::{web, Scope};
 mod controller;
 pub(crate) mod dtos;
 mod error;
-mod repo;
-pub(crate) mod service;
+pub(crate) mod repo;
+mod service;
 
 pub(crate) fn vectors_module() -> Scope {
     let vectors_module = web::scope("/collections/{collection_id}/vectors")

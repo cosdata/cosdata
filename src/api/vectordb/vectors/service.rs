@@ -19,14 +19,6 @@ pub(crate) async fn create_vector(
     repo::create_vector(ctx, collection_id, create_vector_dto).await
 }
 
-pub(crate) async fn create_vector_without_committing(
-    ctx: Arc<AppContext>,
-    collection_id: &str,
-    create_vector_dto: CreateVectorDto,
-) -> Result<CreateVectorResponseDto, VectorsError> {
-    repo::create_vector_without_committing(ctx, collection_id, create_vector_dto).await
-}
-
 pub(crate) async fn get_vector_by_id(
     collection_id: &str,
     vector_id: &str,
