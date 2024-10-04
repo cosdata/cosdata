@@ -4,6 +4,7 @@ use actix_web::{web, HttpResponse};
 
 use crate::{
     api_service::ann_vector_query,
+    app_context::AppContext,
     convert_option_vec,
     models::{
         buffered_io::BufferManagerFactory,
@@ -14,7 +15,10 @@ use crate::{
 };
 
 // Route: `/vectordb/search`
-pub(crate) async fn search(web::Json(body): web::Json<VectorANN>) -> HttpResponse {
+pub(crate) async fn search(
+    web::Json(body): web::Json<VectorANN>,
+    ctx: web::Data<AppContext>,
+) -> HttpResponse {
     let env = match get_app_env() {
         Ok(env) => env,
         Err(_) => return HttpResponse::InternalServerError().body("Env initialization error"),
@@ -28,23 +32,11 @@ pub(crate) async fn search(web::Json(body): web::Json<VectorANN>) -> HttpRespons
         }
     };
 
-    let result = match ann_vector_query(
-        vec_store.clone(),
-        // TODO: use global cache
-        Arc::new(NodeRegistry::new(
-            1000,
-            Arc::new(BufferManagerFactory::new(
-                Path::new(".").into(),
-                |root, ver| root.join(format!("{}.index", **ver)),
-            )),
-        )),
-        body.vector,
-    )
-    .await
-    {
-        Ok(result) => result,
-        Err(err) => return HttpResponse::InternalServerError().body(err.to_string()),
-    };
+    let result =
+        match ann_vector_query(ctx.node_registry.clone(), vec_store.clone(), body.vector).await {
+            Ok(result) => result,
+            Err(err) => return HttpResponse::InternalServerError().body(err.to_string()),
+        };
 
     let response_data = RPCResponseBody::RespVectorKNN {
         knn: convert_option_vec(result),

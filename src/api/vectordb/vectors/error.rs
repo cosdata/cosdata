@@ -4,6 +4,8 @@ use actix_web::{
 };
 use std::fmt::Display;
 
+use crate::WaCustomError;
+
 #[derive(Debug)]
 pub(crate) enum VectorsError {
     NotFound,
@@ -12,6 +14,7 @@ pub(crate) enum VectorsError {
     FailedToUpdateVector(String),
     FailedToFindSimilarVectors(String),
     NotImplemented,
+    WaCustom(WaCustomError),
 }
 
 impl Display for VectorsError {
@@ -30,6 +33,9 @@ impl Display for VectorsError {
             }
             VectorsError::FailedToFindSimilarVectors(msg) => {
                 write!(f, "Failed to find similar vectors due to: {}", msg)
+            },
+            VectorsError::WaCustom(e) => {
+                write!(f, "Vector operation failed due to internal error: {e:?}")
             }
         }
     }
@@ -49,6 +55,7 @@ impl ResponseError for VectorsError {
             Self::NotImplemented => StatusCode::BAD_REQUEST,
             VectorsError::FailedToUpdateVector(_) => StatusCode::BAD_REQUEST,
             VectorsError::FailedToFindSimilarVectors(_) => StatusCode::BAD_REQUEST,
+            VectorsError::WaCustom(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }

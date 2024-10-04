@@ -1,0 +1,36 @@
+* Use of LMDB in Cosdata
+** LMDB
+   - Cosdata uses LMDB for storing various metadata
+   - https://www.symas.com/lmdb
+   - Rust [[https://docs.rs/lmdb/latest/lmdb/][crate]]
+** Databases
+*** metadata
+**** Keys
+***** =current_version=
+      version hash
+***** =count_unindexed=
+      To keep track of no. of embeddings that have been written to the
+      ~vec_raw~ file but yet to be indexed
+***** =count_indexed=
+      No. of embeddings that have been indexed
+***** =next_file_offset=
+      File offset upto which embeddings have been written to the
+      ~vec_raw~ file. Value is serialized form of ~EmbeddingOffset~
+*** embeddings
+    - Raw vector embeddings are stored as key-value pairs
+    - Keys: Serialized ~VectorId~
+    - Values: Offset to locate where the raw vector is written in the
+      ~vec_raw~ file.
+**** Why are embeddings offsets stored in lmdb?
+     Purely in order to CRUD API to fetch vectors that are previously
+     created. Not used for indexing and search operations
+*** versions
+    - Key: u32 hash obtained by performing bitwise operations on
+      version and branch.
+      + The =current_version= key in ~metadata~ db is a reference to
+        one of the keys stored in this db.
+    - Value: branch (u64) and version (u32) and timestamp (u32)
+      serialized together (total size 16 bytes).
+*** branches
+    - Key: branch id as (le) bytes (u32)
+    - Value: serialized ~BranchInfo~ struct

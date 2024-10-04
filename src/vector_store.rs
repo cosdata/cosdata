@@ -1,5 +1,5 @@
 use crate::distance::DistanceFunction;
-use crate::models::buffered_io::{BufIoError, BufferManager, BufferManagerFactory};
+use crate::models::buffered_io::{BufferManager, BufferManagerFactory};
 use crate::models::cache_loader::NodeRegistry;
 use crate::models::common::*;
 use crate::models::file_persist::*;
@@ -18,13 +18,13 @@ use smallvec::SmallVec;
 use std::array::TryFromSliceError;
 use std::cmp::Ordering;
 use std::collections::HashSet;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::SeekFrom;
 use std::sync::Arc;
 
 pub fn ann_search(
+    node_registry: Arc<NodeRegistry>,
     vec_store: Arc<VectorStore>,
-    cache: Arc<NodeRegistry>,
     vector_emb: QuantizedVectorEmbedding,
     cur_entry: LazyItem<MergedNode>,
     cur_level: HNSWLevel,
@@ -75,8 +75,8 @@ pub fn ann_search(
     };
 
     let z = traverse_find_nearest(
+        node_registry.clone(),
         vec_store.clone(),
-        cache.clone(),
         cur_entry.clone(),
         fvec.clone(),
         vector_emb.hash_vec.clone(),
@@ -100,9 +100,9 @@ pub fn ann_search(
         Some(vec![])
     } else {
         ann_search(
-            vec_store.clone(),
-            cache,
-            vector_emb.clone(),
+            node_registry,
+            vec_store,
+            vector_emb,
             z[0].0.clone(),
             HNSWLevel(cur_level.0 - 1),
         )?
@@ -395,8 +395,10 @@ pub fn insert_embedding(
 }
 
 pub fn index_embeddings(
+    node_registry: Arc<NodeRegistry>,
+    index_manager: Arc<BufferManagerFactory>,
+    vec_raw_manager: &BufferManagerFactory,
     vec_store: Arc<VectorStore>,
-    cache: Arc<NodeRegistry>,
     upload_process_batch_size: usize,
 ) -> Result<(), WaCustomError> {
     let env = vec_store.lmdb.env.clone();
@@ -462,8 +464,9 @@ pub fn index_embeddings(
                 };
 
                 index_embedding(
+                    node_registry.clone(),
+                    index_manager.clone(),
                     vec_store.clone(),
-                    cache.clone(),
                     None,
                     embedding,
                     vec_store.root_vec.item.clone().get().clone(),
@@ -511,11 +514,7 @@ pub fn index_embeddings(
         Ok(())
     };
 
-    let file = OpenOptions::new()
-        .read(true)
-        .open(format!("{}.vec_raw", *version))
-        .map_err(|e| WaCustomError::FsError(e.to_string()))?;
-    let bufman = Arc::new(BufferManager::new(file).map_err(BufIoError::Io)?);
+    let bufman = vec_raw_manager.get(&version)?;
 
     let mut i = 0;
     let cursor = bufman.open_cursor()?;
@@ -545,8 +544,9 @@ pub fn index_embeddings(
 }
 
 pub fn index_embedding(
+    node_registry: Arc<NodeRegistry>,
+    index_manager: Arc<BufferManagerFactory>,
     vec_store: Arc<VectorStore>,
-    cache: Arc<NodeRegistry>,
     parent: Option<LazyItem<MergedNode>>,
     vector_emb: QuantizedVectorEmbedding,
     cur_entry: LazyItem<MergedNode>,
@@ -559,7 +559,9 @@ pub fn index_embedding(
     let mut skipm = HashSet::new();
     skipm.insert(vector_emb.hash_vec.clone());
 
-    let mut cur_node_arc = cur_entry.get_latest_version().get_data(cache.clone());
+    let mut cur_node_arc = cur_entry
+        .get_latest_version()
+        .get_data(node_registry.clone());
     let cur_node = cur_node_arc.get();
 
     let mut prop_arc = cur_node.prop.clone();
@@ -575,8 +577,8 @@ pub fn index_embedding(
     };
 
     let z = traverse_find_nearest(
+        node_registry.clone(),
         vec_store.clone(),
-        cache.clone(),
         cur_entry.clone(),
         fvec.clone(),
         vector_emb.hash_vec.clone(),
@@ -586,10 +588,17 @@ pub fn index_embedding(
         true,
     )?;
 
+    // @DOUBT: May be this distance can be calculated only if z is
+    // empty
     let dist = vec_store
         .distance_metric
         .calculate(&fvec, &node_prop.value)?;
 
+    // @DOUBT: Perhaps, traverse_find_nearest can itself handle this
+    // case. Because, logically not finding nearest nodes doesn't make
+    // sense given that cur_entry is not optional (root node always
+    // exists). In that case cur_entry will be the nearest which is
+    // how that case is being handled below.
     let z = if z.is_empty() {
         vec![(cur_entry.clone(), dist)]
     } else {
@@ -600,8 +609,9 @@ pub fn index_embedding(
 
     let parent = if cur_level.0 <= max_insert_level.0 {
         let parent = insert_node_create_edges(
+            node_registry.clone(),
+            index_manager.clone(),
             vec_store.clone(),
-            cache.clone(),
             parent,
             fvec,
             vector_emb.hash_vec.clone(),
@@ -611,6 +621,7 @@ pub fn index_embedding(
             version_number,
         )
         .expect("Failed insert_node_create_edges");
+
         Some(parent)
     } else {
         None
@@ -618,8 +629,9 @@ pub fn index_embedding(
 
     if cur_level.0 != 0 {
         index_embedding(
+            node_registry,
+            index_manager,
             vec_store.clone(),
-            cache,
             parent,
             vector_emb.clone(),
             z_clone[0].clone(),
@@ -634,6 +646,8 @@ pub fn index_embedding(
 }
 
 pub fn queue_node_prop_exec(
+    node_registry: Arc<NodeRegistry>,
+    index_manager: Arc<BufferManagerFactory>,
     lznode: LazyItem<MergedNode>,
     prop_file: Arc<File>,
     vec_store: Arc<VectorStore>,
@@ -651,11 +665,12 @@ pub fn queue_node_prop_exec(
         } => {
             if let Some(file_index) = file_index.clone().get().clone() {
                 match file_index {
-                    FileIndex::Valid { offset, .. } => {
-                        return Err(WaCustomError::LazyLoadingError(format!(
-                            "Node at offset {} needs to be loaded",
-                            offset.0
-                        )));
+                    FileIndex::Valid { .. } => {
+                        // @TODO: Confirm that `try_get_data` method
+                        // is not just retrieving the data but also
+                        // caching it.
+                        let node = lznode.try_get_data(node_registry.clone(), index_manager)?;
+                        (node, Some(file_index))
                     }
                     FileIndex::Invalid => {
                         return Err(WaCustomError::NodeError("Node is null".to_string()));
@@ -745,8 +760,9 @@ fn create_node_extract_neighbours(
 }
 
 fn insert_node_create_edges(
+    node_registry: Arc<NodeRegistry>,
+    index_manager: Arc<BufferManagerFactory>,
     vec_store: Arc<VectorStore>,
-    cache: Arc<NodeRegistry>,
     parent: Option<LazyItem<MergedNode>>,
     fvec: Arc<Storage>,
     hs: VectorId,
@@ -784,7 +800,7 @@ fn insert_node_create_edges(
                     .get_version(vec_store.vcs.clone(), version_number)
                     .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?
                 {
-                    let mut node = version.get_data(cache.clone());
+                    let mut node = version.get_data(node_registry.clone());
                     let neighbor_list: Vec<(LazyItem<MergedNode>, MetricResult)> = node
                         .get()
                         .neighbors
@@ -838,14 +854,20 @@ fn insert_node_create_edges(
         }
     }
 
-    queue_node_prop_exec(node.clone(), vec_store.prop_file.clone(), vec_store)?;
+    queue_node_prop_exec(
+        node_registry,
+        index_manager,
+        node.clone(),
+        vec_store.prop_file.clone(),
+        vec_store,
+    )?;
 
     Ok(node)
 }
 
 fn traverse_find_nearest(
+    node_registry: Arc<NodeRegistry>,
     vec_store: Arc<VectorStore>,
-    cache: Arc<NodeRegistry>,
     vtm: LazyItem<MergedNode>,
     fvec: Arc<Storage>,
     hs: VectorId,
@@ -856,8 +878,7 @@ fn traverse_find_nearest(
 ) -> Result<Vec<(LazyItem<MergedNode>, MetricResult)>, WaCustomError> {
     let mut tasks: SmallVec<[Vec<(LazyItem<MergedNode>, MetricResult)>; 24]> = SmallVec::new();
 
-    let mut node_arc = vtm.get_latest_version().get_data(cache.clone());
-
+    let mut node_arc = vtm.get_latest_version().get_data(node_registry.clone());
     let node = node_arc.get();
 
     for (index, nref) in node.neighbors.iter().enumerate() {
@@ -894,8 +915,8 @@ fn traverse_find_nearest(
                 let full_hops = 30;
                 if hops <= tapered_total_hops(full_hops, cur_level.0, vec_store.max_cache_level) {
                     let mut z = traverse_find_nearest(
+                        node_registry.clone(),
                         vec_store.clone(),
-                        cache.clone(),
                         nref.1.clone(),
                         fvec.clone(),
                         hs.clone(),

@@ -4,9 +4,9 @@ use dashmap::DashMap;
 use rayon::prelude::*;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
-use std::sync::Mutex;
+// use std::sync::Mutex;
 
-use super::inverted_index::InvertedIndex;
+use super::inverted_index_old::InvertedIndex;
 
 const K: usize = 5;
 

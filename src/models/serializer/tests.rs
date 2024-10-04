@@ -339,11 +339,11 @@ fn test_lazy_item_with_versions_serialization() {
 
     let v1_hash = vcs.add_next_version("main").unwrap();
     let node_v1 = LazyItem::new(v1_hash, MergedNode::new(HNSWLevel(2)));
-    node_v0.add_version(vcs.clone(), 1, node_v1).unwrap();
+    node_v0.add_version(vcs.clone(), node_v1).unwrap();
 
     let v2_hash = vcs.add_next_version("main").unwrap();
     let node_v2 = LazyItem::new(v2_hash, MergedNode::new(HNSWLevel(2)));
-    node_v0.add_version(vcs, 2, node_v2).unwrap();
+    node_v0.add_version(vcs, node_v2).unwrap();
 
     let bufmans = Arc::new(BufferManagerFactory::new(
         temp_dir.as_ref().into(),
@@ -637,10 +637,10 @@ fn test_lazy_item_with_versions_serialization_and_validation() {
     let bufman = bufmans.get(&v0_hash).unwrap();
     let cursor = bufman.open_cursor().unwrap();
 
-    for i in 0..100 {
+    for _ in 0..100 {
         let hash = vcs.add_next_version("main").unwrap();
         let next_version = LazyItem::new(hash, MergedNode::new(HNSWLevel(0)));
-        root.add_version(vcs.clone(), i + 1, next_version).unwrap();
+        root.add_version(vcs.clone(), next_version).unwrap();
     }
 
     let root_version_hash = vcs.get_version_hash(&v0_hash).unwrap().unwrap();
@@ -689,10 +689,10 @@ fn test_lazy_item_with_versions_multiple_serialization() {
     let cursor = bufman.open_cursor().unwrap();
     let root_version_hash = vcs.get_version_hash(&v0_hash).unwrap().unwrap();
 
-    for i in 0..25 {
+    for _ in 0..25 {
         let hash = vcs.add_next_version("main").unwrap();
         let next_version = LazyItem::new(hash, MergedNode::new(HNSWLevel(0)));
-        root.add_version(vcs.clone(), i + 1, next_version).unwrap();
+        root.add_version(vcs.clone(), next_version).unwrap();
     }
 
     validate_lazy_item_versions(
@@ -705,10 +705,10 @@ fn test_lazy_item_with_versions_multiple_serialization() {
     // 1, 4, 16
     assert_eq!(root.get_versions().unwrap().len(), 3);
 
-    for i in 25..50 {
+    for _ in 25..50 {
         let hash = vcs.add_next_version("main").unwrap();
         let next_version = LazyItem::new(hash, MergedNode::new(HNSWLevel(0)));
-        root.add_version(vcs.clone(), i + 1, next_version).unwrap();
+        root.add_version(vcs.clone(), next_version).unwrap();
     }
 
     validate_lazy_item_versions(
@@ -722,10 +722,10 @@ fn test_lazy_item_with_versions_multiple_serialization() {
     // 1, 4, 16
     assert_eq!(root.get_versions().unwrap().len(), 3);
 
-    for i in 50..75 {
+    for _ in 50..75 {
         let hash = vcs.add_next_version("main").unwrap();
         let next_version = LazyItem::new(hash, MergedNode::new(HNSWLevel(0)));
-        root.add_version(vcs.clone(), i + 1, next_version).unwrap();
+        root.add_version(vcs.clone(), next_version).unwrap();
     }
 
     validate_lazy_item_versions(
@@ -740,10 +740,10 @@ fn test_lazy_item_with_versions_multiple_serialization() {
     // 1, 4, 16, 64
     assert_eq!(root.get_versions().unwrap().len(), 4);
 
-    for i in 75..100 {
+    for _ in 75..100 {
         let hash = vcs.add_next_version("main").unwrap();
         let next_version = LazyItem::new(hash, MergedNode::new(HNSWLevel(0)));
-        root.add_version(vcs.clone(), i + 1, next_version).unwrap();
+        root.add_version(vcs.clone(), next_version).unwrap();
     }
     validate_lazy_item_versions(
         vcs.clone(),
