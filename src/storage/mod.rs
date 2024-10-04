@@ -1,3 +1,4 @@
+pub mod bench_common;
 pub mod inverted_index_old;
 pub mod inverted_index_sparse_ann;
 pub mod knn_query_old;
