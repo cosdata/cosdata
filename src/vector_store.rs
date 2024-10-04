@@ -797,7 +797,7 @@ fn insert_node_create_edges(
                     let parent = old_neighbour.get().parent.clone();
                     let (new_neighbour, new_neighbour_neighbours) =
                         create_node_extract_neighbours(version, cur_level, prop_arc, parent);
-                    nbr1.add_version(vec_store.vcs.clone(), version_number, new_neighbour.clone())
+                    nbr1.add_version(vec_store.vcs.clone(), new_neighbour.clone())
                         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
                     let neighbor_list: Vec<(LazyItem<MergedNode>, MetricResult)> = old_neighbour
                         .get()

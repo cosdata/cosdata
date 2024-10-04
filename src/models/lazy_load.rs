@@ -313,35 +313,50 @@ impl<T: Clone + 'static> LazyItem<T> {
     pub fn add_version(
         &self,
         vcs: Arc<VersionControl>,
-        version: u32,
         lazy_item: LazyItem<T>,
     ) -> lmdb::Result<()> {
-        if let Self::Valid {
-            versions,
-            version_id,
-            ..
-        } = self
-        {
-            // Retrieve current version from LMDB
-            let version_hash = vcs
-                .get_version_hash(version_id)?
+        let hash = self.get_current_version();
+        // Retrieve current version from LMDB
+        let version_hash = vcs.get_version_hash(&hash)?.ok_or(lmdb::Error::NotFound)?;
+        let latest_version = self.get_latest_version().get_current_version();
+        let latest_version_hash = vcs
+            .get_version_hash(&latest_version)?
+            .ok_or(lmdb::Error::NotFound)?;
+        self.add_version_inner(
+            vcs,
+            lazy_item,
+            version_hash,
+            *latest_version_hash.version + 1,
+        )
+    }
+
+    // private function, reduces redundant LMDB lookups
+    fn add_version_inner(
+        &self,
+        vcs: Arc<VersionControl>,
+        lazy_item: LazyItem<T>,
+        version_hash: VersionHash,
+        version_number: u32,
+    ) -> lmdb::Result<()> {
+        let Some(versions) = self.get_versions() else {
+            return Ok(());
+        };
+        let target_diff = version_number - *version_hash.version;
+        let index = largest_power_of_4_below(target_diff);
+
+        if let Some(existing_version) = versions.get(index as usize) {
+            let existing_version_hash = vcs
+                .get_version_hash(&existing_version.get_current_version())?
                 .ok_or(lmdb::Error::NotFound)?;
-            // Calculate the difference between the target version and the current version
-            let target_diff = version - *version_hash.version;
-
-            // Use the largest power of 4 below the target difference to find the appropriate
-            // checkpoint for storing this new version.
-            let index = largest_power_of_4_below(target_diff);
-
-            // If a version already exists at the calculated index, recursively add the new version.
-            if let Some(existing_version) = versions.get(index as usize) {
-                return existing_version.add_version(vcs, version, lazy_item);
-            } else {
-                // Insert the new version at the calculated index if none exists there yet.
-                versions.insert(index as usize, lazy_item);
-            }
+            return existing_version.add_version_inner(
+                vcs,
+                lazy_item,
+                existing_version_hash,
+                version_number,
+            );
         }
 
+        versions.insert(index as usize, lazy_item);
         Ok(())
     }
 
@@ -358,32 +373,46 @@ impl<T: Clone + 'static> LazyItem<T> {
         vcs: Arc<VersionControl>,
         version: u32,
     ) -> lmdb::Result<Option<LazyItem<T>>> {
-        if let Self::Valid {
-            versions,
-            version_id,
-            ..
-        } = self
-        {
-            let version_hash = vcs
-                .get_version_hash(version_id)?
-                .ok_or(lmdb::Error::NotFound)?;
-            if version == *version_hash.version {
-                return Ok(Some(self.clone()));
-            }
-            let target_diff = version - *version_hash.version;
-            let index = largest_power_of_4_below(target_diff);
-            let Some(version_at_index) = versions.get(index as usize) else {
-                return Ok(None);
-            };
-            let power = 1u32 << (index * 2);
-            if power == target_diff {
-                Ok(Some(version_at_index))
-            } else {
-                version_at_index.get_version(vcs, version)
-            }
-        } else {
-            Ok(None)
+        let hash = self.get_current_version();
+        let version_hash = vcs.get_version_hash(&hash)?.ok_or(lmdb::Error::NotFound)?;
+        self.get_version_inner(vcs, version, version_hash)
+    }
+
+    // private function, reduces redundant LMDB lookups
+    fn get_version_inner(
+        &self,
+        vcs: Arc<VersionControl>,
+        version: u32,
+        version_hash: VersionHash,
+    ) -> lmdb::Result<Option<LazyItem<T>>> {
+        let Some(versions) = self.get_versions() else {
+            return Ok(None);
+        };
+        if version == *version_hash.version {
+            return Ok(Some(self.clone()));
         }
+        let Some(mut prev) = versions.get(0) else {
+            return Ok(None);
+        };
+        let prev_hash = prev.get_current_version();
+        let mut prev_version_hash = vcs
+            .get_version_hash(&prev_hash)?
+            .ok_or(lmdb::Error::NotFound)?;
+        let mut i = 1;
+        while let Some(next) = versions.get(i) {
+            let next_hash = next.get_current_version();
+            let next_version_hash = vcs
+                .get_version_hash(&next_hash)?
+                .ok_or(lmdb::Error::NotFound)?;
+            if version >= *prev_version_hash.version && version < *next_version_hash.version {
+                return prev.get_version_inner(vcs, version, prev_version_hash);
+            }
+            prev = next;
+            prev_version_hash = next_version_hash;
+            i += 1;
+        }
+
+        prev.get_version_inner(vcs.clone(), version, prev_version_hash)
     }
 
     pub fn get_latest_version(&self) -> LazyItem<T> {
