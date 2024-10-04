@@ -8,9 +8,9 @@ use cosdata::{
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
 use rand::{rngs::StdRng, Rng, SeedableRng};
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, time::Instant};
 
-const NUM_OF_VECTORS: usize = 2000; // Each of these will be used to create 100 more perturbed vectors
+const NUM_OF_VECTORS: usize = 1000; // Each of these will be used to create 100 more perturbed vectors
 const NUM_OF_DIMENSIONS: usize = 50000;
 
 // Function to generate multiple random sparse vectors
@@ -48,6 +48,7 @@ fn create_inverted_index_and_query_vector(
     num_dimensions: usize,
     num_vectors: usize,
 ) -> (InvertedIndexSparseAnn, SparseVector) {
+    let nowx = Instant::now();
     let inverted_index = InvertedIndexSparseAnn::new();
 
     let mut original_vectors: Vec<SparseVector> =
@@ -62,13 +63,24 @@ fn create_inverted_index_and_query_vector(
         let mut new_vectors = perturb_vector(&vector, 0.5, current_id);
         final_vectors.append(&mut new_vectors);
         current_id += 100; // Move to the next block of 100 IDs
+        println!("generating vector with id {:?}", current_id);
     }
 
+    println!(
+        "Finished generating vectors in time : {:?}, Next step adding them to inverted index",
+        nowx.elapsed()
+    );
+    let now = Instant::now();
     for vector in final_vectors {
+        if vector.vector_id % 10000 == 0 {
+            println!("Just adding vector {:?}", vector.vector_id);
+            println!("Time elapsed : {:?}", now.elapsed());
+        }
         inverted_index
             .add_sparse_vector(vector)
             .unwrap_or_else(|e| println!("Error : {:?}", e));
     }
+    println!("Time taken to insert all vectors : {:?}", now.elapsed());
 
     (inverted_index, query_vector)
 }
@@ -104,8 +116,9 @@ fn sparse_ann_query_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("Sparse Ann Query Benchmark");
     group
         .sample_size(10)
-        .measurement_time(std::time::Duration::new(50, 0)); //Give enough time to collect samples
+        .measurement_time(std::time::Duration::new(30, 0)); //Give enough time to measure
     let mut rng = rand::thread_rng();
+    println!("Creating Inverted Index and query vector.. ");
 
     let (inverted_index, mut query_vector) =
         create_inverted_index_and_query_vector(NUM_OF_DIMENSIONS, NUM_OF_VECTORS + 1);
@@ -121,6 +134,11 @@ fn sparse_ann_query_benchmark(c: &mut Criterion) {
 
     let sparse_ann_query = SparseAnnQuery::new(query_vector);
 
+    println!(
+        "Starting benchmark.. for Vector count {:?} and dimension {:?}",
+        NUM_OF_VECTORS * 100,
+        NUM_OF_DIMENSIONS
+    );
     // Benchmarking Sparse_Ann_Query_Concurrent
     group.bench_function(
         BenchmarkId::new(
