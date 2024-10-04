@@ -163,6 +163,7 @@ pub fn run_upload(
     ctx: Arc<AppContext>,
     vec_store: Arc<VectorStore>,
     vecs: Vec<(VectorIdValue, Vec<f32>)>,
+    auto_commit: bool,
 ) -> Result<(), WaCustomError> {
     let current_version = vec_store.get_current_version();
     let next_version = vec_store
@@ -170,7 +171,9 @@ pub fn run_upload(
         .add_next_version("main")
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
     vec_store.set_current_version(next_version);
-    let bufman = ctx.vec_raw_manager.get(&current_version)
+    let bufman = ctx
+        .vec_raw_manager
+        .get(&current_version)
         .map_err(|e| WaCustomError::BufIo(Arc::new(e)))?;
     let cursor = bufman.open_cursor()?;
     bufman.write_u32_with_cursor(cursor, *next_version)?;
@@ -213,12 +216,13 @@ pub fn run_upload(
             ctx.index_manager.clone(),
             &ctx.vec_raw_manager,
             vec_store.clone(),
-            ctx.config.upload_process_batch_size
+            ctx.config.upload_process_batch_size,
         )?;
     }
-
-    auto_commit_transaction(vec_store.clone(), ctx.index_manager.clone())?;
-    ctx.index_manager.flush_all()?;
+    if auto_commit {
+        auto_commit_transaction(vec_store, ctx.index_manager.clone())?;
+        ctx.index_manager.flush_all()?;
+    }
 
     Ok(())
 }
