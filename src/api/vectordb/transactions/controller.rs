@@ -1,5 +1,7 @@
 use actix_web::{web, HttpResponse};
 
+use crate::{api::vectordb::vectors::dtos::CreateVectorDto, app_context::AppContext};
+
 use super::{error::TransactionError, service};
 
 pub(crate) async fn create_transaction(
@@ -16,4 +18,15 @@ pub(crate) async fn commit_transaction(
     let (collection_id, transaction_id) = params.into_inner();
     let _ = service::commit_transaction(&collection_id, &transaction_id).await?;
     Ok(HttpResponse::NoContent().finish())
+}
+
+pub(crate) async fn create_vector_in_transaction(
+    collection_id: web::Path<String>,
+    web::Json(create_vector_dto): web::Json<CreateVectorDto>,
+    ctx: web::Data<AppContext>,
+) -> Result<HttpResponse, TransactionError> {
+    let vector =
+        service::create_vector_in_transaction(ctx.into_inner(), &collection_id, create_vector_dto)
+            .await?;
+    Ok(HttpResponse::Ok().json(vector))
 }
