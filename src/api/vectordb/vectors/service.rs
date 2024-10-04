@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{app_context::AppContext, config_loader::Config, models::rpc::VectorIdValue};
+use crate::{app_context::AppContext, models::rpc::VectorIdValue};
 
 use super::{
     dtos::{
@@ -17,6 +17,14 @@ pub(crate) async fn create_vector(
     create_vector_dto: CreateVectorDto,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
     repo::create_vector(ctx, collection_id, create_vector_dto).await
+}
+
+pub(crate) async fn create_vector_without_committing(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    create_vector_dto: CreateVectorDto,
+) -> Result<CreateVectorResponseDto, VectorsError> {
+    repo::create_vector_without_committing(ctx, collection_id, create_vector_dto).await
 }
 
 pub(crate) async fn get_vector_by_id(

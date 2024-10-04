@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use crate::{
-    api::vectordb::collections, api_service::run_upload, app_context::AppContext, config_loader::Config, models::rpc::VectorIdValue
+    api::vectordb::collections, api_service::run_upload, app_context::AppContext,
+    models::rpc::VectorIdValue,
 };
 
 use super::{
@@ -28,7 +29,33 @@ pub(crate) async fn create_vector(
             create_vector_dto.id.clone(),
             create_vector_dto.values.clone(),
         )],
-    ).map_err(VectorsError::WaCustom)?;
+        true,
+    )
+    .map_err(VectorsError::WaCustom)?;
+    Ok(CreateVectorResponseDto {
+        id: create_vector_dto.id,
+        values: create_vector_dto.values,
+    })
+}
+
+pub(crate) async fn create_vector_without_committing(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    create_vector_dto: CreateVectorDto,
+) -> Result<CreateVectorResponseDto, VectorsError> {
+    let collection = collections::service::get_collection_by_id(collection_id)
+        .await
+        .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
+    run_upload(
+        ctx,
+        collection,
+        vec![(
+            create_vector_dto.id.clone(),
+            create_vector_dto.values.clone(),
+        )],
+        false,
+    )
+    .map_err(VectorsError::WaCustom)?;
     Ok(CreateVectorResponseDto {
         id: create_vector_dto.id,
         values: create_vector_dto.values,
@@ -56,7 +83,9 @@ pub(crate) async fn update_vector(
         ctx,
         collection,
         vec![(vector_id.clone(), update_vector_dto.values.clone())],
-    ).map_err(VectorsError::WaCustom)?;
+        true,
+    )
+    .map_err(VectorsError::WaCustom)?;
     Ok(UpdateVectorResponseDto {
         id: vector_id,
         values: update_vector_dto.values,
