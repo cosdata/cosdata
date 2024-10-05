@@ -21,7 +21,7 @@ pub(crate) async fn commit_transaction(
 }
 
 pub(crate) async fn create_vector_in_transaction(
-    params: web::Path<(String, String)>,
+    params: web::Path<(String, u32)>,
     web::Json(create_vector_dto): web::Json<CreateVectorDto>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse, TransactionError> {
@@ -29,7 +29,7 @@ pub(crate) async fn create_vector_in_transaction(
     let vector = service::create_vector_in_transaction(
         ctx.into_inner(),
         &collection_id,
-        &transaction_id,
+        transaction_id.into(),
         create_vector_dto,
     )
     .await?;

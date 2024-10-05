@@ -6,6 +6,7 @@ use crate::models::meta_persist::*;
 use crate::models::rpc::VectorIdValue;
 use crate::models::types::*;
 use crate::models::user::Statistics;
+use crate::models::versioning::Hash;
 use crate::models::versioning::VersionControl;
 use crate::quantization::{Quantization, StorageType};
 use crate::vector_store::*;
@@ -159,12 +160,13 @@ pub async fn init_vector_store(
     Ok(vec_store)
 }
 
-pub fn run_upload_in_ongoing_transaction(
+pub fn run_upload_in_transaction(
     ctx: Arc<AppContext>,
     vec_store: Arc<VectorStore>,
+    transaction_id: Hash,
     vecs: Vec<(VectorIdValue, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
-    let current_version = vec_store.get_current_version();
+    let current_version = transaction_id;
 
     let bufman = ctx
         .vec_raw_manager

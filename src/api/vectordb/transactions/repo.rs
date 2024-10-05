@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use super::{dtos::CreateTransactionResponseDto, error::TransactionError};
+use crate::models::versioning::Hash;
 use crate::{
     api::vectordb::vectors::{
         self,
@@ -71,10 +72,10 @@ pub(crate) async fn commit_transaction(
     Ok(())
 }
 
-pub(crate) async fn create_vector_without_committing(
+pub(crate) async fn create_vector_in_transaction(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    transaction_id: &str,
+    transaction_id: Hash,
     create_vector_dto: CreateVectorDto,
 ) -> Result<CreateVectorResponseDto, TransactionError> {
     let env = get_app_env().map_err(|_| TransactionError::FailedToGetAppEnv)?;
@@ -90,16 +91,20 @@ pub(crate) async fn create_vector_without_committing(
         return Err(TransactionError::NotFound);
     }
 
-    if current_open_transaction_arc.unwrap().to_string() != transaction_id {
+    if current_open_transaction_arc.unwrap() != transaction_id {
         return Err(TransactionError::FailedToCreateVector(
             "This is not the currently open transaction!".into(),
         ));
     }
 
-    let vector =
-        vectors::repo::create_vector_without_committing(ctx, collection_id, create_vector_dto)
-            .await
-            .map_err(|e| TransactionError::FailedToCreateVector(e.to_string()))?;
+    let vector = vectors::repo::create_vector_in_transaction(
+        ctx,
+        collection_id,
+        transaction_id,
+        create_vector_dto,
+    )
+    .await
+    .map_err(|e| TransactionError::FailedToCreateVector(e.to_string()))?;
 
     Ok(vector)
 }

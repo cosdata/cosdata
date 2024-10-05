@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
+use crate::models::versioning::Hash;
+
 use crate::{
     api::vectordb::collections,
-    api_service::{run_upload, run_upload_in_ongoing_transaction},
+    api_service::{run_upload, run_upload_in_transaction},
     app_context::AppContext,
     models::rpc::VectorIdValue,
 };
@@ -47,17 +49,19 @@ pub(crate) async fn create_vector(
     })
 }
 
-pub(crate) async fn create_vector_without_committing(
+pub(crate) async fn create_vector_in_transaction(
     ctx: Arc<AppContext>,
     collection_id: &str,
+    transaction_id: Hash,
     create_vector_dto: CreateVectorDto,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
     let collection = collections::service::get_collection_by_id(collection_id)
         .await
         .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
-    run_upload_in_ongoing_transaction(
+    run_upload_in_transaction(
         ctx,
         collection,
+        transaction_id,
         vec![(
             create_vector_dto.id.clone(),
             create_vector_dto.values.clone(),
