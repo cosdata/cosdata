@@ -220,8 +220,8 @@ pub struct VectorData {
 }
 
 #[derive(Clone)]
-pub struct NewStruct {
-    pub items: Vec<VectorData>,
+pub struct IncrementalSerializableGrowableData {
+    pub items: LazyItemVec<STM<VectorData>>,
 }
 
 impl<T: Clone + 'static> SyncPersist for LazyItem<T> {
@@ -798,6 +798,17 @@ impl<T: Clone + 'static> LazyItemVec<T> {
         return_value
     }
 
+    pub fn resize(&self, new_len: usize, value: LazyItem<T>) {
+        let mut items = self.items.clone();
+        items
+            .transactional_update(|old| {
+                let mut new = old.clone();
+                new.resize(new_len, value.clone());
+                new
+            })
+            .unwrap();
+    }
+
     pub fn get(&self, index: usize) -> Option<LazyItem<T>> {
         let mut items = self.items.clone();
         items.get().get(index).cloned()
@@ -957,20 +968,58 @@ impl VectorData {
     }
 }
 
-impl NewStruct {
+impl IncrementalSerializableGrowableData {
     pub fn new() -> Self {
-        Self { items: Vec::new() }
+        Self {
+            items: LazyItemVec::new(),
+        }
+    }
+
+    pub fn from_vec(vec: Vec<VectorData>) -> Self {
+        let items = vec
+            .iter()
+            .map(|data| {
+                LazyItem::new(
+                    Hash::from(u32::MAX),
+                    STM::new(
+                        VectorData::from_array(*data.data, data.is_serialized),
+                        1,
+                        true,
+                    ),
+                )
+            })
+            .collect();
+        Self {
+            items: LazyItemVec::from_vec(items),
+        }
     }
 
     pub fn insert(&mut self, vec_id: u32, value: u32) {
         let insert_dimension = (vec_id % 64) as usize;
         let insert_index = (vec_id / 64) as usize;
+        let items_len = self.items.len();
 
-        if self.items.len() <= insert_index {
-            self.items.resize(insert_index + 1, VectorData::new());
+        if items_len <= insert_index {
+            self.items.resize(
+                insert_index + 1,
+                LazyItem::new(Hash::from(u32::MAX), STM::new(VectorData::new(), 1, true)),
+            );
         }
 
-        self.items[insert_index].set(insert_dimension, value);
+        let mut vector_data_arcshift = self
+            .items
+            .get(insert_index)
+            .unwrap()
+            .get_lazy_data()
+            .unwrap();
+        let mut vector_data_stm = vector_data_arcshift.get().clone();
+        vector_data_stm
+            .transactional_update(|old| {
+                let mut new = old.clone();
+                new.set(insert_dimension, value);
+                new
+            })
+            .unwrap();
     }
 
     pub fn get(&self, vec_id: u32) -> Option<u32> {
@@ -981,6 +1030,8 @@ impl NewStruct {
             return None;
         }
 
-        self.items[insert_index].get(insert_dimension)
+        let vector_data_lazy_item = self.items.get(insert_index).unwrap();
+        let mut vector_data_stm = vector_data_lazy_item.get_lazy_data().unwrap().get().clone();
+        vector_data_stm.get().get(insert_dimension)
     }
 }
