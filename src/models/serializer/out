@@ -1,0 +1,154 @@
+
+running 1 test
+SERIALIZATION FINISHED
+CALLING DESERIALIZE ITEM
+get_object called with file_index: Valid { offset: FileOffset(0), version_number: 1, version_id: Hash(1) }, max_loads: 1000
+Acquired read lock on cuckoo_filter
+FileIndex not found in cuckoo_filter
+Released read lock on cuckoo_filter
+Calling load_function
+DESERIALIZING ITEM
+load_function returned successfully
+Trying to get or insert item into registry
+Inserting key into cuckoo_filter
+Returning newly created LazyItem
+ITEM DESERIALIZED
+CALLING DESERIALIZE ITEM
+get_object called with file_index: Valid { offset: FileOffset(0), version_number: 2, version_id: Hash(2) }, max_loads: 1000
+Acquired read lock on cuckoo_filter
+FileIndex not found in cuckoo_filter
+Released read lock on cuckoo_filter
+Calling load_function
+DESERIALIZING ITEM
+load_function returned successfully
+Trying to get or insert item into registry
+Inserting key into cuckoo_filter
+Returning newly created LazyItem
+ITEM DESERIALIZED
+CALLING DESERIALIZE ITEM
+get_object called with file_index: Valid { offset: FileOffset(0), version_number: 3, version_id: Hash(3) }, max_loads: 1000
+Acquired read lock on cuckoo_filter
+FileIndex not found in cuckoo_filter
+Released read lock on cuckoo_filter
+Calling load_function
+DESERIALIZING ITEM
+load_function returned successfully
+Trying to get or insert item into registry
+Inserting key into cuckoo_filter
+Returning newly created LazyItem
+ITEM DESERIALIZED
+CALLING DESERIALIZE ITEM
+get_object called with file_index: Valid { offset: FileOffset(0), version_number: 4, version_id: Hash(4) }, max_loads: 1000
+Acquired read lock on cuckoo_filter
+FileIndex not found in cuckoo_filter
+Released read lock on cuckoo_filter
+Calling load_function
+DESERIALIZING ITEM
+load_function returned successfully
+Trying to get or insert item into registry
+Inserting key into cuckoo_filter
+Returning newly created LazyItem
+ITEM DESERIALIZED
+CALLING DESERIALIZE ITEM
+get_object called with file_index: Valid { offset: FileOffset(0), version_number: 5, version_id: Hash(5) }, max_loads: 1000
+Acquired read lock on cuckoo_filter
+FileIndex not found in cuckoo_filter
+Released read lock on cuckoo_filter
+Calling load_function
+DESERIALIZING ITEM
+load_function returned successfully
+Trying to get or insert item into registry
+Inserting key into cuckoo_filter
+Returning newly created LazyItem
+ITEM DESERIALIZED
+NEXT CHUNK POSITION: 54
+CALLING DESERIALIZE ITEM
+get_object called with file_index: Valid { offset: FileOffset(0), version_number: 6, version_id: Hash(6) }, max_loads: 1000
+Acquired read lock on cuckoo_filter
+FileIndex not found in cuckoo_filter
+Released read lock on cuckoo_filter
+Calling load_function
+DESERIALIZING ITEM
+load_function returned successfully
+Trying to get or insert item into registry
+Inserting key into cuckoo_filter
+Returning newly created LazyItem
+ITEM DESERIALIZED
+CALLING DESERIALIZE ITEM
+get_object called with file_index: Valid { offset: FileOffset(0), version_number: 7, version_id: Hash(7) }, max_loads: 1000
+Acquired read lock on cuckoo_filter
+FileIndex not found in cuckoo_filter
+Released read lock on cuckoo_filter
+Calling load_function
+DESERIALIZING ITEM
+load_function returned successfully
+Trying to get or insert item into registry
+Inserting key into cuckoo_filter
+Returning newly created LazyItem
+ITEM DESERIALIZED
+CALLING DESERIALIZE ITEM
+get_object called with file_index: Valid { offset: FileOffset(0), version_number: 8, version_id: Hash(8) }, max_loads: 1000
+Acquired read lock on cuckoo_filter
+FileIndex not found in cuckoo_filter
+Released read lock on cuckoo_filter
+Calling load_function
+DESERIALIZING ITEM
+load_function returned successfully
+Trying to get or insert item into registry
+Inserting key into cuckoo_filter
+Returning newly created LazyItem
+ITEM DESERIALIZED
+CALLING DESERIALIZE ITEM
+get_object called with file_index: Valid { offset: FileOffset(0), version_number: 9, version_id: Hash(9) }, max_loads: 1000
+Acquired read lock on cuckoo_filter
+FileIndex not found in cuckoo_filter
+Released read lock on cuckoo_filter
+Calling load_function
+DESERIALIZING ITEM
+load_function returned successfully
+Trying to get or insert item into registry
+Inserting key into cuckoo_filter
+Returning newly created LazyItem
+ITEM DESERIALIZED
+CALLING DESERIALIZE ITEM
+get_object called with file_index: Valid { offset: FileOffset(0), version_number: 10, version_id: Hash(10) }, max_loads: 1000
+Acquired read lock on cuckoo_filter
+FileIndex not found in cuckoo_filter
+Released read lock on cuckoo_filter
+Calling load_function
+DESERIALIZING ITEM
+load_function returned successfully
+Trying to get or insert item into registry
+Inserting key into cuckoo_filter
+Returning newly created LazyItem
+ITEM DESERIALIZED
+NEXT CHUNK POSITION: 108
+CALLING DESERIALIZE ITEM
+get_object called with file_index: Valid { offset: FileOffset(0), version_number: 11, version_id: Hash(11) }, max_loads: 1000
+Acquired read lock on cuckoo_filter
+FileIndex not found in cuckoo_filter
+Released read lock on cuckoo_filter
+Calling load_function
+DESERIALIZING ITEM
+load_function returned successfully
+Trying to get or insert item into registry
+Inserting key into cuckoo_filter
+Returning newly created LazyItem
+ITEM DESERIALIZED
+CALLING DESERIALIZE ITEM
+get_object called with file_index: Valid { offset: FileOffset(0), version_number: 12, version_id: Hash(12) }, max_loads: 1000
+Acquired read lock on cuckoo_filter
+FileIndex not found in cuckoo_filter
+Released read lock on cuckoo_filter
+Calling load_function
+DESERIALIZING ITEM
+load_function returned successfully
+Trying to get or insert item into registry
+Inserting key into cuckoo_filter
+Returning newly created LazyItem
+ITEM DESERIALIZED
+NEXT CHUNK POSITION: 4294967295
+test models::serializer::tests::test_lazy_item_vec_linked_chunk_serialization ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 100 filtered out; finished in 0.01s
+

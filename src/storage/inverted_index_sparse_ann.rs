@@ -75,6 +75,7 @@ impl InvertedIndexSparseAnnNode {
             let new_dim_index = current_node.dim_index + POWERS_OF_4[child_index];
             let new_child = LazyItem::new(
                 0.into(),
+                0,
                 InvertedIndexSparseAnnNode::new(new_dim_index, true),
             );
             loop {
@@ -103,7 +104,7 @@ impl InvertedIndexSparseAnnNode {
 
         // Insert into the specific LazyItemVec at the index quantized_value
         if let Some(lazy_item_vec) = Arc::make_mut(&mut data).get_mut(quantized_value as usize) {
-            lazy_item_vec.push(LazyItem::new(0.into(), vector_id));
+            lazy_item_vec.push(LazyItem::new(0.into(), 0, vector_id));
         }
     }
 

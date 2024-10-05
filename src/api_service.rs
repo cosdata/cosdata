@@ -102,9 +102,8 @@ pub async fn init_vector_store(
             child: LazyItemRef::new_invalid(),
         });
 
-        // TODO: Initialize with appropriate version ID
-        let lazy_node = LazyItem::from_arcshift(hash, current_node.clone());
-        let nn = LazyItemRef::from_arcshift(hash, current_node.clone());
+        let lazy_node = LazyItem::from_arcshift(hash, 0, current_node.clone());
+        let nn = LazyItemRef::from_arcshift(hash, 0, current_node.clone());
 
         if let Some(prev_node) = prev.item.get().get_lazy_data() {
             current_node

@@ -442,7 +442,7 @@ pub fn index_embeddings(
         .get_version_hash(&version)
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?
         .expect("Current version hash not found");
-    let version_number = *version_hash.version;
+    let version_number = *version_hash.version as u16;
 
     txn.abort();
 
@@ -553,7 +553,7 @@ pub fn index_embedding(
     cur_level: HNSWLevel,
     max_insert_level: HNSWLevel,
     version: Hash,
-    version_number: u32,
+    version_number: u16,
 ) -> Result<(), WaCustomError> {
     let fvec = vector_emb.quantized_vec.clone();
     let mut skipm = HashSet::new();
@@ -738,7 +738,8 @@ pub fn auto_commit_transaction(
 }
 
 fn create_node_extract_neighbours(
-    version: Hash,
+    version_id: Hash,
+    version_number: u16,
     hnsw_level: HNSWLevel,
     prop: ArcShift<PropState>,
     parent: LazyItemRef<MergedNode>,
@@ -748,7 +749,8 @@ fn create_node_extract_neighbours(
 ) {
     let neighbours = EagerLazyItemSet::new();
     let node = LazyItem::from_data(
-        version,
+        version_id,
+        version_number,
         MergedNode {
             hnsw_level,
             prop,
@@ -770,7 +772,7 @@ fn insert_node_create_edges(
     nbs: Vec<(LazyItem<MergedNode>, MetricResult)>,
     cur_level: HNSWLevel,
     version: Hash,
-    version_number: u32,
+    version_number: u16,
 ) -> Result<LazyItem<MergedNode>, WaCustomError> {
     let prop = PropState::Ready(Arc::new(NodeProp {
         id: hs.clone(),
@@ -779,6 +781,7 @@ fn insert_node_create_edges(
     }));
     let (node, neighbours) = create_node_extract_neighbours(
         version,
+        version_number,
         cur_level,
         ArcShift::new(prop),
         parent.clone().map_or_else(
@@ -798,7 +801,7 @@ fn insert_node_create_edges(
         {
             let (new_neighbor, mut new_neighbor_neighbors, mut neighbor_list) =
                 if let Some(version) = nbr1
-                    .get_version(vec_store.vcs.clone(), version_number)
+                    .get_version(version_number)
                     .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?
                 {
                     let mut node = version.get_data(node_registry.clone());
@@ -812,10 +815,14 @@ fn insert_node_create_edges(
                 } else {
                     let prop_arc = old_neighbour.get().prop.clone();
                     let parent = old_neighbour.get().parent.clone();
-                    let (new_neighbour, new_neighbour_neighbours) =
-                        create_node_extract_neighbours(version, cur_level, prop_arc, parent);
-                    nbr1.add_version(vec_store.vcs.clone(), new_neighbour.clone())
-                        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+                    let (new_neighbour, new_neighbour_neighbours) = create_node_extract_neighbours(
+                        version,
+                        version_number,
+                        cur_level,
+                        prop_arc,
+                        parent,
+                    );
+                    nbr1.add_version(new_neighbour.clone());
                     let neighbor_list: Vec<(LazyItem<MergedNode>, MetricResult)> = old_neighbour
                         .get()
                         .neighbors

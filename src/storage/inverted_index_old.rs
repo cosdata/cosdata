@@ -88,7 +88,7 @@ where
         let mut current_node = node;
         for &child_index in path {
             let new_dim_index = current_node.dim_index + POWERS_OF_4[child_index];
-            let new_child = LazyItem::new(0.into(), InvertedIndexItem::new(new_dim_index, true));
+            let new_child = LazyItem::new(0.into(), 0, InvertedIndexItem::new(new_dim_index, true));
             loop {
                 if let Some(child) = current_node
                     .lazy_children
@@ -107,7 +107,7 @@ where
     /// Calculates the path and delegates to `insert_with_path`.
     pub fn insert(node: ArcShift<InvertedIndexItem<T>>, value: T, vector_id: u32) {
         let key = IdentityMapKey::Int(vector_id);
-        let value = LazyItem::new(0.into(), value.clone());
+        let value = LazyItem::new(0.into(), 0, value.clone());
         node.data.insert(key, value);
     }
 

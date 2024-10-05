@@ -77,12 +77,13 @@ where
             FileIndex::Invalid => Ok(EagerLazyItemSet::new()),
             FileIndex::Valid {
                 offset: FileOffset(offset),
-                version,
+                version_number,
+                version_id,
             } => {
                 if offset == u32::MAX {
                     return Ok(EagerLazyItemSet::new());
                 }
-                let bufman = bufmans.get(&version)?;
+                let bufman = bufmans.get(&version_id)?;
                 let cursor = bufman.open_cursor()?;
                 bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
                 let mut items = Vec::new();
@@ -99,7 +100,8 @@ where
                         }
                         let item_file_index = FileIndex::Valid {
                             offset: FileOffset(item_offset),
-                            version,
+                            version_number,
+                            version_id,
                         };
                         let item = EagerLazyItem::deserialize(
                             bufmans.clone(),
