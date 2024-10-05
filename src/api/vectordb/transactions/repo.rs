@@ -32,7 +32,7 @@ pub(crate) async fn create_transaction(
         "the main branch is not found!".into(),
     ))?;
 
-    let current_verion = branch_info.get_current_version();
+    let current_version = branch_info.get_current_version();
 
     let mut current_open_transaction_arc = vec_store.current_open_transaction.clone();
 
@@ -42,7 +42,7 @@ pub(crate) async fn create_transaction(
 
     let transaction_id = vec_store
         .vcs
-        .generate_hash("main", Version::from(*current_verion + 1))
+        .generate_hash("main", Version::from(*current_version + 1))
         .map_err(|_| TransactionError::FailedToCreateTransaction("LMDB Error".to_string()))?;
 
     current_open_transaction_arc.update(Some(transaction_id));
