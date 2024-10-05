@@ -7,7 +7,7 @@ use crate::{
         dtos::{CreateVectorDto, CreateVectorResponseDto},
     },
     app_context::AppContext,
-    models::types::get_app_env,
+    models::{types::get_app_env, versioning::Version},
 };
 use chrono::Utc;
 
@@ -30,7 +30,7 @@ pub(crate) async fn create_transaction(
 
     let transaction_id = vec_store
         .vcs
-        .add_next_version("main")
+        .generate_hash("new_transaction", Version::from(0))
         .map_err(|_| TransactionError::FailedToCreateTransaction("LMDB Error".to_string()))?;
 
     current_open_transaction_arc.update(Some(transaction_id));
