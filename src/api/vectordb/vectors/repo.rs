@@ -24,6 +24,14 @@ pub(crate) async fn create_vector(
         .await
         .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
 
+    let mut current_open_transaction_arc = collection.current_open_transaction.clone();
+
+    if current_open_transaction_arc.get().is_some() {
+        return Err(VectorsError::FailedToCreateVector(
+            "there is an ongoing transaction!".into(),
+        ));
+    }
+
     run_upload(
         ctx,
         collection,
@@ -78,6 +86,14 @@ pub(crate) async fn update_vector(
     let collection = collections::service::get_collection_by_id(collection_id)
         .await
         .map_err(|e| VectorsError::FailedToUpdateVector(e.to_string()))?;
+
+    let mut current_open_transaction_arc = collection.current_open_transaction.clone();
+
+    if current_open_transaction_arc.get().is_some() {
+        return Err(VectorsError::FailedToUpdateVector(
+            "there is an ongoing transaction!".into(),
+        ));
+    }
 
     run_upload(
         ctx,
