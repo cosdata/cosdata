@@ -53,8 +53,8 @@ impl CustomSerialize for IncrementalSerializableGrowableData {
                 continue;
             }
 
-            // TODO: Correctly serialize the version
-            bufman.write_u32_with_cursor(cursor, 0u32)?;
+            // Serialize the version
+            bufman.write_u32_with_cursor(cursor, **version)?;
 
             // Serialize the array
             for i in 0..64 {
@@ -96,7 +96,6 @@ impl CustomSerialize for IncrementalSerializableGrowableData {
                 for _ in 0..total_items {
                     let mut item = [u32::MAX; 64];
                     // Deserialize version
-                    // TODO: Correctly deserialize the version
                     let version = bufman.read_u32_with_cursor(cursor)?;
 
                     // Deserialize elements
