@@ -560,7 +560,7 @@ pub fn index_embedding(
     skipm.insert(vector_emb.hash_vec.clone());
 
     let mut cur_node_arc = cur_entry
-        .get_latest_version()
+        .get_latest_version(node_registry.clone())
         .0
         .get_data(node_registry.clone());
     let cur_node = cur_node_arc.get();
@@ -800,10 +800,7 @@ fn insert_node_create_edges(
         } = nbr1.clone()
         {
             let (new_neighbor, mut new_neighbor_neighbors, mut neighbor_list) =
-                if let Some(version) = nbr1
-                    .get_version(version_number)
-                    .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?
-                {
+                if let Some(version) = nbr1.get_version(node_registry.clone(), version_number) {
                     let mut node = version.get_data(node_registry.clone());
                     let neighbor_list: Vec<(LazyItem<MergedNode>, MetricResult)> = node
                         .get()
@@ -822,7 +819,7 @@ fn insert_node_create_edges(
                         prop_arc,
                         parent,
                     );
-                    nbr1.add_version(new_neighbour.clone());
+                    nbr1.add_version(node_registry.clone(), new_neighbour.clone());
                     let neighbor_list: Vec<(LazyItem<MergedNode>, MetricResult)> = old_neighbour
                         .get()
                         .neighbors
@@ -886,7 +883,10 @@ fn traverse_find_nearest(
 ) -> Result<Vec<(LazyItem<MergedNode>, MetricResult)>, WaCustomError> {
     let mut tasks: SmallVec<[Vec<(LazyItem<MergedNode>, MetricResult)>; 24]> = SmallVec::new();
 
-    let mut node_arc = vtm.get_latest_version().0.get_data(node_registry.clone());
+    let mut node_arc = vtm
+        .get_latest_version(node_registry.clone())
+        .0
+        .get_data(node_registry.clone());
     let node = node_arc.get();
 
     for (index, nref) in node.neighbors.iter().enumerate() {

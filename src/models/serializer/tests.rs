@@ -401,23 +401,23 @@ fn test_lazy_item_with_versions_serialization() {
             .unwrap(),
     );
     let vcs = Arc::new(VersionControl::new(env).unwrap());
+    let bufmans = Arc::new(BufferManagerFactory::new(
+        temp_dir.as_ref().into(),
+        |root, ver| root.join(format!("{}.index", **ver)),
+    ));
+    let cache = get_cache(bufmans.clone());
 
     let v0_hash = vcs.generate_hash("main", 0.into()).unwrap();
     let node_v0 = LazyItem::new(v0_hash, 0, MergedNode::new(HNSWLevel(2)));
 
     let v1_hash = vcs.add_next_version("main").unwrap();
     let node_v1 = LazyItem::new(v1_hash, 1, MergedNode::new(HNSWLevel(2)));
-    node_v0.add_version(node_v1);
+    node_v0.add_version(cache.clone(), node_v1);
 
     let v2_hash = vcs.add_next_version("main").unwrap();
     let node_v2 = LazyItem::new(v2_hash, 2, MergedNode::new(HNSWLevel(2)));
-    node_v0.add_version(node_v2);
+    node_v0.add_version(cache.clone(), node_v2);
 
-    let bufmans = Arc::new(BufferManagerFactory::new(
-        temp_dir.as_ref().into(),
-        |root, ver| root.join(format!("{}.index", **ver)),
-    ));
-    let cache = get_cache(bufmans.clone());
     let bufman = bufmans.get(&v0_hash).unwrap();
     let cursor = bufman.open_cursor().unwrap();
 
@@ -747,7 +747,7 @@ fn test_lazy_item_with_versions_serialization_and_validation() {
     for i in 1..=100 {
         let hash = vcs.add_next_version("main").unwrap();
         let next_version = LazyItem::new(hash, i, MergedNode::new(HNSWLevel(0)));
-        root.add_version(next_version);
+        root.add_version(cache.clone(), next_version);
     }
 
     validate_lazy_item_versions(cache.clone(), root.clone(), 0);
@@ -793,7 +793,7 @@ fn test_lazy_item_with_versions_multiple_serialization() {
     for i in 1..26 {
         let hash = vcs.add_next_version("main").unwrap();
         let next_version = LazyItem::new(hash, i, MergedNode::new(HNSWLevel(0)));
-        root.add_version(next_version);
+        root.add_version(cache.clone(), next_version);
     }
 
     validate_lazy_item_versions(cache.clone(), root.clone(), 0);
@@ -804,7 +804,7 @@ fn test_lazy_item_with_versions_multiple_serialization() {
     for i in 26..51 {
         let hash = vcs.add_next_version("main").unwrap();
         let next_version = LazyItem::new(hash, i, MergedNode::new(HNSWLevel(0)));
-        root.add_version(next_version);
+        root.add_version(cache.clone(), next_version);
     }
 
     validate_lazy_item_versions(cache.clone(), root.clone(), 0);
@@ -816,7 +816,7 @@ fn test_lazy_item_with_versions_multiple_serialization() {
     for i in 51..76 {
         let hash = vcs.add_next_version("main").unwrap();
         let next_version = LazyItem::new(hash, i, MergedNode::new(HNSWLevel(0)));
-        root.add_version(next_version);
+        root.add_version(cache.clone(), next_version);
     }
 
     validate_lazy_item_versions(cache.clone(), root.clone(), 0);
@@ -829,7 +829,7 @@ fn test_lazy_item_with_versions_multiple_serialization() {
     for i in 76..101 {
         let hash = vcs.add_next_version("main").unwrap();
         let next_version = LazyItem::new(hash, i, MergedNode::new(HNSWLevel(0)));
-        root.add_version(next_version);
+        root.add_version(cache.clone(), next_version);
     }
     validate_lazy_item_versions(cache.clone(), root.clone(), 0);
     root.set_versions_persistence(true);

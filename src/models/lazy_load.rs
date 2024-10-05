@@ -339,81 +339,12 @@ impl<T: Clone + 'static> LazyItem<T> {
         }
     }
 
-    pub fn add_version(&self, lazy_item: LazyItem<T>) {
-        let latest_local_version_number = self.get_latest_version().1;
-        self.add_version_inner(lazy_item, 0, latest_local_version_number + 1)
-    }
-
-    fn add_version_inner(
-        &self,
-        lazy_item: LazyItem<T>,
-        self_relative_version_number: u16,
-        target_relative_version_number: u16,
-    ) {
-        let Some(versions) = self.get_versions() else {
-            return;
-        };
-        let target_diff = target_relative_version_number - self_relative_version_number;
-        let index = largest_power_of_4_below(target_diff);
-
-        if let Some(existing_version) = versions.get(index as usize) {
-            return existing_version.add_version_inner(
-                lazy_item,
-                self_relative_version_number + (1 << (2 * index)),
-                target_relative_version_number,
-            );
-        }
-
-        versions.insert(index as usize, lazy_item);
-    }
-
     pub fn get_versions(&self) -> Option<LazyItemVec<T>> {
         if let Self::Valid { versions, .. } = self {
             Some(versions.clone())
         } else {
             None
         }
-    }
-
-    pub fn get_version(&self, version: u16) -> lmdb::Result<Option<LazyItem<T>>> {
-        let Some(versions) = self.get_versions() else {
-            return Ok(None);
-        };
-        let self_version_number = self.get_current_version_number();
-        if version < self_version_number {
-            return Ok(None);
-        }
-        if version == self.get_current_version_number() {
-            return Ok(Some(self.clone()));
-        }
-        let Some(mut prev) = versions.get(0) else {
-            return Ok(None);
-        };
-        let mut i = 1;
-        while let Some(next) = versions.get(i) {
-            if version < next.get_current_version_number() {
-                return prev.get_version(version);
-            }
-            prev = next;
-            i += 1;
-        }
-
-        prev.get_version(version)
-    }
-
-    // returns (latest version of current node, relative version number)
-    pub fn get_latest_version(&self) -> (LazyItem<T>, u16) {
-        if let Self::Valid { versions, .. } = self {
-            // TODO(a-rustacean): load versions if `data` field is `None`.
-            if let Some(last) = versions.last() {
-                let (latest_version, relative_local_version_number) = last.get_latest_version();
-                return (
-                    latest_version,
-                    (1u16 << ((versions.len() as u8 - 1) * 2)) + relative_local_version_number,
-                );
-            }
-        };
-        (self.clone(), 0)
     }
 
     pub fn set_versions_persistence(&self, flag: bool) {
@@ -428,6 +359,155 @@ impl<T: Clone + 'static> LazyItem<T> {
 }
 
 impl<T: Clone + CustomSerialize + Cacheable + 'static> LazyItem<T> {
+    pub fn add_version(&self, cache: Arc<NodeRegistry>, lazy_item: LazyItem<T>) {
+        let latest_local_version_number = self.get_latest_version(cache.clone()).1;
+        self.add_version_inner(cache, lazy_item, 0, latest_local_version_number + 1)
+    }
+
+    fn add_version_inner(
+        &self,
+        cache: Arc<NodeRegistry>,
+        lazy_item: LazyItem<T>,
+        self_relative_version_number: u16,
+        target_relative_version_number: u16,
+    ) {
+        if let Self::Valid {
+            data,
+            file_index,
+            versions,
+            ..
+        } = self
+        {
+            let mut versions = versions.clone();
+            let target_diff = target_relative_version_number - self_relative_version_number;
+            let index = largest_power_of_4_below(target_diff);
+
+            if data.is_none() {
+                let mut file_index_arc = file_index.clone();
+                let Some(file_index) = file_index_arc.get().clone() else {
+                    unreachable!("data and file_index both cannot be None at the time!");
+                };
+                let item: LazyItem<T> = cache
+                    .clone()
+                    .load_item(file_index)
+                    .expect("Deserialization failed");
+                let deserialized_versions = match item {
+                    LazyItem::Valid { data, versions, .. } => versions.items.clone().get().clone(),
+                    LazyItem::Invalid => {
+                        unreachable!("Deserialized LazyItem should not be Invalid")
+                    }
+                };
+                // TODO: update the `data` field too
+                versions.items.update(deserialized_versions);
+            };
+
+            if let Some(existing_version) = versions.get(index as usize) {
+                return existing_version.add_version_inner(
+                    cache,
+                    lazy_item,
+                    self_relative_version_number + (1 << (2 * index)),
+                    target_relative_version_number,
+                );
+            }
+
+            versions.insert(index as usize, lazy_item);
+        }
+    }
+
+    pub fn get_version(&self, cache: Arc<NodeRegistry>, version: u16) -> Option<LazyItem<T>> {
+        match self {
+            Self::Valid {
+                data,
+                file_index,
+                versions,
+                version_number,
+                ..
+            } => {
+                if &version < version_number {
+                    return None;
+                }
+                if &version == version_number {
+                    return Some(self.clone());
+                }
+                let mut versions = versions.clone();
+                if data.is_none() {
+                    let mut file_index_arc = file_index.clone();
+                    let Some(file_index) = file_index_arc.get().clone() else {
+                        unreachable!("data and file_index both cannot be None at the time!");
+                    };
+                    let item: LazyItem<T> = cache
+                        .clone()
+                        .load_item(file_index)
+                        .expect("Deserialization failed");
+                    let deserialized_versions = match item {
+                        LazyItem::Valid { data, versions, .. } => {
+                            versions.items.clone().get().clone()
+                        }
+                        LazyItem::Invalid => {
+                            unreachable!("Deserialized LazyItem should not be Invalid")
+                        }
+                    };
+                    // TODO: update the `data` field too
+                    versions.items.update(deserialized_versions);
+                };
+                let Some(mut prev) = versions.get(0) else {
+                    return None;
+                };
+                let mut i = 1;
+                while let Some(next) = versions.get(i) {
+                    if version < next.get_current_version_number() {
+                        return prev.get_version(cache, version);
+                    }
+                    prev = next;
+                    i += 1;
+                }
+
+                prev.get_version(cache, version)
+            }
+            Self::Invalid => None,
+        }
+    }
+
+    // returns (latest version of current node, relative version number)
+    pub fn get_latest_version(&self, cache: Arc<NodeRegistry>) -> (LazyItem<T>, u16) {
+        if let Self::Valid {
+            versions,
+            data,
+            file_index,
+            ..
+        } = self
+        {
+            let mut versions = versions.clone();
+            if data.is_none() {
+                let mut file_index_arc = file_index.clone();
+                let Some(file_index) = file_index_arc.get().clone() else {
+                    unreachable!("data and file_index both cannot be None at the time!");
+                };
+                let item: LazyItem<T> = cache
+                    .clone()
+                    .load_item(file_index)
+                    .expect("Deserialization failed");
+                let deserialized_versions = match item {
+                    LazyItem::Valid { data, versions, .. } => versions.items.clone().get().clone(),
+                    LazyItem::Invalid => {
+                        unreachable!("Deserialized LazyItem should not be Invalid")
+                    }
+                };
+                // TODO: update the `data` field too
+                versions.items.update(deserialized_versions);
+            };
+            if let Some(last) = versions.items.get().last() {
+                let (latest_version, relative_local_version_number) =
+                    last.get_latest_version(cache);
+                return (
+                    latest_version,
+                    (1u16 << ((versions.len() as u8 - 1) * 2)) + relative_local_version_number,
+                );
+            }
+        };
+        (self.clone(), 0)
+    }
+
     pub fn try_get_data(
         &self,
         cache: Arc<NodeRegistry>,
