@@ -1,3 +1,11 @@
+use std::sync::Arc;
+
+use crate::{
+    api::vectordb::vectors::dtos::{CreateVectorDto, CreateVectorResponseDto},
+    app_context::AppContext,
+    models::versioning::Hash,
+};
+
 use super::{dtos::CreateTransactionResponseDto, error::TransactionError, repo};
 
 pub(crate) async fn create_transaction(
@@ -8,7 +16,16 @@ pub(crate) async fn create_transaction(
 
 pub(crate) async fn commit_transaction(
     collection_id: &str,
-    transaction_id: &str,
+    transaction_id: Hash,
 ) -> Result<(), TransactionError> {
     repo::commit_transaction(collection_id, transaction_id).await
+}
+
+pub(crate) async fn create_vector_in_transaction(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    transaction_id: Hash,
+    create_vector_dto: CreateVectorDto,
+) -> Result<CreateVectorResponseDto, TransactionError> {
+    repo::create_vector_in_transaction(ctx, collection_id, transaction_id, create_vector_dto).await
 }

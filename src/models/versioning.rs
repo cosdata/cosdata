@@ -197,6 +197,10 @@ impl BranchInfo {
             parent_version,
         })
     }
+
+    pub fn get_current_version(&self) -> Version {
+        self.current_version
+    }
 }
 
 pub struct VersionControl {
