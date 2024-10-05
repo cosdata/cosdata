@@ -159,11 +159,35 @@ pub async fn init_vector_store(
     Ok(vec_store)
 }
 
+pub fn run_upload_in_ongoing_transaction(
+    ctx: Arc<AppContext>,
+    vec_store: Arc<VectorStore>,
+    vecs: Vec<(VectorIdValue, Vec<f32>)>,
+) -> Result<(), WaCustomError> {
+    let current_version = vec_store.get_current_version();
+
+    let bufman = ctx
+        .vec_raw_manager
+        .get(&current_version)
+        .map_err(|e| WaCustomError::BufIo(Arc::new(e)))?;
+
+    vecs.into_par_iter()
+        .map(|(id, vec)| {
+            let hash_vec = convert_value(id);
+            let vec_emb = RawVectorEmbedding {
+                raw_vec: vec,
+                hash_vec,
+            };
+            insert_embedding(bufman.clone(), vec_store.clone(), &vec_emb, current_version)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(())
+}
+
 pub fn run_upload(
     ctx: Arc<AppContext>,
     vec_store: Arc<VectorStore>,
     vecs: Vec<(VectorIdValue, Vec<f32>)>,
-    auto_commit: bool,
 ) -> Result<(), WaCustomError> {
     let current_version = vec_store.get_current_version();
     let next_version = vec_store
@@ -219,10 +243,9 @@ pub fn run_upload(
             ctx.config.upload_process_batch_size,
         )?;
     }
-    if auto_commit {
-        auto_commit_transaction(vec_store, ctx.index_manager.clone())?;
-        ctx.index_manager.flush_all()?;
-    }
+
+    auto_commit_transaction(vec_store, ctx.index_manager.clone())?;
+    ctx.index_manager.flush_all()?;
 
     Ok(())
 }

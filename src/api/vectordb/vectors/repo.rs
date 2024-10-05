@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use crate::{
-    api::vectordb::collections, api_service::run_upload, app_context::AppContext,
+    api::vectordb::collections,
+    api_service::{run_upload, run_upload_in_ongoing_transaction},
+    app_context::AppContext,
     models::rpc::VectorIdValue,
 };
 
@@ -29,7 +31,6 @@ pub(crate) async fn create_vector(
             create_vector_dto.id.clone(),
             create_vector_dto.values.clone(),
         )],
-        true,
     )
     .map_err(VectorsError::WaCustom)?;
     Ok(CreateVectorResponseDto {
@@ -46,14 +47,13 @@ pub(crate) async fn create_vector_without_committing(
     let collection = collections::service::get_collection_by_id(collection_id)
         .await
         .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
-    run_upload(
+    run_upload_in_ongoing_transaction(
         ctx,
         collection,
         vec![(
             create_vector_dto.id.clone(),
             create_vector_dto.values.clone(),
         )],
-        false,
     )
     .map_err(VectorsError::WaCustom)?;
     Ok(CreateVectorResponseDto {
@@ -83,7 +83,6 @@ pub(crate) async fn update_vector(
         ctx,
         collection,
         vec![(vector_id.clone(), update_vector_dto.values.clone())],
-        true,
     )
     .map_err(VectorsError::WaCustom)?;
     Ok(UpdateVectorResponseDto {
