@@ -214,8 +214,14 @@ pub struct LazyItemArray<T: Clone + 'static, const N: usize> {
 }
 
 #[derive(Clone)]
+pub struct VectorData {
+    pub data: Box<[u32; 64]>,
+    pub is_serialized: bool,
+}
+
+#[derive(Clone)]
 pub struct NewStruct {
-    pub items: Vec<(Box<[Option<u32>; 64]>, bool)>,
+    pub items: Vec<VectorData>,
 }
 
 impl<T: Clone + 'static> SyncPersist for LazyItem<T> {
@@ -909,32 +915,72 @@ impl<T: Clone + 'static, const N: usize> LazyItemArray<T, N> {
     }
 }
 
+impl VectorData {
+    pub fn new() -> Self {
+        Self {
+            data: Box::new([u32::MAX; 64]),
+            is_serialized: false,
+        }
+    }
+
+    pub fn from_array(data: [u32; 64], is_serialized: bool) -> Self {
+        Self {
+            data: Box::new(data),
+            is_serialized,
+        }
+    }
+
+    pub fn is_serialized(&self) -> bool {
+        self.is_serialized
+    }
+
+    pub fn get(&self, index: usize) -> Option<u32> {
+        if index < 64 {
+            match self.data[index] {
+                u32::MAX => None,
+                val => Some(val),
+            }
+        } else {
+            None
+        }
+    }
+
+    pub fn set(&mut self, index: usize, value: u32) {
+        if index < 64 {
+            self.data[index] = value;
+            self.is_serialized = false;
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.data.iter().all(|&x| x == u32::MAX)
+    }
+}
+
 impl NewStruct {
     pub fn new() -> Self {
         Self { items: Vec::new() }
     }
 
     pub fn insert(&mut self, vec_id: u32, value: u32) {
-        let insert_dimension = vec_id % 64;
-        let insert_index = vec_id / 64;
+        let insert_dimension = (vec_id % 64) as usize;
+        let insert_index = (vec_id / 64) as usize;
 
-        if self.items.len() <= insert_index as usize {
-            self.items
-                .resize(insert_index as usize + 1, (Box::new([None; 64]), false));
+        if self.items.len() <= insert_index {
+            self.items.resize(insert_index + 1, VectorData::new());
         }
 
-        self.items[insert_index as usize].0[insert_dimension as usize] = Some(value);
-        self.items[insert_index as usize].1 = false;
+        self.items[insert_index].set(insert_dimension, value);
     }
 
     pub fn get(&self, vec_id: u32) -> Option<u32> {
-        let insert_dimension = vec_id % 64;
-        let insert_index = vec_id / 64;
+        let insert_dimension = (vec_id % 64) as usize;
+        let insert_index = (vec_id / 64) as usize;
 
-        if self.items.len() <= insert_index as usize {
+        if self.items.len() <= insert_index {
             return None;
         }
 
-        self.items[insert_index as usize].0[insert_dimension as usize]
+        self.items[insert_index].get(insert_dimension)
     }
 }

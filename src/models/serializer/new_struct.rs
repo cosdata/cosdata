@@ -1,8 +1,8 @@
 use super::CustomSerialize;
 use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
-    cache_loader::{Cacheable, NodeRegistry},
-    lazy_load::{FileIndex, LazyItem, NewStruct, SyncPersist, CHUNK_SIZE},
+    cache_loader::NodeRegistry,
+    lazy_load::{FileIndex, NewStruct, VectorData},
     types::FileOffset,
     versioning::Hash,
 };
@@ -26,20 +26,20 @@ impl CustomSerialize for NewStruct {
         bufman.write_u32_with_cursor(cursor, total_items as u32)?;
 
         // Serialize individual items
-        for (item, serialized) in items.iter() {
+        for item in items.iter() {
             let item_start_offset = bufman.cursor_position(cursor)? as u32;
-            if *serialized {
+            if item.is_serialized() {
                 // If the array is already serialized, move the cursor forward by 64 * 4 bytes and serialize the next array
                 bufman
                     .seek_with_cursor(cursor, SeekFrom::Start(item_start_offset as u64 + 64 * 4))?;
                 continue;
             }
 
-            // Serialize the array, storing u32::MAX for None values
+            // Serialize the array
             for i in 0..64 {
                 bufman.write_u32_with_cursor(
                     cursor,
-                    match item[i] {
+                    match item.get(i) {
                         Some(val) => val,
                         None => u32::MAX,
                     },
@@ -73,12 +73,12 @@ impl CustomSerialize for NewStruct {
 
                 // Deserialize individual items
                 for _ in 0..total_items {
-                    let mut item = [None; 64];
+                    let mut item = [u32::MAX; 64];
                     for i in 0..64 {
                         let val = bufman.read_u32_with_cursor(cursor)?;
-                        item[i] = if val == u32::MAX { None } else { Some(val) };
+                        item[i] = val;
                     }
-                    items.push((Box::new(item), true));
+                    items.push(VectorData::from_array(item, true))
                 }
 
                 Ok(NewStruct { items })
