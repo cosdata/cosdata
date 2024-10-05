@@ -6,6 +6,7 @@ use crate::models::meta_persist::*;
 use crate::models::rpc::VectorIdValue;
 use crate::models::types::*;
 use crate::models::user::Statistics;
+use crate::models::versioning::Hash;
 use crate::models::versioning::VersionControl;
 use crate::quantization::{Quantization, StorageType};
 use crate::vector_store::*;
@@ -159,6 +160,32 @@ pub async fn init_vector_store(
     Ok(vec_store)
 }
 
+pub fn run_upload_in_transaction(
+    ctx: Arc<AppContext>,
+    vec_store: Arc<VectorStore>,
+    transaction_id: Hash,
+    vecs: Vec<(VectorIdValue, Vec<f32>)>,
+) -> Result<(), WaCustomError> {
+    let current_version = transaction_id;
+
+    let bufman = ctx
+        .vec_raw_manager
+        .get(&current_version)
+        .map_err(|e| WaCustomError::BufIo(Arc::new(e)))?;
+
+    vecs.into_par_iter()
+        .map(|(id, vec)| {
+            let hash_vec = convert_value(id);
+            let vec_emb = RawVectorEmbedding {
+                raw_vec: vec,
+                hash_vec,
+            };
+            insert_embedding(bufman.clone(), vec_store.clone(), &vec_emb, current_version)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(())
+}
+
 pub fn run_upload(
     ctx: Arc<AppContext>,
     vec_store: Arc<VectorStore>,
@@ -170,7 +197,9 @@ pub fn run_upload(
         .add_next_version("main")
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
     vec_store.set_current_version(next_version);
-    let bufman = ctx.vec_raw_manager.get(&current_version)
+    let bufman = ctx
+        .vec_raw_manager
+        .get(&current_version)
         .map_err(|e| WaCustomError::BufIo(Arc::new(e)))?;
     let cursor = bufman.open_cursor()?;
     bufman.write_u32_with_cursor(cursor, *next_version)?;
@@ -213,11 +242,11 @@ pub fn run_upload(
             ctx.index_manager.clone(),
             &ctx.vec_raw_manager,
             vec_store.clone(),
-            ctx.config.upload_process_batch_size
+            ctx.config.upload_process_batch_size,
         )?;
     }
 
-    auto_commit_transaction(vec_store.clone(), ctx.index_manager.clone())?;
+    auto_commit_transaction(vec_store, ctx.index_manager.clone())?;
     ctx.index_manager.flush_all()?;
 
     Ok(())

@@ -12,6 +12,7 @@ pub(crate) enum TransactionError {
     OnGoingTransaction,
     FailedToGetAppEnv,
     FailedToCreateTransaction(String),
+    FailedToCreateVector(String),
     NotImplemented,
 }
 
@@ -27,6 +28,9 @@ impl Display for TransactionError {
             }
             TransactionError::NotImplemented => {
                 write!(f, "This is not supported yet!")
+            }
+            TransactionError::FailedToCreateVector(msg) => {
+                write!(f, "Failed to create vector in transaction due to {}", msg)
             }
         }
     }
@@ -46,6 +50,7 @@ impl ResponseError for TransactionError {
             TransactionError::FailedToCreateTransaction(_) => StatusCode::BAD_REQUEST,
             TransactionError::OnGoingTransaction => StatusCode::CONFLICT,
             TransactionError::NotImplemented => StatusCode::BAD_REQUEST,
+            TransactionError::FailedToCreateVector(_) => StatusCode::BAD_REQUEST,
         }
     }
 }
