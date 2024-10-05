@@ -78,7 +78,7 @@ pub(crate) async fn get_vector_by_id(
     _collection_id: &str,
     _vector_id: &str,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
-    Err(VectorsError::NotFound)?
+    Err(VectorsError::NotImplemented)?
 }
 
 pub(crate) async fn update_vector(

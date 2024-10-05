@@ -16,7 +16,7 @@ pub(crate) async fn create_transaction(
 
 pub(crate) async fn commit_transaction(
     collection_id: &str,
-    transaction_id: &str,
+    transaction_id: Hash,
 ) -> Result<(), TransactionError> {
     repo::commit_transaction(collection_id, transaction_id).await
 }

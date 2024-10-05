@@ -45,7 +45,7 @@ pub(crate) async fn create_transaction(
 // commits a transaction for a specific collection (vector store)
 pub(crate) async fn commit_transaction(
     collection_id: &str,
-    transaction_id: &str,
+    transaction_id: Hash,
 ) -> Result<(), TransactionError> {
     // initializing environment
     let env = get_app_env().map_err(|_| TransactionError::FailedToGetAppEnv)?;
@@ -59,7 +59,7 @@ pub(crate) async fn commit_transaction(
     let current_open_transaction = current_open_transaction_arc.get();
     let current_transaction_id = current_open_transaction.ok_or(TransactionError::NotFound)?;
 
-    if current_transaction_id.to_string() != transaction_id {
+    if current_transaction_id != transaction_id {
         return Err(TransactionError::NotFound);
     }
 

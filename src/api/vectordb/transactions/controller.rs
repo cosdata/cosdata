@@ -13,10 +13,10 @@ pub(crate) async fn create_transaction(
 }
 
 pub(crate) async fn commit_transaction(
-    params: web::Path<(String, String)>,
+    params: web::Path<(String, u32)>,
 ) -> Result<HttpResponse, TransactionError> {
     let (collection_id, transaction_id) = params.into_inner();
-    let _ = service::commit_transaction(&collection_id, &transaction_id).await?;
+    let _ = service::commit_transaction(&collection_id, transaction_id.into()).await?;
     Ok(HttpResponse::NoContent().finish())
 }
 
