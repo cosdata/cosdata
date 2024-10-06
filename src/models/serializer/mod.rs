@@ -1,6 +1,7 @@
 mod dashmap;
 mod eager_lazy_item;
 mod eager_lazy_item_set;
+mod incremental_serializable_growable_data;
 mod inverted_index;
 mod inverted_index_item;
 mod inverted_index_sparse_ann_node;
