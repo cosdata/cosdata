@@ -1,13 +1,16 @@
-use cosdata::models::types::SparseVector;
-use cosdata::storage::{
-    inverted_index_old::InvertedIndex,
-    knn_query_old::{KNNQuery, KNNResult},
+use cosdata::{
+    models::types::SparseVector,
+    storage::{
+        inverted_index_sparse_ann::InvertedIndexSparseAnn,
+        sparse_ann_query::{SparseAnnQuery, SparseAnnResult},
+    },
 };
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use rand::{rngs::StdRng, Rng, SeedableRng};
-use std::collections::BTreeSet;
 
-const NUM_OF_VECTORS: usize = 2000; // Each of these will be used to create 100 more perturbed vectors
+use rand::{rngs::StdRng, Rng, SeedableRng};
+use std::{collections::BTreeSet, time::Instant};
+
+const NUM_OF_VECTORS: usize = 1000; // Each of these will be used to create 100 more perturbed vectors
 const NUM_OF_DIMENSIONS: usize = 50000;
 
 // Function to generate multiple random sparse vectors
@@ -44,8 +47,9 @@ fn generate_random_sparse_vectors(num_records: usize, dimensions: usize) -> Vec<
 fn create_inverted_index_and_query_vector(
     num_dimensions: usize,
     num_vectors: usize,
-) -> (InvertedIndex<f32>, SparseVector) {
-    let inverted_index = InvertedIndex::new();
+) -> (InvertedIndexSparseAnn, SparseVector) {
+    let nowx = Instant::now();
+    let inverted_index = InvertedIndexSparseAnn::new();
 
     let mut original_vectors: Vec<SparseVector> =
         generate_random_sparse_vectors(num_vectors as usize, num_dimensions as usize);
@@ -59,13 +63,24 @@ fn create_inverted_index_and_query_vector(
         let mut new_vectors = perturb_vector(&vector, 0.5, current_id);
         final_vectors.append(&mut new_vectors);
         current_id += 100; // Move to the next block of 100 IDs
+        println!("generating vector with id {:?}", current_id);
     }
 
+    println!(
+        "Finished generating vectors in time : {:?}, Next step adding them to inverted index",
+        nowx.elapsed()
+    );
+    let now = Instant::now();
     for vector in final_vectors {
+        if vector.vector_id % 10000 == 0 {
+            println!("Just adding vector {:?}", vector.vector_id);
+            println!("Time elapsed : {:?}", now.elapsed());
+        }
         inverted_index
             .add_sparse_vector(vector)
             .unwrap_or_else(|e| println!("Error : {:?}", e));
     }
+    println!("Time taken to insert all vectors : {:?}", now.elapsed());
 
     (inverted_index, query_vector)
 }
@@ -97,12 +112,13 @@ fn perturb_vector(
     new_vectors // Sending 100 new vectors from each original sparse_vector received.
 }
 
-fn knn_query_benchmark(c: &mut Criterion) {
-    let mut group = c.benchmark_group("knn query benchmark");
+fn sparse_ann_query_benchmark(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Sparse Ann Query Benchmark");
     group
         .sample_size(10)
-        .measurement_time(std::time::Duration::new(60, 0)); //Give enough time to collect samples
+        .measurement_time(std::time::Duration::new(30, 0)); //Give enough time to measure
     let mut rng = rand::thread_rng();
+    println!("Creating Inverted Index and query vector.. ");
 
     let (inverted_index, mut query_vector) =
         create_inverted_index_and_query_vector(NUM_OF_DIMENSIONS, NUM_OF_VECTORS + 1);
@@ -116,29 +132,17 @@ fn knn_query_benchmark(c: &mut Criterion) {
     }
     query_vector.entries = new_entries;
 
-    let knn_query = KNNQuery::new(query_vector);
+    let sparse_ann_query = SparseAnnQuery::new(query_vector);
 
-    // Benchmarking Knn_Query_Concurrent
-    group.bench_function(
-        BenchmarkId::new(
-            "Knn_Query_Concurrent",
-            format!(
-                "Total vectors = {} and dimensions = {}",
-                NUM_OF_VECTORS * 100,
-                NUM_OF_DIMENSIONS,
-            ),
-        ),
-        |b| {
-            b.iter(|| {
-                let _res: Vec<KNNResult> = knn_query.concurrent_search(&inverted_index);
-            });
-        },
+    println!(
+        "Starting benchmark.. for Vector count {:?} and dimension {:?}",
+        NUM_OF_VECTORS * 100,
+        NUM_OF_DIMENSIONS
     );
-
-    // Benchmarking Knn_Query_Sequential
+    // Benchmarking Sparse_Ann_Query_Concurrent
     group.bench_function(
         BenchmarkId::new(
-            "Knn_Query_Sequential",
+            "Sparse_Ann_Query_Sequential",
             format!(
                 "Total vectors = {} and dimensions = {}",
                 NUM_OF_VECTORS * 100,
@@ -147,11 +151,12 @@ fn knn_query_benchmark(c: &mut Criterion) {
         ),
         |b| {
             b.iter(|| {
-                let _res = knn_query.sequential_search(&inverted_index);
+                let _res: Vec<SparseAnnResult> =
+                    sparse_ann_query.sequential_search(&inverted_index);
             });
         },
     );
 }
 
-criterion_group!(benches, knn_query_benchmark);
+criterion_group!(benches, sparse_ann_query_benchmark);
 criterion_main!(benches);

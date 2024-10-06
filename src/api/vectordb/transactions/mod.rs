@@ -20,6 +20,11 @@ pub(crate) fn transactions_module() -> Scope {
         .route(
             "/{transaction_id}/commit",
             web::post().to(controller::commit_transaction),
+        )
+        .route(
+            "/{transaction_id}/vectors",
+            web::post().to(controller::create_vector_in_transaction),
         );
+
     transactions_module
 }

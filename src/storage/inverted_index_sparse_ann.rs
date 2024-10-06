@@ -1,5 +1,6 @@
 use arcshift::ArcShift;
 use core::array::from_fn;
+use rayon::prelude::*;
 use std::path::Path;
 
 use std::sync::Arc;
@@ -197,11 +198,11 @@ impl InvertedIndexSparseAnn {
     /// Adds a sparse vector to the index.
     pub fn add_sparse_vector(&self, vector: SparseVector) -> Result<(), String> {
         let vector_id = vector.vector_id;
-        for (dim_index, value) in vector.entries.iter() {
+        vector.entries.par_iter().for_each(|(dim_index, value)| {
             if *value != 0.0 {
                 self.insert(*dim_index, *value, vector_id);
             }
-        }
+        });
         Ok(())
     }
 }

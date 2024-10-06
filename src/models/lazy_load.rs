@@ -229,6 +229,17 @@ pub struct LazyItemArray<T: Clone + 'static, const N: usize> {
     pub items: STM<[Option<LazyItem<T>>; N]>,
 }
 
+#[derive(Clone)]
+pub struct VectorData {
+    pub data: Box<[u32; 64]>,
+    pub is_serialized: bool,
+}
+
+#[derive(Clone)]
+pub struct IncrementalSerializableGrowableData {
+    pub items: LazyItemVec<STM<VectorData>>,
+}
+
 impl<T: Clone + 'static> SyncPersist for LazyItem<T> {
     fn set_persistence(&self, flag: bool) {
         if let Self::Valid { persist_flag, .. } = self {
@@ -957,6 +968,17 @@ impl<T: Clone + 'static> LazyItemVec<T> {
         return_value
     }
 
+    pub fn resize(&self, new_len: usize, value: LazyItem<T>) {
+        let mut items = self.items.clone();
+        items
+            .transactional_update(|old| {
+                let mut new = old.clone();
+                new.resize(new_len, value.clone());
+                new
+            })
+            .unwrap();
+    }
+
     pub fn get(&self, index: usize) -> Option<LazyItem<T>> {
         let mut items = self.items.clone();
         items.get().get(index).cloned()
@@ -1076,5 +1098,115 @@ impl<T: Clone + 'static, const N: usize> LazyItemArray<T, N> {
     pub fn is_empty(&mut self) -> bool {
         let mut arc = self.items.clone();
         arc.get().iter().all(Option::is_none)
+    }
+}
+
+impl VectorData {
+    pub fn new() -> Self {
+        Self {
+            data: Box::new([u32::MAX; 64]),
+            is_serialized: false,
+        }
+    }
+
+    pub fn from_array(data: [u32; 64], is_serialized: bool) -> Self {
+        Self {
+            data: Box::new(data),
+            is_serialized,
+        }
+    }
+
+    pub fn is_serialized(&self) -> bool {
+        self.is_serialized
+    }
+
+    pub fn get(&self, index: usize) -> Option<u32> {
+        if index < 64 {
+            match self.data[index] {
+                u32::MAX => None,
+                val => Some(val),
+            }
+        } else {
+            None
+        }
+    }
+
+    pub fn set(&mut self, index: usize, value: u32) {
+        if index < 64 {
+            self.data[index] = value;
+            self.is_serialized = false;
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.data.iter().all(|&x| x == u32::MAX)
+    }
+}
+
+impl IncrementalSerializableGrowableData {
+    pub fn new() -> Self {
+        Self {
+            items: LazyItemVec::new(),
+        }
+    }
+
+    pub fn from_vec(vec: Vec<VectorData>) -> Self {
+        let items = vec
+            .iter()
+            .map(|data| {
+                LazyItem::new(
+                    Hash::from(u32::MAX),
+                    STM::new(
+                        VectorData::from_array(*data.data, data.is_serialized),
+                        1,
+                        true,
+                    ),
+                )
+            })
+            .collect();
+        Self {
+            items: LazyItemVec::from_vec(items),
+        }
+    }
+
+    pub fn insert(&mut self, vec_id: u32, value: u32) {
+        let insert_dimension = (vec_id % 64) as usize;
+        let insert_index = (vec_id / 64) as usize;
+        let items_len = self.items.len();
+
+        if items_len <= insert_index {
+            self.items.resize(
+                insert_index + 1,
+                LazyItem::new(Hash::from(u32::MAX), STM::new(VectorData::new(), 1, true)),
+            );
+        }
+
+        let mut vector_data_arcshift = self
+            .items
+            .get(insert_index)
+            .unwrap()
+            .get_lazy_data()
+            .unwrap();
+        let mut vector_data_stm = vector_data_arcshift.get().clone();
+        vector_data_stm
+            .transactional_update(|old| {
+                let mut new = old.clone();
+                new.set(insert_dimension, value);
+                new
+            })
+            .unwrap();
+    }
+
+    pub fn get(&self, vec_id: u32) -> Option<u32> {
+        let insert_dimension = (vec_id % 64) as usize;
+        let insert_index = (vec_id / 64) as usize;
+
+        if self.items.len() <= insert_index {
+            return None;
+        }
+
+        let vector_data_lazy_item = self.items.get(insert_index).unwrap();
+        let mut vector_data_stm = vector_data_lazy_item.get_lazy_data().unwrap().get().clone();
+        vector_data_stm.get().get(insert_dimension)
     }
 }

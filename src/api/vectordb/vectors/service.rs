@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{app_context::AppContext, config_loader::Config, models::rpc::VectorIdValue};
+use crate::{app_context::AppContext, models::rpc::VectorIdValue};
 
 use super::{
     dtos::{

@@ -37,7 +37,7 @@ pub(crate) async fn upsert(
     // Call run_upload with the extracted parameters
     web::block(move || {
         // TODO: handle the error
-        run_upload(ctx.into_inner(), vec_store, convert_vectors(body.vectors));
+        let _ = run_upload(ctx.into_inner(), vec_store, convert_vectors(body.vectors));
     })
     .await
     .unwrap();

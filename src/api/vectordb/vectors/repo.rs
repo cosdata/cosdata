@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
+use crate::models::versioning::Hash;
+
 use crate::{
-    api::vectordb::collections, api_service::run_upload, app_context::AppContext,
+    api_service::{run_upload, run_upload_in_transaction},
+    app_context::AppContext,
     models::rpc::VectorIdValue,
 };
 
@@ -22,9 +25,42 @@ pub(crate) async fn create_vector(
         .await
         .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
 
+    let mut current_open_transaction_arc = collection.current_open_transaction.clone();
+
+    if current_open_transaction_arc.get().is_some() {
+        return Err(VectorsError::FailedToCreateVector(
+            "there is an ongoing transaction!".into(),
+        ));
+    }
+
     run_upload(
         ctx,
         collection,
+        vec![(
+            create_vector_dto.id.clone(),
+            create_vector_dto.values.clone(),
+        )],
+    )
+    .map_err(VectorsError::WaCustom)?;
+    Ok(CreateVectorResponseDto {
+        id: create_vector_dto.id,
+        values: create_vector_dto.values,
+    })
+}
+
+pub(crate) async fn create_vector_in_transaction(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    transaction_id: Hash,
+    create_vector_dto: CreateVectorDto,
+) -> Result<CreateVectorResponseDto, VectorsError> {
+    let collection = collections::service::get_collection_by_id(collection_id)
+        .await
+        .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
+    run_upload_in_transaction(
+        ctx,
+        collection,
+        transaction_id,
         vec![(
             create_vector_dto.id.clone(),
             create_vector_dto.values.clone(),
@@ -41,7 +77,7 @@ pub(crate) async fn get_vector_by_id(
     _collection_id: &str,
     _vector_id: &str,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
-    Err(VectorsError::NotFound)?
+    Err(VectorsError::NotImplemented)?
 }
 
 pub(crate) async fn update_vector(
@@ -53,6 +89,14 @@ pub(crate) async fn update_vector(
     let collection = collections::service::get_collection_by_id(collection_id)
         .await
         .map_err(|e| VectorsError::FailedToUpdateVector(e.to_string()))?;
+
+    let mut current_open_transaction_arc = collection.current_open_transaction.clone();
+
+    if current_open_transaction_arc.get().is_some() {
+        return Err(VectorsError::FailedToUpdateVector(
+            "there is an ongoing transaction!".into(),
+        ));
+    }
 
     run_upload(
         ctx,

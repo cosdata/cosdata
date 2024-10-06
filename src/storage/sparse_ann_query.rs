@@ -1,6 +1,3 @@
-use dashmap::DashMap;
-use rayon::iter::IntoParallelRefIterator;
-use rayon::prelude::*;
 use std::collections::HashMap;
 use std::{cmp::Ordering, collections::BinaryHeap};
 
@@ -14,7 +11,7 @@ const K: usize = 5;
 #[derive(Debug, Clone, PartialEq)]
 pub struct SparseAnnResult {
     vector_id: u32,
-    similarity: f32,
+    similarity: u32,
 }
 
 impl Eq for SparseAnnResult {}
@@ -42,7 +39,7 @@ impl SparseAnnQuery {
     }
 
     pub fn sequential_search(&self, index: &InvertedIndexSparseAnn) -> Vec<SparseAnnResult> {
-        let mut dot_products: HashMap<u32, f32> = HashMap::new();
+        let mut dot_products: HashMap<u32, u32> = HashMap::new();
 
         let mut sorted_query_dims: Vec<(u32, f32)> = self.query_vector.entries.clone();
         sorted_query_dims.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
@@ -63,8 +60,8 @@ impl SparseAnnQuery {
                     if !lazy_item_vec.is_empty() {
                         for lazy_item in lazy_item_vec.iter() {
                             let vector_id = lazy_item.get_data(index.cache.clone());
-                            let dot_product = dot_products.entry(*vector_id).or_insert(0.0);
-                            *dot_product += (quantized_query_value * key) as f32;
+                            let dot_product = dot_products.entry(*vector_id).or_insert(0u32);
+                            *dot_product += (quantized_query_value * key) as u32;
                         }
                     }
                 }
