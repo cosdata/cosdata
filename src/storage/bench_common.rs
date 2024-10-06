@@ -1,10 +1,33 @@
 use super::inverted_index_sparse_ann::InvertedIndexSparseAnn;
 use crate::models::types::SparseVector;
 use rand::{rngs::StdRng, Rng, SeedableRng};
-use std::{collections::BTreeSet, time::Instant};
+use std::{
+    collections::BTreeSet,
+    time::{Duration, Instant},
+};
 
 /// This bench_common file contains all relevant functions required for benchmarking knn and sparse_ann queries
 /// Import these functions in benchmarking, for easy use.
+
+pub fn mean(data: &Vec<Duration>) -> Duration {
+    let sum: Duration = data.iter().sum();
+    sum / data.len() as u32
+}
+
+pub fn variance(data: &Vec<Duration>) -> f64 {
+    let data_mean = mean(data).as_secs_f64();
+    data.iter()
+        .map(|value| {
+            let diff = data_mean - value.as_secs_f64();
+            diff * diff
+        })
+        .sum::<f64>()
+        / data.len() as f64
+}
+
+pub fn standard_deviation(data: &Vec<Duration>) -> f32 {
+    variance(data).sqrt() as f32
+}
 
 // Function to generate multiple random sparse vectors
 pub fn generate_random_sparse_vectors(num_records: usize, dimensions: usize) -> Vec<SparseVector> {
