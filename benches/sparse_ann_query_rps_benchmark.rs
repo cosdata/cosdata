@@ -88,7 +88,7 @@ fn sparse_ann_query_rps_benchmark(c: &mut Criterion) {
                         queries_successful, batch_length, time_elapsed
                     );
                     if (queries_successful as f32 / batch_length as f32) < 0.5 {
-                        // Breaking batch loop if less than 50% are sucessful
+                        // Breaking batch loop if less than 50% are successful
                         break;
                     }
                 }
@@ -132,7 +132,7 @@ fn sparse_ann_query_rps_benchmark(c: &mut Criterion) {
 
     for (batch_size, vec_dur) in time_batches {
         println!(
-            "\n For batch size {:?}, \nThe mean time is {:?}, \n variance is {:?}, \n Standard deviation is {:?}, \n",batch_size,
+            "\n For batch size {:?}, \nThe mean time is {:?}, \n variance is {:?}ms, \n Standard deviation is {:?}ms, \n",batch_size,
             bench_common::mean(&vec_dur), format!("{:.5}", bench_common::variance(&vec_dur)),bench_common::standard_deviation(&vec_dur),
         );
     }
