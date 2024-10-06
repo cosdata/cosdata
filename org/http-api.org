@@ -5,9 +5,14 @@
 create_collection:
   name: string
   description: string (optional)
-  vector_dimension: integer
+  dense_vector:
+    enabled: boolean
+    auto_create_index: boolean
+    dimension: integer
+  sparse_vector:
+    enabled: boolean
+    auto_create_index: boolean
   metadata_schema: object (optional)
-  auto_create_index: boolean
   config:
     max_vectors: integer (optional)
     replication_factor: integer (optional)
@@ -18,16 +23,23 @@ create_collection:
 create_index:
   collection_name: string
   name: string
-  index_type: string
-  distance_metric_type: string
-  quantization:
+  dense_index:
     enabled: boolean
-    bits: integer
-    type: string
-  params:
-    m: integer (optional)
-    ef_construction: integer (optional)
-    # Other index-specific parameters
+    type: string  # Currently only "hnsw" is supported
+    quantization:
+      enabled: boolean
+      resolution: integer # Range 1-8
+    params:
+      m: integer (optional)
+      ef_construction: integer (optional)
+      # Other HNSW-specific parameters
+  sparse_index:
+    enabled: boolean
+    type: string  # Currently only "inverted_index" is supported
+    quantization:
+      enabled: boolean
+      resolution: integer # Range 1-8
+    params:
 #+end_src
 
 ** Namespace Creation
@@ -42,7 +54,10 @@ create_namespace:
 #+begin_src yaml
 vector:
   id: string
-  values: array[float]
+  values: array[float] (optional)
+  sparse_values:
+    indices: array[integer]
+    values: array[float]
   metadata: object (optional)
   namespace: string (optional)
 #+end_src
@@ -52,7 +67,13 @@ vector:
 create_collection:
   name: "clothing_items"
   description: "Collection of clothing item vectors and metadata"
-  vector_dimension: 512
+  dense_vector:
+    enabled: true
+    auto_create_index: true
+    dimension: 512
+  sparse_vector:
+    enabled: true
+    auto_create_index: true
   metadata_schema:
     product_id:
       type: "string"
@@ -72,13 +93,93 @@ create_collection:
     size:
       type: "string"
       index: true
-     date_added:
+    date_added:
       type: "date"
       index: true
-  auto_create_index: true
+  config:
+    max_vectors: 1000000
+    replication_factor: 3
 #+end_src
 
 * Vector Insertion API 
+
+** Upsert API URL
+POST /api/v1/collections/{collection_name}/vectors
+
+** Request Body
+#+BEGIN_SRC json
+{
+  "vectors": [
+    {
+      "id": "vec1",
+      "values": [0.1, 0.2, 0.3, ...], // Optional dense vector
+      "sparse_values": { // Optional sparse vector
+        "indices": [0, 5],
+        "values": [0.2849, 0.9092]
+      },
+      "metadata": {
+        "key1": "value1",
+        "key2": "value2"
+      }
+    },
+    // More vectors...
+  ]
+}
+#+END_SRC
+
+** Notes
+- Supports upsert of dense vectors, sparse vectors, or both
+- Common ID field for both dense and sparse representations
+- Can upsert just dense, just sparse, or both in a single request
+
+* Query API
+
+** Query API URL
+POST /api/v1/collections/{collection_name}/query
+
+** Request Body
+#+BEGIN_SRC json
+{
+  "vector": [0.1, 0.2, 0.3, ...], // Optional dense query vector
+  "sparse_vector": { // Optional sparse query vector
+    "indices": [0, 5],
+    "values": [0.2849, 0.9092]
+  },
+  "top_k": 10,
+  "sparse_top_k": 20, // Explicit count for sparse vector ANN
+  "include_metadata": true,
+  "namespace": "default"
+}
+#+END_SRC
+
+** Response Body
+#+BEGIN_SRC json
+{
+  "dense_results": [
+    {
+      "id": "vec1",
+      "score": 0.95,
+      "metadata": {...}
+    },
+    // More dense results...
+  ],
+  "sparse_results": [
+    {
+      "id": "vec2",
+      "score": 0.88,
+      "metadata": {...}
+    },
+    // More sparse results...
+  ]
+}
+#+END_SRC
+
+** Notes
+- Supports querying with dense vectors, sparse vectors, or both
+- Separate top_k parameters for dense and sparse results
+- Returns separate result sets for dense and sparse vector matches
+
+* Vector Insertion Scenarios
 
 ** Scenario 1: Index Created Upfront (Implicitly or Explicitly)
 
