@@ -132,7 +132,7 @@ fn sparse_ann_query_rps_benchmark(c: &mut Criterion) {
 
     for (batch_size, vec_dur) in time_batches {
         println!(
-            "\n For batch size {:?}, \nThe mean time is {:?}, \n variance is {:?}, \n Standard deviation is {:?}, \n",batch_size,
+            "\n For batch size {:?}, \nThe mean time is {:?}, \n variance is {:?}ms, \n Standard deviation is {:?}ms, \n",batch_size,
             bench_common::mean(&vec_dur), format!("{:.5}", bench_common::variance(&vec_dur)),bench_common::standard_deviation(&vec_dur),
         );
     }
