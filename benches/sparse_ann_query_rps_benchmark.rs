@@ -88,7 +88,7 @@ fn sparse_ann_query_rps_benchmark(c: &mut Criterion) {
                         queries_successful, batch_length, time_elapsed
                     );
                     if (queries_successful as f32 / batch_length as f32) < 0.5 {
-                        // Breaking batch loop if less than 50% are sucessful
+                        // Breaking batch loop if less than 50% are successful
                         break;
                     }
                 }
