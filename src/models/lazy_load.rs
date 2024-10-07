@@ -1215,3 +1215,35 @@ impl IncrementalSerializableGrowableData {
         vector_data_stm.get().get(insert_dimension)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn test_lazy_item_versions_add_and_get() {
+        let temp_dir = tempdir().unwrap();
+        let bufmans = Arc::new(BufferManagerFactory::new(
+            temp_dir.as_ref().into(),
+            |root, ver| root.join(format!("{}.index", **ver)),
+        ));
+        let cache = Arc::new(NodeRegistry::new(1000, bufmans));
+        let root = LazyItem::new(Hash::from(0), 0, 0.0);
+
+        for i in 1..=10_000 {
+            let version = LazyItem::new(Hash::from(0), i, 0.0);
+            root.add_version(cache.clone(), version);
+        }
+
+        for i in 0..=10_000 {
+            assert_eq!(
+                root.get_version(cache.clone(), i)
+                    .unwrap()
+                    .get_current_version_number(),
+                i
+            );
+        }
+    }
+}
