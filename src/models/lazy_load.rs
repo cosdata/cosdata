@@ -1156,6 +1156,7 @@ impl IncrementalSerializableGrowableData {
             .map(|data| {
                 LazyItem::new(
                     Hash::from(u32::MAX),
+                    u16::MAX,
                     STM::new(
                         VectorData::from_array(*data.data, data.is_serialized),
                         1,
@@ -1177,7 +1178,11 @@ impl IncrementalSerializableGrowableData {
         if items_len <= insert_index {
             self.items.resize(
                 insert_index + 1,
-                LazyItem::new(Hash::from(u32::MAX), STM::new(VectorData::new(), 1, true)),
+                LazyItem::new(
+                    Hash::from(u32::MAX),
+                    u16::MAX,
+                    STM::new(VectorData::new(), 1, true),
+                ),
             );
         }
 

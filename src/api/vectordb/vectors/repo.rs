@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::models::versioning::Hash;
 
 use crate::{
+    api::vectordb::collections,
     api_service::{run_upload, run_upload_in_transaction},
     app_context::AppContext,
     models::rpc::VectorIdValue,
