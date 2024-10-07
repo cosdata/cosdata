@@ -45,7 +45,7 @@ pub fn write_node_to_file(
     let mut node_arc = lazy_item
         .get_lazy_data()
         .ok_or(WaCustomError::LazyLoadingError("node in null".to_string()))?;
-    let node = node_arc.get();
+    let node = node_arc.get().clone().unwrap();
     let version = match file_index {
         Some(FileIndex::Valid { version_id, .. }) => version_id,
         _ => lazy_item.get_current_version(),

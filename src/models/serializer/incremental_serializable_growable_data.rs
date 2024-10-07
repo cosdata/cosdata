@@ -28,7 +28,10 @@ impl CustomSerialize for IncrementalSerializableGrowableData {
             .iter()
             .map(|item| {
                 (
-                    item.get_lazy_data().unwrap().get().clone().get().clone(),
+                    (*item.get_lazy_data().unwrap().get().clone().unwrap())
+                        .clone()
+                        .get()
+                        .clone(),
                     item.get_current_version_number(),
                     item.get_current_version(),
                 )

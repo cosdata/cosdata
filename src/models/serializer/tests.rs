@@ -7,7 +7,6 @@ use crate::models::versioning::BranchId;
 use crate::models::versioning::VersionHash;
 use crate::models::versioning::{Version, VersionControl};
 use crate::storage::Storage;
-use arcshift::ArcShift;
 use half::f16;
 use lmdb::Environment;
 use std::sync::Arc;
@@ -64,22 +63,20 @@ fn test_lazy_item_serialization() {
     match (original_arc.get(), deserialized_arc.get()) {
         (
             LazyItem::Valid {
-                data: Some(original),
+                data: original_arc,
                 version_id: original_version_id,
                 version_number: original_version_number,
                 ..
             },
             LazyItem::Valid {
-                data: Some(deserialized),
+                data: deserialized_arc,
                 version_id: deserialized_version_id,
                 version_number: deserialized_version_number,
                 ..
             },
         ) => {
-            let mut original_arc = original.clone();
-            let mut deserialized_arc = deserialized.clone();
-            let original = original_arc.get();
-            let deserialized = deserialized_arc.get();
+            let original = original_arc.clone().get().clone().unwrap();
+            let deserialized = deserialized_arc.clone().get().clone().unwrap();
 
             assert_eq!(original.hnsw_level, deserialized.hnsw_level);
             assert_eq!(original_version_id, deserialized_version_id);
@@ -127,8 +124,8 @@ fn test_eager_lazy_item_serialization() {
     if let (Some(mut node_arc), Some(mut deserialized_arc)) =
         (item.1.get_lazy_data(), deserialized.1.get_lazy_data())
     {
-        let node = node_arc.get();
-        let deserialized = deserialized_arc.get();
+        let node = node_arc.get().clone().unwrap();
+        let deserialized = deserialized_arc.get().clone().unwrap();
 
         assert_eq!(node.hnsw_level, deserialized.hnsw_level);
     } else {
@@ -171,20 +168,20 @@ fn test_lazy_item_set_serialization() {
         match (original, deserialized) {
             (
                 LazyItem::Valid {
-                    data: Some(mut original_arc),
+                    data: mut original_arc,
                     version_id: original_version_id,
                     version_number: original_version_number,
                     ..
                 },
                 LazyItem::Valid {
-                    data: Some(mut deserialized_arc),
+                    data: mut deserialized_arc,
                     version_id: deserialized_version_id,
                     version_number: deserialized_version_number,
                     ..
                 },
             ) => {
-                let original = original_arc.get();
-                let deserialized = deserialized_arc.get();
+                let original = original_arc.get().clone().unwrap();
+                let deserialized = deserialized_arc.get().clone().unwrap();
 
                 assert_eq!(original.hnsw_level, deserialized.hnsw_level);
                 assert_eq!(original_version_id, deserialized_version_id);
@@ -229,7 +226,7 @@ fn test_eager_lazy_item_set_serialization() {
                 EagerLazyItem(
                     original_data,
                     LazyItem::Valid {
-                        data: Some(mut original_arc),
+                        data: mut original_arc,
                         version_id: original_version_id,
                         version_number: original_version_number,
                         ..
@@ -238,15 +235,15 @@ fn test_eager_lazy_item_set_serialization() {
                 EagerLazyItem(
                     deserialized_data,
                     LazyItem::Valid {
-                        data: Some(mut deserialized_arc),
+                        data: mut deserialized_arc,
                         version_id: deserialized_version_id,
                         version_number: deserialized_version_number,
                         ..
                     },
                 ),
             ) => {
-                let original = original_arc.get();
-                let deserialized = deserialized_arc.get();
+                let original = original_arc.get().clone().unwrap();
+                let deserialized = deserialized_arc.get().clone().unwrap();
 
                 assert_eq!(original_data, deserialized_data);
                 assert_eq!(original.hnsw_level, deserialized.hnsw_level);
@@ -321,7 +318,7 @@ fn test_merged_node_with_neighbors_serialization() {
                 EagerLazyItem(
                     original_cs,
                     LazyItem::Valid {
-                        data: Some(mut original_arc),
+                        data: mut original_arc,
                         version_id: original_version_id,
                         version_number: original_version_number,
                         ..
@@ -330,15 +327,15 @@ fn test_merged_node_with_neighbors_serialization() {
                 EagerLazyItem(
                     deserialized_cs,
                     LazyItem::Valid {
-                        data: Some(mut deserialized_arc),
+                        data: mut deserialized_arc,
                         version_id: deserialized_version_id,
                         version_number: deserialized_version_number,
                         ..
                     },
                 ),
             ) => {
-                let original = original_arc.get();
-                let deserialized = deserialized_arc.get();
+                let original = original_arc.get().clone().unwrap();
+                let deserialized = deserialized_arc.get().clone().unwrap();
 
                 assert_eq!(original.hnsw_level, deserialized.hnsw_level);
                 assert_eq!(original_cs, deserialized_cs);
@@ -375,19 +372,33 @@ fn test_merged_node_with_parent_child_serialization() {
     assert!(matches!(
         deserialized.get_parent().item.get(),
         LazyItem::Valid {
-            data: Some(_),
             version_number: 1,
             ..
         }
     ));
+    assert!(deserialized
+        .get_parent()
+        .item
+        .get()
+        .get_lazy_data()
+        .unwrap()
+        .get()
+        .is_some());
     assert!(matches!(
         deserialized.get_child().item.get(),
         LazyItem::Valid {
-            data: Some(_),
             version_number: 2,
             ..
         }
     ));
+    assert!(deserialized
+        .get_child()
+        .item
+        .get()
+        .get_lazy_data()
+        .unwrap()
+        .get()
+        .is_some());
 }
 
 #[test]
@@ -454,11 +465,15 @@ fn test_lazy_item_cyclic_serialization() {
         .get_lazy_data()
         .unwrap()
         .get()
+        .clone()
+        .unwrap()
         .set_parent(node1.clone());
     node1
         .get_lazy_data()
         .unwrap()
         .get()
+        .clone()
+        .unwrap()
         .set_child(node0.clone());
 
     let lazy_ref = LazyItemRef::from_lazy(node0.clone());
@@ -475,17 +490,23 @@ fn test_lazy_item_cyclic_serialization() {
 
     let deserialized: LazyItem<MergedNode> = cache.load_item(file_index).unwrap();
 
-    let mut parent_ref = deserialized.get_lazy_data().unwrap().get_parent();
+    let mut parent_ref = deserialized
+        .get_lazy_data()
+        .unwrap()
+        .get()
+        .clone()
+        .unwrap()
+        .get_parent();
 
     // Deserialize the parent
     if let LazyItem::Valid {
-        data: Some(mut parent_arc),
+        data: mut parent_arc,
         version_number,
         ..
     } = parent_ref.item.get().clone()
     {
         assert_eq!(version_number, 1);
-        let parent = parent_arc.get();
+        let parent = parent_arc.get().clone().unwrap();
 
         let mut child_ref = parent.get_child();
         let child = child_ref.item.get();
@@ -493,11 +514,11 @@ fn test_lazy_item_cyclic_serialization() {
         assert!(matches!(
             child,
             LazyItem::Valid {
-                data: None,
                 version_number: 0,
                 ..
             }
         ));
+        assert!(child.get_lazy_data().unwrap().get().is_none());
     } else {
         panic!("Expected lazy load for parent");
     }
@@ -506,21 +527,21 @@ fn test_lazy_item_cyclic_serialization() {
 #[test]
 fn test_lazy_item_complex_cyclic_serialization() {
     let root_version_id = Hash::from(0);
-    let mut node0 = ArcShift::new(MergedNode::new(HNSWLevel(2)));
-    let mut node1 = ArcShift::new(MergedNode::new(HNSWLevel(2)));
-    let mut node2 = ArcShift::new(MergedNode::new(HNSWLevel(2)));
+    let node0 = Arc::new(MergedNode::new(HNSWLevel(2)));
+    let node1 = Arc::new(MergedNode::new(HNSWLevel(2)));
+    let node2 = Arc::new(MergedNode::new(HNSWLevel(2)));
 
-    let lazy1 = LazyItem::from_arcshift(root_version_id, 0, node0.clone());
-    let lazy2 = LazyItem::from_arcshift(1.into(), 1, node1.clone());
-    let lazy3 = LazyItem::from_arcshift(2.into(), 2, node2.clone());
+    let lazy1 = LazyItem::from_arc(root_version_id, 0, node0.clone());
+    let lazy2 = LazyItem::from_arc(1.into(), 1, node1.clone());
+    let lazy3 = LazyItem::from_arc(2.into(), 2, node2.clone());
 
-    node0.get().set_parent(lazy2.clone());
-    node1.get().set_child(lazy1.clone());
-    node1.get().set_parent(lazy3.clone());
-    node2.get().set_child(lazy2.clone());
+    node0.set_parent(lazy2.clone());
+    node1.set_child(lazy1.clone());
+    node1.set_parent(lazy3.clone());
+    node2.set_child(lazy2.clone());
 
-    node0.get().add_ready_neighbor(
-        LazyItem::from_arcshift(2.into(), 2, node2),
+    node0.add_ready_neighbor(
+        LazyItem::from_arc(2.into(), 2, node2),
         MetricResult::CosineSimilarity(CosineSimilarity(0.9)),
     );
 
@@ -540,19 +561,19 @@ fn test_lazy_item_complex_cyclic_serialization() {
 
     let deserialized: LazyItemRef<MergedNode> = cache.clone().load_item(file_index).unwrap();
 
-    let mut deserialized_data_arc = deserialized.get_data().unwrap();
-    let deserialized_data = deserialized_data_arc.get();
+    let mut deserialized_data_arc = deserialized.get_lazy_data().unwrap();
+    let deserialized_data = deserialized_data_arc.get().clone().unwrap();
 
     let mut parent_ref = deserialized_data.get_parent();
     let parent = parent_ref.item.get();
 
     // Deserialize the parent
     if let LazyItem::Valid {
-        data: Some(mut parent_arc),
+        data: mut parent_arc,
         ..
     } = parent.clone()
     {
-        let parent = parent_arc.get();
+        let parent = parent_arc.get().clone().unwrap();
 
         let mut child_ref = parent.get_child();
         let child = child_ref.item.get();
@@ -562,21 +583,19 @@ fn test_lazy_item_complex_cyclic_serialization() {
         let grand_parent = grand_parent_ref.item.get();
 
         if let LazyItem::Valid {
-            data: None,
             file_index,
+            data: child_arc,
             ..
         } = &child
         {
+            assert!(child_arc.clone().get().is_none());
             let file_index = file_index.clone().get().clone().unwrap();
             let _: LazyItemRef<MergedNode> = cache.load_item(file_index).unwrap();
         } else {
             panic!("Deserialization mismatch");
         }
 
-        assert!(matches!(
-            grand_parent,
-            LazyItem::Valid { data: Some(_), .. }
-        ));
+        assert!(grand_parent.get_lazy_data().unwrap().get().is_some());
     } else {
         panic!("Deserialization Error");
     }
@@ -613,20 +632,20 @@ fn test_lazy_item_set_linked_chunk_serialization() {
         match (original, deserialized) {
             (
                 LazyItem::Valid {
-                    data: Some(mut original_arc),
+                    data: mut original_arc,
                     version_id: original_version_id,
                     version_number: original_version_number,
                     ..
                 },
                 LazyItem::Valid {
-                    data: Some(mut deserialized_arc),
+                    data: mut deserialized_arc,
                     version_id: deserialized_version_id,
                     version_number: deserialized_version_number,
                     ..
                 },
             ) => {
-                let original = original_arc.get();
-                let deserialized = deserialized_arc.get();
+                let original = original_arc.get().clone().unwrap();
+                let deserialized = deserialized_arc.get().clone().unwrap();
 
                 assert_eq!(original.hnsw_level, deserialized.hnsw_level);
                 assert_eq!(original_version_id, deserialized_version_id);
@@ -669,7 +688,7 @@ fn test_eager_lazy_item_set_linked_chunk_serialization() {
                 EagerLazyItem(
                     original_data,
                     LazyItem::Valid {
-                        data: Some(mut original_arc),
+                        data: mut original_arc,
                         version_id: original_version_id,
                         version_number: original_version_number,
                         ..
@@ -678,15 +697,15 @@ fn test_eager_lazy_item_set_linked_chunk_serialization() {
                 EagerLazyItem(
                     deserialized_data,
                     LazyItem::Valid {
-                        data: Some(mut deserialized_arc),
+                        data: mut deserialized_arc,
                         version_id: deserialized_version_id,
                         version_number: deserialized_version_number,
                         ..
                     },
                 ),
             ) => {
-                let original = original_arc.get();
-                let deserialized = deserialized_arc.get();
+                let original = original_arc.get().clone().unwrap();
+                let deserialized = deserialized_arc.get().clone().unwrap();
 
                 assert_eq!(original_data, deserialized_data);
                 assert_eq!(original.hnsw_level, deserialized.hnsw_level);
@@ -939,16 +958,16 @@ fn test_lazy_item_vec_serialization() {
         match (original, deserialized) {
             (
                 LazyItem::Valid {
-                    data: Some(mut original_arc),
+                    data: mut original_arc,
                     ..
                 },
                 LazyItem::Valid {
-                    data: Some(mut deserialized_arc),
+                    data: mut deserialized_arc,
                     ..
                 },
             ) => {
-                let original = original_arc.get();
-                let deserialized = deserialized_arc.get();
+                let original = original_arc.get().clone().unwrap();
+                let deserialized = deserialized_arc.get().clone().unwrap();
                 assert_eq!(original.hnsw_level, deserialized.hnsw_level);
             }
             _ => panic!("Deserialization mismatch"),
@@ -987,16 +1006,17 @@ fn test_lazy_item_vec_linked_chunk_serialization() {
         match (original, deserialized) {
             (
                 LazyItem::Valid {
-                    data: Some(mut original_arc),
+                    data: mut original_arc,
                     ..
                 },
                 LazyItem::Valid {
-                    data: Some(mut deserialized_arc),
+                    data: mut deserialized_arc,
                     ..
                 },
             ) => {
-                let original = original_arc.get();
-                let deserialized = deserialized_arc.get();
+                let original = original_arc.get().clone().unwrap();
+                let deserialized = deserialized_arc.get().clone().unwrap();
+
                 assert_eq!(original.hnsw_level, deserialized.hnsw_level);
             }
             _ => panic!("Deserialization mismatch"),

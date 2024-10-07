@@ -167,7 +167,7 @@ where
 }
 
 fn lazy_item_serialize_impl<T: Cacheable + CustomSerialize>(
-    node: &T,
+    node: Arc<T>,
     versions: &LazyItemVec<T>,
     bufmans: Arc<BufferManagerFactory>,
     version: Hash,
@@ -254,7 +254,7 @@ fn lazy_item_deserialize_impl<T: Cacheable + CustomSerialize + Clone>(
             )?;
 
             Ok(LazyItem::Valid {
-                data: Some(ArcShift::new(data)),
+                data: ArcShift::new(Some(Arc::new(data))),
                 file_index: ArcShift::new(Some(file_index)),
                 decay_counter: 0,
                 persist_flag: Arc::new(AtomicBool::new(true)),
@@ -283,6 +283,7 @@ impl<T: Cacheable + CustomSerialize> CustomSerialize for LazyItem<T> {
                 serialized_flag: serialized_flag_arc,
                 ..
             } => {
+                let mut data_arc = data.clone();
                 let bufman = bufmans.get(version_id)?;
                 if let Some(existing_file_index) = file_index.clone().get().clone() {
                     if let FileIndex::Valid {
@@ -290,9 +291,7 @@ impl<T: Cacheable + CustomSerialize> CustomSerialize for LazyItem<T> {
                         ..
                     } = existing_file_index
                     {
-                        if let Some(data) = &data {
-                            let mut arc = data.clone();
-                            let data = arc.get();
+                        if let Some(data) = data_arc.get() {
                             if self.needs_persistence() {
                                 let cursor = if version_id == &version {
                                     cursor
@@ -304,7 +303,7 @@ impl<T: Cacheable + CustomSerialize> CustomSerialize for LazyItem<T> {
                                 let serialized_flag =
                                     serialized_flag_arc.swap(true, Ordering::Relaxed);
                                 lazy_item_serialize_impl(
-                                    data,
+                                    data.clone(),
                                     versions,
                                     bufmans,
                                     *version_id,
@@ -320,7 +319,7 @@ impl<T: Cacheable + CustomSerialize> CustomSerialize for LazyItem<T> {
                     }
                 }
 
-                if let Some(data) = &data {
+                if let Some(data) = data_arc.get() {
                     let cursor = if version_id == &version {
                         cursor
                     } else {
@@ -328,7 +327,6 @@ impl<T: Cacheable + CustomSerialize> CustomSerialize for LazyItem<T> {
                         bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
                         cursor
                     };
-                    let mut arc = data.clone();
                     let offset = bufman.cursor_position(cursor)? as u32;
                     let item_version_id = self.get_current_version();
                     let item_version_number = self.get_current_version_number();
@@ -339,11 +337,10 @@ impl<T: Cacheable + CustomSerialize> CustomSerialize for LazyItem<T> {
                         version_number: item_version_number,
                     }));
 
-                    let data = arc.get();
                     self.set_persistence(false);
                     let serialized_flag = serialized_flag_arc.swap(true, Ordering::Relaxed);
                     let offset = lazy_item_serialize_impl(
-                        data,
+                        data.clone(),
                         versions,
                         bufmans,
                         *version_id,

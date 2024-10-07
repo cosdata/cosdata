@@ -33,34 +33,7 @@ pub fn ann_search(
     let mut skipm = HashSet::new();
     skipm.insert(vector_emb.hash_vec.clone());
 
-    let mut cur_node_arc = match cur_entry.clone() {
-        LazyItem::Valid {
-            data: Some(node), ..
-        } => node,
-        LazyItem::Valid {
-            data: None,
-            mut file_index,
-            ..
-        } => {
-            if let Some(file_index) = file_index.get() {
-                return Err(WaCustomError::LazyLoadingError(format!(
-                    "Node at offset {} needs to be loaded",
-                    file_index
-                )));
-            } else {
-                return Err(WaCustomError::NodeError(
-                    "Current entry is null".to_string(),
-                ));
-            }
-        }
-        _ => {
-            return Err(WaCustomError::NodeError(
-                "Current entry is null".to_string(),
-            ))
-        }
-    };
-
-    let cur_node = cur_node_arc.get();
+    let cur_node = cur_entry.get_data(node_registry.clone());
 
     let mut prop_arc = cur_node.prop.clone();
     let prop_state = prop_arc.get();
@@ -112,6 +85,7 @@ pub fn ann_search(
 }
 
 pub fn vector_fetch(
+    node_registry: Arc<NodeRegistry>,
     vec_store: Arc<VectorStore>,
     vector_id: VectorId,
 ) -> Result<Vec<Option<(VectorId, Vec<(VectorId, MetricResult)>)>>, WaCustomError> {
@@ -119,63 +93,24 @@ pub fn vector_fetch(
 
     for lev in 0..vec_store.max_cache_level {
         let maybe_res = load_vector_id_lsmdb(HNSWLevel(lev), vector_id.clone());
-        let neighbors = match maybe_res {
-            LazyItem::Valid {
-                data: Some(vth), ..
-            } => {
-                let mut vth = vth.clone();
-                let nes: Vec<(VectorId, MetricResult)> = vth
-                    .get()
-                    .neighbors
-                    .iter()
-                    .filter_map(|ne| match ne.1.clone() {
-                        LazyItem::Valid {
-                            data: Some(node), ..
-                        } => get_vector_id_from_node(node.clone().get()).map(|id| (id, ne.0)),
-                        LazyItem::Valid {
-                            data: None,
-                            mut file_index,
-                            ..
-                        } => {
-                            if let Some(xloc) = file_index.get() {
-                                match load_neighbor_from_db(xloc.clone(), &vec_store) {
-                                    Ok(Some(info)) => Some(info),
-                                    Ok(None) => None,
-                                    Err(e) => {
-                                        eprintln!("Error loading neighbor: {}", e);
-                                        None
-                                    }
-                                }
-                            } else {
-                                None
-                                // NonePaste, drop, or click to add files Create pull request
-                            }
-                        }
-                        _ => None,
-                    })
-                    .collect();
-                Some((vector_id.clone(), nes))
-            }
-            LazyItem::Valid {
-                data: None,
-                mut file_index,
-                ..
-            } => {
-                if let Some(xloc) = file_index.get() {
-                    match load_node_from_persist(xloc.clone(), &vec_store) {
-                        Ok(Some((id, neighbors))) => Some((id, neighbors)),
-                        Ok(None) => None,
-                        Err(e) => {
-                            eprintln!("Error loading vector: {}", e);
-                            None
-                        }
-                    }
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        };
+        let neighbors = maybe_res
+            .try_get_data(node_registry.clone())
+            .ok()
+            .and_then(|data| {
+                let id = get_vector_id_from_node(data.clone())?;
+
+                Some((
+                    id,
+                    data.neighbors
+                        .iter()
+                        .filter_map(|ne| {
+                            let data = ne.1.try_get_data(node_registry.clone()).ok()?;
+                            Some((get_vector_id_from_node(data)?, ne.0))
+                        })
+                        .collect(),
+                ))
+            });
+
         results.push(neighbors);
     }
     Ok(results)
@@ -215,7 +150,7 @@ fn load_node_from_persist(
 //     }
 // }
 
-fn get_vector_id_from_node(node: &MergedNode) -> Option<VectorId> {
+fn get_vector_id_from_node(node: Arc<MergedNode>) -> Option<VectorId> {
     let mut prop_arc = node.prop.clone();
     match prop_arc.get() {
         PropState::Ready(node_prop) => Some(node_prop.id.clone()),
@@ -396,7 +331,6 @@ pub fn insert_embedding(
 
 pub fn index_embeddings(
     node_registry: Arc<NodeRegistry>,
-    index_manager: Arc<BufferManagerFactory>,
     vec_raw_manager: &BufferManagerFactory,
     vec_store: Arc<VectorStore>,
     upload_process_batch_size: usize,
@@ -465,7 +399,6 @@ pub fn index_embeddings(
 
                 index_embedding(
                     node_registry.clone(),
-                    index_manager.clone(),
                     vec_store.clone(),
                     None,
                     embedding,
@@ -545,7 +478,6 @@ pub fn index_embeddings(
 
 pub fn index_embedding(
     node_registry: Arc<NodeRegistry>,
-    index_manager: Arc<BufferManagerFactory>,
     vec_store: Arc<VectorStore>,
     parent: Option<LazyItem<MergedNode>>,
     vector_emb: QuantizedVectorEmbedding,
@@ -559,11 +491,10 @@ pub fn index_embedding(
     let mut skipm = HashSet::new();
     skipm.insert(vector_emb.hash_vec.clone());
 
-    let mut cur_node_arc = cur_entry
+    let cur_node = cur_entry
         .get_latest_version(node_registry.clone())
         .0
         .get_data(node_registry.clone());
-    let cur_node = cur_node_arc.get();
 
     let mut prop_arc = cur_node.prop.clone();
     let prop_state = prop_arc.get();
@@ -611,7 +542,6 @@ pub fn index_embedding(
     let parent = if cur_level.0 <= max_insert_level.0 {
         let parent = insert_node_create_edges(
             node_registry.clone(),
-            index_manager.clone(),
             vec_store.clone(),
             parent,
             fvec,
@@ -631,7 +561,6 @@ pub fn index_embedding(
     if cur_level.0 != 0 {
         index_embedding(
             node_registry,
-            index_manager,
             vec_store.clone(),
             parent,
             vector_emb.clone(),
@@ -648,43 +577,19 @@ pub fn index_embedding(
 
 pub fn queue_node_prop_exec(
     node_registry: Arc<NodeRegistry>,
-    index_manager: Arc<BufferManagerFactory>,
     lznode: LazyItem<MergedNode>,
     prop_file: Arc<File>,
     vec_store: Arc<VectorStore>,
 ) -> Result<(), WaCustomError> {
-    let (mut node_arc, _location) = match &lznode {
-        LazyItem::Valid {
-            data: Some(node),
-            file_index,
-            ..
-        } => (node.clone(), file_index.clone().get().clone()),
-        LazyItem::Valid {
-            data: None,
-            file_index,
-            ..
-        } => {
-            if let Some(file_index) = file_index.clone().get().clone() {
-                match file_index {
-                    FileIndex::Valid { .. } => {
-                        // @TODO: Confirm that `try_get_data` method
-                        // is not just retrieving the data but also
-                        // caching it.
-                        let node = lznode.try_get_data(node_registry.clone(), index_manager)?;
-                        (node, Some(file_index))
-                    }
-                    FileIndex::Invalid => {
-                        return Err(WaCustomError::NodeError("Node is null".to_string()));
-                    }
-                }
-            } else {
-                return Err(WaCustomError::NodeError("Node is null".to_string()));
-            }
-        }
-        _ => return Err(WaCustomError::NodeError("Node is null".to_string())),
-    };
+    let (node, _location) = (
+        lznode.try_get_data(node_registry)?,
+        lznode
+            .get_file_index()
+            .ok_or(WaCustomError::LazyLoadingError(
+                "Missing FileIndex".to_string(),
+            ))?,
+    );
 
-    let node = node_arc.get();
     let mut prop_arc = node.prop.clone();
 
     let prop_state = prop_arc.get();
@@ -764,7 +669,6 @@ fn create_node_extract_neighbours(
 
 fn insert_node_create_edges(
     node_registry: Arc<NodeRegistry>,
-    index_manager: Arc<BufferManagerFactory>,
     vec_store: Arc<VectorStore>,
     parent: Option<LazyItem<MergedNode>>,
     fvec: Arc<Storage>,
@@ -790,28 +694,26 @@ fn insert_node_create_edges(
         ),
     );
     if let Some(parent) = parent {
-        parent.get_lazy_data().unwrap().set_child(node.clone());
+        parent
+            .get_lazy_data()
+            .unwrap()
+            .get()
+            .clone()
+            .unwrap()
+            .set_child(node.clone());
     }
 
     for (nbr1, dist) in nbs.into_iter() {
-        if let LazyItem::Valid {
-            data: Some(mut old_neighbour),
-            ..
-        } = nbr1.clone()
-        {
+        if let Ok(old_neighbour) = nbr1.try_get_data(node_registry.clone()) {
             let (new_neighbor, mut new_neighbor_neighbors, mut neighbor_list) =
                 if let Some(version) = nbr1.get_version(node_registry.clone(), version_number) {
                     let mut node = version.get_data(node_registry.clone());
-                    let neighbor_list: Vec<(LazyItem<MergedNode>, MetricResult)> = node
-                        .get()
-                        .neighbors
-                        .iter()
-                        .map(|nbr2| (nbr2.1, nbr2.0))
-                        .collect();
-                    (version, node.get().neighbors.clone(), neighbor_list)
+                    let neighbor_list: Vec<(LazyItem<MergedNode>, MetricResult)> =
+                        node.neighbors.iter().map(|nbr2| (nbr2.1, nbr2.0)).collect();
+                    (version, node.neighbors.clone(), neighbor_list)
                 } else {
-                    let prop_arc = old_neighbour.get().prop.clone();
-                    let parent = old_neighbour.get().parent.clone();
+                    let prop_arc = old_neighbour.prop.clone();
+                    let parent = old_neighbour.parent.clone();
                     let (new_neighbour, new_neighbour_neighbours) = create_node_extract_neighbours(
                         version,
                         version_number,
@@ -821,7 +723,6 @@ fn insert_node_create_edges(
                     );
                     nbr1.add_version(node_registry.clone(), new_neighbour.clone());
                     let neighbor_list: Vec<(LazyItem<MergedNode>, MetricResult)> = old_neighbour
-                        .get()
                         .neighbors
                         .iter()
                         .map(|nbr2| (nbr2.1, nbr2.0))
@@ -861,7 +762,6 @@ fn insert_node_create_edges(
 
     queue_node_prop_exec(
         node_registry,
-        index_manager,
         node.clone(),
         vec_store.prop_file.clone(),
         vec_store,
@@ -883,60 +783,61 @@ fn traverse_find_nearest(
 ) -> Result<Vec<(LazyItem<MergedNode>, MetricResult)>, WaCustomError> {
     let mut tasks: SmallVec<[Vec<(LazyItem<MergedNode>, MetricResult)>; 24]> = SmallVec::new();
 
-    let mut node_arc = vtm
+    let node = vtm
         .get_latest_version(node_registry.clone())
         .0
         .get_data(node_registry.clone());
-    let node = node_arc.get();
 
     for (index, nref) in node.neighbors.iter().enumerate() {
         if let Some(mut neighbor_arc) = nref.1.get_lazy_data() {
-            let neighbor = neighbor_arc.get();
-            let mut prop_arc = neighbor.prop.clone();
-            let prop_state = prop_arc.get();
+            if let Some(neighbor) = neighbor_arc.get() {
+                let mut prop_arc = neighbor.prop.clone();
+                let prop_state = prop_arc.get();
 
-            let node_prop = match prop_state {
-                PropState::Ready(prop) => prop.clone(),
-                PropState::Pending(loc) => {
-                    return Err(WaCustomError::NodeError(format!(
-                        "Neighbor prop is in pending state at loc: {:?}",
-                        loc
-                    )))
+                let node_prop = match prop_state {
+                    PropState::Ready(prop) => prop.clone(),
+                    PropState::Pending(loc) => {
+                        return Err(WaCustomError::NodeError(format!(
+                            "Neighbor prop is in pending state at loc: {:?}",
+                            loc
+                        )))
+                    }
+                };
+
+                let nb = node_prop.id.clone();
+
+                if index % 2 != 0 && skip_hop && index > 4 {
+                    continue;
                 }
-            };
 
-            let nb = node_prop.id.clone();
+                let vec_store = vec_store.clone();
+                let fvec = fvec.clone();
+                let hs = hs.clone();
 
-            if index % 2 != 0 && skip_hop && index > 4 {
-                continue;
-            }
+                if skipm.insert(nb.clone()) {
+                    let dist = vec_store
+                        .distance_metric
+                        .calculate(&fvec, &node_prop.value)?;
 
-            let vec_store = vec_store.clone();
-            let fvec = fvec.clone();
-            let hs = hs.clone();
-
-            if skipm.insert(nb.clone()) {
-                let dist = vec_store
-                    .distance_metric
-                    .calculate(&fvec, &node_prop.value)?;
-
-                let full_hops = 30;
-                if hops <= tapered_total_hops(full_hops, cur_level.0, vec_store.max_cache_level) {
-                    let mut z = traverse_find_nearest(
-                        node_registry.clone(),
-                        vec_store.clone(),
-                        nref.1.clone(),
-                        fvec.clone(),
-                        hs.clone(),
-                        hops + 1,
-                        skipm,
-                        cur_level,
-                        skip_hop,
-                    )?;
-                    z.push((nref.1.clone(), dist));
-                    tasks.push(z);
-                } else {
-                    tasks.push(vec![(nref.1.clone(), dist)]);
+                    let full_hops = 30;
+                    if hops <= tapered_total_hops(full_hops, cur_level.0, vec_store.max_cache_level)
+                    {
+                        let mut z = traverse_find_nearest(
+                            node_registry.clone(),
+                            vec_store.clone(),
+                            nref.1.clone(),
+                            fvec.clone(),
+                            hs.clone(),
+                            hops + 1,
+                            skipm,
+                            cur_level,
+                            skip_hop,
+                        )?;
+                        z.push((nref.1.clone(), dist));
+                        tasks.push(z);
+                    } else {
+                        tasks.push(vec![(nref.1.clone(), dist)]);
+                    }
                 }
             }
         }
@@ -946,17 +847,15 @@ fn traverse_find_nearest(
     nn.sort_by(|a, b| b.1.get_value().partial_cmp(&a.1.get_value()).unwrap());
     let mut seen = HashSet::new();
     nn.retain(|(lazy_node, _)| {
-        if let LazyItem::Valid {
-            data: Some(node_arc),
-            ..
-        } = &lazy_node
-        {
-            let mut node_arc = node_arc.clone();
-            let node = node_arc.get();
-            let mut prop_arc = node.prop.clone();
-            let prop_state = prop_arc.get();
-            if let PropState::Ready(node_prop) = &*prop_state {
-                seen.insert(node_prop.id.clone())
+        if let LazyItem::Valid { data: node_arc, .. } = &lazy_node {
+            if let Some(node) = node_arc.clone().get() {
+                let mut prop_arc = node.prop.clone();
+                let prop_state = prop_arc.get();
+                if let PropState::Ready(node_prop) = &*prop_state {
+                    seen.insert(node_prop.id.clone())
+                } else {
+                    false
+                }
             } else {
                 false
             }

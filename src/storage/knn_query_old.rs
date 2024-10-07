@@ -51,7 +51,7 @@ impl KNNQuery {
                 if let Some(node) = index.find_node(dim_index) {
                     // Get all data for this dimension
                     let data: &DashMap<IdentityMapKey, crate::models::lazy_load::LazyItem<f32>> =
-                        &node.shared_get().data;
+                        &node.data;
 
                     // Iterate over the DashMap concurrently
                     data.iter().par_bridge().for_each(|entry| {
@@ -99,7 +99,7 @@ impl KNNQuery {
             if let Some(node) = index.find_node(dim_index) {
                 // Get all data for this dimension
                 let data: &DashMap<IdentityMapKey, crate::models::lazy_load::LazyItem<f32>> =
-                    &node.shared_get().data;
+                    &node.data;
 
                 // Iterate over the DashMap
                 for entry in data.iter() {

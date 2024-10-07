@@ -1,4 +1,3 @@
-use super::buffered_io::BufferManagerFactory;
 use super::cache_loader::{Cacheable, NodeRegistry};
 use super::common::WaCustomError;
 use super::identity_collections::{Identifiable, IdentityMap, IdentityMapKey, IdentitySet};
@@ -59,7 +58,7 @@ pub enum FileIndex {
 pub enum LazyItem<T: Clone + 'static> {
     Valid {
         // Holds the actual data. Wrapped in an `Option` to indicate whether the data is loaded.
-        data: Option<ArcShift<T>>,
+        data: ArcShift<Option<Arc<T>>>,
         // Pointer to the file offset where the data is stored. Used for lazy loading the data when
         // needed. If the data is not loaded, this index retrieves it from persistent storage.
         file_index: ArcShift<Option<FileIndex>>,
@@ -141,9 +140,10 @@ where
                 return LazyItemId::Persist(offset);
             }
 
-            if let Some(data) = data {
-                let mut arc = data.clone();
-                return LazyItemId::Memory(arc.get().get_id());
+            let mut data_arc = data.clone();
+
+            if let Some(data) = data_arc.get() {
+                return LazyItemId::Memory(data.get_id());
             }
         }
 
@@ -275,7 +275,7 @@ impl<T: Clone + 'static> SyncPersist for LazyItem<T> {
 impl<T: Clone + 'static> LazyItem<T> {
     pub fn new(version_id: Hash, version_number: u16, item: T) -> Self {
         Self::Valid {
-            data: Some(ArcShift::new(item)),
+            data: ArcShift::new(Some(Arc::new(item))),
             file_index: ArcShift::new(None),
             decay_counter: 0,
             persist_flag: Arc::new(AtomicBool::new(true)),
@@ -292,7 +292,7 @@ impl<T: Clone + 'static> LazyItem<T> {
 
     pub fn from_data(version_id: Hash, version_number: u16, data: T) -> Self {
         LazyItem::Valid {
-            data: Some(ArcShift::new(data)),
+            data: ArcShift::new(Some(Arc::new(data))),
             file_index: ArcShift::new(None),
             decay_counter: 0,
             persist_flag: Arc::new(AtomicBool::new(true)),
@@ -303,9 +303,9 @@ impl<T: Clone + 'static> LazyItem<T> {
         }
     }
 
-    pub fn from_arcshift(version_id: Hash, version_number: u16, item: ArcShift<T>) -> Self {
+    pub fn from_arc(version_id: Hash, version_number: u16, item: Arc<T>) -> Self {
         Self::Valid {
-            data: Some(item),
+            data: ArcShift::new(Some(item)),
             file_index: ArcShift::new(None),
             decay_counter: 0,
             persist_flag: Arc::new(AtomicBool::new(true)),
@@ -324,17 +324,11 @@ impl<T: Clone + 'static> LazyItem<T> {
         matches!(self, Self::Invalid)
     }
 
-    pub fn get_lazy_data(&self) -> Option<ArcShift<T>> {
+    pub fn get_lazy_data(&self) -> Option<ArcShift<Option<Arc<T>>>> {
         if let Self::Valid { data, .. } = self {
-            return data.clone();
+            return Some(data.clone());
         }
         None
-    }
-
-    pub fn set_data(&mut self, new_data: T) {
-        if let Self::Valid { data, .. } = self {
-            *data = Some(ArcShift::new(new_data))
-        }
     }
 
     pub fn get_file_index(&self) -> Option<FileIndex> {
@@ -389,11 +383,12 @@ impl<T: Clone + CustomSerialize + Cacheable + 'static> LazyItem<T> {
             ..
         } = self
         {
+            let mut data = data.clone();
             let mut versions = versions.clone();
             let target_diff = target_relative_version_number - self_relative_version_number;
             let index = largest_power_of_4_below(target_diff);
 
-            if data.is_none() {
+            if data.get().is_none() {
                 let mut file_index_arc = file_index.clone();
                 let Some(file_index) = file_index_arc.get().clone() else {
                     unreachable!("data and file_index both cannot be None at the time!");
@@ -402,14 +397,17 @@ impl<T: Clone + CustomSerialize + Cacheable + 'static> LazyItem<T> {
                     .clone()
                     .load_item(file_index)
                     .expect("Deserialization failed");
-                let deserialized_versions = match item {
-                    LazyItem::Valid { data, versions, .. } => versions.items.clone().get().clone(),
+                let (deserialized_data, deserialized_versions) = match item {
+                    LazyItem::Valid { data, versions, .. } => (
+                        data.clone().get().clone().unwrap(),
+                        versions.items.clone().get().clone(),
+                    ),
                     LazyItem::Invalid => {
                         unreachable!("Deserialized LazyItem should not be Invalid")
                     }
                 };
-                // TODO: update the `data` field too
                 versions.items.update(deserialized_versions);
+                data.update(Some(deserialized_data));
             };
 
             if let Some(existing_version) = versions.get(index as usize) {
@@ -440,6 +438,7 @@ impl<T: Clone + CustomSerialize + Cacheable + 'static> LazyItem<T> {
                 if &version == version_number {
                     return Some(self.clone());
                 }
+                let mut data = data.clone();
                 let mut versions = versions.clone();
                 if data.is_none() {
                     let mut file_index_arc = file_index.clone();
@@ -450,16 +449,17 @@ impl<T: Clone + CustomSerialize + Cacheable + 'static> LazyItem<T> {
                         .clone()
                         .load_item(file_index)
                         .expect("Deserialization failed");
-                    let deserialized_versions = match item {
-                        LazyItem::Valid { data, versions, .. } => {
-                            versions.items.clone().get().clone()
-                        }
+                    let (deserialized_data, deserialized_versions) = match item {
+                        LazyItem::Valid { data, versions, .. } => (
+                            data.clone().get().clone().unwrap(),
+                            versions.items.clone().get().clone(),
+                        ),
                         LazyItem::Invalid => {
                             unreachable!("Deserialized LazyItem should not be Invalid")
                         }
                     };
-                    // TODO: update the `data` field too
                     versions.items.update(deserialized_versions);
+                    data.update(Some(deserialized_data));
                 };
                 let Some(mut prev) = versions.get(0) else {
                     return None;
@@ -488,6 +488,7 @@ impl<T: Clone + CustomSerialize + Cacheable + 'static> LazyItem<T> {
             ..
         } = self
         {
+            let mut data = data.clone();
             let mut versions = versions.clone();
             if data.is_none() {
                 let mut file_index_arc = file_index.clone();
@@ -498,14 +499,17 @@ impl<T: Clone + CustomSerialize + Cacheable + 'static> LazyItem<T> {
                     .clone()
                     .load_item(file_index)
                     .expect("Deserialization failed");
-                let deserialized_versions = match item {
-                    LazyItem::Valid { data, versions, .. } => versions.items.clone().get().clone(),
+                let (deserialized_data, deserialized_versions) = match item {
+                    LazyItem::Valid { data, versions, .. } => (
+                        data.clone().get().clone().unwrap(),
+                        versions.items.clone().get().clone(),
+                    ),
                     LazyItem::Invalid => {
                         unreachable!("Deserialized LazyItem should not be Invalid")
                     }
                 };
-                // TODO: update the `data` field too
                 versions.items.update(deserialized_versions);
+                data.update(Some(deserialized_data));
             };
             if let Some(last) = versions.items.get().last() {
                 let (latest_version, relative_local_version_number) =
@@ -519,16 +523,16 @@ impl<T: Clone + CustomSerialize + Cacheable + 'static> LazyItem<T> {
         (self.clone(), 0)
     }
 
-    pub fn try_get_data(
-        &self,
-        cache: Arc<NodeRegistry>,
-        index_manager: Arc<BufferManagerFactory>,
-    ) -> Result<ArcShift<T>, WaCustomError> {
+    pub fn try_get_data(&self, cache: Arc<NodeRegistry>) -> Result<Arc<T>, WaCustomError> {
         if let Self::Valid {
-            data, file_index, ..
+            data,
+            file_index,
+            versions,
+            ..
         } = self
         {
-            if let Some(data) = data {
+            let mut data_arc = data.clone();
+            if let Some(data) = data_arc.get() {
                 return Ok(data.clone());
             }
 
@@ -539,24 +543,40 @@ impl<T: Clone + CustomSerialize + Cacheable + 'static> LazyItem<T> {
                 .ok_or(WaCustomError::LazyLoadingError(
                     "LazyItem offset is None".to_string(),
                 ))?;
+
             let item: LazyItem<T> = LazyItem::deserialize(
-                index_manager,
+                cache.get_bufmans(),
                 offset.clone(),
                 cache,
                 1000,
                 &mut HashSet::new(),
             )
             .map_err(|e| WaCustomError::BufIo(Arc::new(e)))?;
-            match item {
-                Self::Valid { data, .. } => data.ok_or(WaCustomError::LazyLoadingError(
-                    "Deserialized LazyItem is None".to_string(),
-                )),
+
+            let (data, deserialized_versions) = match item {
+                Self::Valid {
+                    mut data,
+                    mut versions,
+                    ..
+                } => (
+                    data.get().clone().ok_or(WaCustomError::LazyLoadingError(
+                        "Deserialized LazyItem is None".to_string(),
+                    ))?,
+                    versions.items.get().clone(),
+                ),
                 Self::Invalid => {
                     return Err(WaCustomError::LazyLoadingError(
                         "Deserialized LazyItem is invalid".to_string(),
                     ));
                 }
-            }
+            };
+
+            data_arc.update(Some(data.clone()));
+
+            let mut version_arc = versions.clone();
+            version_arc.items.update(deserialized_versions);
+
+            Ok(data)
         } else {
             return Err(WaCustomError::LazyLoadingError(
                 "LazyItem is invalid".to_string(),
@@ -564,12 +584,16 @@ impl<T: Clone + CustomSerialize + Cacheable + 'static> LazyItem<T> {
         }
     }
 
-    pub fn get_data(&self, cache: Arc<NodeRegistry>) -> ArcShift<T> {
+    pub fn get_data(&self, cache: Arc<NodeRegistry>) -> Arc<T> {
         if let Self::Valid {
-            data, file_index, ..
+            data,
+            file_index,
+            versions,
+            ..
         } = self
         {
-            if let Some(data) = data {
+            let mut data_arc = data.clone();
+            if let Some(data) = data_arc.get() {
                 return data.clone();
             }
 
@@ -579,9 +603,34 @@ impl<T: Clone + CustomSerialize + Cacheable + 'static> LazyItem<T> {
                 .clone()
                 .expect("LazyItem offset is None");
 
-            let deserialized = cache.load_item(file_index).expect("Deserialization error");
+            // let deserialized = cache.load_item(file_index).expect("Deserialization error");
+            let item: LazyItem<T> = LazyItem::deserialize(
+                cache.get_bufmans(),
+                file_index,
+                cache,
+                1000,
+                &mut HashSet::new(),
+            )
+            .expect("Deserialization failed");
 
-            ArcShift::new(deserialized)
+            let (data, deserialized_versions) = match item {
+                Self::Valid {
+                    mut data,
+                    mut versions,
+                    ..
+                } => (
+                    data.get().clone().expect("Deserialized LazyItem is None"),
+                    versions.items.get().clone(),
+                ),
+                Self::Invalid => panic!("Deserialized LazyItem is Invalid"),
+            };
+
+            data_arc.update(Some(data.clone()));
+
+            let mut version_arc = versions.clone();
+            version_arc.items.update(deserialized_versions);
+
+            data
         } else {
             panic!("LazyItem is invalid");
         }
@@ -592,7 +641,7 @@ impl<T: Clone + 'static> LazyItemRef<T> {
     pub fn new(version_id: Hash, version_number: u16, item: T) -> Self {
         Self {
             item: ArcShift::new(LazyItem::Valid {
-                data: Some(ArcShift::new(item)),
+                data: ArcShift::new(Some(Arc::new(item))),
                 file_index: ArcShift::new(None),
                 decay_counter: 0,
                 persist_flag: Arc::new(AtomicBool::new(true)),
@@ -610,10 +659,10 @@ impl<T: Clone + 'static> LazyItemRef<T> {
         }
     }
 
-    pub fn from_arcshift(version_id: Hash, version_number: u16, item: ArcShift<T>) -> Self {
+    pub fn from_arc(version_id: Hash, version_number: u16, item: Arc<T>) -> Self {
         Self {
             item: ArcShift::new(LazyItem::Valid {
-                data: Some(item),
+                data: ArcShift::new(Some(item)),
                 file_index: ArcShift::new(None),
                 decay_counter: 0,
                 persist_flag: Arc::new(AtomicBool::new(true)),
@@ -641,10 +690,10 @@ impl<T: Clone + 'static> LazyItemRef<T> {
         arc.get().is_invalid()
     }
 
-    pub fn get_data(&self) -> Option<ArcShift<T>> {
+    pub fn get_lazy_data(&self) -> Option<ArcShift<Option<Arc<T>>>> {
         let mut arc = self.item.clone();
         if let LazyItem::Valid { data, .. } = arc.get() {
-            return data.clone();
+            return Some(data.clone());
         }
         None
     }
@@ -694,7 +743,7 @@ impl<T: Clone + 'static> LazyItemRef<T> {
             };
 
             LazyItem::Valid {
-                data: Some(ArcShift::new(new_data)),
+                data: ArcShift::new(Some(Arc::new(new_data))),
                 file_index,
                 decay_counter,
                 persist_flag,
@@ -740,7 +789,7 @@ impl<T: Clone + 'static> LazyItemRef<T> {
                 )
             } else {
                 (
-                    None,
+                    ArcShift::new(None),
                     0,
                     Arc::new(AtomicBool::new(true)),
                     0.into(),
@@ -1192,7 +1241,7 @@ impl IncrementalSerializableGrowableData {
             .unwrap()
             .get_lazy_data()
             .unwrap();
-        let mut vector_data_stm = vector_data_arcshift.get().clone();
+        let mut vector_data_stm = (*vector_data_arcshift.get().clone().unwrap()).clone();
         vector_data_stm
             .transactional_update(|old| {
                 let mut new = old.clone();
@@ -1211,7 +1260,13 @@ impl IncrementalSerializableGrowableData {
         }
 
         let vector_data_lazy_item = self.items.get(insert_index).unwrap();
-        let mut vector_data_stm = vector_data_lazy_item.get_lazy_data().unwrap().get().clone();
+        let mut vector_data_stm = (*vector_data_lazy_item
+            .get_lazy_data()
+            .unwrap()
+            .get()
+            .clone()
+            .unwrap())
+        .clone();
         vector_data_stm.get().get(insert_dimension)
     }
 }
@@ -1220,6 +1275,8 @@ impl IncrementalSerializableGrowableData {
 mod tests {
     use rand::{thread_rng, Rng};
     use tempfile::tempdir;
+
+    use crate::models::buffered_io::BufferManagerFactory;
 
     use super::*;
 

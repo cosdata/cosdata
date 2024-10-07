@@ -1,5 +1,3 @@
-use std::{path::Path, sync::Arc};
-
 use actix_web::{web, HttpResponse};
 
 use crate::{
@@ -7,8 +5,6 @@ use crate::{
     app_context::AppContext,
     convert_option_vec,
     models::{
-        buffered_io::BufferManagerFactory,
-        cache_loader::NodeRegistry,
         rpc::{RPCResponseBody, VectorANN},
         types::get_app_env,
     },

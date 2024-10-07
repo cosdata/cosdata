@@ -164,6 +164,10 @@ impl NodeRegistry {
         }
     }
 
+    pub fn get_bufmans(&self) -> Arc<BufferManagerFactory> {
+        self.bufmans.clone()
+    }
+
     pub fn get_object<T: Cacheable, F>(
         self: Arc<Self>,
         file_index: FileIndex,
@@ -222,7 +226,7 @@ impl NodeRegistry {
         if max_loads == 0 || !skipm.insert(combined_index) {
             println!("Either max_loads hit 0 or loop detected, returning LazyItem with no data");
             return Ok(LazyItem::Valid {
-                data: None,
+                data: ArcShift::new(None),
                 file_index: ArcShift::new(Some(file_index)),
                 decay_counter: 0,
                 persist_flag: Arc::new(AtomicBool::new(true)),
