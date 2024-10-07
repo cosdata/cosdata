@@ -1218,6 +1218,7 @@ impl IncrementalSerializableGrowableData {
 
 #[cfg(test)]
 mod tests {
+    use rand::{thread_rng, Rng};
     use tempfile::tempdir;
 
     use super::*;
@@ -1232,12 +1233,43 @@ mod tests {
         let cache = Arc::new(NodeRegistry::new(1000, bufmans));
         let root = LazyItem::new(Hash::from(0), 0, 0.0);
 
-        for i in 1..=10_000 {
+        for i in 1..=u16::MAX {
             let version = LazyItem::new(Hash::from(0), i, 0.0);
             root.add_version(cache.clone(), version);
         }
 
-        for i in 0..=10_000 {
+        for i in 0..=u16::MAX {
+            assert_eq!(
+                root.get_version(cache.clone(), i)
+                    .unwrap()
+                    .get_current_version_number(),
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn test_lazy_item_versions_add_and_get_with_skipped_items() {
+        let temp_dir = tempdir().unwrap();
+        let bufmans = Arc::new(BufferManagerFactory::new(
+            temp_dir.as_ref().into(),
+            |root, ver| root.join(format!("{}.index", **ver)),
+        ));
+        let cache = Arc::new(NodeRegistry::new(1000, bufmans));
+        let root = LazyItem::new(Hash::from(0), 0, 0.0);
+        let mut i = 0;
+        let mut rng = thread_rng();
+        let mut versions = vec![0];
+
+        while i < u16::MAX - 100 {
+            i += rng.gen_range(3..100);
+
+            let version = LazyItem::new(Hash::from(0), i, 0.0);
+            root.add_version(cache.clone(), version);
+            versions.push(i);
+        }
+
+        for i in versions {
             assert_eq!(
                 root.get_version(cache.clone(), i)
                     .unwrap()
