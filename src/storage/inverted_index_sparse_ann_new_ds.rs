@@ -47,7 +47,7 @@ fn calculate_path(target_dim_index: u32, current_dim_index: u32) -> Vec<usize> {
 pub struct InvertedIndexNewDSNode {
     pub dim_index: u32,
     pub implicit: bool,
-    pub data: Arc<[IncrementalSerializableGrowableData; 64]>,
+    pub data: Arc<[IncrementalSerializableGrowableData; 64]>, // Storing vec_ids in chunks of 64 for each quantized u8 value
     pub lazy_children: LazyItemArray<InvertedIndexNewDSNode, 16>,
 }
 
@@ -94,7 +94,7 @@ impl InvertedIndexNewDSNode {
 
     pub fn insert(mut node: ArcShift<InvertedIndexNewDSNode>, value: f32, vector_id: u32) {
         let quantized_value = Self::quantize(value);
-        let mut node = node.get().clone();
+        let mut node: InvertedIndexNewDSNode = node.get().clone();
 
         if let Some(growable_data) = Arc::make_mut(&mut node.data).get_mut(quantized_value as usize)
         {
