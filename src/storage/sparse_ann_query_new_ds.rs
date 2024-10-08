@@ -3,8 +3,8 @@ use std::{cmp::Ordering, collections::BinaryHeap};
 
 use crate::models::types::SparseVector;
 
-use super::inverted_index_new_ds::InvertedIndexSparseAnnNewDS;
 use super::inverted_index_sparse_ann::InvertedIndexSparseAnnNode;
+use super::inverted_index_sparse_ann_new_ds::InvertedIndexSparseAnnNewDS;
 
 const K: usize = 5;
 

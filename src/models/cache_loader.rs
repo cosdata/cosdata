@@ -1,9 +1,9 @@
 use crate::models::lru_cache::CachedValue;
-use crate::storage::inverted_index_new_ds::InvertedIndexNewDSNode;
 use crate::storage::inverted_index_old::InvertedIndexItem;
 use crate::storage::inverted_index_sparse_ann::{
     InvertedIndexSparseAnn, InvertedIndexSparseAnnNode,
 };
+use crate::storage::inverted_index_sparse_ann_new_ds::InvertedIndexNewDSNode;
 use crate::storage::Storage;
 
 use super::buffered_io::{BufIoError, BufferManagerFactory};

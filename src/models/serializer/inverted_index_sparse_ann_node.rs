@@ -1,13 +1,12 @@
 use super::CustomSerialize;
 use crate::models::versioning::Hash;
-use crate::storage::inverted_index_new_ds::InvertedIndexNewDSNode;
+use crate::storage::inverted_index_sparse_ann_new_ds::InvertedIndexNewDSNode;
 use crate::{
     models::{
         buffered_io::{BufIoError, BufferManagerFactory},
         cache_loader::NodeRegistry,
         lazy_load::FileIndex,
     },
-    storage::inverted_index_new_ds::InvertedIndexSparseAnnNewDS,
     storage::inverted_index_sparse_ann::InvertedIndexSparseAnnNode,
 };
 use std::collections::HashSet;

@@ -3,8 +3,8 @@ use std::time::Instant;
 use cosdata::{
     models::types::SparseVector,
     storage::{
-        bench_common, inverted_index_new_ds::InvertedIndexSparseAnnNewDS,
-        sparse_ann_query_newDS::SparseAnnQueryNewDS,
+        bench_common, inverted_index_sparse_ann_new_ds::InvertedIndexSparseAnnNewDS,
+        sparse_ann_query_new_ds::SparseAnnQueryNewDS,
     },
 };
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
@@ -58,7 +58,7 @@ pub fn create_inverted_index_and_query_vector(
     (inverted_index, query_vector)
 }
 
-fn sparse_ann_query_newDS_benchmark(c: &mut Criterion) {
+fn sparse_ann_query_new_ds_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("Sparse Ann Query new DS Benchmark");
     group
         .sample_size(10)
@@ -78,7 +78,7 @@ fn sparse_ann_query_newDS_benchmark(c: &mut Criterion) {
     }
     query_vector.entries = new_entries;
 
-    let sparse_ann_query_newDS = SparseAnnQueryNewDS::new(query_vector);
+    let sparse_ann_query_new_ds = SparseAnnQueryNewDS::new(query_vector);
 
     println!(
         "Starting benchmark.. for Vector count {:?} and dimension {:?}",
@@ -97,11 +97,11 @@ fn sparse_ann_query_newDS_benchmark(c: &mut Criterion) {
         ),
         |b| {
             b.iter(|| {
-                let _res = sparse_ann_query_newDS.sequential_search(&inverted_index);
+                let _res = sparse_ann_query_new_ds.sequential_search(&inverted_index);
             });
         },
     );
 }
 
-criterion_group!(benches, sparse_ann_query_newDS_benchmark);
+criterion_group!(benches, sparse_ann_query_new_ds_benchmark);
 criterion_main!(benches);
