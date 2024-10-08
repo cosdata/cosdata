@@ -8,7 +8,6 @@ use crate::models::cache_loader::NodeRegistry;
 use crate::models::lazy_load::IncrementalSerializableGrowableData;
 use crate::models::lazy_load::LazyItem;
 use crate::models::lazy_load::LazyItemArray;
-use crate::models::lazy_load::LazyItemVec;
 use crate::models::types::SparseVector;
 use arcshift::ArcShift;
 
@@ -94,10 +93,9 @@ impl InvertedIndexNewDSNode {
 
     pub fn insert(mut node: ArcShift<InvertedIndexNewDSNode>, value: f32, vector_id: u32) {
         let quantized_value = Self::quantize(value);
-        let mut node: InvertedIndexNewDSNode = node.get().clone();
+        let mut data: Arc<[IncrementalSerializableGrowableData; 64]> = node.get().data.clone();
 
-        if let Some(growable_data) = Arc::make_mut(&mut node.data).get_mut(quantized_value as usize)
-        {
+        if let Some(growable_data) = Arc::make_mut(&mut data).get_mut(quantized_value as usize) {
             growable_data.insert(vector_id);
         };
     }

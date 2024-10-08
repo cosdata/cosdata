@@ -59,8 +59,8 @@ impl SparseAnnQueryNewDS {
                     let growable_data = &node.shared_get().data[key as usize];
 
                     growable_data.items.iter().for_each(|x| {
-                        let res = x.get_data(index.cache.clone());
-                        let mut stm_vecdata = res.shared_get().clone();
+                        let mut res = x.get_data(index.cache.clone());
+                        let mut stm_vecdata = res.get().clone();
                         let vector_data = stm_vecdata.get();
                         vector_data.data.iter().for_each(|vec_id| {
                             let dot_product = dot_products.entry(*vec_id).or_insert(0u32);
