@@ -92,9 +92,9 @@ impl InvertedIndexNewDSNode {
         ((value * 63.0).clamp(0.0, 63.0) as u8).min(63)
     }
 
-    pub fn insert(node: ArcShift<InvertedIndexNewDSNode>, value: f32, vector_id: u32) {
+    pub fn insert(mut node: ArcShift<InvertedIndexNewDSNode>, value: f32, vector_id: u32) {
         let quantized_value = Self::quantize(value);
-        let mut node = node.shared_get().clone();
+        let mut node = node.get().clone();
 
         if let Some(growable_data) = Arc::make_mut(&mut node.data).get_mut(quantized_value as usize)
         {
