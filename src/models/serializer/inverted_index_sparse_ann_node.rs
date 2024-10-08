@@ -1,11 +1,13 @@
 use super::CustomSerialize;
 use crate::models::versioning::Hash;
+use crate::storage::inverted_index_new_ds::InvertedIndexNewDSNode;
 use crate::{
     models::{
         buffered_io::{BufIoError, BufferManagerFactory},
         cache_loader::NodeRegistry,
         lazy_load::FileIndex,
     },
+    storage::inverted_index_new_ds::InvertedIndexSparseAnnNewDS,
     storage::inverted_index_sparse_ann::InvertedIndexSparseAnnNode,
 };
 use std::collections::HashSet;
@@ -33,5 +35,30 @@ impl CustomSerialize for InvertedIndexSparseAnnNode {
         //todo! Implement deserialize
 
         Ok(InvertedIndexSparseAnnNode::new(0, false))
+    }
+}
+
+impl CustomSerialize for InvertedIndexNewDSNode {
+    fn serialize(
+        &self,
+        bufmans: Arc<BufferManagerFactory>,
+        version: Hash,
+        cursor: u64,
+    ) -> Result<u32, BufIoError> {
+        //todo! Implement serialize
+
+        Ok(0u32)
+    }
+
+    fn deserialize(
+        bufmans: Arc<BufferManagerFactory>,
+        file_index: FileIndex,
+        cache: Arc<NodeRegistry>,
+        max_loads: u16,
+        skipm: &mut HashSet<u64>,
+    ) -> Result<Self, BufIoError> {
+        //todo! Implement deserialize
+
+        Ok(InvertedIndexNewDSNode::new(0, false))
     }
 }
