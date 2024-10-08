@@ -47,7 +47,7 @@ fn calculate_path(target_dim_index: u32, current_dim_index: u32) -> Vec<usize> {
 pub struct InvertedIndexNewDSNode {
     pub dim_index: u32,
     pub implicit: bool,
-    pub data: Arc<[IncrementalSerializableGrowableData; 63]>,
+    pub data: Arc<[IncrementalSerializableGrowableData; 64]>,
     pub lazy_children: LazyItemArray<InvertedIndexNewDSNode, 16>,
 }
 
