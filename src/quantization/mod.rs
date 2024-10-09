@@ -9,6 +9,7 @@ pub trait Quantization: std::fmt::Debug + Send + Sync {
         vector: &[f32],
         storage_type: StorageType,
     ) -> Result<Storage, QuantizationError>;
+
     fn train(&mut self, vectors: &[&[f32]]) -> Result<(), QuantizationError>;
 }
 
@@ -23,4 +24,5 @@ pub enum StorageType {
 pub enum QuantizationError {
     InvalidInput(String),
     TrainingFailed,
+    Untrained,
 }

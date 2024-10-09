@@ -364,6 +364,7 @@ pub enum WaCustomError {
     QuantizationMismatch,
     LazyLoadingError(String),
     TrainingFailed,
+    Untrained,
     CalculationError,
     FsError(String),
     DeserializationError(String),
@@ -387,6 +388,7 @@ impl fmt::Display for WaCustomError {
             WaCustomError::QuantizationMismatch => write!(f, "Quantization mismatch"),
             WaCustomError::LazyLoadingError(msg) => write!(f, "Lazy loading error: {}", msg),
             WaCustomError::TrainingFailed => write!(f, "Training failed"),
+            WaCustomError::Untrained => write!(f, "Untrained"),
             WaCustomError::CalculationError => write!(f, "Calculation error"),
             WaCustomError::FsError(err) => write!(f, "FS error: {}", err),
             WaCustomError::DeserializationError(err) => write!(f, "Deserialization error: {}", err),
@@ -400,6 +402,7 @@ impl From<QuantizationError> for WaCustomError {
         match value {
             QuantizationError::InvalidInput(_) => WaCustomError::InvalidParams,
             QuantizationError::TrainingFailed => WaCustomError::TrainingFailed,
+            QuantizationError::Untrained => WaCustomError::Untrained,
         }
     }
 }
