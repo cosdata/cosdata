@@ -75,6 +75,11 @@ pub async fn init_vector_store(
     let exec_queue_nodes: ExecQueueUpdate = STM::new(Vec::new(), 1, true);
     let vector_list = Arc::new(quantization_metric.quantize(&vec, storage_type)?);
 
+    // @DOUBT: Every VecStore will carry a separate file handler for
+    // the `prop.data` file. This may not be desirable assuming that
+    // we'd need some kind of synchronization when writing to the file
+    // from multiple threads.
+
     // Note that setting .write(true).append(true) has the same effect
     // as setting only .append(true)
     let prop_file = Arc::new(
@@ -159,7 +164,7 @@ pub async fn init_vector_store(
     ));
     ain_env
         .vector_store_map
-        .insert(name.clone(), vec_store.clone());
+        .insert(&name, vec_store.clone())?;
 
     Ok(vec_store)
 }
