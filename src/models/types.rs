@@ -22,6 +22,7 @@ use std::fmt;
 use std::fs::*;
 use std::hash::{DefaultHasher, Hash as StdHash, Hasher};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -186,15 +187,6 @@ impl Quantization for QuantizationMetric {
         match self {
             Self::Scalar => ScalarQuantization.train(vectors),
             Self::Product(product) => product.train(vectors),
-        }
-    }
-}
-
-impl QuantizationMetric {
-    pub fn needs_training(&self) -> bool {
-        match self {
-            Self::Scalar => false,
-            Self::Product(product) => product.centroids.is_none(),
         }
     }
 }
@@ -407,6 +399,8 @@ pub struct VectorStore {
     pub storage_type: ArcShift<StorageType>,
     pub vcs: Arc<VersionControl>,
     pub hnsw_params: ArcShift<HNSWHyperParams>,
+    // Whether the VectorStore has been configured or not
+    pub config_flag: Arc<AtomicBool>,
 }
 
 impl VectorStore {
@@ -443,8 +437,10 @@ impl VectorStore {
                 num_layers,
                 ..Default::default()
             }),
+            config_flag: Arc::new(AtomicBool::new(false)),
         }
     }
+
     // Get method
     pub fn get_current_version(&self) -> Hash {
         let mut arc = self.current_version.clone();
@@ -455,6 +451,14 @@ impl VectorStore {
     pub fn set_current_version(&self, new_version: Hash) {
         let mut arc = self.current_version.clone();
         arc.update(new_version);
+    }
+
+    pub fn get_config_flag(&self) -> bool {
+        self.config_flag.load(Ordering::Relaxed)
+    }
+
+    pub fn set_config_flag(&self, flag: bool) {
+        self.config_flag.store(flag, Ordering::Relaxed);
     }
 }
 

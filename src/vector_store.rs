@@ -2,10 +2,11 @@ use crate::distance::DistanceFunction;
 use crate::models::buffered_io::{BufferManager, BufferManagerFactory};
 use crate::models::common::*;
 use crate::models::file_persist::*;
+use crate::models::kmeans::{concat_vectors, generate_initial_centroids, kmeans, should_continue};
 use crate::models::lazy_load::*;
 use crate::models::types::*;
 use crate::models::versioning::Hash;
-use crate::quantization::Quantization;
+use crate::quantization::{Quantization, StorageType};
 use crate::storage::Storage;
 use arcshift::ArcShift;
 use lmdb::Transaction;
@@ -399,6 +400,39 @@ fn read_embedding(
     Ok((emb, next))
 }
 
+fn auto_config_storage_type(vec_store: Arc<VectorStore>, vectors: &[&[f32]]) {
+    let threshold = 0.0;
+    let iterations = 32;
+
+    let vec = concat_vectors(vectors);
+
+    // First iteration with k = 16
+    let initial_centroids_16 = generate_initial_centroids(&vec, 16);
+    let (_, counts_16) = kmeans(&vec, &initial_centroids_16, iterations);
+    let storage_type = if should_continue(&counts_16, threshold, 8) {
+        // Second iteration with k = 8
+        let initial_centroids_8 = generate_initial_centroids(&vec, 8);
+        let (_, counts_8) = kmeans(&vec, &initial_centroids_8, iterations);
+        if should_continue(&counts_8, threshold, 4) {
+            // Third iteration with k = 4
+            let initial_centroids_4 = generate_initial_centroids(&vec, 4);
+            let (_, counts_4) = kmeans(&vec, &initial_centroids_4, iterations);
+
+            if should_continue(&counts_4, threshold, 2) {
+                StorageType::SubByte(1)
+            } else {
+                StorageType::SubByte(2)
+            }
+        } else {
+            StorageType::SubByte(3)
+        }
+    } else {
+        StorageType::UnsignedByte
+    };
+
+    vec_store.storage_type.update_shared(storage_type);
+}
+
 pub fn insert_embedding(
     bufman: Arc<BufferManager>,
     vec_store: Arc<VectorStore>,
@@ -512,7 +546,7 @@ pub fn index_embeddings(
                      last_embedding_offset: EmbeddingOffset|
      -> Result<(), WaCustomError> {
         let mut quantization_arc = vec_store.quantization_metric.clone();
-        if quantization_arc.get().needs_training() {
+        if !vec_store.get_config_flag() {
             let quantization = quantization_arc.get();
             let mut new_quantization = quantization.clone();
             let vectors: Vec<&[f32]> = embeddings
@@ -521,6 +555,8 @@ pub fn index_embeddings(
                 .collect();
             new_quantization.train(&vectors)?;
             quantization_arc.update(new_quantization);
+            auto_config_storage_type(vec_store.clone(), &vectors);
+            vec_store.set_config_flag(true);
         }
         let quantization = quantization_arc.get();
         let results: Vec<()> = embeddings

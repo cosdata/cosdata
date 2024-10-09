@@ -19,20 +19,6 @@ use std::fs::OpenOptions;
 use std::path::Path;
 use std::sync::Arc;
 
-pub fn auto_config_storage_type(dim: usize) -> StorageType {
-    if dim < 256 {
-        StorageType::HalfPrecisionFP
-    } else if dim < 512 {
-        StorageType::UnsignedByte
-    } else if dim < 1024 {
-        StorageType::SubByte(3) // Octal
-    } else if dim < 2048 {
-        StorageType::SubByte(2) // Quaternary
-    } else {
-        StorageType::SubByte(1) // Binary
-    }
-}
-
 pub async fn init_vector_store(
     name: String,
     size: usize,
@@ -45,7 +31,7 @@ pub async fn init_vector_store(
     }
 
     let quantization_metric = QuantizationMetric::Scalar;
-    let storage_type = auto_config_storage_type(size);
+    let storage_type = StorageType::UnsignedByte;
     let ain_env = get_app_env().map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
     let denv = ain_env.persist.clone();
