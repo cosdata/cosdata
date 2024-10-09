@@ -67,13 +67,13 @@ pub(crate) async fn delete_vector_store_by_name(
         Err(_) => return Err(CollectionsError::FailedToGetAppEnv),
     };
     // Try to get the vector store from the environment
-    // @TODO: Remove unwrap
-    let vec_store = match env.vector_store_map.remove(name).unwrap() {
-        Some((_, store)) => store,
+    let result = env.vector_store_map.remove(name)
+        .map_err(CollectionsError::WaCustomError)?;
+    match result {
+        Some((_, store)) => Ok(store),
         None => {
             // Vector store not found, return an error response
             return Err(CollectionsError::NotFound);
         }
-    };
-    Ok(vec_store)
+    }
 }
