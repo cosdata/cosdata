@@ -11,6 +11,7 @@ pub mod cosql;
 pub mod distance;
 pub mod quantization;
 pub mod storage;
+pub mod indexes;
 
 use crate::models::common::*;
 
