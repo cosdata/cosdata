@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use super::{DistanceError, DistanceFunction};
 use crate::storage::Storage;
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Serialize)]
 pub struct HammingDistance(pub f32);
 
 impl DistanceFunction for HammingDistance {

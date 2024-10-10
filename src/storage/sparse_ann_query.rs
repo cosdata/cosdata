@@ -56,7 +56,7 @@ impl SparseAnnQuery {
                     _ => 0,
                 };
                 for key in start_key..=end_key {
-                    let lazy_item_vec: &LazyItemVec<u32> = &node.shared_get().data[key as usize];
+                    let lazy_item_vec: &LazyItemVec<u32> = &node.data[key as usize];
                     if !lazy_item_vec.is_empty() {
                         for lazy_item in lazy_item_vec.iter() {
                             let vector_id = lazy_item.get_data(index.cache.clone());

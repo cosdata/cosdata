@@ -1,5 +1,6 @@
 use crate::{
     api_service::fetch_vector_neighbors,
+    app_context::AppContext,
     models::{
         rpc::{FetchNeighbors, RPCResponseBody, Vector, VectorIdValue},
         types::{get_app_env, VectorId},
@@ -8,7 +9,10 @@ use crate::{
 use actix_web::{web, HttpResponse};
 
 // Route: `/vectordb/fetch`
-pub(crate) async fn fetch(web::Json(body): web::Json<FetchNeighbors>) -> HttpResponse {
+pub(crate) async fn fetch(
+    web::Json(body): web::Json<FetchNeighbors>,
+    ctx: web::Data<AppContext>,
+) -> HttpResponse {
     let env = match get_app_env() {
         Ok(env) => env,
         Err(_) => return HttpResponse::InternalServerError().body("Env initialization error"),
@@ -23,7 +27,7 @@ pub(crate) async fn fetch(web::Json(body): web::Json<FetchNeighbors>) -> HttpRes
     };
     let fvid = VectorId::from(body.vector_id);
 
-    let result = fetch_vector_neighbors(vec_store.clone(), fvid).await;
+    let result = fetch_vector_neighbors(ctx.node_registry.clone(), vec_store.clone(), fvid).await;
 
     let mut xx: Vec<Option<RPCResponseBody>> = result
         .iter()

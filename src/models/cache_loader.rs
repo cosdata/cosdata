@@ -1,6 +1,8 @@
 use crate::models::lru_cache::CachedValue;
 use crate::storage::inverted_index_old::InvertedIndexItem;
-use crate::storage::inverted_index_sparse_ann::{InvertedIndexSparseAnn, InvertedIndexSparseAnnNode};
+use crate::storage::inverted_index_sparse_ann::{
+    InvertedIndexSparseAnn, InvertedIndexSparseAnnNode,
+};
 use crate::storage::Storage;
 
 use super::buffered_io::{BufIoError, BufferManagerFactory};
@@ -162,6 +164,10 @@ impl NodeRegistry {
         }
     }
 
+    pub fn get_bufmans(&self) -> Arc<BufferManagerFactory> {
+        self.bufmans.clone()
+    }
+
     pub fn get_object<T: Cacheable, F>(
         self: Arc<Self>,
         file_index: FileIndex,
@@ -206,21 +212,27 @@ impl NodeRegistry {
         }
         println!("Released read lock on cuckoo_filter");
 
-        let version_id = if let FileIndex::Valid { version, .. } = &file_index {
-            *version
+        let (version_id, version_number) = if let FileIndex::Valid {
+            version_id,
+            version_number,
+            ..
+        } = &file_index
+        {
+            (*version_id, *version_number)
         } else {
-            0.into()
+            (0.into(), 0)
         };
 
         if max_loads == 0 || !skipm.insert(combined_index) {
             println!("Either max_loads hit 0 or loop detected, returning LazyItem with no data");
             return Ok(LazyItem::Valid {
-                data: None,
+                data: ArcShift::new(None),
                 file_index: ArcShift::new(Some(file_index)),
                 decay_counter: 0,
                 persist_flag: Arc::new(AtomicBool::new(true)),
                 versions: LazyItemVec::new(),
                 version_id,
+                version_number,
                 serialized_flag: Arc::new(AtomicBool::new(true)),
             });
         }
@@ -280,21 +292,23 @@ impl NodeRegistry {
 
     pub fn combine_index(file_index: &FileIndex) -> u64 {
         match file_index {
-            FileIndex::Valid { offset, version } => ((offset.0 as u64) << 32) | (**version as u64),
+            FileIndex::Valid {
+                offset, version_id, ..
+            } => ((offset.0 as u64) << 32) | (**version_id as u64),
             FileIndex::Invalid => u64::MAX, // Use max u64 value for Invalid
         }
     }
 
-    pub fn split_combined_index(combined: u64) -> FileIndex {
-        if combined == u64::MAX {
-            FileIndex::Invalid
-        } else {
-            FileIndex::Valid {
-                offset: FileOffset((combined >> 32) as u32),
-                version: (combined as u32).into(),
-            }
-        }
-    }
+    // pub fn split_combined_index(combined: u64) -> FileIndex {
+    //     if combined == u64::MAX {
+    //         FileIndex::Invalid
+    //     } else {
+    //         FileIndex::Valid {
+    //             offset: FileOffset((combined >> 32) as u32),
+    //             version: (combined as u32).into(),
+    //         }
+    //     }
+    // }
 }
 
 pub fn load_cache() {
@@ -304,10 +318,12 @@ pub fn load_cache() {
         |root, ver| root.join(format!("{}.index", **ver)),
     ));
 
+    // TODO: fill appropriate version info
     let file_index = FileIndex::Valid {
         offset: FileOffset(0),
-        version: 0.into(),
-    }; // Assuming initial version is 0
+        version_id: 0.into(),
+        version_number: 0,
+    };
     let cache = Arc::new(NodeRegistry::new(1000, bufmans));
     match read_node_from_file(file_index.clone(), cache) {
         Ok(_) => println!(
