@@ -365,25 +365,6 @@ pub fn insert_embedding(
         WriteFlags::empty(),
     )
     .map_err(|e| WaCustomError::DatabaseError(format!("Failed to put data: {}", e)))?;
-    let current_version_bytes = current_version.to_le_bytes();
-
-    let should_update_next_version = match txn.get(*metadata_db, &"next_version") {
-        Ok(bytes) => bytes != &current_version_bytes,
-        Err(lmdb::Error::NotFound) => true,
-        Err(err) => {
-            return Err(WaCustomError::DatabaseError(err.to_string()));
-        }
-    };
-
-    if should_update_next_version {
-        txn.put(
-            *metadata_db,
-            &"next_version",
-            &current_version_bytes,
-            WriteFlags::empty(),
-        )
-        .map_err(|e| WaCustomError::DatabaseError(format!("Failed to put data: {}", e)))?;
-    }
 
     txn.put(
         *metadata_db,
@@ -437,13 +418,12 @@ pub fn index_embeddings(
         Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
     };
 
-    let version =
-        Hash::from(match txn.get(*metadata_db, &"next_version") {
-            Ok(bytes) => u32::from_le_bytes(bytes.try_into().map_err(|e: TryFromSliceError| {
-                WaCustomError::DeserializationError(e.to_string())
-            })?),
-            Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
-        });
+    let embedding_offset = match txn.get(*metadata_db, &"next_embedding_offset") {
+        Ok(bytes) => EmbeddingOffset::deserialize(bytes)
+            .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?,
+        Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
+    };
+    let version = embedding_offset.version;
     let version_hash = vec_store
         .vcs
         .get_version_hash(&version)
@@ -453,7 +433,9 @@ pub fn index_embeddings(
 
     txn.abort();
 
-    let mut index = |embeddings: Vec<RawVectorEmbedding>| -> Result<(), WaCustomError> {
+    let mut index = |embeddings: Vec<RawVectorEmbedding>,
+                     next_offset: u32|
+     -> Result<(), WaCustomError> {
         let mut quantization_arc = vec_store.quantization_metric.clone();
         if !vec_store.get_config_flag() {
             let quantization = quantization_arc.get();
@@ -509,6 +491,22 @@ pub fn index_embeddings(
             WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e))
         })?;
 
+        let next_embedding_offset = EmbeddingOffset {
+            version,
+            offset: next_offset,
+        };
+        let next_embedding_offset_serialized = next_embedding_offset.serialize();
+
+        txn.put(
+            *metadata_db,
+            &"next_embedding_offset",
+            &next_embedding_offset_serialized,
+            WriteFlags::empty(),
+        )
+        .map_err(|e| {
+            WaCustomError::DatabaseError(format!("Failed to update `next_embedding_offset`: {}", e))
+        })?;
+
         txn.put(
             *metadata_db,
             &"count_indexed",
@@ -538,7 +536,7 @@ pub fn index_embeddings(
 
     let bufman = vec_raw_manager.get(&version)?;
 
-    let mut i = 0;
+    let mut i = embedding_offset.offset;
     let cursor = bufman.open_cursor()?;
     let file_len = bufman.seek_with_cursor(cursor, SeekFrom::End(0))? as u32;
     bufman.seek_with_cursor(cursor, SeekFrom::Start(0))?;
@@ -547,7 +545,7 @@ pub fn index_embeddings(
 
     loop {
         if i == file_len {
-            index(embeddings)?;
+            index(embeddings, i)?;
             bufman.close_cursor(cursor)?;
             break;
         }
@@ -557,7 +555,7 @@ pub fn index_embeddings(
         i = next;
 
         if embeddings.len() == upload_process_batch_size {
-            index(embeddings)?;
+            index(embeddings, i)?;
             embeddings = Vec::new();
         }
     }

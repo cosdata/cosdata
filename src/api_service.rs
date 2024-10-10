@@ -1,5 +1,4 @@
 use crate::app_context::AppContext;
-use crate::models::buffered_io::*;
 use crate::models::cache_loader::NodeRegistry;
 use crate::models::common::*;
 use crate::models::file_persist::*;
@@ -13,11 +12,13 @@ use crate::models::versioning::VersionControl;
 use crate::quantization::{Quantization, StorageType};
 use crate::vector_store::*;
 use arcshift::ArcShift;
+use lmdb::WriteFlags;
 use lmdb::{DatabaseFlags, Transaction};
 use rand::Rng;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::array::TryFromSliceError;
 use std::fs::OpenOptions;
+use std::io::SeekFrom;
 use std::sync::Arc;
 
 pub async fn init_vector_store(
@@ -189,18 +190,71 @@ pub fn run_upload(
     vec_store: Arc<VectorStore>,
     vecs: Vec<(VectorIdValue, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
+    let env = vec_store.lmdb.env.clone();
+    let metadata_db = vec_store.lmdb.metadata_db.clone();
+    let mut txn = env
+        .begin_rw_txn()
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+    // Check if the previous version is unindexed, and continue from where we left.
+    let prev_version = vec_store.get_current_version();
+    let index_before_insertion = match txn.get(*metadata_db, &"next_embedding_offset") {
+        Ok(bytes) => {
+            let embedding_offset = EmbeddingOffset::deserialize(bytes)
+                .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?;
+
+            debug_assert_eq!(
+                embedding_offset.version, prev_version,
+                "Last unindexed embedding's version must be the previous version of the collection"
+            );
+
+            let prev_bufman = ctx.vec_raw_manager.get(&prev_version)?;
+            let cursor = prev_bufman.open_cursor()?;
+            let prev_file_len = prev_bufman.seek_with_cursor(cursor, SeekFrom::End(0))? as u32;
+
+            prev_file_len > embedding_offset.offset
+        }
+        Err(lmdb::Error::NotFound) => false,
+        Err(e) => {
+            return Err(WaCustomError::DatabaseError(e.to_string()));
+        }
+    };
+
+    if index_before_insertion {
+        index_embeddings(
+            ctx.node_registry.clone(),
+            &ctx.vec_raw_manager,
+            vec_store.clone(),
+            ctx.config.upload_process_batch_size,
+        )?;
+    }
+
+    // Add next version
     let current_version = vec_store
         .vcs
         .add_next_version("main")
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
     vec_store.set_current_version(current_version);
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .open(format!("{}.vec_raw", *current_version))
-        .map_err(|e| WaCustomError::FsError(e.to_string()))?;
-    let bufman = Arc::new(BufferManager::new(file).map_err(BufIoError::Io)?);
+
+    // Update LMDB metadata
+    let new_offset = EmbeddingOffset {
+        version: current_version,
+        offset: 0,
+    };
+    let new_offset_serialized = new_offset.serialize();
+    txn.put(
+        *metadata_db,
+        &"next_embedding_offset",
+        &new_offset_serialized,
+        WriteFlags::empty(),
+    )
+    .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+    txn.commit()
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+    // Insert vectors
+    let bufman = ctx.vec_raw_manager.get(&current_version)?;
     vecs.into_par_iter()
         .map(|(id, vec)| {
             let hash_vec = convert_value(id);
@@ -213,9 +267,6 @@ pub fn run_upload(
         })
         .collect::<Result<Vec<_>, _>>()?;
     bufman.flush()?;
-
-    let env = vec_store.lmdb.env.clone();
-    let metadata_db = vec_store.lmdb.metadata_db.clone();
 
     let txn = env
         .begin_ro_txn()
