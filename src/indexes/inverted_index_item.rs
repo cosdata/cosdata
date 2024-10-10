@@ -76,7 +76,7 @@ impl InvertedIndexItem {
     fn insert_data(&mut self, value: f32, vector_id: u32) {
         let is_repeated = self.data.iter().find(|i| i.1 == vector_id);
 
-        // should this return error if the vector id is already registered ?
+        // TODO should this return error if the vector id is already registered ?
         //  or should it skip inserting and return nothing ?
         if is_repeated.is_none() {
             self.data.push((value, vector_id))
