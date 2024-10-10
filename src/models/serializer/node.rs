@@ -64,6 +64,7 @@ impl CustomSerialize for MergedNode {
         let parent_placeholder = if parent_present {
             let pos = bufman.cursor_position(cursor)? as u32;
             bufman.write_u32_with_cursor(cursor, 0)?;
+            bufman.write_u16_with_cursor(cursor, 0)?;
             bufman.write_u32_with_cursor(cursor, 0)?;
             Some(pos)
         } else {
@@ -73,6 +74,7 @@ impl CustomSerialize for MergedNode {
         let child_placeholder = if child_present {
             let pos = bufman.cursor_position(cursor)? as u32;
             bufman.write_u32_with_cursor(cursor, 0)?;
+            bufman.write_u16_with_cursor(cursor, 0)?;
             bufman.write_u32_with_cursor(cursor, 0)?;
             Some(pos)
         } else {
@@ -106,12 +108,14 @@ impl CustomSerialize for MergedNode {
         if let (Some(placeholder), Some(offset)) = (parent_placeholder, parent_offset) {
             bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder as u64))?;
             bufman.write_u32_with_cursor(cursor, offset)?;
+            bufman.write_u16_with_cursor(cursor, self.parent.get_current_version_number())?;
             bufman.write_u32_with_cursor(cursor, *self.parent.get_current_version())?;
         }
 
         if let (Some(placeholder), Some(offset)) = (child_placeholder, child_offset) {
             bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder as u64))?;
             bufman.write_u32_with_cursor(cursor, offset)?;
+            bufman.write_u16_with_cursor(cursor, self.child.get_current_version_number())?;
             bufman.write_u32_with_cursor(cursor, *self.child.get_current_version())?;
         }
 
@@ -139,9 +143,10 @@ impl CustomSerialize for MergedNode {
             .into()),
             FileIndex::Valid {
                 offset: FileOffset(offset),
-                version,
+                version_number,
+                version_id,
             } => {
-                let bufman = bufmans.get(&version)?;
+                let bufman = bufmans.get(&version_id)?;
                 let cursor = bufman.open_cursor()?;
                 bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
                 // Read basic fields
@@ -160,53 +165,60 @@ impl CustomSerialize for MergedNode {
                 if parent_present {
                     parent_offset_and_version = Some((
                         bufman.read_u32_with_cursor(cursor)?,
+                        bufman.read_u16_with_cursor(cursor)?,
                         bufman.read_u32_with_cursor(cursor)?.into(),
                     ));
                 }
                 if child_present {
                     child_offset_and_version = Some((
                         bufman.read_u32_with_cursor(cursor)?,
+                        bufman.read_u16_with_cursor(cursor)?,
                         bufman.read_u32_with_cursor(cursor)?.into(),
                     ));
                 }
                 let neighbors_offset = bufman.read_u32_with_cursor(cursor)?;
                 bufman.close_cursor(cursor)?;
                 // Deserialize parent
-                let parent = if let Some((offset, version)) = parent_offset_and_version {
-                    LazyItemRef::deserialize(
-                        bufmans.clone(),
-                        FileIndex::Valid {
-                            offset: FileOffset(offset),
-                            version,
-                        },
-                        cache.clone(),
-                        max_loads,
-                        skipm,
-                    )?
-                } else {
-                    LazyItemRef::new_invalid()
-                };
+                let parent =
+                    if let Some((offset, version_number, version_id)) = parent_offset_and_version {
+                        LazyItemRef::deserialize(
+                            bufmans.clone(),
+                            FileIndex::Valid {
+                                offset: FileOffset(offset),
+                                version_number,
+                                version_id,
+                            },
+                            cache.clone(),
+                            max_loads,
+                            skipm,
+                        )?
+                    } else {
+                        LazyItemRef::new_invalid()
+                    };
                 // Deserialize child
-                let child = if let Some((offset, version)) = child_offset_and_version {
-                    LazyItemRef::deserialize(
-                        bufmans.clone(),
-                        FileIndex::Valid {
-                            offset: FileOffset(offset),
-                            version,
-                        },
-                        cache.clone(),
-                        max_loads,
-                        skipm,
-                    )?
-                } else {
-                    LazyItemRef::new_invalid()
-                };
+                let child =
+                    if let Some((offset, version_number, version_id)) = child_offset_and_version {
+                        LazyItemRef::deserialize(
+                            bufmans.clone(),
+                            FileIndex::Valid {
+                                offset: FileOffset(offset),
+                                version_number,
+                                version_id,
+                            },
+                            cache.clone(),
+                            max_loads,
+                            skipm,
+                        )?
+                    } else {
+                        LazyItemRef::new_invalid()
+                    };
                 // Deserialize neighbors
                 let neighbors = EagerLazyItemSet::deserialize(
                     bufmans,
                     FileIndex::Valid {
                         offset: FileOffset(neighbors_offset),
-                        version,
+                        version_number,
+                        version_id,
                     },
                     cache.clone(),
                     max_loads,

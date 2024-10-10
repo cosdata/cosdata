@@ -53,8 +53,10 @@ impl CustomSerialize for MetricResult {
         Self: Sized,
     {
         match file_index {
-            FileIndex::Valid { offset, version } => {
-                let bufman = bufmans.get(&version)?;
+            FileIndex::Valid {
+                offset, version_id, ..
+            } => {
+                let bufman = bufmans.get(&version_id)?;
                 let cursor = bufman.open_cursor()?;
                 bufman.seek_with_cursor(cursor, SeekFrom::Start(offset.0 as u64))?;
                 let variant = bufman.read_u8_with_cursor(cursor)?;

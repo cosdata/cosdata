@@ -1,7 +1,5 @@
 use std::{collections::HashSet, sync::Arc};
 
-use arcshift::ArcShift;
-
 use crate::{
     models::{
         buffered_io::{BufIoError, BufferManagerFactory},
@@ -25,8 +23,7 @@ where
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
-        let mut root_arc = self.root.clone();
-        root_arc.get().serialize(bufmans, version, cursor)
+        self.root.serialize(bufmans, version, cursor)
     }
 
     fn deserialize(
@@ -39,7 +36,7 @@ where
         let root =
             InvertedIndexItem::deserialize(bufmans, file_index, cache.clone(), max_loads, skipm)?;
         Ok(Self {
-            root: ArcShift::new(root),
+            root: Arc::new(root),
             cache,
         })
     }

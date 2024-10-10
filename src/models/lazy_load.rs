@@ -1,4 +1,3 @@
-use super::buffered_io::BufferManagerFactory;
 use super::cache_loader::{Cacheable, NodeRegistry};
 use super::common::WaCustomError;
 use super::identity_collections::{Identifiable, IdentityMap, IdentityMapKey, IdentitySet};
@@ -14,7 +13,7 @@ use std::sync::{
     Arc,
 };
 
-fn largest_power_of_4_below(x: u32) -> u32 {
+fn largest_power_of_4_below(x: u16) -> u8 {
     // This function is used to calculate the largest power of 4 (4^n) such that
     // 4^n <= x, where x represents the gap between the current version and the
     // target version in our version control system.
@@ -28,7 +27,8 @@ fn largest_power_of_4_below(x: u32) -> u32 {
     // is undefined, as zero does not have any significant bits for such a calculation.
     assert_ne!(x, 0, "x should not be zero");
 
-    let msb_position = 31 - x.leading_zeros(); // Find the most significant bit's position
+    // must be small enough to fit inside u8
+    let msb_position = (15 - x.leading_zeros()) as u8; // Find the most significant bit's position
     msb_position / 2 // Return the power index of the largest 4^n ≤ x
 }
 
@@ -36,13 +36,18 @@ pub trait SyncPersist {
     fn set_persistence(&self, flag: bool);
     fn needs_persistence(&self) -> bool;
     fn get_current_version(&self) -> Hash;
+    fn get_current_version_number(&self) -> u16;
 }
 
 pub const CHUNK_SIZE: usize = 5;
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
 pub enum FileIndex {
-    Valid { offset: FileOffset, version: Hash },
+    Valid {
+        offset: FileOffset,
+        version_number: u16,
+        version_id: Hash,
+    },
     Invalid,
 }
 
@@ -53,7 +58,7 @@ pub enum FileIndex {
 pub enum LazyItem<T: Clone + 'static> {
     Valid {
         // Holds the actual data. Wrapped in an `Option` to indicate whether the data is loaded.
-        data: Option<ArcShift<T>>,
+        data: ArcShift<Option<Arc<T>>>,
         // Pointer to the file offset where the data is stored. Used for lazy loading the data when
         // needed. If the data is not loaded, this index retrieves it from persistent storage.
         file_index: ArcShift<Option<FileIndex>>,
@@ -78,6 +83,8 @@ pub enum LazyItem<T: Clone + 'static> {
         versions: LazyItemVec<T>,
         // Hash value representing the current version.
         version_id: Hash,
+        // Current version
+        version_number: u16,
         // Indicates if this `LazyItem` has ever been serialized. Unlike `persist_flag`, this flag
         // should not be reset. It avoids re-serializing the entire `LazyItem` if it's already
         // been serialized once, as only the `versions` field might change.
@@ -102,8 +109,16 @@ pub enum LazyItemId {
 impl fmt::Display for FileIndex {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            FileIndex::Valid { offset, version } => {
-                write!(f, "FileIndex(offset: {}, version: {})", offset.0, **version)
+            FileIndex::Valid {
+                offset,
+                version_number,
+                version_id,
+            } => {
+                write!(
+                    f,
+                    "FileIndex(offset: {}, version_number: {}, version_id: {})",
+                    offset.0, version_number, **version_id
+                )
             }
             FileIndex::Invalid => write!(f, "FileIndex(Invalid)"),
         }
@@ -125,9 +140,10 @@ where
                 return LazyItemId::Persist(offset);
             }
 
-            if let Some(data) = data {
-                let mut arc = data.clone();
-                return LazyItemId::Memory(arc.get().get_id());
+            let mut data_arc = data.clone();
+
+            if let Some(data) = data_arc.get() {
+                return LazyItemId::Memory(data.get_id());
             }
         }
 
@@ -246,17 +262,26 @@ impl<T: Clone + 'static> SyncPersist for LazyItem<T> {
             0.into()
         }
     }
+
+    fn get_current_version_number(&self) -> u16 {
+        if let Self::Valid { version_number, .. } = self {
+            *version_number
+        } else {
+            0
+        }
+    }
 }
 
 impl<T: Clone + 'static> LazyItem<T> {
-    pub fn new(version_id: Hash, item: T) -> Self {
+    pub fn new(version_id: Hash, version_number: u16, item: T) -> Self {
         Self::Valid {
-            data: Some(ArcShift::new(item)),
+            data: ArcShift::new(Some(Arc::new(item))),
             file_index: ArcShift::new(None),
             decay_counter: 0,
             persist_flag: Arc::new(AtomicBool::new(true)),
             versions: LazyItemVec::new(),
             version_id,
+            version_number,
             serialized_flag: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -265,26 +290,28 @@ impl<T: Clone + 'static> LazyItem<T> {
         Self::Invalid
     }
 
-    pub fn from_data(version_id: Hash, data: T) -> Self {
+    pub fn from_data(version_id: Hash, version_number: u16, data: T) -> Self {
         LazyItem::Valid {
-            data: Some(ArcShift::new(data)),
+            data: ArcShift::new(Some(Arc::new(data))),
             file_index: ArcShift::new(None),
             decay_counter: 0,
             persist_flag: Arc::new(AtomicBool::new(true)),
             versions: LazyItemVec::new(),
             version_id,
+            version_number,
             serialized_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    pub fn from_arcshift(version_id: Hash, item: ArcShift<T>) -> Self {
+    pub fn from_arc(version_id: Hash, version_number: u16, item: Arc<T>) -> Self {
         Self::Valid {
-            data: Some(item),
+            data: ArcShift::new(Some(item)),
             file_index: ArcShift::new(None),
             decay_counter: 0,
             persist_flag: Arc::new(AtomicBool::new(true)),
             versions: LazyItemVec::new(),
             version_id,
+            version_number,
             serialized_flag: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -297,17 +324,11 @@ impl<T: Clone + 'static> LazyItem<T> {
         matches!(self, Self::Invalid)
     }
 
-    pub fn get_lazy_data(&self) -> Option<ArcShift<T>> {
+    pub fn get_lazy_data(&self) -> Option<ArcShift<Option<Arc<T>>>> {
         if let Self::Valid { data, .. } = self {
-            return data.clone();
+            return Some(data.clone());
         }
         None
-    }
-
-    pub fn set_data(&mut self, new_data: T) {
-        if let Self::Valid { data, .. } = self {
-            *data = Some(ArcShift::new(new_data))
-        }
     }
 
     pub fn get_file_index(&self) -> Option<FileIndex> {
@@ -321,41 +342,6 @@ impl<T: Clone + 'static> LazyItem<T> {
         if let Self::Valid { file_index, .. } = self {
             file_index.clone().update(new_file_index);
         }
-    }
-
-    pub fn add_version(
-        &self,
-        vcs: Arc<VersionControl>,
-        version: u32,
-        lazy_item: LazyItem<T>,
-    ) -> lmdb::Result<()> {
-        if let Self::Valid {
-            versions,
-            version_id,
-            ..
-        } = self
-        {
-            // Retrieve current version from LMDB
-            let version_hash = vcs
-                .get_version_hash(version_id)?
-                .ok_or(lmdb::Error::NotFound)?;
-            // Calculate the difference between the target version and the current version
-            let target_diff = version - *version_hash.version;
-
-            // Use the largest power of 4 below the target difference to find the appropriate
-            // checkpoint for storing this new version.
-            let index = largest_power_of_4_below(target_diff);
-
-            // If a version already exists at the calculated index, recursively add the new version.
-            if let Some(existing_version) = versions.get(index as usize) {
-                return existing_version.add_version(vcs, version, lazy_item);
-            } else {
-                // Insert the new version at the calculated index if none exists there yet.
-                versions.insert(index as usize, lazy_item);
-            }
-        }
-
-        Ok(())
     }
 
     pub fn get_versions(&self) -> Option<LazyItemVec<T>> {
@@ -378,16 +364,175 @@ impl<T: Clone + 'static> LazyItem<T> {
 }
 
 impl<T: Clone + CustomSerialize + Cacheable + 'static> LazyItem<T> {
-    pub fn try_get_data(
+    pub fn add_version(&self, cache: Arc<NodeRegistry>, lazy_item: LazyItem<T>) {
+        let latest_local_version_number = self.get_latest_version(cache.clone()).1;
+        self.add_version_inner(cache, lazy_item, 0, latest_local_version_number + 1)
+    }
+
+    fn add_version_inner(
         &self,
         cache: Arc<NodeRegistry>,
-        index_manager: Arc<BufferManagerFactory>,
-    ) -> Result<ArcShift<T>, WaCustomError> {
+        lazy_item: LazyItem<T>,
+        self_relative_version_number: u16,
+        target_relative_version_number: u16,
+    ) {
         if let Self::Valid {
-            data, file_index, ..
+            data,
+            file_index,
+            versions,
+            ..
         } = self
         {
-            if let Some(data) = data {
+            let mut data = data.clone();
+            let mut versions = versions.clone();
+            let target_diff = target_relative_version_number - self_relative_version_number;
+            let index = largest_power_of_4_below(target_diff);
+
+            if data.get().is_none() {
+                let mut file_index_arc = file_index.clone();
+                let Some(file_index) = file_index_arc.get().clone() else {
+                    unreachable!("data and file_index both cannot be None at the time!");
+                };
+                let item: LazyItem<T> = cache
+                    .clone()
+                    .load_item(file_index)
+                    .expect("Deserialization failed");
+                let (deserialized_data, deserialized_versions) = match item {
+                    LazyItem::Valid { data, versions, .. } => (
+                        data.clone().get().clone().unwrap(),
+                        versions.items.clone().get().clone(),
+                    ),
+                    LazyItem::Invalid => {
+                        unreachable!("Deserialized LazyItem should not be Invalid")
+                    }
+                };
+                versions.items.update(deserialized_versions);
+                data.update(Some(deserialized_data));
+            };
+
+            if let Some(existing_version) = versions.get(index as usize) {
+                return existing_version.add_version_inner(
+                    cache,
+                    lazy_item,
+                    self_relative_version_number + (1 << (2 * index)),
+                    target_relative_version_number,
+                );
+            }
+
+            versions.insert(index as usize, lazy_item);
+        }
+    }
+
+    pub fn get_version(&self, cache: Arc<NodeRegistry>, version: u16) -> Option<LazyItem<T>> {
+        match self {
+            Self::Valid {
+                data,
+                file_index,
+                versions,
+                version_number,
+                ..
+            } => {
+                if &version < version_number {
+                    return None;
+                }
+                if &version == version_number {
+                    return Some(self.clone());
+                }
+                let mut data = data.clone();
+                let mut versions = versions.clone();
+                if data.is_none() {
+                    let mut file_index_arc = file_index.clone();
+                    let Some(file_index) = file_index_arc.get().clone() else {
+                        unreachable!("data and file_index both cannot be None at the time!");
+                    };
+                    let item: LazyItem<T> = cache
+                        .clone()
+                        .load_item(file_index)
+                        .expect("Deserialization failed");
+                    let (deserialized_data, deserialized_versions) = match item {
+                        LazyItem::Valid { data, versions, .. } => (
+                            data.clone().get().clone().unwrap(),
+                            versions.items.clone().get().clone(),
+                        ),
+                        LazyItem::Invalid => {
+                            unreachable!("Deserialized LazyItem should not be Invalid")
+                        }
+                    };
+                    versions.items.update(deserialized_versions);
+                    data.update(Some(deserialized_data));
+                };
+                let Some(mut prev) = versions.get(0) else {
+                    return None;
+                };
+                let mut i = 1;
+                while let Some(next) = versions.get(i) {
+                    if version < next.get_current_version_number() {
+                        return prev.get_version(cache, version);
+                    }
+                    prev = next;
+                    i += 1;
+                }
+
+                prev.get_version(cache, version)
+            }
+            Self::Invalid => None,
+        }
+    }
+
+    // returns (latest version of current node, relative version number)
+    pub fn get_latest_version(&self, cache: Arc<NodeRegistry>) -> (LazyItem<T>, u16) {
+        if let Self::Valid {
+            versions,
+            data,
+            file_index,
+            ..
+        } = self
+        {
+            let mut data = data.clone();
+            let mut versions = versions.clone();
+            if data.is_none() {
+                let mut file_index_arc = file_index.clone();
+                let Some(file_index) = file_index_arc.get().clone() else {
+                    unreachable!("data and file_index both cannot be None at the time!");
+                };
+                let item: LazyItem<T> = cache
+                    .clone()
+                    .load_item(file_index)
+                    .expect("Deserialization failed");
+                let (deserialized_data, deserialized_versions) = match item {
+                    LazyItem::Valid { data, versions, .. } => (
+                        data.clone().get().clone().unwrap(),
+                        versions.items.clone().get().clone(),
+                    ),
+                    LazyItem::Invalid => {
+                        unreachable!("Deserialized LazyItem should not be Invalid")
+                    }
+                };
+                versions.items.update(deserialized_versions);
+                data.update(Some(deserialized_data));
+            };
+            if let Some(last) = versions.items.get().last() {
+                let (latest_version, relative_local_version_number) =
+                    last.get_latest_version(cache);
+                return (
+                    latest_version,
+                    (1u16 << ((versions.len() as u8 - 1) * 2)) + relative_local_version_number,
+                );
+            }
+        };
+        (self.clone(), 0)
+    }
+
+    pub fn try_get_data(&self, cache: Arc<NodeRegistry>) -> Result<Arc<T>, WaCustomError> {
+        if let Self::Valid {
+            data,
+            file_index,
+            versions,
+            ..
+        } = self
+        {
+            let mut data_arc = data.clone();
+            if let Some(data) = data_arc.get() {
                 return Ok(data.clone());
             }
 
@@ -398,24 +543,40 @@ impl<T: Clone + CustomSerialize + Cacheable + 'static> LazyItem<T> {
                 .ok_or(WaCustomError::LazyLoadingError(
                     "LazyItem offset is None".to_string(),
                 ))?;
+
             let item: LazyItem<T> = LazyItem::deserialize(
-                index_manager,
+                cache.get_bufmans(),
                 offset.clone(),
                 cache,
                 1000,
                 &mut HashSet::new(),
             )
             .map_err(|e| WaCustomError::BufIo(Arc::new(e)))?;
-            match item {
-                Self::Valid { data, .. } => data.ok_or(WaCustomError::LazyLoadingError(
-                    "Deserialized LazyItem is None".to_string(),
-                )),
+
+            let (data, deserialized_versions) = match item {
+                Self::Valid {
+                    mut data,
+                    mut versions,
+                    ..
+                } => (
+                    data.get().clone().ok_or(WaCustomError::LazyLoadingError(
+                        "Deserialized LazyItem is None".to_string(),
+                    ))?,
+                    versions.items.get().clone(),
+                ),
                 Self::Invalid => {
                     return Err(WaCustomError::LazyLoadingError(
                         "Deserialized LazyItem is invalid".to_string(),
                     ));
                 }
-            }
+            };
+
+            data_arc.update(Some(data.clone()));
+
+            let mut version_arc = versions.clone();
+            version_arc.items.update(deserialized_versions);
+
+            Ok(data)
         } else {
             return Err(WaCustomError::LazyLoadingError(
                 "LazyItem is invalid".to_string(),
@@ -423,12 +584,16 @@ impl<T: Clone + CustomSerialize + Cacheable + 'static> LazyItem<T> {
         }
     }
 
-    pub fn get_data(&self, cache: Arc<NodeRegistry>) -> ArcShift<T> {
+    pub fn get_data(&self, cache: Arc<NodeRegistry>) -> Arc<T> {
         if let Self::Valid {
-            data, file_index, ..
+            data,
+            file_index,
+            versions,
+            ..
         } = self
         {
-            if let Some(data) = data {
+            let mut data_arc = data.clone();
+            if let Some(data) = data_arc.get() {
                 return data.clone();
             }
 
@@ -438,9 +603,34 @@ impl<T: Clone + CustomSerialize + Cacheable + 'static> LazyItem<T> {
                 .clone()
                 .expect("LazyItem offset is None");
 
-            let deserialized = cache.load_item(file_index).expect("Deserialization error");
+            // let deserialized = cache.load_item(file_index).expect("Deserialization error");
+            let item: LazyItem<T> = LazyItem::deserialize(
+                cache.get_bufmans(),
+                file_index,
+                cache,
+                1000,
+                &mut HashSet::new(),
+            )
+            .expect("Deserialization failed");
 
-            ArcShift::new(deserialized)
+            let (data, deserialized_versions) = match item {
+                Self::Valid {
+                    mut data,
+                    mut versions,
+                    ..
+                } => (
+                    data.get().clone().expect("Deserialized LazyItem is None"),
+                    versions.items.get().clone(),
+                ),
+                Self::Invalid => panic!("Deserialized LazyItem is Invalid"),
+            };
+
+            data_arc.update(Some(data.clone()));
+
+            let mut version_arc = versions.clone();
+            version_arc.items.update(deserialized_versions);
+
+            data
         } else {
             panic!("LazyItem is invalid");
         }
@@ -448,15 +638,16 @@ impl<T: Clone + CustomSerialize + Cacheable + 'static> LazyItem<T> {
 }
 
 impl<T: Clone + 'static> LazyItemRef<T> {
-    pub fn new(version_id: Hash, item: T) -> Self {
+    pub fn new(version_id: Hash, version_number: u16, item: T) -> Self {
         Self {
             item: ArcShift::new(LazyItem::Valid {
-                data: Some(ArcShift::new(item)),
+                data: ArcShift::new(Some(Arc::new(item))),
                 file_index: ArcShift::new(None),
                 decay_counter: 0,
                 persist_flag: Arc::new(AtomicBool::new(true)),
                 versions: LazyItemVec::new(),
                 version_id,
+                version_number,
                 serialized_flag: Arc::new(AtomicBool::new(false)),
             }),
         }
@@ -468,15 +659,16 @@ impl<T: Clone + 'static> LazyItemRef<T> {
         }
     }
 
-    pub fn from_arcshift(version_id: Hash, item: ArcShift<T>) -> Self {
+    pub fn from_arc(version_id: Hash, version_number: u16, item: Arc<T>) -> Self {
         Self {
             item: ArcShift::new(LazyItem::Valid {
-                data: Some(item),
+                data: ArcShift::new(Some(item)),
                 file_index: ArcShift::new(None),
                 decay_counter: 0,
                 persist_flag: Arc::new(AtomicBool::new(true)),
                 versions: LazyItemVec::new(),
                 version_id,
+                version_number,
                 serialized_flag: Arc::new(AtomicBool::new(false)),
             }),
         }
@@ -498,10 +690,10 @@ impl<T: Clone + 'static> LazyItemRef<T> {
         arc.get().is_invalid()
     }
 
-    pub fn get_data(&self) -> Option<ArcShift<T>> {
+    pub fn get_lazy_data(&self) -> Option<ArcShift<Option<Arc<T>>>> {
         let mut arc = self.item.clone();
         if let LazyItem::Valid { data, .. } = arc.get() {
-            return data.clone();
+            return Some(data.clone());
         }
         None
     }
@@ -510,43 +702,54 @@ impl<T: Clone + 'static> LazyItemRef<T> {
         let mut arc = self.item.clone();
 
         arc.rcu(|item| {
-            let (file_index, decay_counter, persist_flag, version_id, versions, serialized_flag) =
-                if let LazyItem::Valid {
-                    file_index,
-                    decay_counter,
-                    persist_flag,
-                    version_id,
-                    versions,
-                    serialized_flag,
-                    ..
-                } = item
-                {
-                    (
-                        file_index.clone(),
-                        *decay_counter,
-                        persist_flag.clone(),
-                        *version_id,
-                        versions.clone(),
-                        serialized_flag.clone(),
-                    )
-                } else {
-                    (
-                        ArcShift::new(None),
-                        0,
-                        Arc::new(AtomicBool::new(true)),
-                        0.into(),
-                        LazyItemVec::new(),
-                        Arc::new(AtomicBool::new(false)),
-                    )
-                };
+            let (
+                file_index,
+                decay_counter,
+                persist_flag,
+                version_id,
+                version_number,
+                versions,
+                serialized_flag,
+            ) = if let LazyItem::Valid {
+                file_index,
+                decay_counter,
+                persist_flag,
+                version_id,
+                version_number,
+                versions,
+                serialized_flag,
+                ..
+            } = item
+            {
+                (
+                    file_index.clone(),
+                    *decay_counter,
+                    persist_flag.clone(),
+                    *version_id,
+                    *version_number,
+                    versions.clone(),
+                    serialized_flag.clone(),
+                )
+            } else {
+                (
+                    ArcShift::new(None),
+                    0,
+                    Arc::new(AtomicBool::new(true)),
+                    0.into(),
+                    0,
+                    LazyItemVec::new(),
+                    Arc::new(AtomicBool::new(false)),
+                )
+            };
 
             LazyItem::Valid {
-                data: Some(ArcShift::new(new_data)),
+                data: ArcShift::new(Some(Arc::new(new_data))),
                 file_index,
                 decay_counter,
                 persist_flag,
                 versions,
                 version_id,
+                version_number,
                 serialized_flag,
             }
         });
@@ -556,35 +759,45 @@ impl<T: Clone + 'static> LazyItemRef<T> {
         let mut arc = self.item.clone();
 
         arc.rcu(|item| {
-            let (data, decay_counter, persist_flag, version_id, versions, serialized_flag) =
-                if let LazyItem::Valid {
-                    data,
-                    decay_counter,
-                    persist_flag,
-                    version_id,
-                    versions,
-                    serialized_flag,
-                    ..
-                } = item
-                {
-                    (
-                        data.clone(),
-                        *decay_counter,
-                        persist_flag.clone(),
-                        *version_id,
-                        versions.clone(),
-                        serialized_flag.clone(),
-                    )
-                } else {
-                    (
-                        None,
-                        0,
-                        Arc::new(AtomicBool::new(true)),
-                        0.into(),
-                        LazyItemVec::new(),
-                        Arc::new(AtomicBool::new(false)),
-                    )
-                };
+            let (
+                data,
+                decay_counter,
+                persist_flag,
+                version_id,
+                version_number,
+                versions,
+                serialized_flag,
+            ) = if let LazyItem::Valid {
+                data,
+                decay_counter,
+                persist_flag,
+                version_id,
+                version_number,
+                versions,
+                serialized_flag,
+                ..
+            } = item
+            {
+                (
+                    data.clone(),
+                    *decay_counter,
+                    persist_flag.clone(),
+                    *version_id,
+                    *version_number,
+                    versions.clone(),
+                    serialized_flag.clone(),
+                )
+            } else {
+                (
+                    ArcShift::new(None),
+                    0,
+                    Arc::new(AtomicBool::new(true)),
+                    0.into(),
+                    0,
+                    LazyItemVec::new(),
+                    Arc::new(AtomicBool::new(false)),
+                )
+            };
 
             LazyItem::Valid {
                 data,
@@ -593,6 +806,7 @@ impl<T: Clone + 'static> LazyItemRef<T> {
                 persist_flag,
                 versions,
                 version_id,
+                version_number,
                 serialized_flag,
             }
         });
@@ -601,6 +815,11 @@ impl<T: Clone + 'static> LazyItemRef<T> {
     pub fn get_current_version(&self) -> Hash {
         let mut arc = self.item.clone();
         arc.get().get_current_version()
+    }
+
+    pub fn get_current_version_number(&self) -> u16 {
+        let mut arc = self.item.clone();
+        arc.get().get_current_version_number()
     }
 }
 
@@ -814,6 +1033,11 @@ impl<T: Clone + 'static> LazyItemVec<T> {
         items.get().get(index).cloned()
     }
 
+    pub fn last(&self) -> Option<LazyItem<T>> {
+        let mut items = self.items.clone();
+        items.get().last().cloned()
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = LazyItem<T>> {
         let mut items = self.items.clone();
         items.get().clone().into_iter()
@@ -981,6 +1205,7 @@ impl IncrementalSerializableGrowableData {
             .map(|data| {
                 LazyItem::new(
                     Hash::from(u32::MAX),
+                    u16::MAX,
                     STM::new(
                         VectorData::from_array(*data.data, data.is_serialized),
                         1,
@@ -1002,7 +1227,11 @@ impl IncrementalSerializableGrowableData {
         if items_len <= insert_index {
             self.items.resize(
                 insert_index + 1,
-                LazyItem::new(Hash::from(u32::MAX), STM::new(VectorData::new(), 1, true)),
+                LazyItem::new(
+                    Hash::from(u32::MAX),
+                    u16::MAX,
+                    STM::new(VectorData::new(), 1, true),
+                ),
             );
         }
 
@@ -1012,7 +1241,7 @@ impl IncrementalSerializableGrowableData {
             .unwrap()
             .get_lazy_data()
             .unwrap();
-        let mut vector_data_stm = vector_data_arcshift.get().clone();
+        let mut vector_data_stm = (*vector_data_arcshift.get().clone().unwrap()).clone();
         vector_data_stm
             .transactional_update(|old| {
                 let mut new = old.clone();
@@ -1031,7 +1260,79 @@ impl IncrementalSerializableGrowableData {
         }
 
         let vector_data_lazy_item = self.items.get(insert_index).unwrap();
-        let mut vector_data_stm = vector_data_lazy_item.get_lazy_data().unwrap().get().clone();
+        let mut vector_data_stm = (*vector_data_lazy_item
+            .get_lazy_data()
+            .unwrap()
+            .get()
+            .clone()
+            .unwrap())
+        .clone();
         vector_data_stm.get().get(insert_dimension)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rand::{thread_rng, Rng};
+    use tempfile::tempdir;
+
+    use crate::models::buffered_io::BufferManagerFactory;
+
+    use super::*;
+
+    #[test]
+    fn test_lazy_item_versions_add_and_get() {
+        let temp_dir = tempdir().unwrap();
+        let bufmans = Arc::new(BufferManagerFactory::new(
+            temp_dir.as_ref().into(),
+            |root, ver| root.join(format!("{}.index", **ver)),
+        ));
+        let cache = Arc::new(NodeRegistry::new(1000, bufmans));
+        let root = LazyItem::new(Hash::from(0), 0, 0.0);
+
+        for i in 1..=u16::MAX {
+            let version = LazyItem::new(Hash::from(0), i, 0.0);
+            root.add_version(cache.clone(), version);
+        }
+
+        for i in 0..=u16::MAX {
+            assert_eq!(
+                root.get_version(cache.clone(), i)
+                    .unwrap()
+                    .get_current_version_number(),
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn test_lazy_item_versions_add_and_get_with_skipped_items() {
+        let temp_dir = tempdir().unwrap();
+        let bufmans = Arc::new(BufferManagerFactory::new(
+            temp_dir.as_ref().into(),
+            |root, ver| root.join(format!("{}.index", **ver)),
+        ));
+        let cache = Arc::new(NodeRegistry::new(1000, bufmans));
+        let root = LazyItem::new(Hash::from(0), 0, 0.0);
+        let mut i = 0;
+        let mut rng = thread_rng();
+        let mut versions = vec![0];
+
+        while i < u16::MAX - 100 {
+            i += rng.gen_range(3..100);
+
+            let version = LazyItem::new(Hash::from(0), i, 0.0);
+            root.add_version(cache.clone(), version);
+            versions.push(i);
+        }
+
+        for i in versions {
+            assert_eq!(
+                root.get_version(cache.clone(), i)
+                    .unwrap()
+                    .get_current_version_number(),
+                i
+            );
+        }
     }
 }

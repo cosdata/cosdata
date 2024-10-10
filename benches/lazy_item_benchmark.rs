@@ -12,7 +12,7 @@ fn create_lazy_item_vec_list(index_count: u32, lazy_vec_count: u32) -> Vec<LazyI
         let lazy_item_vec: LazyItemVec<String> = LazyItemVec::new();
         for i in 0..index_count {
             let version_id = Hash::from(i);
-            let item = LazyItem::new(version_id, i.to_string());
+            let item = LazyItem::new(version_id, i as u16, i.to_string());
             lazy_item_vec.insert(i as usize, item);
         }
         res.push(lazy_item_vec);
@@ -26,7 +26,7 @@ fn create_lazy_item_map_list(index_count: u32, lazy_map_count: u32) -> Vec<LazyI
         let lazy_item_map: LazyItemMap<String> = LazyItemMap::new();
         for i in 0..index_count {
             let version_id = Hash::from(i);
-            let item = LazyItem::new(version_id, i.to_string());
+            let item = LazyItem::new(version_id, i as u16, i.to_string());
             lazy_item_map.insert(IdentityMapKey::Int(i), item);
         }
         res.push(lazy_item_map);
@@ -80,7 +80,7 @@ fn lazy_item_benchmark(c: &mut Criterion) {
                 let lazy_vec: LazyItemVec<String> = LazyItemVec::new();
                 for i in 0..index_count {
                     let version_id = Hash::from(i);
-                    let item = LazyItem::new(version_id, i.to_string());
+                    let item = LazyItem::new(version_id, i as u16, i.to_string());
                     lazy_vec.insert(i as usize, item);
                 }
                 lazy_vec_list.push(lazy_vec);
@@ -96,7 +96,7 @@ fn lazy_item_benchmark(c: &mut Criterion) {
                 let lazy_map: LazyItemMap<String> = LazyItemMap::new();
                 for i in 0..index_count {
                     let version_id = Hash::from(i);
-                    let item = LazyItem::new(version_id, i.to_string());
+                    let item = LazyItem::new(version_id, i as u16, i.to_string());
                     lazy_map.insert(IdentityMapKey::Int(i), item);
                 }
                 lazy_map_list.push(lazy_map);
