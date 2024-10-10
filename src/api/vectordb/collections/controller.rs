@@ -1,5 +1,7 @@
 use actix_web::{web, HttpResponse, Result};
 
+use crate::app_context::AppContext;
+
 use super::{
     dtos::{
         CreateCollectionDto, CreateCollectionDtoResponse, FindCollectionDto, GetCollectionsDto,
@@ -9,11 +11,12 @@ use super::{
 
 pub(crate) async fn create_collection(
     web::Json(create_collection_dto): web::Json<CreateCollectionDto>,
+    ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse> {
     let lower_bound = create_collection_dto.min_val;
     let upper_bound = create_collection_dto.max_val;
 
-    let collection = service::create_collection(create_collection_dto).await?;
+    let collection = service::create_collection(ctx.into_inner(), create_collection_dto).await?;
 
     Ok(HttpResponse::Ok().json(CreateCollectionDtoResponse {
         id: collection.database_name.clone(), // will use the vector store name , till it does have a unique id

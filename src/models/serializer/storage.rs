@@ -83,9 +83,10 @@ impl CustomSerialize for Storage {
             .into()),
             FileIndex::Valid {
                 offset: FileOffset(offset),
-                version,
+                version_id,
+                ..
             } => {
-                let bufman = bufmans.get(&version)?;
+                let bufman = bufmans.get(&version_id)?;
                 let cursor = bufman.open_cursor()?;
                 bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
 

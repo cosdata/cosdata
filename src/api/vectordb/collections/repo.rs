@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     api_service::init_vector_store,
+    app_context::AppContext,
     models::types::{get_app_env, VectorStore},
 };
 
@@ -11,6 +12,7 @@ use super::{
 };
 
 pub(crate) async fn create_vector_store(
+    ctx: Arc<AppContext>,
     name: String,
     size: usize,
     lower_bound: Option<f32>,
@@ -18,7 +20,7 @@ pub(crate) async fn create_vector_store(
     num_layers: u8,
 ) -> Result<Arc<VectorStore>, CollectionsError> {
     // Call init_vector_store using web::block
-    let result = init_vector_store(name, size, lower_bound, upper_bound, num_layers).await;
+    let result = init_vector_store(ctx, name, size, lower_bound, upper_bound, num_layers).await;
     result.map_err(|e| CollectionsError::FailedToCreateCollection(e.to_string()))
 }
 

@@ -1,7 +1,10 @@
+use crate::app_context::AppContext;
 use crate::distance::DistanceFunction;
 use crate::models::buffered_io::{BufferManager, BufferManagerFactory};
+use crate::models::cache_loader::NodeRegistry;
 use crate::models::common::*;
 use crate::models::file_persist::*;
+use crate::models::identity_collections::IdentitySet;
 use crate::models::kmeans::{concat_vectors, generate_initial_centroids, kmeans, should_continue};
 use crate::models::lazy_load::*;
 use crate::models::types::*;
@@ -16,50 +19,24 @@ use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
 use smallvec::SmallVec;
 use std::array::TryFromSliceError;
+use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::SeekFrom;
-use std::path::Path;
 use std::sync::Arc;
 
 pub fn ann_search(
+    node_registry: Arc<NodeRegistry>,
     vec_store: Arc<VectorStore>,
     vector_emb: QuantizedVectorEmbedding,
     cur_entry: LazyItem<MergedNode>,
-    cur_level: u8,
+    cur_level: HNSWLevel,
 ) -> Result<Option<Vec<(LazyItem<MergedNode>, MetricResult)>>, WaCustomError> {
     let fvec = vector_emb.quantized_vec.clone();
     let mut skipm = HashSet::new();
     skipm.insert(vector_emb.hash_vec.clone());
 
-    let mut cur_node_arc = match cur_entry.clone() {
-        LazyItem::Valid {
-            data: Some(node), ..
-        } => node,
-        LazyItem::Valid {
-            data: None,
-            mut file_index,
-            ..
-        } => {
-            if let Some(file_index) = file_index.get() {
-                return Err(WaCustomError::LazyLoadingError(format!(
-                    "Node at offset {} needs to be loaded",
-                    file_index
-                )));
-            } else {
-                return Err(WaCustomError::NodeError(
-                    "Current entry is null".to_string(),
-                ));
-            }
-        }
-        _ => {
-            return Err(WaCustomError::NodeError(
-                "Current entry is null".to_string(),
-            ))
-        }
-    };
-
-    let cur_node = cur_node_arc.get();
+    let cur_node = cur_entry.get_data(node_registry.clone());
 
     let mut prop_arc = cur_node.prop.clone();
     let prop_state = prop_arc.get();
@@ -74,6 +51,7 @@ pub fn ann_search(
     };
 
     let z = traverse_find_nearest(
+        node_registry.clone(),
         vec_store.clone(),
         cur_entry.clone(),
         fvec.clone(),
@@ -94,14 +72,15 @@ pub fn ann_search(
         z
     };
 
-    let result = if cur_level == 0 {
+    let result = if cur_level.0 == 0 {
         Some(vec![])
     } else {
         ann_search(
-            vec_store.clone(),
-            vector_emb.clone(),
+            node_registry,
+            vec_store,
+            vector_emb,
             z[0].0.clone(),
-            cur_level - 1,
+            HNSWLevel(cur_level.0 - 1),
         )?
     };
 
@@ -109,6 +88,7 @@ pub fn ann_search(
 }
 
 pub fn vector_fetch(
+    node_registry: Arc<NodeRegistry>,
     vec_store: Arc<VectorStore>,
     vector_id: VectorId,
 ) -> Result<Vec<Option<(VectorId, Vec<(VectorId, MetricResult)>)>>, WaCustomError> {
@@ -116,120 +96,35 @@ pub fn vector_fetch(
 
     for lev in 0..=vec_store.hnsw_params.clone().get().num_layers {
         let maybe_res = load_vector_id_lsmdb(HNSWLevel(lev), vector_id.clone());
-        let neighbors = match maybe_res {
-            LazyItem::Valid {
-                data: Some(vth), ..
-            } => {
-                let mut vth = vth.clone();
-                let nes: Vec<(VectorId, MetricResult)> = vth
-                    .get()
-                    .neighbors
-                    .iter()
-                    .filter_map(|ne| match ne.1.clone() {
-                        LazyItem::Valid {
-                            data: Some(node), ..
-                        } => get_vector_id_from_node(node.clone().get()).map(|id| (id, ne.0)),
-                        LazyItem::Valid {
-                            data: None,
-                            mut file_index,
-                            ..
-                        } => {
-                            if let Some(xloc) = file_index.get() {
-                                match load_neighbor_from_db(xloc.clone(), &vec_store) {
-                                    Ok(Some(info)) => Some(info),
-                                    Ok(None) => None,
-                                    Err(e) => {
-                                        eprintln!("Error loading neighbor: {}", e);
-                                        None
-                                    }
-                                }
-                            } else {
-                                None
-                                // NonePaste, drop, or click to add files Create pull request
-                            }
-                        }
-                        _ => None,
-                    })
-                    .collect();
-                Some((vector_id.clone(), nes))
-            }
-            LazyItem::Valid {
-                data: None,
-                mut file_index,
-                ..
-            } => {
-                if let Some(xloc) = file_index.get() {
-                    match load_node_from_persist(xloc.clone(), &vec_store) {
-                        Ok(Some((id, neighbors))) => Some((id, neighbors)),
-                        Ok(None) => None,
-                        Err(e) => {
-                            eprintln!("Error loading vector: {}", e);
-                            None
-                        }
-                    }
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        };
+        let neighbors = maybe_res
+            .try_get_data(node_registry.clone())
+            .ok()
+            .and_then(|data| {
+                let id = get_vector_id_from_node(data.clone())?;
+
+                Some((
+                    id,
+                    data.neighbors
+                        .iter()
+                        .filter_map(|ne| {
+                            let data = ne.1.try_get_data(node_registry.clone()).ok()?;
+                            Some((get_vector_id_from_node(data)?, ne.0))
+                        })
+                        .collect(),
+                ))
+            });
+
         results.push(neighbors);
     }
     Ok(results)
 }
 
-fn load_node_from_persist(
-    _offset: FileIndex,
-    _vec_store: &Arc<VectorStore>,
-) -> Result<Option<(VectorId, Vec<(VectorId, MetricResult)>)>, WaCustomError> {
-    // Placeholder function to load vector from database
-    // TODO: Implement actual database loading logic
-    Err(WaCustomError::LazyLoadingError(
-        "Not implemented".to_string(),
-    ))
-}
-
-// fn get_neighbor_info(nbr: &Neighbour) -> Option<(VectorId, f32)> {
-//     let Some(node) = nbr.node.data.clone() else {
-//         eprintln!("Neighbour node not initialized");
-//         return None;
-//     };
-//     let guard = node.read().unwrap();
-
-//     let prop_state = match guard.prop.read() {
-//         Ok(guard) => guard,
-//         Err(e) => {
-//             eprintln!("Lock error when reading prop: {}", e);
-//             return None;
-//         }
-//     };
-
-//     match &*prop_state {
-//         PropState::Ready(node_prop) => Some((node_prop.id.clone(), nbr.cosine_similarity)),
-//         PropState::Pending(_) => {
-//             eprintln!("Encountered pending prop state");
-//             None
-//         }
-//     }
-// }
-
-fn get_vector_id_from_node(node: &MergedNode) -> Option<VectorId> {
+fn get_vector_id_from_node(node: Arc<MergedNode>) -> Option<VectorId> {
     let mut prop_arc = node.prop.clone();
     match prop_arc.get() {
         PropState::Ready(node_prop) => Some(node_prop.id.clone()),
         PropState::Pending(_) => None,
     }
-}
-
-fn load_neighbor_from_db(
-    _offset: FileIndex,
-    _vec_store: &Arc<VectorStore>,
-) -> Result<Option<(VectorId, MetricResult)>, WaCustomError> {
-    // Placeholder function to load neighbor from database
-    // TODO: Implement actual database loading logic
-    Err(WaCustomError::LazyLoadingError(
-        "Not implemented".to_string(),
-    ))
 }
 
 pub fn write_embedding(
@@ -333,6 +228,7 @@ impl EmbeddingOffset {
 /// Ensure that the buffer manager and the database are correctly initialized and configured before calling this function.
 /// The function assumes the existence of methods and types like `EmbeddingOffset::deserialize`, `BufferManagerFactory::new`, and `read_embedding` which should be implemented correctly.
 pub fn get_embedding_by_id(
+    ctx: Arc<AppContext>,
     vec_store: Arc<VectorStore>,
     vector_id: VectorId,
 ) -> Result<RawVectorEmbedding, WaCustomError> {
@@ -355,13 +251,9 @@ pub fn get_embedding_by_id(
     let embedding_offset = EmbeddingOffset::deserialize(offset_serialized)
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
-    let bufmans = BufferManagerFactory::new(Path::new(".").into(), |root, ver| {
-        root.join(format!("{}.vec_raw", **ver))
-    });
-
     let offset = embedding_offset.offset;
     let current_version = embedding_offset.version;
-    let bufman = bufmans.get(&current_version)?;
+    let bufman = ctx.vec_raw_manager.get(&current_version)?;
     let (embedding, _next) = read_embedding(bufman.clone(), offset)?;
 
     Ok(embedding)
@@ -473,12 +365,21 @@ pub fn insert_embedding(
         WriteFlags::empty(),
     )
     .map_err(|e| WaCustomError::DatabaseError(format!("Failed to put data: {}", e)))?;
+    let current_version_bytes = current_version.to_le_bytes();
 
-    if txn.get(*metadata_db, &"next_file_offset") == Err(lmdb::Error::NotFound) {
+    let should_update_next_version = match txn.get(*metadata_db, &"next_version") {
+        Ok(bytes) => bytes != &current_version_bytes,
+        Err(lmdb::Error::NotFound) => true,
+        Err(err) => {
+            return Err(WaCustomError::DatabaseError(err.to_string()));
+        }
+    };
+
+    if should_update_next_version {
         txn.put(
             *metadata_db,
-            &"next_file_offset",
-            &offset_serialized,
+            &"next_version",
+            &current_version_bytes,
             WriteFlags::empty(),
         )
         .map_err(|e| WaCustomError::DatabaseError(format!("Failed to put data: {}", e)))?;
@@ -502,6 +403,8 @@ pub fn insert_embedding(
 }
 
 pub fn index_embeddings(
+    node_registry: Arc<NodeRegistry>,
+    vec_raw_manager: &BufferManagerFactory,
     vec_store: Arc<VectorStore>,
     upload_process_batch_size: usize,
 ) -> Result<(), WaCustomError> {
@@ -534,24 +437,30 @@ pub fn index_embeddings(
         Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
     };
 
-    let next_file_offset = match txn.get(*metadata_db, &"next_file_offset") {
-        Ok(bytes) => EmbeddingOffset::deserialize(bytes)
-            .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?,
-        Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
-    };
+    let version =
+        Hash::from(match txn.get(*metadata_db, &"next_version") {
+            Ok(bytes) => u32::from_le_bytes(bytes.try_into().map_err(|e: TryFromSliceError| {
+                WaCustomError::DeserializationError(e.to_string())
+            })?),
+            Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
+        });
+    let version_hash = vec_store
+        .vcs
+        .get_version_hash(&version)
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?
+        .expect("Current version hash not found");
+    let version_number = *version_hash.version as u16;
 
     txn.abort();
 
-    let mut index = |embeddings: Vec<(RawVectorEmbedding, Hash)>,
-                     last_embedding_offset: EmbeddingOffset|
-     -> Result<(), WaCustomError> {
+    let mut index = |embeddings: Vec<RawVectorEmbedding>| -> Result<(), WaCustomError> {
         let mut quantization_arc = vec_store.quantization_metric.clone();
         if !vec_store.get_config_flag() {
             let quantization = quantization_arc.get();
             let mut new_quantization = quantization.clone();
             let vectors: Vec<&[f32]> = embeddings
                 .iter()
-                .map(|embedding| &embedding.0.raw_vec as &[f32])
+                .map(|embedding| &embedding.raw_vec as &[f32])
                 .collect();
             new_quantization.train(&vectors)?;
             quantization_arc.update(new_quantization);
@@ -561,12 +470,15 @@ pub fn index_embeddings(
         let quantization = quantization_arc.get();
         let results: Vec<()> = embeddings
             .into_par_iter()
-            .map(|(raw_emb, version)| {
+            .map(|raw_emb| {
                 let lp = &vec_store.levels_prob;
                 let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
                 let quantized_vec = Arc::new(
                     quantization
-                        .quantize(&raw_emb.raw_vec, *vec_store.storage_type.clone().get())
+                        .quantize(
+                            &raw_emb.raw_vec,
+                            vec_store.storage_type.clone().get().clone(),
+                        )
                         .expect("Quantization failed"),
                 );
                 let embedding = QuantizedVectorEmbedding {
@@ -575,13 +487,15 @@ pub fn index_embeddings(
                 };
 
                 index_embedding(
+                    node_registry.clone(),
                     vec_store.clone(),
                     None,
                     embedding,
                     vec_store.root_vec.item.clone().get().clone(),
-                    vec_store.hnsw_params.clone().num_layers.try_into().unwrap(),
-                    iv.try_into().unwrap(),
+                    HNSWLevel(vec_store.hnsw_params.clone().get().num_layers),
+                    HNSWLevel(iv.try_into().unwrap()),
                     version,
+                    version_number,
                 )
                 .expect("index_embedding failed");
             })
@@ -615,16 +529,6 @@ pub fn index_embeddings(
             WaCustomError::DatabaseError(format!("Failed to update `count_unindexed`: {}", e))
         })?;
 
-        txn.put(
-            *metadata_db,
-            &"next_file_offset",
-            &last_embedding_offset.serialize(),
-            WriteFlags::empty(),
-        )
-        .map_err(|e| {
-            WaCustomError::DatabaseError(format!("Failed to update `next_file_offset`: {}", e))
-        })?;
-
         txn.commit().map_err(|e| {
             WaCustomError::DatabaseError(format!("Failed to commit transaction: {}", e))
         })?;
@@ -632,58 +536,28 @@ pub fn index_embeddings(
         Ok(())
     };
 
-    let bufmans = BufferManagerFactory::new(Path::new(".").into(), |root, ver| {
-        root.join(format!("{}.vec_raw", **ver))
-    });
+    let bufman = vec_raw_manager.get(&version)?;
 
-    let mut i = next_file_offset.offset;
-    let mut current_version = next_file_offset.version;
-    let mut bufman = bufmans.get(&current_version)?;
+    let mut i = 0;
     let cursor = bufman.open_cursor()?;
-    let mut current_file_len = bufman.seek_with_cursor(cursor, SeekFrom::End(0))? as u32;
-    if current_file_len == 0 {
-        return Ok(());
-    }
+    let file_len = bufman.seek_with_cursor(cursor, SeekFrom::End(0))? as u32;
     bufman.seek_with_cursor(cursor, SeekFrom::Start(0))?;
-    let mut next_version = Hash::from(bufman.read_u32_with_cursor(cursor)?);
-    bufman.close_cursor(cursor)?;
+
     let mut embeddings = Vec::new();
 
     loop {
-        let (embedding, next) = read_embedding(bufman.clone(), i)?;
-        embeddings.push((embedding, current_version));
-        i = next;
-
-        if i == current_file_len {
-            let new_bufman = bufmans.get(&next_version)?;
-            let cursor = new_bufman.open_cursor()?;
-            current_file_len = new_bufman.seek_with_cursor(cursor, SeekFrom::End(0))? as u32;
-            if current_file_len == 0 {
-                index(
-                    embeddings,
-                    EmbeddingOffset {
-                        version: current_version,
-                        offset: i,
-                    },
-                )?;
-                break;
-            }
-            new_bufman.seek_with_cursor(cursor, SeekFrom::Start(0))?;
-            current_version = next_version;
-            next_version = Hash::from(new_bufman.read_u32_with_cursor(cursor)?);
-            bufman = new_bufman;
+        if i == file_len {
+            index(embeddings)?;
             bufman.close_cursor(cursor)?;
-            i = 4;
+            break;
         }
 
+        let (embedding, next) = read_embedding(bufman.clone(), i)?;
+        embeddings.push(embedding);
+        i = next;
+
         if embeddings.len() == upload_process_batch_size {
-            index(
-                embeddings,
-                EmbeddingOffset {
-                    version: current_version,
-                    offset: i,
-                },
-            )?;
+            index(embeddings)?;
             embeddings = Vec::new();
         }
     }
@@ -692,55 +566,24 @@ pub fn index_embeddings(
 }
 
 pub fn index_embedding(
+    node_registry: Arc<NodeRegistry>,
     vec_store: Arc<VectorStore>,
     parent: Option<LazyItem<MergedNode>>,
     vector_emb: QuantizedVectorEmbedding,
     cur_entry: LazyItem<MergedNode>,
-    cur_level: u8,
-    max_insert_level: u8,
+    cur_level: HNSWLevel,
+    max_insert_level: HNSWLevel,
     version: Hash,
+    version_number: u16,
 ) -> Result<(), WaCustomError> {
     let fvec = vector_emb.quantized_vec.clone();
     let mut skipm = HashSet::new();
     skipm.insert(vector_emb.hash_vec.clone());
 
-    let mut cur_node_arc = match cur_entry.clone() {
-        LazyItem::Valid {
-            data: Some(node), ..
-        } => node,
-        LazyItem::Valid {
-            data: None,
-            mut file_index,
-            ..
-        } => {
-            if let Some(file_index) = file_index.get() {
-                match file_index {
-                    FileIndex::Valid { offset, .. } => {
-                        return Err(WaCustomError::LazyLoadingError(format!(
-                            "Node at offset {} needs to be loaded",
-                            offset.0
-                        )));
-                    }
-                    FileIndex::Invalid => {
-                        return Err(WaCustomError::NodeError(
-                            "Current entry is null".to_string(),
-                        ));
-                    }
-                }
-            } else {
-                return Err(WaCustomError::NodeError(
-                    "Current entry is null".to_string(),
-                ));
-            }
-        }
-        _ => {
-            return Err(WaCustomError::NodeError(
-                "Current entry is null".to_string(),
-            ))
-        }
-    };
-
-    let cur_node = cur_node_arc.get();
+    let cur_node = cur_entry
+        .get_latest_version(node_registry.clone())
+        .0
+        .get_data(node_registry.clone());
 
     let mut prop_arc = cur_node.prop.clone();
     let prop_state = prop_arc.get();
@@ -755,6 +598,7 @@ pub fn index_embedding(
     };
 
     let z = traverse_find_nearest(
+        node_registry.clone(),
         vec_store.clone(),
         cur_entry.clone(),
         fvec.clone(),
@@ -765,10 +609,17 @@ pub fn index_embedding(
         true,
     )?;
 
+    // @DOUBT: May be this distance can be calculated only if z is
+    // empty
     let dist = vec_store
         .distance_metric
         .calculate(&fvec, &node_prop.value)?;
 
+    // @DOUBT: Perhaps, traverse_find_nearest can itself handle this
+    // case. Because, logically not finding nearest nodes doesn't make
+    // sense given that cur_entry is not optional (root node always
+    // exists). In that case cur_entry will be the nearest which is
+    // how that case is being handled below.
     let z = if z.is_empty() {
         vec![(cur_entry.clone(), dist)]
     } else {
@@ -777,8 +628,9 @@ pub fn index_embedding(
 
     let z_clone: Vec<_> = z.iter().map(|(first, _)| first.clone()).collect();
 
-    let parent = if cur_level <= max_insert_level {
+    let parent = if cur_level.0 <= max_insert_level.0 {
         let parent = insert_node_create_edges(
+            node_registry.clone(),
             vec_store.clone(),
             parent,
             fvec,
@@ -786,22 +638,26 @@ pub fn index_embedding(
             z,
             cur_level,
             version,
+            version_number,
         )
         .expect("Failed insert_node_create_edges");
+
         Some(parent)
     } else {
         None
     };
 
-    if cur_level != 0 {
+    if cur_level.0 != 0 {
         index_embedding(
+            node_registry,
             vec_store.clone(),
             parent,
             vector_emb.clone(),
             z_clone[0].clone(),
-            cur_level - 1,
+            HNSWLevel(cur_level.0 - 1),
             max_insert_level,
             version,
+            version_number,
         )?;
     }
 
@@ -809,41 +665,20 @@ pub fn index_embedding(
 }
 
 pub fn queue_node_prop_exec(
+    node_registry: Arc<NodeRegistry>,
     lznode: LazyItem<MergedNode>,
     prop_file: Arc<File>,
     vec_store: Arc<VectorStore>,
 ) -> Result<(), WaCustomError> {
-    let (mut node_arc, _location) = match &lznode {
-        LazyItem::Valid {
-            data: Some(node),
-            file_index,
-            ..
-        } => (node.clone(), file_index.clone().get().clone()),
-        LazyItem::Valid {
-            data: None,
-            file_index,
-            ..
-        } => {
-            if let Some(file_index) = file_index.clone().get().clone() {
-                match file_index {
-                    FileIndex::Valid { offset, .. } => {
-                        return Err(WaCustomError::LazyLoadingError(format!(
-                            "Node at offset {} needs to be loaded",
-                            offset.0
-                        )));
-                    }
-                    FileIndex::Invalid => {
-                        return Err(WaCustomError::NodeError("Node is null".to_string()));
-                    }
-                }
-            } else {
-                return Err(WaCustomError::NodeError("Node is null".to_string()));
-            }
-        }
-        _ => return Err(WaCustomError::NodeError("Node is null".to_string())),
-    };
+    let (node, _location) = (
+        lznode.try_get_data(node_registry)?,
+        lznode
+            .get_file_index()
+            .ok_or(WaCustomError::LazyLoadingError(
+                "Missing FileIndex".to_string(),
+            ))?,
+    );
 
-    let node = node_arc.get();
     let mut prop_arc = node.prop.clone();
 
     let prop_state = prop_arc.get();
@@ -863,7 +698,6 @@ pub fn queue_node_prop_exec(
 
     // Add the node to exec_queue_nodes
     let mut exec_queue = vec_store.exec_queue_nodes.clone();
-    println!("queue length before {}", exec_queue.get().len());
     exec_queue
         .transactional_update(|queue| {
             let mut new_queue = queue.clone();
@@ -871,13 +705,8 @@ pub fn queue_node_prop_exec(
             new_queue
         })
         .unwrap();
-    println!("queue length after {}", exec_queue.get().len());
 
     Ok(())
-}
-
-pub fn _link_prev_version(_prev_loc: Option<u32>, _offset: u32) {
-    // todo , needs to happen in file persist
 }
 
 pub fn auto_commit_transaction(
@@ -898,165 +727,207 @@ pub fn auto_commit_transaction(
     Ok(())
 }
 
+fn create_node_extract_neighbours(
+    version_id: Hash,
+    version_number: u16,
+    hnsw_level: HNSWLevel,
+    prop: ArcShift<PropState>,
+    parent: LazyItemRef<MergedNode>,
+) -> (
+    LazyItem<MergedNode>,
+    EagerLazyItemSet<MergedNode, MetricResult>,
+) {
+    let neighbours = EagerLazyItemSet::new();
+    let node = LazyItem::from_data(
+        version_id,
+        version_number,
+        MergedNode {
+            hnsw_level,
+            prop,
+            neighbors: neighbours.clone(),
+            parent,
+            child: LazyItemRef::new_invalid(),
+        },
+    );
+    (node, neighbours)
+}
+
 fn insert_node_create_edges(
+    node_registry: Arc<NodeRegistry>,
     vec_store: Arc<VectorStore>,
     parent: Option<LazyItem<MergedNode>>,
     fvec: Arc<Storage>,
     hs: VectorId,
     nbs: Vec<(LazyItem<MergedNode>, MetricResult)>,
-    cur_level: u8,
+    cur_level: HNSWLevel,
     version: Hash,
+    version_number: u16,
 ) -> Result<LazyItem<MergedNode>, WaCustomError> {
-    let node_prop = NodeProp {
+    let prop = PropState::Ready(Arc::new(NodeProp {
         id: hs.clone(),
         value: fvec.clone(),
         location: None,
-    };
-    let mut nn = ArcShift::new(MergedNode::new(HNSWLevel(cur_level)));
-    nn.get().set_prop_ready(Arc::new(node_prop));
-    nn.get().add_ready_neighbors(nbs.clone());
+    }));
+    let (node, neighbours) = create_node_extract_neighbours(
+        version,
+        version_number,
+        cur_level,
+        ArcShift::new(prop),
+        parent.clone().map_or_else(
+            || LazyItemRef::new_invalid(),
+            |parent| LazyItemRef::from_lazy(parent),
+        ),
+    );
+    if let Some(parent) = parent {
+        parent
+            .get_lazy_data()
+            .unwrap()
+            .get()
+            .clone()
+            .unwrap()
+            .set_child(node.clone());
+    }
 
-    let lz_item = LazyItem::from_arcshift(version, nn.clone());
+    for (nbr1, dist) in nbs.into_iter() {
+        if let Ok(old_neighbour) = nbr1.try_get_data(node_registry.clone()) {
+            let (new_neighbor, mut new_neighbor_neighbors, mut neighbor_list) =
+                if let Some(version) = nbr1.get_version(node_registry.clone(), version_number) {
+                    let node = version.get_data(node_registry.clone());
+                    let neighbor_list: Vec<(LazyItem<MergedNode>, MetricResult)> =
+                        node.neighbors.iter().map(|nbr2| (nbr2.1, nbr2.0)).collect();
+                    (version, node.neighbors.clone(), neighbor_list)
+                } else {
+                    let prop_arc = old_neighbour.prop.clone();
+                    let parent = old_neighbour.parent.clone();
+                    let (new_neighbour, new_neighbour_neighbours) = create_node_extract_neighbours(
+                        version,
+                        version_number,
+                        cur_level,
+                        prop_arc,
+                        parent,
+                    );
+                    nbr1.add_version(node_registry.clone(), new_neighbour.clone());
+                    let neighbor_list: Vec<(LazyItem<MergedNode>, MetricResult)> = old_neighbour
+                        .neighbors
+                        .iter()
+                        .map(|nbr2| (nbr2.1, nbr2.0))
+                        .collect();
+                    let mut exec_queue = vec_store.exec_queue_nodes.clone();
+                    exec_queue
+                        .transactional_update(|queue| {
+                            let mut new_queue = queue.clone();
+                            new_queue.push(ArcShift::new(new_neighbour.clone()));
+                            new_queue
+                        })
+                        .unwrap();
 
-    for (nbr1, cs) in nbs.into_iter() {
-        if let LazyItem::Valid {
-            data: Some(mut nbr1_node),
-            ..
-        } = nbr1.clone()
-        {
-            let mut neighbor_list: Vec<(LazyItem<MergedNode>, MetricResult)> = nbr1_node
-                .get()
-                .neighbors
-                .iter()
-                .map(|nbr2| (nbr2.1, nbr2.0))
-                .collect();
+                    (new_neighbour, new_neighbour_neighbours, neighbor_list)
+                };
 
-            neighbor_list.push((lz_item.clone(), cs));
+            neighbor_list.push((node.clone(), dist));
 
             neighbor_list.sort_by(|a, b| {
                 b.1.get_value()
                     .partial_cmp(&a.1.get_value())
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .unwrap_or(Ordering::Equal)
             });
 
-            neighbor_list.truncate(vec_store.hnsw_params.clone().get().m);
-
-            nbr1_node.get().add_ready_neighbors(neighbor_list);
+            neighbor_list.truncate(20);
+            let new_neighbour_neighbours_set = IdentitySet::from_iter(
+                neighbor_list
+                    .into_iter()
+                    .map(|(node, dist)| EagerLazyItem(dist, node)),
+            );
+            new_neighbor_neighbors
+                .items
+                .update(new_neighbour_neighbours_set);
+            neighbours.insert(EagerLazyItem(dist, new_neighbor));
         }
     }
-    println!("insert node create edges, queuing nodes");
-    if let Some(parent) = parent {
-        lz_item.get_lazy_data().unwrap().set_parent(parent.clone());
-        parent.get_lazy_data().unwrap().set_child(lz_item.clone());
-    }
-    queue_node_prop_exec(lz_item.clone(), vec_store.prop_file.clone(), vec_store)?;
 
-    Ok(lz_item)
+    queue_node_prop_exec(
+        node_registry,
+        node.clone(),
+        vec_store.prop_file.clone(),
+        vec_store,
+    )?;
+
+    Ok(node)
 }
 
 fn traverse_find_nearest(
+    node_registry: Arc<NodeRegistry>,
     vec_store: Arc<VectorStore>,
     vtm: LazyItem<MergedNode>,
     fvec: Arc<Storage>,
     hs: VectorId,
     hops: u8,
     skipm: &mut HashSet<VectorId>,
-    cur_level: u8,
+    cur_level: HNSWLevel,
     skip_hop: bool,
 ) -> Result<Vec<(LazyItem<MergedNode>, MetricResult)>, WaCustomError> {
     let mut tasks: SmallVec<[Vec<(LazyItem<MergedNode>, MetricResult)>; 24]> = SmallVec::new();
 
-    let mut node_arc = match vtm.clone() {
-        LazyItem::Valid {
-            data: Some(node), ..
-        } => node,
-        LazyItem::Valid {
-            data: None,
-            mut file_index,
-            ..
-        } => {
-            if let Some(file_index) = file_index.get() {
-                match file_index {
-                    FileIndex::Valid { offset, .. } => {
-                        return Err(WaCustomError::LazyLoadingError(format!(
-                            "Node at offset {} needs to be loaded",
-                            offset.0
-                        )));
-                    }
-                    FileIndex::Invalid => {
-                        return Err(WaCustomError::NodeError(
-                            "Current entry is null".to_string(),
-                        ));
-                    }
-                }
-            } else {
-                return Err(WaCustomError::NodeError(
-                    "Current entry is null".to_string(),
-                ));
-            }
-        }
-        _ => {
-            return Err(WaCustomError::NodeError(
-                "Current entry is null".to_string(),
-            ))
-        }
-    };
-
-    let node = node_arc.get();
+    let node = vtm
+        .get_latest_version(node_registry.clone())
+        .0
+        .get_data(node_registry.clone());
 
     for (index, nref) in node.neighbors.iter().enumerate() {
         if let Some(mut neighbor_arc) = nref.1.get_lazy_data() {
-            let neighbor = neighbor_arc.get();
-            let mut prop_arc = neighbor.prop.clone();
-            let prop_state = prop_arc.get();
+            if let Some(neighbor) = neighbor_arc.get() {
+                let mut prop_arc = neighbor.prop.clone();
+                let prop_state = prop_arc.get();
 
-            let node_prop = match prop_state {
-                PropState::Ready(prop) => prop.clone(),
-                PropState::Pending(loc) => {
-                    return Err(WaCustomError::NodeError(format!(
-                        "Neighbor prop is in pending state at loc: {:?}",
-                        loc
-                    )))
+                let node_prop = match prop_state {
+                    PropState::Ready(prop) => prop.clone(),
+                    PropState::Pending(loc) => {
+                        return Err(WaCustomError::NodeError(format!(
+                            "Neighbor prop is in pending state at loc: {:?}",
+                            loc
+                        )))
+                    }
+                };
+
+                let nb = node_prop.id.clone();
+
+                if index % 2 != 0 && skip_hop && index > 4 {
+                    continue;
                 }
-            };
 
-            let nb = node_prop.id.clone();
+                let vec_store = vec_store.clone();
+                let fvec = fvec.clone();
+                let hs = hs.clone();
 
-            if index % 2 != 0 && skip_hop && index > 4 {
-                continue;
-            }
+                if skipm.insert(nb.clone()) {
+                    let dist = vec_store
+                        .distance_metric
+                        .calculate(&fvec, &node_prop.value)?;
 
-            let vec_store = vec_store.clone();
-            let fvec = fvec.clone();
-            let hs = hs.clone();
-
-            if skipm.insert(nb.clone()) {
-                let dist = vec_store
-                    .distance_metric
-                    .calculate(&fvec, &node_prop.value)?;
-
-                let full_hops = 30;
-                if hops
-                    <= tapered_total_hops(
-                        full_hops,
-                        cur_level,
-                        vec_store.hnsw_params.clone().get().num_layers,
-                    )
-                {
-                    let mut z = traverse_find_nearest(
-                        vec_store.clone(),
-                        nref.1.clone(),
-                        fvec.clone(),
-                        hs.clone(),
-                        hops + 1,
-                        skipm,
-                        cur_level,
-                        skip_hop,
-                    )?;
-                    z.push((nref.1.clone(), dist));
-                    tasks.push(z);
-                } else {
-                    tasks.push(vec![(nref.1.clone(), dist)]);
+                    let full_hops = 30;
+                    if hops
+                        <= tapered_total_hops(
+                            full_hops,
+                            cur_level.0,
+                            vec_store.hnsw_params.clone().get().num_layers,
+                        )
+                    {
+                        let mut z = traverse_find_nearest(
+                            node_registry.clone(),
+                            vec_store.clone(),
+                            nref.1.clone(),
+                            fvec.clone(),
+                            hs.clone(),
+                            hops + 1,
+                            skipm,
+                            cur_level,
+                            skip_hop,
+                        )?;
+                        z.push((nref.1.clone(), dist));
+                        tasks.push(z);
+                    } else {
+                        tasks.push(vec![(nref.1.clone(), dist)]);
+                    }
                 }
             }
         }
@@ -1066,17 +937,15 @@ fn traverse_find_nearest(
     nn.sort_by(|a, b| b.1.get_value().partial_cmp(&a.1.get_value()).unwrap());
     let mut seen = HashSet::new();
     nn.retain(|(lazy_node, _)| {
-        if let LazyItem::Valid {
-            data: Some(node_arc),
-            ..
-        } = &lazy_node
-        {
-            let mut node_arc = node_arc.clone();
-            let node = node_arc.get();
-            let mut prop_arc = node.prop.clone();
-            let prop_state = prop_arc.get();
-            if let PropState::Ready(node_prop) = &*prop_state {
-                seen.insert(node_prop.id.clone())
+        if let LazyItem::Valid { data: node_arc, .. } = &lazy_node {
+            if let Some(node) = node_arc.clone().get() {
+                let mut prop_arc = node.prop.clone();
+                let prop_state = prop_arc.get();
+                if let PropState::Ready(node_prop) = &*prop_state {
+                    seen.insert(node_prop.id.clone())
+                } else {
+                    false
+                }
             } else {
                 false
             }

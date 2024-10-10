@@ -9,7 +9,7 @@ use crate::{
     storage::Storage,
 };
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Serialize)]
 pub struct CosineDistance(pub f32);
 
 impl DistanceFunction for CosineDistance {
@@ -20,7 +20,7 @@ impl DistanceFunction for CosineDistance {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Serialize)]
 pub struct CosineSimilarity(pub f32);
 
 impl DistanceFunction for CosineSimilarity {
