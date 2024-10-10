@@ -62,7 +62,7 @@ impl Identifiable for MergedNode {
 
 pub type PropPersistRef = (FileOffset, BytesToRead);
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct NodeProp {
     pub id: VectorId,
     pub value: Arc<Storage>,

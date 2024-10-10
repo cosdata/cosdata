@@ -21,7 +21,7 @@ use smallvec::SmallVec;
 use std::array::TryFromSliceError;
 use std::cmp::Ordering;
 use std::collections::HashSet;
-use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::SeekFrom;
 use std::sync::Arc;
 
@@ -463,6 +463,11 @@ pub fn index_embeddings(
                         )
                         .expect("Quantization failed"),
                 );
+                let prop = ArcShift::new(PropState::Ready(Arc::new(NodeProp {
+                    id: raw_emb.hash_vec.clone(),
+                    value: quantized_vec.clone(),
+                    location: None,
+                })));
                 let embedding = QuantizedVectorEmbedding {
                     quantized_vec,
                     hash_vec: raw_emb.hash_vec,
@@ -473,6 +478,7 @@ pub fn index_embeddings(
                     vec_store.clone(),
                     None,
                     embedding,
+                    prop,
                     vec_store.root_vec.item.clone().get().clone(),
                     HNSWLevel(vec_store.hnsw_params.clone().get().num_layers),
                     HNSWLevel(iv.try_into().unwrap()),
@@ -568,6 +574,7 @@ pub fn index_embedding(
     vec_store: Arc<VectorStore>,
     parent: Option<LazyItem<MergedNode>>,
     vector_emb: QuantizedVectorEmbedding,
+    prop: ArcShift<PropState>,
     cur_entry: LazyItem<MergedNode>,
     cur_level: HNSWLevel,
     max_insert_level: HNSWLevel,
@@ -631,8 +638,7 @@ pub fn index_embedding(
             node_registry.clone(),
             vec_store.clone(),
             parent,
-            fvec,
-            vector_emb.hash_vec.clone(),
+            prop.clone(),
             z,
             cur_level,
             version,
@@ -651,6 +657,7 @@ pub fn index_embedding(
             vec_store.clone(),
             parent,
             vector_emb.clone(),
+            prop,
             z_clone[0].clone(),
             HNSWLevel(cur_level.0 - 1),
             max_insert_level,
@@ -665,7 +672,6 @@ pub fn index_embedding(
 pub fn queue_node_prop_exec(
     node_registry: Arc<NodeRegistry>,
     lznode: LazyItem<MergedNode>,
-    prop_file: Arc<File>,
     vec_store: Arc<VectorStore>,
 ) -> Result<(), WaCustomError> {
     let (node, _location) = (
@@ -677,18 +683,12 @@ pub fn queue_node_prop_exec(
             ))?,
     );
 
-    let mut prop_arc = node.prop.clone();
-
-    let prop_state = prop_arc.get();
-
-    if let PropState::Ready(node_prop) = &*prop_state {
-        let prop_location = write_prop_to_file(node_prop, &prop_file);
-        node.set_prop_location(prop_location);
-    } else {
-        return Err(WaCustomError::NodeError(
-            "Node prop is not ready".to_string(),
-        ));
-    }
+    if let PropState::Ready(prop) = node.get_prop() {
+        if prop.location.is_none() {
+            let location = write_prop_to_file(&prop.id, prop.value.clone(), &vec_store.prop_file)?;
+            node.set_prop_location(location);
+        }
+    };
 
     for neighbor in node.neighbors.iter() {
         neighbor.1.set_persistence(true);
@@ -754,23 +754,17 @@ fn insert_node_create_edges(
     node_registry: Arc<NodeRegistry>,
     vec_store: Arc<VectorStore>,
     parent: Option<LazyItem<MergedNode>>,
-    fvec: Arc<Storage>,
-    hs: VectorId,
+    prop: ArcShift<PropState>,
     nbs: Vec<(LazyItem<MergedNode>, MetricResult)>,
     cur_level: HNSWLevel,
     version: Hash,
     version_number: u16,
 ) -> Result<LazyItem<MergedNode>, WaCustomError> {
-    let prop = PropState::Ready(Arc::new(NodeProp {
-        id: hs.clone(),
-        value: fvec.clone(),
-        location: None,
-    }));
     let (node, neighbours) = create_node_extract_neighbours(
         version,
         version_number,
         cur_level,
-        ArcShift::new(prop),
+        prop,
         parent.clone().map_or_else(
             || LazyItemRef::new_invalid(),
             |parent| LazyItemRef::from_lazy(parent),
@@ -843,12 +837,7 @@ fn insert_node_create_edges(
         }
     }
 
-    queue_node_prop_exec(
-        node_registry,
-        node.clone(),
-        vec_store.prop_file.clone(),
-        vec_store,
-    )?;
+    queue_node_prop_exec(node_registry, node.clone(), vec_store)?;
 
     Ok(node)
 }

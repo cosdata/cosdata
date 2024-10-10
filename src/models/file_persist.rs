@@ -4,9 +4,11 @@ use super::common::WaCustomError;
 use super::lazy_load::{FileIndex, LazyItem, SyncPersist};
 use super::types::{BytesToRead, FileOffset, HNSWLevel, MergedNode, NodeProp, VectorId};
 use crate::models::serializer::CustomSerialize;
+use crate::storage::Storage;
 use arcshift::ArcShift;
+use serde::{Deserialize, Serialize};
 use std::fs::File;
-use std::io::{SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::Arc;
 
 pub fn read_node_from_file(
@@ -129,18 +131,57 @@ pub fn load_vector_id_lsmdb(_level: HNSWLevel, _vector_id: VectorId) -> LazyItem
 pub fn load_neighbor_persist_ref(_level: HNSWLevel, _node_file_ref: u32) -> Option<MergedNode> {
     None
 }
-pub fn write_prop_to_file(prop: &NodeProp, mut file: &File) -> (FileOffset, BytesToRead) {
-    let mut prop_bytes = Vec::new();
-    //let result = encode(&prop);
-    let result = serde_cbor::to_vec(&prop).unwrap();
 
-    prop_bytes.extend_from_slice(result.as_ref());
+#[derive(Debug, Clone, Serialize)]
+pub struct NodePropSerialize<'a> {
+    pub id: &'a VectorId,
+    pub value: Arc<Storage>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct NodePropDeserialize {
+    pub id: VectorId,
+    pub value: Arc<Storage>,
+}
+
+pub fn write_prop_to_file(
+    id: &VectorId,
+    value: Arc<Storage>,
+    mut file: &File,
+) -> Result<(FileOffset, BytesToRead), WaCustomError> {
+    let prop = NodePropSerialize { id, value };
+    let prop_bytes =
+        serde_cbor::to_vec(&prop).map_err(|e| WaCustomError::SerializationError(e.to_string()))?;
+
+    let offset = file
+        .seek(SeekFrom::End(0))
+        .map_err(|e| WaCustomError::FsError(e.to_string()))?;
 
     file.write_all(&prop_bytes)
-        .expect("Failed to write to file");
-    let offset = file.metadata().unwrap().len() - prop_bytes.len() as u64;
-    (
+        .map_err(|e| WaCustomError::FsError(e.to_string()))?;
+
+    Ok((
         FileOffset(offset as u32),
         BytesToRead(prop_bytes.len() as u32),
-    )
+    ))
+}
+
+pub fn read_prop_from_file(
+    (offset, bytes_to_read): (FileOffset, BytesToRead),
+    mut file: &File,
+) -> Result<NodeProp, WaCustomError> {
+    let mut bytes = vec![0u8; bytes_to_read.0 as usize];
+    file.seek(SeekFrom::Start(offset.0 as u64))
+        .map_err(|e| WaCustomError::FsError(e.to_string()))?;
+    file.read_exact(&mut bytes)
+        .map_err(|e| WaCustomError::FsError(e.to_string()))?;
+
+    let prop: NodePropDeserialize = serde_cbor::from_slice(&bytes)
+        .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?;
+
+    Ok(NodeProp {
+        id: prop.id,
+        value: prop.value,
+        location: Some((offset, bytes_to_read)),
+    })
 }

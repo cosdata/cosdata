@@ -85,39 +85,45 @@ pub async fn init_vector_store(
             .map_err(|e| WaCustomError::FsError(e.to_string()))?,
     );
 
+    let location = write_prop_to_file(&vec_hash, vector_list.clone(), &prop_file)?;
+
+    let prop = ArcShift::new(PropState::Ready(Arc::new(NodeProp {
+        id: vec_hash,
+        value: vector_list.clone(),
+        location: Some(location),
+    })));
+
     let mut root: LazyItemRef<MergedNode> = LazyItemRef::new_invalid();
     let mut prev: LazyItemRef<MergedNode> = LazyItemRef::new_invalid();
 
     let mut nodes = Vec::new();
     for l in (0..=num_layers).rev() {
-        let prop = Arc::new(NodeProp {
-            id: vec_hash.clone(),
-            value: vector_list.clone(),
-            location: Some((FileOffset(0), BytesToRead(0))),
-        });
         let current_node = Arc::new(MergedNode {
             hnsw_level: HNSWLevel(l as u8),
-            prop: ArcShift::new(PropState::Ready(prop.clone())),
+            prop: prop.clone(),
             neighbors: EagerLazyItemSet::new(),
-            parent: LazyItemRef::new_invalid(),
+            parent: prev.clone(),
             child: LazyItemRef::new_invalid(),
         });
 
         let lazy_node = LazyItem::from_arc(hash, 0, current_node.clone());
-        let nn = LazyItemRef::from_arc(hash, 0, current_node.clone());
+        let lazy_node_ref = LazyItemRef::from_arc(hash, 0, current_node.clone());
 
-        if let Some(prev_node) = prev.item.get().get_lazy_data().unwrap().get() {
+        if let Some(prev_node) = prev
+            .item
+            .get()
+            .get_lazy_data()
+            .and_then(|mut arc| arc.get().clone())
+        {
             current_node.set_parent(prev.clone().item.get().clone());
             prev_node.set_child(lazy_node.clone());
         }
-        prev = nn.clone();
+        prev = lazy_node_ref.clone();
 
         if l == 0 {
-            root = nn.clone();
-            let _prop_location = write_prop_to_file(&prop, &prop_file);
-            current_node.set_prop_ready(prop);
+            root = lazy_node_ref.clone();
         }
-        nodes.push(nn.clone());
+        nodes.push(lazy_node_ref.clone());
     }
 
     for (l, nn) in nodes.iter_mut().enumerate() {
@@ -192,8 +198,8 @@ pub fn run_upload(
 ) -> Result<(), WaCustomError> {
     let env = vec_store.lmdb.env.clone();
     let metadata_db = vec_store.lmdb.metadata_db.clone();
-    let mut txn = env
-        .begin_rw_txn()
+    let txn = env
+        .begin_ro_txn()
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
     // Check if the previous version is unindexed, and continue from where we left.
@@ -220,6 +226,8 @@ pub fn run_upload(
         }
     };
 
+    txn.abort();
+
     if index_before_insertion {
         index_embeddings(
             ctx.node_registry.clone(),
@@ -242,6 +250,10 @@ pub fn run_upload(
         offset: 0,
     };
     let new_offset_serialized = new_offset.serialize();
+
+    let mut txn = env
+        .begin_rw_txn()
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
     txn.put(
         *metadata_db,
         &"next_embedding_offset",
