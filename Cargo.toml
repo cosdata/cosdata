@@ -106,3 +106,7 @@ harness = false
 [[bench]]
 name = "sparse_ann_query_rps_benchmark"
 harness = false
+
+[[bench]]
+name = "sparse_ann_query_basic_benchmark"
+harness = false
