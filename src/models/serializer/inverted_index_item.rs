@@ -62,9 +62,10 @@ where
             .into()),
             FileIndex::Valid {
                 offset: FileOffset(offset),
-                version,
+                version_number,
+                version_id,
             } => {
-                let bufman = bufmans.get(&version)?;
+                let bufman = bufmans.get(&version_id)?;
                 let cursor = bufman.open_cursor()?;
                 bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
                 let dim_index = bufman.read_u32_with_cursor(cursor)?;
@@ -74,7 +75,8 @@ where
 
                 let data_file_index = FileIndex::Valid {
                     offset: FileOffset(data_offset),
-                    version,
+                    version_number,
+                    version_id,
                 };
                 let data = Arc::new(DashMap::deserialize(
                     bufmans.clone(),
@@ -86,7 +88,8 @@ where
 
                 let children_file_index = FileIndex::Valid {
                     offset: FileOffset(children_offset),
-                    version,
+                    version_number,
+                    version_id,
                 };
                 let lazy_children = LazyItemArray::deserialize(
                     bufmans,

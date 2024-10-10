@@ -4,7 +4,7 @@ use crate::storage::Storage;
 use half::f16;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Serialize)]
 pub struct DotProductDistance(pub f32);
 
 impl DistanceFunction for DotProductDistance {

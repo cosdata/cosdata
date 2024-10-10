@@ -68,8 +68,10 @@ impl CustomSerialize for f32 {
         Self: Sized,
     {
         match file_index {
-            FileIndex::Valid { offset, version } => {
-                let bufman = bufmans.get(&version)?;
+            FileIndex::Valid {
+                offset, version_id, ..
+            } => {
+                let bufman = bufmans.get(&version_id)?;
                 let cursor = bufman.open_cursor()?;
                 bufman.seek_with_cursor(cursor, SeekFrom::Start(offset.0 as u64))?;
                 let res = bufman.read_f32_with_cursor(cursor)?;
@@ -109,8 +111,10 @@ impl CustomSerialize for u32 {
         Self: Sized,
     {
         match file_index {
-            FileIndex::Valid { offset, version } => {
-                let bufman = bufmans.get(&version)?;
+            FileIndex::Valid {
+                offset, version_id, ..
+            } => {
+                let bufman = bufmans.get(&version_id)?;
                 let cursor = bufman.open_cursor()?;
                 bufman.seek_with_cursor(cursor, SeekFrom::Start(offset.0 as u64))?;
                 let res = bufman.read_u32_with_cursor(cursor)?;

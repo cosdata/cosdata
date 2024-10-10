@@ -53,7 +53,7 @@ where
             for j in 0..CHUNK_SIZE {
                 bufman.seek_with_cursor(
                     cursor,
-                    SeekFrom::Start(current_chunk as u64 + (j as u64 * 8)),
+                    SeekFrom::Start(current_chunk as u64 + (j as u64 * 10)),
                 )?;
                 let item_offset = bufman.read_u32_with_cursor(cursor)?;
                 if item_offset == u32::MAX {
@@ -68,7 +68,7 @@ where
             let prev_chunk = current_chunk;
             bufman.seek_with_cursor(
                 cursor,
-                SeekFrom::Start(current_chunk as u64 + CHUNK_SIZE as u64 * 8),
+                SeekFrom::Start(current_chunk as u64 + CHUNK_SIZE as u64 * 10),
             )?;
             current_chunk = bufman.read_u32_with_cursor(cursor)?;
             if current_chunk == u32::MAX {
@@ -83,7 +83,7 @@ where
                 break;
             }
             let current_pos = bufman.cursor_position(cursor)?;
-            let placeholder_pos = last_chunk as u64 + (j as u64 * 8);
+            let placeholder_pos = last_chunk as u64 + (j as u64 * 10);
             bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_pos))?;
             let item_offset = bufman.read_u32_with_cursor(cursor)?;
             if item_offset != u32::MAX {
@@ -97,6 +97,7 @@ where
             let current_pos = bufman.cursor_position(cursor)?;
             bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_pos))?;
             bufman.write_u32_with_cursor(cursor, item_offset)?;
+            bufman.write_u16_with_cursor(cursor, item.get_current_version_number())?;
             bufman.write_u32_with_cursor(cursor, *item.get_current_version())?;
 
             bufman.seek_with_cursor(cursor, SeekFrom::Start(current_pos))?;
@@ -109,7 +110,7 @@ where
             let current_pos = bufman.cursor_position(cursor)?;
             bufman.seek_with_cursor(
                 cursor,
-                SeekFrom::Start(last_chunk as u64 + (CHUNK_SIZE as u64 * 8)),
+                SeekFrom::Start(last_chunk as u64 + (CHUNK_SIZE as u64 * 10)),
             )?;
             bufman.write_u32_with_cursor(cursor, current_pos as u32)?;
             bufman.seek_with_cursor(cursor, SeekFrom::Start(current_pos))?;
@@ -122,6 +123,7 @@ where
                 let placeholder_start = bufman.cursor_position(cursor)? as u32;
                 for _ in 0..CHUNK_SIZE {
                     bufman.write_u32_with_cursor(cursor, u32::MAX)?;
+                    bufman.write_u16_with_cursor(cursor, u16::MAX)?;
                     bufman.write_u32_with_cursor(cursor, u32::MAX)?;
                 }
                 // Write placeholder for next chunk link
@@ -131,12 +133,14 @@ where
                 // Serialize items and update placeholders
                 for j in chunk_start..chunk_end {
                     let item_offset = items[i].serialize(bufmans.clone(), version, cursor)?;
-                    let placeholder_pos = placeholder_start as u64 + ((j - chunk_start) as u64 * 8);
+                    let placeholder_pos =
+                        placeholder_start as u64 + ((j - chunk_start) as u64 * 10);
                     let current_pos = bufman.cursor_position(cursor)?;
 
                     // Write entry offset
                     bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_pos))?;
                     bufman.write_u32_with_cursor(cursor, item_offset)?;
+                    bufman.write_u16_with_cursor(cursor, items[i].get_current_version_number())?;
                     bufman.write_u32_with_cursor(cursor, *items[i].get_current_version())?;
 
                     // Return to the current position
@@ -163,7 +167,7 @@ where
 }
 
 fn lazy_item_serialize_impl<T: Cacheable + CustomSerialize>(
-    node: &T,
+    node: Arc<T>,
     versions: &LazyItemVec<T>,
     bufmans: Arc<BufferManagerFactory>,
     version: Hash,
@@ -213,11 +217,15 @@ fn lazy_item_deserialize_impl<T: Cacheable + CustomSerialize + Clone>(
             "Cannot deserialize MergedNode with an invalid FileIndex",
         )
         .into()),
-        FileIndex::Valid { offset, version } => {
+        FileIndex::Valid {
+            offset,
+            version_id,
+            version_number,
+        } => {
             if offset.0 == u32::MAX {
                 return Ok(LazyItem::Invalid);
             }
-            let bufman = bufmans.get(&version)?;
+            let bufman = bufmans.get(&version_id)?;
             let cursor = bufman.open_cursor()?;
             bufman.seek_with_cursor(cursor, SeekFrom::Start(offset.0 as u64))?;
             let node_offset = bufman.read_u32_with_cursor(cursor)?;
@@ -226,7 +234,8 @@ fn lazy_item_deserialize_impl<T: Cacheable + CustomSerialize + Clone>(
                 bufmans.clone(),
                 FileIndex::Valid {
                     offset: FileOffset(node_offset),
-                    version,
+                    version_id,
+                    version_number,
                 },
                 cache.clone(),
                 max_loads,
@@ -236,7 +245,8 @@ fn lazy_item_deserialize_impl<T: Cacheable + CustomSerialize + Clone>(
                 bufmans.clone(),
                 FileIndex::Valid {
                     offset: FileOffset(versions_offset),
-                    version,
+                    version_number,
+                    version_id,
                 },
                 cache,
                 max_loads,
@@ -244,12 +254,13 @@ fn lazy_item_deserialize_impl<T: Cacheable + CustomSerialize + Clone>(
             )?;
 
             Ok(LazyItem::Valid {
-                data: Some(ArcShift::new(data)),
+                data: ArcShift::new(Some(Arc::new(data))),
                 file_index: ArcShift::new(Some(file_index)),
                 decay_counter: 0,
                 persist_flag: Arc::new(AtomicBool::new(true)),
                 versions,
-                version_id: version,
+                version_id,
+                version_number,
                 serialized_flag: Arc::new(AtomicBool::new(true)),
             })
         }
@@ -272,6 +283,7 @@ impl<T: Cacheable + CustomSerialize> CustomSerialize for LazyItem<T> {
                 serialized_flag: serialized_flag_arc,
                 ..
             } => {
+                let mut data_arc = data.clone();
                 let bufman = bufmans.get(version_id)?;
                 if let Some(existing_file_index) = file_index.clone().get().clone() {
                     if let FileIndex::Valid {
@@ -279,9 +291,7 @@ impl<T: Cacheable + CustomSerialize> CustomSerialize for LazyItem<T> {
                         ..
                     } = existing_file_index
                     {
-                        if let Some(data) = &data {
-                            let mut arc = data.clone();
-                            let data = arc.get();
+                        if let Some(data) = data_arc.get() {
                             if self.needs_persistence() {
                                 let cursor = if version_id == &version {
                                     cursor
@@ -293,7 +303,7 @@ impl<T: Cacheable + CustomSerialize> CustomSerialize for LazyItem<T> {
                                 let serialized_flag =
                                     serialized_flag_arc.swap(true, Ordering::Relaxed);
                                 lazy_item_serialize_impl(
-                                    data,
+                                    data.clone(),
                                     versions,
                                     bufmans,
                                     *version_id,
@@ -309,7 +319,7 @@ impl<T: Cacheable + CustomSerialize> CustomSerialize for LazyItem<T> {
                     }
                 }
 
-                if let Some(data) = &data {
+                if let Some(data) = data_arc.get() {
                     let cursor = if version_id == &version {
                         cursor
                     } else {
@@ -317,20 +327,20 @@ impl<T: Cacheable + CustomSerialize> CustomSerialize for LazyItem<T> {
                         bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
                         cursor
                     };
-                    let mut arc = data.clone();
                     let offset = bufman.cursor_position(cursor)? as u32;
-                    let version = self.get_current_version();
+                    let item_version_id = self.get_current_version();
+                    let item_version_number = self.get_current_version_number();
 
                     self.set_file_index(Some(FileIndex::Valid {
                         offset: FileOffset(offset),
-                        version,
+                        version_id: item_version_id,
+                        version_number: item_version_number,
                     }));
 
-                    let data = arc.get();
                     self.set_persistence(false);
                     let serialized_flag = serialized_flag_arc.swap(true, Ordering::Relaxed);
                     let offset = lazy_item_serialize_impl(
-                        data,
+                        data.clone(),
                         versions,
                         bufmans,
                         *version_id,

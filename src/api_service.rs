@@ -1,4 +1,6 @@
 use crate::app_context::AppContext;
+use crate::models::buffered_io::*;
+use crate::models::cache_loader::NodeRegistry;
 use crate::models::common::*;
 use crate::models::file_persist::*;
 use crate::models::lazy_load::*;
@@ -93,7 +95,7 @@ pub async fn init_vector_store(
             value: vector_list.clone(),
             location: Some((FileOffset(0), BytesToRead(0))),
         });
-        let mut current_node = ArcShift::new(MergedNode {
+        let current_node = Arc::new(MergedNode {
             hnsw_level: HNSWLevel(l as u8),
             prop: ArcShift::new(PropState::Ready(prop.clone())),
             neighbors: EagerLazyItemSet::new(),
@@ -101,14 +103,11 @@ pub async fn init_vector_store(
             child: LazyItemRef::new_invalid(),
         });
 
-        // TODO: Initialize with appropriate version ID
-        let lazy_node = LazyItem::from_arcshift(hash, current_node.clone());
-        let nn = LazyItemRef::from_arcshift(hash, current_node.clone());
+        let lazy_node = LazyItem::from_arc(hash, 0, current_node.clone());
+        let nn = LazyItemRef::from_arc(hash, 0, current_node.clone());
 
-        if let Some(prev_node) = prev.item.get().get_lazy_data() {
-            current_node
-                .get()
-                .set_parent(prev.clone().item.get().clone());
+        if let Some(prev_node) = prev.item.get().get_lazy_data().unwrap().get() {
+            current_node.set_parent(prev.clone().item.get().clone());
             prev_node.set_child(lazy_node.clone());
         }
         prev = nn.clone();
@@ -116,7 +115,7 @@ pub async fn init_vector_store(
         if l == 0 {
             root = nn.clone();
             let _prop_location = write_prop_to_file(&prop, &prop_file);
-            current_node.get().set_prop_ready(prop);
+            current_node.set_prop_ready(prop);
         }
         nodes.push(nn.clone());
     }
@@ -191,19 +190,18 @@ pub fn run_upload(
     vec_store: Arc<VectorStore>,
     vecs: Vec<(VectorIdValue, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
-    let current_version = vec_store.get_current_version();
-    let next_version = vec_store
+    let current_version = vec_store
         .vcs
         .add_next_version("main")
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-    vec_store.set_current_version(next_version);
-    let bufman = ctx
-        .vec_raw_manager
-        .get(&current_version)
-        .map_err(|e| WaCustomError::BufIo(Arc::new(e)))?;
-    let cursor = bufman.open_cursor()?;
-    bufman.write_u32_with_cursor(cursor, *next_version)?;
-    bufman.close_cursor(cursor)?;
+    vec_store.set_current_version(current_version);
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(format!("{}.vec_raw", *current_version))
+        .map_err(|e| WaCustomError::FsError(e.to_string()))?;
+    let bufman = Arc::new(BufferManager::new(file).map_err(BufIoError::Io)?);
     vecs.into_par_iter()
         .map(|(id, vec)| {
             let hash_vec = convert_value(id);
@@ -239,7 +237,6 @@ pub fn run_upload(
     if count_unindexed >= ctx.config.upload_threshold {
         index_embeddings(
             ctx.node_registry.clone(),
-            ctx.index_manager.clone(),
             &ctx.vec_raw_manager,
             vec_store.clone(),
             ctx.config.upload_process_batch_size,
@@ -253,6 +250,7 @@ pub fn run_upload(
 }
 
 pub async fn ann_vector_query(
+    node_registry: Arc<NodeRegistry>,
     vec_store: Arc<VectorStore>,
     query: Vec<f32>,
 ) -> Result<Option<Vec<(VectorId, MetricResult)>>, WaCustomError> {
@@ -269,20 +267,22 @@ pub async fn ann_vector_query(
     };
 
     let results = ann_search(
+        node_registry,
         vec_store.clone(),
         vec_emb,
         root.item.clone().get().clone(),
-        vec_store.max_cache_level.try_into().unwrap(),
+        HNSWLevel(vec_store.max_cache_level),
     )?;
     let output = remove_duplicates_and_filter(results);
     Ok(output)
 }
 
 pub async fn fetch_vector_neighbors(
+    node_registry: Arc<NodeRegistry>,
     vec_store: Arc<VectorStore>,
     vector_id: VectorId,
 ) -> Vec<Option<(VectorId, Vec<(VectorId, MetricResult)>)>> {
-    let results = vector_fetch(vec_store.clone(), vector_id);
+    let results = vector_fetch(node_registry, vec_store.clone(), vector_id);
     return results.expect("Failed fetching vector neighbors");
 }
 

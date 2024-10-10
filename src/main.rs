@@ -15,7 +15,6 @@ pub mod storage;
 use crate::models::common::*;
 
 fn main() {
-    let _ = run_actix_server();
     load_cache();
-    ()
+    let _ = run_actix_server();
 }

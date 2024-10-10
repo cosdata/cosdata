@@ -2,7 +2,6 @@ use std::fmt::Debug;
 use std::path::Path;
 use std::sync::Arc;
 
-use arcshift::ArcShift;
 use dashmap::DashMap;
 
 use crate::models::buffered_io::BufferManagerFactory;
@@ -81,14 +80,14 @@ where
     /// Finds or creates the node where the data should be inserted.
     /// Traverses the tree iteratively and returns a reference to the node.
     fn find_or_create_node(
-        node: ArcShift<InvertedIndexItem<T>>,
+        node: Arc<InvertedIndexItem<T>>,
         path: &[usize],
         cache: Arc<NodeRegistry>,
-    ) -> ArcShift<InvertedIndexItem<T>> {
+    ) -> Arc<InvertedIndexItem<T>> {
         let mut current_node = node;
         for &child_index in path {
             let new_dim_index = current_node.dim_index + POWERS_OF_4[child_index];
-            let new_child = LazyItem::new(0.into(), InvertedIndexItem::new(new_dim_index, true));
+            let new_child = LazyItem::new(0.into(), 0, InvertedIndexItem::new(new_dim_index, true));
             loop {
                 if let Some(child) = current_node
                     .lazy_children
@@ -105,9 +104,9 @@ where
 
     /// Inserts a value into the index at the specified dimension index.
     /// Calculates the path and delegates to `insert_with_path`.
-    pub fn insert(node: ArcShift<InvertedIndexItem<T>>, value: T, vector_id: u32) {
+    pub fn insert(node: Arc<InvertedIndexItem<T>>, value: T, vector_id: u32) {
         let key = IdentityMapKey::Int(vector_id);
-        let value = LazyItem::new(0.into(), value.clone());
+        let value = LazyItem::new(0.into(), 0, value.clone());
         node.data.insert(key, value);
     }
 
@@ -133,7 +132,7 @@ where
             None => self
                 .data
                 .get(&IdentityMapKey::Int(vector_id))
-                .map(|lazy_item| lazy_item.get_data(cache.clone()).get().clone()),
+                .map(|lazy_item| (*lazy_item.get_data(cache.clone())).clone()),
         }
     }
 }
@@ -189,7 +188,7 @@ pub struct InvertedIndex<T>
 where
     T: Clone + 'static,
 {
-    pub root: ArcShift<InvertedIndexItem<T>>,
+    pub root: Arc<InvertedIndexItem<T>>,
     pub cache: Arc<NodeRegistry>,
 }
 
@@ -206,14 +205,14 @@ where
         ));
         let cache = Arc::new(NodeRegistry::new(1000, bufmans));
         InvertedIndex {
-            root: ArcShift::new(InvertedIndexItem::new(0, false)),
+            root: Arc::new(InvertedIndexItem::new(0, false)),
             cache,
         }
     }
 
     /// Finds the node at a given dimension
     /// Traverses the tree iteratively and returns a reference to the node.
-    pub fn find_node(&self, dim_index: u32) -> Option<ArcShift<InvertedIndexItem<T>>> {
+    pub fn find_node(&self, dim_index: u32) -> Option<Arc<InvertedIndexItem<T>>> {
         let mut current_node = self.root.clone();
         let path = calculate_path(dim_index, self.root.dim_index);
         for child_index in path {
@@ -227,9 +226,7 @@ where
     /// Retrieves a value from the index at the specified dimension index.
     /// Delegates to the root node's `get` method.
     pub fn get(&self, dim_index: u32, vector_id: u32) -> Option<T> {
-        self.root
-            .shared_get()
-            .get(dim_index, vector_id, self.cache.clone())
+        self.root.get(dim_index, vector_id, self.cache.clone())
     }
 
     /// Inserts a value into the index at the specified dimension index.
@@ -406,10 +403,9 @@ mod test {
     #[test]
     fn test_find_or_create_race_condition() {
         for _ in 0..1000 {
-            let root: ArcShift<InvertedIndexItem<f32>> =
-                ArcShift::new(InvertedIndexItem::new(0, false));
+            let root: Arc<InvertedIndexItem<f32>> = Arc::new(InvertedIndexItem::new(0, false));
             let root_clone1 = root.clone();
-            let mut root_clone2 = root.clone();
+            let root_clone2 = root.clone();
             let bufmans = Arc::new(BufferManagerFactory::new(
                 Path::new(".").into(),
                 |root, ver| root.join(format!("{}.index", **ver)),
@@ -436,11 +432,7 @@ mod test {
             handle1.join().unwrap();
             handle2.join().unwrap();
 
-            // Check the final state
-            root_clone2.reload();
-            let node = root_clone2.shared_get();
-
-            let child_0 = node
+            let child_0 = root_clone2
                 .lazy_children
                 .get(0)
                 .map(|data| data.get_data(cache.clone()));
@@ -448,7 +440,6 @@ mod test {
             let child_0 = child_0.unwrap();
 
             let child_1 = child_0
-                .shared_get()
                 .lazy_children
                 .get(1)
                 .map(|data| data.get_data(cache.clone()));
