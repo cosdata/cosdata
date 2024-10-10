@@ -52,7 +52,7 @@
     - Type: u8
     - Example: 5
     - Default: 5
-    - Part of the VectoreStore struct
+    - Part of the VectorStore struct
     - Suggestion: The name ~max_cache_level~ is related to legacy
       code. It can be names as ~max_levels~ in the db to avoid
       confusion.
@@ -64,7 +64,7 @@
       #+begin_src rust
         [(0.99999, 5), (0.9999, 4), (0.999, 3), (0.99, 2), (0.9, 1), (0.0, 0)]
       #+end_src
-    - Suggestion: Even if we store just the probablities in order, the
+    - Suggestion: Even if we store just the probabilities in order, the
       above format can be easily obtained.
 
 *** quant_dim

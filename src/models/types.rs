@@ -501,12 +501,12 @@ impl VectorStoreMap {
             let root = LazyItemRef::new_invalid();
 
             // @NOTE: Creating a separate instance of `vcs` and
-            // `prop_file` for every instance of VectoreStore, as this
+            // `prop_file` for every instance of VectorStore, as this
             // is how it works at present when a new collection is
             // created (Refer: crate::api_service::init_vector_store).
             //
             // But it might be a good idea to share a single instance
-            // of these with all `VectoreStore` instances.
+            // of these with all `VectorStore` instances.
 
             let vcs = Arc::new(VersionControl::new(env.clone())?);
             let prop_file = Arc::new(
