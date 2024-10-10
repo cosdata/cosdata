@@ -35,9 +35,8 @@ pub async fn init_vector_store(
 
     let quantization_metric = Arc::new(QuantizationMetric::Scalar);
     let storage_type = StorageType::UnsignedByte;
-    let ain_env = get_app_env().map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
-    let denv = ain_env.persist.clone();
+    let denv = ctx.ain_env.persist.clone();
 
     let metadata_db = denv
         .create_db(Some("metadata"), DatabaseFlags::empty())
@@ -162,7 +161,7 @@ pub async fn init_vector_store(
         StorageType::UnsignedByte,
         vcs,
     ));
-    ain_env
+    ctx.ain_env
         .vector_store_map
         .insert(&name, vec_store.clone())?;
 

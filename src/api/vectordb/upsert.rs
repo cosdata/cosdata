@@ -4,10 +4,7 @@ use crate::{
     api_service::run_upload,
     app_context::AppContext,
     convert_vectors,
-    models::{
-        rpc::{RPCResponseBody, UpsertVectors},
-        types::get_app_env,
-    },
+    models::rpc::{RPCResponseBody, UpsertVectors},
 };
 
 // Route: `/vectordb/upsert`
@@ -15,12 +12,8 @@ pub(crate) async fn upsert(
     web::Json(body): web::Json<UpsertVectors>,
     ctx: web::Data<AppContext>,
 ) -> HttpResponse {
-    let env = match get_app_env() {
-        Ok(env) => env,
-        Err(_) => return HttpResponse::InternalServerError().body("Env initialization error"),
-    };
     // Try to get the vector store from the environment
-    let vec_store = match env.vector_store_map.get(&body.vector_db_name) {
+    let vec_store = match ctx.ain_env.vector_store_map.get(&body.vector_db_name) {
         Some(store) => store,
         None => {
             // Vector store not found, return an error response
