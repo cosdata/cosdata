@@ -1,4 +1,5 @@
 use lmdb::{Database, DatabaseFlags, Environment, Transaction, WriteFlags};
+use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher24;
 use std::hash::Hasher;
 use std::ops::Deref;
@@ -56,7 +57,7 @@ impl Deref for Timestamp {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Hash(u32);
 
 impl From<u32> for Hash {
@@ -221,6 +222,7 @@ impl VersionControl {
             parent_version: Version(0),
         };
 
+        // @TODO: Need to consider collection name
         let key = main_branch_id.to_le_bytes();
         let bytes = branch_info.serialize();
 

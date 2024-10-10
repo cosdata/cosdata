@@ -2,6 +2,7 @@ use actix_web::{
     http::{header::ContentType, StatusCode},
     HttpResponse, ResponseError,
 };
+use crate::models::common::WaCustomError;
 use std::fmt::Display;
 
 #[derive(Debug)]
@@ -9,6 +10,7 @@ pub enum CollectionsError {
     NotFound,
     FailedToGetAppEnv,
     FailedToCreateCollection(String),
+    WaCustomError(WaCustomError),
 }
 
 impl Display for CollectionsError {
@@ -19,6 +21,7 @@ impl Display for CollectionsError {
             CollectionsError::FailedToCreateCollection(msg) => {
                 write!(f, "Failed to create collection due to {}", msg)
             }
+            CollectionsError::WaCustomError(e) => write!(f, "LMDB database error: {e:?}"),
         }
     }
 }
@@ -34,6 +37,7 @@ impl ResponseError for CollectionsError {
             CollectionsError::NotFound => StatusCode::BAD_REQUEST,
             CollectionsError::FailedToGetAppEnv => StatusCode::INTERNAL_SERVER_ERROR,
             CollectionsError::FailedToCreateCollection(_) => StatusCode::BAD_REQUEST,
+            CollectionsError::WaCustomError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }

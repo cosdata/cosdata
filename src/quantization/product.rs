@@ -1,12 +1,14 @@
+use serde::{Deserialize, Serialize};
+
 use super::{Quantization, QuantizationError, StorageType};
 use crate::storage::Storage;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ProductQuantization {
     centroids: Option<Centroid>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Centroid {
     pub number_of_centroids: u16,
     pub centroids: Vec<u16>,
