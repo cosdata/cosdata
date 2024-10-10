@@ -1,4 +1,5 @@
 use crate::app_context::AppContext;
+use crate::indexes::inverted_index::InvertedIndex;
 use crate::models::buffered_io::*;
 use crate::models::cache_loader::NodeRegistry;
 use crate::models::common::*;
@@ -157,6 +158,72 @@ pub async fn init_vector_store(
         .insert(name.clone(), vec_store.clone());
 
     Ok(vec_store)
+}
+
+pub async fn init_inverted_index(
+    _ctx: Arc<AppContext>,
+    name: String,
+    description: Option<String>,
+    auto_create_index: bool,
+    metadata_schema: Option<String>,
+    max_vectors: Option<i32>,
+    replication_factor: Option<i32>,
+) -> Result<Arc<InvertedIndex>, WaCustomError> {
+    if name.is_empty() {
+        return Err(WaCustomError::InvalidParams);
+    }
+
+    let ain_env = get_app_env().map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+    let denv = ain_env.persist.clone();
+
+    let metadata_db = denv
+        .create_db(Some("metadata"), DatabaseFlags::empty())
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+    let embeddings_db = denv
+        .create_db(Some("embeddings"), DatabaseFlags::empty())
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+    let vcs = Arc::new(
+        VersionControl::new(denv.clone())
+            .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?,
+    );
+
+    let lmdb = MetaDb {
+        env: denv.clone(),
+        metadata_db: Arc::new(metadata_db),
+        embeddings_db: Arc::new(embeddings_db),
+    };
+
+    let hash = store_current_version(&lmdb, vcs.clone(), "main", 0)?;
+
+    // Note that setting .write(true).append(true) has the same effect
+    // as setting only .append(true)
+    let prop_file = Arc::new(
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("prop.data")
+            .map_err(|e| WaCustomError::FsError(e.to_string()))?,
+    );
+
+    let index = InvertedIndex::new(
+        name,
+        description,
+        auto_create_index,
+        metadata_schema,
+        max_vectors,
+        replication_factor,
+        prop_file,
+        lmdb,
+        ArcShift::new(hash),
+        Arc::new(QuantizationMetric::Scalar),
+        Arc::new(DistanceMetric::DotProduct),
+        StorageType::UnsignedByte,
+        vcs,
+    );
+    Ok(Arc::new(index))
 }
 
 pub fn run_upload_in_transaction(

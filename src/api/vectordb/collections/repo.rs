@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use crate::{
-    api_service::init_vector_store, app_context::AppContext, models::types::{get_app_env, VectorStore}
+    api_service::{init_inverted_index, init_vector_store},
+    app_context::AppContext,
+    indexes::inverted_index::InvertedIndex,
+    models::types::{get_app_env, VectorStore},
 };
 
 use super::{
@@ -18,7 +21,30 @@ pub(crate) async fn create_vector_store(
     max_cache_level: u8,
 ) -> Result<Arc<VectorStore>, CollectionsError> {
     // Call init_vector_store using web::block
-    let result = init_vector_store(ctx, name, size, lower_bound, upper_bound, max_cache_level).await;
+    let result =
+        init_vector_store(ctx, name, size, lower_bound, upper_bound, max_cache_level).await;
+    result.map_err(|e| CollectionsError::FailedToCreateCollection(e.to_string()))
+}
+
+pub(crate) async fn create_inverted_index(
+    ctx: Arc<AppContext>,
+    name: String,
+    description: Option<String>,
+    auto_create_index: bool,
+    metadata_schema: Option<String>,
+    max_vectors: Option<i32>,
+    replication_factor: Option<i32>,
+) -> Result<Arc<InvertedIndex>, CollectionsError> {
+    let result = init_inverted_index(
+        ctx,
+        name,
+        description,
+        auto_create_index,
+        metadata_schema,
+        max_vectors,
+        replication_factor,
+    )
+    .await;
     result.map_err(|e| CollectionsError::FailedToCreateCollection(e.to_string()))
 }
 

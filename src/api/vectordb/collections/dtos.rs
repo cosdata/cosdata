@@ -11,11 +11,32 @@ pub(crate) struct FindCollectionDto {
 }
 
 #[derive(Deserialize)]
+pub(crate) struct DenseVectorOptions {
+    pub enabled: bool,
+    pub auto_create_index: bool,
+    pub dimension: i32,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct SparseVectorOptions {
+    pub enabled: bool,
+    pub auto_create_index: bool,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct CreateCollectionConfig {
+    pub max_vectors: Option<i32>,
+    pub replication_factor: Option<i32>,
+}
+
+#[derive(Deserialize)]
 pub(crate) struct CreateCollectionDto {
-    pub vector_db_name: String,
-    pub dimensions: i32,
-    pub max_val: Option<f32>,
-    pub min_val: Option<f32>,
+    pub name: String,
+    pub description: Option<String>,
+    pub dense_vector: DenseVectorOptions,
+    pub sparse_vector: SparseVectorOptions,
+    pub metadata_schema: Option<String>, //object (optional)
+    pub config: CreateCollectionConfig,
 }
 
 #[derive(Serialize)]
@@ -23,9 +44,6 @@ pub(crate) struct CreateCollectionDtoResponse {
     pub id: String,
     pub name: String,
     pub dimensions: usize,
-    pub min_val: Option<f32>,
-    pub max_val: Option<f32>,
-    // pub created_at: String, // will be added when vector store has a creation timestamp
 }
 
 #[derive(Deserialize)]
