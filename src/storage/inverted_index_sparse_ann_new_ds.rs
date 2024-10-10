@@ -71,14 +71,18 @@ impl InvertedIndexNewDSNode {
         let mut current_node = node;
         for &child_index in path {
             let new_dim_index = current_node.dim_index + POWERS_OF_4[child_index];
-            let new_child =
-                LazyItem::new(0.into(), InvertedIndexNewDSNode::new(new_dim_index, true));
+            let new_child = LazyItem::new(
+                0.into(),
+                0u16,
+                InvertedIndexNewDSNode::new(new_dim_index, true),
+            );
             loop {
                 if let Some(child) = current_node
                     .lazy_children
                     .checked_insert(child_index, new_child.clone())
                 {
-                    current_node = child.get_data(cache.clone());
+                    let res = child.get_data(cache.clone());
+                    current_node = ArcShift::new((*res).clone());
                     break;
                 }
             }
@@ -122,8 +126,8 @@ impl InvertedIndexNewDSNode {
             None => {
                 for (index, growable_data) in self.data.iter().enumerate() {
                     if growable_data.items.iter().any(|item| {
-                        let mut p = item.get_data(cache.clone()).shared_get().clone();
-                        p.get().data.contains(&vector_id)
+                        let arc_vector_data = item.get_data(cache.clone()).clone();
+                        (*arc_vector_data).clone().get().data.contains(&vector_id)
                     }) {
                         return Some(index as u8);
                     }
@@ -160,7 +164,8 @@ impl InvertedIndexSparseAnnNewDS {
         let path = calculate_path(dim_index, self.root.dim_index);
         for child_index in path {
             let child = current_node.lazy_children.get(child_index)?;
-            current_node = child.get_data(self.cache.clone());
+            let res = child.get_data(self.cache.clone());
+            current_node = ArcShift::new((*res).clone());
         }
 
         Some(current_node)
