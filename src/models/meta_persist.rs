@@ -13,6 +13,8 @@ use siphasher::sip::SipHasher24;
 use std::hash::Hasher;
 use std::sync::Arc;
 
+use super::lazy_load::FileIndex;
+
 pub fn store_current_version(
     lmdb: &MetaDb,
     vcs: Arc<VersionControl>,
@@ -75,6 +77,7 @@ pub struct VecStoreData {
     pub levels_prob: Arc<Vec<(f64, i32)>>,
     pub quant_dim: usize,
     pub current_version: Hash,
+    pub file_index: FileIndex,
     pub quantization_metric: Arc<QuantizationMetric>,
     pub distance_metric: Arc<DistanceMetric>,
     pub storage_type: StorageType,
@@ -83,21 +86,30 @@ pub struct VecStoreData {
     pub upper_bound: Option<f32>,
 }
 
-impl From<Arc<VectorStore>> for VecStoreData {
-    fn from(store: Arc<VectorStore>) -> Self {
-        Self {
+impl TryFrom<Arc<VectorStore>> for VecStoreData {
+    type Error = WaCustomError;
+    fn try_from(store: Arc<VectorStore>) -> Result<Self, Self::Error> {
+        let offset = store.root_vec_offset()
+            .ok_or(WaCustomError::NodeError("FileIndex must be set for root node".to_owned()))?;
+        println!("Offset of root node: {offset:?}");
+        if let FileIndex::Invalid = offset {
+            return Err(WaCustomError::NodeError("FileIndex must be valid for root node".to_owned()));
+        };
+        let res = Self {
             name: store.database_name.clone(),
             max_level: store.max_cache_level,
             levels_prob: store.levels_prob.clone(),
             quant_dim: store.quant_dim,
             current_version: store.current_version.shared_get().clone(),
+            file_index: offset,
             quantization_metric: store.quantization_metric.clone(),
             distance_metric: store.distance_metric.clone(),
             storage_type: store.storage_type.clone(),
             size: 0,
             lower_bound: None,
             upper_bound: None,
-        }
+        };
+        Ok(res)
     }
 }
 
@@ -121,7 +133,7 @@ pub fn persist_vector_store(
     db: Database,
     vec_store: Arc<VectorStore>,
 ) -> Result<(), WaCustomError> {
-    let data = VecStoreData::from(vec_store.clone());
+    let data = VecStoreData::try_from(vec_store.clone())?;
 
     // Compute SipHash of the vector_store/collection name
     let mut hasher = SipHasher24::new();

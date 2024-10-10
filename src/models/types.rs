@@ -440,6 +440,19 @@ impl VectorStore {
         let mut arc = self.current_version.clone();
         arc.update(new_version);
     }
+
+    /// Returns FileIndex (offset) corresponding to the root
+    /// node. Returns None if the it's not set or the root node is an
+    /// invalid LazyItem
+    pub fn root_vec_offset(&self) -> Option<FileIndex> {
+        let lazy_item = self.root_vec.item.shared_get();
+        match lazy_item {
+            LazyItem::Valid { file_index, .. } => {
+                file_index.shared_get().clone()
+            },
+            LazyItem::Invalid => None,
+        }
+    }
 }
 
 // Quantized vector embedding
