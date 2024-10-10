@@ -3,11 +3,12 @@ use crate::storage::inverted_index_old::InvertedIndexItem;
 use crate::storage::inverted_index_sparse_ann::{
     InvertedIndexSparseAnn, InvertedIndexSparseAnnNode,
 };
+use crate::storage::inverted_index_sparse_ann_new_ds::InvertedIndexNewDSNode;
 use crate::storage::Storage;
 
 use super::buffered_io::{BufIoError, BufferManagerFactory};
 use super::file_persist::*;
-use super::lazy_load::{FileIndex, LazyItem, LazyItemVec};
+use super::lazy_load::{FileIndex, LazyItem, LazyItemVec, VectorData};
 use super::lru_cache::LRUCache;
 use super::serializer::CustomSerialize;
 use super::types::*;
@@ -28,6 +29,8 @@ pub enum CacheItem {
     InvertedIndexItemWithFloat(LazyItem<InvertedIndexItem<f32>>),
     InvertedIndexSparseAnnNode(LazyItem<InvertedIndexSparseAnnNode>),
     InvertedIndexSparseAnn(LazyItem<InvertedIndexSparseAnn>),
+    InvertedIndexNewDSNode(LazyItem<InvertedIndexNewDSNode>),
+    VectorData(LazyItem<STM<VectorData>>),
 }
 
 pub trait Cacheable: Clone + 'static {
@@ -144,6 +147,34 @@ impl Cacheable for InvertedIndexSparseAnn {
 
     fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
         CacheItem::InvertedIndexSparseAnn(item)
+    }
+}
+
+impl Cacheable for InvertedIndexNewDSNode {
+    fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
+        if let CacheItem::InvertedIndexNewDSNode(item) = cache_item {
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
+        CacheItem::InvertedIndexNewDSNode(item)
+    }
+}
+
+impl Cacheable for STM<VectorData> {
+    fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
+        if let CacheItem::VectorData(item) = cache_item {
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
+        CacheItem::VectorData(item)
     }
 }
 

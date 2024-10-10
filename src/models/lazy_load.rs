@@ -1180,9 +1180,9 @@ impl VectorData {
         }
     }
 
-    pub fn set(&mut self, index: usize, value: u32) {
+    pub fn set(&mut self, index: usize, vec_id: u32) {
         if index < 64 {
-            self.data[index] = value;
+            self.data[index] = vec_id;
             self.is_serialized = false;
         }
     }
@@ -1219,7 +1219,7 @@ impl IncrementalSerializableGrowableData {
         }
     }
 
-    pub fn insert(&mut self, vec_id: u32, value: u32) {
+    pub fn insert(&mut self, vec_id: u32) {
         let insert_dimension = (vec_id % 64) as usize;
         let insert_index = (vec_id / 64) as usize;
         let items_len = self.items.len();
@@ -1245,7 +1245,7 @@ impl IncrementalSerializableGrowableData {
         vector_data_stm
             .transactional_update(|old| {
                 let mut new = old.clone();
-                new.set(insert_dimension, value);
+                new.set(insert_dimension, vec_id);
                 new
             })
             .unwrap();
