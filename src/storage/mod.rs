@@ -1,8 +1,10 @@
 pub mod bench_common;
 pub mod inverted_index_old;
 pub mod inverted_index_sparse_ann;
+pub mod inverted_index_sparse_ann_basic;
 pub mod knn_query_old;
 pub mod sparse_ann_query;
+pub mod sparse_ann_query_basic;
 
 use half::f16;
 use serde::{Deserialize, Serialize};
