@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::models::{
     buffered_io::BufferManagerFactory,
     cache_loader::NodeRegistry,
-    lazy_load::{LazyItem, LazyItemArray, LazyItemVec},
+    lazy_load::{LazyItem, LazyItemArray},
     types::SparseVector,
 };
 
@@ -78,6 +78,7 @@ impl InvertedIndexSparseAnnNodeBasic {
             let new_dim_index = current_node.dim_index + POWERS_OF_4[child_index];
             let new_child = LazyItem::new(
                 0.into(),
+                0u16,
                 InvertedIndexSparseAnnNodeBasic::new(new_dim_index, true),
             );
             loop {
@@ -85,7 +86,8 @@ impl InvertedIndexSparseAnnNodeBasic {
                     .lazy_children
                     .checked_insert(child_index, new_child.clone())
                 {
-                    current_node = child.get_data(cache.clone());
+                    let res: Arc<InvertedIndexSparseAnnNodeBasic> = child.get_data(cache.clone());
+                    current_node = ArcShift::new((*res).clone());
                     break;
                 }
             }
@@ -107,7 +109,7 @@ impl InvertedIndexSparseAnnNodeBasic {
         // Insert into the specific LazyItem at the index quantized_value
         if let Some(arc_lazy_item) = data.get(quantized_value as usize) {
             let mut vec = arc_lazy_item.write().unwrap();
-            vec.push(LazyItem::new(0.into(), vector_id));
+            vec.push(LazyItem::new(0.into(), 0u16, vector_id));
         }
     }
 
@@ -173,7 +175,8 @@ impl InvertedIndexSparseAnnBasic {
         let path = calculate_path(dim_index, self.root.dim_index);
         for child_index in path {
             let child = current_node.lazy_children.get(child_index)?;
-            current_node = child.get_data(self.cache.clone());
+            let node_res = child.get_data(self.cache.clone());
+            current_node = ArcShift::new((*node_res).clone());
         }
 
         Some(current_node)
