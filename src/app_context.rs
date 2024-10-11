@@ -44,7 +44,8 @@ impl AppContext {
         // Let it panic if there's a problem initializing the
         // env. Without app env, the HTTP server won't be able to
         // serve any incoming requests anyway.
-        let ain_env = get_app_env().expect("Failed to initialize app env");
+        let ain_env = get_app_env(node_registry.clone())
+            .expect("Failed to initialize app env");
         Self {
             config,
             node_registry,

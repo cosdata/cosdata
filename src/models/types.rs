@@ -1,4 +1,6 @@
+use super::cache_loader::NodeRegistry;
 use super::meta_persist::{delete_vector_store, lmdb_init_collections_db, load_collections, persist_vector_store};
+use super::serializer::CustomSerialize;
 use super::versioning::VersionControl;
 use crate::distance::cosine::CosineSimilarity;
 use crate::distance::DistanceError;
@@ -18,6 +20,7 @@ use arcshift::ArcShift;
 use dashmap::DashMap;
 use lmdb::{Database, DatabaseFlags, Environment, Transaction};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fmt;
 use std::fs::*;
 use std::hash::{DefaultHasher, Hash as StdHash, Hasher};
@@ -488,17 +491,32 @@ impl VectorStoreMap {
         Ok(res)
     }
 
-    fn load(env: Arc<Environment>) -> lmdb::Result<Self> {
-        let res = Self::new(env.clone())?;
+    /// Loads vector store map from lmdb
+    ///
+    /// In doing so, the root vec for all collections are loaded into
+    /// memory, which also ends up warming the cache (NodeRegistry)
+    fn load(env: Arc<Environment>, cache: Arc<NodeRegistry>) -> Result<Self, WaCustomError> {
+        let res = Self::new(env.clone())
+            .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
         // @TODO: This can come from app context
-        let lmdb = MetaDb::try_from(env.clone())?;
+        let lmdb = MetaDb::try_from(env.clone())
+            .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
-        for coll in load_collections(&res.lmdb_env, res.lmdb_db.clone())? {
-            // @TODO: This needs to be loaded, along with some of it's
-            // neighbours based on max_loads parameter (which may
-            // require the `max_loads` param to be added to config)
-            let root = LazyItemRef::new_invalid();
+        let collections = load_collections(&res.lmdb_env, res.lmdb_db.clone())
+            .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+        let bufmans = cache.get_bufmans();
+
+        for coll in collections {
+            let root_item: LazyItem<MergedNode> = LazyItem::deserialize(
+                bufmans.clone(),
+                coll.file_index,
+                cache.clone(),
+                1000,
+                &mut HashSet::new(),
+            )?;
+            let root = LazyItemRef::from_lazy(root_item);
 
             // @NOTE: Creating a separate instance of `vcs` and
             // `prop_file` for every instance of VectorStore, as this
@@ -508,7 +526,9 @@ impl VectorStoreMap {
             // But it might be a good idea to share a single instance
             // of these with all `VectorStore` instances.
 
-            let vcs = Arc::new(VersionControl::new(env.clone())?);
+            let vcs_raw = VersionControl::new(env.clone())
+                .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+            let vcs = Arc::new(vcs_raw);
             let prop_file = Arc::new(
                 OpenOptions::new()
                     .create(true)
@@ -594,7 +614,7 @@ pub struct AppEnv {
 
 static AIN_ENV: OnceLock<Result<Arc<AppEnv>, WaCustomError>> = OnceLock::new();
 
-pub fn get_app_env() -> Result<Arc<AppEnv>, WaCustomError> {
+pub fn get_app_env(cache: Arc<NodeRegistry>) -> Result<Arc<AppEnv>, WaCustomError> {
     AIN_ENV
         .get_or_init(|| {
             let path = Path::new("./_mdb"); // TODO: prefix the customer & database name
@@ -610,7 +630,7 @@ pub fn get_app_env() -> Result<Arc<AppEnv>, WaCustomError> {
 
             let env_arc = Arc::new(env);
 
-            let vector_store_map = VectorStoreMap::load(env_arc.clone())
+            let vector_store_map = VectorStoreMap::load(env_arc.clone(), cache)
                 .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
             Ok(Arc::new(AppEnv {
