@@ -8,10 +8,9 @@ use crate::models::types::{get_app_env, AppEnv};
 use crate::WaCustomError;
 
 fn init_index_manager() -> BufferManagerFactory {
-    BufferManagerFactory::new(
-        Path::new(".").into(),
-        |root, ver| root.join(format!("{}.index", **ver)),
-    )
+    BufferManagerFactory::new(Path::new(".").into(), |root, ver| {
+        root.join(format!("{}.index", **ver))
+    })
 }
 
 fn init_node_registry(index_manager: Arc<BufferManagerFactory>) -> NodeRegistry {
@@ -21,10 +20,9 @@ fn init_node_registry(index_manager: Arc<BufferManagerFactory>) -> NodeRegistry 
 }
 
 fn init_vec_raw_manager() -> BufferManagerFactory {
-    BufferManagerFactory::new(
-        Path::new(".").into(),
-        |root, ver| root.join(format!("{}.vec_raw", **ver))
-    )
+    BufferManagerFactory::new(Path::new(".").into(), |root, ver| {
+        root.join(format!("{}.vec_raw", **ver))
+    })
 }
 
 #[allow(unused)]
@@ -37,7 +35,6 @@ pub struct AppContext {
 }
 
 impl AppContext {
-
     pub fn new(config: Config) -> Result<Self, WaCustomError> {
         let index_manager = Arc::new(init_index_manager());
         let node_registry = Arc::new(init_node_registry(index_manager.clone()));
@@ -52,4 +49,3 @@ impl AppContext {
         })
     }
 }
-

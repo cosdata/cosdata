@@ -4,7 +4,7 @@ use crate::models::cache_loader::NodeRegistry;
 use crate::models::common::*;
 use crate::models::file_persist::*;
 use crate::models::lazy_load::*;
-use crate::models::meta_persist::*;
+use crate::models::meta_persist::store_current_version;
 use crate::models::rpc::VectorIdValue;
 use crate::models::types::*;
 use crate::models::user::Statistics;
@@ -13,7 +13,7 @@ use crate::models::versioning::VersionControl;
 use crate::quantization::{Quantization, StorageType};
 use crate::vector_store::*;
 use arcshift::ArcShift;
-use lmdb::{DatabaseFlags, Transaction};
+use lmdb::Transaction;
 use rand::Rng;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
@@ -36,28 +36,15 @@ pub async fn init_vector_store(
     let quantization_metric = Arc::new(QuantizationMetric::Scalar);
     let storage_type = StorageType::UnsignedByte;
 
-    let denv = ctx.ain_env.persist.clone();
+    let env = ctx.ain_env.persist.clone();
 
-    let metadata_db = denv
-        .create_db(Some("metadata"), DatabaseFlags::empty())
+    let lmdb = MetaDb::from_env(env.clone(), &name)
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
-    let embeddings_db = denv
-        .create_db(Some("embeddings"), DatabaseFlags::empty())
+    let (vcs, hash) = VersionControl::new(env.clone(), lmdb.db.clone())
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
-    let vcs = Arc::new(
-        VersionControl::new(denv.clone())
-            .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?,
-    );
-
-    let lmdb = MetaDb {
-        env: denv.clone(),
-        metadata_db: Arc::new(metadata_db),
-        embeddings_db: Arc::new(embeddings_db),
-    };
-
-    let hash = store_current_version(&lmdb, vcs.clone(), "main", 0)?;
+    let vcs = Arc::new(vcs);
 
     let min = lower_bound.unwrap_or(-1.0);
     let max = upper_bound.unwrap_or(1.0);
@@ -128,7 +115,7 @@ pub async fn init_vector_store(
         }
         nodes.push(nn.clone());
     }
-    // TODO: include db name in the path
+
     let bufmans = &ctx.index_manager;
     for (l, nn) in nodes.iter_mut().enumerate() {
         match persist_node_update_loc(bufmans.clone(), &mut nn.item) {
@@ -204,6 +191,7 @@ pub fn run_upload(
         .add_next_version("main")
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
     vec_store.set_current_version(current_version);
+    store_current_version(&vec_store.lmdb, current_version)?;
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -225,14 +213,14 @@ pub fn run_upload(
     bufman.flush()?;
 
     let env = vec_store.lmdb.env.clone();
-    let metadata_db = vec_store.lmdb.metadata_db.clone();
+    let db = vec_store.lmdb.db.clone();
 
     let txn = env
         .begin_ro_txn()
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
     let count_unindexed = txn
-        .get(*metadata_db, &"count_unindexed")
+        .get(*db, &"count_unindexed")
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))
         .and_then(|bytes| {
             let bytes = bytes.try_into().map_err(|e: TryFromSliceError| {

@@ -1,6 +1,6 @@
 mod api_service;
 mod app_context;
-use crate::models::cache_loader::load_cache;
+pub mod macros;
 mod models;
 mod vector_store;
 mod web_server;

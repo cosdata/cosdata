@@ -1,4 +1,5 @@
 use crate::distance::DistanceFunction;
+use crate::macros::key;
 use crate::models::buffered_io::{BufferManager, BufferManagerFactory};
 use crate::models::cache_loader::NodeRegistry;
 use crate::models::common::*;
@@ -115,40 +116,6 @@ pub fn vector_fetch(
     }
     Ok(results)
 }
-fn load_node_from_persist(
-    _offset: FileIndex,
-    _vec_store: &Arc<VectorStore>,
-) -> Result<Option<(VectorId, Vec<(VectorId, MetricResult)>)>, WaCustomError> {
-    // Placeholder function to load vector from database
-    // TODO: Implement actual database loading logic
-    Err(WaCustomError::LazyLoadingError(
-        "Not implemented".to_string(),
-    ))
-}
-
-// fn get_neighbor_info(nbr: &Neighbour) -> Option<(VectorId, f32)> {
-//     let Some(node) = nbr.node.data.clone() else {
-//         eprintln!("Neighbour node not initialized");
-//         return None;
-//     };
-//     let guard = node.read().unwrap();
-
-//     let prop_state = match guard.prop.read() {
-//         Ok(guard) => guard,
-//         Err(e) => {
-//             eprintln!("Lock error when reading prop: {}", e);
-//             return None;
-//         }
-//     };
-
-//     match &*prop_state {
-//         PropState::Ready(node_prop) => Some((node_prop.id.clone(), nbr.cosine_similarity)),
-//         PropState::Pending(_) => {
-//             eprintln!("Encountered pending prop state");
-//             None
-//         }
-//     }
-// }
 
 fn get_vector_id_from_node(node: Arc<MergedNode>) -> Option<VectorId> {
     let mut prop_arc = node.prop.clone();
@@ -156,17 +123,6 @@ fn get_vector_id_from_node(node: Arc<MergedNode>) -> Option<VectorId> {
         PropState::Ready(node_prop) => Some(node_prop.id.clone()),
         PropState::Pending(_) => None,
     }
-}
-
-fn load_neighbor_from_db(
-    _offset: FileIndex,
-    _vec_store: &Arc<VectorStore>,
-) -> Result<Option<(VectorId, MetricResult)>, WaCustomError> {
-    // Placeholder function to load neighbor from database
-    // TODO: Implement actual database loading logic
-    Err(WaCustomError::LazyLoadingError(
-        "Not implemented".to_string(),
-    ))
 }
 
 pub fn write_embedding(
@@ -259,14 +215,13 @@ pub fn insert_embedding(
     current_version: Hash,
 ) -> Result<(), WaCustomError> {
     let env = vec_store.lmdb.env.clone();
-    let embedding_db = vec_store.lmdb.embeddings_db.clone();
-    let metadata_db = vec_store.lmdb.metadata_db.clone();
+    let db = vec_store.lmdb.db.clone();
 
     let mut txn = env
         .begin_rw_txn()
         .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
 
-    let count_unindexed = match txn.get(*metadata_db, &"count_unindexed") {
+    let count_unindexed = match txn.get(*db, &"count_unindexed") {
         Ok(bytes) => {
             let bytes = bytes.try_into().map_err(|e: TryFromSliceError| {
                 WaCustomError::DeserializationError(e.to_string())
@@ -285,16 +240,13 @@ pub fn insert_embedding(
     };
     let offset_serialized = offset.serialize();
 
-    txn.put(
-        *embedding_db,
-        &emb.hash_vec.to_string(),
-        &offset_serialized,
-        WriteFlags::empty(),
-    )
-    .map_err(|e| WaCustomError::DatabaseError(format!("Failed to put data: {}", e)))?;
+    let embedding_key = key!(e:emb.hash_vec);
+
+    txn.put(*db, &embedding_key, &offset_serialized, WriteFlags::empty())
+        .map_err(|e| WaCustomError::DatabaseError(format!("Failed to put data: {}", e)))?;
     let current_version_bytes = current_version.to_le_bytes();
 
-    let should_update_next_version = match txn.get(*metadata_db, &"next_version") {
+    let should_update_next_version = match txn.get(*db, &"next_version") {
         Ok(bytes) => bytes != &current_version_bytes,
         Err(lmdb::Error::NotFound) => true,
         Err(err) => {
@@ -304,7 +256,7 @@ pub fn insert_embedding(
 
     if should_update_next_version {
         txn.put(
-            *metadata_db,
+            *db,
             &"next_version",
             &current_version_bytes,
             WriteFlags::empty(),
@@ -313,7 +265,7 @@ pub fn insert_embedding(
     }
 
     txn.put(
-        *metadata_db,
+        *db,
         &"count_unindexed",
         &(count_unindexed + 1).to_le_bytes(),
         WriteFlags::empty(),
@@ -336,13 +288,13 @@ pub fn index_embeddings(
     upload_process_batch_size: usize,
 ) -> Result<(), WaCustomError> {
     let env = vec_store.lmdb.env.clone();
-    let metadata_db = vec_store.lmdb.metadata_db.clone();
+    let db = vec_store.lmdb.db.clone();
 
     let txn = env
         .begin_ro_txn()
         .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
 
-    let mut count_indexed = match txn.get(*metadata_db, &"count_indexed") {
+    let mut count_indexed = match txn.get(*db, &"count_indexed") {
         Ok(bytes) => {
             let bytes = bytes.try_into().map_err(|e: TryFromSliceError| {
                 WaCustomError::DeserializationError(e.to_string())
@@ -353,7 +305,7 @@ pub fn index_embeddings(
         Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
     };
 
-    let mut count_unindexed = match txn.get(*metadata_db, &"count_unindexed") {
+    let mut count_unindexed = match txn.get(*db, &"count_unindexed") {
         Ok(bytes) => {
             let bytes = bytes.try_into().map_err(|e: TryFromSliceError| {
                 WaCustomError::DeserializationError(e.to_string())
@@ -365,7 +317,7 @@ pub fn index_embeddings(
     };
 
     let version =
-        Hash::from(match txn.get(*metadata_db, &"next_version") {
+        Hash::from(match txn.get(*db, &"next_version") {
             Ok(bytes) => u32::from_le_bytes(bytes.try_into().map_err(|e: TryFromSliceError| {
                 WaCustomError::DeserializationError(e.to_string())
             })?),
@@ -421,7 +373,7 @@ pub fn index_embeddings(
         })?;
 
         txn.put(
-            *metadata_db,
+            *db,
             &"count_indexed",
             &count_indexed.to_le_bytes(),
             WriteFlags::empty(),
@@ -431,7 +383,7 @@ pub fn index_embeddings(
         })?;
 
         txn.put(
-            *metadata_db,
+            *db,
             &"count_unindexed",
             &count_unindexed.to_le_bytes(),
             WriteFlags::empty(),
@@ -707,7 +659,7 @@ fn insert_node_create_edges(
         if let Ok(old_neighbour) = nbr1.try_get_data(node_registry.clone()) {
             let (new_neighbor, mut new_neighbor_neighbors, mut neighbor_list) =
                 if let Some(version) = nbr1.get_version(node_registry.clone(), version_number) {
-                    let mut node = version.get_data(node_registry.clone());
+                    let node = version.get_data(node_registry.clone());
                     let neighbor_list: Vec<(LazyItem<MergedNode>, MetricResult)> =
                         node.neighbors.iter().map(|nbr2| (nbr2.1, nbr2.0)).collect();
                     (version, node.neighbors.clone(), neighbor_list)
