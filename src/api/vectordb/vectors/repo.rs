@@ -35,6 +35,12 @@ pub(crate) async fn create_vector(
         ));
     }
 
+    if !collection.get_auto_config_flag() && !collection.get_configured_flag() {
+        return Err(VectorsError::FailedToCreateVector(
+            "Vector store is set to mannual indexing but an index is not created".to_string(),
+        ));
+    }
+
     // TODO: handle the error
     run_upload(
         ctx,
@@ -117,12 +123,19 @@ pub(crate) async fn update_vector(
         ));
     }
 
+    if !collection.get_auto_config_flag() && !collection.get_configured_flag() {
+        return Err(VectorsError::FailedToCreateVector(
+            "Vector store is set to mannual indexing but an index is not created".to_string(),
+        ));
+    }
+
     run_upload(
         ctx,
         collection,
         vec![(vector_id.clone(), update_vector_dto.values.clone())],
     )
     .map_err(VectorsError::WaCustom)?;
+
     Ok(UpdateVectorResponseDto {
         id: vector_id,
         values: update_vector_dto.values,

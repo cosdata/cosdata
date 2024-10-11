@@ -12,11 +12,9 @@ use crate::models::versioning::Hash;
 use crate::quantization::{Quantization, StorageType};
 use crate::storage::Storage;
 use arcshift::ArcShift;
-use lmdb::Transaction;
-use lmdb::WriteFlags;
+use lmdb::{Transaction, WriteFlags};
 use rand::{thread_rng, Rng};
-use rayon::iter::IntoParallelIterator;
-use rayon::iter::ParallelIterator;
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use smallvec::SmallVec;
 use std::array::TryFromSliceError;
 use std::cmp::Ordering;
@@ -437,7 +435,8 @@ pub fn index_embeddings(
                      next_offset: u32|
      -> Result<(), WaCustomError> {
         let mut quantization_arc = vec_store.quantization_metric.clone();
-        if !vec_store.get_config_flag() {
+        // Set to auto config but is not configured
+        if vec_store.get_auto_config_flag() && !vec_store.get_configured_flag() {
             let quantization = quantization_arc.get();
             let mut new_quantization = quantization.clone();
             let vectors: Vec<&[f32]> = embeddings
@@ -447,7 +446,7 @@ pub fn index_embeddings(
             new_quantization.train(&vectors)?;
             quantization_arc.update(new_quantization);
             auto_config_storage_type(vec_store.clone(), &vectors);
-            vec_store.set_config_flag(true);
+            vec_store.set_configured_flag(true);
         }
         let quantization = quantization_arc.get();
         let results: Vec<()> = embeddings
@@ -944,8 +943,10 @@ fn traverse_find_nearest(
     Ok(nn.into_iter().take(5).collect())
 }
 
-// TODO(a-rustacean): finish it!!
-pub fn reindex_embeddings(vec_store: Arc<VectorStore>) -> Result<(), WaCustomError> {
+pub fn create_index_in_collection(
+    ctx: Arc<AppContext>,
+    vec_store: Arc<VectorStore>,
+) -> Result<(), WaCustomError> {
     // TODO(a-rustacean): store the min & max in the `VectorStore` in the collection creation step and use here
     let min = -1.0;
     let max = 1.0;
@@ -964,8 +965,73 @@ pub fn reindex_embeddings(vec_store: Arc<VectorStore>) -> Result<(), WaCustomErr
     let vector_list =
         Arc::new(quantization_metric.quantize(&vec, *vec_store.storage_type.clone().get())?);
 
-    // TODO(a-rustacean): implement the rest
-    todo!()
+    let prop_file = Arc::new(
+        OpenOptions::new()
+            .create(true)
+            .truncate(true) // removes all the previous data from the file
+            .append(true)
+            .open("prop.data")
+            .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?,
+    );
+
+    let hash = vec_store.root_vec.get_current_version();
+
+    let location = write_prop_to_file(&vec_hash, vector_list.clone(), &prop_file)?;
+
+    let prop = ArcShift::new(PropState::Ready(Arc::new(NodeProp {
+        id: vec_hash,
+        value: vector_list,
+        location: Some(location),
+    })));
+
+    let root = LazyItem::new(
+        hash,
+        0,
+        MergedNode {
+            hnsw_level: HNSWLevel(0),
+            prop: prop.clone(),
+            neighbors: EagerLazyItemSet::new(),
+            parent: LazyItemRef::new_invalid(),
+            child: LazyItemRef::new_invalid(),
+        },
+    );
+
+    let mut prev: LazyItemRef<MergedNode> = LazyItemRef::from_lazy(root.clone());
+
+    let mut nodes = Vec::new();
+    for l in (1..=vec_store.hnsw_params.clone().get().num_layers).rev() {
+        let current_node = Arc::new(MergedNode {
+            hnsw_level: HNSWLevel(l),
+            prop: prop.clone(),
+            neighbors: EagerLazyItemSet::new(),
+            parent: prev.clone(),
+            child: LazyItemRef::new_invalid(),
+        });
+
+        let lazy_node = LazyItem::from_arc(hash, 0, current_node.clone());
+        let nn = LazyItemRef::from_arc(hash, 0, current_node.clone());
+
+        if let Some(prev_node) = prev.item.get().get_lazy_data().unwrap().get() {
+            current_node.set_parent(prev.clone().item.get().clone());
+            prev_node.set_child(lazy_node.clone());
+        }
+        prev = nn.clone();
+
+        nodes.push(nn.clone());
+    }
+
+    for nn in nodes.iter_mut() {
+        persist_node_update_loc(ctx.index_manager.clone(), &mut nn.item)?;
+    }
+
+    ctx.index_manager.flush_all()?;
+
+    // The whole index is empty now
+    vec_store.root_vec.item.clone().update(root);
+    vec_store.set_auto_config_flag(false);
+    vec_store.set_configured_flag(true);
+
+    Ok(())
 }
 
 #[cfg(test)]

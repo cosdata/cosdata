@@ -1,6 +1,9 @@
+use std::sync::Arc;
+
 use crate::{
+    app_context::AppContext,
     models::types::{get_app_env, DistanceMetric},
-    vector_store::{self, reindex_embeddings},
+    vector_store::create_index_in_collection,
 };
 
 use super::{
@@ -9,6 +12,7 @@ use super::{
 };
 
 pub(crate) async fn create_index(
+    ctx: Arc<AppContext>,
     collection_name: String,
     _name: String,
     distance_metric: DistanceMetric,
@@ -40,9 +44,8 @@ pub(crate) async fn create_index(
 
     collection.hnsw_params.clone().update(hnsw_param);
 
-    // TODO: trigger re-indexing
-
-    reindex_embeddings(collection).map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;
+    create_index_in_collection(ctx, collection)
+        .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;
 
     Ok(())
 }

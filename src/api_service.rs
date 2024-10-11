@@ -35,6 +35,8 @@ pub async fn init_vector_store(
 
     let quantization_metric = QuantizationMetric::Scalar;
     let storage_type = StorageType::UnsignedByte;
+    // TODO: get from API
+    let auto_config = true;
     let ain_env = get_app_env().map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
     let denv = ain_env.persist.clone();
@@ -99,7 +101,7 @@ pub async fn init_vector_store(
     let mut nodes = Vec::new();
     for l in (0..=num_layers).rev() {
         let current_node = Arc::new(MergedNode {
-            hnsw_level: HNSWLevel(l as u8),
+            hnsw_level: HNSWLevel(l),
             prop: prop.clone(),
             neighbors: EagerLazyItemSet::new(),
             parent: prev.clone(),
@@ -126,13 +128,8 @@ pub async fn init_vector_store(
         nodes.push(lazy_node_ref.clone());
     }
 
-    for (l, nn) in nodes.iter_mut().enumerate() {
-        match persist_node_update_loc(ctx.index_manager.clone(), &mut nn.item) {
-            Ok(_) => (),
-            Err(e) => {
-                eprintln!("Failed node persist (init) for node {}: {}", l, e);
-            }
-        };
+    for nn in nodes.iter_mut() {
+        persist_node_update_loc(ctx.index_manager.clone(), &mut nn.item)?;
     }
 
     ctx.index_manager.flush_all()?;
@@ -156,6 +153,7 @@ pub async fn init_vector_store(
         ArcShift::new(storage_type),
         vcs,
         num_layers,
+        auto_config,
     ));
 
     ain_env

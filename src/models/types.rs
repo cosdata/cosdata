@@ -400,7 +400,8 @@ pub struct VectorStore {
     pub vcs: Arc<VersionControl>,
     pub hnsw_params: ArcShift<HNSWHyperParams>,
     // Whether the VectorStore has been configured or not
-    pub config_flag: Arc<AtomicBool>,
+    pub configured: Arc<AtomicBool>,
+    pub auto_config: Arc<AtomicBool>,
 }
 
 impl VectorStore {
@@ -418,6 +419,7 @@ impl VectorStore {
         storage_type: ArcShift<StorageType>,
         vcs: Arc<VersionControl>,
         num_layers: u8,
+        auto_config: bool,
     ) -> Self {
         VectorStore {
             exec_queue_nodes,
@@ -437,7 +439,8 @@ impl VectorStore {
                 num_layers,
                 ..Default::default()
             }),
-            config_flag: Arc::new(AtomicBool::new(false)),
+            configured: Arc::new(AtomicBool::new(false)),
+            auto_config: Arc::new(AtomicBool::new(auto_config)),
         }
     }
 
@@ -453,12 +456,20 @@ impl VectorStore {
         arc.update(new_version);
     }
 
-    pub fn get_config_flag(&self) -> bool {
-        self.config_flag.load(Ordering::Relaxed)
+    pub fn get_configured_flag(&self) -> bool {
+        self.configured.load(Ordering::Relaxed)
     }
 
-    pub fn set_config_flag(&self, flag: bool) {
-        self.config_flag.store(flag, Ordering::Relaxed);
+    pub fn set_configured_flag(&self, flag: bool) {
+        self.configured.store(flag, Ordering::Relaxed);
+    }
+
+    pub fn get_auto_config_flag(&self) -> bool {
+        self.auto_config.load(Ordering::Relaxed)
+    }
+
+    pub fn set_auto_config_flag(&self, flag: bool) {
+        self.auto_config.store(flag, Ordering::Relaxed);
     }
 }
 
