@@ -37,7 +37,7 @@ pub(crate) async fn create_vector(
 
     if !collection.get_auto_config_flag() && !collection.get_configured_flag() {
         return Err(VectorsError::FailedToCreateVector(
-            "Vector store is set to mannual indexing but an index is not created".to_string(),
+            "Vector store is set to manual indexing but an index is not created".to_string(),
         ));
     }
 
@@ -125,7 +125,7 @@ pub(crate) async fn update_vector(
 
     if !collection.get_auto_config_flag() && !collection.get_configured_flag() {
         return Err(VectorsError::FailedToCreateVector(
-            "Vector store is set to mannual indexing but an index is not created".to_string(),
+            "Vector store is set to manual indexing but an index is not created".to_string(),
         ));
     }
 

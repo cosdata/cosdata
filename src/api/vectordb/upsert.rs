@@ -36,7 +36,7 @@ pub(crate) async fn upsert(
 
     if !collection.get_auto_config_flag() && !collection.get_configured_flag() {
         return HttpResponse::BadRequest()
-            .body("Vector store is set to mannual indexing but an index is not created");
+            .body("Vector store is set to manual indexing but an index is not created");
     }
 
     // Call run_upload with the extracted parameters
