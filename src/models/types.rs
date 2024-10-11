@@ -612,34 +612,28 @@ pub struct AppEnv {
     pub persist: Arc<Environment>,
 }
 
-static AIN_ENV: OnceLock<Result<Arc<AppEnv>, WaCustomError>> = OnceLock::new();
-
 pub fn get_app_env(cache: Arc<NodeRegistry>) -> Result<Arc<AppEnv>, WaCustomError> {
-    AIN_ENV
-        .get_or_init(|| {
-            let path = Path::new("./_mdb"); // TODO: prefix the customer & database name
+    let path = Path::new("./_mdb"); // TODO: prefix the customer & database name
 
-            // Ensure the directory exists
-            create_dir_all(&path).map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-            // Initialize the environment
-            let env = Environment::new()
-                .set_max_dbs(5)
-                .set_map_size(10485760) // Set the maximum size of the database to 10MB
-                .open(&path)
-                .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+    // Ensure the directory exists
+    create_dir_all(&path).map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+    // Initialize the environment
+    let env = Environment::new()
+        .set_max_dbs(5)
+        .set_map_size(10485760) // Set the maximum size of the database to 10MB
+        .open(&path)
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
-            let env_arc = Arc::new(env);
+    let env_arc = Arc::new(env);
 
-            let vector_store_map = VectorStoreMap::load(env_arc.clone(), cache)
-                .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+    let vector_store_map = VectorStoreMap::load(env_arc.clone(), cache)
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
-            Ok(Arc::new(AppEnv {
-                user_data_cache: DashMap::new(),
-                vector_store_map,
-                persist: env_arc,
-            }))
-        })
-        .clone()
+    Ok(Arc::new(AppEnv {
+        user_data_cache: DashMap::new(),
+        vector_store_map,
+        persist: env_arc,
+    }))
 }
 
 #[derive(Clone)]
