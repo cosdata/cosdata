@@ -5,6 +5,7 @@ use crate::config_loader::Config;
 use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::cache_loader::NodeRegistry;
 use crate::models::types::{get_app_env, AppEnv};
+use crate::WaCustomError;
 
 fn init_index_manager() -> BufferManagerFactory {
     BufferManagerFactory::new(
@@ -37,22 +38,18 @@ pub struct AppContext {
 
 impl AppContext {
 
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: Config) -> Result<Self, WaCustomError> {
         let index_manager = Arc::new(init_index_manager());
         let node_registry = Arc::new(init_node_registry(index_manager.clone()));
         let vec_raw_manager = Arc::new(init_vec_raw_manager());
-        // Let it panic if there's a problem initializing the
-        // env. Without app env, the HTTP server won't be able to
-        // serve any incoming requests anyway.
-        let ain_env = get_app_env(node_registry.clone())
-            .expect("Failed to initialize app env");
-        Self {
+        let ain_env = get_app_env(node_registry.clone())?;
+        Ok(Self {
             config,
             node_registry,
             index_manager,
             vec_raw_manager,
             ain_env,
-        }
+        })
     }
 }
 
