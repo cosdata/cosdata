@@ -1,3 +1,4 @@
+use super::buffered_io::BufferManagerFactory;
 use super::cache_loader::NodeRegistry;
 use super::meta_persist::{
     delete_vector_store, lmdb_init_collections_db, load_collections, persist_vector_store,
@@ -392,6 +393,9 @@ pub struct VectorStore {
     pub distance_metric: Arc<DistanceMetric>,
     pub storage_type: StorageType,
     pub vcs: Arc<VersionControl>,
+    pub cache: Arc<NodeRegistry>,
+    pub index_manager: Arc<BufferManagerFactory>,
+    pub vec_raw_manager: Arc<BufferManagerFactory>,
 }
 
 impl VectorStore {
@@ -409,6 +413,9 @@ impl VectorStore {
         distance_metric: Arc<DistanceMetric>,
         storage_type: StorageType,
         vcs: Arc<VersionControl>,
+        cache: Arc<NodeRegistry>,
+        index_manager: Arc<BufferManagerFactory>,
+        vec_raw_manager: Arc<BufferManagerFactory>,
     ) -> Self {
         VectorStore {
             exec_queue_nodes,
@@ -425,6 +432,9 @@ impl VectorStore {
             distance_metric,
             storage_type,
             vcs,
+            cache,
+            index_manager,
+            vec_raw_manager,
         }
     }
     // Get method
@@ -486,22 +496,36 @@ impl VectorStoreMap {
     ///
     /// In doing so, the root vec for all collections are loaded into
     /// memory, which also ends up warming the cache (NodeRegistry)
-    fn load(env: Arc<Environment>, cache: Arc<NodeRegistry>) -> Result<Self, WaCustomError> {
+    fn load(env: Arc<Environment>) -> Result<Self, WaCustomError> {
         let res =
             Self::new(env.clone()).map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
         let collections = load_collections(&res.lmdb_env, res.lmdb_db.clone())
             .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
-        let bufmans = cache.get_bufmans();
+        let root_path = Path::new(".");
+
+        // let bufmans = cache.get_bufmans();
 
         for coll in collections {
+            let collection_path: Arc<Path> = root_path.join(&coll.name).into();
+            let index_manager = Arc::new(BufferManagerFactory::new(
+                collection_path.clone(),
+                |root, ver| root.join(format!("{}.index", **ver)),
+            ));
+            let vec_raw_manager = Arc::new(BufferManagerFactory::new(
+                collection_path.clone(),
+                |root, ver| root.join(format!("{}.vec_raw", **ver)),
+            ));
+            // TODO: May be the value can be taken from config
+            let cache = Arc::new(NodeRegistry::new(1000, index_manager.clone()));
+
             let db = Arc::new(
                 env.create_db(Some(&coll.name), DatabaseFlags::empty())
                     .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?,
             );
             let root_item: LazyItem<MergedNode> = LazyItem::deserialize(
-                bufmans.clone(),
+                index_manager.clone(),
                 coll.file_index,
                 cache.clone(),
                 1000,
@@ -509,19 +533,12 @@ impl VectorStoreMap {
             )?;
             let root = LazyItemRef::from_lazy(root_item);
 
-            // @NOTE: Creating a separate instance `prop_file` for every instance of VectorStore,
-            // as this is how it works at present when a new collection is created
-            // (Refer: crate::api_service::init_vector_store).
-            //
-            // But it might be a good idea to share a single instance of it with all
-            // `VectorStore` instances.
-
             let vcs = Arc::new(VersionControl::from_existing(env.clone(), db.clone()));
             let prop_file = Arc::new(
                 OpenOptions::new()
                     .create(true)
                     .append(true)
-                    .open("prop.data")
+                    .open(collection_path.join("prop.data"))
                     .unwrap(),
             );
             let lmdb = MetaDb {
@@ -543,6 +560,9 @@ impl VectorStoreMap {
                 coll.distance_metric.clone(),
                 coll.storage_type,
                 vcs,
+                cache,
+                index_manager,
+                vec_raw_manager,
             );
             res.inner.insert(coll.name, Arc::new(vs));
         }
@@ -605,7 +625,7 @@ pub struct AppEnv {
     pub persist: Arc<Environment>,
 }
 
-pub fn get_app_env(cache: Arc<NodeRegistry>) -> Result<Arc<AppEnv>, WaCustomError> {
+pub fn get_app_env() -> Result<Arc<AppEnv>, WaCustomError> {
     let path = Path::new("./_mdb"); // TODO: prefix the customer & database name
 
     // Ensure the directory exists
@@ -619,7 +639,7 @@ pub fn get_app_env(cache: Arc<NodeRegistry>) -> Result<Arc<AppEnv>, WaCustomErro
 
     let env_arc = Arc::new(env);
 
-    let vector_store_map = VectorStoreMap::load(env_arc.clone(), cache)
+    let vector_store_map = VectorStoreMap::load(env_arc.clone())
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
     Ok(Arc::new(AppEnv {

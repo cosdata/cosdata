@@ -59,7 +59,6 @@ pub(crate) async fn create_vector_in_transaction(
         .await
         .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
     run_upload_in_transaction(
-        ctx,
         collection,
         transaction_id,
         vec![(

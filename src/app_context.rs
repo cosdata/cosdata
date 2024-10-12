@@ -28,24 +28,12 @@ fn init_vec_raw_manager() -> BufferManagerFactory {
 #[allow(unused)]
 pub struct AppContext {
     pub config: Config,
-    pub node_registry: Arc<NodeRegistry>,
-    pub index_manager: Arc<BufferManagerFactory>,
-    pub vec_raw_manager: Arc<BufferManagerFactory>,
     pub ain_env: Arc<AppEnv>,
 }
 
 impl AppContext {
     pub fn new(config: Config) -> Result<Self, WaCustomError> {
-        let index_manager = Arc::new(init_index_manager());
-        let node_registry = Arc::new(init_node_registry(index_manager.clone()));
-        let vec_raw_manager = Arc::new(init_vec_raw_manager());
-        let ain_env = get_app_env(node_registry.clone())?;
-        Ok(Self {
-            config,
-            node_registry,
-            index_manager,
-            vec_raw_manager,
-            ain_env,
-        })
+        let ain_env = get_app_env()?;
+        Ok(Self { config, ain_env })
     }
 }

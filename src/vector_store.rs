@@ -1,7 +1,6 @@
 use crate::distance::DistanceFunction;
 use crate::macros::key;
-use crate::models::buffered_io::{BufferManager, BufferManagerFactory};
-use crate::models::cache_loader::NodeRegistry;
+use crate::models::buffered_io::BufferManager;
 use crate::models::common::*;
 use crate::models::file_persist::*;
 use crate::models::identity_collections::IdentitySet;
@@ -19,12 +18,10 @@ use smallvec::SmallVec;
 use std::array::TryFromSliceError;
 use std::cmp::Ordering;
 use std::collections::HashSet;
-use std::fs::File;
 use std::io::SeekFrom;
 use std::sync::Arc;
 
 pub fn ann_search(
-    node_registry: Arc<NodeRegistry>,
     vec_store: Arc<VectorStore>,
     vector_emb: QuantizedVectorEmbedding,
     cur_entry: LazyItem<MergedNode>,
@@ -34,7 +31,7 @@ pub fn ann_search(
     let mut skipm = HashSet::new();
     skipm.insert(vector_emb.hash_vec.clone());
 
-    let cur_node = cur_entry.get_data(node_registry.clone());
+    let cur_node = cur_entry.get_data(vec_store.cache.clone());
 
     let mut prop_arc = cur_node.prop.clone();
     let prop_state = prop_arc.get();
@@ -49,7 +46,6 @@ pub fn ann_search(
     };
 
     let z = traverse_find_nearest(
-        node_registry.clone(),
         vec_store.clone(),
         cur_entry.clone(),
         fvec.clone(),
@@ -74,7 +70,6 @@ pub fn ann_search(
         Some(vec![])
     } else {
         ann_search(
-            node_registry,
             vec_store,
             vector_emb,
             z[0].0.clone(),
@@ -86,7 +81,6 @@ pub fn ann_search(
 }
 
 pub fn vector_fetch(
-    node_registry: Arc<NodeRegistry>,
     vec_store: Arc<VectorStore>,
     vector_id: VectorId,
 ) -> Result<Vec<Option<(VectorId, Vec<(VectorId, MetricResult)>)>>, WaCustomError> {
@@ -95,7 +89,7 @@ pub fn vector_fetch(
     for lev in 0..vec_store.max_cache_level {
         let maybe_res = load_vector_id_lsmdb(HNSWLevel(lev), vector_id.clone());
         let neighbors = maybe_res
-            .try_get_data(node_registry.clone())
+            .try_get_data(vec_store.cache.clone())
             .ok()
             .and_then(|data| {
                 let id = get_vector_id_from_node(data.clone())?;
@@ -105,7 +99,7 @@ pub fn vector_fetch(
                     data.neighbors
                         .iter()
                         .filter_map(|ne| {
-                            let data = ne.1.try_get_data(node_registry.clone()).ok()?;
+                            let data = ne.1.try_get_data(vec_store.cache.clone()).ok()?;
                             Some((get_vector_id_from_node(data)?, ne.0))
                         })
                         .collect(),
@@ -282,8 +276,6 @@ pub fn insert_embedding(
 }
 
 pub fn index_embeddings(
-    node_registry: Arc<NodeRegistry>,
-    vec_raw_manager: &BufferManagerFactory,
     vec_store: Arc<VectorStore>,
     upload_process_batch_size: usize,
 ) -> Result<(), WaCustomError> {
@@ -350,7 +342,6 @@ pub fn index_embeddings(
                 };
 
                 index_embedding(
-                    node_registry.clone(),
                     vec_store.clone(),
                     None,
                     embedding,
@@ -399,7 +390,7 @@ pub fn index_embeddings(
         Ok(())
     };
 
-    let bufman = vec_raw_manager.get(&version)?;
+    let bufman = vec_store.vec_raw_manager.get(&version)?;
 
     let mut i = 0;
     let cursor = bufman.open_cursor()?;
@@ -429,7 +420,6 @@ pub fn index_embeddings(
 }
 
 pub fn index_embedding(
-    node_registry: Arc<NodeRegistry>,
     vec_store: Arc<VectorStore>,
     parent: Option<LazyItem<MergedNode>>,
     vector_emb: QuantizedVectorEmbedding,
@@ -444,9 +434,9 @@ pub fn index_embedding(
     skipm.insert(vector_emb.hash_vec.clone());
 
     let cur_node = cur_entry
-        .get_latest_version(node_registry.clone())
+        .get_latest_version(vec_store.cache.clone())
         .0
-        .get_data(node_registry.clone());
+        .get_data(vec_store.cache.clone());
 
     let mut prop_arc = cur_node.prop.clone();
     let prop_state = prop_arc.get();
@@ -461,7 +451,6 @@ pub fn index_embedding(
     };
 
     let z = traverse_find_nearest(
-        node_registry.clone(),
         vec_store.clone(),
         cur_entry.clone(),
         fvec.clone(),
@@ -493,7 +482,6 @@ pub fn index_embedding(
 
     let parent = if cur_level.0 <= max_insert_level.0 {
         let parent = insert_node_create_edges(
-            node_registry.clone(),
             vec_store.clone(),
             parent,
             fvec,
@@ -512,7 +500,6 @@ pub fn index_embedding(
 
     if cur_level.0 != 0 {
         index_embedding(
-            node_registry,
             vec_store.clone(),
             parent,
             vector_emb.clone(),
@@ -528,13 +515,11 @@ pub fn index_embedding(
 }
 
 pub fn queue_node_prop_exec(
-    node_registry: Arc<NodeRegistry>,
-    lznode: LazyItem<MergedNode>,
-    prop_file: Arc<File>,
     vec_store: Arc<VectorStore>,
+    lznode: LazyItem<MergedNode>,
 ) -> Result<(), WaCustomError> {
     let (node, _location) = (
-        lznode.try_get_data(node_registry)?,
+        lznode.try_get_data(vec_store.cache.clone())?,
         lznode
             .get_file_index()
             .ok_or(WaCustomError::LazyLoadingError(
@@ -547,7 +532,7 @@ pub fn queue_node_prop_exec(
     let prop_state = prop_arc.get();
 
     if let PropState::Ready(node_prop) = &*prop_state {
-        let prop_location = write_prop_to_file(node_prop, &prop_file);
+        let prop_location = write_prop_to_file(node_prop, &vec_store.prop_file);
         node.set_prop_location(prop_location);
     } else {
         return Err(WaCustomError::NodeError(
@@ -576,17 +561,14 @@ pub fn _link_prev_version(_prev_loc: Option<u32>, _offset: u32) {
     // todo , needs to happen in file persist
 }
 
-pub fn auto_commit_transaction(
-    vec_store: Arc<VectorStore>,
-    bufmans: Arc<BufferManagerFactory>,
-) -> Result<(), WaCustomError> {
+pub fn auto_commit_transaction(vec_store: Arc<VectorStore>) -> Result<(), WaCustomError> {
     // Retrieve exec_queue_nodes from vec_store
     let mut exec_queue_nodes_arc = vec_store.exec_queue_nodes.clone();
     let mut exec_queue_nodes = exec_queue_nodes_arc.get().clone();
 
     for node in exec_queue_nodes.iter_mut() {
         println!("auto_commit_txn");
-        persist_node_update_loc(bufmans.clone(), node)?;
+        persist_node_update_loc(vec_store.index_manager.clone(), node)?;
     }
 
     exec_queue_nodes_arc.update(Vec::new());
@@ -620,7 +602,6 @@ fn create_node_extract_neighbours(
 }
 
 fn insert_node_create_edges(
-    node_registry: Arc<NodeRegistry>,
     vec_store: Arc<VectorStore>,
     parent: Option<LazyItem<MergedNode>>,
     fvec: Arc<Storage>,
@@ -656,10 +637,10 @@ fn insert_node_create_edges(
     }
 
     for (nbr1, dist) in nbs.into_iter() {
-        if let Ok(old_neighbour) = nbr1.try_get_data(node_registry.clone()) {
+        if let Ok(old_neighbour) = nbr1.try_get_data(vec_store.cache.clone()) {
             let (new_neighbor, mut new_neighbor_neighbors, mut neighbor_list) =
-                if let Some(version) = nbr1.get_version(node_registry.clone(), version_number) {
-                    let node = version.get_data(node_registry.clone());
+                if let Some(version) = nbr1.get_version(vec_store.cache.clone(), version_number) {
+                    let node = version.get_data(vec_store.cache.clone());
                     let neighbor_list: Vec<(LazyItem<MergedNode>, MetricResult)> =
                         node.neighbors.iter().map(|nbr2| (nbr2.1, nbr2.0)).collect();
                     (version, node.neighbors.clone(), neighbor_list)
@@ -673,7 +654,7 @@ fn insert_node_create_edges(
                         prop_arc,
                         parent,
                     );
-                    nbr1.add_version(node_registry.clone(), new_neighbour.clone());
+                    nbr1.add_version(vec_store.cache.clone(), new_neighbour.clone());
                     let neighbor_list: Vec<(LazyItem<MergedNode>, MetricResult)> = old_neighbour
                         .neighbors
                         .iter()
@@ -712,18 +693,12 @@ fn insert_node_create_edges(
         }
     }
 
-    queue_node_prop_exec(
-        node_registry,
-        node.clone(),
-        vec_store.prop_file.clone(),
-        vec_store,
-    )?;
+    queue_node_prop_exec(vec_store, node.clone())?;
 
     Ok(node)
 }
 
 fn traverse_find_nearest(
-    node_registry: Arc<NodeRegistry>,
     vec_store: Arc<VectorStore>,
     vtm: LazyItem<MergedNode>,
     fvec: Arc<Storage>,
@@ -736,9 +711,9 @@ fn traverse_find_nearest(
     let mut tasks: SmallVec<[Vec<(LazyItem<MergedNode>, MetricResult)>; 24]> = SmallVec::new();
 
     let node = vtm
-        .get_latest_version(node_registry.clone())
+        .get_latest_version(vec_store.cache.clone())
         .0
-        .get_data(node_registry.clone());
+        .get_data(vec_store.cache.clone());
 
     for (index, nref) in node.neighbors.iter().enumerate() {
         if let Some(mut neighbor_arc) = nref.1.get_lazy_data() {
@@ -775,7 +750,6 @@ fn traverse_find_nearest(
                     if hops <= tapered_total_hops(full_hops, cur_level.0, vec_store.max_cache_level)
                     {
                         let mut z = traverse_find_nearest(
-                            node_registry.clone(),
                             vec_store.clone(),
                             nref.1.clone(),
                             fvec.clone(),

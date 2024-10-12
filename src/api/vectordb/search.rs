@@ -21,11 +21,10 @@ pub(crate) async fn search(
         }
     };
 
-    let result =
-        match ann_vector_query(ctx.node_registry.clone(), vec_store.clone(), body.vector).await {
-            Ok(result) => result,
-            Err(err) => return HttpResponse::InternalServerError().body(err.to_string()),
-        };
+    let result = match ann_vector_query(vec_store.clone(), body.vector).await {
+        Ok(result) => result,
+        Err(err) => return HttpResponse::InternalServerError().body(err.to_string()),
+    };
 
     let response_data = RPCResponseBody::RespVectorKNN {
         knn: convert_option_vec(result),

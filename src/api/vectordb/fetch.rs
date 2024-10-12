@@ -23,7 +23,7 @@ pub(crate) async fn fetch(
     };
     let fvid = VectorId::from(body.vector_id);
 
-    let result = fetch_vector_neighbors(ctx.node_registry.clone(), vec_store.clone(), fvid).await;
+    let result = fetch_vector_neighbors(vec_store.clone(), fvid).await;
 
     let mut xx: Vec<Option<RPCResponseBody>> = result
         .iter()
