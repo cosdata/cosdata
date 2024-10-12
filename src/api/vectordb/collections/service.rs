@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use crate::{app_context::AppContext, models::types::VectorStore};
+use crate::{
+    app_context::AppContext,
+    models::types::{Collection, VectorStore},
+};
 
 use super::{
     dtos::{
@@ -12,33 +15,45 @@ use super::{
 
 pub(crate) async fn create_collection(
     ctx: Arc<AppContext>,
-    create_collection_dto: CreateCollectionDto,
+    create_collection_dto: &CreateCollectionDto,
 ) -> Result<CreateCollectionDtoResponse, CollectionsError> {
-    // Define the parameters for init_vector_store
-    let name = create_collection_dto.name.clone();
-    let description = create_collection_dto.description;
-    let size = create_collection_dto.dense_vector.dimension as usize;
-    let max_cache_level = 5;
+    let Collection {
+        name,
+        description,
+        config,
+        dense_vector,
+        metadata_schema,
+        sparse_vector,
+    } = &*repo::create_collection(create_collection_dto).await?;
 
-    if create_collection_dto.dense_vector.enabled {
-        let _ = repo::create_vector_store(ctx, name, size, None, None, max_cache_level).await?;
-    } else {
+    if dense_vector.enabled {
+        let _ = repo::create_vector_store(
+            ctx.clone(),
+            name,
+            dense_vector.dimension as usize,
+            None,
+            None,
+            5,
+        )
+        .await?;
+    }
+    if sparse_vector.enabled {
         let _ = repo::create_inverted_index(
             ctx,
             name,
             description,
-            create_collection_dto.sparse_vector.auto_create_index,
-            create_collection_dto.metadata_schema,
-            create_collection_dto.config.max_vectors,
-            create_collection_dto.config.replication_factor,
+            sparse_vector.auto_create_index,
+            metadata_schema,
+            config.max_vectors,
+            config.replication_factor,
         )
         .await?;
     }
 
     Ok(CreateCollectionDtoResponse {
-        id: create_collection_dto.name.clone(),
-        name: create_collection_dto.name,
-        dimensions: size,
+        id: name.clone(),
+        name: name.clone(),
+        description: description.clone(),
     })
 }
 

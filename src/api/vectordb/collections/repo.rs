@@ -4,43 +4,72 @@ use crate::{
     api_service::{init_inverted_index, init_vector_store},
     app_context::AppContext,
     indexes::inverted_index::InvertedIndex,
-    models::types::{get_app_env, VectorStore},
+    models::types::{get_app_env, Collection, VectorStore},
 };
 
 use super::{
-    dtos::{FindCollectionDto, GetCollectionsDto},
+    dtos::{CreateCollectionDto, FindCollectionDto, GetCollectionsDto},
     error::CollectionsError,
 };
 
+pub(crate) async fn create_collection(
+    CreateCollectionDto {
+        name,
+        description,
+        config,
+        dense_vector,
+        metadata_schema,
+        sparse_vector,
+    }: &CreateCollectionDto,
+) -> Result<Arc<Collection>, CollectionsError> {
+    let collection = Collection::new(
+        name,
+        description,
+        dense_vector,
+        sparse_vector,
+        metadata_schema,
+        config,
+    );
+
+    Ok(Arc::new(collection))
+}
+
 pub(crate) async fn create_vector_store(
     ctx: Arc<AppContext>,
-    name: String,
+    name: &str,
     size: usize,
     lower_bound: Option<f32>,
     upper_bound: Option<f32>,
     max_cache_level: u8,
 ) -> Result<Arc<VectorStore>, CollectionsError> {
     // Call init_vector_store using web::block
-    let result =
-        init_vector_store(ctx, name, size, lower_bound, upper_bound, max_cache_level).await;
+    let result = init_vector_store(
+        ctx,
+        name.into(),
+        size,
+        lower_bound,
+        upper_bound,
+        max_cache_level,
+    )
+    .await;
     result.map_err(|e| CollectionsError::FailedToCreateCollection(e.to_string()))
 }
 
 pub(crate) async fn create_inverted_index(
     ctx: Arc<AppContext>,
-    name: String,
-    description: Option<String>,
+    name: &str,
+    description: &Option<String>,
     auto_create_index: bool,
-    metadata_schema: Option<String>,
+    metadata_schema: &Option<String>,
     max_vectors: Option<i32>,
     replication_factor: Option<i32>,
 ) -> Result<Arc<InvertedIndex>, CollectionsError> {
     let result = init_inverted_index(
         ctx,
-        name,
-        description,
+        name.into(),
+        description.clone(),
         auto_create_index,
-        metadata_schema,
+        metadata_schema.clone(),
         max_vectors,
         replication_factor,
     )
