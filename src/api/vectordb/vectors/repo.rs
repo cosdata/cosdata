@@ -22,7 +22,7 @@ pub(crate) async fn create_vector(
     collection_id: &str,
     create_vector_dto: CreateVectorDto,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
-    let collection = collections::service::get_collection_by_id(collection_id)
+    let collection = collections::service::get_collection_by_id(ctx.clone(), collection_id)
         .await
         .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
 
@@ -55,11 +55,10 @@ pub(crate) async fn create_vector_in_transaction(
     transaction_id: Hash,
     create_vector_dto: CreateVectorDto,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
-    let collection = collections::service::get_collection_by_id(collection_id)
+    let collection = collections::service::get_collection_by_id(ctx.clone(), collection_id)
         .await
         .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
     run_upload_in_transaction(
-        ctx,
         collection,
         transaction_id,
         vec![(
@@ -87,7 +86,7 @@ pub(crate) async fn update_vector(
     vector_id: VectorIdValue,
     update_vector_dto: UpdateVectorDto,
 ) -> Result<UpdateVectorResponseDto, VectorsError> {
-    let collection = collections::service::get_collection_by_id(collection_id)
+    let collection = collections::service::get_collection_by_id(ctx.clone(), collection_id)
         .await
         .map_err(|e| VectorsError::FailedToUpdateVector(e.to_string()))?;
 

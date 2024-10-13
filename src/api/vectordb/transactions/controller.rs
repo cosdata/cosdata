@@ -6,17 +6,19 @@ use super::{error::TransactionError, service};
 
 pub(crate) async fn create_transaction(
     collection_id: web::Path<String>,
+    ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse, TransactionError> {
     let collection_id = collection_id.into_inner();
-    let transaction = service::create_transaction(&collection_id).await?;
+    let transaction = service::create_transaction(ctx.into_inner(), &collection_id).await?;
     Ok(HttpResponse::Ok().json(transaction))
 }
 
 pub(crate) async fn commit_transaction(
     params: web::Path<(String, u32)>,
+    ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse, TransactionError> {
     let (collection_id, transaction_id) = params.into_inner();
-    let _ = service::commit_transaction(&collection_id, transaction_id.into()).await?;
+    let _ = service::commit_transaction(ctx.into_inner(), &collection_id, transaction_id.into()).await?;
     Ok(HttpResponse::NoContent().finish())
 }
 
@@ -38,8 +40,9 @@ pub(crate) async fn create_vector_in_transaction(
 
 pub(crate) async fn abort_transaction(
     params: web::Path<(String, String)>,
+    ctx: web::Data<AppContext>
 ) -> Result<HttpResponse, TransactionError> {
     let (collection_id, transaction_id) = params.into_inner();
-    let _ = service::abort_transaction(&collection_id, &transaction_id).await?;
+    let _ = service::abort_transaction(ctx.into_inner(), &collection_id, &transaction_id).await?;
     Ok(HttpResponse::NoContent().finish())
 }

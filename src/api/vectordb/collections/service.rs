@@ -26,22 +26,25 @@ pub(crate) async fn create_collection(
 }
 
 pub(crate) async fn get_collections(
+    ctx: Arc<AppContext>,
     get_collections_dto: GetCollectionsDto,
 ) -> Result<Vec<FindCollectionDto>, CollectionsError> {
-    let collections = repo::get_vector_stores(get_collections_dto).await?;
+    let collections = repo::get_vector_stores(ctx, get_collections_dto).await?;
     Ok(collections)
 }
 
 pub(crate) async fn get_collection_by_id(
+    ctx: Arc<AppContext>,
     collection_id: &str,
 ) -> Result<Arc<VectorStore>, CollectionsError> {
-    let store = repo::get_vector_store_by_name(collection_id).await?;
+    let store = repo::get_vector_store_by_name(ctx, collection_id).await?;
     Ok(store)
 }
 
 pub(crate) async fn delete_collection_by_id(
+    ctx: Arc<AppContext>,
     collection_id: &str,
 ) -> Result<Arc<VectorStore>, CollectionsError> {
-    let store = repo::delete_vector_store_by_name(collection_id).await?;
+    let store = repo::delete_vector_store_by_name(ctx, collection_id).await?;
     Ok(store)
 }
