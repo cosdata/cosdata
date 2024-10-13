@@ -124,3 +124,10 @@ pub(crate) async fn find_similar_vectors(
         score: find_similar_vectors.vector[0],
     }])
 }
+
+pub(crate) async fn delete_vector_by_id(
+    _collection_id: &str,
+    _vector_id: VectorIdValue,
+) -> Result<CreateVectorResponseDto, VectorsError> {
+    Err(VectorsError::NotImplemented)?
+}
