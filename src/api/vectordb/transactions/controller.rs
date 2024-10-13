@@ -35,3 +35,11 @@ pub(crate) async fn create_vector_in_transaction(
     .await?;
     Ok(HttpResponse::Ok().json(vector))
 }
+
+pub(crate) async fn abort_transaction(
+    params: web::Path<(String, String)>,
+) -> Result<HttpResponse, TransactionError> {
+    let (collection_id, transaction_id) = params.into_inner();
+    let _ = service::abort_transaction(&collection_id, &transaction_id).await?;
+    Ok(HttpResponse::NoContent().finish())
+}

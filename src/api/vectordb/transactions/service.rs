@@ -29,3 +29,10 @@ pub(crate) async fn create_vector_in_transaction(
 ) -> Result<CreateVectorResponseDto, TransactionError> {
     repo::create_vector_in_transaction(ctx, collection_id, transaction_id, create_vector_dto).await
 }
+
+pub(crate) async fn abort_transaction(
+    collection_id: &str,
+    transaction_id: &str,
+) -> Result<(), TransactionError> {
+    repo::abort_transaction(collection_id, transaction_id).await
+}
