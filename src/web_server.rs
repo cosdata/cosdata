@@ -3,6 +3,7 @@ use crate::api::auth::{auth_module, authentication_middleware::AuthenticationMid
 use crate::api::vectordb::collections::collections_module;
 use crate::api::vectordb::transactions::transactions_module;
 use crate::api::vectordb::vectors::vectors_module;
+use crate::app_context::AppContext;
 use crate::config_loader::{load_config, ServerMode, Ssl};
 use actix_cors::Cors;
 use actix_web::web::Data;
@@ -48,14 +49,14 @@ pub async fn run_actix_server() -> std::io::Result<()> {
         }
     };
 
-    let config_data = Data::new(config);
-    let app_state = config_data.clone();
     log::info!(
         "starting HTTPS server at {}://{}:{}",
-        &config_data.server.mode.protocol(),
-        &config_data.server.host,
-        &config_data.server.port
+        &config.server.mode.protocol(),
+        &config.server.host,
+        &config.server.port,
     );
+
+    let ctx = Data::new(AppContext::new(config.clone()));
 
     let server = HttpServer::new(move || {
         App::new()
@@ -70,7 +71,7 @@ pub async fn run_actix_server() -> std::io::Result<()> {
             .service(
                 web::scope("/vectordb")
                     .wrap(AuthenticationMiddleware)
-                    // vectors module must be registereb before collections module
+                    // vectors module must be registered before collections module
                     // as its scope path is more specific than collections module
                     .service(vectors_module())
                     .service(transactions_module())
@@ -94,16 +95,12 @@ pub async fn run_actix_server() -> std::io::Result<()> {
                                 web::post().to(api::vectordb::transactions::delete),
                             )
                             .route(
-                                "/{transaction_id}/commit",
-                                web::post().to(api::vectordb::transactions::commit),
-                            )
-                            .route(
                                 "/{transaction_id}/abort",
                                 web::post().to(api::vectordb::transactions::abort),
                             ),
                     ),
             )
-            .app_data(app_state.clone())
+            .app_data(ctx.clone())
 
         // .service(web::resource("/index").route(web::post().to(index)))
         // .service(
@@ -116,7 +113,7 @@ pub async fn run_actix_server() -> std::io::Result<()> {
         // .service(web::resource("/").route(web::post().to(index)))
     });
 
-    let addr = config_data.server.listen_address();
+    let addr = config.server.listen_address();
     let server = match tls {
         Some(tls_config) => server.bind_rustls_0_23(addr, tls_config),
         None => server.bind(addr),

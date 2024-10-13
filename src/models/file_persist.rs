@@ -18,10 +18,12 @@ pub fn read_node_from_file(
 
     // Pretty print the node
     match file_index {
-        FileIndex::Valid { offset, version } => {
+        FileIndex::Valid {
+            offset, version_id, ..
+        } => {
             println!(
                 "Read MergedNode from offset: {}, version: {}",
-                offset.0, *version
+                offset.0, *version_id
             );
         }
         FileIndex::Invalid => {
@@ -43,9 +45,9 @@ pub fn write_node_to_file(
     let mut node_arc = lazy_item
         .get_lazy_data()
         .ok_or(WaCustomError::LazyLoadingError("node in null".to_string()))?;
-    let node = node_arc.get();
+    let node = node_arc.get().clone().unwrap();
     let version = match file_index {
-        Some(FileIndex::Valid { version, .. }) => version,
+        Some(FileIndex::Valid { version_id, .. }) => version_id,
         _ => lazy_item.get_current_version(),
     };
     let bufman = bufmans.get(&version)?;
@@ -54,11 +56,12 @@ pub fn write_node_to_file(
     match file_index {
         Some(FileIndex::Valid {
             offset: FileOffset(offset),
-            version,
+            version_id,
+            ..
         }) => {
             println!(
                 "About to write at offset {}, version {}, node: {:#?}",
-                offset, *version, node
+                offset, *version_id, node
             );
             bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
         }
@@ -73,12 +76,27 @@ pub fn write_node_to_file(
     bufman.close_cursor(cursor)?;
 
     // Create and return the new FileIndex
-    let new_file_index = FileIndex::Valid {
-        offset: FileOffset(new_offset),
-        version: match file_index {
-            Some(FileIndex::Valid { version, .. }) => version,
-            _ => lazy_item.get_current_version(),
+    let new_file_index = match file_index {
+        Some(FileIndex::Valid {
+            version_number,
+            version_id,
+            ..
+        }) => FileIndex::Valid {
+            offset: FileOffset(new_offset),
+            version_number,
+            version_id,
         },
+        Some(FileIndex::Invalid) => FileIndex::Invalid,
+        None => {
+            let version_id = lazy_item.get_current_version();
+            let version_number = lazy_item.get_current_version_number();
+
+            FileIndex::Valid {
+                offset: FileOffset(new_offset),
+                version_number,
+                version_id,
+            }
+        }
     };
 
     Ok(new_file_index)

@@ -1,5 +1,8 @@
 use crate::models::lru_cache::CachedValue;
-use crate::storage::inverted_index::InvertedIndexItem;
+use crate::storage::inverted_index_old::InvertedIndexItem;
+use crate::storage::inverted_index_sparse_ann::{
+    InvertedIndexSparseAnn, InvertedIndexSparseAnnNode,
+};
 use crate::storage::Storage;
 
 use super::buffered_io::{BufIoError, BufferManagerFactory};
@@ -18,7 +21,13 @@ use std::sync::{atomic::AtomicBool, Arc, RwLock};
 #[derive(Clone)]
 pub enum CacheItem {
     MergedNode(LazyItem<MergedNode>),
-    InvertedIndexItem(LazyItem<InvertedIndexItem<Storage>>),
+    Storage(LazyItem<Storage>),
+    InvertedIndexItemWithStorage(LazyItem<InvertedIndexItem<Storage>>),
+    Float(LazyItem<f32>),
+    Unsigned32(LazyItem<u32>),
+    InvertedIndexItemWithFloat(LazyItem<InvertedIndexItem<f32>>),
+    InvertedIndexSparseAnnNode(LazyItem<InvertedIndexSparseAnnNode>),
+    InvertedIndexSparseAnn(LazyItem<InvertedIndexSparseAnn>),
 }
 
 pub trait Cacheable: Clone + 'static {
@@ -40,9 +49,9 @@ impl Cacheable for MergedNode {
     }
 }
 
-impl Cacheable for InvertedIndexItem<Storage> {
+impl Cacheable for Storage {
     fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
-        if let CacheItem::InvertedIndexItem(item) = cache_item {
+        if let CacheItem::Storage(item) = cache_item {
             Some(item)
         } else {
             None
@@ -50,7 +59,91 @@ impl Cacheable for InvertedIndexItem<Storage> {
     }
 
     fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
-        CacheItem::InvertedIndexItem(item)
+        CacheItem::Storage(item)
+    }
+}
+
+impl Cacheable for InvertedIndexItem<Storage> {
+    fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
+        if let CacheItem::InvertedIndexItemWithStorage(item) = cache_item {
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
+        CacheItem::InvertedIndexItemWithStorage(item)
+    }
+}
+
+impl Cacheable for f32 {
+    fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
+        if let CacheItem::Float(item) = cache_item {
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
+        CacheItem::Float(item)
+    }
+}
+
+impl Cacheable for u32 {
+    fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
+        if let CacheItem::Unsigned32(item) = cache_item {
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
+        CacheItem::Unsigned32(item)
+    }
+}
+
+impl Cacheable for InvertedIndexItem<f32> {
+    fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
+        if let CacheItem::InvertedIndexItemWithFloat(item) = cache_item {
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
+        CacheItem::InvertedIndexItemWithFloat(item)
+    }
+}
+
+impl Cacheable for InvertedIndexSparseAnnNode {
+    fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
+        if let CacheItem::InvertedIndexSparseAnnNode(item) = cache_item {
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
+        CacheItem::InvertedIndexSparseAnnNode(item)
+    }
+}
+
+impl Cacheable for InvertedIndexSparseAnn {
+    fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
+        if let CacheItem::InvertedIndexSparseAnn(item) = cache_item {
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
+        CacheItem::InvertedIndexSparseAnn(item)
     }
 }
 
@@ -70,6 +163,11 @@ impl NodeRegistry {
             bufmans,
         }
     }
+
+    pub fn get_bufmans(&self) -> Arc<BufferManagerFactory> {
+        self.bufmans.clone()
+    }
+
     pub fn get_object<T: Cacheable, F>(
         self: Arc<Self>,
         file_index: FileIndex,
@@ -114,21 +212,27 @@ impl NodeRegistry {
         }
         println!("Released read lock on cuckoo_filter");
 
-        let version_id = if let FileIndex::Valid { version, .. } = &file_index {
-            *version
+        let (version_id, version_number) = if let FileIndex::Valid {
+            version_id,
+            version_number,
+            ..
+        } = &file_index
+        {
+            (*version_id, *version_number)
         } else {
-            0.into()
+            (0.into(), 0)
         };
 
         if max_loads == 0 || !skipm.insert(combined_index) {
             println!("Either max_loads hit 0 or loop detected, returning LazyItem with no data");
             return Ok(LazyItem::Valid {
-                data: None,
+                data: ArcShift::new(None),
                 file_index: ArcShift::new(Some(file_index)),
                 decay_counter: 0,
                 persist_flag: Arc::new(AtomicBool::new(true)),
                 versions: LazyItemVec::new(),
                 version_id,
+                version_number,
                 serialized_flag: Arc::new(AtomicBool::new(true)),
             });
         }
@@ -188,31 +292,38 @@ impl NodeRegistry {
 
     pub fn combine_index(file_index: &FileIndex) -> u64 {
         match file_index {
-            FileIndex::Valid { offset, version } => ((offset.0 as u64) << 32) | (**version as u64),
+            FileIndex::Valid {
+                offset, version_id, ..
+            } => ((offset.0 as u64) << 32) | (**version_id as u64),
             FileIndex::Invalid => u64::MAX, // Use max u64 value for Invalid
         }
     }
 
-    pub fn split_combined_index(combined: u64) -> FileIndex {
-        if combined == u64::MAX {
-            FileIndex::Invalid
-        } else {
-            FileIndex::Valid {
-                offset: FileOffset((combined >> 32) as u32),
-                version: (combined as u32).into(),
-            }
-        }
-    }
+    // pub fn split_combined_index(combined: u64) -> FileIndex {
+    //     if combined == u64::MAX {
+    //         FileIndex::Invalid
+    //     } else {
+    //         FileIndex::Valid {
+    //             offset: FileOffset((combined >> 32) as u32),
+    //             version: (combined as u32).into(),
+    //         }
+    //     }
+    // }
 }
 
 pub fn load_cache() {
     // TODO: include db name in the path
-    let bufmans = Arc::new(BufferManagerFactory::new(Path::new(".").into()));
+    let bufmans = Arc::new(BufferManagerFactory::new(
+        Path::new(".").into(),
+        |root, ver| root.join(format!("{}.index", **ver)),
+    ));
 
+    // TODO: fill appropriate version info
     let file_index = FileIndex::Valid {
         offset: FileOffset(0),
-        version: 0.into(),
-    }; // Assuming initial version is 0
+        version_id: 0.into(),
+        version_number: 0,
+    };
     let cache = Arc::new(NodeRegistry::new(1000, bufmans));
     match read_node_from_file(file_index.clone(), cache) {
         Ok(_) => println!(

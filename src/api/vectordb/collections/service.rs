@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::models::types::VectorStore;
+use crate::{app_context::AppContext, models::types::VectorStore};
 
 use super::{
     dtos::{CreateCollectionDto, FindCollectionDto, GetCollectionsDto},
@@ -9,6 +9,7 @@ use super::{
 };
 
 pub(crate) async fn create_collection(
+    ctx: Arc<AppContext>,
     create_collection_dto: CreateCollectionDto,
 ) -> Result<Arc<VectorStore>, CollectionsError> {
     // Define the parameters for init_vector_store
@@ -21,7 +22,7 @@ pub(crate) async fn create_collection(
     // ---------------------------
     let max_cache_level = 5;
 
-    repo::create_vector_store(name, size, lower_bound, upper_bound, max_cache_level).await
+    repo::create_vector_store(ctx, name, size, lower_bound, upper_bound, max_cache_level).await
 }
 
 pub(crate) async fn get_collections(

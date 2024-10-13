@@ -11,7 +11,7 @@ use crate::models::lazy_load::*;
 use crate::models::versioning::*;
 use crate::quantization::product::ProductQuantization;
 use crate::quantization::scalar::ScalarQuantization;
-use crate::quantization::{Quantization, QuantizationError,StorageType};
+use crate::quantization::{Quantization, QuantizationError, StorageType};
 use crate::storage::Storage;
 use arcshift::ArcShift;
 use dashmap::DashMap;
@@ -20,11 +20,10 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs::*;
 use std::hash::{DefaultHasher, Hash as StdHash, Hasher};
-use std::hint::spin_loop;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct HNSWLevel(pub u8);
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -109,7 +108,7 @@ pub struct MergedNode {
     pub child: LazyItemRef<MergedNode>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub enum MetricResult {
     CosineSimilarity(CosineSimilarity),
     CosineDistance(CosineDistance),
@@ -170,7 +169,11 @@ pub enum QuantizationMetric {
 }
 
 impl Quantization for QuantizationMetric {
-    fn quantize(&self, vector: &[f32], storage_type: StorageType) -> Result<Storage, QuantizationError> {
+    fn quantize(
+        &self,
+        vector: &[f32],
+        storage_type: StorageType,
+    ) -> Result<Storage, QuantizationError> {
         match self {
             Self::Scalar => ScalarQuantization.quantize(vector, storage_type),
             Self::Product(product) => product.quantize(vector, storage_type),
@@ -329,7 +332,9 @@ pub enum VectorQt {
 
 impl VectorQt {
     pub fn unsigned_byte(vec: &[f32]) -> Self {
-        let quant_vec = simp_quant(vec).inspect_err(|x| println!("{:?}",x)).unwrap();
+        let quant_vec = simp_quant(vec)
+            .inspect_err(|x| println!("{:?}", x))
+            .unwrap();
         let mag = mag_square_u8(&quant_vec);
         Self::UnsignedByte { mag, quant_vec }
     }
@@ -367,7 +372,7 @@ pub struct VectorStore {
     pub quant_dim: usize,
     pub prop_file: Arc<File>,
     pub lmdb: MetaDb,
-    pub current_version: ArcShift<Option<Hash>>,
+    pub current_version: ArcShift<Hash>,
     pub current_open_transaction: ArcShift<Option<Hash>>,
     pub quantization_metric: Arc<QuantizationMetric>,
     pub distance_metric: Arc<DistanceMetric>,
@@ -385,7 +390,7 @@ impl VectorStore {
         quant_dim: usize,
         prop_file: Arc<File>,
         lmdb: MetaDb,
-        current_version: ArcShift<Option<Hash>>,
+        current_version: ArcShift<Hash>,
         quantization_metric: Arc<QuantizationMetric>,
         distance_metric: Arc<DistanceMetric>,
         storage_type: StorageType,
@@ -409,20 +414,29 @@ impl VectorStore {
         }
     }
     // Get method
-    pub fn get_current_version(&self) -> Option<Hash> {
+    pub fn get_current_version(&self) -> Hash {
         let mut arc = self.current_version.clone();
         arc.get().clone()
     }
 
     // Set method
-    pub fn set_current_version(&self, new_version: Option<Hash>) {
+    pub fn set_current_version(&self, new_version: Hash) {
         let mut arc = self.current_version.clone();
         arc.update(new_version);
     }
 }
+
+// Quantized vector embedding
+#[derive(Debug, Clone, PartialEq)]
+pub struct QuantizedVectorEmbedding {
+    pub quantized_vec: Arc<Storage>,
+    pub hash_vec: VectorId,
+}
+
+// Raw vector embedding
 #[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize, PartialEq)]
-pub struct VectorEmbedding {
-    pub raw_vec: Arc<Storage>,
+pub struct RawVectorEmbedding {
+    pub raw_vec: Vec<f32>,
     pub hash_vec: VectorId,
 }
 

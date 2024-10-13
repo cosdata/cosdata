@@ -1,7 +1,11 @@
 use std::sync::Arc;
 
+use crate::models::versioning::Hash;
+
 use crate::{
-    api::vectordb::collections, api_service::run_upload, config_loader::Config,
+    api::vectordb::collections,
+    api_service::{run_upload, run_upload_in_transaction},
+    app_context::AppContext,
     models::rpc::VectorIdValue,
 };
 
@@ -14,24 +18,56 @@ use super::{
 };
 
 pub(crate) async fn create_vector(
+    ctx: Arc<AppContext>,
     collection_id: &str,
     create_vector_dto: CreateVectorDto,
-    config: Arc<Config>,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
     let collection = collections::service::get_collection_by_id(collection_id)
         .await
         .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
 
-    // error cases that happens within run_upload is not handled
-    // this method always return a successful response with the data sent by the user
+    let mut current_open_transaction_arc = collection.current_open_transaction.clone();
+
+    if current_open_transaction_arc.get().is_some() {
+        return Err(VectorsError::FailedToCreateVector(
+            "there is an ongoing transaction!".into(),
+        ));
+    }
+
     run_upload(
+        ctx,
         collection,
         vec![(
             create_vector_dto.id.clone(),
             create_vector_dto.values.clone(),
         )],
-        config,
-    );
+    )
+    .map_err(VectorsError::WaCustom)?;
+    Ok(CreateVectorResponseDto {
+        id: create_vector_dto.id,
+        values: create_vector_dto.values,
+    })
+}
+
+pub(crate) async fn create_vector_in_transaction(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    transaction_id: Hash,
+    create_vector_dto: CreateVectorDto,
+) -> Result<CreateVectorResponseDto, VectorsError> {
+    let collection = collections::service::get_collection_by_id(collection_id)
+        .await
+        .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
+    run_upload_in_transaction(
+        ctx,
+        collection,
+        transaction_id,
+        vec![(
+            create_vector_dto.id.clone(),
+            create_vector_dto.values.clone(),
+        )],
+    )
+    .map_err(VectorsError::WaCustom)?;
     Ok(CreateVectorResponseDto {
         id: create_vector_dto.id,
         values: create_vector_dto.values,
@@ -42,26 +78,33 @@ pub(crate) async fn get_vector_by_id(
     _collection_id: &str,
     _vector_id: &str,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
-    Err(VectorsError::NotFound)?
+    Err(VectorsError::NotImplemented)?
 }
 
 pub(crate) async fn update_vector(
+    ctx: Arc<AppContext>,
     collection_id: &str,
     vector_id: VectorIdValue,
     update_vector_dto: UpdateVectorDto,
-    config: Arc<Config>,
 ) -> Result<UpdateVectorResponseDto, VectorsError> {
     let collection = collections::service::get_collection_by_id(collection_id)
         .await
         .map_err(|e| VectorsError::FailedToUpdateVector(e.to_string()))?;
 
-    // error cases that happens within run_upload is not handled
-    // this method always return a successful response with the data sent by the user
+    let mut current_open_transaction_arc = collection.current_open_transaction.clone();
+
+    if current_open_transaction_arc.get().is_some() {
+        return Err(VectorsError::FailedToUpdateVector(
+            "there is an ongoing transaction!".into(),
+        ));
+    }
+
     run_upload(
+        ctx,
         collection,
         vec![(vector_id.clone(), update_vector_dto.values.clone())],
-        config,
-    );
+    )
+    .map_err(VectorsError::WaCustom)?;
     Ok(UpdateVectorResponseDto {
         id: vector_id,
         values: update_vector_dto.values,

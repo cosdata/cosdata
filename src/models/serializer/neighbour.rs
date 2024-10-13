@@ -55,9 +55,10 @@ impl CustomSerialize for Neighbour {
             .into()),
             FileIndex::Valid {
                 offset: FileOffset(offset),
-                version,
+                version_id,
+                version_number,
             } => {
-                let bufman = bufmans.get(&version)?;
+                let bufman = bufmans.get(&version_id)?;
                 let cursor = bufman.open_cursor()?;
                 bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
                 // Deserialize the node position
@@ -67,7 +68,8 @@ impl CustomSerialize for Neighbour {
                 // Deserialize the node using the node position
                 let node_file_index = FileIndex::Valid {
                     offset: FileOffset(node_pos),
-                    version,
+                    version_id,
+                    version_number,
                 };
                 bufman.close_cursor(cursor)?;
                 let node =

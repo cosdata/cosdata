@@ -1,4 +1,4 @@
-use crate::{config_loader::Config, models::rpc::VectorIdValue};
+use crate::{app_context::AppContext, models::rpc::VectorIdValue};
 use actix_web::{web, HttpResponse, Result};
 
 use super::{
@@ -9,10 +9,13 @@ use super::{
 pub(crate) async fn create_vector(
     collection_id: web::Path<String>,
     web::Json(create_vector_dto): web::Json<CreateVectorDto>,
-    config: web::Data<Config>,
+    ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse> {
-    let vector =
-        service::create_vector(&collection_id, create_vector_dto, config.into_inner()).await?;
+    let vector = service::create_vector(
+        ctx.into_inner(),
+        &collection_id,
+        create_vector_dto,
+    ).await?;
     Ok(HttpResponse::Ok().json(vector))
 }
 
@@ -25,14 +28,14 @@ pub(crate) async fn get_vector_by_id(path: web::Path<(String, String)>) -> Resul
 pub(crate) async fn update_vector_by_id(
     path: web::Path<(String, String)>,
     web::Json(update_vector_dto): web::Json<UpdateVectorDto>,
-    config: web::Data<Config>,
+    ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse> {
     let (collection_id, vector_id) = path.into_inner();
     let vector = service::update_vector_by_id(
+        ctx.into_inner(),
         &collection_id,
         VectorIdValue::StringValue(vector_id),
         update_vector_dto,
-        config.into_inner(),
     )
     .await?;
     Ok(HttpResponse::Ok().json(vector))
