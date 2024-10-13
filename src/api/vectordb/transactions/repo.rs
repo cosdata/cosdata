@@ -17,7 +17,8 @@ pub(crate) async fn create_transaction(
     ctx: Arc<AppContext>,
     collection_id: &str,
 ) -> Result<CreateTransactionResponseDto, TransactionError> {
-    let vec_store = ctx.ain_env
+    let vec_store = ctx
+        .ain_env
         .vector_store_map
         .get(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
@@ -58,7 +59,8 @@ pub(crate) async fn commit_transaction(
     collection_id: &str,
     transaction_id: Hash,
 ) -> Result<(), TransactionError> {
-    let vec_store = ctx.ain_env
+    let vec_store = ctx
+        .ain_env
         .vector_store_map
         .get(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
@@ -86,7 +88,8 @@ pub(crate) async fn create_vector_in_transaction(
     transaction_id: Hash,
     create_vector_dto: CreateVectorDto,
 ) -> Result<CreateVectorResponseDto, TransactionError> {
-    let vec_store = ctx.ain_env
+    let vec_store = ctx
+        .ain_env
         .vector_store_map
         .get(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
@@ -117,12 +120,12 @@ pub(crate) async fn create_vector_in_transaction(
 
 // aborts the currently open transaction of a specific collection (vector store)
 pub(crate) async fn abort_transaction(
+    ctx: Arc<AppContext>,
     collection_id: &str,
     transaction_id: &str,
 ) -> Result<(), TransactionError> {
-    let env = get_app_env().map_err(|_| TransactionError::FailedToGetAppEnv)?;
-
-    let vec_store = env
+    let vec_store = ctx
+        .ain_env
         .vector_store_map
         .get(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
