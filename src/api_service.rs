@@ -96,12 +96,7 @@ pub async fn init_vector_store(
         let lazy_node = LazyItem::from_arc(hash, 0, current_node.clone());
         let nn = LazyItemRef::from_arc(hash, 0, current_node.clone());
 
-        if let Some(prev_node) = prev
-            .item
-            .get()
-            .get_lazy_data()
-            .and_then(|mut arc| arc.get().clone())
-        {
+        if let Some(prev_node) = prev.item.get().get_lazy_data().unwrap().get() {
             current_node.set_parent(prev.clone().item.get().clone());
             prev_node.set_child(lazy_node.clone());
         }
