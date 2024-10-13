@@ -20,8 +20,13 @@ pub(crate) fn transactions_module() -> Scope {
             web::post().to(controller::commit_transaction),
         )
         .route(
+            "/{transaction_id}/vectors",
+            web::post().to(controller::create_vector_in_transaction),
+        )
+        .route(
             "/{transaction_id}/abort",
             web::post().to(controller::abort_transaction),
         );
+
     transactions_module
 }

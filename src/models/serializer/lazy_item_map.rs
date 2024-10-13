@@ -45,6 +45,7 @@ where
             for _ in 0..CHUNK_SIZE {
                 bufman.write_u32_with_cursor(cursor, u32::MAX)?;
                 bufman.write_u32_with_cursor(cursor, u32::MAX)?;
+                bufman.write_u16_with_cursor(cursor, u16::MAX)?;
                 bufman.write_u32_with_cursor(cursor, u32::MAX)?;
             }
             // Write placeholder for next chunk link
@@ -56,13 +57,14 @@ where
                 let key_offset = items[i].0.serialize(bufmans.clone(), version, cursor)?;
                 let item_offset = items[i].1.serialize(bufmans.clone(), version, cursor)?;
 
-                let placeholder_pos = placeholder_start as u64 + ((i - chunk_start) as u64 * 12);
+                let placeholder_pos = placeholder_start as u64 + ((i - chunk_start) as u64 * 14);
                 let current_pos = bufman.cursor_position(cursor)?;
 
                 // Write entry offset
                 bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_pos))?;
                 bufman.write_u32_with_cursor(cursor, key_offset)?;
                 bufman.write_u32_with_cursor(cursor, item_offset)?;
+                bufman.write_u16_with_cursor(cursor, items[i].1.get_current_version_number())?;
                 bufman.write_u32_with_cursor(cursor, *items[i].1.get_current_version())?;
 
                 // Return to the current position
@@ -93,12 +95,13 @@ where
             FileIndex::Invalid => Ok(LazyItemMap::new()),
             FileIndex::Valid {
                 offset: FileOffset(offset),
-                version,
+                version_number,
+                version_id,
             } => {
                 if offset == u32::MAX {
                     return Ok(LazyItemMap::new());
                 }
-                let bufman = bufmans.get(&version)?;
+                let bufman = bufmans.get(&version_id)?;
                 let cursor = bufman.open_cursor()?;
                 bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
                 let mut items = Vec::new();
@@ -107,17 +110,19 @@ where
                     for i in 0..CHUNK_SIZE {
                         bufman.seek_with_cursor(
                             cursor,
-                            SeekFrom::Start(current_chunk as u64 + (i as u64 * 12)),
+                            SeekFrom::Start(current_chunk as u64 + (i as u64 * 14)),
                         )?;
                         let key_offset = bufman.read_u32_with_cursor(cursor)?;
                         let item_offset = bufman.read_u32_with_cursor(cursor)?;
-                        let item_version = bufman.read_u32_with_cursor(cursor)?.into();
+                        let item_version_number = bufman.read_u16_with_cursor(cursor)?;
+                        let item_version_id = bufman.read_u32_with_cursor(cursor)?.into();
                         if key_offset == u32::MAX {
                             continue;
                         }
                         let key_file_index = FileIndex::Valid {
                             offset: FileOffset(key_offset),
-                            version,
+                            version_number,
+                            version_id,
                         };
                         let key = IdentityMapKey::deserialize(
                             bufmans.clone(),
@@ -128,7 +133,8 @@ where
                         )?;
                         let item_file_index = FileIndex::Valid {
                             offset: FileOffset(item_offset),
-                            version: item_version,
+                            version_number: item_version_number,
+                            version_id: item_version_id,
                         };
                         let item = LazyItem::deserialize(
                             bufmans.clone(),
@@ -141,7 +147,7 @@ where
                     }
                     bufman.seek_with_cursor(
                         cursor,
-                        SeekFrom::Start(current_chunk as u64 + CHUNK_SIZE as u64 * 12),
+                        SeekFrom::Start(current_chunk as u64 + CHUNK_SIZE as u64 * 14),
                     )?;
                     // Read next chunk link
                     current_chunk = bufman.read_u32_with_cursor(cursor)?;
@@ -193,9 +199,10 @@ impl CustomSerialize for IdentityMapKey {
         match file_index {
             FileIndex::Valid {
                 offset: FileOffset(offset),
-                version,
+                version_id,
+                ..
             } => {
-                let bufman = bufmans.get(&version)?;
+                let bufman = bufmans.get(&version_id)?;
                 let cursor = bufman.open_cursor()?;
                 bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
                 let num = bufman.read_u32_with_cursor(cursor)?;

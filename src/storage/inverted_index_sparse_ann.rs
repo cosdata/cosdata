@@ -1,4 +1,3 @@
-use arcshift::ArcShift;
 use core::array::from_fn;
 use rayon::prelude::*;
 use std::path::Path;
@@ -67,15 +66,16 @@ impl InvertedIndexSparseAnnNode {
     /// Finds or creates the node where the data should be inserted.
     /// Traverses the tree iteratively and returns a reference to the node.
     fn find_or_create_node(
-        node: ArcShift<InvertedIndexSparseAnnNode>,
+        node: Arc<InvertedIndexSparseAnnNode>,
         path: &[usize],
         cache: Arc<NodeRegistry>,
-    ) -> ArcShift<InvertedIndexSparseAnnNode> {
+    ) -> Arc<InvertedIndexSparseAnnNode> {
         let mut current_node = node;
         for &child_index in path {
             let new_dim_index = current_node.dim_index + POWERS_OF_4[child_index];
             let new_child = LazyItem::new(
                 0.into(),
+                0,
                 InvertedIndexSparseAnnNode::new(new_dim_index, true),
             );
             loop {
@@ -98,13 +98,13 @@ impl InvertedIndexSparseAnnNode {
 
     /// Inserts a value into the index at the specified dimension index.
     /// Finds the quantized value and pushes the vec_Id in array at index = quantized_value
-    pub fn insert(node: ArcShift<InvertedIndexSparseAnnNode>, value: f32, vector_id: u32) {
+    pub fn insert(node: Arc<InvertedIndexSparseAnnNode>, value: f32, vector_id: u32) {
         let quantized_value = Self::quantize(value);
         let mut data: Arc<[LazyItemVec<u32>; 63]> = node.data.clone();
 
         // Insert into the specific LazyItemVec at the index quantized_value
         if let Some(lazy_item_vec) = Arc::make_mut(&mut data).get_mut(quantized_value as usize) {
-            lazy_item_vec.push(LazyItem::new(0.into(), vector_id));
+            lazy_item_vec.push(LazyItem::new(0.into(), 0, vector_id));
         }
     }
 
@@ -145,7 +145,7 @@ impl InvertedIndexSparseAnnNode {
 /// [InvertedIndexSparseAnn] is a improved version which only holds quantized u8 values instead of f32 inside [InvertedIndexSparseAnnNode]
 #[derive(Clone)]
 pub struct InvertedIndexSparseAnn {
-    pub root: ArcShift<InvertedIndexSparseAnnNode>,
+    pub root: Arc<InvertedIndexSparseAnnNode>,
     pub cache: Arc<NodeRegistry>,
 }
 
@@ -157,14 +157,14 @@ impl InvertedIndexSparseAnn {
         ));
         let cache = Arc::new(NodeRegistry::new(1000, bufmans));
         InvertedIndexSparseAnn {
-            root: ArcShift::new(InvertedIndexSparseAnnNode::new(0, false)),
+            root: Arc::new(InvertedIndexSparseAnnNode::new(0, false)),
             cache,
         }
     }
 
     /// Finds the node at a given dimension
     /// Traverses the tree iteratively and returns a reference to the node.
-    pub fn find_node(&self, dim_index: u32) -> Option<ArcShift<InvertedIndexSparseAnnNode>> {
+    pub fn find_node(&self, dim_index: u32) -> Option<Arc<InvertedIndexSparseAnnNode>> {
         let mut current_node = self.root.clone();
         let path = calculate_path(dim_index, self.root.dim_index);
         for child_index in path {
@@ -177,9 +177,7 @@ impl InvertedIndexSparseAnn {
 
     //Fetches quantized u8 value for a dim_index and vector_Id present at respective node in index
     pub fn get(&self, dim_index: u32, vector_id: u32) -> Option<u8> {
-        self.root
-            .shared_get()
-            .get(dim_index, vector_id, self.cache.clone())
+        self.root.get(dim_index, vector_id, self.cache.clone())
     }
 
     //Inserts vec_id, quantized value u8 at particular node based on path

@@ -497,29 +497,29 @@ pub fn remove_duplicates_and_filter(
         let mut seen = HashSet::new();
         vec.into_iter()
             .filter_map(|(lazy_item, similarity)| {
-                if let LazyItem::Valid {
-                    data: Some(mut node),
-                    ..
-                } = lazy_item
-                {
-                    let mut prop_arc = node.get().prop.clone();
-                    if let PropState::Ready(node_prop) = prop_arc.get() {
-                        let id = &node_prop.id;
-                        if let VectorId::Int(s) = id {
-                            if *s == -1 {
-                                return None;
+                if let LazyItem::Valid { mut data, .. } = lazy_item {
+                    if let Some(data) = data.get() {
+                        let mut prop_arc = data.prop.clone();
+                        if let PropState::Ready(node_prop) = prop_arc.get() {
+                            let id = &node_prop.id;
+                            if let VectorId::Int(s) = id {
+                                if *s == -1 {
+                                    return None;
+                                }
                             }
-                        }
-                        if seen.insert(id.clone()) {
-                            Some((id.clone(), similarity))
+                            if seen.insert(id.clone()) {
+                                Some((id.clone(), similarity))
+                            } else {
+                                None
+                            }
                         } else {
-                            None
+                            None // PropState is Pending
                         }
                     } else {
-                        None // PropState is Pending
+                        None // data is None
                     }
                 } else {
-                    None // data is None
+                    None // LazyItem is Invalid
                 }
             })
             .collect()

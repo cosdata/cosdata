@@ -33,6 +33,7 @@ where
             let placeholder_start = bufman.cursor_position(cursor)? as u32;
             for _ in 0..CHUNK_SIZE {
                 bufman.write_u32_with_cursor(cursor, u32::MAX)?;
+                bufman.write_u16_with_cursor(cursor, u16::MAX)?;
                 bufman.write_u32_with_cursor(cursor, u32::MAX)?;
             }
 
@@ -45,22 +46,17 @@ where
                 if items[i].is_none() {
                     continue;
                 }
+                let item = items[i].as_ref().unwrap();
 
-                let item_offset =
-                    items[i]
-                        .as_ref()
-                        .unwrap()
-                        .serialize(bufmans.clone(), version, cursor)?;
-                let placeholder_pos = placeholder_start as u64 + ((i - chunk_start) as u64 * 12);
+                let item_offset = item.serialize(bufmans.clone(), version, cursor)?;
+                let placeholder_pos = placeholder_start as u64 + ((i - chunk_start) as u64 * 10);
                 let current_pos = bufman.cursor_position(cursor)?;
 
                 // Move cursor backwards and write item offset and version
                 bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_pos))?;
                 bufman.write_u32_with_cursor(cursor, item_offset)?;
-                bufman.write_u32_with_cursor(
-                    cursor,
-                    *items[i].as_ref().unwrap().get_current_version(),
-                )?;
+                bufman.write_u16_with_cursor(cursor, item.get_current_version_number())?;
+                bufman.write_u32_with_cursor(cursor, *item.get_current_version())?;
 
                 // Return to the current position
                 bufman.seek_with_cursor(cursor, SeekFrom::Start(current_pos))?;
@@ -94,9 +90,10 @@ where
             FileIndex::Invalid => Ok(LazyItemArray::new()),
             FileIndex::Valid {
                 offset: FileOffset(offset),
-                version,
+                version_id,
+                ..
             } => {
-                let bufman = bufmans.get(&version)?;
+                let bufman = bufmans.get(&version_id)?;
                 let cursor = bufman.open_cursor()?;
                 bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
                 let mut items: Vec<Option<LazyItem<T>>> = Vec::new();
@@ -106,17 +103,19 @@ where
                     for i in 0..CHUNK_SIZE {
                         bufman.seek_with_cursor(
                             cursor,
-                            SeekFrom::Start(current_chunk as u64 + (i as u64 * 8)),
+                            SeekFrom::Start(current_chunk as u64 + (i as u64 * 10)),
                         )?;
                         let item_offset = bufman.read_u32_with_cursor(cursor)?;
-                        let version = bufman.read_u32_with_cursor(cursor)?.into();
+                        let item_version_number = bufman.read_u16_with_cursor(cursor)?;
+                        let item_version_id = bufman.read_u32_with_cursor(cursor)?.into();
                         if item_offset == u32::MAX {
                             items.push(None);
                             continue;
                         }
                         let item_file_index = FileIndex::Valid {
                             offset: FileOffset(item_offset),
-                            version,
+                            version_number: item_version_number,
+                            version_id: item_version_id,
                         };
                         let item = LazyItem::deserialize(
                             bufmans.clone(),
@@ -129,7 +128,7 @@ where
                     }
                     bufman.seek_with_cursor(
                         cursor,
-                        SeekFrom::Start(current_chunk as u64 + CHUNK_SIZE as u64 * 8),
+                        SeekFrom::Start(current_chunk as u64 + CHUNK_SIZE as u64 * 10),
                     )?;
                     // Read next chunk link
                     current_chunk = bufman.read_u32_with_cursor(cursor)?;

@@ -27,7 +27,7 @@ Cosdata is at the forefront of advancing search technology, excelling in critica
 Cosdata is designed to meet the demands of modern search applications, empowering businesses to harness the full potential of their data.
 
 <p align="center">
-<strong><a href="#features">Features</a> • <a href="#getting-started">Getting Started</a> • <a href="#contacts">Contact Us</a> • <a href="#show-your-support">Show Your Support</a>
+<strong><a href="#features">Features</a> • <a href="#getting-started">Getting Started</a> • <a href="org/docs_index.md">Docs</a> • <a href="#contacts">Contact Us</a> • <a href="#show-your-support">Show Your Support</a>
 </strong>
 </p>
 
