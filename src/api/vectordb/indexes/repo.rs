@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    app_context::AppContext,
-    models::types::{get_app_env, DistanceMetric},
+    app_context::AppContext, models::types::DistanceMetric,
     vector_store::create_index_in_collection,
 };
 
@@ -20,13 +19,8 @@ pub(crate) async fn create_index(
     data_type: DataType,
     index_params: IndexParamsDTo,
 ) -> Result<(), IndexesError> {
-    let env = match get_app_env() {
-        Ok(env) => env,
-        Err(_) => {
-            return Err(IndexesError::FailedToGetAppEnv);
-        }
-    };
-    let collection = env
+    let collection = ctx
+        .ain_env
         .vector_store_map
         .get(&collection_name)
         .map(|collection| collection.clone())
@@ -44,7 +38,7 @@ pub(crate) async fn create_index(
 
     collection.hnsw_params.clone().update(hnsw_param);
 
-    create_index_in_collection(ctx, collection)
+    create_index_in_collection(collection)
         .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;
 
     Ok(())

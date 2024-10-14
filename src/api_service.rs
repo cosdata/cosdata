@@ -1,9 +1,10 @@
 use crate::app_context::AppContext;
+use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::cache_loader::NodeRegistry;
 use crate::models::common::*;
 use crate::models::file_persist::*;
 use crate::models::lazy_load::*;
-use crate::models::meta_persist::*;
+use crate::models::meta_persist::store_current_version;
 use crate::models::rpc::VectorIdValue;
 use crate::models::types::*;
 use crate::models::user::Statistics;
@@ -12,13 +13,14 @@ use crate::models::versioning::VersionControl;
 use crate::quantization::{Quantization, StorageType};
 use crate::vector_store::*;
 use arcshift::ArcShift;
+use lmdb::Transaction;
 use lmdb::WriteFlags;
-use lmdb::{DatabaseFlags, Transaction};
 use rand::Rng;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::array::TryFromSliceError;
-use std::fs::OpenOptions;
+use std::fs;
 use std::io::SeekFrom;
+use std::path::Path;
 use std::sync::Arc;
 
 pub async fn init_vector_store(
@@ -28,39 +30,27 @@ pub async fn init_vector_store(
     lower_bound: Option<f32>,
     upper_bound: Option<f32>,
     num_layers: u8,
+    auto_config: bool,
 ) -> Result<Arc<VectorStore>, WaCustomError> {
     if name.is_empty() {
         return Err(WaCustomError::InvalidParams);
     }
 
+    let collection_path: Arc<Path> = Path::new(&name).into();
+
+    fs::create_dir_all(&collection_path).map_err(|e| WaCustomError::FsError(e.to_string()))?;
     let quantization_metric = QuantizationMetric::Scalar;
     let storage_type = StorageType::UnsignedByte;
-    // TODO: get from API
-    let auto_config = true;
-    let ain_env = get_app_env().map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
-    let denv = ain_env.persist.clone();
+    let env = ctx.ain_env.persist.clone();
 
-    let metadata_db = denv
-        .create_db(Some("metadata"), DatabaseFlags::empty())
+    let lmdb = MetaDb::from_env(env.clone(), &name)
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
-    let embeddings_db = denv
-        .create_db(Some("embeddings"), DatabaseFlags::empty())
+    let (vcs, hash) = VersionControl::new(env.clone(), lmdb.db.clone())
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
-    let vcs = Arc::new(
-        VersionControl::new(denv.clone())
-            .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?,
-    );
-
-    let lmdb = MetaDb {
-        env: denv.clone(),
-        metadata_db: Arc::new(metadata_db),
-        embeddings_db: Arc::new(embeddings_db),
-    };
-
-    let hash = store_current_version(&lmdb, vcs.clone(), "main", 0)?;
+    let vcs = Arc::new(vcs);
 
     let min = lower_bound.unwrap_or(-1.0);
     let max = upper_bound.unwrap_or(1.0);
@@ -80,10 +70,10 @@ pub async fn init_vector_store(
     // Note that setting .write(true).append(true) has the same effect
     // as setting only .append(true)
     let prop_file = Arc::new(
-        OpenOptions::new()
+        fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open("prop.data")
+            .open(collection_path.join("prop.data"))
             .map_err(|e| WaCustomError::FsError(e.to_string()))?,
     );
 
@@ -125,14 +115,26 @@ pub async fn init_vector_store(
         if l == 0 {
             root = lazy_node_ref.clone();
         }
+
         nodes.push(lazy_node_ref.clone());
     }
 
-    for nn in nodes.iter_mut() {
-        persist_node_update_loc(ctx.index_manager.clone(), &mut nn.item)?;
+    let index_manager = Arc::new(BufferManagerFactory::new(
+        collection_path.clone(),
+        |root, ver| root.join(format!("{}.index", **ver)),
+    ));
+    let vec_raw_manager = Arc::new(BufferManagerFactory::new(
+        collection_path.clone(),
+        |root, ver| root.join(format!("{}.vec_raw", **ver)),
+    ));
+    // TODO: May be the value can be taken from config
+    let cache = Arc::new(NodeRegistry::new(1000, index_manager.clone()));
+
+    for item_ref in nodes.iter_mut() {
+        persist_node_update_loc(index_manager.clone(), &mut item_ref.item)?;
     }
 
-    ctx.index_manager.flush_all()?;
+    index_manager.flush_all()?;
     // ---------------------------
     // -- TODO level entry ratio
     // ---------------------------
@@ -154,24 +156,26 @@ pub async fn init_vector_store(
         vcs,
         num_layers,
         auto_config,
+        cache,
+        index_manager,
+        vec_raw_manager,
     ));
 
-    ain_env
+    ctx.ain_env
         .vector_store_map
-        .insert(name.clone(), vec_store.clone());
+        .insert(&name, vec_store.clone())?;
 
     Ok(vec_store)
 }
 
 pub fn run_upload_in_transaction(
-    ctx: Arc<AppContext>,
     vec_store: Arc<VectorStore>,
     transaction_id: Hash,
     vecs: Vec<(VectorIdValue, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
     let current_version = transaction_id;
 
-    let bufman = ctx
+    let bufman = vec_store
         .vec_raw_manager
         .get(&current_version)
         .map_err(|e| WaCustomError::BufIo(Arc::new(e)))?;
@@ -195,14 +199,14 @@ pub fn run_upload(
     vecs: Vec<(VectorIdValue, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
     let env = vec_store.lmdb.env.clone();
-    let metadata_db = vec_store.lmdb.metadata_db.clone();
+    let db = vec_store.lmdb.db.clone();
     let txn = env
         .begin_ro_txn()
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
     // Check if the previous version is unindexed, and continue from where we left.
     let prev_version = vec_store.get_current_version();
-    let index_before_insertion = match txn.get(*metadata_db, &"next_embedding_offset") {
+    let index_before_insertion = match txn.get(*db, &"next_embedding_offset") {
         Ok(bytes) => {
             let embedding_offset = EmbeddingOffset::deserialize(bytes)
                 .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?;
@@ -212,7 +216,7 @@ pub fn run_upload(
                 "Last unindexed embedding's version must be the previous version of the collection"
             );
 
-            let prev_bufman = ctx.vec_raw_manager.get(&prev_version)?;
+            let prev_bufman = vec_store.vec_raw_manager.get(&prev_version)?;
             let cursor = prev_bufman.open_cursor()?;
             let prev_file_len = prev_bufman.seek_with_cursor(cursor, SeekFrom::End(0))? as u32;
 
@@ -227,12 +231,7 @@ pub fn run_upload(
     txn.abort();
 
     if index_before_insertion {
-        index_embeddings(
-            ctx.node_registry.clone(),
-            &ctx.vec_raw_manager,
-            vec_store.clone(),
-            ctx.config.upload_process_batch_size,
-        )?;
+        index_embeddings(vec_store.clone(), ctx.config.upload_process_batch_size)?;
     }
 
     // Add next version
@@ -241,6 +240,7 @@ pub fn run_upload(
         .add_next_version("main")
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
     vec_store.set_current_version(current_version);
+    store_current_version(&vec_store.lmdb, current_version)?;
 
     // Update LMDB metadata
     let new_offset = EmbeddingOffset {
@@ -253,7 +253,7 @@ pub fn run_upload(
         .begin_rw_txn()
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
     txn.put(
-        *metadata_db,
+        *db,
         &"next_embedding_offset",
         &new_offset_serialized,
         WriteFlags::empty(),
@@ -264,7 +264,8 @@ pub fn run_upload(
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
     // Insert vectors
-    let bufman = ctx.vec_raw_manager.get(&current_version)?;
+    let bufman = vec_store.vec_raw_manager.get(&current_version)?;
+
     vecs.into_par_iter()
         .map(|(id, vec)| {
             let hash_vec = convert_value(id);
@@ -278,12 +279,15 @@ pub fn run_upload(
         .collect::<Result<Vec<_>, _>>()?;
     bufman.flush()?;
 
+    let env = vec_store.lmdb.env.clone();
+    let db = vec_store.lmdb.db.clone();
+
     let txn = env
         .begin_ro_txn()
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
     let count_unindexed = txn
-        .get(*metadata_db, &"count_unindexed")
+        .get(*db, &"count_unindexed")
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))
         .and_then(|bytes| {
             let bytes = bytes.try_into().map_err(|e: TryFromSliceError| {
@@ -295,22 +299,17 @@ pub fn run_upload(
     txn.abort();
 
     if count_unindexed >= ctx.config.upload_threshold {
-        index_embeddings(
-            ctx.node_registry.clone(),
-            &ctx.vec_raw_manager,
-            vec_store.clone(),
-            ctx.config.upload_process_batch_size,
-        )?;
+        index_embeddings(vec_store.clone(), ctx.config.upload_process_batch_size)?;
     }
 
-    auto_commit_transaction(vec_store, ctx.index_manager.clone())?;
-    ctx.index_manager.flush_all()?;
+    auto_commit_transaction(vec_store.clone())?;
+    vec_store.vec_raw_manager.flush_all()?;
+    vec_store.index_manager.flush_all()?;
 
     Ok(())
 }
 
 pub async fn ann_vector_query(
-    node_registry: Arc<NodeRegistry>,
     vec_store: Arc<VectorStore>,
     query: Vec<f32>,
 ) -> Result<Option<Vec<(VectorId, MetricResult)>>, WaCustomError> {
@@ -327,7 +326,6 @@ pub async fn ann_vector_query(
     };
 
     let results = ann_search(
-        node_registry,
         vec_store.clone(),
         vec_emb,
         root.item.clone().get().clone(),
@@ -338,11 +336,10 @@ pub async fn ann_vector_query(
 }
 
 pub async fn fetch_vector_neighbors(
-    node_registry: Arc<NodeRegistry>,
     vec_store: Arc<VectorStore>,
     vector_id: VectorId,
 ) -> Vec<Option<(VectorId, Vec<(VectorId, MetricResult)>)>> {
-    let results = vector_fetch(node_registry, vec_store.clone(), vector_id);
+    let results = vector_fetch(vec_store.clone(), vector_id);
     return results.expect("Failed fetching vector neighbors");
 }
 

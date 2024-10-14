@@ -17,28 +17,41 @@ pub(crate) async fn create_collection(
     let size = create_collection_dto.dimensions as usize;
     let lower_bound = create_collection_dto.min_val;
     let upper_bound = create_collection_dto.max_val;
+    let auto_config = true;
     let num_layers = 5;
 
-    repo::create_vector_store(ctx, name, size, lower_bound, upper_bound, num_layers).await
+    repo::create_vector_store(
+        ctx,
+        name,
+        size,
+        lower_bound,
+        upper_bound,
+        num_layers,
+        auto_config,
+    )
+    .await
 }
 
 pub(crate) async fn get_collections(
+    ctx: Arc<AppContext>,
     get_collections_dto: GetCollectionsDto,
 ) -> Result<Vec<FindCollectionDto>, CollectionsError> {
-    let collections = repo::get_vector_stores(get_collections_dto).await?;
+    let collections = repo::get_vector_stores(ctx, get_collections_dto).await?;
     Ok(collections)
 }
 
 pub(crate) async fn get_collection_by_id(
+    ctx: Arc<AppContext>,
     collection_id: &str,
 ) -> Result<Arc<VectorStore>, CollectionsError> {
-    let store = repo::get_vector_store_by_name(collection_id).await?;
+    let store = repo::get_vector_store_by_name(ctx, collection_id).await?;
     Ok(store)
 }
 
 pub(crate) async fn delete_collection_by_id(
+    ctx: Arc<AppContext>,
     collection_id: &str,
 ) -> Result<Arc<VectorStore>, CollectionsError> {
-    let store = repo::delete_vector_store_by_name(collection_id).await?;
+    let store = repo::delete_vector_store_by_name(ctx, collection_id).await?;
     Ok(store)
 }

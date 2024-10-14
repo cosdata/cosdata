@@ -1,6 +1,8 @@
 pub mod product;
 pub mod scalar;
 
+use serde::{Deserialize, Serialize};
+
 use crate::storage::Storage;
 
 pub trait Quantization: std::fmt::Debug + Send + Sync {
@@ -13,7 +15,7 @@ pub trait Quantization: std::fmt::Debug + Send + Sync {
     fn train(&mut self, vectors: &[&[f32]]) -> Result<(), QuantizationError>;
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum StorageType {
     UnsignedByte,
     SubByte(u8),

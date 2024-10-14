@@ -8,6 +8,7 @@ use crate::models::versioning::VersionHash;
 use crate::models::versioning::{Version, VersionControl};
 use crate::storage::Storage;
 use half::f16;
+use lmdb::DatabaseFlags;
 use lmdb::Environment;
 use std::sync::Arc;
 use tempfile::{tempdir, TempDir};
@@ -411,7 +412,8 @@ fn test_lazy_item_with_versions_serialization() {
             .open(temp_dir.as_ref())
             .unwrap(),
     );
-    let vcs = Arc::new(VersionControl::new(env).unwrap());
+    let db = Arc::new(env.create_db(None, DatabaseFlags::empty()).unwrap());
+    let vcs = VersionControl::new(env, db).unwrap().0;
     let bufmans = Arc::new(BufferManagerFactory::new(
         temp_dir.as_ref().into(),
         |root, ver| root.join(format!("{}.index", **ver)),
@@ -750,7 +752,8 @@ fn test_lazy_item_with_versions_serialization_and_validation() {
             .open(temp_dir.as_ref())
             .unwrap(),
     );
-    let vcs = Arc::new(VersionControl::new(env).unwrap());
+    let db = Arc::new(env.create_db(None, DatabaseFlags::empty()).unwrap());
+    let vcs = VersionControl::new(env, db).unwrap().0;
 
     let v0_hash = vcs.generate_hash("main", Version::from(0)).unwrap();
     let root = LazyItem::new(v0_hash, 0, MergedNode::new(HNSWLevel(0)));
@@ -796,7 +799,8 @@ fn test_lazy_item_with_versions_multiple_serialization() {
             .open(temp_dir.as_ref())
             .unwrap(),
     );
-    let vcs = Arc::new(VersionControl::new(env).unwrap());
+    let db = Arc::new(env.create_db(None, DatabaseFlags::empty()).unwrap());
+    let vcs = VersionControl::new(env, db).unwrap().0;
 
     let v0_hash = vcs.generate_hash("main", Version::from(0)).unwrap();
     let root = LazyItem::new(v0_hash, 0, MergedNode::new(HNSWLevel(0)));

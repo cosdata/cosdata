@@ -56,7 +56,11 @@ pub async fn run_actix_server() -> std::io::Result<()> {
         &config.server.port,
     );
 
-    let ctx = Data::new(AppContext::new(config.clone()));
+    // Let it panic if there's a problem initializing the
+    // env. Without app env, the HTTP server won't be able to
+    // serve any incoming requests anyway.
+    let ctx = AppContext::new(config.clone()).expect("Failed to initialize AppContext");
+    let data = Data::new(ctx);
 
     let server = HttpServer::new(move || {
         App::new()
@@ -93,14 +97,10 @@ pub async fn run_actix_server() -> std::io::Result<()> {
                             .route(
                                 "/{transaction_id}/delete",
                                 web::post().to(api::vectordb::transactions::delete),
-                            )
-                            .route(
-                                "/{transaction_id}/abort",
-                                web::post().to(api::vectordb::transactions::abort),
                             ),
                     ),
             )
-            .app_data(ctx.clone())
+            .app_data(data.clone())
 
         // .service(web::resource("/index").route(web::post().to(index)))
         // .service(

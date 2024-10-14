@@ -1,4 +1,3 @@
-mod abort;
 mod controller;
 mod delete;
 mod dtos;
@@ -8,7 +7,6 @@ mod service;
 mod update;
 mod upsert;
 
-pub(crate) use abort::abort;
 use actix_web::{web, Scope};
 pub(crate) use delete::delete;
 pub(crate) use update::update;
@@ -24,6 +22,10 @@ pub(crate) fn transactions_module() -> Scope {
         .route(
             "/{transaction_id}/vectors",
             web::post().to(controller::create_vector_in_transaction),
+        )
+        .route(
+            "/{transaction_id}/abort",
+            web::post().to(controller::abort_transaction),
         );
 
     transactions_module

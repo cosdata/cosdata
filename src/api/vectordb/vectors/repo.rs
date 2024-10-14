@@ -23,7 +23,7 @@ pub(crate) async fn create_vector(
     collection_id: &str,
     create_vector_dto: CreateVectorDto,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
-    let collection = collections::service::get_collection_by_id(collection_id)
+    let collection = collections::service::get_collection_by_id(ctx.clone(), collection_id)
         .await
         .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
 
@@ -63,11 +63,10 @@ pub(crate) async fn create_vector_in_transaction(
     transaction_id: Hash,
     create_vector_dto: CreateVectorDto,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
-    let collection = collections::service::get_collection_by_id(collection_id)
+    let collection = collections::service::get_collection_by_id(ctx.clone(), collection_id)
         .await
         .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
     run_upload_in_transaction(
-        ctx,
         collection,
         transaction_id,
         vec![(
@@ -87,11 +86,11 @@ pub(crate) async fn get_vector_by_id(
     collection_id: &str,
     vector_id: VectorId,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
-    let vec_store = collections::service::get_collection_by_id(collection_id)
+    let vec_store = collections::service::get_collection_by_id(ctx.clone(), collection_id)
         .await
         .map_err(|_| VectorsError::NotFound)?;
 
-    let embedding = get_embedding_by_id(ctx, vec_store, vector_id)
+    let embedding = get_embedding_by_id(vec_store, vector_id)
         .map_err(|e| VectorsError::DatabaseError(e.to_string()))?;
 
     let id = match embedding.hash_vec {
@@ -111,7 +110,7 @@ pub(crate) async fn update_vector(
     vector_id: VectorIdValue,
     update_vector_dto: UpdateVectorDto,
 ) -> Result<UpdateVectorResponseDto, VectorsError> {
-    let collection = collections::service::get_collection_by_id(collection_id)
+    let collection = collections::service::get_collection_by_id(ctx.clone(), collection_id)
         .await
         .map_err(|e| VectorsError::FailedToUpdateVector(e.to_string()))?;
 
@@ -154,4 +153,11 @@ pub(crate) async fn find_similar_vectors(
         id: VectorIdValue::IntValue(find_similar_vectors.k),
         score: find_similar_vectors.vector[0],
     }])
+}
+
+pub(crate) async fn delete_vector_by_id(
+    _collection_id: &str,
+    _vector_id: VectorIdValue,
+) -> Result<CreateVectorResponseDto, VectorsError> {
+    Err(VectorsError::NotImplemented)?
 }
