@@ -15,7 +15,7 @@ pub(crate) async fn create_collection(
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse> {
     let create_collection_response_dto =
-        service::create_collection(ctx.into_inner(), &create_collection_dto).await?;
+        service::create_collection(ctx.into_inner(), create_collection_dto).await?;
 
     Ok(HttpResponse::Ok().json(create_collection_response_dto))
 }

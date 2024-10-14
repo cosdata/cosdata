@@ -13,6 +13,7 @@ use super::{
 };
 
 pub(crate) async fn create_collection(
+    ctx: Arc<AppContext>,
     CreateCollectionDto {
         name,
         description,
@@ -20,8 +21,11 @@ pub(crate) async fn create_collection(
         dense_vector,
         metadata_schema,
         sparse_vector,
-    }: &CreateCollectionDto,
+    }: CreateCollectionDto,
 ) -> Result<Arc<Collection>, CollectionsError> {
+    let env = &ctx.ain_env.persist;
+    let collections_db = &ctx.ain_env.vector_store_map.lmdb_db;
+
     let collection = Collection::new(
         name,
         description,
@@ -30,7 +34,13 @@ pub(crate) async fn create_collection(
         metadata_schema,
         config,
     );
-
+    // persisting collection after creation
+    // note that VectorStoreMap has similar functionality to
+    // persist vector stores on the disk
+    // TODO rework VectorStoreMap
+    let _ = collection
+        .persist(env, collections_db.clone())
+        .map_err(|e| CollectionsError::WaCustomError(e));
     Ok(Arc::new(collection))
 }
 

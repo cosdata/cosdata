@@ -478,7 +478,9 @@ pub struct RawVectorEmbedding {
 pub struct VectorStoreMap {
     inner: DashMap<String, Arc<VectorStore>>,
     lmdb_env: Arc<Environment>,
-    lmdb_db: Database,
+    // made it public temporarily
+    // just to be able to persist collections from outside VectorStoreMap
+    pub(crate) lmdb_db: Database,
 }
 
 impl VectorStoreMap {
