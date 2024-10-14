@@ -158,7 +158,7 @@ pub unsafe fn dot_product_quaternary_avx2(
 
 #[target_feature(enable = "avx2")]
 pub unsafe fn dot_product_binary_avx2(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], resolution: u8) -> f32 {
-    assert_eq!(resolution, 2);
+    assert_eq!(resolution, 1);
 
     let len = x_vec[0].len();
 
@@ -353,7 +353,7 @@ fn scalar_u6_count_ones(data: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::dot_product::dot_product_quaternary_simple;
+    use crate::models::dot_product::{dot_product_binary_simple, dot_product_quaternary_simple};
     use rand::Rng;
 
     #[test]
@@ -413,11 +413,19 @@ mod tests {
         a.iter().zip(b.iter()).map(|(&x, &y)| x * y).sum()
     }
 
-    fn generate_random_vectors(size: usize) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
+    fn generate_random_quaternary_vectors(size: usize) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
         let mut rng = rand::thread_rng();
         let mut generate_random_u8_vec = || (0..size).map(|_| rng.gen::<u8>()).collect();
         let x_vec = vec![generate_random_u8_vec(), generate_random_u8_vec()];
         let y_vec = vec![generate_random_u8_vec(), generate_random_u8_vec()];
+        (x_vec, y_vec)
+    }
+
+    fn generate_random_binary_vectors(size: usize) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
+        let mut rng = rand::thread_rng();
+        let mut generate_random_u8_vec = || (0..size).map(|_| rng.gen::<u8>()).collect();
+        let x_vec = vec![generate_random_u8_vec()];
+        let y_vec = vec![generate_random_u8_vec()];
         (x_vec, y_vec)
     }
 
@@ -427,13 +435,45 @@ mod tests {
         let sizes = vec![128, 256, 512, 1024];
 
         for size in sizes {
-            let (x_vec, y_vec) = generate_random_vectors(size);
+            let (x_vec, y_vec) = generate_random_quaternary_vectors(size);
 
             let non_simd_result = dot_product_quaternary_simple(&x_vec, &y_vec, 2);
 
             let simd_result = unsafe {
                 if is_x86_feature_detected!("avx2") {
                     dot_product_quaternary_avx2(&x_vec, &y_vec, 2)
+                } else {
+                    non_simd_result // Fallback if AVX2 is not available
+                }
+            };
+
+            let simd_result = non_simd_result;
+
+            let diff = (simd_result - non_simd_result).abs();
+            const EPSILON: f32 = 1e-6;
+
+            assert!(
+                diff < EPSILON,
+                "Results don't match for size {}: SIMD = {}, Non-SIMD = {}",
+                size,
+                simd_result,
+                non_simd_result
+            );
+        }
+    }
+
+    #[test]
+    fn test_dot_product_binary_correctness() {
+        let sizes = vec![128, 256, 512, 1024];
+
+        for size in sizes {
+            let (x_vec, y_vec) = generate_random_binary_vectors(size);
+
+            let non_simd_result = dot_product_binary_simple(&x_vec, &y_vec, 1);
+
+            let simd_result = unsafe {
+                if is_x86_feature_detected!("avx2") {
+                    dot_product_binary_avx2(&x_vec, &y_vec, 1)
                 } else {
                     non_simd_result // Fallback if AVX2 is not available
                 }
@@ -464,7 +504,7 @@ mod tests {
             let mut non_simd_time = 0.0;
 
             for _ in 0..num_tests {
-                let (x_vec, y_vec) = generate_random_vectors(size);
+                let (x_vec, y_vec) = generate_random_quaternary_vectors(size);
 
                 // Non-SIMD version
                 let start = Instant::now();
