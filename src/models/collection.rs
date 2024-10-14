@@ -54,15 +54,30 @@ impl Collection {
         }
     }
 
-    // perists the collection instance on disk
-    pub fn persist(&self, env: &Environment, db: Database) -> Result<(), WaCustomError> {
-        // Compute SipHash of the vector_store/collection name
+    /// Computes the SipHash of the collection name
+    pub fn get_hash(&self) -> u64 {
         let mut hasher = SipHasher24::new();
         hasher.write(self.name.as_bytes());
         let hash = hasher.finish();
+        hash
+    }
 
+    /// computes the key used to store the collection in the database
+    pub fn get_key(&self) -> [u8; 8] {
+        let hash = self.get_hash();
         let key = hash.to_le_bytes();
-        let value = to_vec(self).map_err(|e| WaCustomError::SerializationError(e.to_string()))?;
+        key
+    }
+
+    /// serializes the collection
+    pub fn serialize(&self) -> Result<Vec<u8>, WaCustomError> {
+        to_vec(self).map_err(|e| WaCustomError::SerializationError(e.to_string()))
+    }
+
+    /// perists the collection instance on disk (lmdb -> collections database)
+    pub fn persist(&self, env: &Environment, db: Database) -> Result<(), WaCustomError> {
+        let key = self.get_key();
+        let value = self.serialize()?;
 
         let mut txn = env
             .begin_rw_txn()

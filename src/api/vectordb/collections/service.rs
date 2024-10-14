@@ -24,7 +24,7 @@ pub(crate) async fn create_collection(
         dense_vector,
         metadata_schema,
         sparse_vector,
-    } = &*repo::create_collection(ctx.clone(), create_collection_dto).await?;
+    } = &repo::create_collection(ctx.clone(), create_collection_dto).await?;
 
     if dense_vector.enabled {
         let _ = repo::create_vector_store(

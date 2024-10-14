@@ -22,7 +22,7 @@ pub(crate) async fn create_collection(
         metadata_schema,
         sparse_vector,
     }: CreateCollectionDto,
-) -> Result<Arc<Collection>, CollectionsError> {
+) -> Result<Collection, CollectionsError> {
     let env = &ctx.ain_env.persist;
     let collections_db = &ctx.ain_env.vector_store_map.lmdb_db;
 
@@ -41,7 +41,7 @@ pub(crate) async fn create_collection(
     let _ = collection
         .persist(env, collections_db.clone())
         .map_err(|e| CollectionsError::WaCustomError(e));
-    Ok(Arc::new(collection))
+    Ok(collection)
 }
 
 pub(crate) async fn create_vector_store(
