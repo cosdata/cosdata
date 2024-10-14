@@ -23,28 +23,28 @@ pub(crate) enum VectorsError {
 impl Display for VectorsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            VectorsError::NotFound => write!(f, "Vector Not Found!"),
-            VectorsError::FailedToGetAppEnv => write!(f, "Failed to get App Env!"),
-            VectorsError::FailedToCreateVector(msg) => {
+            Self::NotFound => write!(f, "Vector Not Found!"),
+            Self::FailedToGetAppEnv => write!(f, "Failed to get App Env!"),
+            Self::FailedToCreateVector(msg) => {
                 write!(f, "Failed to create vector due to: {}", msg)
             }
-            VectorsError::NotImplemented => {
+            Self::NotImplemented => {
                 write!(f, "This is not supported yet!")
             }
-            VectorsError::DatabaseError(msg) => write!(f, "Failed to fetch vector due to: {}", msg),
-            VectorsError::InternalServerError => {
+            Self::DatabaseError(msg) => write!(f, "Failed to fetch vector due to: {}", msg),
+            Self::InternalServerError => {
                 write!(f, "Internal server error while trying to fetch vector!")
             }
-            VectorsError::FailedToUpdateVector(msg) => {
+            Self::FailedToUpdateVector(msg) => {
                 write!(f, "Failed to update vector due to: {}", msg)
             }
-            VectorsError::FailedToFindSimilarVectors(msg) => {
+            Self::FailedToFindSimilarVectors(msg) => {
                 write!(f, "Failed to find similar vectors due to: {}", msg)
             }
             Self::FailedToDeleteVector(msg) => {
                 write!(f, "Failed to delete vector due to: {}", msg)
             }
-            VectorsError::WaCustom(e) => {
+            Self::WaCustom(e) => {
                 write!(f, "Vector operation failed due to internal error: {e:?}")
             }
         }

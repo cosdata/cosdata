@@ -15,10 +15,10 @@ pub enum IndexesError {
 impl Display for IndexesError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            IndexesError::NotFound => write!(f, "Index Not Found!"),
-            IndexesError::FailedToGetAppEnv => write!(f, "Failed to get App Env!"),
-            IndexesError::CollectionNotFound => write!(f, "Collection Not Found!"),
-            IndexesError::FailedToCreateIndex(msg) => {
+            Self::NotFound => write!(f, "Index Not Found!"),
+            Self::FailedToGetAppEnv => write!(f, "Failed to get App Env!"),
+            Self::CollectionNotFound => write!(f, "Collection Not Found!"),
+            Self::FailedToCreateIndex(msg) => {
                 write!(f, "Failed to create index due to {}", msg)
             }
         }
@@ -34,10 +34,10 @@ impl ResponseError for IndexesError {
 
     fn status_code(&self) -> StatusCode {
         match self {
-            IndexesError::NotFound => StatusCode::BAD_REQUEST,
-            IndexesError::CollectionNotFound => StatusCode::BAD_REQUEST,
-            IndexesError::FailedToGetAppEnv => StatusCode::INTERNAL_SERVER_ERROR,
-            IndexesError::FailedToCreateIndex(_) => StatusCode::BAD_REQUEST,
+            Self::NotFound => StatusCode::BAD_REQUEST,
+            Self::CollectionNotFound => StatusCode::BAD_REQUEST,
+            Self::FailedToGetAppEnv => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::FailedToCreateIndex(_) => StatusCode::BAD_REQUEST,
         }
     }
 }

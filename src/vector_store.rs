@@ -1161,6 +1161,90 @@ pub fn delete_vector_by_id(
     Ok(())
 }
 
+pub fn delete_vector_by_id_in_transaction(
+    vec_store: Arc<VectorStore>,
+    vector_id: VectorId,
+    transaction_id: Hash,
+) -> Result<(), WaCustomError> {
+    let version_hash = vec_store
+        .vcs
+        .get_version_hash(&transaction_id)
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?
+        .ok_or(WaCustomError::DatabaseError(
+            "VersionHash not found for transaction".to_string(),
+        ))?;
+    let current_version_number = *version_hash.version as u16;
+
+    let vec_raw = get_embedding_by_id(vec_store.clone(), vector_id.clone())?;
+    let quantized = Arc::new(vec_store.quantization_metric.clone().get().quantize(
+        &vec_raw.raw_vec,
+        vec_store.storage_type.clone().get().clone(),
+    )?);
+    let mut skipm = HashSet::new();
+    skipm.insert(vec_raw.hash_vec);
+    let items = traverse_find_nearest(
+        vec_store.clone(),
+        vec_store
+            .root_vec
+            .item
+            .clone()
+            .get()
+            .get_latest_version(vec_store.cache.clone())
+            .0,
+        quantized,
+        0,
+        &mut skipm,
+        HNSWLevel(vec_store.hnsw_params.clone().get().num_layers),
+        false,
+    )?;
+
+    let mut maybe_item = None;
+
+    for (item, _) in items {
+        let data = item.get_data(vec_store.cache.clone());
+        let prop = match data.get_prop() {
+            PropState::Ready(prop) => prop.id.clone(),
+            PropState::Pending(_) => {
+                // TODO: load prop
+                return Err(WaCustomError::NodeError("PropState is Pending".to_string()));
+            }
+        };
+
+        if prop == vector_id {
+            maybe_item = Some(item);
+        }
+    }
+
+    let Some(mut item) = maybe_item else {
+        return Err(WaCustomError::NodeError(
+            "Node not found in graph".to_string(),
+        ));
+    };
+
+    for level in 0..=vec_store.hnsw_params.clone().get().num_layers {
+        delete_node_update_neighbours(
+            vec_store.clone(),
+            item.clone(),
+            skipm.clone(),
+            transaction_id,
+            current_version_number,
+            HNSWLevel(level),
+        )?;
+
+        item = item
+            .get_data(vec_store.cache.clone())
+            .parent
+            .clone()
+            .item
+            .get()
+            .clone();
+    }
+
+    auto_commit_transaction(vec_store)?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{read_embedding, write_embedding, RawVectorEmbedding};
