@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     app_context::AppContext,
-    models::types::{Collection, VectorStore},
+    models::{collection::Collection, types::VectorStore},
 };
 
 use super::{

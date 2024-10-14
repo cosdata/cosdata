@@ -4,7 +4,7 @@ use crate::{
     api_service::{init_inverted_index, init_vector_store},
     app_context::AppContext,
     indexes::inverted_index::InvertedIndex,
-    models::types::{Collection, VectorStore},
+    models::{collection::Collection, types::VectorStore},
 };
 
 use super::{

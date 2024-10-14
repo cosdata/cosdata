@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::models::types::{CollectionConfig, DenseVectorOptions, SparseVectorOptions};
+use crate::models::collection::{CollectionConfig, DenseVectorOptions, SparseVectorOptions};
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct FindCollectionDto {
