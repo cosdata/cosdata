@@ -4,7 +4,7 @@ use crate::{
     api_service::{init_inverted_index, init_vector_store},
     app_context::AppContext,
     indexes::inverted_index::InvertedIndex,
-    models::types::{get_app_env, Collection, VectorStore},
+    models::types::{Collection, VectorStore},
 };
 
 use super::{
@@ -78,13 +78,11 @@ pub(crate) async fn create_inverted_index(
 }
 
 pub(crate) async fn get_vector_stores(
+    ctx: Arc<AppContext>,
     _get_collections_dto: GetCollectionsDto,
 ) -> Result<Vec<FindCollectionDto>, CollectionsError> {
-    let env = match get_app_env() {
-        Ok(env) => env,
-        Err(_) => return Err(CollectionsError::FailedToGetAppEnv),
-    };
-    let vec_store = env
+    let vec_store = ctx
+        .ain_env
         .vector_store_map
         .iter()
         .map(|v| FindCollectionDto {
@@ -97,14 +95,11 @@ pub(crate) async fn get_vector_stores(
 }
 
 pub(crate) async fn get_vector_store_by_name(
+    ctx: Arc<AppContext>,
     name: &str,
 ) -> Result<Arc<VectorStore>, CollectionsError> {
-    let env = match get_app_env() {
-        Ok(env) => env,
-        Err(_) => return Err(CollectionsError::FailedToGetAppEnv),
-    };
     // Try to get the vector store from the environment
-    let vec_store = match env.vector_store_map.get(name) {
+    let vec_store = match ctx.ain_env.vector_store_map.get(name) {
         Some(store) => store.clone(),
         None => {
             // Vector store not found, return an error response
@@ -115,19 +110,20 @@ pub(crate) async fn get_vector_store_by_name(
 }
 
 pub(crate) async fn delete_vector_store_by_name(
+    ctx: Arc<AppContext>,
     name: &str,
 ) -> Result<Arc<VectorStore>, CollectionsError> {
-    let env = match get_app_env() {
-        Ok(env) => env,
-        Err(_) => return Err(CollectionsError::FailedToGetAppEnv),
-    };
     // Try to get the vector store from the environment
-    let vec_store = match env.vector_store_map.remove(name) {
-        Some((_, store)) => store,
+    let result = ctx
+        .ain_env
+        .vector_store_map
+        .remove(name)
+        .map_err(CollectionsError::WaCustomError)?;
+    match result {
+        Some((_, store)) => Ok(store),
         None => {
             // Vector store not found, return an error response
             return Err(CollectionsError::NotFound);
         }
-    };
-    Ok(vec_store)
+    }
 }
