@@ -13,6 +13,7 @@ pub(crate) enum VectorsError {
     FailedToCreateVector(String),
     FailedToUpdateVector(String),
     FailedToFindSimilarVectors(String),
+    FailedToDeleteVector(String),
     NotImplemented,
     DatabaseError(String),
     InternalServerError,
@@ -40,6 +41,9 @@ impl Display for VectorsError {
             VectorsError::FailedToFindSimilarVectors(msg) => {
                 write!(f, "Failed to find similar vectors due to: {}", msg)
             }
+            Self::FailedToDeleteVector(msg) => {
+                write!(f, "Failed to delete vector due to: {}", msg)
+            }
             VectorsError::WaCustom(e) => {
                 write!(f, "Vector operation failed due to internal error: {e:?}")
             }
@@ -63,8 +67,7 @@ impl ResponseError for VectorsError {
             Self::InternalServerError => StatusCode::INTERNAL_SERVER_ERROR,
             Self::FailedToUpdateVector(_) => StatusCode::BAD_REQUEST,
             Self::FailedToFindSimilarVectors(_) => StatusCode::BAD_REQUEST,
-            Self::FailedToUpdateVector(_) => StatusCode::BAD_REQUEST,
-            Self::FailedToFindSimilarVectors(_) => StatusCode::BAD_REQUEST,
+            Self::FailedToDeleteVector(_) => StatusCode::BAD_REQUEST,
             Self::WaCustom(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }

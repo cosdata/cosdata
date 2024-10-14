@@ -235,7 +235,7 @@ pub fn run_upload(
     }
 
     // Add next version
-    let current_version = vec_store
+    let (current_version, _) = vec_store
         .vcs
         .add_next_version("main")
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;

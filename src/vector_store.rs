@@ -6,6 +6,7 @@ use crate::models::file_persist::*;
 use crate::models::identity_collections::IdentitySet;
 use crate::models::kmeans::{concat_vectors, generate_initial_centroids, kmeans, should_continue};
 use crate::models::lazy_load::*;
+use crate::models::meta_persist::store_current_version;
 use crate::models::types::*;
 use crate::models::versioning::Hash;
 use crate::quantization::{Quantization, StorageType};
@@ -51,7 +52,6 @@ pub fn ann_search(
         vec_store.clone(),
         cur_entry.clone(),
         fvec.clone(),
-        vector_emb.hash_vec.clone(),
         0,
         &mut skipm,
         cur_level,
@@ -589,7 +589,6 @@ pub fn index_embedding(
         vec_store.clone(),
         cur_entry.clone(),
         fvec.clone(),
-        vector_emb.hash_vec.clone(),
         0,
         &mut skipm,
         cur_level,
@@ -706,6 +705,7 @@ fn create_node_extract_neighbours(
     hnsw_level: HNSWLevel,
     prop: ArcShift<PropState>,
     parent: LazyItemRef<MergedNode>,
+    child: LazyItemRef<MergedNode>,
 ) -> (
     LazyItem<MergedNode>,
     EagerLazyItemSet<MergedNode, MetricResult>,
@@ -719,7 +719,7 @@ fn create_node_extract_neighbours(
             prop,
             neighbors: neighbours.clone(),
             parent,
-            child: LazyItemRef::new_invalid(),
+            child,
         },
     );
     (node, neighbours)
@@ -743,6 +743,7 @@ fn insert_node_create_edges(
             || LazyItemRef::new_invalid(),
             |parent| LazyItemRef::from_lazy(parent),
         ),
+        LazyItemRef::new_invalid(),
     );
     if let Some(parent) = parent {
         parent
@@ -765,12 +766,14 @@ fn insert_node_create_edges(
                 } else {
                     let prop_arc = old_neighbour.prop.clone();
                     let parent = old_neighbour.parent.clone();
+                    let child = old_neighbour.child.clone();
                     let (new_neighbour, new_neighbour_neighbours) = create_node_extract_neighbours(
                         version,
                         version_number,
                         cur_level,
                         prop_arc,
                         parent,
+                        child,
                     );
                     nbr1.add_version(vec_store.cache.clone(), new_neighbour.clone());
                     let neighbor_list: Vec<(LazyItem<MergedNode>, MetricResult)> = old_neighbour
@@ -782,7 +785,7 @@ fn insert_node_create_edges(
                     exec_queue
                         .transactional_update(|queue| {
                             let mut new_queue = queue.clone();
-                            new_queue.push(ArcShift::new(new_neighbour.clone()));
+                            new_queue.push(ArcShift::new(nbr1.clone()));
                             new_queue
                         })
                         .unwrap();
@@ -820,7 +823,6 @@ fn traverse_find_nearest(
     vec_store: Arc<VectorStore>,
     vtm: LazyItem<MergedNode>,
     fvec: Arc<Storage>,
-    hs: VectorId,
     hops: u8,
     skipm: &mut HashSet<VectorId>,
     cur_level: HNSWLevel,
@@ -857,7 +859,6 @@ fn traverse_find_nearest(
 
                 let vec_store = vec_store.clone();
                 let fvec = fvec.clone();
-                let hs = hs.clone();
 
                 if skipm.insert(nb.clone()) {
                     let dist = vec_store
@@ -876,7 +877,6 @@ fn traverse_find_nearest(
                             vec_store.clone(),
                             nref.1.clone(),
                             fvec.clone(),
-                            hs.clone(),
                             hops + 1,
                             skipm,
                             cur_level,
@@ -1002,6 +1002,161 @@ pub fn create_index_in_collection(vec_store: Arc<VectorStore>) -> Result<(), WaC
     vec_store.root_vec.item.clone().update(root);
     vec_store.set_auto_config_flag(false);
     vec_store.set_configured_flag(true);
+
+    Ok(())
+}
+
+fn delete_node_update_neighbours(
+    vec_store: Arc<VectorStore>,
+    item: LazyItem<MergedNode>,
+    skipm: HashSet<VectorId>,
+    version_id: Hash,
+    version_number: u16,
+    hnsw_level: HNSWLevel,
+) -> Result<(), WaCustomError> {
+    let node = item.get_data(vec_store.cache.clone());
+    for nbr in node.neighbors.iter() {
+        let mut skipm = skipm.clone();
+        let nbr_node = nbr.1.get_data(vec_store.cache.clone());
+        let (nbr_id, nbr_vec) = match nbr_node.get_prop() {
+            PropState::Ready(prop) => (prop.id.clone(), prop.value.clone()),
+            PropState::Pending(_) => {
+                // TODO: load prop
+                return Err(WaCustomError::NodeError("PropState is Pending".to_string()));
+            }
+        };
+        skipm.insert(nbr_id);
+        let mut nbr_nbrs = traverse_find_nearest(
+            vec_store.clone(),
+            vec_store
+                .root_vec
+                .item
+                .clone()
+                .get()
+                .get_latest_version(vec_store.cache.clone())
+                .0,
+            nbr_vec,
+            0,
+            &mut skipm,
+            HNSWLevel(vec_store.hnsw_params.clone().get().num_layers),
+            false,
+        )?;
+
+        nbr_nbrs.truncate(20);
+        let nbr_nbrs_set = IdentitySet::from_iter(
+            nbr_nbrs
+                .into_iter()
+                .map(|(node, dist)| EagerLazyItem(dist, node)),
+        );
+
+        if let Some(version) = nbr.1.get_version(vec_store.cache.clone(), version_number) {
+            let nbr_current_version_data = version.get_data(vec_store.cache.clone());
+            nbr_current_version_data
+                .neighbors
+                .items
+                .clone()
+                .update(nbr_nbrs_set);
+        } else {
+            let (new_version, mut new_neighbours) = create_node_extract_neighbours(
+                version_id,
+                version_number,
+                hnsw_level,
+                nbr_node.prop.clone(),
+                nbr_node.parent.clone(),
+                nbr_node.child.clone(),
+            );
+            new_neighbours.items.update(nbr_nbrs_set);
+            nbr.1.add_version(vec_store.cache.clone(), new_version);
+            let mut exec_queue = vec_store.exec_queue_nodes.clone();
+            exec_queue
+                .transactional_update(|queue| {
+                    let mut new_queue = queue.clone();
+                    new_queue.push(ArcShift::new(nbr.1.clone()));
+                    new_queue
+                })
+                .unwrap();
+        }
+    }
+    Ok(())
+}
+
+pub fn delete_vector_by_id(
+    vec_store: Arc<VectorStore>,
+    vector_id: VectorId,
+) -> Result<(), WaCustomError> {
+    let (current_version, current_version_number) = vec_store
+        .vcs
+        .add_next_version("main")
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+    vec_store.set_current_version(current_version);
+    store_current_version(&vec_store.lmdb, current_version)?;
+
+    let vec_raw = get_embedding_by_id(vec_store.clone(), vector_id.clone())?;
+    let quantized = Arc::new(vec_store.quantization_metric.clone().get().quantize(
+        &vec_raw.raw_vec,
+        vec_store.storage_type.clone().get().clone(),
+    )?);
+    let mut skipm = HashSet::new();
+    skipm.insert(vec_raw.hash_vec);
+    let items = traverse_find_nearest(
+        vec_store.clone(),
+        vec_store
+            .root_vec
+            .item
+            .clone()
+            .get()
+            .get_latest_version(vec_store.cache.clone())
+            .0,
+        quantized,
+        0,
+        &mut skipm,
+        HNSWLevel(vec_store.hnsw_params.clone().get().num_layers),
+        false,
+    )?;
+
+    let mut maybe_item = None;
+
+    for (item, _) in items {
+        let data = item.get_data(vec_store.cache.clone());
+        let prop = match data.get_prop() {
+            PropState::Ready(prop) => prop.id.clone(),
+            PropState::Pending(_) => {
+                // TODO: load prop
+                return Err(WaCustomError::NodeError("PropState is Pending".to_string()));
+            }
+        };
+
+        if prop == vector_id {
+            maybe_item = Some(item);
+        }
+    }
+
+    let Some(mut item) = maybe_item else {
+        return Err(WaCustomError::NodeError(
+            "Node not found in graph".to_string(),
+        ));
+    };
+
+    for level in 0..=vec_store.hnsw_params.clone().get().num_layers {
+        delete_node_update_neighbours(
+            vec_store.clone(),
+            item.clone(),
+            skipm.clone(),
+            current_version,
+            *current_version_number as u16,
+            HNSWLevel(level),
+        )?;
+
+        item = item
+            .get_data(vec_store.cache.clone())
+            .parent
+            .clone()
+            .item
+            .get()
+            .clone();
+    }
+
+    auto_commit_transaction(vec_store)?;
 
     Ok(())
 }

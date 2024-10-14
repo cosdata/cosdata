@@ -1,12 +1,11 @@
 use std::sync::Arc;
 
-use crate::models::versioning::Hash;
-
 use crate::{
     api::vectordb::collections,
     api_service::{run_upload, run_upload_in_transaction},
     app_context::AppContext,
-    models::{rpc::VectorIdValue, types::VectorId},
+    convert_value,
+    models::{rpc::VectorIdValue, types::VectorId, versioning::Hash},
     vector_store::get_embedding_by_id,
 };
 
@@ -156,8 +155,16 @@ pub(crate) async fn find_similar_vectors(
 }
 
 pub(crate) async fn delete_vector_by_id(
-    _collection_id: &str,
-    _vector_id: VectorIdValue,
-) -> Result<CreateVectorResponseDto, VectorsError> {
-    Err(VectorsError::NotImplemented)?
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    vector_id: VectorIdValue,
+) -> Result<(), VectorsError> {
+    let collection = collections::service::get_collection_by_id(ctx.clone(), collection_id)
+        .await
+        .map_err(|e| VectorsError::FailedToDeleteVector(e.to_string()))?;
+
+    crate::vector_store::delete_vector_by_id(collection, convert_value(vector_id.clone()))
+        .map_err(|e| VectorsError::WaCustom(e))?;
+
+    Ok(())
 }
