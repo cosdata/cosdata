@@ -120,12 +120,22 @@ pub fn dot_product_f16(x: &[f16], y: &[f16]) -> f32 {
 }
 
 pub fn dot_product_binary(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], res: u8) -> f32 {
-    // TODO: use SIMD if possible
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx") && is_x86_feature_detected!("avx2") {
+            return unsafe { x86_64::dot_product_binary_avx2(x_vec, y_vec, res) };
+        }
+    }
     dot_product_binary_simple(x_vec, y_vec, res)
 }
 
 pub fn dot_product_quaternary(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], res: u8) -> f32 {
-    // TODO: use SIMD if possible
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx") && is_x86_feature_detected!("avx2") {
+            return unsafe { x86_64::dot_product_quaternary_avx2(x_vec, y_vec, res) };
+        }
+    }
     dot_product_quaternary_simple(x_vec, y_vec, res)
 }
 
