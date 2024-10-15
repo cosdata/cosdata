@@ -32,12 +32,20 @@ pub(crate) async fn upsert(
          run_upload(ctx.into_inner(), vec_store, convert_vectors(body.vectors));
     })
     .await
+<<<<<<< HEAD
     .unwrap();
 
     match res {
         Ok(_) => HttpResponse::Ok().body("Vectors upserted successfully"),
         Err(err) => HttpResponse::InternalServerError().body(format!("Error upserting vectors: {}", err));
     }
+=======
+    .unwrap_or_else(|err| {
+        println!("Error: {}\n", err);
+        HttpResponse::InternalServerError().body("error during upload\n");
+        
+    });
+>>>>>>> 163f060 ( handled an unwrap error)
     let response_data = RPCResponseBody::RespUpsertVectors { insert_stats: None };
     HttpResponse::Ok().json(response_data)
 }
