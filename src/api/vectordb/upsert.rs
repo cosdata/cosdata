@@ -4,7 +4,10 @@ use crate::{
     api_service::run_upload,
     app_context::AppContext,
     convert_vectors,
-    models::rpc::{RPCResponseBody, UpsertVectors},
+    models::{
+        rpc::{RPCResponseBody, UpsertVectors},
+        types::get_app_env,
+    },
 };
 
 // Route: `/vectordb/upsert`
@@ -12,8 +15,12 @@ pub(crate) async fn upsert(
     web::Json(body): web::Json<UpsertVectors>,
     ctx: web::Data<AppContext>,
 ) -> HttpResponse {
+    let env = match get_app_env() {
+        Ok(env) => env,
+        Err(_) => return HttpResponse::InternalServerError().body("Env initialization error"),
+    };
     // Try to get the vector store from the environment
-    let vec_store = match ctx.ain_env.vector_store_map.get(&body.vector_db_name) {
+    let vec_store = match env.vector_store_map.get(&body.vector_db_name) {
         Some(store) => store,
         None => {
             // Vector store not found, return an error response
@@ -29,23 +36,13 @@ pub(crate) async fn upsert(
 
     // Call run_upload with the extracted parameters
     let res = web::block(move || {
-         run_upload(ctx.into_inner(), vec_store, convert_vectors(body.vectors));
+        run_upload(ctx.into_inner(), vec_store, convert_vectors(body.vectors))
     })
     .await
-<<<<<<< HEAD
     .unwrap();
-
+    
     match res {
-        Ok(_) => HttpResponse::Ok().body("Vectors upserted successfully"),
-        Err(err) => HttpResponse::InternalServerError().body(format!("Error upserting vectors: {}", err));
+        Ok(_) => HttpResponse::Ok().body("upserted successfully"),
+        Err(err) => HttpResponse::InternalServerError().body(format!("error upserting vectors: {}", err)),
     }
-=======
-    .unwrap_or_else(|err| {
-        println!("Error: {}\n", err);
-        HttpResponse::InternalServerError().body("error during upload\n");
-        
-    });
->>>>>>> 163f060 ( handled an unwrap error)
-    let response_data = RPCResponseBody::RespUpsertVectors { insert_stats: None };
-    HttpResponse::Ok().json(response_data)
 }
