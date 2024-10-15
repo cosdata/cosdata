@@ -3,6 +3,7 @@ use crate::storage::inverted_index_old::InvertedIndexItem;
 use crate::storage::inverted_index_sparse_ann::{
     InvertedIndexSparseAnn, InvertedIndexSparseAnnNode,
 };
+use crate::storage::inverted_index_sparse_ann_basic::InvertedIndexSparseAnnNodeBasic;
 use crate::storage::Storage;
 
 use super::buffered_io::{BufIoError, BufferManagerFactory};
@@ -28,6 +29,7 @@ pub enum CacheItem {
     InvertedIndexItemWithFloat(LazyItem<InvertedIndexItem<f32>>),
     InvertedIndexSparseAnnNode(LazyItem<InvertedIndexSparseAnnNode>),
     InvertedIndexSparseAnn(LazyItem<InvertedIndexSparseAnn>),
+    InvertedIndexSparseAnnNodeBasic(LazyItem<InvertedIndexSparseAnnNodeBasic>),
 }
 
 pub trait Cacheable: Clone + 'static {
@@ -144,6 +146,20 @@ impl Cacheable for InvertedIndexSparseAnn {
 
     fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
         CacheItem::InvertedIndexSparseAnn(item)
+    }
+}
+
+impl Cacheable for InvertedIndexSparseAnnNodeBasic {
+    fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
+        if let CacheItem::InvertedIndexSparseAnnNodeBasic(item) = cache_item {
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
+        CacheItem::InvertedIndexSparseAnnNodeBasic(item)
     }
 }
 
