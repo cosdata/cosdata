@@ -47,3 +47,10 @@ pub(crate) async fn find_similar_vectors(
     let similar_vectors = service::find_similar_vectors(find_similar_vectors).await?;
     Ok(HttpResponse::Ok().json(similar_vectors))
 }
+
+pub(crate) async fn delete_vector_by_id(path: web::Path<(String, String)>) -> Result<HttpResponse> {
+    let (collection_id, vector_id) = path.into_inner();
+    let _ =
+        service::delete_vector_by_id(&collection_id, VectorIdValue::StringValue(vector_id)).await?;
+    Ok(HttpResponse::NoContent().finish())
+}

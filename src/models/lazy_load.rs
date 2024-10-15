@@ -5,6 +5,7 @@ use super::serializer::CustomSerialize;
 use super::types::{FileOffset, STM};
 use super::versioning::*;
 use arcshift::ArcShift;
+use serde::{Deserialize, Serialize};
 use core::panic;
 use std::collections::HashSet;
 use std::fmt;
@@ -41,7 +42,7 @@ pub trait SyncPersist {
 
 pub const CHUNK_SIZE: usize = 5;
 
-#[derive(Debug, Eq, PartialEq, Hash, Clone)]
+#[derive(Debug, Eq, PartialEq, Hash, Clone, Serialize, Deserialize)]
 pub enum FileIndex {
     Valid {
         offset: FileOffset,

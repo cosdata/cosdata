@@ -1,3 +1,10 @@
+use super::buffered_io::BufferManagerFactory;
+use super::cache_loader::NodeRegistry;
+use super::meta_persist::{
+    delete_vector_store, lmdb_init_collections_db, load_collections, persist_vector_store,
+    retrieve_current_version,
+};
+use super::serializer::CustomSerialize;
 use super::versioning::VersionControl;
 use crate::distance::cosine::CosineSimilarity;
 use crate::distance::DistanceError;
@@ -15,13 +22,14 @@ use crate::quantization::{Quantization, QuantizationError, StorageType};
 use crate::storage::Storage;
 use arcshift::ArcShift;
 use dashmap::DashMap;
-use lmdb::{Database, Environment};
+use lmdb::{Database, DatabaseFlags, Environment};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fmt;
 use std::fs::*;
 use std::hash::{DefaultHasher, Hash as StdHash, Hasher};
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct HNSWLevel(pub u8);
@@ -162,7 +170,7 @@ impl DistanceFunction for DistanceMetric {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum QuantizationMetric {
     Scalar,
     Product(ProductQuantization),
@@ -358,8 +366,15 @@ pub type ExecQueueUpdate = STM<Vec<ArcShift<LazyItem<MergedNode>>>>;
 #[derive(Debug, Clone)]
 pub struct MetaDb {
     pub env: Arc<Environment>,
-    pub metadata_db: Arc<Database>,
-    pub embeddings_db: Arc<Database>,
+    pub db: Arc<Database>,
+}
+
+impl MetaDb {
+    pub fn from_env(env: Arc<Environment>, collection_name: &str) -> lmdb::Result<Self> {
+        let db = Arc::new(env.create_db(Some(collection_name), DatabaseFlags::empty())?);
+
+        Ok(Self { env, db })
+    }
 }
 
 #[derive(Clone)]
@@ -378,6 +393,9 @@ pub struct VectorStore {
     pub distance_metric: Arc<DistanceMetric>,
     pub storage_type: StorageType,
     pub vcs: Arc<VersionControl>,
+    pub cache: Arc<NodeRegistry>,
+    pub index_manager: Arc<BufferManagerFactory>,
+    pub vec_raw_manager: Arc<BufferManagerFactory>,
 }
 
 impl VectorStore {
@@ -395,6 +413,9 @@ impl VectorStore {
         distance_metric: Arc<DistanceMetric>,
         storage_type: StorageType,
         vcs: Arc<VersionControl>,
+        cache: Arc<NodeRegistry>,
+        index_manager: Arc<BufferManagerFactory>,
+        vec_raw_manager: Arc<BufferManagerFactory>,
     ) -> Self {
         VectorStore {
             exec_queue_nodes,
@@ -411,6 +432,9 @@ impl VectorStore {
             distance_metric,
             storage_type,
             vcs,
+            cache,
+            index_manager,
+            vec_raw_manager,
         }
     }
     // Get method
@@ -423,6 +447,17 @@ impl VectorStore {
     pub fn set_current_version(&self, new_version: Hash) {
         let mut arc = self.current_version.clone();
         arc.update(new_version);
+    }
+
+    /// Returns FileIndex (offset) corresponding to the root
+    /// node. Returns None if the it's not set or the root node is an
+    /// invalid LazyItem
+    pub fn root_vec_offset(&self) -> Option<FileIndex> {
+        let lazy_item = self.root_vec.item.shared_get();
+        match lazy_item {
+            LazyItem::Valid { file_index, .. } => file_index.shared_get().clone(),
+            LazyItem::Invalid => None,
+        }
     }
 }
 
@@ -440,7 +475,147 @@ pub struct RawVectorEmbedding {
     pub hash_vec: VectorId,
 }
 
-type VectorStoreMap = DashMap<String, Arc<VectorStore>>;
+pub struct VectorStoreMap {
+    inner: DashMap<String, Arc<VectorStore>>,
+    lmdb_env: Arc<Environment>,
+    lmdb_db: Database,
+}
+
+impl VectorStoreMap {
+    fn new(env: Arc<Environment>) -> lmdb::Result<Self> {
+        let db = lmdb_init_collections_db(&env)?;
+        let res = Self {
+            inner: DashMap::new(),
+            lmdb_env: env,
+            lmdb_db: db,
+        };
+        Ok(res)
+    }
+
+    /// Loads vector store map from lmdb
+    ///
+    /// In doing so, the root vec for all collections are loaded into
+    /// memory, which also ends up warming the cache (NodeRegistry)
+    fn load(env: Arc<Environment>) -> Result<Self, WaCustomError> {
+        let res =
+            Self::new(env.clone()).map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+        let collections = load_collections(&res.lmdb_env, res.lmdb_db.clone())
+            .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+        let root_path = Path::new(".");
+
+        // let bufmans = cache.get_bufmans();
+
+        for coll in collections {
+            let collection_path: Arc<Path> = root_path.join(&coll.name).into();
+            let index_manager = Arc::new(BufferManagerFactory::new(
+                collection_path.clone(),
+                |root, ver| root.join(format!("{}.index", **ver)),
+            ));
+            let vec_raw_manager = Arc::new(BufferManagerFactory::new(
+                collection_path.clone(),
+                |root, ver| root.join(format!("{}.vec_raw", **ver)),
+            ));
+            // TODO: May be the value can be taken from config
+            let cache = Arc::new(NodeRegistry::new(1000, index_manager.clone()));
+
+            let db = Arc::new(
+                env.create_db(Some(&coll.name), DatabaseFlags::empty())
+                    .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?,
+            );
+            let root_item: LazyItem<MergedNode> = LazyItem::deserialize(
+                index_manager.clone(),
+                coll.file_index,
+                cache.clone(),
+                1000,
+                &mut HashSet::new(),
+            )?;
+            let root = LazyItemRef::from_lazy(root_item);
+
+            let vcs = Arc::new(VersionControl::from_existing(env.clone(), db.clone()));
+            let prop_file = Arc::new(
+                OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(collection_path.join("prop.data"))
+                    .unwrap(),
+            );
+            let lmdb = MetaDb {
+                env: env.clone(),
+                db,
+            };
+            let current_version = retrieve_current_version(&lmdb)?;
+            let vs = VectorStore::new(
+                STM::new(Vec::new(), 1, true),
+                coll.max_level,
+                coll.name.clone(),
+                root,
+                coll.levels_prob,
+                coll.quant_dim,
+                prop_file.clone(),
+                lmdb,
+                ArcShift::new(current_version),
+                coll.quantization_metric.clone(),
+                coll.distance_metric.clone(),
+                coll.storage_type,
+                vcs,
+                cache,
+                index_manager,
+                vec_raw_manager,
+            );
+            res.inner.insert(coll.name, Arc::new(vs));
+        }
+        Ok(res)
+    }
+
+    pub fn insert(&self, name: &str, vec_store: Arc<VectorStore>) -> Result<(), WaCustomError> {
+        self.inner.insert(name.to_owned(), vec_store.clone());
+        persist_vector_store(&self.lmdb_env, self.lmdb_db.clone(), vec_store.clone())
+    }
+
+    /// Returns the `VectorStore` by name
+    ///
+    /// If not found, None is returned
+    ///
+    /// Note that it tried to look up the VectorStore in the DashMap
+    /// only and doesn't check LMDB. This is because of the assumption
+    /// that at startup, all VectorStores will be loaded from LMDB
+    /// into the in-memory DashMap and when a new VectorStore is
+    /// added, it will be written to the DashMap as well.
+    ///
+    /// @TODO: As a future improvement, we can fallback to checking if
+    /// the VectorStore exists in LMDB and caching it. But it's not
+    /// required for the current use case.
+    pub fn get(&self, name: &str) -> Option<Arc<VectorStore>> {
+        self.inner.get(name).map(|store| store.clone())
+    }
+
+    pub fn remove(&self, name: &str) -> Result<Option<(String, Arc<VectorStore>)>, WaCustomError> {
+        match self.inner.remove(name) {
+            Some((key, store)) => {
+                let vec_store =
+                    delete_vector_store(&self.lmdb_env, self.lmdb_db.clone(), store.clone())
+                        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+                Ok(Some((key, vec_store)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub fn iter(
+        &self,
+    ) -> dashmap::iter::Iter<
+        String,
+        Arc<VectorStore>,
+        std::hash::RandomState,
+        DashMap<String, Arc<VectorStore>>,
+    > {
+        self.inner.iter()
+    }
+}
+
+// type VectorStoreMap = DashMap<String, Arc<VectorStore>>;
 type UserDataCache = DashMap<String, (String, i32, i32, std::time::SystemTime, Vec<String>)>;
 
 // Define the AppEnv struct
@@ -450,29 +625,28 @@ pub struct AppEnv {
     pub persist: Arc<Environment>,
 }
 
-static AIN_ENV: OnceLock<Result<Arc<AppEnv>, WaCustomError>> = OnceLock::new();
-
 pub fn get_app_env() -> Result<Arc<AppEnv>, WaCustomError> {
-    AIN_ENV
-        .get_or_init(|| {
-            let path = Path::new("./_mdb"); // TODO: prefix the customer & database name
+    let path = Path::new("./_mdb"); // TODO: prefix the customer & database name
 
-            // Ensure the directory exists
-            create_dir_all(&path).map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-            // Initialize the environment
-            let env = Environment::new()
-                .set_max_dbs(4)
-                .set_map_size(10485760) // Set the maximum size of the database to 10MB
-                .open(&path)
-                .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+    // Ensure the directory exists
+    create_dir_all(&path).map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+    // Initialize the environment
+    let env = Environment::new()
+        .set_max_dbs(10)
+        .set_map_size(10485760) // Set the maximum size of the database to 10MB
+        .open(&path)
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
-            Ok(Arc::new(AppEnv {
-                user_data_cache: DashMap::new(),
-                vector_store_map: DashMap::new(),
-                persist: Arc::new(env),
-            }))
-        })
-        .clone()
+    let env_arc = Arc::new(env);
+
+    let vector_store_map = VectorStoreMap::load(env_arc.clone())
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+    Ok(Arc::new(AppEnv {
+        user_data_cache: DashMap::new(),
+        vector_store_map,
+        persist: env_arc,
+    }))
 }
 
 #[derive(Clone)]

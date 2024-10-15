@@ -14,6 +14,10 @@ pub(crate) fn vectors_module() -> Scope {
         .route(
             "/{vector_id}",
             web::put().to(controller::update_vector_by_id),
+        )
+        .route(
+            "/{vector_id}",
+            web::delete().to(controller::delete_vector_by_id),
         );
 
     vectors_module

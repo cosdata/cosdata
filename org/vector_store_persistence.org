@@ -1,0 +1,181 @@
+* Vector store persistence
+
+** Problem
+   - Currently, the instances of struct ~VectorStore~ are only held in
+     memory, as part of the ~vector_store_map~ field of ~AppEnv~.
+   - This means if the process is restarted, previously created vector
+     stores (collections) will be lost
+
+** Requirements
+   1. At startup we need to get a list of all collection names in the
+      db. This operation should be straightforward
+   2. Some fields can be mutable e.g. ~max_cache_level~, ~levels_prob~
+      etc. It should be easy and efficient to modify these
+      individually.
+   3. Check if a collection exists
+
+** Where to store the data
+   As we're already using lmdb for storing metadata, vector store data
+   can also be stored in lmdb. More about how it will be stored is
+   covered in a later section.
+
+** Data to be persisted
+   The ~VectorStore~ struct is defined as follows,
+   #+begin_src rust
+     #[derive(Clone)]
+     pub struct VectorStore {
+         pub exec_queue_nodes: ExecQueueUpdate,
+         pub max_cache_level: u8,
+         pub database_name: String,
+         pub root_vec: LazyItemRef<MergedNode>,
+         pub levels_prob: Arc<Vec<(f64, i32)>>,
+         pub quant_dim: usize,
+         pub prop_file: Arc<File>,
+         pub lmdb: MetaDb,
+         pub current_version: ArcShift<Hash>,
+         pub current_open_transaction: ArcShift<Option<Hash>>,
+         pub quantization_metric: Arc<QuantizationMetric>,
+         pub distance_metric: Arc<DistanceMetric>,
+         pub storage_type: StorageType,
+         pub vcs: Arc<VersionControl>,
+     }
+   #+end_src
+   Note that,
+   - Not all fields of the struct need to be persisted to disk
+   - Some additional fields, not present in the struct are also need
+     to be persisted.
+
+   Following is a list of all the fields that need to be stored in the db
+
+*** max_cache_level
+    - Meaning: Total HNSW levels
+    - Type: u8
+    - Example: 5
+    - Default: 5
+    - Part of the VectorStore struct
+    - Suggestion: The name ~max_cache_level~ is related to legacy
+      code. It can be names as ~max_levels~ in the db to avoid
+      confusion.
+
+*** levels_prob
+    - Type: ~Vec<(f64, i32)>~
+    - Part of the VectorStore struct
+    - Example
+      #+begin_src rust
+        [(0.99999, 5), (0.9999, 4), (0.999, 3), (0.99, 2), (0.9, 1), (0.0, 0)]
+      #+end_src
+    - Suggestion: Even if we store just the probabilities in order, the
+      above format can be easily obtained.
+
+*** quant_dim
+    - Type: usize
+    - Default: ~size as usize / 32~
+    - Part of the VectorStore struct
+
+*** current version
+    - Type: Hash (versioning u32 SipHash)
+    - Part of the VectorStore struct
+
+*** quantization_metric
+    - Type: String
+    - Default: scalar
+    - Possible values
+      + Scalar
+      + Product with product quantization data
+        + no. of centroids: u16
+        + centroid values: u16
+    - Part of the VectorStore struct
+
+*** distance_metric
+    - Type: String
+    - Default: Cosine
+    - Possible values;
+      + Cosine
+      + Euclidean
+      + Hamming
+      + DotProduct
+    - Part of the VectorStore struct
+
+*** storage
+    - Type: StorageType
+    - Default: UnsignedByte
+    - Possible values
+      + UnsignedByte
+      + SubByte with u8 data
+      + HalfPrecisionFP
+    - Part of the VectorStore struct
+
+*** offset
+    - Meaning: address of the root vector in the index file
+    - Type: version + offset (serialization of the ~EmbeddingOffset~
+      struct; the same that's stored in the ~embeddings~ db in lmdb)
+
+*** size
+    - Meaning: Vector dimension
+    - Type: usize
+    - This will be specified as user input in the create collection
+      API call
+
+*** lower_bound
+    - Type: f32
+    - This will be specified as user input in the create collection
+
+*** upper_bound
+    - Type: f32
+    - This will be specified as user input in the create collection
+
+*** name
+    - Name of the collection
+    - Type: String
+
+** Approaches for storing the data as values in lmdb
+
+*** Option 1: Serialize in some format (bincode or an inefficient format like json)
+    - Key = collection name
+    - Value = json hashmap containing the above fields
+**** Fetching list of collections at startup
+     - The list of all collection names can be obtained by iterating
+       through the keys. As this will be done only once at startup,
+       this should be fine I guess.
+**** Advantages:
+     - Straightforward and easy to get started with
+**** Disadvantages:
+     - Overhead in serialization and deserialization (particularly if
+       JSON is used)
+
+*** Option 2: Multiple namespace qualified keys per collection in lmdb
+    - Every field will be stored as a namespace qualified keys in a
+      ~collections~ db. LMDB has transactions so all keys for a
+      collection can be stored together atomically.
+    - Examples:
+      + <collname>:<field> => serialized data
+      + mycoll:levels_prob
+      + mycoll:quantization_metric
+**** Fetching list of collections at startup
+     - [ ] Need to check if it's possible to iterate through the keys
+       by a prefix or some key range function
+**** Advantages
+     - Straightforward
+     - Extensible: More keys can be easily added
+     - Individual keys can be mutated easily
+**** Disadvantages
+     - Possibility of explosion of keys
+     - [ ] Need to check how efficient is iteration over all keys using a
+       prefix or a key function
+
+** Questions
+*** Data stored in embeddings, versions and branches lmdb tables
+    - The data stored in these tables is not namespaced by
+      collections. Would that be a problem?
+    - Key collisions for data that belongs to different collections
+      is possible
+      + e.g. the key in embeddings db is VectorId which can be same
+        for two vectors in different collections.
+      + The key in branches db is also just branch id (u64).
+*** Should current open transaction be persisted?
+    - Scenario: when the db crashes while a transaction is running
+    - This can be a future consideration
+*** Create collection API call for existing collection?
+    - What should be the behaviour if a client sends a create
+      collection API request with a collection name that already
+      exists?
