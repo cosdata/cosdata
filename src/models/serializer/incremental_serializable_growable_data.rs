@@ -122,3 +122,28 @@ impl CustomSerialize for IncrementalSerializableGrowableData {
         }
     }
 }
+
+impl CustomSerialize for STM<VectorData> {
+    fn serialize(
+        &self,
+        bufmans: Arc<BufferManagerFactory>,
+        version: Hash,
+        cursor: u64,
+    ) -> Result<u32, BufIoError> {
+        //todo! Implement serialize
+
+        Ok(0u32)
+    }
+
+    fn deserialize(
+        bufmans: Arc<BufferManagerFactory>,
+        file_index: FileIndex,
+        cache: Arc<NodeRegistry>,
+        max_loads: u16,
+        skipm: &mut HashSet<u64>,
+    ) -> Result<Self, BufIoError> {
+        //todo! Implement deserialize
+
+        Ok(STM::new(VectorData::new(), 1, true))
+    }
+}
