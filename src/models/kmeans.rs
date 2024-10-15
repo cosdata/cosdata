@@ -28,7 +28,7 @@ pub fn generate_initial_centroids(x_vec: &[i8], k: usize) -> Vec<i8> {
     x_vec.choose_multiple(&mut rng, k).cloned().collect()
 }
 
-fn kmeans_simple(
+fn kmeans_scalar(
     x_vec: &[i8],
     initial_centroids: &[i8],
     iterations: usize,
@@ -124,5 +124,5 @@ pub fn kmeans(x_vec: &[i8], initial_centroids: &[i8], iterations: usize) -> (Vec
         }
     }
 
-    kmeans_simple(x_vec, initial_centroids, iterations)
+    kmeans_scalar(x_vec, initial_centroids, iterations)
 }

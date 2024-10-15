@@ -6,11 +6,11 @@ mod arm64;
 #[cfg(target_arch = "x86_64")]
 pub mod x86_64;
 
-fn dot_product_u8_simple(a: &[u8], b: &[u8]) -> u64 {
+fn dot_product_u8_scalar(a: &[u8], b: &[u8]) -> u64 {
     a.iter().zip(b).map(|(&x, &y)| x as u64 * y as u64).sum()
 }
 
-fn dot_product_f16_simple(x_vec: &[f16], y_vec: &[f16]) -> f32 {
+fn dot_product_f16_scalar(x_vec: &[f16], y_vec: &[f16]) -> f32 {
     x_vec
         .iter()
         .zip(y_vec)
@@ -18,7 +18,7 @@ fn dot_product_f16_simple(x_vec: &[f16], y_vec: &[f16]) -> f32 {
         .sum()
 }
 
-fn dot_product_binary_simple(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], res: u8) -> f32 {
+fn dot_product_binary_scalar(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], res: u8) -> f32 {
     debug_assert_eq!(x_vec.len(), 1);
     debug_assert_eq!(y_vec.len(), 1);
     debug_assert_eq!(res, 1);
@@ -32,7 +32,7 @@ fn dot_product_binary_simple(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], res: u8) -> f
     dot_product as f32
 }
 
-fn dot_product_quaternary_simple(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], res: u8) -> f32 {
+fn dot_product_quaternary_scalar(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], res: u8) -> f32 {
     debug_assert_eq!(x_vec.len(), 2);
     debug_assert_eq!(y_vec.len(), 2);
     debug_assert_eq!(res, 2);
@@ -57,7 +57,7 @@ fn dot_product_quaternary_simple(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], res: u8) 
     dot_product as f32
 }
 
-fn dot_product_octal_simple(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], res: u8) -> f32 {
+fn dot_product_octal_scalar(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], res: u8) -> f32 {
     debug_assert_eq!(x_vec.len(), 3);
     debug_assert_eq!(y_vec.len(), 3);
     debug_assert_eq!(res, 3);
@@ -111,12 +111,12 @@ pub fn dot_product_u8(a: &[u8], b: &[u8]) -> u64 {
         }
     }
 
-    dot_product_u8_simple(a, b)
+    dot_product_u8_scalar(a, b)
 }
 
 pub fn dot_product_f16(x: &[f16], y: &[f16]) -> f32 {
     // TODO: use SIMD if possible
-    dot_product_f16_simple(x, y)
+    dot_product_f16_scalar(x, y)
 }
 
 pub fn dot_product_binary(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], res: u8) -> f32 {
@@ -126,7 +126,7 @@ pub fn dot_product_binary(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], res: u8) -> f32 
             return unsafe { x86_64::dot_product_binary_avx2(x_vec, y_vec, res) };
         }
     }
-    dot_product_binary_simple(x_vec, y_vec, res)
+    dot_product_binary_scalar(x_vec, y_vec, res)
 }
 
 pub fn dot_product_quaternary(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], res: u8) -> f32 {
@@ -136,12 +136,12 @@ pub fn dot_product_quaternary(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], res: u8) -> 
             return unsafe { x86_64::dot_product_quaternary_avx2(x_vec, y_vec, res) };
         }
     }
-    dot_product_quaternary_simple(x_vec, y_vec, res)
+    dot_product_quaternary_scalar(x_vec, y_vec, res)
 }
 
 pub fn dot_product_octal(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], res: u8) -> f32 {
     // TODO: use SIMD if possible
-    dot_product_octal_simple(x_vec, y_vec, res)
+    dot_product_octal_scalar(x_vec, y_vec, res)
 }
 
 pub fn dot_product_f32_chunk(src: &[(f32, f32)], dst: &mut [f32]) -> f32 {
