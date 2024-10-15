@@ -13,7 +13,7 @@ pub(crate) async fn upsert(
     ctx: web::Data<AppContext>,
 ) -> HttpResponse {
     // Try to get the vector store from the environment
-    let vec_store = match ctx.ain_env.vector_store_map.get(&body.vector_db_name) {
+    let collection = match ctx.ain_env.vector_store_map.get(&body.vector_db_name) {
         Some(store) => store,
         None => {
             // Vector store not found, return an error response
@@ -22,15 +22,20 @@ pub(crate) async fn upsert(
     }
     .clone();
 
-    if vec_store.current_open_transaction.clone().get().is_some() {
+    if collection.current_open_transaction.clone().get().is_some() {
         return HttpResponse::Conflict()
             .body("Cannot upsert while there's an on-going transaction");
+    }
+
+    if !collection.get_auto_config_flag() && !collection.get_configured_flag() {
+        return HttpResponse::BadRequest()
+            .body("Vector store is set to manual indexing but an index is not created");
     }
 
     // Call run_upload with the extracted parameters
     web::block(move || {
         // TODO: handle the error
-        let _ = run_upload(ctx.into_inner(), vec_store, convert_vectors(body.vectors));
+        let _ = run_upload(ctx.into_inner(), collection, convert_vectors(body.vectors));
     })
     .await
     .unwrap();

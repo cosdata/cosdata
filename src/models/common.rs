@@ -317,10 +317,10 @@ pub fn quantize_to_u8_bits(fins: &[f32], resolution: u8) -> Vec<Vec<u8>> {
     let bits_per_value = resolution as usize;
     let parts = 2_usize.pow(bits_per_value as u32);
     let step = 2.0 / parts as f32;
-    let u32s_per_value = (fins.len()) / 8;
-    let mut quantized: Vec<Vec<u8>> = vec![Vec::with_capacity(u32s_per_value); bits_per_value];
+    let u8s_per_value = (fins.len() + 7) / 8;
+    let mut quantized: Vec<Vec<u8>> = vec![Vec::with_capacity(u8s_per_value); bits_per_value];
 
-    let mut current_u32s: Vec<u8> = vec![0; bits_per_value];
+    let mut current_u8s: Vec<u8> = vec![0; bits_per_value];
     let mut bit_index: usize = 0;
 
     for &f in fins {
@@ -328,23 +328,24 @@ pub fn quantize_to_u8_bits(fins: &[f32], resolution: u8) -> Vec<Vec<u8>> {
 
         for bit_position in 0..bits_per_value {
             if flags[bit_position] {
-                current_u32s[bit_position] |= 1 << bit_index;
+                current_u8s[bit_position] |= 1 << bit_index;
             }
         }
         bit_index += 1;
 
-        if bit_index == 32 {
+        if bit_index == 8 {
             for bit_position in 0..bits_per_value {
-                quantized[bit_position].push(current_u32s[bit_position]);
-                current_u32s[bit_position] = 0;
+                quantized[bit_position].push(current_u8s[bit_position]);
+                current_u8s[bit_position] = 0;
             }
             bit_index = 0;
         }
     }
 
+    // Push remaining bits if not a multiple of 8
     if bit_index > 0 {
         for bit_position in 0..bits_per_value {
-            quantized[bit_position].push(current_u32s[bit_position]);
+            quantized[bit_position].push(current_u8s[bit_position]);
         }
     }
 
@@ -363,6 +364,7 @@ pub enum WaCustomError {
     QuantizationMismatch,
     LazyLoadingError(String),
     TrainingFailed,
+    Untrained,
     CalculationError,
     FsError(String),
     DeserializationError(String),
@@ -386,6 +388,7 @@ impl fmt::Display for WaCustomError {
             WaCustomError::QuantizationMismatch => write!(f, "Quantization mismatch"),
             WaCustomError::LazyLoadingError(msg) => write!(f, "Lazy loading error: {}", msg),
             WaCustomError::TrainingFailed => write!(f, "Training failed"),
+            WaCustomError::Untrained => write!(f, "Untrained"),
             WaCustomError::CalculationError => write!(f, "Calculation error"),
             WaCustomError::FsError(err) => write!(f, "FS error: {}", err),
             WaCustomError::DeserializationError(err) => write!(f, "Deserialization error: {}", err),
@@ -399,6 +402,7 @@ impl From<QuantizationError> for WaCustomError {
         match value {
             QuantizationError::InvalidInput(_) => WaCustomError::InvalidParams,
             QuantizationError::TrainingFailed => WaCustomError::TrainingFailed,
+            QuantizationError::Untrained => WaCustomError::Untrained,
         }
     }
 }
@@ -526,9 +530,9 @@ pub fn remove_duplicates_and_filter(
     })
 }
 
-pub fn generate_tuples(x: f64, max_cache_level: u8) -> Vec<(f64, i32)> {
+pub fn generate_tuples(x: f64, num_levels: u8) -> Vec<(f64, i32)> {
     let mut result = Vec::new();
-    for n in (0..=max_cache_level).rev() {
+    for n in (0..=num_levels).rev() {
         let first_item = 1.0 - x.powi(-(n as i32));
         let second_item = n as i32;
         result.push((first_item, second_item));

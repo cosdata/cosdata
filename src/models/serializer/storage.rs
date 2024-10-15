@@ -45,7 +45,7 @@ impl CustomSerialize for Storage {
             } => {
                 bufman.write_u8_with_cursor(cursor, 1)?;
                 bufman.write_u8_with_cursor(cursor, *resolution)?;
-                bufman.write_u32_with_cursor(cursor, *mag)?;
+                bufman.write_f32_with_cursor(cursor, *mag)?;
                 bufman.write_u32_with_cursor(cursor, quant_vec.len() as u32)?;
                 for vec in quant_vec {
                     bufman.write_u32_with_cursor(cursor, vec.len() as u32)?;
@@ -107,7 +107,7 @@ impl CustomSerialize for Storage {
                     }
                     1 => {
                         let resolution = bufman.read_u8_with_cursor(cursor)?;
-                        let mag = bufman.read_u32_with_cursor(cursor)?;
+                        let mag = bufman.read_f32_with_cursor(cursor)?;
                         let len = bufman.read_u32_with_cursor(cursor)? as usize;
                         let mut quant_vec = Vec::with_capacity(len);
 

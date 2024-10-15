@@ -24,6 +24,10 @@ pub(crate) fn transactions_module() -> Scope {
             web::post().to(controller::create_vector_in_transaction),
         )
         .route(
+            "/{transaction_id}/vectors/{vector_id}",
+            web::delete().to(controller::delete_vector_by_id),
+        )
+        .route(
             "/{transaction_id}/abort",
             web::post().to(controller::abort_transaction),
         );

@@ -6,6 +6,7 @@ pub mod dry_run_writer;
 pub mod encoding_format;
 pub mod file_persist;
 pub mod identity_collections;
+pub mod kmeans;
 pub mod lazy_load;
 pub mod lookup_table;
 pub mod lru_cache;

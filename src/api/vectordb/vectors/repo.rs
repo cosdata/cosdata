@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use crate::models::versioning::Hash;
-
 use crate::{
     api::vectordb::collections,
     api_service::{run_upload, run_upload_in_transaction},
     app_context::AppContext,
-    models::rpc::VectorIdValue,
+    convert_value,
+    models::{rpc::VectorIdValue, types::VectorId, versioning::Hash},
+    vector_store::get_embedding_by_id,
 };
 
 use super::{
@@ -34,6 +34,13 @@ pub(crate) async fn create_vector(
         ));
     }
 
+    if !collection.get_auto_config_flag() && !collection.get_configured_flag() {
+        return Err(VectorsError::FailedToCreateVector(
+            "Vector store is set to manual indexing but an index is not created".to_string(),
+        ));
+    }
+
+    // TODO: handle the error
     run_upload(
         ctx,
         collection,
@@ -74,10 +81,26 @@ pub(crate) async fn create_vector_in_transaction(
 }
 
 pub(crate) async fn get_vector_by_id(
-    _collection_id: &str,
-    _vector_id: &str,
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    vector_id: VectorId,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
-    Err(VectorsError::NotImplemented)?
+    let vec_store = collections::service::get_collection_by_id(ctx.clone(), collection_id)
+        .await
+        .map_err(|_| VectorsError::NotFound)?;
+
+    let embedding = get_embedding_by_id(vec_store, vector_id)
+        .map_err(|e| VectorsError::DatabaseError(e.to_string()))?;
+
+    let id = match embedding.hash_vec {
+        VectorId::Int(v) => VectorIdValue::IntValue(v),
+        VectorId::Str(v) => VectorIdValue::StringValue(v),
+    };
+
+    Ok(CreateVectorResponseDto {
+        id,
+        values: embedding.raw_vec,
+    })
 }
 
 pub(crate) async fn update_vector(
@@ -98,12 +121,19 @@ pub(crate) async fn update_vector(
         ));
     }
 
+    if !collection.get_auto_config_flag() && !collection.get_configured_flag() {
+        return Err(VectorsError::FailedToCreateVector(
+            "Vector store is set to manual indexing but an index is not created".to_string(),
+        ));
+    }
+
     run_upload(
         ctx,
         collection,
         vec![(vector_id.clone(), update_vector_dto.values.clone())],
     )
     .map_err(VectorsError::WaCustom)?;
+
     Ok(UpdateVectorResponseDto {
         id: vector_id,
         values: update_vector_dto.values,
@@ -125,8 +155,16 @@ pub(crate) async fn find_similar_vectors(
 }
 
 pub(crate) async fn delete_vector_by_id(
-    _collection_id: &str,
-    _vector_id: VectorIdValue,
-) -> Result<CreateVectorResponseDto, VectorsError> {
-    Err(VectorsError::NotImplemented)?
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    vector_id: VectorIdValue,
+) -> Result<(), VectorsError> {
+    let collection = collections::service::get_collection_by_id(ctx.clone(), collection_id)
+        .await
+        .map_err(|e| VectorsError::FailedToDeleteVector(e.to_string()))?;
+
+    crate::vector_store::delete_vector_by_id(collection, convert_value(vector_id.clone()))
+        .map_err(|e| VectorsError::WaCustom(e))?;
+
+    Ok(())
 }

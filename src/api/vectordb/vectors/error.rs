@@ -13,28 +13,38 @@ pub(crate) enum VectorsError {
     FailedToCreateVector(String),
     FailedToUpdateVector(String),
     FailedToFindSimilarVectors(String),
+    FailedToDeleteVector(String),
     NotImplemented,
+    DatabaseError(String),
+    InternalServerError,
     WaCustom(WaCustomError),
 }
 
 impl Display for VectorsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            VectorsError::NotFound => write!(f, "Vector Not Found!"),
-            VectorsError::FailedToGetAppEnv => write!(f, "Failed to get App Env!"),
-            VectorsError::FailedToCreateVector(msg) => {
+            Self::NotFound => write!(f, "Vector Not Found!"),
+            Self::FailedToGetAppEnv => write!(f, "Failed to get App Env!"),
+            Self::FailedToCreateVector(msg) => {
                 write!(f, "Failed to create vector due to: {}", msg)
             }
-            VectorsError::NotImplemented => {
+            Self::NotImplemented => {
                 write!(f, "This is not supported yet!")
             }
-            VectorsError::FailedToUpdateVector(msg) => {
+            Self::DatabaseError(msg) => write!(f, "Failed to fetch vector due to: {}", msg),
+            Self::InternalServerError => {
+                write!(f, "Internal server error while trying to fetch vector!")
+            }
+            Self::FailedToUpdateVector(msg) => {
                 write!(f, "Failed to update vector due to: {}", msg)
             }
-            VectorsError::FailedToFindSimilarVectors(msg) => {
+            Self::FailedToFindSimilarVectors(msg) => {
                 write!(f, "Failed to find similar vectors due to: {}", msg)
-            },
-            VectorsError::WaCustom(e) => {
+            }
+            Self::FailedToDeleteVector(msg) => {
+                write!(f, "Failed to delete vector due to: {}", msg)
+            }
+            Self::WaCustom(e) => {
                 write!(f, "Vector operation failed due to internal error: {e:?}")
             }
         }
@@ -49,13 +59,16 @@ impl ResponseError for VectorsError {
     }
     fn status_code(&self) -> StatusCode {
         match self {
-            VectorsError::NotFound => StatusCode::BAD_REQUEST,
-            VectorsError::FailedToGetAppEnv => StatusCode::INTERNAL_SERVER_ERROR,
-            VectorsError::FailedToCreateVector(_) => StatusCode::BAD_REQUEST,
+            Self::NotFound => StatusCode::BAD_REQUEST,
+            Self::FailedToGetAppEnv => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::FailedToCreateVector(_) => StatusCode::BAD_REQUEST,
             Self::NotImplemented => StatusCode::BAD_REQUEST,
-            VectorsError::FailedToUpdateVector(_) => StatusCode::BAD_REQUEST,
-            VectorsError::FailedToFindSimilarVectors(_) => StatusCode::BAD_REQUEST,
-            VectorsError::WaCustom(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::DatabaseError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::InternalServerError => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::FailedToUpdateVector(_) => StatusCode::BAD_REQUEST,
+            Self::FailedToFindSimilarVectors(_) => StatusCode::BAD_REQUEST,
+            Self::FailedToDeleteVector(_) => StatusCode::BAD_REQUEST,
+            Self::WaCustom(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }

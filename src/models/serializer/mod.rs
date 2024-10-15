@@ -14,7 +14,6 @@ mod metric_distance;
 mod neighbour;
 mod node;
 mod storage;
-mod vector;
 
 #[cfg(test)]
 mod tests;

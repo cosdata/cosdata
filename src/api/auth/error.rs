@@ -15,10 +15,10 @@ pub enum AuthError {
 impl Display for AuthError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AuthError::WrongCredentials => write!(f, "Wrong Credentials!"),
-            AuthError::FailedToEncodeToken => write!(f, "failed to generate an jwt auth token!"),
-            AuthError::InvalidToken => write!(f, "Invalid auth token!"),
-            AuthError::FailedToExtractTokenFromRequest => {
+            Self::WrongCredentials => write!(f, "Wrong Credentials!"),
+            Self::FailedToEncodeToken => write!(f, "failed to generate an jwt auth token!"),
+            Self::InvalidToken => write!(f, "Invalid auth token!"),
+            Self::FailedToExtractTokenFromRequest => {
                 write!(f, "Failed to extract token from request!")
             }
         }
@@ -33,10 +33,10 @@ impl ResponseError for AuthError {
     }
     fn status_code(&self) -> StatusCode {
         match self {
-            AuthError::WrongCredentials => StatusCode::BAD_REQUEST,
-            AuthError::FailedToEncodeToken => StatusCode::INTERNAL_SERVER_ERROR,
-            AuthError::InvalidToken => StatusCode::UNAUTHORIZED,
-            AuthError::FailedToExtractTokenFromRequest => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::WrongCredentials => StatusCode::BAD_REQUEST,
+            Self::FailedToEncodeToken => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::InvalidToken => StatusCode::UNAUTHORIZED,
+            Self::FailedToExtractTokenFromRequest => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }
