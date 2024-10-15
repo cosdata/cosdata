@@ -68,28 +68,17 @@ fn dot_product_octal_scalar(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], res: u8) -> f3
         .zip(&x_vec[2])
         .zip(y_vec[0].iter().zip(&y_vec[1]).zip(&y_vec[2]))
         .map(|(((&x_lsb, &x_mid), &x_msb), ((&y_lsb, &y_mid), &y_msb))| {
-            let lsbs = (x_lsb & y_lsb).count_ones();
-
-            let mid1 = x_lsb & y_mid;
-            let mid2 = y_lsb & x_mid;
-            let mid_carry1 = (mid1 & mid2).count_ones();
-            let mid = (mid1 ^ mid2).count_ones();
-
-            let high1 = x_lsb & y_msb;
-            let high2 = y_lsb & x_msb;
-            let high3 = x_mid & y_mid;
-            let high_carry1 = ((high1 & high2) | (high1 & high3) | (high2 & high3)).count_ones();
-            let high = (high1 ^ high2 ^ high3).count_ones();
-
-            let msbs = (x_msb & y_msb).count_ones();
-
-            let result = (msbs << 3)
-                + (high_carry1 << 3)
-                + (high << 2)
-                + (mid_carry1 << 2)
-                + (mid << 1)
-                + lsbs;
-            result
+            let mut sum = 0u32;
+            for bit in 0..8 {
+                let x = ((x_msb & (1 << bit)) >> bit) << 2
+                    | ((x_mid & (1 << bit)) >> bit) << 1
+                    | ((x_lsb & (1 << bit)) >> bit);
+                let y = ((y_msb & (1 << bit)) >> bit) << 2
+                    | ((y_mid & (1 << bit)) >> bit) << 1
+                    | ((y_lsb & (1 << bit)) >> bit);
+                sum += (x * y) as u32;
+            }
+            sum
         })
         .sum();
 
@@ -140,7 +129,13 @@ pub fn dot_product_quaternary(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], res: u8) -> 
 }
 
 pub fn dot_product_octal(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], res: u8) -> f32 {
-    // TODO: use SIMD if possible
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx") && is_x86_feature_detected!("avx2") {
+            let packed = x86_64::pack_octal_vectors(x_vec, y_vec);
+            return unsafe { x86_64::octal_weighted_wrapper(&packed) as f32 };
+        }
+    }
     dot_product_octal_scalar(x_vec, y_vec, res)
 }
 

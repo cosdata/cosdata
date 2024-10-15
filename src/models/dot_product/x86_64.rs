@@ -1,4 +1,3 @@
-use rand::Rng;
 use std::arch::x86_64::*;
 
 fn print_mm256i(name: &str, value: __m256i) {
@@ -274,15 +273,38 @@ unsafe fn quaternary_weighted_wrapper(data: &[u8]) -> u64 {
 
 //     unsafe { octal_weighted_simd_avx2(data.as_ptr(), data.len(), &lookup0, &lookup1) }
 // }
-#[target_feature(enable = "avx2")]
-unsafe fn octal_weighted_wrapper(data: &[u8]) -> u64 {
-    // Initialize lookup table
-    let mut lookup = [0u8; 64];
-    for i in 0..64 {
-        lookup[i] = i.count_ones() as u8;
-    }
 
-    octal_weighted_simd_avx2(data.as_ptr(), data.len(), &lookup)
+#[target_feature(enable = "avx2")]
+pub unsafe fn octal_weighted_wrapper(data: &[u8]) -> u64 {
+    // Initialize lookup table with a * b for a, b in 0..8
+    #[rustfmt::skip]
+    let lookup = [
+        // MSB = 00
+        0, 0, 0, 0,
+        0, 1, 2, 3,
+        0, 2, 4, 6,
+        0, 3, 6, 9,
+
+        // MSB = 01
+        0, 0, 0, 0,
+        4, 5, 6, 7,
+        8, 10, 12, 14,
+        12, 15, 18, 21,
+
+        // MSB = 10
+        0, 4, 8, 12,
+        0, 5, 10, 15,
+        0, 6, 12, 18,
+        0, 7, 14, 21,
+
+        // MSB = 11
+        16, 20, 24, 28,
+        20, 25, 30, 35,
+        24, 30, 36, 42,
+        28, 35, 42, 49,
+    ];
+
+    unsafe { octal_weighted_simd_avx2(data.as_ptr(), data.len(), &lookup) }
 }
 
 #[target_feature(enable = "avx2")]
@@ -302,7 +324,7 @@ unsafe fn octal_weighted_simd_avx2(data: *const u8, n: usize, lookup: &[u8; 64])
     let mut acc = _mm256_setzero_si256();
     while i + 32 < n {
         let mut local = _mm256_setzero_si256();
-        for _ in 0..255 / 8 {
+        for _ in 0..2 {
             if i + 32 >= n {
                 break;
             }
@@ -343,6 +365,23 @@ unsafe fn octal_weighted_simd_avx2(data: *const u8, n: usize, lookup: &[u8; 64])
     result
 }
 
+pub fn pack_octal_vectors(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>]) -> Vec<u8> {
+    let mut data = Vec::with_capacity(x_vec[0].len() * 8);
+    for i in 0..x_vec[0].len() {
+        for j in 0..8 {
+            let mask = 1u8 << j;
+            let num = ((y_vec[0][i] & mask) >> j)
+                | (((y_vec[1][i] & mask) >> j) << 1)
+                | (((x_vec[0][i] & mask) >> j) << 2)
+                | (((x_vec[1][i] & mask) >> j) << 3)
+                | (((y_vec[2][i] & mask) >> j) << 4)
+                | (((x_vec[2][i] & mask) >> j) << 5);
+            data.push(num);
+        }
+    }
+    data
+}
+
 // Scalar implementation for comparison
 fn scalar_u6_count_ones(data: &[u8]) -> u64 {
     data.iter()
@@ -353,7 +392,9 @@ fn scalar_u6_count_ones(data: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::dot_product::{dot_product_binary_simple, dot_product_quaternary_simple};
+    use crate::models::dot_product::{
+        dot_product_binary_scalar, dot_product_octal_scalar, dot_product_quaternary_scalar,
+    };
     use rand::Rng;
 
     #[test]
@@ -380,7 +421,7 @@ mod tests {
         }
 
         // Compute dot product using quaternary method
-        let quaternary_dot_product = dot_product_quaternary_simple(&vec_a, &vec_b, 2);
+        let quaternary_dot_product = dot_product_quaternary_scalar(&vec_a, &vec_b, 2);
 
         // Compute theoretical dot product
         let float_a: Vec<f32> = input_a.iter().map(|&x| x as f32).collect();
@@ -413,6 +454,22 @@ mod tests {
         a.iter().zip(b.iter()).map(|(&x, &y)| x * y).sum()
     }
 
+    fn generate_random_octal_vectors(size: usize) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
+        let mut rng = rand::thread_rng();
+        let mut generate_random_u8_vec = || (0..size).map(|_| rng.gen::<u8>()).collect();
+        let x_vec = vec![
+            generate_random_u8_vec(),
+            generate_random_u8_vec(),
+            generate_random_u8_vec(),
+        ];
+        let y_vec = vec![
+            generate_random_u8_vec(),
+            generate_random_u8_vec(),
+            generate_random_u8_vec(),
+        ];
+        (x_vec, y_vec)
+    }
+
     fn generate_random_quaternary_vectors(size: usize) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
         let mut rng = rand::thread_rng();
         let mut generate_random_u8_vec = || (0..size).map(|_| rng.gen::<u8>()).collect();
@@ -437,7 +494,7 @@ mod tests {
         for size in sizes {
             let (x_vec, y_vec) = generate_random_quaternary_vectors(size);
 
-            let non_simd_result = dot_product_quaternary_simple(&x_vec, &y_vec, 2);
+            let non_simd_result = dot_product_quaternary_scalar(&x_vec, &y_vec, 2);
 
             let simd_result = unsafe {
                 if is_x86_feature_detected!("avx2") {
@@ -446,8 +503,6 @@ mod tests {
                     non_simd_result // Fallback if AVX2 is not available
                 }
             };
-
-            let simd_result = non_simd_result;
 
             let diff = (simd_result - non_simd_result).abs();
             const EPSILON: f32 = 1e-6;
@@ -469,7 +524,7 @@ mod tests {
         for size in sizes {
             let (x_vec, y_vec) = generate_random_binary_vectors(size);
 
-            let non_simd_result = dot_product_binary_simple(&x_vec, &y_vec, 1);
+            let non_simd_result = dot_product_binary_scalar(&x_vec, &y_vec, 1);
 
             let simd_result = unsafe {
                 if is_x86_feature_detected!("avx2") {
@@ -478,8 +533,6 @@ mod tests {
                     non_simd_result // Fallback if AVX2 is not available
                 }
             };
-
-            let simd_result = non_simd_result;
 
             let diff = (simd_result - non_simd_result).abs();
             const EPSILON: f32 = 1e-6;
@@ -508,7 +561,7 @@ mod tests {
 
                 // Non-SIMD version
                 let start = Instant::now();
-                let _ = dot_product_quaternary_simple(&x_vec, &y_vec, 2);
+                let _ = dot_product_quaternary_scalar(&x_vec, &y_vec, 2);
                 non_simd_time += start.elapsed().as_secs_f64();
 
                 // SIMD version
@@ -669,41 +722,37 @@ mod tests {
     }
 
     #[test]
-    fn test_octal_weighted_popcount() {
-        let mut rng = rand::thread_rng();
+    fn test_dot_product_octal_correctness() {
+        let sizes = vec![64, 128, 256, 512, 1024];
 
-        // Test with various sizes
-        for &size in &[32, 33, 64, 1024, 10000, 100000] {
-            // Generate random data
-            let data: Vec<u8> = (0..size).map(|_| rng.gen()).collect();
+        for size in sizes {
+            let (x_vec, y_vec) = generate_random_octal_vectors(size);
 
-            // Run both implementations
-            let octal_result = unsafe { octal_weighted_wrapper(&data) };
-            let scalar_result = scalar_u6_count_ones(&data);
+            let scalar_result = dot_product_octal_scalar(&x_vec, &y_vec, 3);
+            let packed = pack_octal_vectors(&x_vec, &y_vec);
 
-            // Assert that results match
-            assert_eq!(octal_result, scalar_result, "Mismatch for size {}", size);
-            println!("Test passed for size {}", size);
+            let simd_result = unsafe {
+                if is_x86_feature_detected!("avx2") {
+                    octal_weighted_wrapper(&packed) as f32
+                } else {
+                    0.0
+                }
+            };
+
+            let diff = (simd_result - scalar_result).abs();
+            const EPSILON: f32 = 1e-6;
+
+            println!("Final SIMD dot product: {}", simd_result);
+            println!("Final Scalar dot product: {}", scalar_result);
+
+            assert!(
+                diff < EPSILON,
+                "Results don't match for size {}: SIMD = {}, Non-SIMD = {}",
+                size,
+                simd_result,
+                scalar_result,
+            );
         }
-
-        // Test with edge cases
-        let edge_cases = vec![
-            vec![0u8; 32],                     // All zeros
-            vec![255u8; 64],                   // All ones
-            vec![0, 255, 0, 255, 0, 255],      // Alternating zeros and ones
-            vec![1, 2, 4, 8, 16, 32, 64, 128], // Powers of 2
-            vec![85, 170, 85, 170],            // Alternating bit patterns
-        ];
-
-        for (i, case) in edge_cases.iter().enumerate() {
-            let octal_result = unsafe { octal_weighted_wrapper(case) };
-            let scalar_result = scalar_u6_count_ones(case);
-
-            assert_eq!(octal_result, scalar_result, "Mismatch for edge case {}", i);
-            println!("Edge case {} passed", i);
-        }
-
-        println!("All tests passed!");
     }
 }
 
