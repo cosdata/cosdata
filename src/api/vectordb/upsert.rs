@@ -36,7 +36,7 @@ pub(crate) async fn upsert(
 
     match res {
         Ok(_) => HttpResponse::Ok().body("Vectors upserted successfully"),
-        Err(err) => HttpResponse::InternalServerError().body(format!("Error upserting vectors: {}", err))
+        Err(err) => HttpResponse::InternalServerError().body(format!("Error upserting vectors: {}", err));
     }
     let response_data = RPCResponseBody::RespUpsertVectors { insert_stats: None };
     HttpResponse::Ok().json(response_data)
