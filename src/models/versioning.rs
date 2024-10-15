@@ -1,4 +1,6 @@
-use lmdb::{Database, DatabaseFlags, Environment, Transaction, WriteFlags};
+use crate::macros::key;
+use lmdb::{Database, Environment, Transaction, WriteFlags};
+use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher24;
 use std::hash::Hasher;
 use std::ops::Deref;
@@ -56,7 +58,7 @@ impl Deref for Timestamp {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Hash(u32);
 
 impl From<u32> for Hash {
@@ -205,48 +207,49 @@ impl BranchInfo {
 
 pub struct VersionControl {
     env: Arc<Environment>,
-    // `Hash` -> `VersionHash`
-    versions_db: Database,
-    // `BranchId` -> `BranchInfo`
-    branches_db: Database,
+    db: Arc<Database>,
 }
 
 impl VersionControl {
-    pub fn new(env: Arc<Environment>) -> lmdb::Result<Self> {
+    pub fn new(env: Arc<Environment>, db: Arc<Database>) -> lmdb::Result<(Self, Hash)> {
         let main_branch_id = BranchId::new("main");
+        let current_version = Version(0);
+        let current_version_hash = VersionHash::new(main_branch_id, current_version);
+        let hash = current_version_hash.calculate_hash();
         let branch_info = BranchInfo {
             branch_name: "main".to_string(),
-            current_version: Version(0),
+            current_version,
             parent_branch: main_branch_id,
             parent_version: Version(0),
         };
 
-        let key = main_branch_id.to_le_bytes();
-        let bytes = branch_info.serialize();
+        let branch_key = key!(b:main_branch_id);
+        let branch_bytes = branch_info.serialize();
 
-        let versions_db = env.create_db(Some("versions"), DatabaseFlags::empty())?;
-        let branches_db = env.create_db(Some("branches"), DatabaseFlags::empty())?;
+        let version_key = key!(v:hash);
+        let version_bytes = current_version_hash.serialize();
 
         let mut txn = env.begin_rw_txn()?;
-        txn.put(branches_db, &key, &bytes, WriteFlags::empty())?;
+        txn.put(*db, &branch_key, &branch_bytes, WriteFlags::empty())?;
+        txn.put(*db, &version_key, &version_bytes, WriteFlags::empty())?;
         txn.commit()?;
 
-        Ok(Self {
-            env,
-            versions_db,
-            branches_db,
-        })
+        Ok((Self { env, db }, hash))
+    }
+
+    pub fn from_existing(env: Arc<Environment>, db: Arc<Database>) -> Self {
+        Self { env, db }
     }
 
     pub fn generate_hash(&self, branch_name: &str, version: Version) -> lmdb::Result<Hash> {
         let branch_id = BranchId::new(branch_name);
         let version_hash = VersionHash::new(branch_id, version);
         let hash = version_hash.calculate_hash();
-        let key = hash.to_le_bytes();
+        let version_key = key!(v:hash);
         let bytes = version_hash.serialize();
 
         let mut txn = self.env.begin_rw_txn()?;
-        txn.put(self.versions_db, &key, &bytes, WriteFlags::empty())?;
+        txn.put(*self.db, &version_key, &bytes, WriteFlags::empty())?;
         txn.commit()?;
 
         Ok(hash)
@@ -254,24 +257,24 @@ impl VersionControl {
 
     pub fn add_next_version(&self, branch_name: &str) -> lmdb::Result<Hash> {
         let branch_id = BranchId::new(branch_name);
-        let key = branch_id.to_le_bytes();
+        let branch_key = key!(b:branch_id);
 
         let mut txn = self.env.begin_rw_txn()?;
-        let bytes = txn.get(self.branches_db, &key)?;
+        let bytes = txn.get(*self.db, &branch_key)?;
 
         let mut branch_info: BranchInfo = BranchInfo::deserialize(bytes).unwrap();
         let new_version = Version(*branch_info.current_version + 1);
         branch_info.current_version = new_version;
         let bytes = branch_info.serialize();
 
-        txn.put(self.branches_db, &key, &bytes, WriteFlags::empty())?;
+        txn.put(*self.db, &branch_key, &bytes, WriteFlags::empty())?;
         let version_hash = VersionHash::new(branch_id, new_version);
         let hash = version_hash.calculate_hash();
 
-        let key = hash.to_le_bytes();
+        let version_key = key!(v:hash);
         let bytes = version_hash.serialize();
 
-        txn.put(self.versions_db, &key, &bytes, WriteFlags::empty())?;
+        txn.put(*self.db, &version_key, &bytes, WriteFlags::empty())?;
         txn.commit()?;
 
         Ok(hash)
@@ -284,16 +287,16 @@ impl VersionControl {
     ) -> lmdb::Result<()> {
         let branch_id = BranchId::new(branch_name);
         let parent_branch_id = BranchId::new(parent_branch_name);
-        let key = branch_id.to_le_bytes();
-        let parent_key = parent_branch_id.to_le_bytes();
+        let branch_key = key!(b:branch_id);
+        let parent_key = key!(b:parent_branch_id);
 
         let mut txn = self.env.begin_rw_txn()?;
 
-        if txn.get(self.branches_db, &key) != Err(lmdb::Error::NotFound) {
+        if txn.get(*self.db, &branch_key) != Err(lmdb::Error::NotFound) {
             return Err(lmdb::Error::KeyExist);
         }
 
-        let parent_bytes = txn.get(self.branches_db, &parent_key)?;
+        let parent_bytes = txn.get(*self.db, &parent_key)?;
         let parent_info = BranchInfo::deserialize(parent_bytes).unwrap();
 
         let new_branch_info = BranchInfo {
@@ -305,7 +308,7 @@ impl VersionControl {
 
         let bytes = new_branch_info.serialize();
 
-        txn.put(self.branches_db, &key, &bytes, WriteFlags::empty())?;
+        txn.put(*self.db, &branch_key, &bytes, WriteFlags::empty())?;
         txn.commit()?;
 
         Ok(())
@@ -313,11 +316,11 @@ impl VersionControl {
 
     pub fn branch_exists(&self, branch_name: &str) -> lmdb::Result<bool> {
         let branch_id = BranchId::new(branch_name);
-        let key = branch_id.to_le_bytes();
+        let branch_key = key!(b:branch_id);
 
         let txn = self.env.begin_ro_txn()?;
 
-        let exists = match txn.get(self.branches_db, &key) {
+        let exists = match txn.get(*self.db, &branch_key) {
             Ok(_) => true,
             Err(lmdb::Error::NotFound) => false,
             Err(err) => {
@@ -333,11 +336,11 @@ impl VersionControl {
 
     pub fn get_branch_info(&self, branch_name: &str) -> lmdb::Result<Option<BranchInfo>> {
         let branch_id = BranchId::new(branch_name);
-        let key = branch_id.to_le_bytes();
+        let branch_key = key!(b:branch_id);
 
         let txn = self.env.begin_ro_txn()?;
 
-        let bytes = match txn.get(self.branches_db, &key) {
+        let bytes = match txn.get(*self.db, &branch_key) {
             Ok(bytes) => bytes,
             Err(lmdb::Error::NotFound) => {
                 return Ok(None);
@@ -353,11 +356,11 @@ impl VersionControl {
     }
 
     pub fn get_version_hash(&self, hash: &Hash) -> lmdb::Result<Option<VersionHash>> {
-        let key = hash.to_le_bytes();
+        let version_key = key!(v:hash);
 
         let txn = self.env.begin_ro_txn()?;
 
-        let bytes = match txn.get(self.versions_db, &key) {
+        let bytes = match txn.get(*self.db, &version_key) {
             Ok(bytes) => bytes,
             Err(lmdb::Error::NotFound) => {
                 return Ok(None);
@@ -375,12 +378,12 @@ impl VersionControl {
     pub fn trace_to_main(&self, start_branch: &str) -> lmdb::Result<Vec<BranchInfo>> {
         let mut branch_path = Vec::new();
         let branch_id = BranchId::new(start_branch);
-        let mut current_key = branch_id.to_le_bytes();
+        let mut current_branch_key = key!(b:branch_id);
 
         let txn = self.env.begin_ro_txn()?;
 
-        let get_branch_info = |key: [u8; 8]| {
-            let bytes = match txn.get(self.branches_db, &key) {
+        let get_branch_info = |branch_key: Vec<u8>| {
+            let bytes = match txn.get(*self.db, &branch_key) {
                 Ok(bytes) => bytes,
                 Err(lmdb::Error::NotFound) => {
                     return Ok(None);
@@ -395,11 +398,11 @@ impl VersionControl {
             Ok(Some(branch_info))
         };
 
-        while let Some(info) = get_branch_info(current_key)? {
+        while let Some(info) = get_branch_info(current_branch_key)? {
             if info.branch_name == "main" {
                 break;
             }
-            current_key = info.parent_branch.to_le_bytes();
+            current_branch_key = key!(b:info.parent_branch);
             branch_path.push(info);
         }
 
