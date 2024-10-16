@@ -3,11 +3,12 @@ use std::time::Instant;
 use cosdata::{
     models::types::SparseVector,
     storage::{
-        bench_common, inverted_index_sparse_ann_basic::InvertedIndexSparseAnnBasicDashMap,
+        bench_common, inverted_index_sparse_ann_basic::InvertedIndexSparseAnnBasicTSHashmap,
         sparse_ann_query_basic::SparseAnnQueryBasic,
     },
 };
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+
 use rand::Rng;
 
 const NUM_OF_VECTORS: usize = 100000; // Each of these will be used to create 100 more perturbed vectors
@@ -17,9 +18,9 @@ const NUM_OF_DIMENSIONS: usize = 50000;
 pub fn create_inverted_index_and_query_vector(
     num_dimensions: usize,
     num_vectors: usize,
-) -> (InvertedIndexSparseAnnBasicDashMap, SparseVector) {
+) -> (InvertedIndexSparseAnnBasicTSHashmap, SparseVector) {
     let nowx = Instant::now();
-    let inverted_index = InvertedIndexSparseAnnBasicDashMap::new();
+    let inverted_index = InvertedIndexSparseAnnBasicTSHashmap::new();
 
     let mut original_vectors: Vec<SparseVector> =
         bench_common::generate_random_sparse_vectors(num_vectors as usize, num_dimensions as usize);
@@ -36,7 +37,7 @@ pub fn create_inverted_index_and_query_vector(
     }
 
     println!(
-        "Finished generating {:?} vectors in time : {:?}, Next step adding them to inverted index...", NUM_OF_VECTORS*100,
+        "Finished generating {:?} vectors in time : {:?}, Next step adding them to inverted index...",NUM_OF_VECTORS*100,
         nowx.elapsed()
     );
     let now = Instant::now();
@@ -67,13 +68,13 @@ pub fn create_inverted_index_and_query_vector(
     (inverted_index, query_vector)
 }
 
-fn sparse_ann_query_basic_benchmark(c: &mut Criterion) {
+fn sparse_ann_query_tshashmap_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("Sparse Ann Query Basic Benchmark");
     group
         .sample_size(10)
         .measurement_time(std::time::Duration::new(30, 0)); //Give enough time to measure
     let mut rng = rand::thread_rng();
-    println!("Creating Inverted Index [InvertedIndexSparseAnnBasicDashMap] and query vector.. ");
+    println!("Creating Inverted Index [InvertedIndexSparseAnnBasicTSHashmap] and query vector.. ");
 
     let (inverted_index, mut query_vector) =
         create_inverted_index_and_query_vector(NUM_OF_DIMENSIONS, NUM_OF_VECTORS + 1);
@@ -97,7 +98,7 @@ fn sparse_ann_query_basic_benchmark(c: &mut Criterion) {
     // Benchmarking Sparse_Ann_Query_Sequential
     group.bench_function(
         BenchmarkId::new(
-            "Sparse_Ann_Query_Basic_Dashmap_Sequential",
+            "Sparse_Ann_Query_Basic_TSHashmap_Sequential",
             format!(
                 "Total vectors = {} and dimensions = {}",
                 NUM_OF_VECTORS * 100,
@@ -106,11 +107,11 @@ fn sparse_ann_query_basic_benchmark(c: &mut Criterion) {
         ),
         |b| {
             b.iter(|| {
-                let _res = sparse_ann_query_basic.sequential_search_dashmap(&inverted_index);
+                let _res = sparse_ann_query_basic.sequential_search_tshashmap(&inverted_index);
             });
         },
     );
 }
 
-criterion_group!(benches, sparse_ann_query_basic_benchmark);
+criterion_group!(benches, sparse_ann_query_tshashmap_benchmark);
 criterion_main!(benches);
