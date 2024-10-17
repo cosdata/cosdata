@@ -5,7 +5,7 @@ use crate::models::cache_loader::NodeRegistry;
 use crate::models::common::*;
 use crate::models::file_persist::*;
 use crate::models::lazy_load::*;
-use crate::models::meta_persist::store_current_version;
+use crate::models::meta_persist::update_current_version;
 use crate::models::rpc::VectorIdValue;
 use crate::models::types::*;
 use crate::models::user::Statistics;
@@ -259,7 +259,7 @@ pub fn run_upload(
         .add_next_version("main")
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
     vec_store.set_current_version(current_version);
-    store_current_version(&vec_store.lmdb, current_version)?;
+    update_current_version(&vec_store.lmdb, current_version)?;
 
     let bufman = vec_store.vec_raw_manager.get(&current_version)?;
 

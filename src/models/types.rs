@@ -1,8 +1,8 @@
 use super::buffered_io::BufferManagerFactory;
 use super::cache_loader::NodeRegistry;
 use super::meta_persist::{
-    delete_vector_store, lmdb_init_collections_db, lmdb_init_db, load_collections,
-    load_dense_index_data, persist_vector_store, retrieve_current_version,
+    delete_dense_index, lmdb_init_collections_db, lmdb_init_db, load_collections,
+    load_dense_index_data, persist_dense_index, retrieve_current_version,
 };
 use super::serializer::CustomSerialize;
 use super::versioning::VersionControl;
@@ -584,7 +584,7 @@ impl VectorStoreMap {
 
     pub fn insert(&self, name: &str, vec_store: Arc<VectorStore>) -> Result<(), WaCustomError> {
         self.inner.insert(name.to_owned(), vec_store.clone());
-        persist_vector_store(
+        persist_dense_index(
             &self.lmdb_env,
             self.lmdb_dense_index_db.clone(),
             vec_store.clone(),
@@ -611,7 +611,7 @@ impl VectorStoreMap {
     pub fn remove(&self, name: &str) -> Result<Option<(String, Arc<VectorStore>)>, WaCustomError> {
         match self.inner.remove(name) {
             Some((key, store)) => {
-                let vec_store = delete_vector_store(
+                let vec_store = delete_dense_index(
                     &self.lmdb_env,
                     self.lmdb_dense_index_db.clone(),
                     store.clone(),

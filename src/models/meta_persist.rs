@@ -16,7 +16,8 @@ use std::sync::Arc;
 use super::collection::Collection;
 use super::lazy_load::FileIndex;
 
-pub fn store_current_version(lmdb: &MetaDb, hash: Hash) -> Result<(), WaCustomError> {
+/// updates the current version of a collection
+pub fn update_current_version(lmdb: &MetaDb, version_hash: Hash) -> Result<(), WaCustomError> {
     let env = lmdb.env.clone();
     let db = lmdb.db.clone();
 
@@ -24,7 +25,7 @@ pub fn store_current_version(lmdb: &MetaDb, hash: Hash) -> Result<(), WaCustomEr
         .begin_rw_txn()
         .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
 
-    let bytes = hash.to_le_bytes();
+    let bytes = version_hash.to_le_bytes();
 
     txn.put(*db, &"current_version", &bytes, WriteFlags::empty())
         .map_err(|e| WaCustomError::DatabaseError(format!("Failed to put data: {}", e)))?;
@@ -36,6 +37,7 @@ pub fn store_current_version(lmdb: &MetaDb, hash: Hash) -> Result<(), WaCustomEr
     Ok(())
 }
 
+/// retrieves the current version of a collection
 pub fn retrieve_current_version(lmdb: &MetaDb) -> Result<Hash, WaCustomError> {
     let env = lmdb.env.clone();
     let db = lmdb.db.clone();
@@ -61,7 +63,7 @@ pub fn retrieve_current_version(lmdb: &MetaDb) -> Result<Hash, WaCustomError> {
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct VecStoreData {
+pub struct DenseIndexData {
     pub name: String,
     pub max_level: u8,
     pub levels_prob: Arc<Vec<(f64, i32)>>,
@@ -75,35 +77,38 @@ pub struct VecStoreData {
     pub upper_bound: Option<f32>,
 }
 
-impl TryFrom<Arc<VectorStore>> for VecStoreData {
+impl TryFrom<Arc<VectorStore>> for DenseIndexData {
     type Error = WaCustomError;
-    fn try_from(store: Arc<VectorStore>) -> Result<Self, Self::Error> {
-        let offset = store.root_vec_offset().ok_or(WaCustomError::NodeError(
-            "FileIndex must be set for root node".to_owned(),
-        ))?;
+    fn try_from(dense_index: Arc<VectorStore>) -> Result<Self, Self::Error> {
+        let offset = dense_index
+            .root_vec_offset()
+            .ok_or(WaCustomError::NodeError(
+                "FileIndex must be set for root node".to_owned(),
+            ))?;
         println!("Offset of root node: {offset:?}");
         if let FileIndex::Invalid = offset {
             return Err(WaCustomError::NodeError(
                 "FileIndex must be valid for root node".to_owned(),
             ));
         };
-        let res = Self {
-            name: store.database_name.clone(),
-            max_level: store.max_cache_level,
-            levels_prob: store.levels_prob.clone(),
-            quant_dim: store.quant_dim,
+        let dense_index_data = Self {
+            name: dense_index.database_name.clone(),
+            max_level: dense_index.max_cache_level,
+            levels_prob: dense_index.levels_prob.clone(),
+            quant_dim: dense_index.quant_dim,
             file_index: offset,
-            quantization_metric: store.quantization_metric.clone(),
-            distance_metric: store.distance_metric.clone(),
-            storage_type: store.storage_type.clone(),
+            quantization_metric: dense_index.quantization_metric.clone(),
+            distance_metric: dense_index.distance_metric.clone(),
+            storage_type: dense_index.storage_type.clone(),
             size: 0,
             lower_bound: None,
             upper_bound: None,
         };
-        Ok(res)
+        Ok(dense_index_data)
     }
 }
 
+// TODO use lmdb_init_db function inside this function
 pub fn lmdb_init_collections_db(env: &Environment) -> lmdb::Result<Database> {
     env.create_db(Some("collections"), DatabaseFlags::empty())
 }
@@ -113,35 +118,36 @@ pub fn lmdb_init_db(env: &Environment, name: &str) -> lmdb::Result<Database> {
 }
 
 pub(crate) fn load_collections(env: &Environment, db: Database) -> lmdb::Result<Vec<Collection>> {
-    let mut res = Vec::new();
+    let mut collections = Vec::new();
     let txn = env.begin_ro_txn().unwrap();
     let mut cursor = txn.open_ro_cursor(db).unwrap();
     for (_k, v) in cursor.iter() {
-        let val: Collection = from_slice(&v[..]).unwrap();
-        res.push(val);
+        let col: Collection = from_slice(&v[..]).unwrap();
+        collections.push(col);
     }
-    Ok(res)
+    Ok(collections)
 }
 
 pub fn load_dense_index_data(
     env: &Environment,
     db: Database,
     collection_id: &[u8; 8],
-) -> lmdb::Result<VecStoreData> {
+) -> lmdb::Result<DenseIndexData> {
     let txn = env.begin_ro_txn().unwrap();
     let index = txn.get(db, collection_id)?;
-    let index: VecStoreData = from_slice(&index[..]).unwrap();
+    let index: DenseIndexData = from_slice(&index[..]).unwrap();
     Ok(index)
 }
 
-pub fn persist_vector_store(
+pub fn persist_dense_index(
     env: &Environment,
     db: Database,
-    vec_store: Arc<VectorStore>,
+    dense_index: Arc<VectorStore>,
 ) -> Result<(), WaCustomError> {
-    let data = VecStoreData::try_from(vec_store.clone())?;
+    let data = DenseIndexData::try_from(dense_index.clone())?;
 
     // Compute SipHash of the vector_store/collection name
+    // TODO use the Collection::get_key() method here
     let mut hasher = SipHasher24::new();
     hasher.write(data.name.as_bytes());
     let hash = hasher.finish();
@@ -158,18 +164,19 @@ pub fn persist_vector_store(
     Ok(())
 }
 
-pub fn delete_vector_store(
+pub fn delete_dense_index(
     env: &Environment,
     db: Database,
-    vec_store: Arc<VectorStore>,
+    dense_index: Arc<VectorStore>,
 ) -> lmdb::Result<Arc<VectorStore>> {
-    // Compute SipHash of the vector_store/collection name
+    // Compute SipHash of the collection name
+    // TODO use the Collection::get_key() method here
     let mut hasher = SipHasher24::new();
-    hasher.write(vec_store.database_name.as_bytes());
+    hasher.write(dense_index.database_name.as_bytes());
     let hash = hasher.finish();
     let key = hash.to_le_bytes();
     let mut txn = env.begin_rw_txn()?;
     txn.del(db, &key, None)?;
     txn.commit()?;
-    Ok(vec_store)
+    Ok(dense_index)
 }
