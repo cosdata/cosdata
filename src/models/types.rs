@@ -475,7 +475,8 @@ pub struct RawVectorEmbedding {
     pub hash_vec: VectorId,
 }
 
-pub struct VectorStoreMap {
+pub struct CollectionsMap {
+    /// holds an in-memory map of all dense indexes for all collections
     inner: DashMap<String, Arc<VectorStore>>,
     lmdb_env: Arc<Environment>,
     // made it public temporarily
@@ -485,7 +486,7 @@ pub struct VectorStoreMap {
     lmdb_inverted_index_db: Database,
 }
 
-impl VectorStoreMap {
+impl CollectionsMap {
     fn new(env: Arc<Environment>) -> lmdb::Result<Self> {
         let collections_db = lmdb_init_collections_db(&env)?;
         let dense_index_db = lmdb_init_db(&env, "dense_indexes")?;
@@ -500,16 +501,19 @@ impl VectorStoreMap {
         Ok(res)
     }
 
-    /// Loads vector store map from lmdb
+    /// Loads collections map from lmdb
     ///
-    /// In doing so, the root vec for all collections are loaded into
+    /// In doing so, the root vec for all collections' dense indexes are loaded into
     /// memory, which also ends up warming the cache (NodeRegistry)
     fn load(env: Arc<Environment>) -> Result<Self, WaCustomError> {
-        let res =
+        let collection_map =
             Self::new(env.clone()).map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
-        let collections = load_collections(&res.lmdb_env, res.lmdb_collections_db.clone())
-            .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+        let collections = load_collections(
+            &collection_map.lmdb_env,
+            collection_map.lmdb_collections_db.clone(),
+        )
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
         let root_path = Path::new(".");
 
@@ -534,7 +538,7 @@ impl VectorStoreMap {
             );
             // TODO: this step should be done conditionally if the collection has a dense index
             let dense_index_data =
-                load_dense_index_data(&env, res.lmdb_dense_index_db, &coll.get_key())
+                load_dense_index_data(&env, collection_map.lmdb_dense_index_db, &coll.get_key())
                     .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
             let root_item: LazyItem<MergedNode> = LazyItem::deserialize(
@@ -559,7 +563,7 @@ impl VectorStoreMap {
                 db,
             };
             let current_version = retrieve_current_version(&lmdb)?;
-            let vs = VectorStore::new(
+            let dense_index = VectorStore::new(
                 STM::new(Vec::new(), 1, true),
                 dense_index_data.max_level,
                 coll.name.clone(),
@@ -577,17 +581,19 @@ impl VectorStoreMap {
                 index_manager,
                 vec_raw_manager,
             );
-            res.inner.insert(coll.name, Arc::new(vs));
+            collection_map
+                .inner
+                .insert(coll.name, Arc::new(dense_index));
         }
-        Ok(res)
+        Ok(collection_map)
     }
 
-    pub fn insert(&self, name: &str, vec_store: Arc<VectorStore>) -> Result<(), WaCustomError> {
-        self.inner.insert(name.to_owned(), vec_store.clone());
+    pub fn insert(&self, name: &str, dense_index: Arc<VectorStore>) -> Result<(), WaCustomError> {
+        self.inner.insert(name.to_owned(), dense_index.clone());
         persist_dense_index(
             &self.lmdb_env,
             self.lmdb_dense_index_db.clone(),
-            vec_store.clone(),
+            dense_index.clone(),
         )
     }
 
@@ -595,14 +601,14 @@ impl VectorStoreMap {
     ///
     /// If not found, None is returned
     ///
-    /// Note that it tried to look up the VectorStore in the DashMap
+    /// Note that it tried to look up the DenseIndex in the DashMap
     /// only and doesn't check LMDB. This is because of the assumption
-    /// that at startup, all VectorStores will be loaded from LMDB
-    /// into the in-memory DashMap and when a new VectorStore is
+    /// that at startup, all DenseIndexes will be loaded from LMDB
+    /// into the in-memory DashMap and when a new DenseIndex is
     /// added, it will be written to the DashMap as well.
     ///
     /// @TODO: As a future improvement, we can fallback to checking if
-    /// the VectorStore exists in LMDB and caching it. But it's not
+    /// the DenseIndex exists in LMDB and caching it. But it's not
     /// required for the current use case.
     pub fn get(&self, name: &str) -> Option<Arc<VectorStore>> {
         self.inner.get(name).map(|store| store.clone())
@@ -611,13 +617,13 @@ impl VectorStoreMap {
     pub fn remove(&self, name: &str) -> Result<Option<(String, Arc<VectorStore>)>, WaCustomError> {
         match self.inner.remove(name) {
             Some((key, store)) => {
-                let vec_store = delete_dense_index(
+                let dense_index = delete_dense_index(
                     &self.lmdb_env,
                     self.lmdb_dense_index_db.clone(),
                     store.clone(),
                 )
                 .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-                Ok(Some((key, vec_store)))
+                Ok(Some((key, dense_index)))
             }
             None => Ok(None),
         }
@@ -641,7 +647,7 @@ type UserDataCache = DashMap<String, (String, i32, i32, std::time::SystemTime, V
 // Define the AppEnv struct
 pub struct AppEnv {
     pub user_data_cache: UserDataCache,
-    pub vector_store_map: VectorStoreMap,
+    pub collections_map: CollectionsMap,
     pub persist: Arc<Environment>,
 }
 
@@ -659,12 +665,12 @@ pub fn get_app_env() -> Result<Arc<AppEnv>, WaCustomError> {
 
     let env_arc = Arc::new(env);
 
-    let vector_store_map = VectorStoreMap::load(env_arc.clone())
+    let collections_map = CollectionsMap::load(env_arc.clone())
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
     Ok(Arc::new(AppEnv {
         user_data_cache: DashMap::new(),
-        vector_store_map,
+        collections_map,
         persist: env_arc,
     }))
 }

@@ -2,7 +2,7 @@
 
 ** Problem
    - Currently, the instances of struct ~VectorStore~ are only held in
-     memory, as part of the ~vector_store_map~ field of ~AppEnv~.
+     memory, as part of the ~collections_map~ field of ~AppEnv~.
    - This means if the process is restarted, previously created vector
      stores (collections) will be lost
 

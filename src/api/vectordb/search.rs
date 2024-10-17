@@ -13,7 +13,7 @@ pub(crate) async fn search(
     ctx: web::Data<AppContext>,
 ) -> HttpResponse {
     // Try to get the vector store from the environment
-    let vec_store = match ctx.ain_env.vector_store_map.get(&body.vector_db_name) {
+    let vec_store = match ctx.ain_env.collections_map.get(&body.vector_db_name) {
         Some(store) => store,
         None => {
             // Vector store not found, return an error response

@@ -7,7 +7,7 @@ pub(crate) async fn delete(
     ctx: web::Data<AppContext>,
 ) -> HttpResponse {
     let (database_name, transaction_id) = path_data.into_inner();
-    let Some(vec_store) = ctx.ain_env.vector_store_map.get(&database_name) else {
+    let Some(vec_store) = ctx.ain_env.collections_map.get(&database_name) else {
         return HttpResponse::NotFound().body("Vector store not found");
     };
 

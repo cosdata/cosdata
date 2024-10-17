@@ -163,7 +163,7 @@ pub async fn init_vector_store(
     ));
 
     ctx.ain_env
-        .vector_store_map
+        .collections_map
         .insert(&name, vec_store.clone())?;
 
     Ok(vec_store)

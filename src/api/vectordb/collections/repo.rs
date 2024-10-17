@@ -24,7 +24,7 @@ pub(crate) async fn create_collection(
     }: CreateCollectionDto,
 ) -> Result<Collection, CollectionsError> {
     let env = &ctx.ain_env.persist;
-    let collections_db = &ctx.ain_env.vector_store_map.lmdb_collections_db;
+    let collections_db = &ctx.ain_env.collections_map.lmdb_collections_db;
 
     let collection = Collection::new(
         name,
@@ -93,7 +93,7 @@ pub(crate) async fn get_vector_stores(
 ) -> Result<Vec<FindCollectionDto>, CollectionsError> {
     let vec_store = ctx
         .ain_env
-        .vector_store_map
+        .collections_map
         .iter()
         .map(|v| FindCollectionDto {
             id: v.database_name.clone(),
@@ -109,7 +109,7 @@ pub(crate) async fn get_vector_store_by_name(
     name: &str,
 ) -> Result<Arc<VectorStore>, CollectionsError> {
     // Try to get the vector store from the environment
-    let vec_store = match ctx.ain_env.vector_store_map.get(name) {
+    let vec_store = match ctx.ain_env.collections_map.get(name) {
         Some(store) => store.clone(),
         None => {
             // Vector store not found, return an error response
@@ -126,7 +126,7 @@ pub(crate) async fn delete_vector_store_by_name(
     // Try to get the vector store from the environment
     let result = ctx
         .ain_env
-        .vector_store_map
+        .collections_map
         .remove(name)
         .map_err(CollectionsError::WaCustomError)?;
     match result {
