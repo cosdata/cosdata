@@ -24,7 +24,7 @@ pub(crate) async fn create_collection(
     }: CreateCollectionDto,
 ) -> Result<Collection, CollectionsError> {
     let env = &ctx.ain_env.persist;
-    let collections_db = &ctx.ain_env.vector_store_map.lmdb_db;
+    let collections_db = &ctx.ain_env.vector_store_map.lmdb_collections_db;
 
     let collection = Collection::new(
         name,

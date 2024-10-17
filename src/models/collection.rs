@@ -1,31 +1,31 @@
 use lmdb::{Database, Environment, Transaction, WriteFlags};
 use serde::{Deserialize, Serialize};
-use serde_cbor::to_vec;
+use serde_cbor::{from_slice, to_vec};
 use siphasher::sip::SipHasher24;
 use std::hash::Hasher;
 
 use super::common::WaCustomError;
 
-#[derive(Deserialize, Clone, Serialize)]
+#[derive(Deserialize, Clone, Serialize, Debug)]
 pub(crate) struct DenseVectorOptions {
     pub enabled: bool,
     pub auto_create_index: bool,
     pub dimension: i32,
 }
 
-#[derive(Deserialize, Clone, Serialize)]
+#[derive(Deserialize, Clone, Serialize, Debug)]
 pub(crate) struct SparseVectorOptions {
     pub enabled: bool,
     pub auto_create_index: bool,
 }
 
-#[derive(Deserialize, Clone, Serialize)]
+#[derive(Deserialize, Clone, Serialize, Debug)]
 pub(crate) struct CollectionConfig {
     pub max_vectors: Option<i32>,
     pub replication_factor: Option<i32>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub(crate) struct Collection {
     pub name: String,
     pub description: Option<String>,

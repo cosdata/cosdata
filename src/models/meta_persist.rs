@@ -13,6 +13,7 @@ use siphasher::sip::SipHasher24;
 use std::hash::Hasher;
 use std::sync::Arc;
 
+use super::collection::Collection;
 use super::lazy_load::FileIndex;
 
 pub fn store_current_version(lmdb: &MetaDb, hash: Hash) -> Result<(), WaCustomError> {
@@ -107,15 +108,30 @@ pub fn lmdb_init_collections_db(env: &Environment) -> lmdb::Result<Database> {
     env.create_db(Some("collections"), DatabaseFlags::empty())
 }
 
-pub fn load_collections(env: &Environment, db: Database) -> lmdb::Result<Vec<VecStoreData>> {
+pub fn lmdb_init_db(env: &Environment, name: &str) -> lmdb::Result<Database> {
+    env.create_db(Some(name), DatabaseFlags::empty())
+}
+
+pub(crate) fn load_collections(env: &Environment, db: Database) -> lmdb::Result<Vec<Collection>> {
     let mut res = Vec::new();
     let txn = env.begin_ro_txn().unwrap();
     let mut cursor = txn.open_ro_cursor(db).unwrap();
     for (_k, v) in cursor.iter() {
-        let val: VecStoreData = from_slice(&v[..]).unwrap();
+        let val: Collection = from_slice(&v[..]).unwrap();
         res.push(val);
     }
     Ok(res)
+}
+
+pub fn load_dense_index_data(
+    env: &Environment,
+    db: Database,
+    collection_id: &[u8; 8],
+) -> lmdb::Result<VecStoreData> {
+    let txn = env.begin_ro_txn().unwrap();
+    let index = txn.get(db, collection_id)?;
+    let index: VecStoreData = from_slice(&index[..]).unwrap();
+    Ok(index)
 }
 
 pub fn persist_vector_store(

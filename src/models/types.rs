@@ -1,8 +1,8 @@
 use super::buffered_io::BufferManagerFactory;
 use super::cache_loader::NodeRegistry;
 use super::meta_persist::{
-    delete_vector_store, lmdb_init_collections_db, load_collections, persist_vector_store,
-    retrieve_current_version,
+    delete_vector_store, lmdb_init_collections_db, lmdb_init_db, load_collections,
+    load_dense_index_data, persist_vector_store, retrieve_current_version,
 };
 use super::serializer::CustomSerialize;
 use super::versioning::VersionControl;
@@ -480,16 +480,22 @@ pub struct VectorStoreMap {
     lmdb_env: Arc<Environment>,
     // made it public temporarily
     // just to be able to persist collections from outside VectorStoreMap
-    pub(crate) lmdb_db: Database,
+    pub(crate) lmdb_collections_db: Database,
+    lmdb_dense_index_db: Database,
+    lmdb_inverted_index_db: Database,
 }
 
 impl VectorStoreMap {
     fn new(env: Arc<Environment>) -> lmdb::Result<Self> {
-        let db = lmdb_init_collections_db(&env)?;
+        let collections_db = lmdb_init_collections_db(&env)?;
+        let dense_index_db = lmdb_init_db(&env, "dense_indexes")?;
+        let inverted_index_db = lmdb_init_db(&env, "inverted_indexes")?;
         let res = Self {
             inner: DashMap::new(),
             lmdb_env: env,
-            lmdb_db: db,
+            lmdb_collections_db: collections_db,
+            lmdb_dense_index_db: dense_index_db,
+            lmdb_inverted_index_db: inverted_index_db,
         };
         Ok(res)
     }
@@ -502,7 +508,7 @@ impl VectorStoreMap {
         let res =
             Self::new(env.clone()).map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
-        let collections = load_collections(&res.lmdb_env, res.lmdb_db.clone())
+        let collections = load_collections(&res.lmdb_env, res.lmdb_collections_db.clone())
             .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
         let root_path = Path::new(".");
@@ -526,9 +532,14 @@ impl VectorStoreMap {
                 env.create_db(Some(&coll.name), DatabaseFlags::empty())
                     .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?,
             );
+            // TODO: this step should be done conditionally if the collection has a dense index
+            let dense_index_data =
+                load_dense_index_data(&env, res.lmdb_dense_index_db, &coll.get_key())
+                    .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
             let root_item: LazyItem<MergedNode> = LazyItem::deserialize(
                 index_manager.clone(),
-                coll.file_index,
+                dense_index_data.file_index,
                 cache.clone(),
                 1000,
                 &mut HashSet::new(),
@@ -550,17 +561,17 @@ impl VectorStoreMap {
             let current_version = retrieve_current_version(&lmdb)?;
             let vs = VectorStore::new(
                 STM::new(Vec::new(), 1, true),
-                coll.max_level,
+                dense_index_data.max_level,
                 coll.name.clone(),
                 root,
-                coll.levels_prob,
-                coll.quant_dim,
+                dense_index_data.levels_prob,
+                dense_index_data.quant_dim,
                 prop_file.clone(),
                 lmdb,
                 ArcShift::new(current_version),
-                coll.quantization_metric.clone(),
-                coll.distance_metric.clone(),
-                coll.storage_type,
+                dense_index_data.quantization_metric.clone(),
+                dense_index_data.distance_metric.clone(),
+                dense_index_data.storage_type,
                 vcs,
                 cache,
                 index_manager,
@@ -573,7 +584,11 @@ impl VectorStoreMap {
 
     pub fn insert(&self, name: &str, vec_store: Arc<VectorStore>) -> Result<(), WaCustomError> {
         self.inner.insert(name.to_owned(), vec_store.clone());
-        persist_vector_store(&self.lmdb_env, self.lmdb_db.clone(), vec_store.clone())
+        persist_vector_store(
+            &self.lmdb_env,
+            self.lmdb_dense_index_db.clone(),
+            vec_store.clone(),
+        )
     }
 
     /// Returns the `VectorStore` by name
@@ -596,9 +611,12 @@ impl VectorStoreMap {
     pub fn remove(&self, name: &str) -> Result<Option<(String, Arc<VectorStore>)>, WaCustomError> {
         match self.inner.remove(name) {
             Some((key, store)) => {
-                let vec_store =
-                    delete_vector_store(&self.lmdb_env, self.lmdb_db.clone(), store.clone())
-                        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+                let vec_store = delete_vector_store(
+                    &self.lmdb_env,
+                    self.lmdb_dense_index_db.clone(),
+                    store.clone(),
+                )
+                .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
                 Ok(Some((key, vec_store)))
             }
             None => Ok(None),
