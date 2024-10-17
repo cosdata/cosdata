@@ -378,7 +378,7 @@ impl MetaDb {
 }
 
 #[derive(Clone)]
-pub struct VectorStore {
+pub struct DenseIndex {
     pub exec_queue_nodes: ExecQueueUpdate,
     pub max_cache_level: u8,
     pub database_name: String,
@@ -398,7 +398,7 @@ pub struct VectorStore {
     pub vec_raw_manager: Arc<BufferManagerFactory>,
 }
 
-impl VectorStore {
+impl DenseIndex {
     pub fn new(
         exec_queue_nodes: ExecQueueUpdate,
         max_cache_level: u8,
@@ -417,7 +417,7 @@ impl VectorStore {
         index_manager: Arc<BufferManagerFactory>,
         vec_raw_manager: Arc<BufferManagerFactory>,
     ) -> Self {
-        VectorStore {
+        DenseIndex {
             exec_queue_nodes,
             max_cache_level,
             database_name,
@@ -477,10 +477,10 @@ pub struct RawVectorEmbedding {
 
 pub struct CollectionsMap {
     /// holds an in-memory map of all dense indexes for all collections
-    inner: DashMap<String, Arc<VectorStore>>,
+    inner: DashMap<String, Arc<DenseIndex>>,
     lmdb_env: Arc<Environment>,
     // made it public temporarily
-    // just to be able to persist collections from outside VectorStoreMap
+    // just to be able to persist collections from outside CollectionsMap
     pub(crate) lmdb_collections_db: Database,
     lmdb_dense_index_db: Database,
     lmdb_inverted_index_db: Database,
@@ -563,7 +563,7 @@ impl CollectionsMap {
                 db,
             };
             let current_version = retrieve_current_version(&lmdb)?;
-            let dense_index = VectorStore::new(
+            let dense_index = DenseIndex::new(
                 STM::new(Vec::new(), 1, true),
                 dense_index_data.max_level,
                 coll.name.clone(),
@@ -588,7 +588,7 @@ impl CollectionsMap {
         Ok(collection_map)
     }
 
-    pub fn insert(&self, name: &str, dense_index: Arc<VectorStore>) -> Result<(), WaCustomError> {
+    pub fn insert(&self, name: &str, dense_index: Arc<DenseIndex>) -> Result<(), WaCustomError> {
         self.inner.insert(name.to_owned(), dense_index.clone());
         persist_dense_index(
             &self.lmdb_env,
@@ -597,7 +597,7 @@ impl CollectionsMap {
         )
     }
 
-    /// Returns the `VectorStore` by name
+    /// Returns the `DenseIndex` by collection's name
     ///
     /// If not found, None is returned
     ///
@@ -610,17 +610,17 @@ impl CollectionsMap {
     /// @TODO: As a future improvement, we can fallback to checking if
     /// the DenseIndex exists in LMDB and caching it. But it's not
     /// required for the current use case.
-    pub fn get(&self, name: &str) -> Option<Arc<VectorStore>> {
-        self.inner.get(name).map(|store| store.clone())
+    pub fn get(&self, name: &str) -> Option<Arc<DenseIndex>> {
+        self.inner.get(name).map(|index| index.clone())
     }
 
-    pub fn remove(&self, name: &str) -> Result<Option<(String, Arc<VectorStore>)>, WaCustomError> {
+    pub fn remove(&self, name: &str) -> Result<Option<(String, Arc<DenseIndex>)>, WaCustomError> {
         match self.inner.remove(name) {
-            Some((key, store)) => {
+            Some((key, index)) => {
                 let dense_index = delete_dense_index(
                     &self.lmdb_env,
                     self.lmdb_dense_index_db.clone(),
-                    store.clone(),
+                    index.clone(),
                 )
                 .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
                 Ok(Some((key, dense_index)))
@@ -633,15 +633,14 @@ impl CollectionsMap {
         &self,
     ) -> dashmap::iter::Iter<
         String,
-        Arc<VectorStore>,
+        Arc<DenseIndex>,
         std::hash::RandomState,
-        DashMap<String, Arc<VectorStore>>,
+        DashMap<String, Arc<DenseIndex>>,
     > {
         self.inner.iter()
     }
 }
 
-// type VectorStoreMap = DashMap<String, Arc<VectorStore>>;
 type UserDataCache = DashMap<String, (String, i32, i32, std::time::SystemTime, Vec<String>)>;
 
 // Define the AppEnv struct

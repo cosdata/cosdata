@@ -77,9 +77,9 @@ pub struct DenseIndexData {
     pub upper_bound: Option<f32>,
 }
 
-impl TryFrom<Arc<VectorStore>> for DenseIndexData {
+impl TryFrom<Arc<DenseIndex>> for DenseIndexData {
     type Error = WaCustomError;
-    fn try_from(dense_index: Arc<VectorStore>) -> Result<Self, Self::Error> {
+    fn try_from(dense_index: Arc<DenseIndex>) -> Result<Self, Self::Error> {
         let offset = dense_index
             .root_vec_offset()
             .ok_or(WaCustomError::NodeError(
@@ -142,12 +142,12 @@ pub fn load_dense_index_data(
 pub fn persist_dense_index(
     env: &Environment,
     db: Database,
-    dense_index: Arc<VectorStore>,
+    dense_index: Arc<DenseIndex>,
 ) -> Result<(), WaCustomError> {
     let data = DenseIndexData::try_from(dense_index.clone())?;
 
-    // Compute SipHash of the vector_store/collection name
-    // TODO use the Collection::get_key() method here
+    // Compute SipHash of the collection name
+    // TODO instead use the Collection::get_key() method here
     let mut hasher = SipHasher24::new();
     hasher.write(data.name.as_bytes());
     let hash = hasher.finish();
@@ -167,8 +167,8 @@ pub fn persist_dense_index(
 pub fn delete_dense_index(
     env: &Environment,
     db: Database,
-    dense_index: Arc<VectorStore>,
-) -> lmdb::Result<Arc<VectorStore>> {
+    dense_index: Arc<DenseIndex>,
+) -> lmdb::Result<Arc<DenseIndex>> {
     // Compute SipHash of the collection name
     // TODO use the Collection::get_key() method here
     let mut hasher = SipHasher24::new();
