@@ -19,7 +19,7 @@ pub(crate) async fn create_transaction(
 ) -> Result<CreateTransactionResponseDto, TransactionError> {
     let vec_store = ctx
         .ain_env
-        .vector_store_map
+        .collections_map
         .get(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
 
@@ -61,7 +61,7 @@ pub(crate) async fn commit_transaction(
 ) -> Result<(), TransactionError> {
     let vec_store = ctx
         .ain_env
-        .vector_store_map
+        .collections_map
         .get(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
 
@@ -90,7 +90,7 @@ pub(crate) async fn create_vector_in_transaction(
 ) -> Result<CreateVectorResponseDto, TransactionError> {
     let vec_store = ctx
         .ain_env
-        .vector_store_map
+        .collections_map
         .get(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
 
@@ -126,7 +126,7 @@ pub(crate) async fn abort_transaction(
 ) -> Result<(), TransactionError> {
     let vec_store = ctx
         .ain_env
-        .vector_store_map
+        .collections_map
         .get(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
 

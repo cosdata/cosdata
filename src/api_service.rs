@@ -1,10 +1,11 @@
 use crate::app_context::AppContext;
+use crate::indexes::inverted_index::InvertedIndex;
 use crate::models::buffered_io::*;
 use crate::models::cache_loader::NodeRegistry;
 use crate::models::common::*;
 use crate::models::file_persist::*;
 use crate::models::lazy_load::*;
-use crate::models::meta_persist::store_current_version;
+use crate::models::meta_persist::update_current_version;
 use crate::models::rpc::VectorIdValue;
 use crate::models::types::*;
 use crate::models::user::Statistics;
@@ -22,6 +23,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
+/// creates a dense index for a collection
 pub async fn init_vector_store(
     ctx: Arc<AppContext>,
     name: String,
@@ -29,7 +31,7 @@ pub async fn init_vector_store(
     lower_bound: Option<f32>,
     upper_bound: Option<f32>,
     max_cache_level: u8,
-) -> Result<Arc<VectorStore>, WaCustomError> {
+) -> Result<Arc<DenseIndex>, WaCustomError> {
     if name.is_empty() {
         return Err(WaCustomError::InvalidParams);
     }
@@ -142,7 +144,7 @@ pub async fn init_vector_store(
     let factor_levels = 10.0;
     let lp = Arc::new(generate_tuples(factor_levels, max_cache_level));
 
-    let vec_store = Arc::new(VectorStore::new(
+    let dense_index = Arc::new(DenseIndex::new(
         exec_queue_nodes,
         max_cache_level,
         name.clone(),
@@ -162,20 +164,76 @@ pub async fn init_vector_store(
     ));
 
     ctx.ain_env
-        .vector_store_map
-        .insert(&name, vec_store.clone())?;
+        .collections_map
+        .insert(&name, dense_index.clone())?;
 
-    Ok(vec_store)
+    Ok(dense_index)
 }
 
+pub async fn init_inverted_index(
+    ctx: Arc<AppContext>,
+    name: String,
+    description: Option<String>,
+    auto_create_index: bool,
+    metadata_schema: Option<String>,
+    max_vectors: Option<i32>,
+    replication_factor: Option<i32>,
+) -> Result<Arc<InvertedIndex>, WaCustomError> {
+    if name.is_empty() {
+        return Err(WaCustomError::InvalidParams);
+    }
+
+    let collection_path: Arc<Path> = Path::new(&name).into();
+
+    fs::create_dir_all(&collection_path).map_err(|e| WaCustomError::FsError(e.to_string()))?;
+
+    let env = ctx.ain_env.persist.clone();
+
+    let lmdb = MetaDb::from_env(env.clone(), &name)
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+    let (vcs, hash) = VersionControl::new(env.clone(), lmdb.db.clone())
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+    let vcs = Arc::new(vcs);
+
+    // Note that setting .write(true).append(true) has the same effect
+    // as setting only .append(true)
+    let prop_file = Arc::new(
+        fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("prop.data")
+            .map_err(|e| WaCustomError::FsError(e.to_string()))?,
+    );
+
+    let index = InvertedIndex::new(
+        name,
+        description,
+        auto_create_index,
+        metadata_schema,
+        max_vectors,
+        replication_factor,
+        prop_file,
+        lmdb,
+        ArcShift::new(hash),
+        Arc::new(QuantizationMetric::Scalar),
+        Arc::new(DistanceMetric::DotProduct),
+        StorageType::UnsignedByte,
+        vcs,
+    );
+    Ok(Arc::new(index))
+}
+
+/// uploads a vector embedding within a transaction
 pub fn run_upload_in_transaction(
-    vec_store: Arc<VectorStore>,
+    dense_index: Arc<DenseIndex>,
     transaction_id: Hash,
     vecs: Vec<(VectorIdValue, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
     let current_version = transaction_id;
 
-    let bufman = vec_store
+    let bufman = dense_index
         .vec_raw_manager
         .get(&current_version)
         .map_err(|e| WaCustomError::BufIo(Arc::new(e)))?;
@@ -187,25 +245,31 @@ pub fn run_upload_in_transaction(
                 raw_vec: vec,
                 hash_vec,
             };
-            insert_embedding(bufman.clone(), vec_store.clone(), &vec_emb, current_version)
+            insert_embedding(
+                bufman.clone(),
+                dense_index.clone(),
+                &vec_emb,
+                current_version,
+            )
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(())
 }
 
+/// uploads a vector embedding
 pub fn run_upload(
     ctx: Arc<AppContext>,
-    vec_store: Arc<VectorStore>,
+    dense_index: Arc<DenseIndex>,
     vecs: Vec<(VectorIdValue, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
-    let current_version = vec_store
+    let current_version = dense_index
         .vcs
         .add_next_version("main")
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-    vec_store.set_current_version(current_version);
-    store_current_version(&vec_store.lmdb, current_version)?;
+    dense_index.set_current_version(current_version);
+    update_current_version(&dense_index.lmdb, current_version)?;
 
-    let bufman = vec_store.vec_raw_manager.get(&current_version)?;
+    let bufman = dense_index.vec_raw_manager.get(&current_version)?;
 
     vecs.into_par_iter()
         .map(|(id, vec)| {
@@ -215,13 +279,18 @@ pub fn run_upload(
                 hash_vec,
             };
 
-            insert_embedding(bufman.clone(), vec_store.clone(), &vec_emb, current_version)
+            insert_embedding(
+                bufman.clone(),
+                dense_index.clone(),
+                &vec_emb,
+                current_version,
+            )
         })
         .collect::<Result<Vec<_>, _>>()?;
     bufman.flush()?;
 
-    let env = vec_store.lmdb.env.clone();
-    let db = vec_store.lmdb.db.clone();
+    let env = dense_index.lmdb.env.clone();
+    let db = dense_index.lmdb.db.clone();
 
     let txn = env
         .begin_ro_txn()
@@ -240,26 +309,26 @@ pub fn run_upload(
     txn.abort();
 
     if count_unindexed >= ctx.config.upload_threshold {
-        index_embeddings(vec_store.clone(), ctx.config.upload_process_batch_size)?;
+        index_embeddings(dense_index.clone(), ctx.config.upload_process_batch_size)?;
     }
 
-    auto_commit_transaction(vec_store.clone())?;
-    vec_store.vec_raw_manager.flush_all()?;
-    vec_store.index_manager.flush_all()?;
+    auto_commit_transaction(dense_index.clone())?;
+    dense_index.vec_raw_manager.flush_all()?;
+    dense_index.index_manager.flush_all()?;
 
     Ok(())
 }
 
 pub async fn ann_vector_query(
-    vec_store: Arc<VectorStore>,
+    dense_index: Arc<DenseIndex>,
     query: Vec<f32>,
 ) -> Result<Option<Vec<(VectorId, MetricResult)>>, WaCustomError> {
-    let vector_store = vec_store.clone();
+    let dense_index = dense_index.clone();
     let vec_hash = VectorId::Str("query".to_string());
-    let root = &vector_store.root_vec;
-    let vector_list = vector_store
+    let root = &dense_index.root_vec;
+    let vector_list = dense_index
         .quantization_metric
-        .quantize(&query, vector_store.storage_type)?;
+        .quantize(&query, dense_index.storage_type)?;
 
     let vec_emb = QuantizedVectorEmbedding {
         quantized_vec: Arc::new(vector_list.clone()),
@@ -267,20 +336,20 @@ pub async fn ann_vector_query(
     };
 
     let results = ann_search(
-        vec_store.clone(),
+        dense_index.clone(),
         vec_emb,
         root.item.clone().get().clone(),
-        HNSWLevel(vec_store.max_cache_level),
+        HNSWLevel(dense_index.max_cache_level),
     )?;
     let output = remove_duplicates_and_filter(results);
     Ok(output)
 }
 
 pub async fn fetch_vector_neighbors(
-    vec_store: Arc<VectorStore>,
+    dense_index: Arc<DenseIndex>,
     vector_id: VectorId,
 ) -> Vec<Option<(VectorId, Vec<(VectorId, MetricResult)>)>> {
-    let results = vector_fetch(vec_store.clone(), vector_id);
+    let results = vector_fetch(dense_index.clone(), vector_id);
     return results.expect("Failed fetching vector neighbors");
 }
 
