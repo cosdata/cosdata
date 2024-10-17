@@ -55,13 +55,18 @@
 // ## Performance
 //
 // Brute force:
-//   - Query time: ~ 2.47s
+//   - Query time: ~ 2.4s
 //
 // Project & Partition:
 //   - Index creation time: ~ 33s
-//   - Query time: ~ 3ms
+//   - Query time: ~ 4.3ms
 
-use std::{cmp::Ordering, fs, path::Path, time::Instant};
+use std::{
+    cmp::Ordering,
+    fs,
+    path::Path,
+    time::{Duration, Instant},
+};
 
 use rand::prelude::*;
 use rand_distr::{Normal, Uniform};
@@ -268,6 +273,7 @@ fn run_tests_pp(vectors: &[Vec<f32>], queries: &[Vec<f32>]) {
         }
     }
     println!("Indexing finished in {:?}", start.elapsed());
+    let mut total_query_time = Duration::ZERO;
 
     for (i, query) in queries.into_iter().enumerate() {
         println!("\nTest#{}", i + 1);
@@ -295,7 +301,9 @@ fn run_tests_pp(vectors: &[Vec<f32>], queries: &[Vec<f32>]) {
         top_matches.sort_unstable_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap_or(Ordering::Equal));
         top_matches.truncate(20);
 
-        println!("Finished in {:?}", start.elapsed());
+        let elapsed = start.elapsed();
+        total_query_time += elapsed;
+        println!("Finished in {:?}", elapsed);
         let mut alt_count = 0;
 
         for (id, _) in top_matches.iter() {
@@ -312,7 +320,10 @@ fn run_tests_pp(vectors: &[Vec<f32>], queries: &[Vec<f32>]) {
         fs::write(format!("result-partition-{}", i), results_serialized).unwrap();
     }
 
-    println!("\nTotal execution time: {:?}", start.elapsed());
+    let avg_query_time = total_query_time / queries.len() as u32;
+
+    println!("\nAvg query time: {:?}", avg_query_time);
+    println!("Total execution time: {:?}", start.elapsed());
 }
 
 fn generate_random_vecs_and_save_to_file() -> (Vec<Vec<f32>>, Vec<Vec<f32>>) {
