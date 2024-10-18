@@ -32,34 +32,34 @@
 // ## Project & Partition
 //
 // 01. 4541:74 (0.8526581)
-// 02. 4541:98 (0.8510747)
-// 03. 4541:13 (0.8489201)
-// 04. 4541:6  (0.8478159)
+// 02. 4541:13 (0.8489201)
+// 03. 4541:85 (0.84865904)
+// 04. 4541:6 (0.8478159)
 // 05. 4541:95 (0.84775466)
 // 06. 4541:44 (0.8470717)
 // 07. 4541:73 (0.8470653)
-// 08. 4541:29 (0.84520525)
-// 09. 4541:49 (0.8412987)
-// 10. 4541:60 (0.83847)
-// 11. 4541:76 (0.83761704)
-// 12. 4541:81 (0.8369249)
-// 13. 4541:93 (0.83678424)
-// 14. 4541:89 (0.83608675)
-// 15. 4541:96 (0.8346243)
+// 08. 4541:3 (0.8462134)
+// 09. 4541:29 (0.84520525)
+// 10. 4541:49 (0.8412987)
+// 11. 4541:60 (0.83847)
+// 12. 4541:76 (0.83761704)
+// 13. 4541:81 (0.8369249)
+// 14. 4541:93 (0.83678424)
+// 15. 4541:89 (0.83608675)
 // 16. 4541:68 (0.8341953)
 // 17. 4541:59 (0.83310014)
-// 18. 4541:48 (0.82951933)
-// 19. 4541:51 (0.82864046)
-// 20. 4541:82 (0.8280492)
+// 18. 4541:26 (0.8302811)
+// 19. 4541:48 (0.82951933)
+// 20. 4541:1 (0.8293679)
 //
 // ## Performance
 //
 // Brute force:
-//   - Query time: ~ 2.4s
+//   - Query time: ~ 2.47s
 //
 // Project & Partition:
-//   - Index creation time: ~ 33s
-//   - Query time: ~ 4.3ms
+//   - Index creation time: ~ 110.02792706s
+//   - Query time: ~ 2.1s
 
 use std::{
     cmp::Ordering,
@@ -70,6 +70,12 @@ use std::{
 
 use rand::prelude::*;
 use rand_distr::{Normal, Uniform};
+
+const VECTORS_COUNT: usize = 50_000;
+const PERTURBATIONS_COUNT: usize = 100;
+const QUERIES_COUNT: usize = 100;
+const DIMENSION: usize = 320;
+const TARGET_DIMENSION: usize = 16;
 
 #[derive(Clone)]
 struct ProjectedValue {
@@ -91,7 +97,11 @@ fn project_to_3d(x: f32, y: f32) -> f32 {
 }
 
 fn is_sensitive_pair(x: f32, y: f32) -> bool {
-    x.abs() < 0.2 && y.abs() > 0.8
+    if x == 0.0 {
+        y.abs() > 0.8
+    } else {
+        (y / x).abs() > 0.8
+    }
 }
 
 fn project_vector_to_x(v: &[f32], x: usize) -> Vec<ProjectedValue> {
@@ -193,12 +203,6 @@ fn make_index(v: &[ProjectedValue]) -> (u16, Vec<u16>) {
     (main_index, alt_indices)
 }
 
-const VECTORS_COUNT: usize = 50_000;
-const PERTURBATIONS_COUNT: usize = 100;
-const QUERIES_COUNT: usize = 100;
-const DIMENSION: usize = 320;
-const TARGET_DIMENSION: usize = 16;
-
 fn serialize_results(results: Vec<(usize, f32)>) -> String {
     let mut out = String::new();
 
@@ -255,31 +259,34 @@ fn run_tests_pp(vectors: &[Vec<f32>], queries: &[Vec<f32>]) {
 
     println!("\nIndexing");
 
+    let mut total_inserted_vectors = 0u64;
+
     let start = Instant::now();
     for (i, vector) in vectors.into_iter().enumerate() {
         let projected = project_vector_to_x(&vector, TARGET_DIMENSION);
-        let (main_index, alt_index) = make_index(&projected);
+        let (main_index, _alt_index) = make_index(&projected);
 
-        let insert_in_main = !alt_index.contains(&main_index);
-
-        for index in &alt_index {
-            let partition = &mut partitions[*index as usize];
-            partition.vectors.push(i);
-        }
-
-        if insert_in_main {
-            let partition = &mut partitions[main_index as usize];
-            partition.vectors.push(i);
-        }
+        let partition = &mut partitions[main_index as usize];
+        partition.vectors.push(i);
+        total_inserted_vectors += 1;
     }
     println!("Indexing finished in {:?}", start.elapsed());
+    println!("Total inserted vectors: {}", total_inserted_vectors);
+    println!(
+        "Average vector replication rate: {}",
+        total_inserted_vectors as f64 / (VECTORS_COUNT * PERTURBATIONS_COUNT) as f64
+    );
+    println!(
+        "Average bucket size: {}",
+        total_inserted_vectors as f64 / (2f64.powi(TARGET_DIMENSION as i32) + 1.0)
+    );
     let mut total_query_time = Duration::ZERO;
 
     for (i, query) in queries.into_iter().enumerate() {
         println!("\nTest#{}", i + 1);
         let start = Instant::now();
         let projected = project_vector_to_x(&query, TARGET_DIMENSION);
-        let (main_index, _alt_index) = make_index(&projected);
+        let (main_index, alt_index) = make_index(&projected);
 
         let mut top_matches: Vec<(usize, f32)> = partitions[main_index as usize]
             .vectors
@@ -287,34 +294,26 @@ fn run_tests_pp(vectors: &[Vec<f32>], queries: &[Vec<f32>]) {
             .map(|&id| (id, cosine_similarity(query, &vectors[id])))
             .collect::<Vec<_>>();
 
-        // for index in alt_index {
-        //     let partition = &partitions[index as usize];
-        //     for id in &partition.vectors {
-        //         if top_matches.iter().position(|(id2, _)| id2 == id).is_some() {
-        //             continue;
-        //         }
-        //         let cs = cosine_similarity(query, &vectors[*id]);
-        //         top_matches.push((*id, cs));
-        //     }
-        // }
+        println!("Alt count: {}", alt_index.len());
+
+        for index in alt_index {
+            let partition = &partitions[index as usize];
+            for id in &partition.vectors {
+                if top_matches.iter().position(|(id2, _)| id2 == id).is_some() {
+                    continue;
+                }
+                let cs = cosine_similarity(query, &vectors[*id]);
+                top_matches.push((*id, cs));
+            }
+        }
 
         top_matches.sort_unstable_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap_or(Ordering::Equal));
         top_matches.truncate(20);
 
         let elapsed = start.elapsed();
+
         total_query_time += elapsed;
         println!("Finished in {:?}", elapsed);
-        let mut alt_count = 0;
-
-        for (id, _) in top_matches.iter() {
-            let vec = &vectors[*id];
-            let projected = project_vector_to_x(vec, TARGET_DIMENSION);
-            let (_, alt_index) = make_index(&projected);
-
-            alt_count += alt_index.len();
-        }
-
-        println!("Avg alt count: {}", alt_count as f32 / 20.0);
 
         let results_serialized = serialize_results(top_matches);
         fs::write(format!("result-partition-{}", i), results_serialized).unwrap();
