@@ -8,49 +8,49 @@
 //
 // ## Brute force
 //
-// 01. 4541:74 (0.8526581)
-// 02. 4541:98 (0.8510747)
-// 03. 4541:13 (0.8489201)
-// 04. 4541:85 (0.84865904)
-// 05. 4541:6  (0.8478159)
-// 06. 4541:95 (0.84775466)
-// 07. 4541:44 (0.8470717)
-// 08. 4541:73 (0.8470653)
-// 09. 4541:3  (0.8462134)
-// 10. 4541:29 (0.84520525)
-// 11. 4541:49 (0.8412987)
-// 12. 4541:60 (0.83847)
-// 13. 4541:76 (0.83761704)
-// 14. 4541:81 (0.8369249)
-// 15. 4541:93 (0.83678424)
-// 16. 4541:89 (0.83608675)
-// 17. 4541:7  (0.8360864)
-// 18. 4541:96 (0.8346243)
-// 19. 4541:68 (0.8341953)
-// 20. 4541:59 (0.83310014)
+// 01. 43148:13 (0.8465757)
+// 02. 43148:83 (0.8402604)
+// 03. 43148:52 (0.8391722)
+// 04. 43148:41 (0.83780986)
+// 05. 43148:95 (0.8375291)
+// 06. 43148:49 (0.8367006)
+// 07. 43148:6  (0.836649)
+// 08. 43148:19 (0.8357567)
+// 09. 43148:53 (0.83417034)
+// 10. 43148:16 (0.83392346)
+// 11. 43148:17 (0.83354986)
+// 12. 43148:29 (0.83285147)
+// 13. 43148:9  (0.832588)
+// 14. 43148:48 (0.8313629)
+// 15. 43148:25 (0.8308406)
+// 16. 43148:50 (0.8307434)
+// 17. 43148:18 (0.83015645)
+// 18. 43148:82 (0.82967573)
+// 19. 43148:5  (0.8270634)
+// 20. 43148:24 (0.8268056)
 //
 // ## Project & Partition
 //
-// 01. 4541:74 (0.8526581)
-// 02. 4541:13 (0.8489201)
-// 03. 4541:85 (0.84865904)
-// 04. 4541:6 (0.8478159)
-// 05. 4541:95 (0.84775466)
-// 06. 4541:44 (0.8470717)
-// 07. 4541:73 (0.8470653)
-// 08. 4541:3 (0.8462134)
-// 09. 4541:29 (0.84520525)
-// 10. 4541:49 (0.8412987)
-// 11. 4541:60 (0.83847)
-// 12. 4541:76 (0.83761704)
-// 13. 4541:81 (0.8369249)
-// 14. 4541:93 (0.83678424)
-// 15. 4541:89 (0.83608675)
-// 16. 4541:68 (0.8341953)
-// 17. 4541:59 (0.83310014)
-// 18. 4541:26 (0.8302811)
-// 19. 4541:48 (0.82951933)
-// 20. 4541:1 (0.8293679)
+// 01. 43148:13 (0.8465757)
+// 02. 43148:83 (0.8402604)
+// 03. 43148:52 (0.8391722)
+// 04. 43148:41 (0.83780986)
+// 05. 43148:95 (0.8375291)
+// 06. 43148:49 (0.8367006)
+// 07. 43148:6  (0.836649)
+// 08. 43148:19 (0.8357567)
+// 09. 43148:16 (0.83392346)
+// 10. 43148:17 (0.83354986)
+// 11. 43148:29 (0.83285147)
+// 12. 43148:9  (0.832588)
+// 13. 43148:48 (0.8313629)
+// 14. 43148:25 (0.8308406)
+// 15. 43148:50 (0.8307434)
+// 16. 43148:82 (0.82967573)
+// 17. 43148:5  (0.8270634)
+// 18. 43148:24 (0.8268056)
+// 19. 43148:35 (0.82625026)
+// 20. 43148:88 (0.82524896)
 //
 // ## Performance
 //
@@ -58,8 +58,8 @@
 //   - Query time: ~ 2.47s
 //
 // Project & Partition:
-//   - Index creation time: ~ 110.02792706s
-//   - Query time: ~ 2.1s
+//   - Index creation time: ~ 46s
+//   - Query time: ~ 342ms
 
 use std::{
     cmp::Ordering,
@@ -70,18 +70,7 @@ use std::{
 
 use rand::prelude::*;
 use rand_distr::{Normal, Uniform};
-
-const VECTORS_COUNT: usize = 50_000;
-const PERTURBATIONS_COUNT: usize = 100;
-const QUERIES_COUNT: usize = 100;
-const DIMENSION: usize = 320;
-const TARGET_DIMENSION: usize = 16;
-
-#[derive(Clone)]
-struct ProjectedValue {
-    value: f32,
-    is_sensitive: bool,
-}
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len());
@@ -91,17 +80,28 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     dot_product / (norm_a * norm_b)
 }
 
-fn project_to_3d(x: f32, y: f32) -> f32 {
-    let theta = y.atan2(x);
-    theta / std::f32::consts::PI
+#[derive(Clone)]
+struct ProjectedValue {
+    value: f32,
+    weight: f32,
+    iterations: u8,
 }
 
 fn is_sensitive_pair(x: f32, y: f32) -> bool {
     if x == 0.0 {
-        y.abs() > 0.8
+        y.abs() > 0.9
     } else {
-        (y / x).abs() > 0.8
+        (y / x).abs() > 0.9
     }
+}
+
+fn calculate_weight(iteration: u8) -> f32 {
+    (iteration as f32).powi(2) / 1.618034 // Golden ratio approximation
+}
+
+fn project_to_3d(x: f32, y: f32) -> f32 {
+    let theta = y.atan2(x);
+    theta / std::f32::consts::PI
 }
 
 fn project_vector_to_x(v: &[f32], x: usize) -> Vec<ProjectedValue> {
@@ -110,66 +110,73 @@ fn project_vector_to_x(v: &[f32], x: usize) -> Vec<ProjectedValue> {
         .map(|chunk| {
             if chunk.len() == 2 {
                 ProjectedValue {
-                    value: project_to_3d(chunk[0], chunk[1]),
-                    is_sensitive: is_sensitive_pair(chunk[0], chunk[1]),
+                    value: chunk[0],
+                    weight: if is_sensitive_pair(chunk[0], chunk[1]) {
+                        calculate_weight(1)
+                    } else {
+                        0.0
+                    },
+                    iterations: 1,
                 }
             } else {
                 ProjectedValue {
                     value: chunk[0],
-                    is_sensitive: false,
+                    weight: 0.0,
+                    iterations: 1,
                 }
             }
         })
         .collect::<Vec<_>>();
 
+    let mut iteration: u8 = 2;
     while projected.len() > x {
         if projected.len() / 2 < x {
             let pairs_to_project = projected.len() - x;
+            let mut new_projected = Vec::new();
 
-            let mut new_projected = Vec::with_capacity(x);
+            for i in 0..pairs_to_project {
+                let z = project_to_3d(projected[2 * i].value, projected[2 * i + 1].value);
+                let inherited_weight = projected[2 * i].weight + projected[2 * i + 1].weight;
+                let sensitivity_weight =
+                    if is_sensitive_pair(projected[2 * i].value, projected[2 * i + 1].value) {
+                        calculate_weight(iteration)
+                    } else {
+                        0.0
+                    };
+                let new_weight = inherited_weight + sensitivity_weight;
 
-            for j in 0..pairs_to_project {
-                let first = &projected[2 * j];
-                let second = &projected[2 * j + 1];
-                let z = project_to_3d(first.value, second.value);
-                let is_sensitive = first.is_sensitive
-                    || second.is_sensitive
-                    || is_sensitive_pair(first.value, second.value);
                 new_projected.push(ProjectedValue {
                     value: z,
-                    is_sensitive,
+                    weight: new_weight,
+                    iterations: iteration,
                 });
             }
 
-            new_projected.extend(projected[2 * pairs_to_project..].iter().cloned());
-
+            new_projected.extend_from_slice(&projected[pairs_to_project * 2..]);
             projected = new_projected;
         } else {
-            let mut new_projected = Vec::with_capacity(projected.len() / 2);
-
-            for chunk in projected.chunks(2) {
-                if chunk.len() == 2 {
+            projected = projected
+                .chunks(2)
+                .map(|chunk| {
                     let z = project_to_3d(chunk[0].value, chunk[1].value);
-                    let is_sensitive = chunk[0].is_sensitive
-                        || chunk[1].is_sensitive
-                        || is_sensitive_pair(chunk[0].value, chunk[1].value);
-                    new_projected.push(ProjectedValue {
+                    let inherited_weight = chunk[0].weight + chunk[1].weight;
+                    let sensitivity_weight = if is_sensitive_pair(chunk[0].value, chunk[1].value) {
+                        calculate_weight(iteration)
+                    } else {
+                        0.0
+                    };
+                    let new_weight = inherited_weight + sensitivity_weight;
+
+                    ProjectedValue {
                         value: z,
-                        is_sensitive,
-                    });
-                } else {
-                    new_projected.push(chunk[0].clone());
-                }
-            }
-
-            if new_projected.len() < x {
-                new_projected.extend(projected[new_projected.len()..].iter().cloned());
-            }
-
-            projected = new_projected;
+                        weight: new_weight,
+                        iterations: iteration,
+                    }
+                })
+                .collect();
         }
+        iteration = iteration.saturating_add(1);
     }
-
     projected
 }
 
@@ -178,13 +185,17 @@ fn make_index(v: &[ProjectedValue]) -> (u16, Vec<u16>) {
     let mut main_mask = 0;
     let mut sway_bits = Vec::new();
 
+    let max_iterations = v.iter().map(|pv| pv.iterations).max().unwrap_or(0);
+    let max_possible_weight: f32 = (1..=max_iterations).map(|i| calculate_weight(i)).sum();
+    let threshold = max_possible_weight / 1.25;
+
     for (i, pv) in v.iter().enumerate() {
         if pv.value >= 0.0 {
             main_index |= 1 << i;
         }
         if pv.value >= 0.1 {
             main_mask |= 1 << i;
-        } else if pv.is_sensitive {
+        } else if pv.weight > threshold {
             sway_bits.push(i as u16);
         }
     }
@@ -202,6 +213,12 @@ fn make_index(v: &[ProjectedValue]) -> (u16, Vec<u16>) {
 
     (main_index, alt_indices)
 }
+
+const VECTORS_COUNT: usize = 50_000;
+const PERTURBATIONS_COUNT: usize = 100;
+const QUERIES_COUNT: usize = 100;
+const DIMENSION: usize = 640;
+const TARGET_DIMENSION: usize = 16;
 
 fn serialize_results(results: Vec<(usize, f32)>) -> String {
     let mut out = String::new();
@@ -246,15 +263,25 @@ fn run_tests_bf(vectors: &[Vec<f32>], queries: &[Vec<f32>]) {
     }
 }
 
-#[derive(Debug, Default)]
+const PARTITIONS_COUNT: usize = 2usize.pow(TARGET_DIMENSION as u32) + 1;
+
+#[derive(Debug)]
 struct Partition {
     vectors: Vec<usize>,
+}
+
+impl Default for Partition {
+    fn default() -> Self {
+        Self {
+            vectors: Vec::new(),
+        }
+    }
 }
 
 // project and partition
 fn run_tests_pp(vectors: &[Vec<f32>], queries: &[Vec<f32>]) {
     println!("\nRunning project & partition test");
-    let mut partitions: [Partition; 2usize.pow(TARGET_DIMENSION as u32) + 1] =
+    let mut partitions: [Partition; PARTITIONS_COUNT] =
         std::array::from_fn(|_| Partition::default());
 
     println!("\nIndexing");
@@ -264,12 +291,23 @@ fn run_tests_pp(vectors: &[Vec<f32>], queries: &[Vec<f32>]) {
     let start = Instant::now();
     for (i, vector) in vectors.into_iter().enumerate() {
         let projected = project_vector_to_x(&vector, TARGET_DIMENSION);
-        let (main_index, _alt_index) = make_index(&projected);
+        let (main_index, alt_index) = make_index(&projected);
 
-        let partition = &mut partitions[main_index as usize];
-        partition.vectors.push(i);
-        total_inserted_vectors += 1;
+        let insert_in_main = !alt_index.contains(&main_index);
+
+        for index in &alt_index {
+            let partition = &mut partitions[*index as usize];
+            partition.vectors.push(i);
+            total_inserted_vectors += 1;
+        }
+
+        if insert_in_main {
+            let partition = &mut partitions[main_index as usize];
+            partition.vectors.push(i);
+            total_inserted_vectors += 1;
+        }
     }
+
     println!("Indexing finished in {:?}", start.elapsed());
     println!("Total inserted vectors: {}", total_inserted_vectors);
     println!(
@@ -278,7 +316,7 @@ fn run_tests_pp(vectors: &[Vec<f32>], queries: &[Vec<f32>]) {
     );
     println!(
         "Average bucket size: {}",
-        total_inserted_vectors as f64 / (2f64.powi(TARGET_DIMENSION as i32) + 1.0)
+        total_inserted_vectors as f64 / PARTITIONS_COUNT as f64
     );
     let mut total_query_time = Duration::ZERO;
 
@@ -287,6 +325,9 @@ fn run_tests_pp(vectors: &[Vec<f32>], queries: &[Vec<f32>]) {
         let start = Instant::now();
         let projected = project_vector_to_x(&query, TARGET_DIMENSION);
         let (main_index, alt_index) = make_index(&projected);
+        let mut skip_partitions = vec![false; PARTITIONS_COUNT];
+
+        skip_partitions[main_index as usize] = true;
 
         let mut top_matches: Vec<(usize, f32)> = partitions[main_index as usize]
             .vectors
@@ -294,17 +335,35 @@ fn run_tests_pp(vectors: &[Vec<f32>], queries: &[Vec<f32>]) {
             .map(|&id| (id, cosine_similarity(query, &vectors[id])))
             .collect::<Vec<_>>();
 
-        println!("Alt count: {}", alt_index.len());
+        let query_alt_count = alt_index.len();
 
-        for index in alt_index {
-            let partition = &partitions[index as usize];
-            for id in &partition.vectors {
-                if top_matches.iter().position(|(id2, _)| id2 == id).is_some() {
-                    continue;
-                }
-                let cs = cosine_similarity(query, &vectors[*id]);
-                top_matches.push((*id, cs));
+        println!("Alt count: {}", query_alt_count);
+
+        let all_index_top_matches: Vec<(usize, f32)> = alt_index
+            .into_par_iter()
+            .map(|index| {
+                let partition = &partitions[index as usize];
+
+                let mut top_matches = partition
+                    .vectors
+                    .iter()
+                    .map(|&id| (id, cosine_similarity(query, &vectors[id])))
+                    .collect::<Vec<_>>();
+
+                top_matches
+                    .sort_unstable_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap_or(Ordering::Equal));
+                top_matches.truncate(20);
+
+                top_matches
+            })
+            .flatten()
+            .collect();
+
+        for (id, cs) in all_index_top_matches {
+            if top_matches.iter().position(|(id2, _)| id2 == &id).is_some() {
+                continue;
             }
+            top_matches.push((id, cs));
         }
 
         top_matches.sort_unstable_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap_or(Ordering::Equal));
@@ -321,7 +380,7 @@ fn run_tests_pp(vectors: &[Vec<f32>], queries: &[Vec<f32>]) {
 
     let avg_query_time = total_query_time / queries.len() as u32;
 
-    println!("\nAvg query time: {:?}", avg_query_time);
+    println!("\nAverage query time: {:?}", avg_query_time);
     println!("Total execution time: {:?}", start.elapsed());
 }
 
