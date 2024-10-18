@@ -1,4 +1,10 @@
-use std::time::Instant;
+use std::{
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Instant,
+};
 
 use cosdata::{
     models::types::SparseVector,
@@ -10,6 +16,7 @@ use cosdata::{
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
 use rand::Rng;
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 const NUM_OF_VECTORS: usize = 100000; // Each of these will be used to create 100 more perturbed vectors
 const NUM_OF_DIMENSIONS: usize = 50000;
@@ -19,37 +26,68 @@ pub fn create_inverted_index_and_query_vector(
     num_dimensions: usize,
     num_vectors: usize,
 ) -> (InvertedIndexSparseAnnBasicTSHashmap, SparseVector) {
-    let nowx = Instant::now();
     let inverted_index = InvertedIndexSparseAnnBasicTSHashmap::new();
 
     let mut original_vectors: Vec<SparseVector> =
         bench_common::generate_random_sparse_vectors(num_vectors as usize, num_dimensions as usize);
     let query_vector = original_vectors.pop().unwrap();
 
-    let mut final_vectors = Vec::new(); // Final vectors generated after perturbation
-    let mut current_id = num_vectors + 1; // To ensure unique IDs
+    let current_id = Arc::new(AtomicUsize::new(num_vectors + 1)); // To ensure unique IDs
+    let now = Instant::now();
 
-    for vector in original_vectors {
-        // We create 100 new sparse vecs from each of original [NUM_OF_VECTORS] => NUM_OF_VECTORS * 100 = final_vectors
-        let mut new_vectors = bench_common::perturb_vector(&vector, 0.5, current_id);
-        final_vectors.append(&mut new_vectors);
-        current_id += 100; // Move to the next block of 100 IDs
+    let chunks = original_vectors.chunks(num_vectors / 10);
+    for (i, chunk) in chunks.enumerate() {
+        println!("Starting with chunk : {i}");
+        chunk.par_iter().for_each(|vector| {
+            let start_id = current_id.fetch_add(100, Ordering::SeqCst); // Move to the next block of 100 IDs
+
+            // We create 100 new sparse vecs from each of original [NUM_OF_VECTORS] => NUM_OF_VECTORS * 100 = final_vectors
+            let new_vectors = bench_common::perturb_vector(&vector, 0.5, start_id);
+            for x in new_vectors {
+                if x.vector_id % 10000 == 0 {
+                    println!("Just added vectors : {:?}", x.vector_id);
+                    println!("Time elapsed : {:?} secs", now.elapsed().as_secs_f32());
+                }
+                inverted_index
+                    .add_sparse_vector(x)
+                    .unwrap_or_else(|e| println!("Error : {:?}", e));
+            }
+        });
+        println!(
+            "Finished adding chunk {i} in time {:?}",
+            now.elapsed().as_secs_f32()
+        );
     }
+    // for vector in original_vectors {
+    //     // We create 100 new sparse vecs from each of original [NUM_OF_VECTORS] => NUM_OF_VECTORS * 100 = final_vectors
+    //     let new_vectors = bench_common::perturb_vector(&vector, 0.5, current_id);
+    //     for x in new_vectors {
+    //         if x.vector_id % 10000 == 0 {
+    //             println!("Just added vectors : {:?}", x.vector_id);
+    //             println!("Time elapsed : {:?} secs", now.elapsed().as_secs_f32());
+    //         }
+    //         inverted_index
+    //             .add_sparse_vector(x)
+    //             .unwrap_or_else(|e| println!("Error : {:?}", e));
+    //     }
+    //     current_id += 100; // Move to the next block of 100 IDs
+    // }
 
     println!(
-        "Finished generating {:?} vectors in time : {:?}, Next step adding them to inverted index...",NUM_OF_VECTORS*100,
-        nowx.elapsed()
+        "Finished generating {:?} vectors and adding them to inverted index in time {:?}",
+        NUM_OF_VECTORS * 100,
+        now.elapsed()
     );
-    let now = Instant::now();
-    for vector in final_vectors.into_iter() {
-        if vector.vector_id % 10000 == 0 {
-            println!("Just added vectors : {:?}", vector.vector_id);
-            println!("Time elapsed : {:?} secs", now.elapsed().as_secs_f32());
-        }
-        inverted_index
-            .add_sparse_vector(vector)
-            .unwrap_or_else(|e| println!("Error : {:?}", e));
-    }
+    // let now = Instant::now();
+    // for vector in final_vectors.into_iter() {
+    //     if vector.vector_id % 10000 == 0 {
+    //         println!("Just added vectors : {:?}", vector.vector_id);
+    //         println!("Time elapsed : {:?} secs", now.elapsed().as_secs_f32());
+    //     }
+    //     inverted_index
+    //         .add_sparse_vector(vector)
+    //         .unwrap_or_else(|e| println!("Error : {:?}", e));
+    // }
 
     // final_vectors.par_iter().for_each(|vec| {
     //     if vec.vector_id % 10000 == 0 {
