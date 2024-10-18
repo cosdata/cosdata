@@ -32,7 +32,6 @@ pub enum CacheItem {
     InvertedIndexSparseAnn(LazyItem<InvertedIndexSparseAnn>),
     InvertedIndexNewDSNode(LazyItem<InvertedIndexNewDSNode>),
     VectorData(LazyItem<STM<VectorData>>),
-    InvertedIndexSparseAnnNodeBasic(LazyItem<InvertedIndexSparseAnnNodeBasic>),
 }
 
 pub trait Cacheable: Clone + 'static {
