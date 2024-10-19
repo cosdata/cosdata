@@ -2,7 +2,7 @@ use lmdb::{Database, Environment, Transaction, WriteFlags};
 use serde::{Deserialize, Serialize};
 use serde_cbor::{from_slice, to_vec};
 use siphasher::sip::SipHasher24;
-use std::hash::Hasher;
+use std::{fs, hash::Hasher, path::Path, sync::Arc};
 
 use super::common::WaCustomError;
 
@@ -43,15 +43,24 @@ impl Collection {
         sparse_vector_options: SparseVectorOptions,
         metadata_schema: Option<String>,
         config: CollectionConfig,
-    ) -> Self {
-        Collection {
+    ) -> Result<Self, WaCustomError> {
+        if name.is_empty() {
+            return Err(WaCustomError::InvalidParams);
+        }
+
+        let collection = Collection {
             name,
             description,
             dense_vector: dense_vector_options,
             sparse_vector: sparse_vector_options,
             metadata_schema,
             config,
-        }
+        };
+
+        let collection_path = collection.get_path();
+        fs::create_dir_all(&collection_path).map_err(|e| WaCustomError::FsError(e.to_string()))?;
+
+        Ok(collection)
     }
 
     /// Computes the SipHash of the collection name
@@ -67,6 +76,12 @@ impl Collection {
         let hash = self.get_hash();
         let key = hash.to_le_bytes();
         key
+    }
+
+    /// creates a path out of the collection name
+    pub fn get_path(&self) -> Arc<Path> {
+        let root_path = Path::new("./collections/");
+        root_path.join(&self.name).into()
     }
 
     /// serializes the collection

@@ -17,6 +17,8 @@ pub(crate) async fn create_collection(
     ctx: Arc<AppContext>,
     create_collection_dto: CreateCollectionDto,
 ) -> Result<CreateCollectionDtoResponse, CollectionsError> {
+    let collection = &repo::create_collection(ctx.clone(), create_collection_dto).await?;
+
     let Collection {
         name,
         description,
@@ -24,12 +26,12 @@ pub(crate) async fn create_collection(
         dense_vector,
         metadata_schema,
         sparse_vector,
-    } = &repo::create_collection(ctx.clone(), create_collection_dto).await?;
+    } = collection;
 
     if dense_vector.enabled {
         let _ = repo::create_dense_index(
             ctx.clone(),
-            name,
+            collection,
             dense_vector.dimension as usize,
             None,
             None,

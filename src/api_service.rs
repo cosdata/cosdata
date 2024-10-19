@@ -2,6 +2,7 @@ use crate::app_context::AppContext;
 use crate::indexes::inverted_index::InvertedIndex;
 use crate::models::buffered_io::*;
 use crate::models::cache_loader::NodeRegistry;
+use crate::models::collection::Collection;
 use crate::models::common::*;
 use crate::models::file_persist::*;
 use crate::models::lazy_load::*;
@@ -24,27 +25,23 @@ use std::path::Path;
 use std::sync::Arc;
 
 /// creates a dense index for a collection
-pub async fn init_vector_store(
+pub async fn init_dense_index_for_collection(
     ctx: Arc<AppContext>,
-    name: String,
+    collection: &Collection,
     size: usize,
     lower_bound: Option<f32>,
     upper_bound: Option<f32>,
     max_cache_level: u8,
 ) -> Result<Arc<DenseIndex>, WaCustomError> {
-    if name.is_empty() {
-        return Err(WaCustomError::InvalidParams);
-    }
+    let collection_name = &collection.name;
+    let collection_path: Arc<Path> = collection.get_path();
 
-    let collection_path: Arc<Path> = Path::new(&name).into();
-
-    fs::create_dir_all(&collection_path).map_err(|e| WaCustomError::FsError(e.to_string()))?;
     let quantization_metric = Arc::new(QuantizationMetric::Scalar);
     let storage_type = StorageType::UnsignedByte;
 
     let env = ctx.ain_env.persist.clone();
 
-    let lmdb = MetaDb::from_env(env.clone(), &name)
+    let lmdb = MetaDb::from_env(env.clone(), &collection_name)
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
     let (vcs, hash) = VersionControl::new(env.clone(), lmdb.db.clone())
@@ -147,7 +144,7 @@ pub async fn init_vector_store(
     let dense_index = Arc::new(DenseIndex::new(
         exec_queue_nodes,
         max_cache_level,
-        name.clone(),
+        collection_name.clone(),
         root,
         lp,
         (size / 32) as usize,
@@ -165,7 +162,7 @@ pub async fn init_vector_store(
 
     ctx.ain_env
         .collections_map
-        .insert(&name, dense_index.clone())?;
+        .insert(&collection_name, dense_index.clone())?;
 
     Ok(dense_index)
 }

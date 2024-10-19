@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    api_service::{init_inverted_index, init_vector_store},
+    api_service::{init_dense_index_for_collection, init_inverted_index},
     app_context::AppContext,
     indexes::inverted_index::InvertedIndex,
     models::{collection::Collection, types::DenseIndex},
@@ -33,7 +33,8 @@ pub(crate) async fn create_collection(
         sparse_vector,
         metadata_schema,
         config,
-    );
+    )
+    .map_err(|e| CollectionsError::WaCustomError(e))?;
     // persisting collection after creation
     // note that CollectionsMap has similar functionality to
     // persist collections on the disk
@@ -47,16 +48,16 @@ pub(crate) async fn create_collection(
 /// creates a dense_index for a collection
 pub(crate) async fn create_dense_index(
     ctx: Arc<AppContext>,
-    name: &str,
+    collection: &Collection,
     size: usize,
     lower_bound: Option<f32>,
     upper_bound: Option<f32>,
     max_cache_level: u8,
 ) -> Result<Arc<DenseIndex>, CollectionsError> {
     // Call init_vector_store using web::block
-    let result = init_vector_store(
+    let result = init_dense_index_for_collection(
         ctx,
-        name.into(),
+        collection,
         size,
         lower_bound,
         upper_bound,
