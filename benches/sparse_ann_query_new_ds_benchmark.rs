@@ -3,24 +3,24 @@ use std::time::Instant;
 use cosdata::{
     models::types::SparseVector,
     storage::{
-        bench_common, inverted_index_sparse_ann_basic::InvertedIndexSparseAnnBasic,
-        sparse_ann_query_basic::SparseAnnQueryBasic,
+        bench_common, inverted_index_sparse_ann_new_ds::InvertedIndexSparseAnnNewDS,
+        sparse_ann_query_new_ds::SparseAnnQueryNewDS,
     },
 };
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
 use rand::Rng;
 
-const NUM_OF_VECTORS: usize = 3000; // Each of these will be used to create 100 more perturbed vectors
+const NUM_OF_VECTORS: usize = 1000; // Each of these will be used to create 100 more perturbed vectors
 const NUM_OF_DIMENSIONS: usize = 50000;
 
 // Returns inverted_index and query vector
 pub fn create_inverted_index_and_query_vector(
     num_dimensions: usize,
     num_vectors: usize,
-) -> (InvertedIndexSparseAnnBasic, SparseVector) {
+) -> (InvertedIndexSparseAnnNewDS, SparseVector) {
     let nowx = Instant::now();
-    let inverted_index = InvertedIndexSparseAnnBasic::new();
+    let inverted_index = InvertedIndexSparseAnnNewDS::new();
 
     let mut original_vectors: Vec<SparseVector> =
         bench_common::generate_random_sparse_vectors(num_vectors as usize, num_dimensions as usize);
@@ -37,12 +37,12 @@ pub fn create_inverted_index_and_query_vector(
     }
 
     println!(
-        "Finished generating {:?} vectors in time : {:?}, Next step adding them to inverted index...", NUM_OF_VECTORS*100,
+        "Finished generating vectors in time : {:?}, Next step adding them to inverted index...",
         nowx.elapsed()
     );
     let now = Instant::now();
     for vector in final_vectors {
-        if vector.vector_id % 10000 == 0 {
+        if vector.vector_id % 1000 == 0 {
             println!("Just added vectors : {:?}", vector.vector_id);
             println!("Time elapsed : {:?} secs", now.elapsed().as_secs_f32());
         }
@@ -58,8 +58,8 @@ pub fn create_inverted_index_and_query_vector(
     (inverted_index, query_vector)
 }
 
-fn sparse_ann_query_basic_benchmark(c: &mut Criterion) {
-    let mut group = c.benchmark_group("Sparse Ann Query Basic Benchmark");
+fn sparse_ann_query_new_ds_benchmark(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Sparse Ann Query new DS Benchmark");
     group
         .sample_size(10)
         .measurement_time(std::time::Duration::new(30, 0)); //Give enough time to measure
@@ -78,17 +78,17 @@ fn sparse_ann_query_basic_benchmark(c: &mut Criterion) {
     }
     query_vector.entries = new_entries;
 
-    let sparse_ann_query_basic = SparseAnnQueryBasic::new(query_vector);
+    let sparse_ann_query_new_ds = SparseAnnQueryNewDS::new(query_vector);
 
     println!(
         "Starting benchmark.. for Vector count {:?} and dimension {:?}",
         NUM_OF_VECTORS * 100,
         NUM_OF_DIMENSIONS
     );
-    // Benchmarking Sparse_Ann_Query_Sequential
+    // Benchmarking Sparse_Ann_Query_Concurrent
     group.bench_function(
         BenchmarkId::new(
-            "Sparse_Ann_Query_Basic_Sequential",
+            "Sparse_Ann_Query_Sequential",
             format!(
                 "Total vectors = {} and dimensions = {}",
                 NUM_OF_VECTORS * 100,
@@ -97,11 +97,11 @@ fn sparse_ann_query_basic_benchmark(c: &mut Criterion) {
         ),
         |b| {
             b.iter(|| {
-                let _res = sparse_ann_query_basic.sequential_search(&inverted_index);
+                let _res = sparse_ann_query_new_ds.sequential_search(&inverted_index);
             });
         },
     );
 }
 
-criterion_group!(benches, sparse_ann_query_basic_benchmark);
+criterion_group!(benches, sparse_ann_query_new_ds_benchmark);
 criterion_main!(benches);

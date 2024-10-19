@@ -218,18 +218,6 @@ impl InvertedIndexSparseAnnBasic {
     }
 }
 
-type HashTable<K, V> = HashMap<K, V>;
-
-/// This is a custom Hastable made to use for data variable in Node of InvertedIndex
-#[derive(Clone)]
-pub struct TSHashTable<K, V> {
-    hash_table_list: Vec<Arc<Mutex<HashTable<K, V>>>>,
-    size: i16,
-}
-//////////////////////////////////////////////
-///
-///
-
 #[derive(Clone)]
 pub struct InvertedIndexSparseAnnNodeBasicTSHashmap {
     pub dim_index: u32,
@@ -401,7 +389,14 @@ impl InvertedIndexSparseAnnBasicTSHashmap {
     }
 }
 
-// type GenericShortHash = i32;
+type HashTable<K, V> = HashMap<K, V>;
+
+/// This is a custom Hastable made to use for data variable in Node of InvertedIndex
+#[derive(Clone)]
+pub struct TSHashTable<K, V> {
+    hash_table_list: Vec<Arc<Mutex<HashTable<K, V>>>>,
+    size: i16,
+}
 
 impl<K: Eq + Hash, V> TSHashTable<K, V> {
     pub fn new(size: i16) -> Self {

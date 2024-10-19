@@ -78,26 +78,6 @@ pub fn create_inverted_index_and_query_vector(
         NUM_OF_VECTORS * 100,
         now.elapsed()
     );
-    // let now = Instant::now();
-    // for vector in final_vectors.into_iter() {
-    //     if vector.vector_id % 10000 == 0 {
-    //         println!("Just added vectors : {:?}", vector.vector_id);
-    //         println!("Time elapsed : {:?} secs", now.elapsed().as_secs_f32());
-    //     }
-    //     inverted_index
-    //         .add_sparse_vector(vector)
-    //         .unwrap_or_else(|e| println!("Error : {:?}", e));
-    // }
-
-    // final_vectors.par_iter().for_each(|vec| {
-    //     if vec.vector_id % 10000 == 0 {
-    //         println!("Just added vectors : {:?}", vec.vector_id);
-    //         println!("Time elapsed : {:?} secs", now.elapsed().as_secs_f32());
-    //     }
-    //     inverted_index
-    //         .add_sparse_vector(vec.clone())
-    //         .unwrap_or_else(|e| println!("Error : {:?}", e));
-    // });
     println!(
         "Time taken to insert all vectors : {:?} secs",
         now.elapsed().as_secs_f32()

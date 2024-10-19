@@ -1,20 +1,20 @@
+use super::buffered_io::{BufIoError, BufferManagerFactory};
+use super::file_persist::*;
+use super::lazy_load::{FileIndex, LazyItem, LazyItemVec, VectorData};
+use super::lru_cache::LRUCache;
+use super::serializer::CustomSerialize;
+use super::types::*;
 use crate::models::lru_cache::CachedValue;
 use crate::storage::inverted_index_old::InvertedIndexItem;
 use crate::storage::inverted_index_sparse_ann::{
     InvertedIndexSparseAnn, InvertedIndexSparseAnnNode,
 };
+use crate::storage::inverted_index_sparse_ann_basic::InvertedIndexSparseAnnNodeBasic;
 use crate::storage::inverted_index_sparse_ann_basic::{
-    InvertedIndexSparseAnnNodeBasic, InvertedIndexSparseAnnNodeBasicDashMap,
-    InvertedIndexSparseAnnNodeBasicTSHashmap,
+    InvertedIndexSparseAnnNodeBasicDashMap, InvertedIndexSparseAnnNodeBasicTSHashmap,
 };
+use crate::storage::inverted_index_sparse_ann_new_ds::InvertedIndexNewDSNode;
 use crate::storage::Storage;
-
-use super::buffered_io::{BufIoError, BufferManagerFactory};
-use super::file_persist::*;
-use super::lazy_load::{FileIndex, LazyItem, LazyItemVec};
-use super::lru_cache::LRUCache;
-use super::serializer::CustomSerialize;
-use super::types::*;
 use arcshift::ArcShift;
 use probabilistic_collections::cuckoo::CuckooFilter;
 use std::collections::HashSet;
@@ -31,10 +31,12 @@ pub enum CacheItem {
     Unsigned32(LazyItem<u32>),
     InvertedIndexItemWithFloat(LazyItem<InvertedIndexItem<f32>>),
     InvertedIndexSparseAnnNode(LazyItem<InvertedIndexSparseAnnNode>),
-    InvertedIndexSparseAnn(LazyItem<InvertedIndexSparseAnn>),
     InvertedIndexSparseAnnNodeBasic(LazyItem<InvertedIndexSparseAnnNodeBasic>),
+    InvertedIndexSparseAnn(LazyItem<InvertedIndexSparseAnn>),
     InvertedIndexSparseAnnNodeBasicTSHashmap(LazyItem<InvertedIndexSparseAnnNodeBasicTSHashmap>),
     InvertedIndexSparseAnnNodeBasicDashMap(LazyItem<InvertedIndexSparseAnnNodeBasicDashMap>),
+    InvertedIndexNewDSNode(LazyItem<InvertedIndexNewDSNode>),
+    VectorData(LazyItem<STM<VectorData>>),
 }
 
 pub trait Cacheable: Clone + 'static {
@@ -182,6 +184,20 @@ impl Cacheable for InvertedIndexSparseAnnNodeBasic {
     }
 }
 
+impl Cacheable for InvertedIndexNewDSNode {
+    fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
+        if let CacheItem::InvertedIndexNewDSNode(item) = cache_item {
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
+        CacheItem::InvertedIndexNewDSNode(item)
+    }
+}
+
 impl Cacheable for InvertedIndexSparseAnnNodeBasicDashMap {
     fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
         if let CacheItem::InvertedIndexSparseAnnNodeBasicDashMap(item) = cache_item {
@@ -193,6 +209,20 @@ impl Cacheable for InvertedIndexSparseAnnNodeBasicDashMap {
 
     fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
         CacheItem::InvertedIndexSparseAnnNodeBasicDashMap(item)
+    }
+}
+
+impl Cacheable for STM<VectorData> {
+    fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
+        if let CacheItem::VectorData(item) = cache_item {
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
+        CacheItem::VectorData(item)
     }
 }
 
