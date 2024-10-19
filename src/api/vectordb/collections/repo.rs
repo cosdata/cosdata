@@ -115,6 +115,21 @@ pub(crate) async fn get_collections(
     Ok(collections)
 }
 
+/// gets a collection by its name
+pub(crate) async fn get_collection_by_name(
+    ctx: Arc<AppContext>,
+    name: &str,
+) -> Result<Arc<Collection>, CollectionsError> {
+    let collection = match ctx.ain_env.collections_map.get_collection(name) {
+        Some(collection) => collection.clone(),
+        None => {
+            // dense index not found, return an error response
+            return Err(CollectionsError::NotFound);
+        }
+    };
+    Ok(collection)
+}
+
 /// gets a dense index for a collection by name
 pub(crate) async fn get_dense_index_by_name(
     ctx: Arc<AppContext>,

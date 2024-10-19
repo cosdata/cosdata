@@ -68,12 +68,24 @@ pub(crate) async fn get_collections(
     Ok(collections)
 }
 
+/// gets a collection by its id
+/// currently collection_id = collection.name
 pub(crate) async fn get_collection_by_id(
     ctx: Arc<AppContext>,
     collection_id: &str,
+) -> Result<Arc<Collection>, CollectionsError> {
+    let collection = repo::get_collection_by_name(ctx, collection_id).await?;
+    Ok(collection)
+}
+
+/// gets dense index by collection id
+/// currently collection_id = collection.name
+pub(crate) async fn get_dense_index_by_id(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
 ) -> Result<Arc<DenseIndex>, CollectionsError> {
-    let dense_index = repo::get_dense_index_by_name(ctx, collection_id).await?;
-    Ok(dense_index)
+    let index = repo::get_dense_index_by_name(ctx, collection_id).await?;
+    Ok(index)
 }
 
 pub(crate) async fn delete_collection_by_id(

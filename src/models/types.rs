@@ -656,6 +656,23 @@ impl CollectionsMap {
         self.inner.get(name).map(|index| index.clone())
     }
 
+    /// Returns the `Collection` by collection's name
+    ///
+    /// If not found, None is returned
+    ///
+    /// Note that it tried to look up the Collections in the DashMap
+    /// only and doesn't check LMDB. This is because of the assumption
+    /// that at startup, all collections will be loaded from LMDB
+    /// into the in-memory DashMap and when a new collection is
+    /// added, it will be written to the DashMap as well.
+    ///
+    /// @TODO: As a future improvement, we can fallback to checking if
+    /// the Collection exists in LMDB and caching it. But it's not
+    /// required for the current use case.
+    pub fn get_collection(&self, name: &str) -> Option<Arc<Collection>> {
+        self.inner_collections.get(name).map(|index| index.clone())
+    }
+
     pub fn remove(&self, name: &str) -> Result<Option<(String, Arc<DenseIndex>)>, WaCustomError> {
         match self.inner.remove(name) {
             Some((key, index)) => {
