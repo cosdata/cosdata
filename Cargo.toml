@@ -115,3 +115,11 @@ harness = false
 [[bench]]
 name = "sparse_ann_query_new_ds_benchmark"
 harness = false
+
+[[bench]]
+name = "sparse_ann_query_basic_dashmap_benchmark"
+harness = false
+
+[[bench]]
+name = "sparse_ann_query_tshashmap_benchmark"
+harness = false

@@ -8,7 +8,6 @@ pub mod sparse_ann_query;
 pub mod sparse_ann_query_basic;
 pub mod sparse_ann_query_new_ds;
 
-
 use half::f16;
 use serde::{Deserialize, Serialize};
 
