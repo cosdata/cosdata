@@ -1,5 +1,6 @@
 use super::buffered_io::BufferManagerFactory;
 use super::cache_loader::NodeRegistry;
+use super::collection::Collection;
 use super::meta_persist::{
     delete_dense_index, lmdb_init_collections_db, lmdb_init_db, load_collections,
     load_dense_index_data, persist_dense_index, retrieve_current_version,
@@ -475,7 +476,7 @@ pub struct RawVectorEmbedding {
     pub hash_vec: VectorId,
 }
 
-pub struct CollectionsMap {
+pub(crate) struct CollectionsMap {
     /// holds an in-memory map of all dense indexes for all collections
     inner: DashMap<String, Arc<DenseIndex>>,
     lmdb_env: Arc<Environment>,
@@ -506,12 +507,12 @@ impl CollectionsMap {
     /// In doing so, the root vec for all collections' dense indexes are loaded into
     /// memory, which also ends up warming the cache (NodeRegistry)
     fn load(env: Arc<Environment>) -> Result<Self, WaCustomError> {
-        let collection_map =
+        let collections_map =
             Self::new(env.clone()).map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
         let collections = load_collections(
-            &collection_map.lmdb_env,
-            collection_map.lmdb_collections_db.clone(),
+            &collections_map.lmdb_env,
+            collections_map.lmdb_collections_db.clone(),
         )
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
@@ -520,72 +521,99 @@ impl CollectionsMap {
         // let bufmans = cache.get_bufmans();
 
         for coll in collections {
-            let collection_path: Arc<Path> = root_path.join(&coll.name).into();
-            let index_manager = Arc::new(BufferManagerFactory::new(
-                collection_path.clone(),
-                |root, ver| root.join(format!("{}.index", **ver)),
-            ));
-            let vec_raw_manager = Arc::new(BufferManagerFactory::new(
-                collection_path.clone(),
-                |root, ver| root.join(format!("{}.vec_raw", **ver)),
-            ));
-            // TODO: May be the value can be taken from config
-            let cache = Arc::new(NodeRegistry::new(1000, index_manager.clone()));
+            // if collection has dense index load it from the lmdb
+            if coll.dense_vector.enabled {
+                let dense_index = collections_map.load_dense_index(&coll, root_path)?;
+                collections_map
+                    .inner
+                    .insert(coll.name, Arc::new(dense_index));
+            }
 
-            let db = Arc::new(
-                env.create_db(Some(&coll.name), DatabaseFlags::empty())
-                    .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?,
-            );
-            // TODO: this step should be done conditionally if the collection has a dense index
-            let dense_index_data =
-                load_dense_index_data(&env, collection_map.lmdb_dense_index_db, &coll.get_key())
-                    .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-
-            let root_item: LazyItem<MergedNode> = LazyItem::deserialize(
-                index_manager.clone(),
-                dense_index_data.file_index,
-                cache.clone(),
-                1000,
-                &mut HashSet::new(),
-            )?;
-            let root = LazyItemRef::from_lazy(root_item);
-
-            let vcs = Arc::new(VersionControl::from_existing(env.clone(), db.clone()));
-            let prop_file = Arc::new(
-                OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(collection_path.join("prop.data"))
-                    .unwrap(),
-            );
-            let lmdb = MetaDb {
-                env: env.clone(),
-                db,
-            };
-            let current_version = retrieve_current_version(&lmdb)?;
-            let dense_index = DenseIndex::new(
-                STM::new(Vec::new(), 1, true),
-                dense_index_data.max_level,
-                coll.name.clone(),
-                root,
-                dense_index_data.levels_prob,
-                dense_index_data.quant_dim,
-                prop_file.clone(),
-                lmdb,
-                ArcShift::new(current_version),
-                dense_index_data.quantization_metric.clone(),
-                dense_index_data.distance_metric.clone(),
-                dense_index_data.storage_type,
-                vcs,
-                cache,
-                index_manager,
-                vec_raw_manager,
-            );
-            collection_map
-                .inner
-                .insert(coll.name, Arc::new(dense_index));
+            // if collection has inverted index load it from the lmdb
+            if coll.sparse_vector.enabled {
+                println!("inverted index should be loaded here!")
+            }
         }
-        Ok(collection_map)
+        Ok(collections_map)
+    }
+
+    /// loads and initiates the dense index of a collection from lmdb
+    ///
+    /// In doing so, the root vec for all collections' dense indexes are loaded into
+    /// memory, which also ends up warming the cache (NodeRegistry)
+    fn load_dense_index(
+        &self,
+        coll: &Collection,
+        root_path: &Path,
+    ) -> Result<DenseIndex, WaCustomError> {
+        let collection_path: Arc<Path> = root_path.join(&coll.name).into();
+
+        let index_manager = Arc::new(BufferManagerFactory::new(
+            collection_path.clone(),
+            |root, ver| root.join(format!("{}.index", **ver)),
+        ));
+        let vec_raw_manager = Arc::new(BufferManagerFactory::new(
+            collection_path.clone(),
+            |root, ver| root.join(format!("{}.vec_raw", **ver)),
+        ));
+        // TODO: May be the value can be taken from config
+        let cache = Arc::new(NodeRegistry::new(1000, index_manager.clone()));
+
+        let db = Arc::new(
+            self.lmdb_env
+                .create_db(Some(&coll.name), DatabaseFlags::empty())
+                .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?,
+        );
+
+        let dense_index_data =
+            load_dense_index_data(&self.lmdb_env, self.lmdb_dense_index_db, &coll.get_key())
+                .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+        let root_item: LazyItem<MergedNode> = LazyItem::deserialize(
+            index_manager.clone(),
+            dense_index_data.file_index,
+            cache.clone(),
+            1000,
+            &mut HashSet::new(),
+        )?;
+        let root = LazyItemRef::from_lazy(root_item);
+
+        let vcs = Arc::new(VersionControl::from_existing(
+            self.lmdb_env.clone(),
+            db.clone(),
+        ));
+        let prop_file = Arc::new(
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(collection_path.join("prop.data"))
+                .unwrap(),
+        );
+        let lmdb = MetaDb {
+            env: self.lmdb_env.clone(),
+            db,
+        };
+        let current_version = retrieve_current_version(&lmdb)?;
+        let dense_index = DenseIndex::new(
+            STM::new(Vec::new(), 1, true),
+            dense_index_data.max_level,
+            coll.name.clone(),
+            root,
+            dense_index_data.levels_prob,
+            dense_index_data.quant_dim,
+            prop_file.clone(),
+            lmdb,
+            ArcShift::new(current_version),
+            dense_index_data.quantization_metric.clone(),
+            dense_index_data.distance_metric.clone(),
+            dense_index_data.storage_type,
+            vcs,
+            cache,
+            index_manager,
+            vec_raw_manager,
+        );
+
+        Ok(dense_index)
     }
 
     pub fn insert(&self, name: &str, dense_index: Arc<DenseIndex>) -> Result<(), WaCustomError> {
