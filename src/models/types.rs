@@ -479,6 +479,7 @@ pub struct RawVectorEmbedding {
 pub(crate) struct CollectionsMap {
     /// holds an in-memory map of all dense indexes for all collections
     inner: DashMap<String, Arc<DenseIndex>>,
+    inner_collections: DashMap<String, Arc<Collection>>,
     lmdb_env: Arc<Environment>,
     // made it public temporarily
     // just to be able to persist collections from outside CollectionsMap
@@ -494,6 +495,7 @@ impl CollectionsMap {
         let inverted_index_db = lmdb_init_db(&env, "inverted_indexes")?;
         let res = Self {
             inner: DashMap::new(),
+            inner_collections: DashMap::new(),
             lmdb_env: env,
             lmdb_collections_db: collections_db,
             lmdb_dense_index_db: dense_index_db,
@@ -521,12 +523,17 @@ impl CollectionsMap {
         // let bufmans = cache.get_bufmans();
 
         for coll in collections {
+            let coll = Arc::new(coll);
+            collections_map
+                .inner_collections
+                .insert(coll.name.clone(), coll.clone());
+
             // if collection has dense index load it from the lmdb
             if coll.dense_vector.enabled {
                 let dense_index = collections_map.load_dense_index(&coll, root_path)?;
                 collections_map
                     .inner
-                    .insert(coll.name, Arc::new(dense_index));
+                    .insert(coll.name.clone(), Arc::new(dense_index));
             }
 
             // if collection has inverted index load it from the lmdb
@@ -625,6 +632,13 @@ impl CollectionsMap {
         )
     }
 
+    /// inserts a collection into the collections map
+    pub fn insert_collection(&self, collection: Arc<Collection>) -> Result<(), WaCustomError> {
+        self.inner_collections
+            .insert(collection.name.to_owned(), collection);
+        Ok(())
+    }
+
     /// Returns the `DenseIndex` by collection's name
     ///
     /// If not found, None is returned
@@ -666,6 +680,18 @@ impl CollectionsMap {
         DashMap<String, Arc<DenseIndex>>,
     > {
         self.inner.iter()
+    }
+
+    /// returns an iterator
+    pub fn iter_collections(
+        &self,
+    ) -> dashmap::iter::Iter<
+        String,
+        Arc<Collection>,
+        std::hash::RandomState,
+        DashMap<String, Arc<Collection>>,
+    > {
+        self.inner_collections.iter()
     }
 }
 

@@ -8,7 +8,7 @@ use crate::{
 };
 
 use super::{
-    dtos::{CreateCollectionDto, FindCollectionDto, GetCollectionsDto},
+    dtos::{CreateCollectionDto, GetCollectionsDto, GetCollectionsResponseDto},
     error::CollectionsError,
 };
 
@@ -35,6 +35,13 @@ pub(crate) async fn create_collection(
         config,
     )
     .map_err(|e| CollectionsError::WaCustomError(e))?;
+
+    // adding the created collection into the in-memory map
+    ctx.ain_env
+        .collections_map
+        .insert_collection(Arc::new(collection.clone()))
+        .map_err(|e| CollectionsError::WaCustomError(e))?;
+
     // persisting collection after creation
     // note that CollectionsMap has similar functionality to
     // persist collections on the disk
@@ -89,22 +96,23 @@ pub(crate) async fn create_inverted_index(
     result.map_err(|e| CollectionsError::FailedToCreateCollection(e.to_string()))
 }
 
-/// gets a dense_index for a collection
-pub(crate) async fn get_dense_index(
+/// gets a list of collections
+/// TODO results should be filtered based on search params,
+/// if no params provided, it returns all collections
+pub(crate) async fn get_collections(
     ctx: Arc<AppContext>,
     _get_collections_dto: GetCollectionsDto,
-) -> Result<Vec<FindCollectionDto>, CollectionsError> {
-    let dense_index = ctx
+) -> Result<Vec<GetCollectionsResponseDto>, CollectionsError> {
+    let collections = ctx
         .ain_env
         .collections_map
-        .iter()
-        .map(|v| FindCollectionDto {
-            id: v.database_name.clone(),
-            dimensions: v.quant_dim,
-            vector_db_name: v.database_name.clone(),
+        .iter_collections()
+        .map(|c| GetCollectionsResponseDto {
+            name: c.name.clone(),
+            description: c.description.clone(),
         })
         .collect();
-    Ok(dense_index)
+    Ok(collections)
 }
 
 /// gets a dense index for a collection by name

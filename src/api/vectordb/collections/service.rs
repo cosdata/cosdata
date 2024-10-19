@@ -7,7 +7,8 @@ use crate::{
 
 use super::{
     dtos::{
-        CreateCollectionDto, CreateCollectionDtoResponse, FindCollectionDto, GetCollectionsDto,
+        CreateCollectionDto, CreateCollectionDtoResponse, GetCollectionsDto,
+        GetCollectionsResponseDto,
     },
     error::CollectionsError,
     repo,
@@ -62,8 +63,8 @@ pub(crate) async fn create_collection(
 pub(crate) async fn get_collections(
     ctx: Arc<AppContext>,
     get_collections_dto: GetCollectionsDto,
-) -> Result<Vec<FindCollectionDto>, CollectionsError> {
-    let collections = repo::get_dense_index(ctx, get_collections_dto).await?;
+) -> Result<Vec<GetCollectionsResponseDto>, CollectionsError> {
+    let collections = repo::get_collections(ctx, get_collections_dto).await?;
     Ok(collections)
 }
 
