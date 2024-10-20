@@ -167,26 +167,17 @@ pub async fn init_dense_index_for_collection(
     Ok(dense_index)
 }
 
-pub async fn init_inverted_index(
+/// creates an inverted index for a collection
+pub async fn init_inverted_index_for_collection(
     ctx: Arc<AppContext>,
-    name: String,
-    description: Option<String>,
-    auto_create_index: bool,
-    metadata_schema: Option<String>,
-    max_vectors: Option<i32>,
-    replication_factor: Option<i32>,
+    collection: &Collection,
 ) -> Result<Arc<InvertedIndex>, WaCustomError> {
-    if name.is_empty() {
-        return Err(WaCustomError::InvalidParams);
-    }
-
-    let collection_path: Arc<Path> = Path::new(&name).into();
-
-    fs::create_dir_all(&collection_path).map_err(|e| WaCustomError::FsError(e.to_string()))?;
+    let collection_name = &collection.name;
+    let collection_path: Arc<Path> = collection.get_path();
 
     let env = ctx.ain_env.persist.clone();
 
-    let lmdb = MetaDb::from_env(env.clone(), &name)
+    let lmdb = MetaDb::from_env(env.clone(), &collection_name)
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
     let (vcs, hash) = VersionControl::new(env.clone(), lmdb.db.clone())
@@ -200,17 +191,17 @@ pub async fn init_inverted_index(
         fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open("prop.data")
+            .open(collection_path.join("prop.data"))
             .map_err(|e| WaCustomError::FsError(e.to_string()))?,
     );
 
     let index = InvertedIndex::new(
-        name,
-        description,
-        auto_create_index,
-        metadata_schema,
-        max_vectors,
-        replication_factor,
+        collection_name.clone(),
+        collection.description.clone(),
+        collection.sparse_vector.auto_create_index,
+        collection.metadata_schema.clone(),
+        collection.config.max_vectors,
+        collection.config.replication_factor,
         prop_file,
         lmdb,
         ArcShift::new(hash),

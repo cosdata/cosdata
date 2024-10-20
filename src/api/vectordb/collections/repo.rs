@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    api_service::{init_dense_index_for_collection, init_inverted_index},
+    api_service::{init_dense_index_for_collection, init_inverted_index_for_collection},
     app_context::AppContext,
     indexes::inverted_index::InvertedIndex,
     models::{collection::Collection, types::DenseIndex},
@@ -43,9 +43,6 @@ pub(crate) async fn create_collection(
         .map_err(|e| CollectionsError::WaCustomError(e))?;
 
     // persisting collection after creation
-    // note that CollectionsMap has similar functionality to
-    // persist collections on the disk
-    // TODO rework CollectionsMap
     let _ = collection
         .persist(env, collections_db.clone())
         .map_err(|e| CollectionsError::WaCustomError(e));
@@ -74,25 +71,12 @@ pub(crate) async fn create_dense_index(
     result.map_err(|e| CollectionsError::FailedToCreateCollection(e.to_string()))
 }
 
+/// creates an inverted index for a collection
 pub(crate) async fn create_inverted_index(
     ctx: Arc<AppContext>,
-    name: &str,
-    description: &Option<String>,
-    auto_create_index: bool,
-    metadata_schema: &Option<String>,
-    max_vectors: Option<i32>,
-    replication_factor: Option<i32>,
+    collection: &Collection,
 ) -> Result<Arc<InvertedIndex>, CollectionsError> {
-    let result = init_inverted_index(
-        ctx,
-        name.into(),
-        description.clone(),
-        auto_create_index,
-        metadata_schema.clone(),
-        max_vectors,
-        replication_factor,
-    )
-    .await;
+    let result = init_inverted_index_for_collection(ctx, collection).await;
     result.map_err(|e| CollectionsError::FailedToCreateCollection(e.to_string()))
 }
 

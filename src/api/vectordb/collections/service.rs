@@ -20,43 +20,25 @@ pub(crate) async fn create_collection(
 ) -> Result<CreateCollectionDtoResponse, CollectionsError> {
     let collection = &repo::create_collection(ctx.clone(), create_collection_dto).await?;
 
-    let Collection {
-        name,
-        description,
-        config,
-        dense_vector,
-        metadata_schema,
-        sparse_vector,
-    } = collection;
-
-    if dense_vector.enabled {
+    if collection.dense_vector.enabled {
         let _ = repo::create_dense_index(
             ctx.clone(),
             collection,
-            dense_vector.dimension as usize,
+            collection.dense_vector.dimension as usize,
             None,
             None,
             5,
         )
         .await?;
     }
-    if sparse_vector.enabled {
-        let _ = repo::create_inverted_index(
-            ctx,
-            name,
-            description,
-            sparse_vector.auto_create_index,
-            metadata_schema,
-            config.max_vectors,
-            config.replication_factor,
-        )
-        .await?;
+    if collection.sparse_vector.enabled {
+        let _ = repo::create_inverted_index(ctx, collection).await?;
     }
 
     Ok(CreateCollectionDtoResponse {
-        id: name.clone(),
-        name: name.clone(),
-        description: description.clone(),
+        id: collection.name.clone(),
+        name: collection.name.clone(),
+        description: collection.description.clone(),
     })
 }
 
@@ -69,7 +51,7 @@ pub(crate) async fn get_collections(
 }
 
 /// gets a collection by its id
-/// 
+///
 /// currently collection_id = collection.name
 pub(crate) async fn get_collection_by_id(
     ctx: Arc<AppContext>,
@@ -80,7 +62,7 @@ pub(crate) async fn get_collection_by_id(
 }
 
 /// gets dense index by collection id
-/// 
+///
 /// currently collection_id = collection.name
 pub(crate) async fn get_dense_index_by_id(
     ctx: Arc<AppContext>,
