@@ -16,3 +16,4 @@ _mdb
 *.index
 *.vec_raw
 venv
+/collections/

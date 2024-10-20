@@ -15,3 +15,4 @@ pub mod serializer;
 pub mod types;
 pub mod user;
 pub mod versioning;
+pub mod collection;

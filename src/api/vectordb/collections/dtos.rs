@@ -1,32 +1,29 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
-pub(crate) struct FindCollectionDto {
-    pub id: String,
-    pub vector_db_name: String,
-    pub dimensions: usize,
-    // pub max_val: Option<f32>,
-    // pub min_val: Option<f32>,
-    // pub created_at: String, //vector stores doesn't store their time of creation
-}
+use crate::models::collection::{CollectionConfig, DenseVectorOptions, SparseVectorOptions};
 
 #[derive(Deserialize)]
 pub(crate) struct CreateCollectionDto {
-    pub vector_db_name: String,
-    pub dimensions: i32,
-    pub max_val: Option<f32>,
-    pub min_val: Option<f32>,
+    pub name: String,
+    pub description: Option<String>,
+    pub dense_vector: DenseVectorOptions,
+    pub sparse_vector: SparseVectorOptions,
+    pub metadata_schema: Option<String>, //object (optional)
+    pub config: CollectionConfig,
 }
 
 #[derive(Serialize)]
 pub(crate) struct CreateCollectionDtoResponse {
     pub id: String,
     pub name: String,
-    pub dimensions: usize,
-    pub min_val: Option<f32>,
-    pub max_val: Option<f32>,
-    // pub created_at: String, // will be added when vector store has a creation timestamp
+    pub description: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub(crate) struct GetCollectionsDto {}
+
+#[derive(Serialize)]
+pub(crate) struct GetCollectionsResponseDto {
+    pub name: String,
+    pub description: Option<String>,
+}

@@ -22,11 +22,11 @@ pub(crate) async fn create_vector(
     collection_id: &str,
     create_vector_dto: CreateVectorDto,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
-    let collection = collections::service::get_collection_by_id(ctx.clone(), collection_id)
+    let dense_index = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
         .await
         .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
 
-    let mut current_open_transaction_arc = collection.current_open_transaction.clone();
+    let mut current_open_transaction_arc = dense_index.current_open_transaction.clone();
 
     if current_open_transaction_arc.get().is_some() {
         return Err(VectorsError::FailedToCreateVector(
@@ -36,7 +36,7 @@ pub(crate) async fn create_vector(
 
     run_upload(
         ctx,
-        collection,
+        dense_index,
         vec![(
             create_vector_dto.id.clone(),
             create_vector_dto.values.clone(),
@@ -55,11 +55,11 @@ pub(crate) async fn create_vector_in_transaction(
     transaction_id: Hash,
     create_vector_dto: CreateVectorDto,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
-    let collection = collections::service::get_collection_by_id(ctx.clone(), collection_id)
+    let dense_index = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
         .await
         .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
     run_upload_in_transaction(
-        collection,
+        dense_index,
         transaction_id,
         vec![(
             create_vector_dto.id.clone(),
@@ -86,11 +86,11 @@ pub(crate) async fn update_vector(
     vector_id: VectorIdValue,
     update_vector_dto: UpdateVectorDto,
 ) -> Result<UpdateVectorResponseDto, VectorsError> {
-    let collection = collections::service::get_collection_by_id(ctx.clone(), collection_id)
+    let dense_index = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
         .await
         .map_err(|e| VectorsError::FailedToUpdateVector(e.to_string()))?;
 
-    let mut current_open_transaction_arc = collection.current_open_transaction.clone();
+    let mut current_open_transaction_arc = dense_index.current_open_transaction.clone();
 
     if current_open_transaction_arc.get().is_some() {
         return Err(VectorsError::FailedToUpdateVector(
@@ -100,7 +100,7 @@ pub(crate) async fn update_vector(
 
     run_upload(
         ctx,
-        collection,
+        dense_index,
         vec![(vector_id.clone(), update_vector_dto.values.clone())],
     )
     .map_err(VectorsError::WaCustom)?;
