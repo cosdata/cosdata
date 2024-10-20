@@ -146,6 +146,30 @@ pub(crate) async fn get_dense_index_by_name(
     Ok(dense_index)
 }
 
+pub(crate) async fn delete_collection_by_name(
+    ctx: Arc<AppContext>,
+    name: &str,
+) -> Result<Arc<Collection>, CollectionsError> {
+    let env = &ctx.ain_env.persist;
+    let collections_db = &ctx.ain_env.collections_map.lmdb_collections_db;
+
+    let collection = get_collection_by_name(ctx.clone(), name).await?;
+
+    // deleting collection from disk
+    collection
+        .delete(env, collections_db.clone())
+        .map_err(|e| CollectionsError::WaCustomError(e))?;
+
+    // deleting collection from in-memory map
+    let collection = ctx
+        .ain_env
+        .collections_map
+        .remove_collection(name)
+        .map_err(|e| CollectionsError::WaCustomError(e))?;
+
+    Ok(collection)
+}
+
 /// deletes a dense index of a collection by name
 pub(crate) async fn delete_dense_index_by_name(
     ctx: Arc<AppContext>,

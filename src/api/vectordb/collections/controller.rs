@@ -6,7 +6,7 @@ use actix_web::{
 use crate::app_context::AppContext;
 
 use super::{
-    dtos::{CreateCollectionDto, FindCollectionDto, GetCollectionsDto},
+    dtos::{CreateCollectionDto, GetCollectionsDto},
     service,
 };
 
@@ -41,9 +41,5 @@ pub(crate) async fn delete_collection_by_id(
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse> {
     let collection = service::delete_collection_by_id(ctx.into_inner(), &collection_id).await?;
-    Ok(HttpResponse::Ok().json(FindCollectionDto {
-        id: collection.database_name.clone(),
-        dimensions: collection.quant_dim,
-        vector_db_name: collection.database_name.clone(),
-    }))
+    Ok(HttpResponse::Ok().json(collection))
 }

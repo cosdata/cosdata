@@ -105,4 +105,20 @@ impl Collection {
 
         Ok(())
     }
+
+    /// deletes a collection instance from the disk (lmdb -> collections database)
+    pub fn delete(&self, env: &Environment, db: Database) -> Result<(), WaCustomError> {
+        let key = self.get_key();
+
+        let mut txn = env
+            .begin_rw_txn()
+            .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+        txn.del(db, &key, None)
+            .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+        txn.commit()
+            .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+        Ok(())
+    }
 }

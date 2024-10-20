@@ -69,6 +69,7 @@ pub(crate) async fn get_collections(
 }
 
 /// gets a collection by its id
+/// 
 /// currently collection_id = collection.name
 pub(crate) async fn get_collection_by_id(
     ctx: Arc<AppContext>,
@@ -79,6 +80,7 @@ pub(crate) async fn get_collection_by_id(
 }
 
 /// gets dense index by collection id
+/// 
 /// currently collection_id = collection.name
 pub(crate) async fn get_dense_index_by_id(
     ctx: Arc<AppContext>,
@@ -88,10 +90,13 @@ pub(crate) async fn get_dense_index_by_id(
     Ok(index)
 }
 
+/// deletes a collection by its id
+///
+/// currently collection_id = collection.name
 pub(crate) async fn delete_collection_by_id(
     ctx: Arc<AppContext>,
     collection_id: &str,
-) -> Result<Arc<DenseIndex>, CollectionsError> {
-    let dense_index = repo::delete_dense_index_by_name(ctx, collection_id).await?;
-    Ok(dense_index)
+) -> Result<Arc<Collection>, CollectionsError> {
+    let collection = repo::delete_collection_by_name(ctx, collection_id).await?;
+    Ok(collection)
 }

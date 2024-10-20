@@ -688,6 +688,21 @@ impl CollectionsMap {
         }
     }
 
+    /// removes a collection from the in-memory map
+    ///
+    /// returns the removed collection in case of success
+    ///
+    /// returns error if not found
+    pub fn remove_collection(&self, name: &str) -> Result<Arc<Collection>, WaCustomError> {
+        match self.inner_collections.remove(name) {
+            Some((_, collection)) => Ok(collection),
+            None => {
+                // collection not found, return an error response
+                return Err(WaCustomError::NotFound("collection".into()));
+            }
+        }
+    }
+
     pub fn iter(
         &self,
     ) -> dashmap::iter::Iter<
