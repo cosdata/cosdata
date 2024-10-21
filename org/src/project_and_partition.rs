@@ -4,62 +4,62 @@
 // Randomly picks 100 vectors from the base vectors and generates perturbation of each,
 // and saves them as query vectors.
 //
-// A sample run with same `vectors` and `query`
+// A sample run with 10M vectors.
 //
 // ## Brute force
 //
-// 01. 43148:13 (0.8465757)
-// 02. 43148:83 (0.8402604)
-// 03. 43148:52 (0.8391722)
-// 04. 43148:41 (0.83780986)
-// 05. 43148:95 (0.8375291)
-// 06. 43148:49 (0.8367006)
-// 07. 43148:6  (0.836649)
-// 08. 43148:19 (0.8357567)
-// 09. 43148:53 (0.83417034)
-// 10. 43148:16 (0.83392346)
-// 11. 43148:17 (0.83354986)
-// 12. 43148:29 (0.83285147)
-// 13. 43148:9  (0.832588)
-// 14. 43148:48 (0.8313629)
-// 15. 43148:25 (0.8308406)
-// 16. 43148:50 (0.8307434)
-// 17. 43148:18 (0.83015645)
-// 18. 43148:82 (0.82967573)
-// 19. 43148:5  (0.8270634)
-// 20. 43148:24 (0.8268056)
+// 01. 73303:25 (0.82679725)
+// 02. 73303:24 (0.82381266)
+// 03. 73303:63 (0.82380205)
+// 04. 73303:23 (0.8174631)
+// 05. 73303:84 (0.8103554)
+// 06. 73303:65 (0.8101841)
+// 07. 73303:87 (0.80889463)
+// 08. 73303:67 (0.8088855)
+// 09. 73303:98 (0.8085643)
+// 10. 73303:39 (0.80775493)
+// 11. 73303:70 (0.80716753)
+// 12. 73303:73 (0.80707437)
+// 13. 73303:46 (0.8068478)
+// 14. 73303:86 (0.80590945)
+// 15. 73303:57 (0.80557406)
+// 16. 73303:97 (0.80540997)
+// 17. 73303:37 (0.8049393)
+// 18. 73303:92 (0.8028671)
+// 19. 73303:62 (0.8019657)
+// 20. 73303:1  (0.8018392)
 //
 // ## Project & Partition
 //
-// 01. 43148:13 (0.8465757)
-// 02. 43148:83 (0.8402604)
-// 03. 43148:52 (0.8391722)
-// 04. 43148:41 (0.83780986)
-// 05. 43148:95 (0.8375291)
-// 06. 43148:49 (0.8367006)
-// 07. 43148:6  (0.836649)
-// 08. 43148:19 (0.8357567)
-// 09. 43148:16 (0.83392346)
-// 10. 43148:17 (0.83354986)
-// 11. 43148:29 (0.83285147)
-// 12. 43148:9  (0.832588)
-// 13. 43148:48 (0.8313629)
-// 14. 43148:25 (0.8308406)
-// 15. 43148:50 (0.8307434)
-// 16. 43148:82 (0.82967573)
-// 17. 43148:5  (0.8270634)
-// 18. 43148:24 (0.8268056)
-// 19. 43148:35 (0.82625026)
-// 20. 43148:88 (0.82524896)
+// 01. 73303:25 (0.82679725)
+// 02. 73303:24 (0.82381266)
+// 03. 73303:63 (0.82380205)
+// 04. 73303:23 (0.8174631)
+// 05. 73303:84 (0.8103554)
+// 06. 73303:87 (0.80889463)
+// 07. 73303:67 (0.8088855)
+// 08. 73303:98 (0.8085643)
+// 09. 73303:39 (0.80775493)
+// 10. 73303:70 (0.80716753)
+// 11. 73303:73 (0.80707437)
+// 12. 73303:46 (0.8068478)
+// 13. 73303:86 (0.80590945)
+// 14. 73303:57 (0.80557406)
+// 15. 73303:97 (0.80540997)
+// 16. 73303:37 (0.8049393)
+// 17. 73303:92 (0.8028671)
+// 18. 73303:62 (0.8019657)
+// 19. 73303:1  (0.8018392)
+// 20. 73303:59 (0.800483)
 //
 // ## Performance
 //
 // Brute force:
-//   - Query time: ~ 2.47s
+//   - Query time: ~ 12s
 //
 // Project & Partition:
-//   - Index creation time: ~ 46s
-//   - Query time: ~ 342ms
+//   - Index creation time: ~ 92s
+//   - Query time: ~ 469ms
 
 use std::{
     cmp::Ordering,
@@ -214,11 +214,12 @@ fn make_index(v: &[ProjectedValue]) -> (u16, Vec<u16>) {
     (main_index, alt_indices)
 }
 
-const VECTORS_COUNT: usize = 50_000;
+const VECTORS_COUNT: usize = 100_000;
 const PERTURBATIONS_COUNT: usize = 100;
 const QUERIES_COUNT: usize = 100;
 const DIMENSION: usize = 640;
 const TARGET_DIMENSION: usize = 16;
+const PARTITIONS_COUNT: usize = 2usize.pow(TARGET_DIMENSION as u32);
 
 fn serialize_results(results: Vec<(usize, f32)>) -> String {
     let mut out = String::new();
@@ -263,19 +264,9 @@ fn run_tests_bf(vectors: &[Vec<f32>], queries: &[Vec<f32>]) {
     }
 }
 
-const PARTITIONS_COUNT: usize = 2usize.pow(TARGET_DIMENSION as u32) + 1;
-
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct Partition {
     vectors: Vec<usize>,
-}
-
-impl Default for Partition {
-    fn default() -> Self {
-        Self {
-            vectors: Vec::new(),
-        }
-    }
 }
 
 // project and partition
@@ -295,8 +286,8 @@ fn run_tests_pp(vectors: &[Vec<f32>], queries: &[Vec<f32>]) {
 
         let insert_in_main = !alt_index.contains(&main_index);
 
-        for index in &alt_index {
-            let partition = &mut partitions[*index as usize];
+        for index in alt_index {
+            let partition = &mut partitions[index as usize];
             partition.vectors.push(i);
             total_inserted_vectors += 1;
         }
@@ -323,7 +314,7 @@ fn run_tests_pp(vectors: &[Vec<f32>], queries: &[Vec<f32>]) {
     for (i, query) in queries.into_iter().enumerate() {
         println!("\nTest#{}", i + 1);
         let start = Instant::now();
-        let projected = project_vector_to_x(&query, TARGET_DIMENSION);
+        let projected = project_vector_to_x(query, TARGET_DIMENSION);
         let (main_index, alt_index) = make_index(&projected);
         let mut skip_partitions = vec![false; PARTITIONS_COUNT];
 
@@ -453,6 +444,6 @@ fn main() {
             generate_random_vecs_and_save_to_file()
         };
 
-    run_tests_bf(&vectors, &queries);
+    // run_tests_bf(&vectors, &queries);
     run_tests_pp(&vectors, &queries);
 }
