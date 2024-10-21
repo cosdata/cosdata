@@ -4,21 +4,24 @@ use crate::models::buffered_io::BufferManager;
 use crate::models::common::*;
 use crate::models::file_persist::*;
 use crate::models::identity_collections::IdentitySet;
+use crate::models::kmeans::{concat_vectors, generate_initial_centroids, kmeans, should_continue};
 use crate::models::lazy_load::*;
+use crate::models::meta_persist::store_current_version;
 use crate::models::types::*;
 use crate::models::versioning::Hash;
-use crate::quantization::Quantization;
+use crate::quantization::{Quantization, StorageType};
 use crate::storage::Storage;
 use arcshift::ArcShift;
-use lmdb::Transaction;
-use lmdb::WriteFlags;
-use rayon::iter::IntoParallelIterator;
-use rayon::iter::ParallelIterator;
+use lmdb::{Transaction, WriteFlags};
+use rand::{thread_rng, Rng};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use smallvec::SmallVec;
 use std::array::TryFromSliceError;
 use std::cmp::Ordering;
 use std::collections::HashSet;
+use std::fs::OpenOptions;
 use std::io::SeekFrom;
+use std::path::Path;
 use std::sync::Arc;
 
 pub fn ann_search(
@@ -49,7 +52,6 @@ pub fn ann_search(
         vec_store.clone(),
         cur_entry.clone(),
         fvec.clone(),
-        vector_emb.hash_vec.clone(),
         0,
         &mut skipm,
         cur_level,
@@ -86,7 +88,7 @@ pub fn vector_fetch(
 ) -> Result<Vec<Option<(VectorId, Vec<(VectorId, MetricResult)>)>>, WaCustomError> {
     let mut results = Vec::new();
 
-    for lev in 0..vec_store.max_cache_level {
+    for lev in 0..=vec_store.hnsw_params.clone().get().num_layers {
         let maybe_res = load_vector_id_lsmdb(HNSWLevel(lev), vector_id.clone());
         let neighbors = maybe_res
             .try_get_data(vec_store.cache.clone())
@@ -169,6 +171,84 @@ impl EmbeddingOffset {
     }
 }
 
+/// Retrieves a raw embedding vector from the vector store by its ID.
+///
+/// This function performs the following steps to retrieve the embedding:
+/// 1. Begins a read-write transaction with the LMDB environment.
+/// 2. Retrieves the serialized offset of the embedding from the database using the provided `vector_id`.
+/// 3. Deserializes the offset to obtain the embedding offset and version.
+/// 4. Uses a `BufferManagerFactory` to create a buffer manager for the appropriate version.
+/// 5. Reads the embedding from the buffer using the offset.
+///
+/// # Arguments
+///
+/// * `vec_store` - An `Arc`-wrapped `VectorStore` instance, which contains the LMDB environment and database for embeddings.
+/// * `vector_id` - The ID of the vector whose embedding is to be retrieved.
+///
+/// # Returns
+///
+/// * `Ok(RawVectorEmbedding)` - On success, returns the embedding associated with the given `vector_id`.
+/// * `Err(WaCustomError)` - On failure, returns a custom error indicating the reason for the failure.
+///
+/// # Errors
+///
+/// This function may return an `Err` variant of `WaCustomError` in cases where:
+/// * There is an error beginning the LMDB transaction (e.g., database access issues).
+/// * The `vector_id` does not exist in the database, leading to a failure when retrieving the serialized offset.
+/// * Deserialization of the embedding offset fails.
+/// * There are issues with accessing or reading from the buffer manager.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+/// use std::path::Path;
+/// use my_crate::{VectorStore, get_embedding_by_id, RawVectorEmbedding, WaCustomError, VectorId};
+///
+/// let vec_store = Arc::new(VectorStore::new());
+/// let vector_id = VectorId::Int(42); // Example vector ID
+/// match get_embedding_by_id(vec_store.clone(), vector_id) {
+///     Ok(embedding) => println!("Embedding: {:?}", embedding),
+///     Err(err) => eprintln!("Error retrieving embedding: {:?}", err),
+/// }
+/// ```
+///
+/// # Panics
+///
+/// This function does not panic.
+///
+/// # Notes
+///
+/// Ensure that the buffer manager and the database are correctly initialized and configured before calling this function.
+/// The function assumes the existence of methods and types like `EmbeddingOffset::deserialize`, `BufferManagerFactory::new`, and `read_embedding` which should be implemented correctly.
+pub fn get_embedding_by_id(
+    vec_store: Arc<VectorStore>,
+    vector_id: VectorId,
+) -> Result<RawVectorEmbedding, WaCustomError> {
+    let env = vec_store.lmdb.env.clone();
+    let db = vec_store.lmdb.db.clone();
+
+    let txn = env
+        .begin_rw_txn()
+        .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
+
+    let embedding_key = key!(e:vector_id);
+
+    let offset_serialized = txn.get(*db, &embedding_key).map_err(|e| {
+        WaCustomError::DatabaseError(format!("Failed to get serialized embedding offset: {}", e))
+    })?;
+
+    let embedding_offset = EmbeddingOffset::deserialize(offset_serialized)
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+    let offset = embedding_offset.offset;
+    let current_version = embedding_offset.version;
+    let bufman = vec_store.vec_raw_manager.get(&current_version)?;
+    let (embedding, _next) = read_embedding(bufman.clone(), offset)?;
+
+    Ok(embedding)
+}
+
 fn read_embedding(
     bufman: Arc<BufferManager>,
     offset: u32,
@@ -200,6 +280,39 @@ fn read_embedding(
     bufman.close_cursor(cursor)?;
 
     Ok((emb, next))
+}
+
+fn auto_config_storage_type(vec_store: Arc<VectorStore>, vectors: &[&[f32]]) {
+    let threshold = 0.0;
+    let iterations = 32;
+
+    let vec = concat_vectors(vectors);
+
+    // First iteration with k = 16
+    let initial_centroids_16 = generate_initial_centroids(&vec, 16);
+    let (_, counts_16) = kmeans(&vec, &initial_centroids_16, iterations);
+    let storage_type = if should_continue(&counts_16, threshold, 8) {
+        // Second iteration with k = 8
+        let initial_centroids_8 = generate_initial_centroids(&vec, 8);
+        let (_, counts_8) = kmeans(&vec, &initial_centroids_8, iterations);
+        if should_continue(&counts_8, threshold, 4) {
+            // Third iteration with k = 4
+            let initial_centroids_4 = generate_initial_centroids(&vec, 4);
+            let (_, counts_4) = kmeans(&vec, &initial_centroids_4, iterations);
+
+            if should_continue(&counts_4, threshold, 2) {
+                StorageType::SubByte(1)
+            } else {
+                StorageType::SubByte(2)
+            }
+        } else {
+            StorageType::SubByte(3)
+        }
+    } else {
+        StorageType::UnsignedByte
+    };
+
+    vec_store.storage_type.update_shared(storage_type);
 }
 
 pub fn insert_embedding(
@@ -238,25 +351,6 @@ pub fn insert_embedding(
 
     txn.put(*db, &embedding_key, &offset_serialized, WriteFlags::empty())
         .map_err(|e| WaCustomError::DatabaseError(format!("Failed to put data: {}", e)))?;
-    let current_version_bytes = current_version.to_le_bytes();
-
-    let should_update_next_version = match txn.get(*db, &"next_version") {
-        Ok(bytes) => bytes != &current_version_bytes,
-        Err(lmdb::Error::NotFound) => true,
-        Err(err) => {
-            return Err(WaCustomError::DatabaseError(err.to_string()));
-        }
-    };
-
-    if should_update_next_version {
-        txn.put(
-            *db,
-            &"next_version",
-            &current_version_bytes,
-            WriteFlags::empty(),
-        )
-        .map_err(|e| WaCustomError::DatabaseError(format!("Failed to put data: {}", e)))?;
-    }
 
     txn.put(
         *db,
@@ -308,13 +402,12 @@ pub fn index_embeddings(
         Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
     };
 
-    let version =
-        Hash::from(match txn.get(*db, &"next_version") {
-            Ok(bytes) => u32::from_le_bytes(bytes.try_into().map_err(|e: TryFromSliceError| {
-                WaCustomError::DeserializationError(e.to_string())
-            })?),
-            Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
-        });
+    let embedding_offset = match txn.get(*db, &"next_embedding_offset") {
+        Ok(bytes) => EmbeddingOffset::deserialize(bytes)
+            .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?,
+        Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
+    };
+    let version = embedding_offset.version;
     let version_hash = vec_store
         .vcs
         .get_version_hash(&version)
@@ -324,18 +417,42 @@ pub fn index_embeddings(
 
     txn.abort();
 
-    let mut index = |embeddings: Vec<RawVectorEmbedding>| -> Result<(), WaCustomError> {
+    let mut index = |embeddings: Vec<RawVectorEmbedding>,
+                     next_offset: u32|
+     -> Result<(), WaCustomError> {
+        let mut quantization_arc = vec_store.quantization_metric.clone();
+        // Set to auto config but is not configured
+        if vec_store.get_auto_config_flag() && !vec_store.get_configured_flag() {
+            let quantization = quantization_arc.get();
+            let mut new_quantization = quantization.clone();
+            let vectors: Vec<&[f32]> = embeddings
+                .iter()
+                .map(|embedding| &embedding.raw_vec as &[f32])
+                .collect();
+            new_quantization.train(&vectors)?;
+            quantization_arc.update(new_quantization);
+            auto_config_storage_type(vec_store.clone(), &vectors);
+            vec_store.set_configured_flag(true);
+        }
+        let quantization = quantization_arc.get();
         let results: Vec<()> = embeddings
             .into_par_iter()
             .map(|raw_emb| {
                 let lp = &vec_store.levels_prob;
                 let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
                 let quantized_vec = Arc::new(
-                    vec_store
-                        .quantization_metric
-                        .quantize(&raw_emb.raw_vec, vec_store.storage_type)
+                    quantization
+                        .quantize(
+                            &raw_emb.raw_vec,
+                            vec_store.storage_type.clone().get().clone(),
+                        )
                         .expect("Quantization failed"),
                 );
+                let prop = ArcShift::new(PropState::Ready(Arc::new(NodeProp {
+                    id: raw_emb.hash_vec.clone(),
+                    value: quantized_vec.clone(),
+                    location: None,
+                })));
                 let embedding = QuantizedVectorEmbedding {
                     quantized_vec,
                     hash_vec: raw_emb.hash_vec,
@@ -345,8 +462,9 @@ pub fn index_embeddings(
                     vec_store.clone(),
                     None,
                     embedding,
+                    prop,
                     vec_store.root_vec.item.clone().get().clone(),
-                    HNSWLevel(vec_store.max_cache_level),
+                    HNSWLevel(vec_store.hnsw_params.clone().get().num_layers),
                     HNSWLevel(iv.try_into().unwrap()),
                     version,
                     version_number,
@@ -361,6 +479,22 @@ pub fn index_embeddings(
 
         let mut txn = env.begin_rw_txn().map_err(|e| {
             WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e))
+        })?;
+
+        let next_embedding_offset = EmbeddingOffset {
+            version,
+            offset: next_offset,
+        };
+        let next_embedding_offset_serialized = next_embedding_offset.serialize();
+
+        txn.put(
+            *db,
+            &"next_embedding_offset",
+            &next_embedding_offset_serialized,
+            WriteFlags::empty(),
+        )
+        .map_err(|e| {
+            WaCustomError::DatabaseError(format!("Failed to update `next_embedding_offset`: {}", e))
         })?;
 
         txn.put(
@@ -392,7 +526,7 @@ pub fn index_embeddings(
 
     let bufman = vec_store.vec_raw_manager.get(&version)?;
 
-    let mut i = 0;
+    let mut i = embedding_offset.offset;
     let cursor = bufman.open_cursor()?;
     let file_len = bufman.seek_with_cursor(cursor, SeekFrom::End(0))? as u32;
     bufman.seek_with_cursor(cursor, SeekFrom::Start(0))?;
@@ -401,7 +535,7 @@ pub fn index_embeddings(
 
     loop {
         if i == file_len {
-            index(embeddings)?;
+            index(embeddings, i)?;
             bufman.close_cursor(cursor)?;
             break;
         }
@@ -411,7 +545,7 @@ pub fn index_embeddings(
         i = next;
 
         if embeddings.len() == upload_process_batch_size {
-            index(embeddings)?;
+            index(embeddings, i)?;
             embeddings = Vec::new();
         }
     }
@@ -423,6 +557,7 @@ pub fn index_embedding(
     vec_store: Arc<VectorStore>,
     parent: Option<LazyItem<MergedNode>>,
     vector_emb: QuantizedVectorEmbedding,
+    prop: ArcShift<PropState>,
     cur_entry: LazyItem<MergedNode>,
     cur_level: HNSWLevel,
     max_insert_level: HNSWLevel,
@@ -454,7 +589,6 @@ pub fn index_embedding(
         vec_store.clone(),
         cur_entry.clone(),
         fvec.clone(),
-        vector_emb.hash_vec.clone(),
         0,
         &mut skipm,
         cur_level,
@@ -484,8 +618,7 @@ pub fn index_embedding(
         let parent = insert_node_create_edges(
             vec_store.clone(),
             parent,
-            fvec,
-            vector_emb.hash_vec.clone(),
+            prop.clone(),
             z,
             cur_level,
             version,
@@ -503,6 +636,7 @@ pub fn index_embedding(
             vec_store.clone(),
             parent,
             vector_emb.clone(),
+            prop,
             z_clone[0].clone(),
             HNSWLevel(cur_level.0 - 1),
             max_insert_level,
@@ -527,18 +661,12 @@ pub fn queue_node_prop_exec(
             ))?,
     );
 
-    let mut prop_arc = node.prop.clone();
-
-    let prop_state = prop_arc.get();
-
-    if let PropState::Ready(node_prop) = &*prop_state {
-        let prop_location = write_prop_to_file(node_prop, &vec_store.prop_file);
-        node.set_prop_location(prop_location);
-    } else {
-        return Err(WaCustomError::NodeError(
-            "Node prop is not ready".to_string(),
-        ));
-    }
+    if let PropState::Ready(prop) = node.get_prop() {
+        if prop.location.is_none() {
+            let location = write_prop_to_file(&prop.id, prop.value.clone(), &vec_store.prop_file)?;
+            node.set_prop_location(location);
+        }
+    };
 
     for neighbor in node.neighbors.iter() {
         neighbor.1.set_persistence(true);
@@ -557,17 +685,12 @@ pub fn queue_node_prop_exec(
     Ok(())
 }
 
-pub fn _link_prev_version(_prev_loc: Option<u32>, _offset: u32) {
-    // todo , needs to happen in file persist
-}
-
 pub fn auto_commit_transaction(vec_store: Arc<VectorStore>) -> Result<(), WaCustomError> {
     // Retrieve exec_queue_nodes from vec_store
     let mut exec_queue_nodes_arc = vec_store.exec_queue_nodes.clone();
     let mut exec_queue_nodes = exec_queue_nodes_arc.get().clone();
 
     for node in exec_queue_nodes.iter_mut() {
-        println!("auto_commit_txn");
         persist_node_update_loc(vec_store.index_manager.clone(), node)?;
     }
 
@@ -582,6 +705,7 @@ fn create_node_extract_neighbours(
     hnsw_level: HNSWLevel,
     prop: ArcShift<PropState>,
     parent: LazyItemRef<MergedNode>,
+    child: LazyItemRef<MergedNode>,
 ) -> (
     LazyItem<MergedNode>,
     EagerLazyItemSet<MergedNode, MetricResult>,
@@ -595,7 +719,7 @@ fn create_node_extract_neighbours(
             prop,
             neighbors: neighbours.clone(),
             parent,
-            child: LazyItemRef::new_invalid(),
+            child,
         },
     );
     (node, neighbours)
@@ -604,27 +728,22 @@ fn create_node_extract_neighbours(
 fn insert_node_create_edges(
     vec_store: Arc<VectorStore>,
     parent: Option<LazyItem<MergedNode>>,
-    fvec: Arc<Storage>,
-    hs: VectorId,
+    prop: ArcShift<PropState>,
     nbs: Vec<(LazyItem<MergedNode>, MetricResult)>,
     cur_level: HNSWLevel,
     version: Hash,
     version_number: u16,
 ) -> Result<LazyItem<MergedNode>, WaCustomError> {
-    let prop = PropState::Ready(Arc::new(NodeProp {
-        id: hs.clone(),
-        value: fvec.clone(),
-        location: None,
-    }));
     let (node, neighbours) = create_node_extract_neighbours(
         version,
         version_number,
         cur_level,
-        ArcShift::new(prop),
+        prop,
         parent.clone().map_or_else(
             || LazyItemRef::new_invalid(),
             |parent| LazyItemRef::from_lazy(parent),
         ),
+        LazyItemRef::new_invalid(),
     );
     if let Some(parent) = parent {
         parent
@@ -647,12 +766,14 @@ fn insert_node_create_edges(
                 } else {
                     let prop_arc = old_neighbour.prop.clone();
                     let parent = old_neighbour.parent.clone();
+                    let child = old_neighbour.child.clone();
                     let (new_neighbour, new_neighbour_neighbours) = create_node_extract_neighbours(
                         version,
                         version_number,
                         cur_level,
                         prop_arc,
                         parent,
+                        child,
                     );
                     nbr1.add_version(vec_store.cache.clone(), new_neighbour.clone());
                     let neighbor_list: Vec<(LazyItem<MergedNode>, MetricResult)> = old_neighbour
@@ -664,7 +785,7 @@ fn insert_node_create_edges(
                     exec_queue
                         .transactional_update(|queue| {
                             let mut new_queue = queue.clone();
-                            new_queue.push(ArcShift::new(new_neighbour.clone()));
+                            new_queue.push(ArcShift::new(nbr1.clone()));
                             new_queue
                         })
                         .unwrap();
@@ -702,7 +823,6 @@ fn traverse_find_nearest(
     vec_store: Arc<VectorStore>,
     vtm: LazyItem<MergedNode>,
     fvec: Arc<Storage>,
-    hs: VectorId,
     hops: u8,
     skipm: &mut HashSet<VectorId>,
     cur_level: HNSWLevel,
@@ -739,7 +859,6 @@ fn traverse_find_nearest(
 
                 let vec_store = vec_store.clone();
                 let fvec = fvec.clone();
-                let hs = hs.clone();
 
                 if skipm.insert(nb.clone()) {
                     let dist = vec_store
@@ -747,13 +866,17 @@ fn traverse_find_nearest(
                         .calculate(&fvec, &node_prop.value)?;
 
                     let full_hops = 30;
-                    if hops <= tapered_total_hops(full_hops, cur_level.0, vec_store.max_cache_level)
+                    if hops
+                        <= tapered_total_hops(
+                            full_hops,
+                            cur_level.0,
+                            vec_store.hnsw_params.clone().get().num_layers,
+                        )
                     {
                         let mut z = traverse_find_nearest(
                             vec_store.clone(),
                             nref.1.clone(),
                             fvec.clone(),
-                            hs.clone(),
                             hops + 1,
                             skipm,
                             cur_level,
@@ -791,6 +914,335 @@ fn traverse_find_nearest(
     });
 
     Ok(nn.into_iter().take(5).collect())
+}
+
+pub fn create_index_in_collection(vec_store: Arc<VectorStore>) -> Result<(), WaCustomError> {
+    let collection_path: Arc<Path> = Path::new(&vec_store.database_name).into();
+
+    // TODO(a-rustacean): store the min & max in the `VectorStore` in the collection creation step and use here
+    let min = -1.0;
+    let max = 1.0;
+    let vec = (0..vec_store.dim)
+        .map(|_| {
+            let mut rng = thread_rng();
+
+            let number: f32 = rng.gen_range(min..max);
+            number
+        })
+        .collect::<Vec<f32>>();
+    let vec_hash = VectorId::Int(-1);
+    let mut quantization_metric_arc = vec_store.quantization_metric.clone();
+    let quantization_metric = quantization_metric_arc.get();
+
+    let vector_list =
+        Arc::new(quantization_metric.quantize(&vec, *vec_store.storage_type.clone().get())?);
+
+    let prop_file = Arc::new(
+        OpenOptions::new()
+            .create(true)
+            .truncate(true) // removes all the previous data from the file
+            .append(true)
+            .open(collection_path.join("prop.data"))
+            .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?,
+    );
+
+    let hash = vec_store.root_vec.get_current_version();
+
+    let location = write_prop_to_file(&vec_hash, vector_list.clone(), &prop_file)?;
+
+    let prop = ArcShift::new(PropState::Ready(Arc::new(NodeProp {
+        id: vec_hash,
+        value: vector_list,
+        location: Some(location),
+    })));
+
+    let root = LazyItem::new(
+        hash,
+        0,
+        MergedNode {
+            hnsw_level: HNSWLevel(0),
+            prop: prop.clone(),
+            neighbors: EagerLazyItemSet::new(),
+            parent: LazyItemRef::new_invalid(),
+            child: LazyItemRef::new_invalid(),
+        },
+    );
+
+    let mut prev: LazyItemRef<MergedNode> = LazyItemRef::from_lazy(root.clone());
+
+    let mut nodes = Vec::new();
+    for l in (1..=vec_store.hnsw_params.clone().get().num_layers).rev() {
+        let current_node = Arc::new(MergedNode {
+            hnsw_level: HNSWLevel(l),
+            prop: prop.clone(),
+            neighbors: EagerLazyItemSet::new(),
+            parent: prev.clone(),
+            child: LazyItemRef::new_invalid(),
+        });
+
+        let lazy_node = LazyItem::from_arc(hash, 0, current_node.clone());
+        let nn = LazyItemRef::from_arc(hash, 0, current_node.clone());
+
+        if let Some(prev_node) = prev.item.get().get_lazy_data().unwrap().get() {
+            current_node.set_parent(prev.clone().item.get().clone());
+            prev_node.set_child(lazy_node.clone());
+        }
+        prev = nn.clone();
+
+        nodes.push(nn.clone());
+    }
+
+    for nn in nodes.iter_mut() {
+        persist_node_update_loc(vec_store.index_manager.clone(), &mut nn.item)?;
+    }
+
+    vec_store.index_manager.flush_all()?;
+
+    // The whole index is empty now
+    vec_store.root_vec.item.clone().update(root);
+    vec_store.set_auto_config_flag(false);
+    vec_store.set_configured_flag(true);
+
+    Ok(())
+}
+
+fn delete_node_update_neighbours(
+    vec_store: Arc<VectorStore>,
+    item: LazyItem<MergedNode>,
+    skipm: HashSet<VectorId>,
+    version_id: Hash,
+    version_number: u16,
+    hnsw_level: HNSWLevel,
+) -> Result<(), WaCustomError> {
+    let node = item.get_data(vec_store.cache.clone());
+    for nbr in node.neighbors.iter() {
+        let mut skipm = skipm.clone();
+        let nbr_node = nbr.1.get_data(vec_store.cache.clone());
+        let (nbr_id, nbr_vec) = match nbr_node.get_prop() {
+            PropState::Ready(prop) => (prop.id.clone(), prop.value.clone()),
+            PropState::Pending(_) => {
+                // TODO: load prop
+                return Err(WaCustomError::NodeError("PropState is Pending".to_string()));
+            }
+        };
+        skipm.insert(nbr_id);
+        let mut nbr_nbrs = traverse_find_nearest(
+            vec_store.clone(),
+            vec_store
+                .root_vec
+                .item
+                .clone()
+                .get()
+                .get_latest_version(vec_store.cache.clone())
+                .0,
+            nbr_vec,
+            0,
+            &mut skipm,
+            HNSWLevel(vec_store.hnsw_params.clone().get().num_layers),
+            false,
+        )?;
+
+        nbr_nbrs.truncate(20);
+        let nbr_nbrs_set = IdentitySet::from_iter(
+            nbr_nbrs
+                .into_iter()
+                .map(|(node, dist)| EagerLazyItem(dist, node)),
+        );
+
+        if let Some(version) = nbr.1.get_version(vec_store.cache.clone(), version_number) {
+            let nbr_current_version_data = version.get_data(vec_store.cache.clone());
+            nbr_current_version_data
+                .neighbors
+                .items
+                .clone()
+                .update(nbr_nbrs_set);
+        } else {
+            let (new_version, mut new_neighbours) = create_node_extract_neighbours(
+                version_id,
+                version_number,
+                hnsw_level,
+                nbr_node.prop.clone(),
+                nbr_node.parent.clone(),
+                nbr_node.child.clone(),
+            );
+            new_neighbours.items.update(nbr_nbrs_set);
+            nbr.1.add_version(vec_store.cache.clone(), new_version);
+            let mut exec_queue = vec_store.exec_queue_nodes.clone();
+            exec_queue
+                .transactional_update(|queue| {
+                    let mut new_queue = queue.clone();
+                    new_queue.push(ArcShift::new(nbr.1.clone()));
+                    new_queue
+                })
+                .unwrap();
+        }
+    }
+    Ok(())
+}
+
+pub fn delete_vector_by_id(
+    vec_store: Arc<VectorStore>,
+    vector_id: VectorId,
+) -> Result<(), WaCustomError> {
+    let (current_version, current_version_number) = vec_store
+        .vcs
+        .add_next_version("main")
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+    vec_store.set_current_version(current_version);
+    store_current_version(&vec_store.lmdb, current_version)?;
+
+    let vec_raw = get_embedding_by_id(vec_store.clone(), vector_id.clone())?;
+    let quantized = Arc::new(vec_store.quantization_metric.clone().get().quantize(
+        &vec_raw.raw_vec,
+        vec_store.storage_type.clone().get().clone(),
+    )?);
+    let mut skipm = HashSet::new();
+    skipm.insert(vec_raw.hash_vec);
+    let items = traverse_find_nearest(
+        vec_store.clone(),
+        vec_store
+            .root_vec
+            .item
+            .clone()
+            .get()
+            .get_latest_version(vec_store.cache.clone())
+            .0,
+        quantized,
+        0,
+        &mut skipm,
+        HNSWLevel(vec_store.hnsw_params.clone().get().num_layers),
+        false,
+    )?;
+
+    let mut maybe_item = None;
+
+    for (item, _) in items {
+        let data = item.get_data(vec_store.cache.clone());
+        let prop = match data.get_prop() {
+            PropState::Ready(prop) => prop.id.clone(),
+            PropState::Pending(_) => {
+                // TODO: load prop
+                return Err(WaCustomError::NodeError("PropState is Pending".to_string()));
+            }
+        };
+
+        if prop == vector_id {
+            maybe_item = Some(item);
+        }
+    }
+
+    let Some(mut item) = maybe_item else {
+        return Err(WaCustomError::NodeError(
+            "Node not found in graph".to_string(),
+        ));
+    };
+
+    for level in 0..=vec_store.hnsw_params.clone().get().num_layers {
+        delete_node_update_neighbours(
+            vec_store.clone(),
+            item.clone(),
+            skipm.clone(),
+            current_version,
+            *current_version_number as u16,
+            HNSWLevel(level),
+        )?;
+
+        item = item
+            .get_data(vec_store.cache.clone())
+            .parent
+            .clone()
+            .item
+            .get()
+            .clone();
+    }
+
+    auto_commit_transaction(vec_store)?;
+
+    Ok(())
+}
+
+pub fn delete_vector_by_id_in_transaction(
+    vec_store: Arc<VectorStore>,
+    vector_id: VectorId,
+    transaction_id: Hash,
+) -> Result<(), WaCustomError> {
+    let version_hash = vec_store
+        .vcs
+        .get_version_hash(&transaction_id)
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?
+        .ok_or(WaCustomError::DatabaseError(
+            "VersionHash not found for transaction".to_string(),
+        ))?;
+    let current_version_number = *version_hash.version as u16;
+
+    let vec_raw = get_embedding_by_id(vec_store.clone(), vector_id.clone())?;
+    let quantized = Arc::new(vec_store.quantization_metric.clone().get().quantize(
+        &vec_raw.raw_vec,
+        vec_store.storage_type.clone().get().clone(),
+    )?);
+    let mut skipm = HashSet::new();
+    skipm.insert(vec_raw.hash_vec);
+    let items = traverse_find_nearest(
+        vec_store.clone(),
+        vec_store
+            .root_vec
+            .item
+            .clone()
+            .get()
+            .get_latest_version(vec_store.cache.clone())
+            .0,
+        quantized,
+        0,
+        &mut skipm,
+        HNSWLevel(vec_store.hnsw_params.clone().get().num_layers),
+        false,
+    )?;
+
+    let mut maybe_item = None;
+
+    for (item, _) in items {
+        let data = item.get_data(vec_store.cache.clone());
+        let prop = match data.get_prop() {
+            PropState::Ready(prop) => prop.id.clone(),
+            PropState::Pending(_) => {
+                // TODO: load prop
+                return Err(WaCustomError::NodeError("PropState is Pending".to_string()));
+            }
+        };
+
+        if prop == vector_id {
+            maybe_item = Some(item);
+        }
+    }
+
+    let Some(mut item) = maybe_item else {
+        return Err(WaCustomError::NodeError(
+            "Node not found in graph".to_string(),
+        ));
+    };
+
+    for level in 0..=vec_store.hnsw_params.clone().get().num_layers {
+        delete_node_update_neighbours(
+            vec_store.clone(),
+            item.clone(),
+            skipm.clone(),
+            transaction_id,
+            current_version_number,
+            HNSWLevel(level),
+        )?;
+
+        item = item
+            .get_data(vec_store.cache.clone())
+            .parent
+            .clone()
+            .item
+            .get()
+            .clone();
+    }
+
+    auto_commit_transaction(vec_store)?;
+
+    Ok(())
 }
 
 #[cfg(test)]

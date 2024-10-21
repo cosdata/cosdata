@@ -255,7 +255,7 @@ impl VersionControl {
         Ok(hash)
     }
 
-    pub fn add_next_version(&self, branch_name: &str) -> lmdb::Result<Hash> {
+    pub fn add_next_version(&self, branch_name: &str) -> lmdb::Result<(Hash, Version)> {
         let branch_id = BranchId::new(branch_name);
         let branch_key = key!(b:branch_id);
 
@@ -277,7 +277,7 @@ impl VersionControl {
         txn.put(*self.db, &version_key, &bytes, WriteFlags::empty())?;
         txn.commit()?;
 
-        Ok(hash)
+        Ok((hash, new_version))
     }
 
     pub fn create_new_branch(

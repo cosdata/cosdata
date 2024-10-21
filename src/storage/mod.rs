@@ -27,7 +27,7 @@ pub enum Storage {
         quant_vec: Vec<u8>,
     },
     SubByte {
-        mag: u32,
+        mag: f32,
         quant_vec: Vec<Vec<u8>>,
         resolution: u8,
     },
