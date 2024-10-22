@@ -89,14 +89,14 @@ struct ProjectedValue {
 
 fn is_sensitive_pair(x: f32, y: f32) -> bool {
     if x == 0.0 {
-        y.abs() > 0.9
+        y.abs() > 0.85
     } else {
-        (y / x).abs() > 0.9
+        (y / x).abs() > 0.85
     }
 }
 
 fn calculate_weight(iteration: u8) -> f32 {
-    (iteration as f32).powi(2) / 1.618034 // Golden ratio approximation
+    2.0_f32.powi(iteration as i32)
 }
 
 fn project_to_3d(x: f32, y: f32) -> f32 {
@@ -186,14 +186,14 @@ fn make_index(v: &[ProjectedValue]) -> (u16, Vec<u16>) {
     let mut sway_bits = Vec::new();
 
     let max_iterations = v.iter().map(|pv| pv.iterations).max().unwrap_or(0);
-    let max_possible_weight: f32 = (1..=max_iterations).map(|i| calculate_weight(i)).sum();
-    let threshold = max_possible_weight / 1.25;
+    let max_possible_weight: f32 = (1..=max_iterations).map(calculate_weight).sum();
+    let threshold = max_possible_weight / 2.0;
 
     for (i, pv) in v.iter().enumerate() {
         if pv.value >= 0.0 {
             main_index |= 1 << i;
         }
-        if pv.value >= 0.1 {
+        if pv.value >= 0.15 {
             main_mask |= 1 << i;
         } else if pv.weight > threshold {
             sway_bits.push(i as u16);
@@ -221,11 +221,19 @@ const DIMENSION: usize = 640;
 const TARGET_DIMENSION: usize = 16;
 const PARTITIONS_COUNT: usize = 2usize.pow(TARGET_DIMENSION as u32);
 
-fn serialize_results(results: Vec<(usize, f32)>) -> String {
+fn serialize_results(results: Vec<(u16, usize, f32)>) -> String {
     let mut out = String::new();
 
-    for (i, (id, cs)) in results.into_iter().enumerate() {
-        out.push_str(&format!("#{}: {}:{} ({})\n", i + 1, id / 100, id % 100, cs));
+    for (i, (partition_id, id, cs)) in results.into_iter().enumerate() {
+        out.push_str(&format!(
+            "#{:0>2}: {:0>5}:{:0>2} ({:.8}) [{:0>5} = {:016b}]\n",
+            i + 1,
+            id / 100,
+            id % 100,
+            cs,
+            partition_id,
+            partition_id,
+        ));
     }
 
     out
@@ -234,32 +242,30 @@ fn serialize_results(results: Vec<(usize, f32)>) -> String {
 // brute force
 fn run_tests_bf(vectors: &[Vec<f32>], queries: &[Vec<f32>]) {
     println!("\nRunning brute force test");
-    for (i, query) in queries.into_iter().enumerate() {
+    for (i, query) in queries.iter().enumerate().take(10) {
         println!("\nTest#{}", i + 1);
         let start = Instant::now();
-        let mut top_matches: Vec<(usize, f32)> = vectors
+        let mut top_matches: Vec<(usize, &[f32], f32)> = vectors
             .iter()
             .enumerate()
-            .map(|(i, vec)| (i, cosine_similarity(&query, vec)))
+            .map(|(i, vec)| (i, vec.as_slice(), cosine_similarity(query, vec)))
             .collect();
 
-        top_matches.sort_unstable_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap_or(Ordering::Equal));
+        top_matches
+            .sort_unstable_by(|(_, _, a), (_, _, b)| b.partial_cmp(a).unwrap_or(Ordering::Equal));
         top_matches.truncate(20);
         println!("Finished in {:?}", start.elapsed());
 
-        let mut alt_count = 0;
-
-        for (id, _) in top_matches.iter() {
-            let vec = &vectors[*id];
-            let projected = project_vector_to_x(vec, TARGET_DIMENSION);
-            let (_, alt_index) = make_index(&projected);
-
-            alt_count += alt_index.len();
-        }
-
-        println!("Avg alt count: {}", alt_count as f32 / 20.0);
-
-        let results_serialized = serialize_results(top_matches);
+        let results_serialized = serialize_results(
+            top_matches
+                .into_iter()
+                .map(|(id, vec, cs)| {
+                    let projected = project_vector_to_x(vec, TARGET_DIMENSION);
+                    let (main_index, _alt_index) = make_index(&projected);
+                    (main_index, id, cs)
+                })
+                .collect(),
+        );
         fs::write(format!("result-bruteforce-{}", i), results_serialized).unwrap();
     }
 }
@@ -280,23 +286,23 @@ fn run_tests_pp(vectors: &[Vec<f32>], queries: &[Vec<f32>]) {
     let mut total_inserted_vectors = 0u64;
 
     let start = Instant::now();
-    for (i, vector) in vectors.into_iter().enumerate() {
-        let projected = project_vector_to_x(&vector, TARGET_DIMENSION);
-        let (main_index, alt_index) = make_index(&projected);
+    for (i, vector) in vectors.iter().enumerate() {
+        let projected = project_vector_to_x(vector, TARGET_DIMENSION);
+        let (main_index, _alt_index) = make_index(&projected);
 
-        let insert_in_main = !alt_index.contains(&main_index);
+        // let insert_in_main = !alt_index.contains(&main_index);
 
-        for index in alt_index {
-            let partition = &mut partitions[index as usize];
-            partition.vectors.push(i);
-            total_inserted_vectors += 1;
-        }
+        // for index in alt_index {
+        //     let partition = &mut partitions[index as usize];
+        //     partition.vectors.push(i);
+        //     total_inserted_vectors += 1;
+        // }
 
-        if insert_in_main {
-            let partition = &mut partitions[main_index as usize];
-            partition.vectors.push(i);
-            total_inserted_vectors += 1;
-        }
+        // if insert_in_main {
+        let partition = &mut partitions[main_index as usize];
+        partition.vectors.push(i);
+        total_inserted_vectors += 1;
+        // }
     }
 
     println!("Indexing finished in {:?}", start.elapsed());
@@ -310,27 +316,27 @@ fn run_tests_pp(vectors: &[Vec<f32>], queries: &[Vec<f32>]) {
         total_inserted_vectors as f64 / PARTITIONS_COUNT as f64
     );
     let mut total_query_time = Duration::ZERO;
+    let mut total_alt_count = 0u64;
 
-    for (i, query) in queries.into_iter().enumerate() {
+    for (i, query) in queries.iter().enumerate() {
         println!("\nTest#{}", i + 1);
         let start = Instant::now();
         let projected = project_vector_to_x(query, TARGET_DIMENSION);
         let (main_index, alt_index) = make_index(&projected);
-        let mut skip_partitions = vec![false; PARTITIONS_COUNT];
 
-        skip_partitions[main_index as usize] = true;
+        total_alt_count += alt_index.len() as u64;
 
-        let mut top_matches: Vec<(usize, f32)> = partitions[main_index as usize]
+        let mut top_matches: Vec<(u16, usize, f32)> = partitions[main_index as usize]
             .vectors
             .iter()
-            .map(|&id| (id, cosine_similarity(query, &vectors[id])))
+            .map(|&id| (main_index, id, cosine_similarity(query, &vectors[id])))
             .collect::<Vec<_>>();
 
         let query_alt_count = alt_index.len();
 
         println!("Alt count: {}", query_alt_count);
 
-        let all_index_top_matches: Vec<(usize, f32)> = alt_index
+        let all_index_top_matches: Vec<(u16, usize, f32)> = alt_index
             .into_par_iter()
             .map(|index| {
                 let partition = &partitions[index as usize];
@@ -338,11 +344,12 @@ fn run_tests_pp(vectors: &[Vec<f32>], queries: &[Vec<f32>]) {
                 let mut top_matches = partition
                     .vectors
                     .iter()
-                    .map(|&id| (id, cosine_similarity(query, &vectors[id])))
+                    .map(|&id| (index, id, cosine_similarity(query, &vectors[id])))
                     .collect::<Vec<_>>();
 
-                top_matches
-                    .sort_unstable_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap_or(Ordering::Equal));
+                top_matches.sort_unstable_by(|(_, _, a), (_, _, b)| {
+                    b.partial_cmp(a).unwrap_or(Ordering::Equal)
+                });
                 top_matches.truncate(20);
 
                 top_matches
@@ -350,14 +357,15 @@ fn run_tests_pp(vectors: &[Vec<f32>], queries: &[Vec<f32>]) {
             .flatten()
             .collect();
 
-        for (id, cs) in all_index_top_matches {
-            if top_matches.iter().position(|(id2, _)| id2 == &id).is_some() {
+        for (partition_id, id, cs) in all_index_top_matches {
+            if top_matches.iter().any(|(_, id2, _)| id2 == &id) {
                 continue;
             }
-            top_matches.push((id, cs));
+            top_matches.push((partition_id, id, cs));
         }
 
-        top_matches.sort_unstable_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap_or(Ordering::Equal));
+        top_matches
+            .sort_unstable_by(|(_, _, a), (_, _, b)| b.partial_cmp(a).unwrap_or(Ordering::Equal));
         top_matches.truncate(20);
 
         let elapsed = start.elapsed();
@@ -370,8 +378,10 @@ fn run_tests_pp(vectors: &[Vec<f32>], queries: &[Vec<f32>]) {
     }
 
     let avg_query_time = total_query_time / queries.len() as u32;
+    let avg_alt_count = total_alt_count as f32 / queries.len() as f32;
 
     println!("\nAverage query time: {:?}", avg_query_time);
+    println!("Average alt count: {}", avg_alt_count);
     println!("Total execution time: {:?}", start.elapsed());
 }
 
@@ -444,6 +454,6 @@ fn main() {
             generate_random_vecs_and_save_to_file()
         };
 
-    // run_tests_bf(&vectors, &queries);
+    run_tests_bf(&vectors, &queries);
     run_tests_pp(&vectors, &queries);
 }
