@@ -89,19 +89,18 @@ struct ProjectedValue {
 
 fn is_sensitive_pair(x: f32, y: f32) -> bool {
     if x == 0.0 {
-        y.abs() > 0.9
+        y.abs() > 0.85
     } else {
-        (y / x).abs() > 0.9
+        x.abs() < (0.11764705882352941) && (y).abs() > 0.85
     }
 }
 
 fn calculate_weight(iteration: u8) -> f32 {
-    (iteration as f32).powi(2) / 1.41421 // square root of 2
+    2.0_f32.powi(iteration as i32)
 }
 
 fn project_to_3d(x: f32, y: f32) -> f32 {
-    let theta = y.atan2(x);
-    theta / std::f32::consts::PI
+    2.0 * (y / x).atan() / std::f32::consts::PI
 }
 
 fn project_vector_to_x(v: &[f32], x: usize) -> Vec<ProjectedValue> {
@@ -187,16 +186,16 @@ fn make_index(v: &[ProjectedValue]) -> (u16, Vec<u16>) {
 
     let max_iterations = v.iter().map(|pv| pv.iterations).max().unwrap_or(0);
     let max_possible_weight: f32 = (1..=max_iterations).map(calculate_weight).sum();
-    let threshold = max_possible_weight / 1.4;
+    let threshold = max_possible_weight / 100.0;
 
     for (i, pv) in v.iter().enumerate() {
         if pv.value >= 0.0 {
             main_index |= 1 << i;
         }
-        if pv.weight > threshold {
-            sway_bits.push(i as u16);
-        } else {
+        if pv.value >= 0.15 {
             main_mask |= 1 << i;
+        } else if pv.weight > threshold {
+            sway_bits.push(i as u16);
         }
     }
 
