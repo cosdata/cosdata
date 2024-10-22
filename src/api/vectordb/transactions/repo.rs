@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use super::{dtos::CreateTransactionResponseDto, error::TransactionError};
+use crate::convert_value;
+use crate::models::rpc::VectorIdValue;
 use crate::models::versioning::Hash;
 use crate::{
     api::vectordb::vectors::{
@@ -122,7 +124,7 @@ pub(crate) async fn create_vector_in_transaction(
 pub(crate) async fn abort_transaction(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    transaction_id: &str,
+    transaction_id: Hash,
 ) -> Result<(), TransactionError> {
     let vec_store = ctx
         .ain_env
@@ -134,11 +136,33 @@ pub(crate) async fn abort_transaction(
     let current_open_transaction = current_open_transaction_arc.get();
     let current_transaction_id = current_open_transaction.ok_or(TransactionError::NotFound)?;
 
-    if current_transaction_id.to_string() != transaction_id {
+    if current_transaction_id != transaction_id {
         return Err(TransactionError::NotFound);
     }
 
     current_open_transaction_arc.update(None);
+
+    Ok(())
+}
+
+pub(crate) async fn delete_vector_by_id(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    transaction_id: Hash,
+    vector_id: VectorIdValue,
+) -> Result<(), TransactionError> {
+    let collection = ctx
+        .ain_env
+        .vector_store_map
+        .get(collection_id)
+        .ok_or(TransactionError::CollectionNotFound)?;
+
+    crate::vector_store::delete_vector_by_id_in_transaction(
+        collection,
+        convert_value(vector_id.clone()),
+        transaction_id,
+    )
+    .map_err(|e| TransactionError::FailedToDeleteVector(e.to_string()))?;
 
     Ok(())
 }
