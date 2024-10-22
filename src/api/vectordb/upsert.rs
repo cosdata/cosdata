@@ -27,13 +27,13 @@ pub(crate) async fn upsert(
             .body("Cannot upsert while there's an on-going transaction");
     }
 
-    // Call run_upload with the extracted parameters
-    web::block(move || {
-        // TODO: handle the error
-        let _ = run_upload(ctx.into_inner(), vec_store, convert_vectors(body.vectors));
+    let res = web::block(move || {
+        run_upload(ctx.into_inner(), vec_store, convert_vectors(body.vectors))
     })
-    .await
-    .unwrap();
-    let response_data = RPCResponseBody::RespUpsertVectors { insert_stats: None };
-    HttpResponse::Ok().json(response_data)
+    .await;
+
+    match res {
+        Ok(_) => HttpResponse::Ok().json(RPCResponseBody::RespUpsertVectors { insert_stats: None }),
+        Err(err) => HttpResponse::InternalServerError().body(format!("error upserting vectors: {}", err)),
+    }
 }
