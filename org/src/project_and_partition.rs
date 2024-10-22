@@ -89,14 +89,14 @@ struct ProjectedValue {
 
 fn is_sensitive_pair(x: f32, y: f32) -> bool {
     if x == 0.0 {
-        y.abs() > 0.85
+        y.abs() > 0.9
     } else {
-        (y / x).abs() > 0.85
+        (y / x).abs() > 0.9
     }
 }
 
 fn calculate_weight(iteration: u8) -> f32 {
-    2.0_f32.powi(iteration as i32)
+    (iteration as f32).powi(2) / 1.41421 // square root of 2
 }
 
 fn project_to_3d(x: f32, y: f32) -> f32 {
@@ -187,16 +187,16 @@ fn make_index(v: &[ProjectedValue]) -> (u16, Vec<u16>) {
 
     let max_iterations = v.iter().map(|pv| pv.iterations).max().unwrap_or(0);
     let max_possible_weight: f32 = (1..=max_iterations).map(calculate_weight).sum();
-    let threshold = max_possible_weight / 2.0;
+    let threshold = max_possible_weight / 1.4;
 
     for (i, pv) in v.iter().enumerate() {
         if pv.value >= 0.0 {
             main_index |= 1 << i;
         }
-        if pv.value >= 0.15 {
-            main_mask |= 1 << i;
-        } else if pv.weight > threshold {
+        if pv.weight > threshold {
             sway_bits.push(i as u16);
+        } else {
+            main_mask |= 1 << i;
         }
     }
 
@@ -212,6 +212,18 @@ fn make_index(v: &[ProjectedValue]) -> (u16, Vec<u16>) {
     }
 
     (main_index, alt_indices)
+}
+
+fn make_main_index(v: &[ProjectedValue]) -> u16 {
+    let mut main_index = 0;
+
+    for (i, pv) in v.iter().enumerate() {
+        if pv.value >= 0.0 {
+            main_index |= 1 << i;
+        }
+    }
+
+    main_index
 }
 
 const VECTORS_COUNT: usize = 100_000;
@@ -261,7 +273,7 @@ fn run_tests_bf(vectors: &[Vec<f32>], queries: &[Vec<f32>]) {
                 .into_iter()
                 .map(|(id, vec, cs)| {
                     let projected = project_vector_to_x(vec, TARGET_DIMENSION);
-                    let (main_index, _alt_index) = make_index(&projected);
+                    let main_index = make_main_index(&projected);
                     (main_index, id, cs)
                 })
                 .collect(),
@@ -288,7 +300,7 @@ fn run_tests_pp(vectors: &[Vec<f32>], queries: &[Vec<f32>]) {
     let start = Instant::now();
     for (i, vector) in vectors.iter().enumerate() {
         let projected = project_vector_to_x(vector, TARGET_DIMENSION);
-        let (main_index, _alt_index) = make_index(&projected);
+        let main_index = make_main_index(&projected);
 
         // let insert_in_main = !alt_index.contains(&main_index);
 
