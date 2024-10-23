@@ -17,19 +17,12 @@ pub(crate) async fn create_collection(
     let size = create_collection_dto.dimensions as usize;
     let lower_bound = create_collection_dto.min_val;
     let upper_bound = create_collection_dto.max_val;
-    let auto_config = true;
-    let num_layers = 5;
+    // ---------------------------
+    // -- TODO Maximum cache level
+    // ---------------------------
+    let max_cache_level = 5;
 
-    repo::create_vector_store(
-        ctx,
-        name,
-        size,
-        lower_bound,
-        upper_bound,
-        num_layers,
-        auto_config,
-    )
-    .await
+    repo::create_vector_store(ctx, name, size, lower_bound, upper_bound, max_cache_level).await
 }
 
 pub(crate) async fn get_collections(

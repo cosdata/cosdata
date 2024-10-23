@@ -2,8 +2,13 @@ use crate::models::common::*;
 use crate::models::types::*;
 use crate::models::versioning::*;
 use crate::quantization::StorageType;
-use lmdb::{Cursor, Database, DatabaseFlags, Environment, Transaction, WriteFlags};
-use serde_cbor::{from_slice, to_vec};
+use lmdb::Cursor;
+use lmdb::Database;
+use lmdb::DatabaseFlags;
+use lmdb::Environment;
+use lmdb::{Transaction, WriteFlags};
+use serde_cbor::from_slice;
+use serde_cbor::to_vec;
 use siphasher::sip::SipHasher24;
 use std::hash::Hasher;
 use std::sync::Arc;
@@ -57,12 +62,12 @@ pub fn retrieve_current_version(lmdb: &MetaDb) -> Result<Hash, WaCustomError> {
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct VecStoreData {
     pub name: String,
-    pub num_layers: u8,
+    pub max_level: u8,
     pub levels_prob: Arc<Vec<(f64, i32)>>,
-    pub dim: usize,
+    pub quant_dim: usize,
     pub file_index: FileIndex,
-    pub quantization_metric: QuantizationMetric,
-    pub distance_metric: DistanceMetric,
+    pub quantization_metric: Arc<QuantizationMetric>,
+    pub distance_metric: Arc<DistanceMetric>,
     pub storage_type: StorageType,
     pub size: usize,
     pub lower_bound: Option<f32>,
@@ -83,13 +88,13 @@ impl TryFrom<Arc<VectorStore>> for VecStoreData {
         };
         let res = Self {
             name: store.database_name.clone(),
-            num_layers: store.hnsw_params.clone().num_layers,
+            max_level: store.max_cache_level,
             levels_prob: store.levels_prob.clone(),
-            dim: store.dim,
+            quant_dim: store.quant_dim,
             file_index: offset,
-            quantization_metric: store.quantization_metric.clone().get().clone(),
-            distance_metric: store.distance_metric.clone().get().clone(),
-            storage_type: store.storage_type.clone().get().clone(),
+            quantization_metric: store.quantization_metric.clone(),
+            distance_metric: store.distance_metric.clone(),
+            storage_type: store.storage_type.clone(),
             size: 0,
             lower_bound: None,
             upper_bound: None,

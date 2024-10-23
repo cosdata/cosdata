@@ -2,24 +2,18 @@ use std::collections::BTreeSet;
 
 use cosdata::{models::types::SparseVector, storage::inverted_index_old::InvertedIndex};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use rand::{Rng, SeedableRng};
-use rand_chacha::ChaCha8Rng;
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use rayon::prelude::*;
 
 // Function to generate multiple random sparse vectors
-fn generate_random_sparse_vectors(
-    num_records: usize,
-    dimensions: usize,
-    min_nonzero_dim_count: usize,
-    max_nonzero_dim_count: usize,
-    rng_seed: u64,
-) -> Vec<SparseVector> {
-    let mut rng = ChaCha8Rng::seed_from_u64(rng_seed);
+fn generate_random_sparse_vectors(num_records: usize, dimensions: usize) -> Vec<SparseVector> {
+    let mut rng = StdRng::seed_from_u64(2024);
     let mut records: Vec<SparseVector> = Vec::with_capacity(num_records);
 
     for vector_id in 0..num_records {
         // Calculate the number of non-zero elements (5% to 10% of dimensions)
-        let num_nonzero = rng.gen_range(min_nonzero_dim_count..=max_nonzero_dim_count);
+        let num_nonzero = rng
+            .gen_range((dimensions as f32 * 0.05) as usize..=(dimensions as f32 * 0.10) as usize);
         let mut entries: Vec<(u32, f32)> = Vec::with_capacity(num_nonzero);
 
         // BTreeSet is used to store unique indices of nonzero values in sorted order
@@ -42,25 +36,15 @@ fn generate_random_sparse_vectors(
 }
 
 fn benchmark_sequential_inserts(c: &mut Criterion) {
-    // Random vector generation parameters
-    let vector_counts = [1000];
     let dimensions = 1000; // Increased dimensions
-    let min_nonzero_dim_count = 500;
-    let max_nonzero_dim_count = 1000;
-    let rng_seed: u64 = 2024;
+    let vector_counts = [1000];
 
     let mut group = c.benchmark_group("Insert sparse vectors");
     group.sample_size(10);
 
     for &num_vectors in &vector_counts {
         // Generate random sparse vectors
-        let records = generate_random_sparse_vectors(
-            num_vectors,
-            dimensions,
-            min_nonzero_dim_count,
-            max_nonzero_dim_count,
-            rng_seed,
-        );
+        let records = generate_random_sparse_vectors(num_vectors, dimensions);
 
         // Sequential benchmark
         let seq_test_name = format!("Sequential {} vectors", num_vectors);
@@ -84,25 +68,15 @@ fn benchmark_sequential_inserts(c: &mut Criterion) {
 }
 
 fn benchmark_parallel_inserts(c: &mut Criterion) {
-    // Random vector generation parameters
-    let vector_counts = [1000];
     let dimensions = 1000; // Increased dimensions
-    let min_nonzero_dim_count = 500;
-    let max_nonzero_dim_count = 1000;
-    let rng_seed: u64 = 2024;
+    let vector_counts = [1000, 10000, 100_000];
 
     let mut group = c.benchmark_group("Insert sparse vectors");
     group.sample_size(10);
 
     for &num_vectors in &vector_counts {
         // Generate random sparse vectors
-        let records = generate_random_sparse_vectors(
-            num_vectors,
-            dimensions,
-            min_nonzero_dim_count,
-            max_nonzero_dim_count,
-            rng_seed,
-        );
+        let records = generate_random_sparse_vectors(num_vectors, dimensions);
 
         // Parallel benchmark
         let par_test_name = format!("Parallel {} vectors", num_vectors);

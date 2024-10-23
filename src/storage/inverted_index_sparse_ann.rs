@@ -48,13 +48,13 @@ fn calculate_path(target_dim_index: u32, current_dim_index: u32) -> Vec<usize> {
 pub struct InvertedIndexSparseAnnNode {
     pub dim_index: u32,
     pub implicit: bool,
-    pub data: Arc<[LazyItemVec<u32>; 64]>,
+    pub data: Arc<[LazyItemVec<u32>; 63]>,
     pub lazy_children: LazyItemArray<InvertedIndexSparseAnnNode, 16>,
 }
 
 impl InvertedIndexSparseAnnNode {
     pub fn new(dim_index: u32, implicit: bool) -> Self {
-        let data: Arc<[LazyItemVec<u32>; 64]> = Arc::new(from_fn(|_| LazyItemVec::new()));
+        let data: Arc<[LazyItemVec<u32>; 63]> = Arc::new(from_fn(|_| LazyItemVec::new()));
         InvertedIndexSparseAnnNode {
             dim_index,
             implicit,
@@ -100,7 +100,7 @@ impl InvertedIndexSparseAnnNode {
     /// Finds the quantized value and pushes the vec_Id in array at index = quantized_value
     pub fn insert(node: Arc<InvertedIndexSparseAnnNode>, value: f32, vector_id: u32) {
         let quantized_value = Self::quantize(value);
-        let mut data: Arc<[LazyItemVec<u32>; 64]> = node.data.clone();
+        let mut data: Arc<[LazyItemVec<u32>; 63]> = node.data.clone();
 
         // Insert into the specific LazyItemVec at the index quantized_value
         if let Some(lazy_item_vec) = Arc::make_mut(&mut data).get_mut(quantized_value as usize) {

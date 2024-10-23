@@ -22,16 +22,16 @@ impl DistanceFunction for HammingDistance {
                     quant_vec: vec_y,
                 },
             ) => {
-                // TODO: Implement hamming similarity for UnsignedByte storage
-                unimplemented!("Hamming similarity for UnsignedByte is not implemented yet");
+                // Implement hamming similarity for UnsignedByte storage
+                unimplemented!("Hamming similarity for UnsignedByte not implemented yet")
             }
             (Storage::SubByte { .. }, Storage::SubByte { .. }) => {
-                // TODO: Implement hamming similarity for SubByte storage
-                unimplemented!("Hamming similarity for SubByte is not implemented yet");
+                // Implement hamming similarity for SubByte storage
+                unimplemented!("Hamming similarity for SubByte not implemented yet")
             }
             (Storage::HalfPrecisionFP { .. }, Storage::HalfPrecisionFP { .. }) => {
-                // TODO: Implement hamming similarity for HalfPrecisionFP storage
-                unimplemented!("Hamming similarity for HalfPrecisionFP is not implemented yet");
+                // Implement hamming similarity for HalfPrecisionFP storage
+                unimplemented!("Hamming similarity for HalfPrecisionFP not implemented yet")
             }
             _ => Err(DistanceError::StorageMismatch),
         }

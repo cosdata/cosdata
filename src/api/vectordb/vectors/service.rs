@@ -1,9 +1,6 @@
 use std::sync::Arc;
 
-use crate::{
-    app_context::AppContext,
-    models::{rpc::VectorIdValue, types::VectorId},
-};
+use crate::{app_context::AppContext, models::rpc::VectorIdValue};
 
 use super::{
     dtos::{
@@ -23,11 +20,10 @@ pub(crate) async fn create_vector(
 }
 
 pub(crate) async fn get_vector_by_id(
-    ctx: Arc<AppContext>,
     collection_id: &str,
-    vector_id: VectorId,
+    vector_id: &str,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
-    repo::get_vector_by_id(ctx, collection_id, vector_id).await
+    repo::get_vector_by_id(collection_id, vector_id).await
 }
 
 pub(crate) async fn update_vector_by_id(
@@ -50,9 +46,8 @@ pub(crate) async fn find_similar_vectors(
 }
 
 pub(crate) async fn delete_vector_by_id(
-    ctx: Arc<AppContext>,
     collection_id: &str,
     vector_id: VectorIdValue,
-) -> Result<(), VectorsError> {
-    repo::delete_vector_by_id(ctx, collection_id, vector_id).await
+) -> Result<CreateVectorResponseDto, VectorsError> {
+    repo::delete_vector_by_id(collection_id, vector_id).await
 }

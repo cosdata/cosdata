@@ -27,8 +27,7 @@ impl DistanceFunction for EuclideanDistance {
                 },
             ) => Ok(euclidean_distance_f16(vec_x, vec_y)),
             (Storage::SubByte { .. }, Storage::SubByte { .. }) => {
-                // TODO: Implement euclidean distance for SubByte storage
-                unimplemented!("Euclidean distance for SubByte is not implemented yet");
+                Err(DistanceError::CalculationError) // Implement if needed
             }
             _ => Err(DistanceError::StorageMismatch),
         }
