@@ -50,6 +50,7 @@ tower-service = "0.3.2"
 tracing = "0.1.40"
 toml = "0.8.19"
 jsonwebtoken = "9.3.0"
+rand_chacha = "0.3.1"
 
 [dev-dependencies]
 criterion = "0.5.1"
@@ -113,4 +114,12 @@ harness = false
 
 [[bench]]
 name = "sparse_ann_query_new_ds_benchmark"
+harness = false
+
+[[bench]]
+name = "sparse_ann_query_basic_dashmap_benchmark"
+harness = false
+
+[[bench]]
+name = "sparse_ann_query_tshashmap_benchmark"
 harness = false

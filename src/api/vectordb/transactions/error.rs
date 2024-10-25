@@ -13,24 +13,28 @@ pub(crate) enum TransactionError {
     FailedToGetAppEnv,
     FailedToCreateTransaction(String),
     FailedToCreateVector(String),
+    FailedToDeleteVector(String),
     NotImplemented,
 }
 
 impl Display for TransactionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TransactionError::NotFound => write!(f, "Transaction Not Found!"),
-            TransactionError::CollectionNotFound => write!(f, "Collection not found!"),
-            TransactionError::FailedToGetAppEnv => write!(f, "Failed to get App Env!"),
-            TransactionError::OnGoingTransaction => write!(f, "There is an on-going transaction!"),
-            TransactionError::FailedToCreateTransaction(msg) => {
+            Self::NotFound => write!(f, "Transaction Not Found!"),
+            Self::CollectionNotFound => write!(f, "Collection not found!"),
+            Self::FailedToGetAppEnv => write!(f, "Failed to get App Env!"),
+            Self::OnGoingTransaction => write!(f, "There is an on-going transaction!"),
+            Self::FailedToCreateTransaction(msg) => {
                 write!(f, "Failed to create transaction due to {}", msg)
             }
-            TransactionError::NotImplemented => {
+            Self::NotImplemented => {
                 write!(f, "This is not supported yet!")
             }
-            TransactionError::FailedToCreateVector(msg) => {
+            Self::FailedToCreateVector(msg) => {
                 write!(f, "Failed to create vector in transaction due to {}", msg)
+            }
+            Self::FailedToDeleteVector(msg) => {
+                write!(f, "Failed to delete vector in transaction due to: {}", msg)
             }
         }
     }
@@ -44,13 +48,14 @@ impl ResponseError for TransactionError {
     }
     fn status_code(&self) -> StatusCode {
         match self {
-            TransactionError::NotFound => StatusCode::BAD_REQUEST,
-            TransactionError::CollectionNotFound => StatusCode::BAD_REQUEST,
-            TransactionError::FailedToGetAppEnv => StatusCode::INTERNAL_SERVER_ERROR,
-            TransactionError::FailedToCreateTransaction(_) => StatusCode::BAD_REQUEST,
-            TransactionError::OnGoingTransaction => StatusCode::CONFLICT,
-            TransactionError::NotImplemented => StatusCode::BAD_REQUEST,
-            TransactionError::FailedToCreateVector(_) => StatusCode::BAD_REQUEST,
+            Self::NotFound => StatusCode::BAD_REQUEST,
+            Self::CollectionNotFound => StatusCode::BAD_REQUEST,
+            Self::FailedToGetAppEnv => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::FailedToCreateTransaction(_) => StatusCode::BAD_REQUEST,
+            Self::OnGoingTransaction => StatusCode::CONFLICT,
+            Self::NotImplemented => StatusCode::BAD_REQUEST,
+            Self::FailedToCreateVector(_) => StatusCode::BAD_REQUEST,
+            Self::FailedToDeleteVector(_) => StatusCode::BAD_REQUEST,
         }
     }
 }

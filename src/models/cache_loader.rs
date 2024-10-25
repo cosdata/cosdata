@@ -10,6 +10,9 @@ use crate::storage::inverted_index_sparse_ann::{
     InvertedIndexSparseAnn, InvertedIndexSparseAnnNode,
 };
 use crate::storage::inverted_index_sparse_ann_basic::InvertedIndexSparseAnnNodeBasic;
+use crate::storage::inverted_index_sparse_ann_basic::{
+    InvertedIndexSparseAnnNodeBasicDashMap, InvertedIndexSparseAnnNodeBasicTSHashmap,
+};
 use crate::storage::inverted_index_sparse_ann_new_ds::InvertedIndexNewDSNode;
 use crate::storage::Storage;
 use arcshift::ArcShift;
@@ -30,6 +33,8 @@ pub enum CacheItem {
     InvertedIndexSparseAnnNode(LazyItem<InvertedIndexSparseAnnNode>),
     InvertedIndexSparseAnnNodeBasic(LazyItem<InvertedIndexSparseAnnNodeBasic>),
     InvertedIndexSparseAnn(LazyItem<InvertedIndexSparseAnn>),
+    InvertedIndexSparseAnnNodeBasicTSHashmap(LazyItem<InvertedIndexSparseAnnNodeBasicTSHashmap>),
+    InvertedIndexSparseAnnNodeBasicDashMap(LazyItem<InvertedIndexSparseAnnNodeBasicDashMap>),
     InvertedIndexNewDSNode(LazyItem<InvertedIndexNewDSNode>),
     VectorData(LazyItem<STM<VectorData>>),
 }
@@ -137,6 +142,20 @@ impl Cacheable for InvertedIndexSparseAnnNode {
     }
 }
 
+impl Cacheable for InvertedIndexSparseAnnNodeBasicTSHashmap {
+    fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
+        if let CacheItem::InvertedIndexSparseAnnNodeBasicTSHashmap(item) = cache_item {
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
+        CacheItem::InvertedIndexSparseAnnNodeBasicTSHashmap(item)
+    }
+}
+
 impl Cacheable for InvertedIndexSparseAnn {
     fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
         if let CacheItem::InvertedIndexSparseAnn(item) = cache_item {
@@ -176,6 +195,20 @@ impl Cacheable for InvertedIndexNewDSNode {
 
     fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
         CacheItem::InvertedIndexNewDSNode(item)
+    }
+}
+
+impl Cacheable for InvertedIndexSparseAnnNodeBasicDashMap {
+    fn from_cache_item(cache_item: CacheItem) -> Option<LazyItem<Self>> {
+        if let CacheItem::InvertedIndexSparseAnnNodeBasicDashMap(item) = cache_item {
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    fn into_cache_item(item: LazyItem<Self>) -> CacheItem {
+        CacheItem::InvertedIndexSparseAnnNodeBasicDashMap(item)
     }
 }
 

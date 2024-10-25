@@ -1,5 +1,21 @@
-use super::dtos::CreateIndexDto;
+use std::sync::Arc;
 
-pub(crate) async fn create_index(create_index_dto: CreateIndexDto) -> CreateIndexDto {
-    create_index_dto
+use crate::app_context::AppContext;
+
+use super::{dtos::CreateIndexDto, error::IndexesError, repo};
+
+pub(crate) async fn create_index(
+    create_index_dto: CreateIndexDto,
+    ctx: Arc<AppContext>,
+) -> Result<(), IndexesError> {
+    repo::create_index(
+        ctx,
+        create_index_dto.collection_name,
+        create_index_dto.name,
+        create_index_dto.distance_metric_type,
+        create_index_dto.quantization,
+        create_index_dto.data_type,
+        create_index_dto.index_params,
+    )
+    .await
 }

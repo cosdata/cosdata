@@ -8,7 +8,6 @@ pub mod sparse_ann_query;
 pub mod sparse_ann_query_basic;
 pub mod sparse_ann_query_new_ds;
 
-
 use half::f16;
 use serde::{Deserialize, Serialize};
 
@@ -28,7 +27,7 @@ pub enum Storage {
         quant_vec: Vec<u8>,
     },
     SubByte {
-        mag: u32,
+        mag: f32,
         quant_vec: Vec<Vec<u8>>,
         resolution: u8,
     },

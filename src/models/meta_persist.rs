@@ -2,13 +2,8 @@ use crate::models::common::*;
 use crate::models::types::*;
 use crate::models::versioning::*;
 use crate::quantization::StorageType;
-use lmdb::Cursor;
-use lmdb::Database;
-use lmdb::DatabaseFlags;
-use lmdb::Environment;
-use lmdb::{Transaction, WriteFlags};
-use serde_cbor::from_slice;
-use serde_cbor::to_vec;
+use lmdb::{Cursor, Database, DatabaseFlags, Environment, Transaction, WriteFlags};
+use serde_cbor::{from_slice, to_vec};
 use siphasher::sip::SipHasher24;
 use std::hash::Hasher;
 use std::sync::Arc;
@@ -65,12 +60,12 @@ pub fn retrieve_current_version(lmdb: &MetaDb) -> Result<Hash, WaCustomError> {
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct DenseIndexData {
     pub name: String,
-    pub max_level: u8,
+    pub num_layers: u8,
     pub levels_prob: Arc<Vec<(f64, i32)>>,
-    pub quant_dim: usize,
+    pub dim: usize,
     pub file_index: FileIndex,
-    pub quantization_metric: Arc<QuantizationMetric>,
-    pub distance_metric: Arc<DistanceMetric>,
+    pub quantization_metric: QuantizationMetric,
+    pub distance_metric: DistanceMetric,
     pub storage_type: StorageType,
     pub size: usize,
     pub lower_bound: Option<f32>,
@@ -93,13 +88,13 @@ impl TryFrom<Arc<DenseIndex>> for DenseIndexData {
         };
         let dense_index_data = Self {
             name: dense_index.database_name.clone(),
-            max_level: dense_index.max_cache_level,
+            num_layers: dense_index.hnsw_params.clone().num_layers,
             levels_prob: dense_index.levels_prob.clone(),
-            quant_dim: dense_index.quant_dim,
+            dim: dense_index.dim,
             file_index: offset,
-            quantization_metric: dense_index.quantization_metric.clone(),
-            distance_metric: dense_index.distance_metric.clone(),
-            storage_type: dense_index.storage_type.clone(),
+            quantization_metric: dense_index.quantization_metric.clone().get().clone(),
+            distance_metric: dense_index.distance_metric.clone().get().clone(),
+            storage_type: dense_index.storage_type.clone().get().clone(),
             size: 0,
             lower_bound: None,
             upper_bound: None,

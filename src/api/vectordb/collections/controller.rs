@@ -1,7 +1,4 @@
-use actix_web::{
-    web::{self},
-    HttpResponse, Result,
-};
+use actix_web::{web, HttpResponse, Result};
 
 use crate::app_context::AppContext;
 

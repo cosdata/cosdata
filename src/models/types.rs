@@ -17,9 +17,10 @@ use crate::models::common::*;
 use crate::models::identity_collections::*;
 use crate::models::lazy_load::*;
 use crate::models::versioning::*;
-use crate::quantization::product::ProductQuantization;
-use crate::quantization::scalar::ScalarQuantization;
-use crate::quantization::{Quantization, QuantizationError, StorageType};
+use crate::quantization::{
+    product::ProductQuantization, scalar::ScalarQuantization, Quantization, QuantizationError,
+    StorageType,
+};
 use crate::storage::Storage;
 use arcshift::ArcShift;
 use dashmap::DashMap;
@@ -30,6 +31,7 @@ use std::fmt;
 use std::fs::*;
 use std::hash::{DefaultHasher, Hash as StdHash, Hasher};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -69,7 +71,7 @@ impl Identifiable for MergedNode {
 
 pub type PropPersistRef = (FileOffset, BytesToRead);
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct NodeProp {
     pub id: VectorId,
     pub value: Arc<Storage>,
@@ -139,7 +141,8 @@ impl MetricResult {
     }
 }
 
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DistanceMetric {
     Cosine,
     Euclidean,
@@ -171,7 +174,7 @@ impl DistanceFunction for DistanceMetric {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum QuantizationMetric {
     Scalar,
     Product(ProductQuantization),
@@ -189,10 +192,7 @@ impl Quantization for QuantizationMetric {
         }
     }
 
-    fn train(
-        &mut self,
-        vectors: &[Vec<f32>],
-    ) -> Result<(), crate::quantization::QuantizationError> {
+    fn train(&mut self, vectors: &[&[f32]]) -> Result<(), QuantizationError> {
         match self {
             Self::Scalar => ScalarQuantization.train(vectors),
             Self::Product(product) => product.train(vectors),
@@ -378,22 +378,46 @@ impl MetaDb {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct HNSWHyperParams {
+    pub m: usize,
+    pub ef_construction: usize,
+    pub ef_search: usize,
+    pub num_layers: u8,
+    pub max_cache_size: usize,
+}
+
+impl Default for HNSWHyperParams {
+    fn default() -> Self {
+        Self {
+            m: 16,
+            ef_construction: 100,
+            ef_search: 15,
+            num_layers: 5,
+            max_cache_size: 1000,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct DenseIndex {
     pub exec_queue_nodes: ExecQueueUpdate,
-    pub max_cache_level: u8,
     pub database_name: String,
     pub root_vec: LazyItemRef<MergedNode>,
     pub levels_prob: Arc<Vec<(f64, i32)>>,
-    pub quant_dim: usize,
+    pub dim: usize,
     pub prop_file: Arc<File>,
     pub lmdb: MetaDb,
     pub current_version: ArcShift<Hash>,
     pub current_open_transaction: ArcShift<Option<Hash>>,
-    pub quantization_metric: Arc<QuantizationMetric>,
-    pub distance_metric: Arc<DistanceMetric>,
-    pub storage_type: StorageType,
+    pub quantization_metric: ArcShift<QuantizationMetric>,
+    pub distance_metric: ArcShift<DistanceMetric>,
+    pub storage_type: ArcShift<StorageType>,
     pub vcs: Arc<VersionControl>,
+    pub hnsw_params: ArcShift<HNSWHyperParams>,
+    // Whether the VectorStore has been configured or not
+    pub configured: Arc<AtomicBool>,
+    pub auto_config: Arc<AtomicBool>,
     pub cache: Arc<NodeRegistry>,
     pub index_manager: Arc<BufferManagerFactory>,
     pub vec_raw_manager: Arc<BufferManagerFactory>,
@@ -402,29 +426,29 @@ pub struct DenseIndex {
 impl DenseIndex {
     pub fn new(
         exec_queue_nodes: ExecQueueUpdate,
-        max_cache_level: u8,
         database_name: String,
         root_vec: LazyItemRef<MergedNode>,
         levels_prob: Arc<Vec<(f64, i32)>>,
-        quant_dim: usize,
+        dim: usize,
         prop_file: Arc<File>,
         lmdb: MetaDb,
         current_version: ArcShift<Hash>,
-        quantization_metric: Arc<QuantizationMetric>,
-        distance_metric: Arc<DistanceMetric>,
-        storage_type: StorageType,
+        quantization_metric: ArcShift<QuantizationMetric>,
+        distance_metric: ArcShift<DistanceMetric>,
+        storage_type: ArcShift<StorageType>,
         vcs: Arc<VersionControl>,
+        num_layers: u8,
+        auto_config: bool,
         cache: Arc<NodeRegistry>,
         index_manager: Arc<BufferManagerFactory>,
         vec_raw_manager: Arc<BufferManagerFactory>,
     ) -> Self {
         DenseIndex {
             exec_queue_nodes,
-            max_cache_level,
             database_name,
             root_vec,
             levels_prob,
-            quant_dim,
+            dim,
             prop_file,
             lmdb,
             current_version,
@@ -433,11 +457,18 @@ impl DenseIndex {
             distance_metric,
             storage_type,
             vcs,
+            hnsw_params: ArcShift::new(HNSWHyperParams {
+                num_layers,
+                ..Default::default()
+            }),
+            configured: Arc::new(AtomicBool::new(false)),
+            auto_config: Arc::new(AtomicBool::new(auto_config)),
             cache,
             index_manager,
             vec_raw_manager,
         }
     }
+
     // Get method
     pub fn get_current_version(&self) -> Hash {
         let mut arc = self.current_version.clone();
@@ -448,6 +479,22 @@ impl DenseIndex {
     pub fn set_current_version(&self, new_version: Hash) {
         let mut arc = self.current_version.clone();
         arc.update(new_version);
+    }
+
+    pub fn get_configured_flag(&self) -> bool {
+        self.configured.load(Ordering::Relaxed)
+    }
+
+    pub fn set_configured_flag(&self, flag: bool) {
+        self.configured.store(flag, Ordering::Relaxed);
+    }
+
+    pub fn get_auto_config_flag(&self) -> bool {
+        self.auto_config.load(Ordering::Relaxed)
+    }
+
+    pub fn set_auto_config_flag(&self, flag: bool) {
+        self.auto_config.store(flag, Ordering::Relaxed);
     }
 
     /// Returns FileIndex (offset) corresponding to the root
@@ -603,18 +650,21 @@ impl CollectionsMap {
         let current_version = retrieve_current_version(&lmdb)?;
         let dense_index = DenseIndex::new(
             STM::new(Vec::new(), 1, true),
-            dense_index_data.max_level,
+            // dense_index_data.max_level,
             coll.name.clone(),
             root,
             dense_index_data.levels_prob,
-            dense_index_data.quant_dim,
+            dense_index_data.dim,
             prop_file.clone(),
             lmdb,
             ArcShift::new(current_version),
-            dense_index_data.quantization_metric.clone(),
-            dense_index_data.distance_metric.clone(),
-            dense_index_data.storage_type,
+            ArcShift::new(dense_index_data.quantization_metric),
+            ArcShift::new(dense_index_data.distance_metric),
+            ArcShift::new(dense_index_data.storage_type),
             vcs,
+            dense_index_data.num_layers,
+            // TODO: persist
+            true,
             cache,
             index_manager,
             vec_raw_manager,
