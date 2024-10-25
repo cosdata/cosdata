@@ -21,7 +21,7 @@ pub(crate) async fn create_index(
 ) -> Result<(), IndexesError> {
     let collection = ctx
         .ain_env
-        .vector_store_map
+        .collections_map
         .get(&collection_name)
         .map(|collection| collection.clone())
         .ok_or(IndexesError::CollectionNotFound)?;

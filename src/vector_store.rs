@@ -6,7 +6,7 @@ use crate::models::file_persist::*;
 use crate::models::identity_collections::IdentitySet;
 use crate::models::kmeans::{concat_vectors, generate_initial_centroids, kmeans, should_continue};
 use crate::models::lazy_load::*;
-use crate::models::meta_persist::store_current_version;
+use crate::models::meta_persist::update_current_version;
 use crate::models::types::*;
 use crate::models::versioning::Hash;
 use crate::quantization::{Quantization, StorageType};
@@ -25,7 +25,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 pub fn ann_search(
-    vec_store: Arc<VectorStore>,
+    dense_index: Arc<DenseIndex>,
     vector_emb: QuantizedVectorEmbedding,
     cur_entry: LazyItem<MergedNode>,
     cur_level: HNSWLevel,
@@ -34,7 +34,7 @@ pub fn ann_search(
     let mut skipm = HashSet::new();
     skipm.insert(vector_emb.hash_vec.clone());
 
-    let cur_node = cur_entry.get_data(vec_store.cache.clone());
+    let cur_node = cur_entry.get_data(dense_index.cache.clone());
 
     let mut prop_arc = cur_node.prop.clone();
     let prop_state = prop_arc.get();
@@ -49,7 +49,7 @@ pub fn ann_search(
     };
 
     let z = traverse_find_nearest(
-        vec_store.clone(),
+        dense_index.clone(),
         cur_entry.clone(),
         fvec.clone(),
         0,
@@ -58,7 +58,7 @@ pub fn ann_search(
         false,
     )?;
 
-    let dist = vec_store
+    let dist = dense_index
         .distance_metric
         .calculate(&fvec, &node_prop.value)?;
 
@@ -72,7 +72,7 @@ pub fn ann_search(
         Some(vec![])
     } else {
         ann_search(
-            vec_store,
+            dense_index,
             vector_emb,
             z[0].0.clone(),
             HNSWLevel(cur_level.0 - 1),
@@ -83,15 +83,15 @@ pub fn ann_search(
 }
 
 pub fn vector_fetch(
-    vec_store: Arc<VectorStore>,
+    dense_index: Arc<DenseIndex>,
     vector_id: VectorId,
 ) -> Result<Vec<Option<(VectorId, Vec<(VectorId, MetricResult)>)>>, WaCustomError> {
     let mut results = Vec::new();
 
-    for lev in 0..=vec_store.hnsw_params.clone().get().num_layers {
+    for lev in 0..=dense_index.hnsw_params.clone().get().num_layers {
         let maybe_res = load_vector_id_lsmdb(HNSWLevel(lev), vector_id.clone());
         let neighbors = maybe_res
-            .try_get_data(vec_store.cache.clone())
+            .try_get_data(dense_index.cache.clone())
             .ok()
             .and_then(|data| {
                 let id = get_vector_id_from_node(data.clone())?;
@@ -101,7 +101,7 @@ pub fn vector_fetch(
                     data.neighbors
                         .iter()
                         .filter_map(|ne| {
-                            let data = ne.1.try_get_data(vec_store.cache.clone()).ok()?;
+                            let data = ne.1.try_get_data(dense_index.cache.clone()).ok()?;
                             Some((get_vector_id_from_node(data)?, ne.0))
                         })
                         .collect(),
@@ -182,7 +182,7 @@ impl EmbeddingOffset {
 ///
 /// # Arguments
 ///
-/// * `vec_store` - An `Arc`-wrapped `VectorStore` instance, which contains the LMDB environment and database for embeddings.
+/// * `dense_index` - An `Arc`-wrapped `DenseIndex` instance, which contains the LMDB environment and database for embeddings.
 /// * `vector_id` - The ID of the vector whose embedding is to be retrieved.
 ///
 /// # Returns
@@ -203,11 +203,11 @@ impl EmbeddingOffset {
 /// ```
 /// use std::sync::Arc;
 /// use std::path::Path;
-/// use my_crate::{VectorStore, get_embedding_by_id, RawVectorEmbedding, WaCustomError, VectorId};
+/// use my_crate::{DenseIndex, get_embedding_by_id, RawVectorEmbedding, WaCustomError, VectorId};
 ///
-/// let vec_store = Arc::new(VectorStore::new());
+/// let dense_index = Arc::new(DenseIndex::new());
 /// let vector_id = VectorId::Int(42); // Example vector ID
-/// match get_embedding_by_id(vec_store.clone(), vector_id) {
+/// match get_embedding_by_id(dense_index.clone(), vector_id) {
 ///     Ok(embedding) => println!("Embedding: {:?}", embedding),
 ///     Err(err) => eprintln!("Error retrieving embedding: {:?}", err),
 /// }
@@ -222,11 +222,11 @@ impl EmbeddingOffset {
 /// Ensure that the buffer manager and the database are correctly initialized and configured before calling this function.
 /// The function assumes the existence of methods and types like `EmbeddingOffset::deserialize`, `BufferManagerFactory::new`, and `read_embedding` which should be implemented correctly.
 pub fn get_embedding_by_id(
-    vec_store: Arc<VectorStore>,
+    dense_index: Arc<DenseIndex>,
     vector_id: VectorId,
 ) -> Result<RawVectorEmbedding, WaCustomError> {
-    let env = vec_store.lmdb.env.clone();
-    let db = vec_store.lmdb.db.clone();
+    let env = dense_index.lmdb.env.clone();
+    let db = dense_index.lmdb.db.clone();
 
     let txn = env
         .begin_rw_txn()
@@ -243,7 +243,7 @@ pub fn get_embedding_by_id(
 
     let offset = embedding_offset.offset;
     let current_version = embedding_offset.version;
-    let bufman = vec_store.vec_raw_manager.get(&current_version)?;
+    let bufman = dense_index.vec_raw_manager.get(&current_version)?;
     let (embedding, _next) = read_embedding(bufman.clone(), offset)?;
 
     Ok(embedding)
@@ -282,7 +282,7 @@ fn read_embedding(
     Ok((emb, next))
 }
 
-fn auto_config_storage_type(vec_store: Arc<VectorStore>, vectors: &[&[f32]]) {
+fn auto_config_storage_type(dense_index: Arc<DenseIndex>, vectors: &[&[f32]]) {
     let threshold = 0.0;
     let iterations = 32;
 
@@ -312,17 +312,17 @@ fn auto_config_storage_type(vec_store: Arc<VectorStore>, vectors: &[&[f32]]) {
         StorageType::UnsignedByte
     };
 
-    vec_store.storage_type.update_shared(storage_type);
+    dense_index.storage_type.update_shared(storage_type);
 }
 
 pub fn insert_embedding(
     bufman: Arc<BufferManager>,
-    vec_store: Arc<VectorStore>,
+    dense_index: Arc<DenseIndex>,
     emb: &RawVectorEmbedding,
     current_version: Hash,
 ) -> Result<(), WaCustomError> {
-    let env = vec_store.lmdb.env.clone();
-    let db = vec_store.lmdb.db.clone();
+    let env = dense_index.lmdb.env.clone();
+    let db = dense_index.lmdb.db.clone();
 
     let mut txn = env
         .begin_rw_txn()
@@ -370,11 +370,11 @@ pub fn insert_embedding(
 }
 
 pub fn index_embeddings(
-    vec_store: Arc<VectorStore>,
+    dense_index: Arc<DenseIndex>,
     upload_process_batch_size: usize,
 ) -> Result<(), WaCustomError> {
-    let env = vec_store.lmdb.env.clone();
-    let db = vec_store.lmdb.db.clone();
+    let env = dense_index.lmdb.env.clone();
+    let db = dense_index.lmdb.db.clone();
 
     let txn = env
         .begin_ro_txn()
@@ -408,7 +408,7 @@ pub fn index_embeddings(
         Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
     };
     let version = embedding_offset.version;
-    let version_hash = vec_store
+    let version_hash = dense_index
         .vcs
         .get_version_hash(&version)
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?
@@ -420,9 +420,9 @@ pub fn index_embeddings(
     let mut index = |embeddings: Vec<RawVectorEmbedding>,
                      next_offset: u32|
      -> Result<(), WaCustomError> {
-        let mut quantization_arc = vec_store.quantization_metric.clone();
+        let mut quantization_arc = dense_index.quantization_metric.clone();
         // Set to auto config but is not configured
-        if vec_store.get_auto_config_flag() && !vec_store.get_configured_flag() {
+        if dense_index.get_auto_config_flag() && !dense_index.get_configured_flag() {
             let quantization = quantization_arc.get();
             let mut new_quantization = quantization.clone();
             let vectors: Vec<&[f32]> = embeddings
@@ -431,20 +431,20 @@ pub fn index_embeddings(
                 .collect();
             new_quantization.train(&vectors)?;
             quantization_arc.update(new_quantization);
-            auto_config_storage_type(vec_store.clone(), &vectors);
-            vec_store.set_configured_flag(true);
+            auto_config_storage_type(dense_index.clone(), &vectors);
+            dense_index.set_configured_flag(true);
         }
         let quantization = quantization_arc.get();
         let results: Vec<()> = embeddings
             .into_par_iter()
             .map(|raw_emb| {
-                let lp = &vec_store.levels_prob;
+                let lp = &dense_index.levels_prob;
                 let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
                 let quantized_vec = Arc::new(
                     quantization
                         .quantize(
                             &raw_emb.raw_vec,
-                            vec_store.storage_type.clone().get().clone(),
+                            dense_index.storage_type.clone().get().clone(),
                         )
                         .expect("Quantization failed"),
                 );
@@ -459,12 +459,12 @@ pub fn index_embeddings(
                 };
 
                 index_embedding(
-                    vec_store.clone(),
+                    dense_index.clone(),
                     None,
                     embedding,
                     prop,
-                    vec_store.root_vec.item.clone().get().clone(),
-                    HNSWLevel(vec_store.hnsw_params.clone().get().num_layers),
+                    dense_index.root_vec.item.clone().get().clone(),
+                    HNSWLevel(dense_index.hnsw_params.clone().get().num_layers),
                     HNSWLevel(iv.try_into().unwrap()),
                     version,
                     version_number,
@@ -524,7 +524,7 @@ pub fn index_embeddings(
         Ok(())
     };
 
-    let bufman = vec_store.vec_raw_manager.get(&version)?;
+    let bufman = dense_index.vec_raw_manager.get(&version)?;
 
     let mut i = embedding_offset.offset;
     let cursor = bufman.open_cursor()?;
@@ -554,7 +554,7 @@ pub fn index_embeddings(
 }
 
 pub fn index_embedding(
-    vec_store: Arc<VectorStore>,
+    dense_index: Arc<DenseIndex>,
     parent: Option<LazyItem<MergedNode>>,
     vector_emb: QuantizedVectorEmbedding,
     prop: ArcShift<PropState>,
@@ -569,9 +569,9 @@ pub fn index_embedding(
     skipm.insert(vector_emb.hash_vec.clone());
 
     let cur_node = cur_entry
-        .get_latest_version(vec_store.cache.clone())
+        .get_latest_version(dense_index.cache.clone())
         .0
-        .get_data(vec_store.cache.clone());
+        .get_data(dense_index.cache.clone());
 
     let mut prop_arc = cur_node.prop.clone();
     let prop_state = prop_arc.get();
@@ -586,7 +586,7 @@ pub fn index_embedding(
     };
 
     let z = traverse_find_nearest(
-        vec_store.clone(),
+        dense_index.clone(),
         cur_entry.clone(),
         fvec.clone(),
         0,
@@ -597,7 +597,7 @@ pub fn index_embedding(
 
     // @DOUBT: May be this distance can be calculated only if z is
     // empty
-    let dist = vec_store
+    let dist = dense_index
         .distance_metric
         .calculate(&fvec, &node_prop.value)?;
 
@@ -616,7 +616,7 @@ pub fn index_embedding(
 
     let parent = if cur_level.0 <= max_insert_level.0 {
         let parent = insert_node_create_edges(
-            vec_store.clone(),
+            dense_index.clone(),
             parent,
             prop.clone(),
             z,
@@ -633,7 +633,7 @@ pub fn index_embedding(
 
     if cur_level.0 != 0 {
         index_embedding(
-            vec_store.clone(),
+            dense_index.clone(),
             parent,
             vector_emb.clone(),
             prop,
@@ -649,11 +649,11 @@ pub fn index_embedding(
 }
 
 pub fn queue_node_prop_exec(
-    vec_store: Arc<VectorStore>,
+    dense_index: Arc<DenseIndex>,
     lznode: LazyItem<MergedNode>,
 ) -> Result<(), WaCustomError> {
     let (node, _location) = (
-        lznode.try_get_data(vec_store.cache.clone())?,
+        lznode.try_get_data(dense_index.cache.clone())?,
         lznode
             .get_file_index()
             .ok_or(WaCustomError::LazyLoadingError(
@@ -663,7 +663,7 @@ pub fn queue_node_prop_exec(
 
     if let PropState::Ready(prop) = node.get_prop() {
         if prop.location.is_none() {
-            let location = write_prop_to_file(&prop.id, prop.value.clone(), &vec_store.prop_file)?;
+            let location = write_prop_to_file(&prop.id, prop.value.clone(), &dense_index.prop_file)?;
             node.set_prop_location(location);
         }
     };
@@ -673,7 +673,7 @@ pub fn queue_node_prop_exec(
     }
 
     // Add the node to exec_queue_nodes
-    let mut exec_queue = vec_store.exec_queue_nodes.clone();
+    let mut exec_queue = dense_index.exec_queue_nodes.clone();
     exec_queue
         .transactional_update(|queue| {
             let mut new_queue = queue.clone();
@@ -685,13 +685,13 @@ pub fn queue_node_prop_exec(
     Ok(())
 }
 
-pub fn auto_commit_transaction(vec_store: Arc<VectorStore>) -> Result<(), WaCustomError> {
-    // Retrieve exec_queue_nodes from vec_store
-    let mut exec_queue_nodes_arc = vec_store.exec_queue_nodes.clone();
+pub fn auto_commit_transaction(dense_index: Arc<DenseIndex>) -> Result<(), WaCustomError> {
+    // Retrieve exec_queue_nodes from dense_index
+    let mut exec_queue_nodes_arc = dense_index.exec_queue_nodes.clone();
     let mut exec_queue_nodes = exec_queue_nodes_arc.get().clone();
 
     for node in exec_queue_nodes.iter_mut() {
-        persist_node_update_loc(vec_store.index_manager.clone(), node)?;
+        persist_node_update_loc(dense_index.index_manager.clone(), node)?;
     }
 
     exec_queue_nodes_arc.update(Vec::new());
@@ -726,7 +726,7 @@ fn create_node_extract_neighbours(
 }
 
 fn insert_node_create_edges(
-    vec_store: Arc<VectorStore>,
+    dense_index: Arc<DenseIndex>,
     parent: Option<LazyItem<MergedNode>>,
     prop: ArcShift<PropState>,
     nbs: Vec<(LazyItem<MergedNode>, MetricResult)>,
@@ -756,10 +756,10 @@ fn insert_node_create_edges(
     }
 
     for (nbr1, dist) in nbs.into_iter() {
-        if let Ok(old_neighbour) = nbr1.try_get_data(vec_store.cache.clone()) {
+        if let Ok(old_neighbour) = nbr1.try_get_data(dense_index.cache.clone()) {
             let (new_neighbor, mut new_neighbor_neighbors, mut neighbor_list) =
-                if let Some(version) = nbr1.get_version(vec_store.cache.clone(), version_number) {
-                    let node = version.get_data(vec_store.cache.clone());
+                if let Some(version) = nbr1.get_version(dense_index.cache.clone(), version_number) {
+                    let node = version.get_data(dense_index.cache.clone());
                     let neighbor_list: Vec<(LazyItem<MergedNode>, MetricResult)> =
                         node.neighbors.iter().map(|nbr2| (nbr2.1, nbr2.0)).collect();
                     (version, node.neighbors.clone(), neighbor_list)
@@ -775,13 +775,13 @@ fn insert_node_create_edges(
                         parent,
                         child,
                     );
-                    nbr1.add_version(vec_store.cache.clone(), new_neighbour.clone());
+                    nbr1.add_version(dense_index.cache.clone(), new_neighbour.clone());
                     let neighbor_list: Vec<(LazyItem<MergedNode>, MetricResult)> = old_neighbour
                         .neighbors
                         .iter()
                         .map(|nbr2| (nbr2.1, nbr2.0))
                         .collect();
-                    let mut exec_queue = vec_store.exec_queue_nodes.clone();
+                    let mut exec_queue = dense_index.exec_queue_nodes.clone();
                     exec_queue
                         .transactional_update(|queue| {
                             let mut new_queue = queue.clone();
@@ -814,13 +814,13 @@ fn insert_node_create_edges(
         }
     }
 
-    queue_node_prop_exec(vec_store, node.clone())?;
+    queue_node_prop_exec(dense_index, node.clone())?;
 
     Ok(node)
 }
 
 fn traverse_find_nearest(
-    vec_store: Arc<VectorStore>,
+    dense_index: Arc<DenseIndex>,
     vtm: LazyItem<MergedNode>,
     fvec: Arc<Storage>,
     hops: u8,
@@ -831,9 +831,9 @@ fn traverse_find_nearest(
     let mut tasks: SmallVec<[Vec<(LazyItem<MergedNode>, MetricResult)>; 24]> = SmallVec::new();
 
     let node = vtm
-        .get_latest_version(vec_store.cache.clone())
+        .get_latest_version(dense_index.cache.clone())
         .0
-        .get_data(vec_store.cache.clone());
+        .get_data(dense_index.cache.clone());
 
     for (index, nref) in node.neighbors.iter().enumerate() {
         if let Some(mut neighbor_arc) = nref.1.get_lazy_data() {
@@ -857,11 +857,11 @@ fn traverse_find_nearest(
                     continue;
                 }
 
-                let vec_store = vec_store.clone();
+                let dense_index = dense_index.clone();
                 let fvec = fvec.clone();
 
                 if skipm.insert(nb.clone()) {
-                    let dist = vec_store
+                    let dist = dense_index
                         .distance_metric
                         .calculate(&fvec, &node_prop.value)?;
 
@@ -870,11 +870,11 @@ fn traverse_find_nearest(
                         <= tapered_total_hops(
                             full_hops,
                             cur_level.0,
-                            vec_store.hnsw_params.clone().get().num_layers,
+                            dense_index.hnsw_params.clone().get().num_layers,
                         )
                     {
                         let mut z = traverse_find_nearest(
-                            vec_store.clone(),
+                            dense_index.clone(),
                             nref.1.clone(),
                             fvec.clone(),
                             hops + 1,
@@ -916,13 +916,13 @@ fn traverse_find_nearest(
     Ok(nn.into_iter().take(5).collect())
 }
 
-pub fn create_index_in_collection(vec_store: Arc<VectorStore>) -> Result<(), WaCustomError> {
-    let collection_path: Arc<Path> = Path::new(&vec_store.database_name).into();
+pub fn create_index_in_collection(dense_index: Arc<DenseIndex>) -> Result<(), WaCustomError> {
+    let collection_path: Arc<Path> = Path::new(&dense_index.database_name).into();
 
     // TODO(a-rustacean): store the min & max in the `VectorStore` in the collection creation step and use here
     let min = -1.0;
     let max = 1.0;
-    let vec = (0..vec_store.dim)
+    let vec = (0..dense_index.dim)
         .map(|_| {
             let mut rng = thread_rng();
 
@@ -931,11 +931,11 @@ pub fn create_index_in_collection(vec_store: Arc<VectorStore>) -> Result<(), WaC
         })
         .collect::<Vec<f32>>();
     let vec_hash = VectorId::Int(-1);
-    let mut quantization_metric_arc = vec_store.quantization_metric.clone();
+    let mut quantization_metric_arc = dense_index.quantization_metric.clone();
     let quantization_metric = quantization_metric_arc.get();
 
     let vector_list =
-        Arc::new(quantization_metric.quantize(&vec, *vec_store.storage_type.clone().get())?);
+        Arc::new(quantization_metric.quantize(&vec, *dense_index.storage_type.clone().get())?);
 
     let prop_file = Arc::new(
         OpenOptions::new()
@@ -946,7 +946,7 @@ pub fn create_index_in_collection(vec_store: Arc<VectorStore>) -> Result<(), WaC
             .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?,
     );
 
-    let hash = vec_store.root_vec.get_current_version();
+    let hash = dense_index.root_vec.get_current_version();
 
     let location = write_prop_to_file(&vec_hash, vector_list.clone(), &prop_file)?;
 
@@ -971,7 +971,7 @@ pub fn create_index_in_collection(vec_store: Arc<VectorStore>) -> Result<(), WaC
     let mut prev: LazyItemRef<MergedNode> = LazyItemRef::from_lazy(root.clone());
 
     let mut nodes = Vec::new();
-    for l in (1..=vec_store.hnsw_params.clone().get().num_layers).rev() {
+    for l in (1..=dense_index.hnsw_params.clone().get().num_layers).rev() {
         let current_node = Arc::new(MergedNode {
             hnsw_level: HNSWLevel(l),
             prop: prop.clone(),
@@ -993,31 +993,31 @@ pub fn create_index_in_collection(vec_store: Arc<VectorStore>) -> Result<(), WaC
     }
 
     for nn in nodes.iter_mut() {
-        persist_node_update_loc(vec_store.index_manager.clone(), &mut nn.item)?;
+        persist_node_update_loc(dense_index.index_manager.clone(), &mut nn.item)?;
     }
 
-    vec_store.index_manager.flush_all()?;
+    dense_index.index_manager.flush_all()?;
 
     // The whole index is empty now
-    vec_store.root_vec.item.clone().update(root);
-    vec_store.set_auto_config_flag(false);
-    vec_store.set_configured_flag(true);
+    dense_index.root_vec.item.clone().update(root);
+    dense_index.set_auto_config_flag(false);
+    dense_index.set_configured_flag(true);
 
     Ok(())
 }
 
 fn delete_node_update_neighbours(
-    vec_store: Arc<VectorStore>,
+    dense_index: Arc<DenseIndex>,
     item: LazyItem<MergedNode>,
     skipm: HashSet<VectorId>,
     version_id: Hash,
     version_number: u16,
     hnsw_level: HNSWLevel,
 ) -> Result<(), WaCustomError> {
-    let node = item.get_data(vec_store.cache.clone());
+    let node = item.get_data(dense_index.cache.clone());
     for nbr in node.neighbors.iter() {
         let mut skipm = skipm.clone();
-        let nbr_node = nbr.1.get_data(vec_store.cache.clone());
+        let nbr_node = nbr.1.get_data(dense_index.cache.clone());
         let (nbr_id, nbr_vec) = match nbr_node.get_prop() {
             PropState::Ready(prop) => (prop.id.clone(), prop.value.clone()),
             PropState::Pending(_) => {
@@ -1027,18 +1027,18 @@ fn delete_node_update_neighbours(
         };
         skipm.insert(nbr_id);
         let mut nbr_nbrs = traverse_find_nearest(
-            vec_store.clone(),
-            vec_store
+            dense_index.clone(),
+            dense_index
                 .root_vec
                 .item
                 .clone()
                 .get()
-                .get_latest_version(vec_store.cache.clone())
+                .get_latest_version(dense_index.cache.clone())
                 .0,
             nbr_vec,
             0,
             &mut skipm,
-            HNSWLevel(vec_store.hnsw_params.clone().get().num_layers),
+            HNSWLevel(dense_index.hnsw_params.clone().get().num_layers),
             false,
         )?;
 
@@ -1049,8 +1049,8 @@ fn delete_node_update_neighbours(
                 .map(|(node, dist)| EagerLazyItem(dist, node)),
         );
 
-        if let Some(version) = nbr.1.get_version(vec_store.cache.clone(), version_number) {
-            let nbr_current_version_data = version.get_data(vec_store.cache.clone());
+        if let Some(version) = nbr.1.get_version(dense_index.cache.clone(), version_number) {
+            let nbr_current_version_data = version.get_data(dense_index.cache.clone());
             nbr_current_version_data
                 .neighbors
                 .items
@@ -1066,8 +1066,8 @@ fn delete_node_update_neighbours(
                 nbr_node.child.clone(),
             );
             new_neighbours.items.update(nbr_nbrs_set);
-            nbr.1.add_version(vec_store.cache.clone(), new_version);
-            let mut exec_queue = vec_store.exec_queue_nodes.clone();
+            nbr.1.add_version(dense_index.cache.clone(), new_version);
+            let mut exec_queue = dense_index.exec_queue_nodes.clone();
             exec_queue
                 .transactional_update(|queue| {
                     let mut new_queue = queue.clone();
@@ -1081,43 +1081,43 @@ fn delete_node_update_neighbours(
 }
 
 pub fn delete_vector_by_id(
-    vec_store: Arc<VectorStore>,
+    dense_index: Arc<DenseIndex>,
     vector_id: VectorId,
 ) -> Result<(), WaCustomError> {
-    let (current_version, current_version_number) = vec_store
+    let (current_version, current_version_number) = dense_index
         .vcs
         .add_next_version("main")
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-    vec_store.set_current_version(current_version);
-    store_current_version(&vec_store.lmdb, current_version)?;
+    dense_index.set_current_version(current_version);
+    update_current_version(&dense_index.lmdb, current_version)?;
 
-    let vec_raw = get_embedding_by_id(vec_store.clone(), vector_id.clone())?;
-    let quantized = Arc::new(vec_store.quantization_metric.clone().get().quantize(
+    let vec_raw = get_embedding_by_id(dense_index.clone(), vector_id.clone())?;
+    let quantized = Arc::new(dense_index.quantization_metric.clone().get().quantize(
         &vec_raw.raw_vec,
-        vec_store.storage_type.clone().get().clone(),
+        dense_index.storage_type.clone().get().clone(),
     )?);
     let mut skipm = HashSet::new();
     skipm.insert(vec_raw.hash_vec);
     let items = traverse_find_nearest(
-        vec_store.clone(),
-        vec_store
+        dense_index.clone(),
+        dense_index
             .root_vec
             .item
             .clone()
             .get()
-            .get_latest_version(vec_store.cache.clone())
+            .get_latest_version(dense_index.cache.clone())
             .0,
         quantized,
         0,
         &mut skipm,
-        HNSWLevel(vec_store.hnsw_params.clone().get().num_layers),
+        HNSWLevel(dense_index.hnsw_params.clone().get().num_layers),
         false,
     )?;
 
     let mut maybe_item = None;
 
     for (item, _) in items {
-        let data = item.get_data(vec_store.cache.clone());
+        let data = item.get_data(dense_index.cache.clone());
         let prop = match data.get_prop() {
             PropState::Ready(prop) => prop.id.clone(),
             PropState::Pending(_) => {
@@ -1137,9 +1137,9 @@ pub fn delete_vector_by_id(
         ));
     };
 
-    for level in 0..=vec_store.hnsw_params.clone().get().num_layers {
+    for level in 0..=dense_index.hnsw_params.clone().get().num_layers {
         delete_node_update_neighbours(
-            vec_store.clone(),
+            dense_index.clone(),
             item.clone(),
             skipm.clone(),
             current_version,
@@ -1148,7 +1148,7 @@ pub fn delete_vector_by_id(
         )?;
 
         item = item
-            .get_data(vec_store.cache.clone())
+            .get_data(dense_index.cache.clone())
             .parent
             .clone()
             .item
@@ -1156,17 +1156,17 @@ pub fn delete_vector_by_id(
             .clone();
     }
 
-    auto_commit_transaction(vec_store)?;
+    auto_commit_transaction(dense_index)?;
 
     Ok(())
 }
 
 pub fn delete_vector_by_id_in_transaction(
-    vec_store: Arc<VectorStore>,
+    dense_index: Arc<DenseIndex>,
     vector_id: VectorId,
     transaction_id: Hash,
 ) -> Result<(), WaCustomError> {
-    let version_hash = vec_store
+    let version_hash = dense_index
         .vcs
         .get_version_hash(&transaction_id)
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?
@@ -1175,33 +1175,33 @@ pub fn delete_vector_by_id_in_transaction(
         ))?;
     let current_version_number = *version_hash.version as u16;
 
-    let vec_raw = get_embedding_by_id(vec_store.clone(), vector_id.clone())?;
-    let quantized = Arc::new(vec_store.quantization_metric.clone().get().quantize(
+    let vec_raw = get_embedding_by_id(dense_index.clone(), vector_id.clone())?;
+    let quantized = Arc::new(dense_index.quantization_metric.clone().get().quantize(
         &vec_raw.raw_vec,
-        vec_store.storage_type.clone().get().clone(),
+        dense_index.storage_type.clone().get().clone(),
     )?);
     let mut skipm = HashSet::new();
     skipm.insert(vec_raw.hash_vec);
     let items = traverse_find_nearest(
-        vec_store.clone(),
-        vec_store
+        dense_index.clone(),
+        dense_index
             .root_vec
             .item
             .clone()
             .get()
-            .get_latest_version(vec_store.cache.clone())
+            .get_latest_version(dense_index.cache.clone())
             .0,
         quantized,
         0,
         &mut skipm,
-        HNSWLevel(vec_store.hnsw_params.clone().get().num_layers),
+        HNSWLevel(dense_index.hnsw_params.clone().get().num_layers),
         false,
     )?;
 
     let mut maybe_item = None;
 
     for (item, _) in items {
-        let data = item.get_data(vec_store.cache.clone());
+        let data = item.get_data(dense_index.cache.clone());
         let prop = match data.get_prop() {
             PropState::Ready(prop) => prop.id.clone(),
             PropState::Pending(_) => {
@@ -1221,9 +1221,9 @@ pub fn delete_vector_by_id_in_transaction(
         ));
     };
 
-    for level in 0..=vec_store.hnsw_params.clone().get().num_layers {
+    for level in 0..=dense_index.hnsw_params.clone().get().num_layers {
         delete_node_update_neighbours(
-            vec_store.clone(),
+            dense_index.clone(),
             item.clone(),
             skipm.clone(),
             transaction_id,
@@ -1232,7 +1232,7 @@ pub fn delete_vector_by_id_in_transaction(
         )?;
 
         item = item
-            .get_data(vec_store.cache.clone())
+            .get_data(dense_index.cache.clone())
             .parent
             .clone()
             .item
@@ -1240,7 +1240,7 @@ pub fn delete_vector_by_id_in_transaction(
             .clone();
     }
 
-    auto_commit_transaction(vec_store)?;
+    auto_commit_transaction(dense_index)?;
 
     Ok(())
 }

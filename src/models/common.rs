@@ -370,6 +370,7 @@ pub enum WaCustomError {
     DeserializationError(String),
     // put it in `Arc` to make it cloneable
     BufIo(Arc<BufIoError>),
+    NotFound(String)
 }
 
 impl fmt::Display for WaCustomError {
@@ -393,6 +394,7 @@ impl fmt::Display for WaCustomError {
             WaCustomError::FsError(err) => write!(f, "FS error: {}", err),
             WaCustomError::DeserializationError(err) => write!(f, "Deserialization error: {}", err),
             WaCustomError::BufIo(err) => write!(f, "Buffer IO error: {}", err),
+            WaCustomError::NotFound(msg) => write!(f, "{} Not Found!", msg)
         }
     }
 }

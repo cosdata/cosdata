@@ -1,25 +1,66 @@
 use std::sync::Arc;
 
-use crate::{api_service::init_vector_store, app_context::AppContext, models::types::VectorStore};
+use crate::{api_service::{init_dense_index_for_collection, init_inverted_index_for_collection},
+    app_context::AppContext,
+    indexes::inverted_index::InvertedIndex,
+    models::{collection::Collection, types::DenseIndex},};
 
 use super::{
-    dtos::{FindCollectionDto, GetCollectionsDto},
+    dtos::{CreateCollectionDto, GetCollectionsDto, GetCollectionsResponseDto},
     error::CollectionsError,
 };
 
-pub(crate) async fn create_vector_store(
+pub(crate) async fn create_collection(
     ctx: Arc<AppContext>,
-    name: String,
+    CreateCollectionDto {
+        name,
+        description,
+        config,
+        dense_vector,
+        metadata_schema,
+        sparse_vector,
+    }: CreateCollectionDto,
+) -> Result<Collection, CollectionsError> {
+    let env = &ctx.ain_env.persist;
+    let collections_db = &ctx.ain_env.collections_map.lmdb_collections_db;
+
+    let collection = Collection::new(
+        name,
+        description,
+        dense_vector,
+        sparse_vector,
+        metadata_schema,
+        config,
+    )
+    .map_err(|e| CollectionsError::WaCustomError(e))?;
+
+    // adding the created collection into the in-memory map
+    ctx.ain_env
+        .collections_map
+        .insert_collection(Arc::new(collection.clone()))
+        .map_err(|e| CollectionsError::WaCustomError(e))?;
+
+    // persisting collection after creation
+    let _ = collection
+        .persist(env, collections_db.clone())
+        .map_err(|e| CollectionsError::WaCustomError(e));
+    Ok(collection)
+}
+
+/// creates a dense_index for a collection
+pub(crate) async fn create_dense_index(
+    ctx: Arc<AppContext>,
+    collection: &Collection,
     size: usize,
     lower_bound: Option<f32>,
     upper_bound: Option<f32>,
     num_layers: u8,
     auto_config: bool,
-) -> Result<Arc<VectorStore>, CollectionsError> {
+) -> Result<Arc<DenseIndex>, CollectionsError> {
     // Call init_vector_store using web::block
-    let result = init_vector_store(
+    let result = init_dense_index_for_collection(
         ctx,
-        name,
+        collection,
         size,
         lower_bound,
         upper_bound,
@@ -30,52 +71,104 @@ pub(crate) async fn create_vector_store(
     result.map_err(|e| CollectionsError::FailedToCreateCollection(e.to_string()))
 }
 
-pub(crate) async fn get_vector_stores(
+/// creates an inverted index for a collection
+pub(crate) async fn create_inverted_index(
     ctx: Arc<AppContext>,
-    _get_collections_dto: GetCollectionsDto,
-) -> Result<Vec<FindCollectionDto>, CollectionsError> {
-    let vec_store = ctx
-        .ain_env
-        .vector_store_map
-        .iter()
-        .map(|v| FindCollectionDto {
-            id: v.database_name.clone(),
-            dimensions: v.dim,
-            vector_db_name: v.database_name.clone(),
-        })
-        .collect();
-    Ok(vec_store)
+    collection: &Collection,
+) -> Result<Arc<InvertedIndex>, CollectionsError> {
+    let result = init_inverted_index_for_collection(ctx, collection).await;
+    result.map_err(|e| CollectionsError::FailedToCreateCollection(e.to_string()))
 }
 
-pub(crate) async fn get_vector_store_by_name(
+/// gets a list of collections
+/// TODO results should be filtered based on search params,
+/// if no params provided, it returns all collections
+pub(crate) async fn get_collections(
+    ctx: Arc<AppContext>,
+    _get_collections_dto: GetCollectionsDto,
+) -> Result<Vec<GetCollectionsResponseDto>, CollectionsError> {
+    let collections = ctx
+        .ain_env
+        .collections_map
+        .iter_collections()
+        .map(|c| GetCollectionsResponseDto {
+            name: c.name.clone(),
+            description: c.description.clone(),
+        })
+        .collect();
+    Ok(collections)
+}
+
+/// gets a collection by its name
+pub(crate) async fn get_collection_by_name(
     ctx: Arc<AppContext>,
     name: &str,
-) -> Result<Arc<VectorStore>, CollectionsError> {
-    // Try to get the vector store from the environment
-    let vec_store = match ctx.ain_env.vector_store_map.get(name) {
-        Some(store) => store.clone(),
+) -> Result<Arc<Collection>, CollectionsError> {
+    let collection = match ctx.ain_env.collections_map.get_collection(name) {
+        Some(collection) => collection.clone(),
         None => {
-            // Vector store not found, return an error response
+            // dense index not found, return an error response
             return Err(CollectionsError::NotFound);
         }
     };
-    Ok(vec_store)
+    Ok(collection)
 }
 
-pub(crate) async fn delete_vector_store_by_name(
+/// gets a dense index for a collection by name
+pub(crate) async fn get_dense_index_by_name(
     ctx: Arc<AppContext>,
     name: &str,
-) -> Result<Arc<VectorStore>, CollectionsError> {
-    // Try to get the vector store from the environment
+) -> Result<Arc<DenseIndex>, CollectionsError> {
+    // Try to get the dense_index from the environment
+    let dense_index = match ctx.ain_env.collections_map.get(name) {
+        Some(index) => index.clone(),
+        None => {
+            // dense index not found, return an error response
+            return Err(CollectionsError::NotFound);
+        }
+    };
+    Ok(dense_index)
+}
+
+pub(crate) async fn delete_collection_by_name(
+    ctx: Arc<AppContext>,
+    name: &str,
+) -> Result<Arc<Collection>, CollectionsError> {
+    let env = &ctx.ain_env.persist;
+    let collections_db = &ctx.ain_env.collections_map.lmdb_collections_db;
+
+    let collection = get_collection_by_name(ctx.clone(), name).await?;
+
+    // deleting collection from disk
+    collection
+        .delete(env, collections_db.clone())
+        .map_err(|e| CollectionsError::WaCustomError(e))?;
+
+    // deleting collection from in-memory map
+    let collection = ctx
+        .ain_env
+        .collections_map
+        .remove_collection(name)
+        .map_err(|e| CollectionsError::WaCustomError(e))?;
+
+    Ok(collection)
+}
+
+/// deletes a dense index of a collection by name
+pub(crate) async fn delete_dense_index_by_name(
+    ctx: Arc<AppContext>,
+    name: &str,
+) -> Result<Arc<DenseIndex>, CollectionsError> {
+    // Try to get the dense index from the environment
     let result = ctx
         .ain_env
-        .vector_store_map
+        .collections_map
         .remove(name)
         .map_err(CollectionsError::WaCustomError)?;
     match result {
-        Some((_, store)) => Ok(store),
+        Some((_, index)) => Ok(index),
         None => {
-            // Vector store not found, return an error response
+            // dense index not found, return an error response
             return Err(CollectionsError::NotFound);
         }
     }
