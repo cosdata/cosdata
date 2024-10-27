@@ -1,10 +1,10 @@
-* Vector store persistence
+* Dense Index persistence
 
 ** Problem
-   - Currently, the instances of struct ~VectorStore~ are only held in
-     memory, as part of the ~vector_store_map~ field of ~AppEnv~.
-   - This means if the process is restarted, previously created vector
-     stores (collections) will be lost
+   - Currently, the instances of struct ~DenseIndex~ are only held in
+     memory, as part of the ~collections_map~ field of ~AppEnv~.
+   - This means if the process is restarted, previously created dense
+     indexes of collections will be lost
 
 ** Requirements
    1. At startup we need to get a list of all collection names in the
@@ -15,15 +15,15 @@
    3. Check if a collection exists
 
 ** Where to store the data
-   As we're already using lmdb for storing metadata, vector store data
+   As we're already using lmdb for storing metadata, dense index data
    can also be stored in lmdb. More about how it will be stored is
    covered in a later section.
 
 ** Data to be persisted
-   The ~VectorStore~ struct is defined as follows,
+   The ~DenseIndex~ struct is defined as follows,
    #+begin_src rust
      #[derive(Clone)]
-     pub struct VectorStore {
+     pub struct DenseIndex {
          pub exec_queue_nodes: ExecQueueUpdate,
          pub max_cache_level: u8,
          pub database_name: String,
@@ -52,14 +52,14 @@
     - Type: u8
     - Example: 5
     - Default: 5
-    - Part of the VectorStore struct
+    - Part of the DenseIndex struct
     - Suggestion: The name ~max_cache_level~ is related to legacy
       code. It can be names as ~max_levels~ in the db to avoid
       confusion.
 
 *** levels_prob
     - Type: ~Vec<(f64, i32)>~
-    - Part of the VectorStore struct
+    - Part of the DenseIndex struct
     - Example
       #+begin_src rust
         [(0.99999, 5), (0.9999, 4), (0.999, 3), (0.99, 2), (0.9, 1), (0.0, 0)]
@@ -70,11 +70,11 @@
 *** quant_dim
     - Type: usize
     - Default: ~size as usize / 32~
-    - Part of the VectorStore struct
+    - Part of the DenseIndex struct
 
 *** current version
     - Type: Hash (versioning u32 SipHash)
-    - Part of the VectorStore struct
+    - Part of the DenseIndex struct
 
 *** quantization_metric
     - Type: String
@@ -84,7 +84,7 @@
       + Product with product quantization data
         + no. of centroids: u16
         + centroid values: u16
-    - Part of the VectorStore struct
+    - Part of the DenseIndex struct
 
 *** distance_metric
     - Type: String
@@ -94,7 +94,7 @@
       + Euclidean
       + Hamming
       + DotProduct
-    - Part of the VectorStore struct
+    - Part of the DenseIndex struct
 
 *** storage
     - Type: StorageType
@@ -103,7 +103,7 @@
       + UnsignedByte
       + SubByte with u8 data
       + HalfPrecisionFP
-    - Part of the VectorStore struct
+    - Part of the DenseIndex struct
 
 *** offset
     - Meaning: address of the root vector in the index file

@@ -1,9 +1,15 @@
 use std::sync::Arc;
 
-use crate::{app_context::AppContext, models::types::VectorStore};
+use crate::{
+    app_context::AppContext,
+    models::{collection::Collection, types::DenseIndex},
+};
 
 use super::{
-    dtos::{CreateCollectionDto, FindCollectionDto, GetCollectionsDto},
+    dtos::{
+        CreateCollectionDto, CreateCollectionDtoResponse, GetCollectionsDto,
+        GetCollectionsResponseDto,
+    },
     error::CollectionsError,
     repo,
 };
@@ -11,47 +17,69 @@ use super::{
 pub(crate) async fn create_collection(
     ctx: Arc<AppContext>,
     create_collection_dto: CreateCollectionDto,
-) -> Result<Arc<VectorStore>, CollectionsError> {
-    // Define the parameters for init_vector_store
-    let name = create_collection_dto.vector_db_name;
-    let size = create_collection_dto.dimensions as usize;
-    let lower_bound = create_collection_dto.min_val;
-    let upper_bound = create_collection_dto.max_val;
-    let auto_config = true;
-    let num_layers = 5;
+) -> Result<CreateCollectionDtoResponse, CollectionsError> {
+    let collection = &repo::create_collection(ctx.clone(), create_collection_dto).await?;
 
-    repo::create_vector_store(
-        ctx,
-        name,
-        size,
-        lower_bound,
-        upper_bound,
-        num_layers,
-        auto_config,
-    )
-    .await
+    if collection.dense_vector.enabled {
+        let _ = repo::create_dense_index(
+            ctx.clone(),
+            collection,
+            collection.dense_vector.dimension as usize,
+            None,
+            None,
+            5,
+            true
+        )
+        .await?;
+    }
+    if collection.sparse_vector.enabled {
+        let _ = repo::create_inverted_index(ctx, collection).await?;
+    }
+
+    Ok(CreateCollectionDtoResponse {
+        id: collection.name.clone(),
+        name: collection.name.clone(),
+        description: collection.description.clone(),
+    })
 }
 
 pub(crate) async fn get_collections(
     ctx: Arc<AppContext>,
     get_collections_dto: GetCollectionsDto,
-) -> Result<Vec<FindCollectionDto>, CollectionsError> {
-    let collections = repo::get_vector_stores(ctx, get_collections_dto).await?;
+) -> Result<Vec<GetCollectionsResponseDto>, CollectionsError> {
+    let collections = repo::get_collections(ctx, get_collections_dto).await?;
     Ok(collections)
 }
 
+/// gets a collection by its id
+///
+/// currently collection_id = collection.name
 pub(crate) async fn get_collection_by_id(
     ctx: Arc<AppContext>,
     collection_id: &str,
-) -> Result<Arc<VectorStore>, CollectionsError> {
-    let store = repo::get_vector_store_by_name(ctx, collection_id).await?;
-    Ok(store)
+) -> Result<Arc<Collection>, CollectionsError> {
+    let collection = repo::get_collection_by_name(ctx, collection_id).await?;
+    Ok(collection)
 }
 
+/// gets dense index by collection id
+///
+/// currently collection_id = collection.name
+pub(crate) async fn get_dense_index_by_id(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+) -> Result<Arc<DenseIndex>, CollectionsError> {
+    let index = repo::get_dense_index_by_name(ctx, collection_id).await?;
+    Ok(index)
+}
+
+/// deletes a collection by its id
+///
+/// currently collection_id = collection.name
 pub(crate) async fn delete_collection_by_id(
     ctx: Arc<AppContext>,
     collection_id: &str,
-) -> Result<Arc<VectorStore>, CollectionsError> {
-    let store = repo::delete_vector_store_by_name(ctx, collection_id).await?;
-    Ok(store)
+) -> Result<Arc<Collection>, CollectionsError> {
+    let collection = repo::delete_collection_by_name(ctx, collection_id).await?;
+    Ok(collection)
 }

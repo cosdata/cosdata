@@ -22,11 +22,11 @@ pub(crate) async fn create_vector(
     collection_id: &str,
     create_vector_dto: CreateVectorDto,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
-    let collection = collections::service::get_collection_by_id(ctx.clone(), collection_id)
+    let dense_index = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
         .await
         .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
 
-    let mut current_open_transaction_arc = collection.current_open_transaction.clone();
+    let mut current_open_transaction_arc = dense_index.current_open_transaction.clone();
 
     if current_open_transaction_arc.get().is_some() {
         return Err(VectorsError::FailedToCreateVector(
@@ -34,7 +34,7 @@ pub(crate) async fn create_vector(
         ));
     }
 
-    if !collection.get_auto_config_flag() && !collection.get_configured_flag() {
+    if !dense_index.get_auto_config_flag() && !dense_index.get_configured_flag() {
         return Err(VectorsError::FailedToCreateVector(
             "Vector store is set to manual indexing but an index is not created".to_string(),
         ));
@@ -43,7 +43,7 @@ pub(crate) async fn create_vector(
     // TODO: handle the error
     run_upload(
         ctx,
-        collection,
+        dense_index,
         vec![(
             create_vector_dto.id.clone(),
             create_vector_dto.values.clone(),
@@ -62,11 +62,11 @@ pub(crate) async fn create_vector_in_transaction(
     transaction_id: Hash,
     create_vector_dto: CreateVectorDto,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
-    let collection = collections::service::get_collection_by_id(ctx.clone(), collection_id)
+    let dense_index = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
         .await
         .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
     run_upload_in_transaction(
-        collection,
+        dense_index,
         transaction_id,
         vec![(
             create_vector_dto.id.clone(),
@@ -85,7 +85,7 @@ pub(crate) async fn get_vector_by_id(
     collection_id: &str,
     vector_id: VectorId,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
-    let vec_store = collections::service::get_collection_by_id(ctx.clone(), collection_id)
+    let vec_store = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
         .await
         .map_err(|_| VectorsError::NotFound)?;
 
@@ -109,11 +109,11 @@ pub(crate) async fn update_vector(
     vector_id: VectorIdValue,
     update_vector_dto: UpdateVectorDto,
 ) -> Result<UpdateVectorResponseDto, VectorsError> {
-    let collection = collections::service::get_collection_by_id(ctx.clone(), collection_id)
+    let dense_index = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
         .await
         .map_err(|e| VectorsError::FailedToUpdateVector(e.to_string()))?;
 
-    let mut current_open_transaction_arc = collection.current_open_transaction.clone();
+    let mut current_open_transaction_arc = dense_index.current_open_transaction.clone();
 
     if current_open_transaction_arc.get().is_some() {
         return Err(VectorsError::FailedToUpdateVector(
@@ -121,7 +121,7 @@ pub(crate) async fn update_vector(
         ));
     }
 
-    if !collection.get_auto_config_flag() && !collection.get_configured_flag() {
+    if !dense_index.get_auto_config_flag() && !dense_index.get_configured_flag() {
         return Err(VectorsError::FailedToCreateVector(
             "Vector store is set to manual indexing but an index is not created".to_string(),
         ));
@@ -129,7 +129,7 @@ pub(crate) async fn update_vector(
 
     run_upload(
         ctx,
-        collection,
+        dense_index,
         vec![(vector_id.clone(), update_vector_dto.values.clone())],
     )
     .map_err(VectorsError::WaCustom)?;
@@ -159,7 +159,7 @@ pub(crate) async fn delete_vector_by_id(
     collection_id: &str,
     vector_id: VectorIdValue,
 ) -> Result<(), VectorsError> {
-    let collection = collections::service::get_collection_by_id(ctx.clone(), collection_id)
+    let collection = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
         .await
         .map_err(|e| VectorsError::FailedToDeleteVector(e.to_string()))?;
 
