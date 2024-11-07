@@ -654,7 +654,7 @@ impl CollectionsMap {
         };
         let current_version = retrieve_current_version(&lmdb)?;
         let dense_index = DenseIndex::new(
-            STM::new(Vec::new(), 1, true),
+            STM::new(Vec::new(), 16, true),
             // dense_index_data.max_level,
             coll.name.clone(),
             root,

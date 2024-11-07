@@ -53,20 +53,7 @@ pub async fn init_dense_index_for_collection(
 
     let vcs = Arc::new(vcs);
 
-    let min = lower_bound.unwrap_or(-1.0);
-    let max = upper_bound.unwrap_or(1.0);
-    let vec = (0..size)
-        .map(|_| {
-            let mut rng = rand::thread_rng();
-
-            let random_number: f32 = rng.gen_range(min..max);
-            random_number
-        })
-        .collect::<Vec<f32>>();
-    let vec_hash = VectorId::Int(-1);
-
-    let exec_queue_nodes: ExecQueueUpdate = STM::new(Vec::new(), 8, true);
-    let vector_list = Arc::new(quantization_metric.quantize(&vec, storage_type)?);
+    let exec_queue_nodes: ExecQueueUpdate = STM::new(Vec::new(), 16, true);
 
     // Note that setting .write(true).append(true) has the same effect
     // as setting only .append(true)
@@ -77,43 +64,6 @@ pub async fn init_dense_index_for_collection(
             .open(collection_path.join("prop.data"))
             .map_err(|e| WaCustomError::FsError(e.to_string()))?,
     );
-
-    let location = write_prop_to_file(&vec_hash, vector_list.clone(), &prop_file)?;
-
-    let prop = ArcShift::new(PropState::Ready(Arc::new(NodeProp {
-        id: vec_hash,
-        value: vector_list.clone(),
-        location: Some(location),
-    })));
-
-    let mut root: LazyItemRef<MergedNode> = LazyItemRef::new_invalid();
-
-    let mut nodes = Vec::new();
-
-    for l in 0..=num_layers {
-        let current_node = Arc::new(MergedNode {
-            hnsw_level: HNSWLevel(l),
-            prop: prop.clone(),
-            neighbors: EagerLazyItemSet::new(),
-            parent: LazyItemRef::new_invalid(),
-            child: root.clone(),
-        });
-
-        let lazy_node = LazyItem::from_arc(hash, 0, current_node.clone());
-        let lazy_node_ref = LazyItemRef::from_arc(hash, 0, current_node.clone());
-
-        if let Some(prev_node) = root
-            .item
-            .get()
-            .get_lazy_data()
-            .and_then(|mut arc| arc.get().clone())
-        {
-            prev_node.set_parent(lazy_node.clone());
-        }
-        root = lazy_node_ref.clone();
-
-        nodes.push(lazy_node_ref.clone());
-    }
 
     let index_manager = Arc::new(BufferManagerFactory::new(
         collection_path.clone(),
@@ -126,9 +76,15 @@ pub async fn init_dense_index_for_collection(
     // TODO: May be the value can be taken from config
     let cache = Arc::new(NodeRegistry::new(1000, index_manager.clone()));
 
-    for item_ref in nodes.iter_mut() {
-        persist_node_update_loc(index_manager.clone(), &mut item_ref.item)?;
-    }
+    let root = create_root_node(
+        num_layers,
+        &quantization_metric,
+        storage_type,
+        size,
+        prop_file.clone(),
+        hash,
+        index_manager.clone(),
+    )?;
 
     index_manager.flush_all()?;
     // ---------------------------
@@ -140,7 +96,7 @@ pub async fn init_dense_index_for_collection(
     let dense_index = Arc::new(DenseIndex::new(
         exec_queue_nodes,
         collection_name.clone(),
-        root,
+        LazyItemRef::from_lazy(root),
         lp,
         size,
         prop_file,
