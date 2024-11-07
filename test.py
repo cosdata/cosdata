@@ -199,6 +199,26 @@ def cosine_similarity(vec1, vec2):
     
     return dot_prod / (magnitude_vec1 * magnitude_vec2)
 
+def generate_perturbation(base_vector, idd, perturbation_degree, dimensions):
+    # Generate the perturbation
+    perturbation = np.random.uniform( -perturbation_degree, perturbation_degree, dimensions)
+    
+    # Apply the perturbation and clamp the values within the range of -1 to 1
+    # perturbed_values = base_vector["values"] + perturbation
+    perturbed_values = np.array(base_vector["values"]) + perturbation
+    clamped_values = np.clip(perturbed_values, -1, 1)
+
+    perturbed_vector = {
+            "id": idd,
+            "values": clamped_values.tolist()
+        }
+    # print(base_vector["values"][:10])
+    # print( perturbed_vector["values"][:10] )
+    # cs = cosine_similarity(base_vector["values"], perturbed_vector["values"] )
+    # print ("cosine similarity of perturbed vec: ", row_ct, cs)
+    return perturbed_vector
+    # if np.random.rand() < 0.01:  # 1 in 100 probability
+    #     shortlisted_vectors.append(perturbed_vector)
 
 # Example usage
 if __name__ == "__main__":
@@ -245,32 +265,8 @@ if __name__ == "__main__":
             print(f"Created transaction: {transaction_id}")
 
             base_vector = generate_random_vector_with_id(req_ct * rows, dimensions)
-
-            # Generate a single random vector
-            final_list = [base_vector]
-
-            for row_ct in range(1, rows):
-                idd = (req_ct * rows) + row_ct
-                # Generate the perturbation
-                perturbation = np.random.uniform( -perturbation_degree, perturbation_degree, dimensions)
-                
-                # Apply the perturbation and clamp the values within the range of -1 to 1
-                # perturbed_values = base_vector["values"] + perturbation
-                perturbed_values = np.array(base_vector["values"]) + perturbation
-                clamped_values = np.clip(perturbed_values, -1, 1)
-
-                perturbed_vector = {
-                        "id": idd,
-                        "values": clamped_values.tolist()
-                    }
-                # print(base_vector["values"][:10])
-                # print( perturbed_vector["values"][:10] )
-                cs = cosine_similarity(base_vector["values"], perturbed_vector["values"] )
-                # print ("cosine similarity of perturbed vec: ", row_ct, cs)
-                final_list.append(perturbed_vector)
-                # if np.random.rand() < 0.01:  # 1 in 100 probability
-                #     shortlisted_vectors.append(perturbed_vector)
-            shortlisted_vectors.append((idd - (rows - 1), base_vector))
+            
+            shortlisted_vectors.append((0, base_vector))
 
             # futures.append(executor.submit(upsert_vectors_in_transaction, vector_db_name, transaction_id, final_list))
                 # Create vectors one by one in the transaction
@@ -285,8 +281,13 @@ if __name__ == "__main__":
             #         except Exception as e:
             #             print(f"Error creating vector {vector['id']}: {e}")
             #             raise  # Re-raise to trigger transaction abort
+            idd = 1
             for i in range(0, rows, 100):
-                vectors = final_list[i:i + 100]
+                vectors = []
+                for i in range(100):
+                    vectors.append(generate_perturbation(base_vector, idd, perturbation_degree, dimensions))
+                    idd += 1
+                    
                 try:
                     upsert_in_transaction(vector_db_name, transaction_id, vectors)
                     print(f"Upsert complete")
