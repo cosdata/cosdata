@@ -49,7 +49,6 @@ pub fn create_root_node(
         .collect::<Vec<f32>>();
     let vec_hash = VectorId::Int(-1);
 
-    let exec_queue_nodes: ExecQueueUpdate = STM::new(Vec::new(), 8, true);
     let vector_list = Arc::new(quantization_metric.quantize(&vec, storage_type)?);
 
     let location = write_prop_to_file(&vec_hash, vector_list.clone(), &prop_file)?;
@@ -57,7 +56,7 @@ pub fn create_root_node(
     let prop = ArcShift::new(PropState::Ready(Arc::new(NodeProp {
         id: vec_hash,
         value: vector_list.clone(),
-        location: Some(location),
+        location,
     })));
     let mut root: LazyItem<MergedNode> = LazyItem::new_invalid();
 
@@ -378,7 +377,8 @@ fn auto_config_storage_type(dense_index: Arc<DenseIndex>, vectors: &[&[f32]]) {
                 StorageType::SubByte(2)
             }
         } else {
-            StorageType::SubByte(3)
+            // StorageType::SubByte(3)
+            StorageType::UnsignedByte
         }
     } else {
         StorageType::UnsignedByte
@@ -520,10 +520,16 @@ pub fn index_embeddings(
                         )
                         .expect("Quantization failed"),
                 );
+                let location = write_prop_to_file(
+                    &raw_emb.hash_vec,
+                    quantized_vec.clone(),
+                    &dense_index.prop_file,
+                )
+                .expect("failed to write prop");
                 let prop = ArcShift::new(PropState::Ready(Arc::new(NodeProp {
                     id: raw_emb.hash_vec.clone(),
                     value: quantized_vec.clone(),
-                    location: None,
+                    location,
                 })));
                 let embedding = QuantizedVectorEmbedding {
                     quantized_vec,
@@ -638,10 +644,11 @@ pub fn index_embeddings(
 
 pub fn index_embeddings_in_transaction(
     dense_index: Arc<DenseIndex>,
-    transaction: &DenseIndexTransaction,
+    transaction_id: Hash,
     embeddings: mpsc::Receiver<RawVectorEmbedding>,
 ) -> Result<(), WaCustomError> {
-    let version = transaction.id;
+    let version = transaction_id;
+
     let version_hash = dense_index
         .vcs
         .get_version_hash(&version)
@@ -719,10 +726,17 @@ pub fn index_embeddings_in_transaction(
                             )
                             .expect("Quantization failed"),
                     );
+                    let location = write_prop_to_file(
+                        &raw_emb.hash_vec,
+                        quantized_vec.clone(),
+                        &dense_index.prop_file,
+                    )
+                    .expect("failed to write prop");
+
                     let prop = ArcShift::new(PropState::Ready(Arc::new(NodeProp {
                         id: raw_emb.hash_vec.clone(),
                         value: quantized_vec.clone(),
-                        location: None,
+                        location,
                     })));
                     let embedding = QuantizedVectorEmbedding {
                         quantized_vec,
@@ -882,14 +896,6 @@ pub fn queue_node_prop_exec(
     lznode: LazyItem<MergedNode>,
 ) -> Result<(), WaCustomError> {
     let node = lznode.try_get_data(dense_index.cache.clone())?;
-
-    if let PropState::Ready(prop) = node.get_prop() {
-        if prop.location.is_none() {
-            let location =
-                write_prop_to_file(&prop.id, prop.value.clone(), &dense_index.prop_file)?;
-            node.set_prop_location(location);
-        }
-    };
 
     for neighbor in node.neighbors.iter() {
         neighbor.1.set_persistence(true);
@@ -1169,7 +1175,7 @@ pub fn create_index_in_collection(dense_index: Arc<DenseIndex>) -> Result<(), Wa
     let prop = ArcShift::new(PropState::Ready(Arc::new(NodeProp {
         id: vec_hash,
         value: vector_list,
-        location: Some(location),
+        location,
     })));
 
     let mut root: LazyItem<MergedNode> = LazyItem::new_invalid();
