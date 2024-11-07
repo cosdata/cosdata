@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    api::vectordb::vectors::dtos::{CreateVectorDto, CreateVectorResponseDto},
+    api::vectordb::vectors::dtos::{CreateVectorDto, CreateVectorResponseDto, UpsertDto},
     app_context::AppContext,
     models::{rpc::VectorIdValue, versioning::Hash},
 };
@@ -47,4 +47,13 @@ pub(crate) async fn delete_vector_by_id(
     vector_id: VectorIdValue,
 ) -> Result<(), TransactionError> {
     repo::delete_vector_by_id(ctx, collection_id, transaction_id, vector_id).await
+}
+
+pub(crate) async fn upsert(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    transaction_id: Hash,
+    upsert_dto: UpsertDto,
+) -> Result<(), TransactionError> {
+    repo::upsert(ctx, collection_id, transaction_id, upsert_dto).await
 }

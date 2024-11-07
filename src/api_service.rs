@@ -85,35 +85,30 @@ pub async fn init_dense_index_for_collection(
     })));
 
     let mut root: LazyItemRef<MergedNode> = LazyItemRef::new_invalid();
-    let mut prev: LazyItemRef<MergedNode> = LazyItemRef::new_invalid();
 
     let mut nodes = Vec::new();
-    for l in (0..=num_layers).rev() {
+
+    for l in 0..=num_layers {
         let current_node = Arc::new(MergedNode {
             hnsw_level: HNSWLevel(l),
             prop: prop.clone(),
             neighbors: EagerLazyItemSet::new(),
-            parent: prev.clone(),
-            child: LazyItemRef::new_invalid(),
+            parent: LazyItemRef::new_invalid(),
+            child: root.clone(),
         });
 
         let lazy_node = LazyItem::from_arc(hash, 0, current_node.clone());
         let lazy_node_ref = LazyItemRef::from_arc(hash, 0, current_node.clone());
 
-        if let Some(prev_node) = prev
+        if let Some(prev_node) = root
             .item
             .get()
             .get_lazy_data()
             .and_then(|mut arc| arc.get().clone())
         {
-            current_node.set_parent(prev.clone().item.get().clone());
-            prev_node.set_child(lazy_node.clone());
+            prev_node.set_parent(lazy_node.clone());
         }
-        prev = lazy_node_ref.clone();
-
-        if l == 0 {
-            root = lazy_node_ref.clone();
-        }
+        root = lazy_node_ref.clone();
 
         nodes.push(lazy_node_ref.clone());
     }
@@ -215,11 +210,12 @@ pub async fn init_inverted_index_for_collection(
 
 /// uploads a vector embedding within a transaction
 pub fn run_upload_in_transaction(
+    ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
-    transaction_id: Hash,
+    transaction: &DenseIndexTransaction,
     vecs: Vec<(VectorIdValue, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
-    let current_version = transaction_id;
+    let current_version = transaction.id;
 
     let bufman = dense_index
         .vec_raw_manager
@@ -241,6 +237,13 @@ pub fn run_upload_in_transaction(
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
+
+    index_embeddings_in_transaction(
+        dense_index.clone(),
+        transaction,
+        ctx.config.upload_process_batch_size,
+    )?;
+
     Ok(())
 }
 
@@ -369,7 +372,7 @@ pub fn run_upload(
 pub async fn ann_vector_query(
     dense_index: Arc<DenseIndex>,
     query: Vec<f32>,
-) -> Result<Option<Vec<(VectorId, MetricResult)>>, WaCustomError> {
+) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
     let dense_index = dense_index.clone();
     let vec_hash = VectorId::Str("query".to_string());
     let root = &dense_index.root_vec;

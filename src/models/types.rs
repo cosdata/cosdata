@@ -399,6 +399,11 @@ impl Default for HNSWHyperParams {
     }
 }
 
+pub struct DenseIndexTransaction {
+    pub id: Hash,
+    pub next_embedding_offset: u32,
+}
+
 #[derive(Clone)]
 pub struct DenseIndex {
     pub exec_queue_nodes: ExecQueueUpdate,
@@ -409,7 +414,7 @@ pub struct DenseIndex {
     pub prop_file: Arc<File>,
     pub lmdb: MetaDb,
     pub current_version: ArcShift<Hash>,
-    pub current_open_transaction: ArcShift<Option<Hash>>,
+    pub current_open_transaction: ArcShift<Option<DenseIndexTransaction>>,
     pub quantization_metric: ArcShift<QuantizationMetric>,
     pub distance_metric: ArcShift<DistanceMetric>,
     pub storage_type: ArcShift<StorageType>,
@@ -421,6 +426,7 @@ pub struct DenseIndex {
     pub cache: Arc<NodeRegistry>,
     pub index_manager: Arc<BufferManagerFactory>,
     pub vec_raw_manager: Arc<BufferManagerFactory>,
+    pub lock: Arc<AtomicBool>,
 }
 
 impl DenseIndex {
@@ -466,7 +472,22 @@ impl DenseIndex {
             cache,
             index_manager,
             vec_raw_manager,
+            lock: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub fn acquire_lock(&self) {
+        #[allow(deprecated)]
+        while self
+            .lock
+            .compare_and_swap(false, true, Ordering::Acquire)
+        {
+            std::thread::yield_now();
+        }
+    }
+
+    pub fn release_lock(&self) {
+        self.lock.store(false, Ordering::Release);
     }
 
     // Get method
