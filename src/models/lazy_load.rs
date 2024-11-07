@@ -982,7 +982,7 @@ impl<T: Clone + 'static> LazyItemMap<T> {
 impl<T: Clone + 'static> LazyItemVec<T> {
     pub fn new() -> Self {
         Self {
-            items: STM::new(Vec::new(), 4, true),
+            items: STM::new(Vec::new(), 1, true),
         }
     }
 
