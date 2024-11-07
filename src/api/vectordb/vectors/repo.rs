@@ -5,7 +5,11 @@ use crate::{
     api_service::{run_upload, run_upload_in_transaction},
     app_context::AppContext,
     convert_value,
-    models::{rpc::VectorIdValue, types::VectorId, versioning::Hash},
+    models::{
+        rpc::VectorIdValue,
+        types::{DenseIndexTransaction, VectorId},
+        versioning::Hash,
+    },
     vector_store::get_embedding_by_id,
 };
 
@@ -59,21 +63,24 @@ pub(crate) async fn create_vector(
 pub(crate) async fn create_vector_in_transaction(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    transaction_id: Hash,
+    transaction: &DenseIndexTransaction,
     create_vector_dto: CreateVectorDto,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
     let dense_index = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
         .await
         .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
+
     run_upload_in_transaction(
+        ctx,
         dense_index,
-        transaction_id,
+        transaction,
         vec![(
             create_vector_dto.id.clone(),
             create_vector_dto.values.clone(),
         )],
     )
     .map_err(VectorsError::WaCustom)?;
+
     Ok(CreateVectorResponseDto {
         id: create_vector_dto.id,
         values: create_vector_dto.values,
