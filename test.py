@@ -227,7 +227,8 @@ if __name__ == "__main__":
     dimensions = 1024
     max_val = 1.0
     min_val = -1.0
-    rows = 1_000_000
+    rows = 100_000
+    batch_size = 100
     perturbation_degree = 0.25  # Degree of perturbation
 
     # first login to get the auth jwt token
@@ -282,9 +283,9 @@ if __name__ == "__main__":
             #             print(f"Error creating vector {vector['id']}: {e}")
             #             raise  # Re-raise to trigger transaction abort
             idd = 1
-            for i in range(0, rows, 100):
+            for i in range(0, rows, batch_size):
                 vectors = []
-                for i in range(100):
+                for i in range(batch_size):
                     vectors.append(generate_perturbation(base_vector, idd, perturbation_degree, dimensions))
                     idd += 1
                     
