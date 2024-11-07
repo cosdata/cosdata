@@ -29,10 +29,31 @@ def login():
     token = response.text
     return token
     
-
+def create_db(name, description=None, dimension=1024):
+    url = f"{base_url}/collections"
+    data = {
+        "name": name,
+        "description": description,
+        "dense_vector": {
+            "enabled": True,
+            "auto_create_index": True,
+            "dimension": dimension
+        },
+        "sparse_vector": {
+            "enabled": False,
+            "auto_create_index": False
+        },
+        "metadata_schema": None,
+        "config": {
+            "max_vectors": None,
+            "replication_factor": None
+        }
+    }
+    response = requests.post(url, headers=generate_headers(), data=json.dumps(data), verify=False)
+    return response.json()
 
 # Function to create database (collection)
-def create_db(vector_db_name, dimensions, max_val, min_val):
+def create_db_old(vector_db_name, dimensions, max_val, min_val):
     url = f"{base_url}/collections"
     data = {
         "vector_db_name": vector_db_name,
@@ -50,6 +71,47 @@ def find_collection(id):
     response = requests.get(url,headers=generate_headers(), verify=False)
     return response.json()
 
+def create_transaction(collection_name):
+    url = f"{base_url}/collections/{collection_name}/transactions"
+    response = requests.post(url, headers=generate_headers(), verify=False)
+    return response.json()
+
+def create_vector_in_transaction(collection_name, transaction_id, vector):
+    url = f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/vectors"
+    data = {
+        "id": vector["id"],
+        "values": vector["values"],
+        "metadata": {}
+    }
+    print(f"Request URL: {url}")
+    print(f"Request Data: {json.dumps(data)}")
+    response = requests.post(url, headers=generate_headers(), data=json.dumps(data), verify=False)
+    print(f"Response Status: {response.status_code}")
+    print(f"Response Text: {response.text}")
+    if response.status_code not in [200, 204]:
+        raise Exception(f"Failed to create vector: {response.status_code}")
+    return response.json() if response.text else None
+
+def upsert_vectors_in_transaction(collection_name, transaction_id, vectors):
+    url = f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/vectors"
+    data = {
+        "vectors": vectors
+    }
+    response = requests.post(url, headers=generate_headers(), data=json.dumps(data), verify=False)
+    return response.json()
+
+def commit_transaction(collection_name, transaction_id):
+    url = f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/commit"
+    response = requests.post(url, headers=generate_headers(), verify=False)
+    if response.status_code not in [200, 204]:
+        print(f"Error response: {response.text}")
+        raise Exception(f"Failed to commit transaction: {response.status_code}")
+    return response.json() if response.text else None
+
+def abort_transaction(collection_name, transaction_id):
+    url = f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/abort"
+    response = requests.post(url, headers=generate_headers(), verify=False)
+    return response.json()
 
 # Function to upsert vectors
 def upsert_vector(vector_db_name, vectors):
@@ -60,12 +122,25 @@ def upsert_vector(vector_db_name, vectors):
 
 
 # Function to search vector
-def ann_vector(idd, vector_db_name, vector):
+def ann_vector_old(idd, vector_db_name, vector):
     url = f"{base_url}/search"
     data = {"vector_db_name": vector_db_name, "vector": vector}
     response = requests.post(url, headers=generate_headers(), data=json.dumps(data), verify=False)
     return (idd, response.json())
 
+def ann_vector(idd, vector_db_name, vector):
+    url = f"{base_url}/search"
+    data = {"vector_db_name": vector_db_name, "vector": vector}
+    response = requests.post(url, headers=generate_headers(), data=json.dumps(data), verify=False)
+    if response.status_code != 200:
+        print(f"Error response: {response.text}")
+        raise Exception(f"Failed to search vector: {response.status_code}")
+    result = response.json()
+    
+    # Handle empty results gracefully
+    if not result.get('RespVectorKNN', {}).get('knn'):
+        return (idd, {'RespVectorKNN': {'knn': []}})
+    return (idd, result)
 
 # Function to fetch vector
 def fetch_vector(vector_db_name, vector_id):
@@ -127,12 +202,16 @@ if __name__ == "__main__":
     login_response = login()
     print("Login Response:", login_response)
 
-    
-    create_Collection_response = create_db(vector_db_name, dimensions, max_val, min_val)
-    print("Create Collection(DB) Response:", create_Collection_response)
+    create_collection_response = create_db(
+        name=vector_db_name,
+        description="Test collection for vector database",
+        dimension=dimensions)
+    print("Create Collection(DB) Response:", create_collection_response)
+   # create_Collection_response = create_db(vector_db_name, dimensions, max_val, min_val)
+   # print("Create Collection(DB) Response:", create_Collection_response)
 
-    find_collection_response = find_collection(create_Collection_response["id"])
-    print("Find Collection(DB) Response:", find_collection_response)
+    #find_collection_response = find_collection(create_Collection_response["id"])
+    #print("Find Collection(DB) Response:", find_collection_response)
 
     shortlisted_vectors = []
 
@@ -146,22 +225,32 @@ if __name__ == "__main__":
         # number of upsert calls
         #
         for req_ct in range(1):
+          transaction_id = None
+          try:
+            # Create a new transaction
+            transaction_response = create_transaction(vector_db_name)
+            transaction_id = transaction_response["transaction_id"]
+            print(f"Created transaction: {transaction_id}")
+
             base_vector = generate_random_vector_with_id(req_ct * rows, dimensions)
 
             # Generate a single random vector
             final_list = [base_vector]
+
             for row_ct in range(1, rows):
                 idd = (req_ct * rows) + row_ct
                 # Generate the perturbation
                 perturbation = np.random.uniform( -perturbation_degree, perturbation_degree, dimensions)
                 
                 # Apply the perturbation and clamp the values within the range of -1 to 1
-                perturbed_values = base_vector["values"] + perturbation
+                # perturbed_values = base_vector["values"] + perturbation
+                perturbed_values = np.array(base_vector["values"]) + perturbation
                 clamped_values = np.clip(perturbed_values, -1, 1)
-                perturbed_vector = {}
-                perturbed_vector["values"] = clamped_values.tolist()
-                perturbed_vector["id"] = idd
 
+                perturbed_vector = {
+                        "id": idd,
+                        "values": clamped_values.tolist()
+                    }
                 # print(base_vector["values"][:10])
                 # print( perturbed_vector["values"][:10] )
                 cs = cosine_similarity(base_vector["values"], perturbed_vector["values"] )
@@ -171,7 +260,34 @@ if __name__ == "__main__":
                 #     shortlisted_vectors.append(perturbed_vector)
             shortlisted_vectors.append((idd - (rows - 1), base_vector))
 
-            futures.append(executor.submit(upsert_vector, vector_db_name, final_list))
+            # futures.append(executor.submit(upsert_vectors_in_transaction, vector_db_name, transaction_id, final_list))
+                # Create vectors one by one in the transaction
+            for vector in final_list:
+                    try:
+                        create_response = create_vector_in_transaction(
+                            vector_db_name, 
+                            transaction_id, 
+                            vector
+                        )
+                        print(f"Created vector {vector['id']}: {create_response}")
+                    except Exception as e:
+                        print(f"Error creating vector {vector['id']}: {e}")
+                        raise  # Re-raise to trigger transaction abort
+
+            # Commit the transaction after vectors are upserted
+            commit_response = commit_transaction(vector_db_name, transaction_id)
+            print(f"Committed transaction {transaction_id}: {commit_response}")
+            transaction_id = None  # Clear transaction_id after successful commit
+                
+          except Exception as e:
+                print(f"Error in transaction: {e}")
+                # Try to abort the transaction if something went wrong
+                if transaction_id:
+                    try:
+                        abort_transaction(vector_db_name, transaction_id)
+                        print(f"Aborted transaction {transaction_id} due to error")
+                    except Exception as abort_error:
+                        print(f"Error aborting transaction: {abort_error}")
 
         for i, future in enumerate(as_completed(futures)):
             try:
