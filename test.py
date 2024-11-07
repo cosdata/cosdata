@@ -92,6 +92,18 @@ def create_vector_in_transaction(collection_name, transaction_id, vector):
         raise Exception(f"Failed to create vector: {response.status_code}")
     return response.json() if response.text else None
 
+def upsert_in_transaction(collection_name, transaction_id, vectors):
+    url = f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/upsert"
+    data = {
+        "vectors": vectors
+    }
+    print(f"Request URL: {url}")
+    print(f"Request Vectors Count: {len(vectors)}")
+    response = requests.post(url, headers=generate_headers(), data=json.dumps(data), verify=False)
+    print(f"Response Status: {response.status_code}")
+    if response.status_code not in [200, 204]:
+        raise Exception(f"Failed to create vector: {response.status_code}")
+
 def upsert_vectors_in_transaction(collection_name, transaction_id, vectors):
     url = f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/vectors"
     data = {
@@ -195,7 +207,7 @@ if __name__ == "__main__":
     dimensions = 1024
     max_val = 1.0
     min_val = -1.0
-    rows = 100
+    rows = 1_000_000
     perturbation_degree = 0.25  # Degree of perturbation
 
     # first login to get the auth jwt token
@@ -262,17 +274,25 @@ if __name__ == "__main__":
 
             # futures.append(executor.submit(upsert_vectors_in_transaction, vector_db_name, transaction_id, final_list))
                 # Create vectors one by one in the transaction
-            for vector in final_list:
-                    try:
-                        create_response = create_vector_in_transaction(
-                            vector_db_name, 
-                            transaction_id, 
-                            vector
-                        )
-                        print(f"Created vector {vector['id']}: {create_response}")
-                    except Exception as e:
-                        print(f"Error creating vector {vector['id']}: {e}")
-                        raise  # Re-raise to trigger transaction abort
+            # for vector in final_list:
+            #         try:
+            #             create_response = create_vector_in_transaction(
+            #                 vector_db_name, 
+            #                 transaction_id, 
+            #                 vector
+            #             )
+            #             print(f"Created vector {vector['id']}: {create_response}")
+            #         except Exception as e:
+            #             print(f"Error creating vector {vector['id']}: {e}")
+            #             raise  # Re-raise to trigger transaction abort
+            for i in range(0, rows, 100):
+                vectors = final_list[i:i + 100]
+                try:
+                    upsert_in_transaction(vector_db_name, transaction_id, vectors)
+                    print(f"Upsert complete")
+                except Exception as e:
+                    print(f"Error in upsert: {e}")
+                    raise
 
             # Commit the transaction after vectors are upserted
             commit_response = commit_transaction(vector_db_name, transaction_id)

@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use self::vectors::dtos::UpsertDto;
+
 use super::{dtos::CreateTransactionResponseDto, error::TransactionError};
 use crate::convert_value;
 use crate::models::rpc::VectorIdValue;
@@ -172,6 +174,38 @@ pub(crate) async fn delete_vector_by_id(
         transaction_id,
     )
     .map_err(|e| TransactionError::FailedToDeleteVector(e.to_string()))?;
+
+    Ok(())
+}
+
+pub(crate) async fn upsert(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    transaction_id: Hash,
+    upsert_dto: UpsertDto,
+) -> Result<(), TransactionError> {
+    let vec_store = ctx
+        .ain_env
+        .collections_map
+        .get(collection_id)
+        .ok_or(TransactionError::CollectionNotFound)?;
+
+    let mut current_open_transaction_arc = vec_store.current_open_transaction.clone();
+
+    let current_open_transaction = current_open_transaction_arc
+        .get()
+        .as_ref()
+        .ok_or(TransactionError::NotFound)?;
+
+    if current_open_transaction.id != transaction_id {
+        return Err(TransactionError::FailedToCreateVector(
+            "This is not the currently open transaction!".into(),
+        ));
+    }
+
+    vectors::repo::upsert_in_transaction(ctx, collection_id, current_open_transaction, upsert_dto)
+        .await
+        .map_err(|e| TransactionError::FailedToCreateVector(e.to_string()))?;
 
     Ok(())
 }

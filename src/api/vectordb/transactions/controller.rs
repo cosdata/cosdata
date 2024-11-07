@@ -1,7 +1,8 @@
 use actix_web::{web, HttpResponse};
 
 use crate::{
-    api::vectordb::vectors::dtos::CreateVectorDto, app_context::AppContext,
+    api::vectordb::vectors::dtos::{CreateVectorDto, UpsertDto},
+    app_context::AppContext,
     models::rpc::VectorIdValue,
 };
 
@@ -65,4 +66,20 @@ pub(crate) async fn delete_vector_by_id(
     )
     .await?;
     Ok(HttpResponse::NoContent().finish())
+}
+
+pub(crate) async fn upsert(
+    path: web::Path<(String, u32)>,
+    ctx: web::Data<AppContext>,
+    web::Json(upsert_dto): web::Json<UpsertDto>,
+) -> Result<HttpResponse, TransactionError> {
+    let (collection_id, transaction_id) = path.into_inner();
+    service::upsert(
+        ctx.into_inner(),
+        &collection_id,
+        transaction_id.into(),
+        upsert_dto,
+    )
+    .await?;
+    Ok(HttpResponse::Ok().finish())
 }
