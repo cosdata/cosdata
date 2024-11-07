@@ -426,7 +426,6 @@ pub struct DenseIndex {
     pub cache: Arc<NodeRegistry>,
     pub index_manager: Arc<BufferManagerFactory>,
     pub vec_raw_manager: Arc<BufferManagerFactory>,
-    pub lock: Arc<AtomicBool>,
 }
 
 impl DenseIndex {
@@ -472,22 +471,7 @@ impl DenseIndex {
             cache,
             index_manager,
             vec_raw_manager,
-            lock: Arc::new(AtomicBool::new(false)),
         }
-    }
-
-    pub fn acquire_lock(&self) {
-        #[allow(deprecated)]
-        while self
-            .lock
-            .compare_and_swap(false, true, Ordering::Acquire)
-        {
-            std::thread::yield_now();
-        }
-    }
-
-    pub fn release_lock(&self) {
-        self.lock.store(false, Ordering::Release);
     }
 
     // Get method
@@ -839,7 +823,7 @@ pub struct STM<T: 'static> {
 }
 
 fn backoff(iteration: usize) {
-    let spins = 1 << iteration;
+    let spins = 1u64 << iteration;
     for _ in 0..spins {
         std::thread::yield_now();
     }

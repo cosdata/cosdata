@@ -23,7 +23,9 @@ use std::array::TryFromSliceError;
 use std::fs;
 use std::io::SeekFrom;
 use std::path::Path;
+use std::sync::mpsc;
 use std::sync::Arc;
+use std::thread;
 
 /// creates a dense index for a collection
 pub async fn init_dense_index_for_collection(
@@ -63,7 +65,7 @@ pub async fn init_dense_index_for_collection(
         .collect::<Vec<f32>>();
     let vec_hash = VectorId::Int(-1);
 
-    let exec_queue_nodes: ExecQueueUpdate = STM::new(Vec::new(), 1, true);
+    let exec_queue_nodes: ExecQueueUpdate = STM::new(Vec::new(), 8, true);
     let vector_list = Arc::new(quantization_metric.quantize(&vec, storage_type)?);
 
     // Note that setting .write(true).append(true) has the same effect
@@ -222,27 +224,40 @@ pub fn run_upload_in_transaction(
         .get(&current_version)
         .map_err(|e| WaCustomError::BufIo(Arc::new(e)))?;
 
-    vecs.into_par_iter()
-        .map(|(id, vec)| {
+    let mut handles: Vec<thread::JoinHandle<Result<(), WaCustomError>>> = Vec::new();
+    let (tx, rx) = mpsc::channel();
+
+    for (id, vec) in vecs {
+        let tx = tx.clone();
+        let bufman = bufman.clone();
+        let dense_index = dense_index.clone();
+        let handle = thread::spawn(move || {
             let hash_vec = convert_value(id);
             let vec_emb = RawVectorEmbedding {
                 raw_vec: vec,
                 hash_vec,
             };
+            tx.send(vec_emb.clone()).unwrap();
             insert_embedding(
                 bufman.clone(),
                 dense_index.clone(),
                 &vec_emb,
                 current_version,
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+            )?;
+            Ok(())
+        });
+        handles.push(handle);
+    }
 
-    index_embeddings_in_transaction(
-        dense_index.clone(),
-        transaction,
-        ctx.config.upload_process_batch_size,
-    )?;
+    drop(tx);
+
+    index_embeddings_in_transaction(dense_index, transaction, rx)?;
+
+    bufman.flush()?;
+
+    for handle in handles {
+        handle.join().unwrap()?;
+    }
 
     Ok(())
 }
