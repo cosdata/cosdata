@@ -4,7 +4,6 @@ use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::cache_loader::NodeRegistry;
 use crate::models::collection::Collection;
 use crate::models::common::*;
-use crate::models::file_persist::*;
 use crate::models::lazy_load::*;
 use crate::models::meta_persist::update_current_version;
 use crate::models::rpc::VectorIdValue;
@@ -17,7 +16,6 @@ use crate::vector_store::*;
 use arcshift::ArcShift;
 use lmdb::Transaction;
 use lmdb::WriteFlags;
-use rand::Rng;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::array::TryFromSliceError;
 use std::fs;
@@ -168,12 +166,11 @@ pub async fn init_inverted_index_for_collection(
 
 /// uploads a vector embedding within a transaction
 pub fn run_upload_in_transaction(
-    ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
-    transaction: &DenseIndexTransaction,
+    transaction_id: Hash,
     vecs: Vec<(VectorIdValue, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
-    let current_version = transaction.id;
+    let current_version = transaction_id;
 
     let bufman = dense_index
         .vec_raw_manager
@@ -202,12 +199,13 @@ pub fn run_upload_in_transaction(
             )?;
             Ok(())
         });
+
         handles.push(handle);
     }
 
     drop(tx);
 
-    index_embeddings_in_transaction(dense_index, transaction, rx)?;
+    index_embeddings_in_transaction(dense_index, transaction_id, rx)?;
 
     bufman.flush()?;
 
