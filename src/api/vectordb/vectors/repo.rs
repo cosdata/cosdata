@@ -67,6 +67,7 @@ pub(crate) async fn create_vector_in_transaction(
         .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
 
     run_upload_in_transaction(
+        ctx.clone(),
         dense_index,
         transaction_id,
         vec![(
@@ -182,6 +183,7 @@ pub(crate) async fn upsert_in_transaction(
         .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
 
     run_upload_in_transaction(
+        ctx.clone(),
         dense_index,
         transaction_id,
         convert_vectors(upsert_dto.vectors),

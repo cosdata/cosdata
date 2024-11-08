@@ -1,5 +1,4 @@
 use super::buffered_io::BufIoError;
-use super::dot_product::x86_64::dot_product_u8_avx2;
 use super::lazy_load::LazyItem;
 use super::rpc::VectorIdValue;
 use super::types::{MergedNode, MetricResult, VectorId};
@@ -17,6 +16,9 @@ use std::sync::Arc;
 
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
+
+#[cfg(target_arch = "x86_64")]
+use super::dot_product::x86_64::dot_product_u8_avx2;
 
 #[cfg(target_arch = "x86_64")]
 pub fn dot_product_u8_avx2_fma(a: &[u8], b: &[u8]) -> u64 {
@@ -209,6 +211,8 @@ pub fn get_magnitude_plus_quantized_vec(quant_vec: &[Vec<u32>], _size: usize) ->
 
     result
 }
+
+#[cfg(target_arch = "x86_64")]
 pub fn cosine_similarity_scalar_u8(x: &VectorQt, y: &VectorQt) -> f32 {
     if let (
         VectorQt::UnsignedByte {
@@ -262,6 +266,7 @@ pub fn cosine_coalesce(x: &VectorQt, y: &VectorQt, length: usize) -> f32 {
         panic!("cosine_coalesce called with non-SubByte VectorQt")
     }
 }
+#[cfg(target_arch = "x86_64")]
 pub fn cosine_similarity_qt(
     x: &VectorQt,
     y: &VectorQt,

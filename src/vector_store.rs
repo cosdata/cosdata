@@ -1,3 +1,4 @@
+use crate::app_context::AppContext;
 use crate::distance::DistanceFunction;
 use crate::macros::key;
 use crate::models::buffered_io::BufferManager;
@@ -643,6 +644,7 @@ pub fn index_embeddings(
 }
 
 pub fn index_embeddings_in_transaction(
+    ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
     transaction_id: Hash,
     embeddings: mpsc::Receiver<RawVectorEmbedding>,
@@ -686,6 +688,7 @@ pub fn index_embeddings_in_transaction(
         dense_index.root_vec.item.clone().update(root);
 
         index_embeddings_in_transaction_inner(
+            ctx.clone(),
             dense_index,
             embeddings.into_iter(),
             quantization,
@@ -695,6 +698,7 @@ pub fn index_embeddings_in_transaction(
     } else {
         let quantization = quantization_arc.get();
         index_embeddings_in_transaction_inner(
+            ctx.clone(),
             dense_index,
             embeddings.into_iter(),
             quantization,
@@ -704,6 +708,7 @@ pub fn index_embeddings_in_transaction(
     }
 
     fn index_embeddings_in_transaction_inner(
+        ctx: Arc<AppContext>,
         dense_index: Arc<DenseIndex>,
         embeddings: impl Iterator<Item = RawVectorEmbedding>,
         quantization: &QuantizationMetric,
@@ -714,7 +719,7 @@ pub fn index_embeddings_in_transaction(
             let (tx, rx) = mpsc::channel::<RawVectorEmbedding>();
             let dense_index = dense_index.clone();
             let quantization = quantization.clone();
-            let handle = thread::spawn(move || {
+            let handle = ctx.threadpool.spawn(move || {
                 for raw_emb in rx {
                     let lp = &dense_index.levels_prob;
                     let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
