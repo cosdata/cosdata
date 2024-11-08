@@ -12,6 +12,7 @@ pub(crate) enum TransactionError {
     OnGoingTransaction,
     FailedToGetAppEnv,
     FailedToCreateTransaction(String),
+    FailedToCommitTransaction(String),
     FailedToCreateVector(String),
     FailedToDeleteVector(String),
     NotImplemented,
@@ -26,6 +27,9 @@ impl Display for TransactionError {
             Self::OnGoingTransaction => write!(f, "There is an on-going transaction!"),
             Self::FailedToCreateTransaction(msg) => {
                 write!(f, "Failed to create transaction due to {}", msg)
+            }
+            Self::FailedToCommitTransaction(msg) => {
+                write!(f, "Failed to commit transaction due to {}", msg)
             }
             Self::NotImplemented => {
                 write!(f, "This is not supported yet!")
@@ -52,6 +56,7 @@ impl ResponseError for TransactionError {
             Self::CollectionNotFound => StatusCode::BAD_REQUEST,
             Self::FailedToGetAppEnv => StatusCode::INTERNAL_SERVER_ERROR,
             Self::FailedToCreateTransaction(_) => StatusCode::BAD_REQUEST,
+            Self::FailedToCommitTransaction(_) => StatusCode::BAD_REQUEST,
             Self::OnGoingTransaction => StatusCode::CONFLICT,
             Self::NotImplemented => StatusCode::BAD_REQUEST,
             Self::FailedToCreateVector(_) => StatusCode::BAD_REQUEST,

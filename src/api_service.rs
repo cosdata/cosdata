@@ -4,7 +4,6 @@ use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::cache_loader::NodeRegistry;
 use crate::models::collection::Collection;
 use crate::models::common::*;
-use crate::models::file_persist::*;
 use crate::models::lazy_load::*;
 use crate::models::meta_persist::update_current_version;
 use crate::models::rpc::VectorIdValue;
@@ -17,13 +16,14 @@ use crate::vector_store::*;
 use arcshift::ArcShift;
 use lmdb::Transaction;
 use lmdb::WriteFlags;
-use rand::Rng;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::array::TryFromSliceError;
 use std::fs;
 use std::io::SeekFrom;
 use std::path::Path;
+use std::sync::mpsc;
 use std::sync::Arc;
+use std::thread;
 
 /// creates a dense index for a collection
 pub async fn init_dense_index_for_collection(
@@ -51,20 +51,7 @@ pub async fn init_dense_index_for_collection(
 
     let vcs = Arc::new(vcs);
 
-    let min = lower_bound.unwrap_or(-1.0);
-    let max = upper_bound.unwrap_or(1.0);
-    let vec = (0..size)
-        .map(|_| {
-            let mut rng = rand::thread_rng();
-
-            let random_number: f32 = rng.gen_range(min..max);
-            random_number
-        })
-        .collect::<Vec<f32>>();
-    let vec_hash = VectorId::Int(-1);
-
-    let exec_queue_nodes: ExecQueueUpdate = STM::new(Vec::new(), 1, true);
-    let vector_list = Arc::new(quantization_metric.quantize(&vec, storage_type)?);
+    let exec_queue_nodes: ExecQueueUpdate = STM::new(Vec::new(), 16, true);
 
     // Note that setting .write(true).append(true) has the same effect
     // as setting only .append(true)
@@ -75,43 +62,6 @@ pub async fn init_dense_index_for_collection(
             .open(collection_path.join("prop.data"))
             .map_err(|e| WaCustomError::FsError(e.to_string()))?,
     );
-
-    let location = write_prop_to_file(&vec_hash, vector_list.clone(), &prop_file)?;
-
-    let prop = ArcShift::new(PropState::Ready(Arc::new(NodeProp {
-        id: vec_hash,
-        value: vector_list.clone(),
-        location: Some(location),
-    })));
-
-    let mut root: LazyItemRef<MergedNode> = LazyItemRef::new_invalid();
-
-    let mut nodes = Vec::new();
-
-    for l in 0..=num_layers {
-        let current_node = Arc::new(MergedNode {
-            hnsw_level: HNSWLevel(l),
-            prop: prop.clone(),
-            neighbors: EagerLazyItemSet::new(),
-            parent: LazyItemRef::new_invalid(),
-            child: root.clone(),
-        });
-
-        let lazy_node = LazyItem::from_arc(hash, 0, current_node.clone());
-        let lazy_node_ref = LazyItemRef::from_arc(hash, 0, current_node.clone());
-
-        if let Some(prev_node) = root
-            .item
-            .get()
-            .get_lazy_data()
-            .and_then(|mut arc| arc.get().clone())
-        {
-            prev_node.set_parent(lazy_node.clone());
-        }
-        root = lazy_node_ref.clone();
-
-        nodes.push(lazy_node_ref.clone());
-    }
 
     let index_manager = Arc::new(BufferManagerFactory::new(
         collection_path.clone(),
@@ -124,9 +74,15 @@ pub async fn init_dense_index_for_collection(
     // TODO: May be the value can be taken from config
     let cache = Arc::new(NodeRegistry::new(1000, index_manager.clone()));
 
-    for item_ref in nodes.iter_mut() {
-        persist_node_update_loc(index_manager.clone(), &mut item_ref.item)?;
-    }
+    let root = create_root_node(
+        num_layers,
+        &quantization_metric,
+        storage_type,
+        size,
+        prop_file.clone(),
+        hash,
+        index_manager.clone(),
+    )?;
 
     index_manager.flush_all()?;
     // ---------------------------
@@ -138,7 +94,7 @@ pub async fn init_dense_index_for_collection(
     let dense_index = Arc::new(DenseIndex::new(
         exec_queue_nodes,
         collection_name.clone(),
-        root,
+        LazyItemRef::from_lazy(root),
         lp,
         size,
         prop_file,
@@ -210,39 +166,52 @@ pub async fn init_inverted_index_for_collection(
 
 /// uploads a vector embedding within a transaction
 pub fn run_upload_in_transaction(
-    ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
-    transaction: &DenseIndexTransaction,
+    transaction_id: Hash,
     vecs: Vec<(VectorIdValue, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
-    let current_version = transaction.id;
+    let current_version = transaction_id;
 
     let bufman = dense_index
         .vec_raw_manager
         .get(&current_version)
         .map_err(|e| WaCustomError::BufIo(Arc::new(e)))?;
 
-    vecs.into_par_iter()
-        .map(|(id, vec)| {
+    let mut handles: Vec<thread::JoinHandle<Result<(), WaCustomError>>> = Vec::new();
+    let (tx, rx) = mpsc::channel();
+
+    for (id, vec) in vecs {
+        let tx = tx.clone();
+        let bufman = bufman.clone();
+        let dense_index = dense_index.clone();
+        let handle = thread::spawn(move || {
             let hash_vec = convert_value(id);
             let vec_emb = RawVectorEmbedding {
                 raw_vec: vec,
                 hash_vec,
             };
+            tx.send(vec_emb.clone()).unwrap();
             insert_embedding(
                 bufman.clone(),
                 dense_index.clone(),
                 &vec_emb,
                 current_version,
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+            )?;
+            Ok(())
+        });
 
-    index_embeddings_in_transaction(
-        dense_index.clone(),
-        transaction,
-        ctx.config.upload_process_batch_size,
-    )?;
+        handles.push(handle);
+    }
+
+    drop(tx);
+
+    index_embeddings_in_transaction(dense_index, transaction_id, rx)?;
+
+    bufman.flush()?;
+
+    for handle in handles {
+        handle.join().unwrap()?;
+    }
 
     Ok(())
 }
