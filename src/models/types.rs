@@ -75,7 +75,7 @@ pub type PropPersistRef = (FileOffset, BytesToRead);
 pub struct NodeProp {
     pub id: VectorId,
     pub value: Arc<Storage>,
-    pub location: Option<PropPersistRef>,
+    pub location: PropPersistRef,
 }
 
 impl StdHash for NodeProp {
@@ -243,23 +243,12 @@ impl MergedNode {
         self.child.clone()
     }
 
-    pub fn set_prop_location(&self, new_location: PropPersistRef) {
-        let mut arc = self.prop.clone();
-        arc.rcu(|prop| match prop {
-            PropState::Pending(_) => PropState::Pending(new_location),
-            PropState::Ready(prop) => {
-                let mut new_prop = NodeProp::clone(&prop);
-                new_prop.location = Some(new_location);
-                PropState::Ready(Arc::new(new_prop))
-            }
-        });
-    }
 
-    pub fn get_prop_location(&self) -> Option<PropPersistRef> {
+    pub fn get_prop_location(&self) -> PropPersistRef {
         let mut arc = self.prop.clone();
         match arc.get() {
-            PropState::Ready(ref node_prop) => node_prop.location,
-            PropState::Pending(location) => Some(*location),
+            PropState::Ready(node_prop) => node_prop.location.clone(),
+            PropState::Pending(location) => *location,
         }
     }
 
@@ -649,7 +638,7 @@ impl CollectionsMap {
         };
         let current_version = retrieve_current_version(&lmdb)?;
         let dense_index = DenseIndex::new(
-            STM::new(Vec::new(), 1, true),
+            STM::new(Vec::new(), 16, true),
             // dense_index_data.max_level,
             coll.name.clone(),
             root,
@@ -818,7 +807,7 @@ pub struct STM<T: 'static> {
 }
 
 fn backoff(iteration: usize) {
-    let spins = 1 << iteration;
+    let spins = 1u64 << iteration;
     for _ in 0..spins {
         std::thread::yield_now();
     }

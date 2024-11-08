@@ -65,7 +65,7 @@ pub enum RPCResponseBody {
         insert_stats: Option<Statistics>,
     },
     RespVectorKNN {
-        knn: Option<Vec<(VectorIdValue, MetricResult)>>,
+        knn: Vec<(VectorIdValue, MetricResult)>,
     },
     RespFetchNeighbors {
         vector: Vector,

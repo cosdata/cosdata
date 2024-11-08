@@ -4,7 +4,7 @@ use crate::{
     api::vectordb::collections,
     api_service::{run_upload, run_upload_in_transaction},
     app_context::AppContext,
-    convert_value,
+    convert_value, convert_vectors,
     models::{rpc::VectorIdValue, types::VectorId, versioning::Hash},
     vector_store::get_embedding_by_id,
 };
@@ -12,7 +12,7 @@ use crate::{
 use super::{
     dtos::{
         CreateVectorDto, CreateVectorResponseDto, FindSimilarVectorsDto, SimilarVector,
-        UpdateVectorDto, UpdateVectorResponseDto,
+        UpdateVectorDto, UpdateVectorResponseDto, UpsertDto,
     },
     error::VectorsError,
 };
@@ -65,7 +65,9 @@ pub(crate) async fn create_vector_in_transaction(
     let dense_index = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
         .await
         .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
+
     run_upload_in_transaction(
+        ctx.clone(),
         dense_index,
         transaction_id,
         vec![(
@@ -74,6 +76,7 @@ pub(crate) async fn create_vector_in_transaction(
         )],
     )
     .map_err(VectorsError::WaCustom)?;
+
     Ok(CreateVectorResponseDto {
         id: create_vector_dto.id,
         values: create_vector_dto.values,
@@ -165,6 +168,27 @@ pub(crate) async fn delete_vector_by_id(
 
     crate::vector_store::delete_vector_by_id(collection, convert_value(vector_id.clone()))
         .map_err(|e| VectorsError::WaCustom(e))?;
+
+    Ok(())
+}
+
+pub(crate) async fn upsert_in_transaction(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    transaction_id: Hash,
+    upsert_dto: UpsertDto,
+) -> Result<(), VectorsError> {
+    let dense_index = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
+        .await
+        .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
+
+    run_upload_in_transaction(
+        ctx.clone(),
+        dense_index,
+        transaction_id,
+        convert_vectors(upsert_dto.vectors),
+    )
+    .map_err(VectorsError::WaCustom)?;
 
     Ok(())
 }

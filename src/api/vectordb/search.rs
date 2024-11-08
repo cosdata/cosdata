@@ -3,7 +3,7 @@ use actix_web::{web, HttpResponse};
 use crate::{
     api_service::ann_vector_query,
     app_context::AppContext,
-    convert_option_vec,
+    convert_search_results,
     models::rpc::{RPCResponseBody, VectorANN},
 };
 
@@ -27,7 +27,7 @@ pub(crate) async fn search(
     };
 
     let response_data = RPCResponseBody::RespVectorKNN {
-        knn: convert_option_vec(result),
+        knn: convert_search_results(result),
     };
     HttpResponse::Ok().json(response_data)
 }

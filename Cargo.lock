@@ -964,6 +964,7 @@ dependencies = [
  "lmdb",
  "log",
  "nom",
+ "num_cpus",
  "once_cell",
  "probabilistic-collections",
  "quickcheck",

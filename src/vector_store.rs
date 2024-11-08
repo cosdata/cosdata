@@ -1,6 +1,8 @@
+use crate::app_context::AppContext;
 use crate::distance::DistanceFunction;
 use crate::macros::key;
 use crate::models::buffered_io::BufferManager;
+use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::common::*;
 use crate::models::file_persist::*;
 use crate::models::identity_collections::IdentitySet;
@@ -19,17 +21,81 @@ use smallvec::SmallVec;
 use std::array::TryFromSliceError;
 use std::cmp::Ordering;
 use std::collections::HashSet;
+use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::SeekFrom;
 use std::path::Path;
+use std::sync::mpsc;
 use std::sync::Arc;
+use std::thread;
+
+pub fn create_root_node(
+    num_layers: u8,
+    quantization_metric: &QuantizationMetric,
+    storage_type: StorageType,
+    dim: usize,
+    prop_file: Arc<File>,
+    hash: Hash,
+    index_manager: Arc<BufferManagerFactory>,
+) -> Result<LazyItem<MergedNode>, WaCustomError> {
+    let min = -1.0;
+    let max = 1.0;
+    let vec = (0..dim)
+        .map(|_| {
+            let mut rng = rand::thread_rng();
+
+            let random_number: f32 = rng.gen_range(min..max);
+            random_number
+        })
+        .collect::<Vec<f32>>();
+    let vec_hash = VectorId::Int(-1);
+
+    let vector_list = Arc::new(quantization_metric.quantize(&vec, storage_type)?);
+
+    let location = write_prop_to_file(&vec_hash, vector_list.clone(), &prop_file)?;
+
+    let prop = ArcShift::new(PropState::Ready(Arc::new(NodeProp {
+        id: vec_hash,
+        value: vector_list.clone(),
+        location,
+    })));
+    let mut root: LazyItem<MergedNode> = LazyItem::new_invalid();
+
+    let mut nodes = Vec::new();
+
+    for l in 0..=num_layers {
+        let current_node = Arc::new(MergedNode {
+            hnsw_level: HNSWLevel(l),
+            prop: prop.clone(),
+            neighbors: EagerLazyItemSet::new(),
+            parent: LazyItemRef::new_invalid(),
+            child: LazyItemRef::from_lazy(root.clone()),
+        });
+
+        let lazy_node = LazyItem::from_arc(hash, 0, current_node.clone());
+        let lazy_node_ref = LazyItemRef::from_arc(hash, 0, current_node.clone());
+
+        if let Some(prev_node) = root.get_lazy_data().and_then(|mut arc| arc.get().clone()) {
+            prev_node.set_parent(lazy_node.clone());
+        }
+        root = lazy_node.clone();
+
+        nodes.push(lazy_node_ref.clone());
+    }
+
+    for item_ref in nodes.iter_mut() {
+        persist_node_update_loc(index_manager.clone(), &mut item_ref.item)?;
+    }
+
+    Ok(root)
+}
 
 pub fn ann_search(
     dense_index: Arc<DenseIndex>,
     vector_emb: QuantizedVectorEmbedding,
     cur_entry: LazyItem<MergedNode>,
     cur_level: HNSWLevel,
-) -> Result<Option<Vec<(LazyItem<MergedNode>, MetricResult)>>, WaCustomError> {
+) -> Result<Vec<(LazyItem<MergedNode>, MetricResult)>, WaCustomError> {
     let fvec = vector_emb.quantized_vec.clone();
     let mut skipm = HashSet::new();
     skipm.insert(vector_emb.hash_vec.clone());
@@ -62,24 +128,30 @@ pub fn ann_search(
         .distance_metric
         .calculate(&fvec, &node_prop.value)?;
 
-    let z = if z.is_empty() {
+    let mut z = if z.is_empty() {
         vec![(cur_entry.clone(), dist)]
     } else {
         z
     };
 
-    let result = if cur_level.0 == 0 {
-        Some(vec![])
-    } else {
-        ann_search(
-            dense_index,
+    if cur_level.0 != 0 {
+        let results = ann_search(
+            dense_index.clone(),
             vector_emb,
-            z[0].0.clone(),
+            z[0].0
+                .clone()
+                .get_data(dense_index.cache.clone())
+                .get_child()
+                .item
+                .get()
+                .clone(),
             HNSWLevel(cur_level.0 - 1),
-        )?
+        )?;
+
+        z.extend(results);
     };
 
-    Ok(add_option_vecs(&result, &Some(z)))
+    Ok(z)
 }
 
 pub fn vector_fetch(
@@ -306,7 +378,8 @@ fn auto_config_storage_type(dense_index: Arc<DenseIndex>, vectors: &[&[f32]]) {
                 StorageType::SubByte(2)
             }
         } else {
-            StorageType::SubByte(3)
+            // StorageType::SubByte(3)
+            StorageType::UnsignedByte
         }
     } else {
         StorageType::UnsignedByte
@@ -448,24 +521,41 @@ pub fn index_embeddings(
                         )
                         .expect("Quantization failed"),
                 );
+                let location = write_prop_to_file(
+                    &raw_emb.hash_vec,
+                    quantized_vec.clone(),
+                    &dense_index.prop_file,
+                )
+                .expect("failed to write prop");
                 let prop = ArcShift::new(PropState::Ready(Arc::new(NodeProp {
                     id: raw_emb.hash_vec.clone(),
                     value: quantized_vec.clone(),
-                    location: None,
+                    location,
                 })));
                 let embedding = QuantizedVectorEmbedding {
                     quantized_vec,
                     hash_vec: raw_emb.hash_vec,
                 };
 
+                let current_level = HNSWLevel(iv.try_into().unwrap());
+
+                let mut current_entry = dense_index.root_vec.item.clone().get().clone();
+
+                loop {
+                    let data = current_entry.get_data(dense_index.cache.clone());
+                    if data.hnsw_level.0 > current_level.0 {
+                        current_entry = data.child.item.clone().get().clone();
+                    }
+                    break;
+                }
+
                 index_embedding(
                     dense_index.clone(),
                     None,
                     embedding,
                     prop,
-                    dense_index.root_vec.item.clone().get().clone(),
-                    HNSWLevel(dense_index.hnsw_params.clone().get().num_layers),
-                    HNSWLevel(iv.try_into().unwrap()),
+                    current_entry,
+                    current_level,
                     version,
                     version_number,
                 )
@@ -553,6 +643,153 @@ pub fn index_embeddings(
     Ok(())
 }
 
+pub fn index_embeddings_in_transaction(
+    ctx: Arc<AppContext>,
+    dense_index: Arc<DenseIndex>,
+    transaction_id: Hash,
+    embeddings: mpsc::Receiver<RawVectorEmbedding>,
+) -> Result<(), WaCustomError> {
+    let version = transaction_id;
+
+    let version_hash = dense_index
+        .vcs
+        .get_version_hash(&version)
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?
+        .expect("Current version hash not found");
+    let version_number = *version_hash.version as u16;
+
+    let mut quantization_arc = dense_index.quantization_metric.clone();
+    // Set to auto config but is not configured
+    if dense_index.get_auto_config_flag() && !dense_index.get_configured_flag() {
+        let quantization = quantization_arc.get();
+        let mut new_quantization = quantization.clone();
+        let embeddings: Vec<_> = embeddings.into_iter().collect();
+        let vectors: Vec<&[f32]> = embeddings
+            .iter()
+            .map(|embedding| &embedding.raw_vec as &[f32])
+            .collect();
+        new_quantization.train(&vectors)?;
+        quantization_arc.update(new_quantization);
+        auto_config_storage_type(dense_index.clone(), &vectors);
+        dense_index.set_configured_flag(true);
+
+        let quantization = quantization_arc.get();
+
+        let root = create_root_node(
+            dense_index.hnsw_params.clone().get().num_layers,
+            quantization,
+            dense_index.storage_type.clone().get().clone(),
+            dense_index.dim,
+            dense_index.prop_file.clone(),
+            dense_index.root_vec.get_current_version(),
+            dense_index.index_manager.clone(),
+        )?;
+
+        dense_index.root_vec.item.clone().update(root);
+
+        index_embeddings_in_transaction_inner(
+            ctx.clone(),
+            dense_index,
+            embeddings.into_iter(),
+            quantization,
+            version,
+            version_number,
+        );
+    } else {
+        let quantization = quantization_arc.get();
+        index_embeddings_in_transaction_inner(
+            ctx.clone(),
+            dense_index,
+            embeddings.into_iter(),
+            quantization,
+            version,
+            version_number,
+        );
+    }
+
+    fn index_embeddings_in_transaction_inner(
+        ctx: Arc<AppContext>,
+        dense_index: Arc<DenseIndex>,
+        embeddings: impl Iterator<Item = RawVectorEmbedding>,
+        quantization: &QuantizationMetric,
+        version: Hash,
+        version_number: u16,
+    ) {
+        let workers: [_; 8] = std::array::from_fn(|_| {
+            let (tx, rx) = mpsc::channel::<RawVectorEmbedding>();
+            let dense_index = dense_index.clone();
+            let quantization = quantization.clone();
+            let handle = ctx.threadpool.spawn(move || {
+                for raw_emb in rx {
+                    let lp = &dense_index.levels_prob;
+                    let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
+                    let quantized_vec = Arc::new(
+                        quantization
+                            .quantize(
+                                &raw_emb.raw_vec,
+                                dense_index.storage_type.clone().get().clone(),
+                            )
+                            .expect("Quantization failed"),
+                    );
+                    let location = write_prop_to_file(
+                        &raw_emb.hash_vec,
+                        quantized_vec.clone(),
+                        &dense_index.prop_file,
+                    )
+                    .expect("failed to write prop");
+
+                    let prop = ArcShift::new(PropState::Ready(Arc::new(NodeProp {
+                        id: raw_emb.hash_vec.clone(),
+                        value: quantized_vec.clone(),
+                        location,
+                    })));
+                    let embedding = QuantizedVectorEmbedding {
+                        quantized_vec,
+                        hash_vec: raw_emb.hash_vec,
+                    };
+
+                    let current_level = HNSWLevel(iv.try_into().unwrap());
+
+                    let mut current_entry = dense_index.root_vec.item.clone().get().clone();
+
+                    loop {
+                        let data = current_entry.get_data(dense_index.cache.clone());
+                        if data.hnsw_level.0 > current_level.0 {
+                            current_entry = data.child.item.clone().get().clone();
+                        } else if data.hnsw_level == current_level {
+                            break;
+                        } else {
+                            panic!("missing node");
+                        }
+                    }
+
+                    index_embedding(
+                        dense_index.clone(),
+                        None,
+                        embedding,
+                        prop,
+                        current_entry,
+                        current_level,
+                        version,
+                        version_number,
+                    )
+                    .expect("index_embedding failed");
+                }
+            });
+            (handle, tx)
+        });
+
+        let mut worker_idx = 0;
+
+        for raw_emb in embeddings {
+            workers[worker_idx].1.send(raw_emb).unwrap();
+            worker_idx = (worker_idx + 1) % 8;
+        }
+    }
+
+    Ok(())
+}
+
 pub fn index_embedding(
     dense_index: Arc<DenseIndex>,
     parent: Option<LazyItem<MergedNode>>,
@@ -560,7 +797,6 @@ pub fn index_embedding(
     prop: ArcShift<PropState>,
     cur_entry: LazyItem<MergedNode>,
     cur_level: HNSWLevel,
-    max_insert_level: HNSWLevel,
     version: Hash,
     version_number: u16,
 ) -> Result<(), WaCustomError> {
@@ -614,36 +850,48 @@ pub fn index_embedding(
 
     let z_clone: Vec<_> = z.iter().map(|(first, _)| first.clone()).collect();
 
-    let parent = if cur_level.0 <= max_insert_level.0 {
-        let parent = insert_node_create_edges(
-            dense_index.clone(),
-            parent,
-            prop.clone(),
-            z,
-            cur_level,
-            version,
-            version_number,
-        )
-        .expect("Failed insert_node_create_edges");
-
-        Some(parent)
-    } else {
-        None
-    };
+    let (node, neighbors) = create_node_extract_neighbors(
+        version,
+        version_number,
+        cur_level,
+        prop.clone(),
+        parent.clone().map_or_else(
+            || LazyItemRef::new_invalid(),
+            |parent| LazyItemRef::from_lazy(parent),
+        ),
+        LazyItemRef::new_invalid(),
+    );
 
     if cur_level.0 != 0 {
         index_embedding(
             dense_index.clone(),
-            parent,
+            Some(node.clone()),
             vector_emb.clone(),
             prop,
-            z_clone[0].clone(),
+            z_clone[0]
+                .clone()
+                .get_data(dense_index.cache.clone())
+                .get_child()
+                .item
+                .get()
+                .clone(),
             HNSWLevel(cur_level.0 - 1),
-            max_insert_level,
             version,
             version_number,
         )?;
     }
+
+    create_node_edges(
+        dense_index.clone(),
+        parent,
+        node,
+        neighbors,
+        z,
+        cur_level,
+        version,
+        version_number,
+    )
+    .expect("Failed insert_node_create_edges");
 
     Ok(())
 }
@@ -652,21 +900,7 @@ pub fn queue_node_prop_exec(
     dense_index: Arc<DenseIndex>,
     lznode: LazyItem<MergedNode>,
 ) -> Result<(), WaCustomError> {
-    let (node, _location) = (
-        lznode.try_get_data(dense_index.cache.clone())?,
-        lznode
-            .get_file_index()
-            .ok_or(WaCustomError::LazyLoadingError(
-                "Missing FileIndex".to_string(),
-            ))?,
-    );
-
-    if let PropState::Ready(prop) = node.get_prop() {
-        if prop.location.is_none() {
-            let location = write_prop_to_file(&prop.id, prop.value.clone(), &dense_index.prop_file)?;
-            node.set_prop_location(location);
-        }
-    };
+    let node = lznode.try_get_data(dense_index.cache.clone())?;
 
     for neighbor in node.neighbors.iter() {
         neighbor.1.set_persistence(true);
@@ -699,7 +933,7 @@ pub fn auto_commit_transaction(dense_index: Arc<DenseIndex>) -> Result<(), WaCus
     Ok(())
 }
 
-fn create_node_extract_neighbours(
+fn create_node_extract_neighbors(
     version_id: Hash,
     version_number: u16,
     hnsw_level: HNSWLevel,
@@ -710,41 +944,31 @@ fn create_node_extract_neighbours(
     LazyItem<MergedNode>,
     EagerLazyItemSet<MergedNode, MetricResult>,
 ) {
-    let neighbours = EagerLazyItemSet::new();
+    let neighbors = EagerLazyItemSet::new();
     let node = LazyItem::from_data(
         version_id,
         version_number,
         MergedNode {
             hnsw_level,
             prop,
-            neighbors: neighbours.clone(),
+            neighbors: neighbors.clone(),
             parent,
             child,
         },
     );
-    (node, neighbours)
+    (node, neighbors)
 }
 
-fn insert_node_create_edges(
+fn create_node_edges(
     dense_index: Arc<DenseIndex>,
     parent: Option<LazyItem<MergedNode>>,
-    prop: ArcShift<PropState>,
+    node: LazyItem<MergedNode>,
+    neighbours: EagerLazyItemSet<MergedNode, MetricResult>,
     nbs: Vec<(LazyItem<MergedNode>, MetricResult)>,
     cur_level: HNSWLevel,
     version: Hash,
     version_number: u16,
-) -> Result<LazyItem<MergedNode>, WaCustomError> {
-    let (node, neighbours) = create_node_extract_neighbours(
-        version,
-        version_number,
-        cur_level,
-        prop,
-        parent.clone().map_or_else(
-            || LazyItemRef::new_invalid(),
-            |parent| LazyItemRef::from_lazy(parent),
-        ),
-        LazyItemRef::new_invalid(),
-    );
+) -> Result<(), WaCustomError> {
     if let Some(parent) = parent {
         parent
             .get_lazy_data()
@@ -757,41 +981,44 @@ fn insert_node_create_edges(
 
     for (nbr1, dist) in nbs.into_iter() {
         if let Ok(old_neighbour) = nbr1.try_get_data(dense_index.cache.clone()) {
-            let (new_neighbor, mut new_neighbor_neighbors, mut neighbor_list) =
-                if let Some(version) = nbr1.get_version(dense_index.cache.clone(), version_number) {
-                    let node = version.get_data(dense_index.cache.clone());
-                    let neighbor_list: Vec<(LazyItem<MergedNode>, MetricResult)> =
-                        node.neighbors.iter().map(|nbr2| (nbr2.1, nbr2.0)).collect();
-                    (version, node.neighbors.clone(), neighbor_list)
-                } else {
-                    let prop_arc = old_neighbour.prop.clone();
-                    let parent = old_neighbour.parent.clone();
-                    let child = old_neighbour.child.clone();
-                    let (new_neighbour, new_neighbour_neighbours) = create_node_extract_neighbours(
-                        version,
-                        version_number,
-                        cur_level,
-                        prop_arc,
-                        parent,
-                        child,
-                    );
-                    nbr1.add_version(dense_index.cache.clone(), new_neighbour.clone());
-                    let neighbor_list: Vec<(LazyItem<MergedNode>, MetricResult)> = old_neighbour
-                        .neighbors
-                        .iter()
-                        .map(|nbr2| (nbr2.1, nbr2.0))
-                        .collect();
-                    let mut exec_queue = dense_index.exec_queue_nodes.clone();
-                    exec_queue
-                        .transactional_update(|queue| {
-                            let mut new_queue = queue.clone();
-                            new_queue.push(ArcShift::new(nbr1.clone()));
-                            new_queue
-                        })
-                        .unwrap();
+            let (new_neighbor, mut new_neighbor_neighbors, mut neighbor_list) = if let Some(
+                version,
+            ) =
+                nbr1.get_version(dense_index.cache.clone(), version_number)
+            {
+                let node = version.get_data(dense_index.cache.clone());
+                let neighbor_list: Vec<(LazyItem<MergedNode>, MetricResult)> =
+                    node.neighbors.iter().map(|nbr2| (nbr2.1, nbr2.0)).collect();
+                (version, node.neighbors.clone(), neighbor_list)
+            } else {
+                let prop_arc = old_neighbour.prop.clone();
+                let parent = old_neighbour.parent.clone();
+                let child = old_neighbour.child.clone();
+                let (new_neighbour, new_neighbour_neighbours) = create_node_extract_neighbors(
+                    version,
+                    version_number,
+                    cur_level,
+                    prop_arc,
+                    parent,
+                    child,
+                );
+                nbr1.add_version(dense_index.cache.clone(), new_neighbour.clone());
+                let neighbor_list: Vec<(LazyItem<MergedNode>, MetricResult)> = old_neighbour
+                    .neighbors
+                    .iter()
+                    .map(|nbr2| (nbr2.1, nbr2.0))
+                    .collect();
+                let mut exec_queue = dense_index.exec_queue_nodes.clone();
+                exec_queue
+                    .transactional_update(|queue| {
+                        let mut new_queue = queue.clone();
+                        new_queue.push(ArcShift::new(nbr1.clone()));
+                        new_queue
+                    })
+                    .unwrap();
 
-                    (new_neighbour, new_neighbour_neighbours, neighbor_list)
-                };
+                (new_neighbour, new_neighbour_neighbours, neighbor_list)
+            };
 
             neighbor_list.push((node.clone(), dist));
 
@@ -814,9 +1041,9 @@ fn insert_node_create_edges(
         }
     }
 
-    queue_node_prop_exec(dense_index, node.clone())?;
+    queue_node_prop_exec(dense_index, node)?;
 
-    Ok(node)
+    Ok(())
 }
 
 fn traverse_find_nearest(
@@ -953,43 +1180,31 @@ pub fn create_index_in_collection(dense_index: Arc<DenseIndex>) -> Result<(), Wa
     let prop = ArcShift::new(PropState::Ready(Arc::new(NodeProp {
         id: vec_hash,
         value: vector_list,
-        location: Some(location),
+        location,
     })));
 
-    let root = LazyItem::new(
-        hash,
-        0,
-        MergedNode {
-            hnsw_level: HNSWLevel(0),
-            prop: prop.clone(),
-            neighbors: EagerLazyItemSet::new(),
-            parent: LazyItemRef::new_invalid(),
-            child: LazyItemRef::new_invalid(),
-        },
-    );
-
-    let mut prev: LazyItemRef<MergedNode> = LazyItemRef::from_lazy(root.clone());
+    let mut root: LazyItem<MergedNode> = LazyItem::new_invalid();
 
     let mut nodes = Vec::new();
-    for l in (1..=dense_index.hnsw_params.clone().get().num_layers).rev() {
+
+    for l in 0..=dense_index.hnsw_params.clone().get().num_layers {
         let current_node = Arc::new(MergedNode {
             hnsw_level: HNSWLevel(l),
             prop: prop.clone(),
             neighbors: EagerLazyItemSet::new(),
-            parent: prev.clone(),
-            child: LazyItemRef::new_invalid(),
+            parent: LazyItemRef::new_invalid(),
+            child: LazyItemRef::from_lazy(root.clone()),
         });
 
         let lazy_node = LazyItem::from_arc(hash, 0, current_node.clone());
-        let nn = LazyItemRef::from_arc(hash, 0, current_node.clone());
+        let lazy_node_ref = LazyItemRef::from_arc(hash, 0, current_node.clone());
 
-        if let Some(prev_node) = prev.item.get().get_lazy_data().unwrap().get() {
-            current_node.set_parent(prev.clone().item.get().clone());
-            prev_node.set_child(lazy_node.clone());
+        if let Some(prev_node) = root.get_lazy_data().and_then(|mut arc| arc.get().clone()) {
+            prev_node.set_parent(lazy_node.clone());
         }
-        prev = nn.clone();
+        root = lazy_node.clone();
 
-        nodes.push(nn.clone());
+        nodes.push(lazy_node_ref.clone());
     }
 
     for nn in nodes.iter_mut() {
@@ -999,7 +1214,7 @@ pub fn create_index_in_collection(dense_index: Arc<DenseIndex>) -> Result<(), Wa
     dense_index.index_manager.flush_all()?;
 
     // The whole index is empty now
-    dense_index.root_vec.item.clone().update(root);
+    dense_index.root_vec.item.update_shared(root);
     dense_index.set_auto_config_flag(false);
     dense_index.set_configured_flag(true);
 
@@ -1057,7 +1272,7 @@ fn delete_node_update_neighbours(
                 .clone()
                 .update(nbr_nbrs_set);
         } else {
-            let (new_version, mut new_neighbours) = create_node_extract_neighbours(
+            let (new_version, mut new_neighbours) = create_node_extract_neighbors(
                 version_id,
                 version_number,
                 hnsw_level,

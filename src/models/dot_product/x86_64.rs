@@ -365,19 +365,37 @@ unsafe fn octal_weighted_simd_avx2(data: *const u8, n: usize, lookup: &[u8; 64])
     result
 }
 
+macro_rules! pack_octal {
+    ($x_vec: ident, $y_vec: ident, $mask:ident, $i: ident, $j: literal) => {{
+        (($y_vec[0][$i] & $mask) >> $j)
+            | ((($y_vec[1][$i] & $mask) >> $j) << 1)
+            | ((($x_vec[0][$i] & $mask) >> $j) << 2)
+            | ((($x_vec[1][$i] & $mask) >> $j) << 3)
+            | ((($y_vec[2][$i] & $mask) >> $j) << 4)
+            | ((($x_vec[2][$i] & $mask) >> $j) << 5)
+    }};
+}
+
 pub fn pack_octal_vectors(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>]) -> Vec<u8> {
+    const MASK_0: u8 = 1 << 0;
+    const MASK_1: u8 = 1 << 1;
+    const MASK_2: u8 = 1 << 2;
+    const MASK_3: u8 = 1 << 3;
+    const MASK_4: u8 = 1 << 4;
+    const MASK_5: u8 = 1 << 5;
+    const MASK_6: u8 = 1 << 6;
+    const MASK_7: u8 = 1 << 7;
+
     let mut data = Vec::with_capacity(x_vec[0].len() * 8);
     for i in 0..x_vec[0].len() {
-        for j in 0..8 {
-            let mask = 1u8 << j;
-            let num = ((y_vec[0][i] & mask) >> j)
-                | (((y_vec[1][i] & mask) >> j) << 1)
-                | (((x_vec[0][i] & mask) >> j) << 2)
-                | (((x_vec[1][i] & mask) >> j) << 3)
-                | (((y_vec[2][i] & mask) >> j) << 4)
-                | (((x_vec[2][i] & mask) >> j) << 5);
-            data.push(num);
-        }
+        data.push(pack_octal!(x_vec, y_vec, MASK_0, i, 0));
+        data.push(pack_octal!(x_vec, y_vec, MASK_1, i, 1));
+        data.push(pack_octal!(x_vec, y_vec, MASK_2, i, 2));
+        data.push(pack_octal!(x_vec, y_vec, MASK_3, i, 3));
+        data.push(pack_octal!(x_vec, y_vec, MASK_4, i, 4));
+        data.push(pack_octal!(x_vec, y_vec, MASK_5, i, 5));
+        data.push(pack_octal!(x_vec, y_vec, MASK_6, i, 6));
+        data.push(pack_octal!(x_vec, y_vec, MASK_7, i, 7));
     }
     data
 }

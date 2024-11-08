@@ -96,7 +96,7 @@ pub fn dot_product_u8(a: &[u8], b: &[u8]) -> u64 {
     #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     {
         if std::arch::is_aarch64_feature_detected!("neon") {
-            return unsafe { arm64::dot_product_neon(a, b) };
+            return unsafe { arm64::dot_product_u8_neon(a, b) };
         }
     }
 

@@ -1,5 +1,4 @@
 use super::buffered_io::BufIoError;
-use super::dot_product::x86_64::dot_product_u8_avx2;
 use super::lazy_load::LazyItem;
 use super::rpc::VectorIdValue;
 use super::types::{MergedNode, MetricResult, VectorId};
@@ -17,6 +16,9 @@ use std::sync::Arc;
 
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
+
+#[cfg(target_arch = "x86_64")]
+use super::dot_product::x86_64::dot_product_u8_avx2;
 
 #[cfg(target_arch = "x86_64")]
 pub fn dot_product_u8_avx2_fma(a: &[u8], b: &[u8]) -> u64 {
@@ -209,6 +211,8 @@ pub fn get_magnitude_plus_quantized_vec(quant_vec: &[Vec<u32>], _size: usize) ->
 
     result
 }
+
+#[cfg(target_arch = "x86_64")]
 pub fn cosine_similarity_scalar_u8(x: &VectorQt, y: &VectorQt) -> f32 {
     if let (
         VectorQt::UnsignedByte {
@@ -262,6 +266,7 @@ pub fn cosine_coalesce(x: &VectorQt, y: &VectorQt, length: usize) -> f32 {
         panic!("cosine_coalesce called with non-SubByte VectorQt")
     }
 }
+#[cfg(target_arch = "x86_64")]
 pub fn cosine_similarity_qt(
     x: &VectorQt,
     y: &VectorQt,
@@ -370,7 +375,7 @@ pub enum WaCustomError {
     DeserializationError(String),
     // put it in `Arc` to make it cloneable
     BufIo(Arc<BufIoError>),
-    NotFound(String)
+    NotFound(String),
 }
 
 impl fmt::Display for WaCustomError {
@@ -394,7 +399,7 @@ impl fmt::Display for WaCustomError {
             WaCustomError::FsError(err) => write!(f, "FS error: {}", err),
             WaCustomError::DeserializationError(err) => write!(f, "Deserialization error: {}", err),
             WaCustomError::BufIo(err) => write!(f, "Buffer IO error: {}", err),
-            WaCustomError::NotFound(msg) => write!(f, "{} Not Found!", msg)
+            WaCustomError::NotFound(msg) => write!(f, "{} Not Found!", msg),
         }
     }
 }
@@ -478,14 +483,12 @@ fn convert_id(id: VectorId) -> VectorIdValue {
 }
 
 // Function to convert the Option<Vec<(VectorId, _)>> to Option<Vec<(VectorIdValue, _)>>
-pub fn convert_option_vec(
-    input: Option<Vec<(VectorId, MetricResult)>>,
-) -> Option<Vec<(VectorIdValue, MetricResult)>> {
-    input.map(|vec| {
-        vec.into_iter()
-            .map(|(id, value)| (convert_id(id), value))
-            .collect()
-    })
+pub fn convert_search_results(
+    vec: Vec<(VectorId, MetricResult)>,
+) -> Vec<(VectorIdValue, MetricResult)> {
+    vec.into_iter()
+        .map(|(id, value)| (convert_id(id), value))
+        .collect()
 }
 
 // Function to convert Vec<Vector> to Vec<(VectorIdValue, Vec<f32>)>
@@ -497,39 +500,37 @@ pub fn convert_vectors(vectors: Vec<Vector>) -> Vec<(VectorIdValue, Vec<f32>)> {
 }
 
 pub fn remove_duplicates_and_filter(
-    input: Option<Vec<(LazyItem<MergedNode>, MetricResult)>>,
-) -> Option<Vec<(VectorId, MetricResult)>> {
-    input.map(|vec| {
-        let mut seen = HashSet::new();
-        vec.into_iter()
-            .filter_map(|(lazy_item, similarity)| {
-                if let LazyItem::Valid { mut data, .. } = lazy_item {
-                    if let Some(data) = data.get() {
-                        let mut prop_arc = data.prop.clone();
-                        if let PropState::Ready(node_prop) = prop_arc.get() {
-                            let id = &node_prop.id;
-                            if let VectorId::Int(s) = id {
-                                if *s == -1 {
-                                    return None;
-                                }
+    vec: Vec<(LazyItem<MergedNode>, MetricResult)>,
+) -> Vec<(VectorId, MetricResult)> {
+    let mut seen = HashSet::new();
+    vec.into_iter()
+        .filter_map(|(lazy_item, similarity)| {
+            if let LazyItem::Valid { mut data, .. } = lazy_item {
+                if let Some(data) = data.get() {
+                    let mut prop_arc = data.prop.clone();
+                    if let PropState::Ready(node_prop) = prop_arc.get() {
+                        let id = &node_prop.id;
+                        if let VectorId::Int(s) = id {
+                            if *s == -1 {
+                                return None;
                             }
-                            if seen.insert(id.clone()) {
-                                Some((id.clone(), similarity))
-                            } else {
-                                None
-                            }
+                        }
+                        if seen.insert(id.clone()) {
+                            Some((id.clone(), similarity))
                         } else {
-                            None // PropState is Pending
+                            None
                         }
                     } else {
-                        None // data is None
+                        None // PropState is Pending
                     }
                 } else {
-                    None // LazyItem is Invalid
+                    None // data is None
                 }
-            })
-            .collect()
-    })
+            } else {
+                None // LazyItem is Invalid
+            }
+        })
+        .collect()
 }
 
 pub fn generate_tuples(x: f64, num_levels: u8) -> Vec<(f64, i32)> {

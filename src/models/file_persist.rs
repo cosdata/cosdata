@@ -182,6 +182,6 @@ pub fn read_prop_from_file(
     Ok(NodeProp {
         id: prop.id,
         value: prop.value,
-        location: Some((offset, bytes_to_read)),
+        location: (offset, bytes_to_read),
     })
 }

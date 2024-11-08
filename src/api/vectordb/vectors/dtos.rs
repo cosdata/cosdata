@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::models::rpc::VectorIdValue;
+use crate::models::rpc::{Vector, VectorIdValue};
 
 #[derive(Deserialize)]
 pub(crate) struct CreateVectorDto {
@@ -42,4 +42,9 @@ pub(crate) struct SimilarVector {
 #[derive(Serialize)]
 pub(crate) struct FindSimilarVectorsResponseDto {
     pub results: Vec<SimilarVector>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct UpsertDto {
+    pub vectors: Vec<Vector>,
 }
