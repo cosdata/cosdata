@@ -178,42 +178,34 @@ pub fn run_upload_in_transaction(
         .get(&current_version)
         .map_err(|e| WaCustomError::BufIo(Arc::new(e)))?;
 
-    let mut handles: Vec<thread::JoinHandle<Result<(), WaCustomError>>> =
-        Vec::with_capacity(vecs.len());
     let (tx, rx) = mpsc::channel();
 
-    for (id, vec) in vecs {
-        let tx = tx.clone();
-        let bufman = bufman.clone();
-        let dense_index = dense_index.clone();
-        let handle = ctx.threadpool.spawn(move || {
-            let hash_vec = convert_value(id);
-            let vec_emb = RawVectorEmbedding {
-                raw_vec: vec,
-                hash_vec,
-            };
-            tx.send(vec_emb.clone()).unwrap();
-            insert_embedding(
-                bufman.clone(),
-                dense_index.clone(),
-                &vec_emb,
-                current_version,
-            )?;
-            Ok(())
-        });
-
-        handles.push(handle);
-    }
+    ctx.threadpool.install(|| {
+        vecs.into_par_iter()
+            .map(|(id, vec)| {
+                let bufman = bufman.clone();
+                let dense_index = dense_index.clone();
+                let hash_vec = convert_value(id);
+                let vec_emb = RawVectorEmbedding {
+                    raw_vec: vec,
+                    hash_vec,
+                };
+                tx.send(vec_emb.clone()).unwrap();
+                insert_embedding(
+                    bufman.clone(),
+                    dense_index.clone(),
+                    &vec_emb,
+                    current_version,
+                )
+            })
+            .collect::<Result<Vec<()>, WaCustomError>>()
+    })?;
 
     drop(tx);
 
     index_embeddings_in_transaction(ctx.clone(), dense_index, transaction_id, rx)?;
 
     bufman.flush()?;
-
-    for handle in handles {
-        handle.join().unwrap()?;
-    }
 
     Ok(())
 }
