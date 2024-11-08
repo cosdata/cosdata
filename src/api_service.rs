@@ -166,6 +166,7 @@ pub async fn init_inverted_index_for_collection(
 
 /// uploads a vector embedding within a transaction
 pub fn run_upload_in_transaction(
+    ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
     transaction_id: Hash,
     vecs: Vec<(VectorIdValue, Vec<f32>)>,
@@ -177,14 +178,15 @@ pub fn run_upload_in_transaction(
         .get(&current_version)
         .map_err(|e| WaCustomError::BufIo(Arc::new(e)))?;
 
-    let mut handles: Vec<thread::JoinHandle<Result<(), WaCustomError>>> = Vec::new();
+    let mut handles: Vec<thread::JoinHandle<Result<(), WaCustomError>>> =
+        Vec::with_capacity(vecs.len());
     let (tx, rx) = mpsc::channel();
 
     for (id, vec) in vecs {
         let tx = tx.clone();
         let bufman = bufman.clone();
         let dense_index = dense_index.clone();
-        let handle = thread::spawn(move || {
+        let handle = ctx.threadpool.spawn(move || {
             let hash_vec = convert_value(id);
             let vec_emb = RawVectorEmbedding {
                 raw_vec: vec,
@@ -205,7 +207,7 @@ pub fn run_upload_in_transaction(
 
     drop(tx);
 
-    index_embeddings_in_transaction(dense_index, transaction_id, rx)?;
+    index_embeddings_in_transaction(ctx.clone(), dense_index, transaction_id, rx)?;
 
     bufman.flush()?;
 
