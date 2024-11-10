@@ -1027,3 +1027,50 @@ fn test_lazy_item_vec_linked_chunk_serialization() {
         }
     }
 }
+
+#[test]
+fn test_eager_lazy_item_multiple_serialization() {
+    let value: u32 = rand::random();
+    let set = EagerLazyItemSet::new();
+
+    for _ in 0..0 {
+        let item = EagerLazyItem(
+            0.0f32,
+            LazyItem::new(0.into(), 0, MergedNode::new(HNSWLevel(0))),
+        );
+        set.insert(item);
+    }
+
+    let (bufmans, cache, bufman, cursor, _tempdir) = setup_test(&0.into());
+
+    set.serialize(bufmans.clone(), 0.into(), cursor).unwrap();
+
+    let value_offset = bufman.cursor_position(cursor).unwrap();
+    bufman.write_u32_with_cursor(cursor, value).unwrap();
+
+    set.insert(EagerLazyItem(
+        0.0f32,
+        LazyItem::new(0.into(), 0, MergedNode::new(HNSWLevel(0))),
+    ));
+
+    let offset = set.serialize(bufmans, 0.into(), cursor).unwrap();
+
+    bufman
+        .seek_with_cursor(cursor, SeekFrom::Start(value_offset))
+        .unwrap();
+    let deserialized_value = bufman.read_u32_with_cursor(cursor).unwrap();
+
+    assert_eq!(value, deserialized_value);
+
+    bufman.close_cursor(cursor).unwrap();
+
+    let file_index = FileIndex::Valid {
+        offset: FileOffset(offset),
+        version_number: 0,
+        version_id: 0.into(),
+    };
+
+    let deserialized: EagerLazyItemSet<MergedNode, f32> = cache.load_item(file_index).unwrap();
+
+    assert_eq!(set.len(), deserialized.len());
+}

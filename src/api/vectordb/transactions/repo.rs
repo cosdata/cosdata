@@ -78,8 +78,6 @@ pub(crate) async fn commit_transaction(
         return Err(TransactionError::NotFound);
     }
 
-    auto_commit_transaction(vec_store.clone())
-        .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
 
     vec_store
         .current_version

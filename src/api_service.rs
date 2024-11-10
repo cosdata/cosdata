@@ -203,9 +203,11 @@ pub fn run_upload_in_transaction(
 
     drop(tx);
 
-    index_embeddings_in_transaction(ctx.clone(), dense_index, transaction_id, rx)?;
+    index_embeddings_in_transaction(ctx.clone(), dense_index.clone(), transaction_id, rx)?;
 
     bufman.flush()?;
+
+    auto_commit_transaction(dense_index)?;
 
     Ok(())
 }
@@ -237,6 +239,7 @@ pub fn run_upload(
             let prev_bufman = dense_index.vec_raw_manager.get(&prev_version)?;
             let cursor = prev_bufman.open_cursor()?;
             let prev_file_len = prev_bufman.seek_with_cursor(cursor, SeekFrom::End(0))? as u32;
+            prev_bufman.close_cursor(cursor)?;
 
             prev_file_len > embedding_offset.offset
         }

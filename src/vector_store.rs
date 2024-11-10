@@ -27,7 +27,6 @@ use std::io::SeekFrom;
 use std::path::Path;
 use std::sync::mpsc;
 use std::sync::Arc;
-use std::thread;
 
 pub fn create_root_node(
     num_layers: u8,
@@ -73,18 +72,17 @@ pub fn create_root_node(
         });
 
         let lazy_node = LazyItem::from_arc(hash, 0, current_node.clone());
-        let lazy_node_ref = LazyItemRef::from_arc(hash, 0, current_node.clone());
 
         if let Some(prev_node) = root.get_lazy_data().and_then(|mut arc| arc.get().clone()) {
             prev_node.set_parent(lazy_node.clone());
         }
         root = lazy_node.clone();
 
-        nodes.push(lazy_node_ref.clone());
+        nodes.push(lazy_node);
     }
 
-    for item_ref in nodes.iter_mut() {
-        persist_node_update_loc(index_manager.clone(), &mut item_ref.item)?;
+    for item in nodes {
+        write_node_to_file(&item, index_manager.clone())?;
     }
 
     Ok(root)
@@ -463,7 +461,6 @@ pub fn index_embeddings(
         Err(lmdb::Error::NotFound) => 0,
         Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
     };
-
     let mut count_unindexed = match txn.get(*db, &"count_unindexed") {
         Ok(bytes) => {
             let bytes = bytes.try_into().map_err(|e: TryFromSliceError| {
@@ -483,7 +480,7 @@ pub fn index_embeddings(
     let version = embedding_offset.version;
     let version_hash = dense_index
         .vcs
-        .get_version_hash(&version)
+        .get_version_hash(&version, &txn)
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?
         .expect("Current version hash not found");
     let version_number = *version_hash.version as u16;
@@ -509,7 +506,7 @@ pub fn index_embeddings(
         }
         let quantization = quantization_arc.get();
         let results: Vec<()> = embeddings
-            .into_par_iter()
+            .into_iter()
             .map(|raw_emb| {
                 let lp = &dense_index.levels_prob;
                 let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
@@ -545,8 +542,9 @@ pub fn index_embeddings(
                     let data = current_entry.get_data(dense_index.cache.clone());
                     if data.hnsw_level.0 > current_level.0 {
                         current_entry = data.child.item.clone().get().clone();
+                    } else {
+                        break;
                     }
-                    break;
                 }
 
                 index_embedding(
@@ -651,12 +649,18 @@ pub fn index_embeddings_in_transaction(
 ) -> Result<(), WaCustomError> {
     let version = transaction_id;
 
+    let txn = dense_index
+        .lmdb
+        .env
+        .begin_ro_txn()
+        .map_err(|err| WaCustomError::DatabaseError(err.to_string()))?;
     let version_hash = dense_index
         .vcs
-        .get_version_hash(&version)
+        .get_version_hash(&version, &txn)
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?
         .expect("Current version hash not found");
     let version_number = *version_hash.version as u16;
+    txn.abort();
 
     let mut quantization_arc = dense_index.quantization_metric.clone();
     // Set to auto config but is not configured
@@ -715,75 +719,135 @@ pub fn index_embeddings_in_transaction(
         version: Hash,
         version_number: u16,
     ) {
-        let workers: [_; 8] = std::array::from_fn(|_| {
-            let (tx, rx) = mpsc::channel::<RawVectorEmbedding>();
-            let dense_index = dense_index.clone();
-            let quantization = quantization.clone();
-            let handle = ctx.threadpool.spawn(move || {
-                for raw_emb in rx {
-                    let lp = &dense_index.levels_prob;
-                    let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
-                    let quantized_vec = Arc::new(
-                        quantization
-                            .quantize(
-                                &raw_emb.raw_vec,
-                                dense_index.storage_type.clone().get().clone(),
-                            )
-                            .expect("Quantization failed"),
-                    );
-                    let location = write_prop_to_file(
-                        &raw_emb.hash_vec,
-                        quantized_vec.clone(),
-                        &dense_index.prop_file,
-                    )
-                    .expect("failed to write prop");
+        // ctx.threadpool.scope(|s| {
+        //     let workers: [_; 8] = std::array::from_fn(|_| {
+        //         let (tx, rx) = mpsc::channel::<RawVectorEmbedding>();
+        //         let dense_index = dense_index.clone();
+        //         let quantization = quantization.clone();
+        //         s.spawn(move |_| {
+        //             for raw_emb in rx {
+        //                 let lp = &dense_index.levels_prob;
+        //                 let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
+        //                 let quantized_vec = Arc::new(
+        //                     quantization
+        //                         .quantize(
+        //                             &raw_emb.raw_vec,
+        //                             dense_index.storage_type.clone().get().clone(),
+        //                         )
+        //                         .expect("Quantization failed"),
+        //                 );
+        //                 let location = write_prop_to_file(
+        //                     &raw_emb.hash_vec,
+        //                     quantized_vec.clone(),
+        //                     &dense_index.prop_file,
+        //                 )
+        //                 .expect("failed to write prop");
 
-                    let prop = ArcShift::new(PropState::Ready(Arc::new(NodeProp {
-                        id: raw_emb.hash_vec.clone(),
-                        value: quantized_vec.clone(),
-                        location,
-                    })));
-                    let embedding = QuantizedVectorEmbedding {
-                        quantized_vec,
-                        hash_vec: raw_emb.hash_vec,
-                    };
+        //                 let prop = ArcShift::new(PropState::Ready(Arc::new(NodeProp {
+        //                     id: raw_emb.hash_vec.clone(),
+        //                     value: quantized_vec.clone(),
+        //                     location,
+        //                 })));
+        //                 let embedding = QuantizedVectorEmbedding {
+        //                     quantized_vec,
+        //                     hash_vec: raw_emb.hash_vec,
+        //                 };
 
-                    let current_level = HNSWLevel(iv.try_into().unwrap());
+        //                 let current_level = HNSWLevel(iv.try_into().unwrap());
 
-                    let mut current_entry = dense_index.root_vec.item.clone().get().clone();
+        //                 let mut current_entry = dense_index.root_vec.item.clone().get().clone();
 
-                    loop {
-                        let data = current_entry.get_data(dense_index.cache.clone());
-                        if data.hnsw_level.0 > current_level.0 {
-                            current_entry = data.child.item.clone().get().clone();
-                        } else if data.hnsw_level == current_level {
-                            break;
-                        } else {
-                            panic!("missing node");
-                        }
-                    }
+        //                 loop {
+        //                     let data = current_entry.get_data(dense_index.cache.clone());
+        //                     if data.hnsw_level.0 > current_level.0 {
+        //                         current_entry = data.child.item.clone().get().clone();
+        //                     } else if data.hnsw_level == current_level {
+        //                         break;
+        //                     } else {
+        //                         panic!("missing node");
+        //                     }
+        //                 }
 
-                    index_embedding(
-                        dense_index.clone(),
-                        None,
-                        embedding,
-                        prop,
-                        current_entry,
-                        current_level,
-                        version,
-                        version_number,
-                    )
-                    .expect("index_embedding failed");
-                }
-            });
-            (handle, tx)
-        });
+        //                 index_embedding(
+        //                     dense_index.clone(),
+        //                     None,
+        //                     embedding,
+        //                     prop,
+        //                     current_entry,
+        //                     current_level,
+        //                     version,
+        //                     version_number,
+        //                 )
+        //                 .expect("index_embedding failed");
+        //             }
+        //         });
+        //         tx
+        //     });
 
-        let mut worker_idx = 0;
+        //     let mut worker_idx = 0;
+
+        //     for raw_emb in embeddings {
+        //         workers[worker_idx].send(raw_emb).unwrap();
+        //         worker_idx = (worker_idx + 1) % 8;
+        //     }
+
+        //     drop(workers);
+        // });
 
         for raw_emb in embeddings {
-            workers[worker_idx].1.send(raw_emb).unwrap();
-            worker_idx = (worker_idx + 1) % 8;
+            let lp = &dense_index.levels_prob;
+            let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
+            let quantized_vec = Arc::new(
+                quantization
+                    .quantize(
+                        &raw_emb.raw_vec,
+                        dense_index.storage_type.clone().get().clone(),
+                    )
+                    .expect("Quantization failed"),
+            );
+            let location = write_prop_to_file(
+                &raw_emb.hash_vec,
+                quantized_vec.clone(),
+                &dense_index.prop_file,
+            )
+            .expect("failed to write prop");
+
+            let prop = ArcShift::new(PropState::Ready(Arc::new(NodeProp {
+                id: raw_emb.hash_vec.clone(),
+                value: quantized_vec.clone(),
+                location,
+            })));
+            let embedding = QuantizedVectorEmbedding {
+                quantized_vec,
+                hash_vec: raw_emb.hash_vec,
+            };
+
+            let current_level = HNSWLevel(iv.try_into().unwrap());
+
+            let mut current_entry = dense_index.root_vec.item.clone().get().clone();
+
+            loop {
+                let data = current_entry.get_data(dense_index.cache.clone());
+                if data.hnsw_level.0 > current_level.0 {
+                    current_entry = data.child.item.clone().get().clone();
+                } else if data.hnsw_level == current_level {
+                    break;
+                } else {
+                    panic!("missing node");
+                }
+            }
+
+            index_embedding(
+                dense_index.clone(),
+                None,
+                embedding,
+                prop,
+                current_entry,
+                current_level,
+                version,
+                version_number,
+            )
+            .expect("index_embedding failed");
         }
     }
 
@@ -925,10 +989,12 @@ pub fn auto_commit_transaction(dense_index: Arc<DenseIndex>) -> Result<(), WaCus
     let mut exec_queue_nodes = exec_queue_nodes_arc.get().clone();
 
     for node in exec_queue_nodes.iter_mut() {
-        persist_node_update_loc(dense_index.index_manager.clone(), node)?;
+        write_node_to_file(node.get(), dense_index.index_manager.clone())?;
     }
 
     exec_queue_nodes_arc.update(Vec::new());
+
+    dense_index.index_manager.flush_all()?;
 
     Ok(())
 }
@@ -1208,7 +1274,7 @@ pub fn create_index_in_collection(dense_index: Arc<DenseIndex>) -> Result<(), Wa
     }
 
     for nn in nodes.iter_mut() {
-        persist_node_update_loc(dense_index.index_manager.clone(), &mut nn.item)?;
+        write_node_to_file(nn.item.get(), dense_index.index_manager.clone())?;
     }
 
     dense_index.index_manager.flush_all()?;
@@ -1381,13 +1447,19 @@ pub fn delete_vector_by_id_in_transaction(
     vector_id: VectorId,
     transaction_id: Hash,
 ) -> Result<(), WaCustomError> {
+    let txn = dense_index
+        .lmdb
+        .env
+        .begin_ro_txn()
+        .map_err(|err| WaCustomError::DatabaseError(err.to_string()))?;
     let version_hash = dense_index
         .vcs
-        .get_version_hash(&transaction_id)
+        .get_version_hash(&transaction_id, &txn)
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?
         .ok_or(WaCustomError::DatabaseError(
             "VersionHash not found for transaction".to_string(),
         ))?;
+    txn.abort();
     let current_version_number = *version_hash.version as u16;
 
     let vec_raw = get_embedding_by_id(dense_index.clone(), vector_id.clone())?;
