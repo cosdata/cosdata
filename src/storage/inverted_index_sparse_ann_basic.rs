@@ -17,6 +17,11 @@ use crate::models::{
     types::SparseVector,
 };
 
+use super::page::Pagepool;
+
+// Size of a page in the hash table
+const PAGE_SIZE: usize = 32;
+
 // TODO: Add more powers for larger jumps
 // TODO: Or switch to dynamic calculation of power of max power of 4
 const POWERS_OF_4: [u32; 8] = [1, 4, 16, 64, 256, 1024, 4096, 16384];
@@ -222,7 +227,7 @@ impl InvertedIndexSparseAnnBasic {
 pub struct InvertedIndexSparseAnnNodeBasicTSHashmap {
     pub dim_index: u32,
     pub implicit: bool,
-    pub data: TSHashTable<u8, Vec<u32>>,
+    pub data: TSHashTable<u8, Pagepool<PAGE_SIZE>>,
     pub lazy_children: LazyItemArray<InvertedIndexSparseAnnNodeBasicTSHashmap, 16>,
 }
 
@@ -288,7 +293,7 @@ impl InvertedIndexSparseAnnNodeBasicTSHashmap {
     ) {
         let quantized_value = Self::quantize(value);
         let data = node.data.clone();
-        data.get_or_create(quantized_value, || Vec::new());
+        data.get_or_create(quantized_value, || Pagepool::default());
         data.mutate(quantized_value, |x| {
             let mut vecof_vec_id = x.unwrap();
             vecof_vec_id.push(vector_id);
@@ -318,7 +323,7 @@ impl InvertedIndexSparseAnnNodeBasicTSHashmap {
             None => {
                 let res = self.data.to_list();
                 for (x, y) in res {
-                    if y.contains(&vector_id) {
+                    if y.contains(vector_id) {
                         return Some(x);
                     }
                 }

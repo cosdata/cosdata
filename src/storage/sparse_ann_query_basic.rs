@@ -3,7 +3,9 @@ use super::inverted_index_sparse_ann_basic::{
     InvertedIndexSparseAnnNodeBasic, InvertedIndexSparseAnnNodeBasicDashMap,
     InvertedIndexSparseAnnNodeBasicTSHashmap,
 };
-use crate::storage::inverted_index_sparse_ann_basic::InvertedIndexSparseAnnBasicTSHashmap;
+use crate::storage::{
+    inverted_index_sparse_ann_basic::InvertedIndexSparseAnnBasicTSHashmap, page::Pagepool,
+};
 
 use crate::models::types::SparseVector;
 use std::collections::HashMap;
@@ -116,11 +118,13 @@ impl SparseAnnQueryBasic {
                     _ => 0,
                 };
                 for key in start_key..=end_key {
-                    let p = node.data.get_or_create(key, || Vec::new());
-                    for x in p {
-                        let vec_id = x;
-                        let dot_product = dot_products.entry(vec_id).or_insert(0u32);
-                        *dot_product += (quantized_query_value * key) as u32;
+                    let p = node.data.get_or_create(key, Pagepool::default);
+                    for x in p.iter() {
+                        for x in x.iter() {
+                            let vec_id = x;
+                            let dot_product = dot_products.entry(*vec_id).or_insert(0u32);
+                            *dot_product += (quantized_query_value * key) as u32;
+                        }
                     }
                 }
             }
