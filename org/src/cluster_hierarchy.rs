@@ -540,5 +540,3 @@ fn main() {
         io::stdin().read_line(&mut temp).unwrap();
     }
 }
-
-println!("Line")
