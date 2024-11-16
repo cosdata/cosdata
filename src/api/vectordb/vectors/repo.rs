@@ -166,8 +166,9 @@ pub(crate) async fn delete_vector_by_id(
         .await
         .map_err(|e| VectorsError::FailedToDeleteVector(e.to_string()))?;
 
-    crate::vector_store::delete_vector_by_id(collection, convert_value(vector_id.clone()))
-        .map_err(|e| VectorsError::WaCustom(e))?;
+    // TODO(a-rustacean): uncomment
+    // crate::vector_store::delete_vector_by_id(collection, convert_value(vector_id.clone()))
+    //     .map_err(|e| VectorsError::WaCustom(e))?;
 
     Ok(())
 }

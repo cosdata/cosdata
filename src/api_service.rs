@@ -1,10 +1,9 @@
 use crate::app_context::AppContext;
 use crate::indexes::inverted_index::InvertedIndex;
 use crate::models::buffered_io::BufferManagerFactory;
-use crate::models::cache_loader::NodeRegistry;
+use crate::models::cache_loader::ProbCache;
 use crate::models::collection::Collection;
 use crate::models::common::*;
-use crate::models::lazy_load::*;
 use crate::models::meta_persist::update_current_version;
 use crate::models::rpc::VectorIdValue;
 use crate::models::types::*;
@@ -21,9 +20,13 @@ use std::array::TryFromSliceError;
 use std::fs;
 use std::io::SeekFrom;
 use std::path::Path;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
+
+static THREAD_ID: AtomicU32 = AtomicU32::new(0);
 
 /// creates a dense index for a collection
 pub async fn init_dense_index_for_collection(
@@ -72,9 +75,10 @@ pub async fn init_dense_index_for_collection(
         |root, ver| root.join(format!("{}.vec_raw", **ver)),
     ));
     // TODO: May be the value can be taken from config
-    let cache = Arc::new(NodeRegistry::new(1000, index_manager.clone()));
+    let cache = Arc::new(ProbCache::new(1000, index_manager.clone()));
 
     let root = create_root_node(
+        &cache.get_allocator(),
         num_layers,
         &quantization_metric,
         storage_type,
@@ -94,7 +98,7 @@ pub async fn init_dense_index_for_collection(
     let dense_index = Arc::new(DenseIndex::new(
         exec_queue_nodes,
         collection_name.clone(),
-        LazyItemRef::from_lazy(root),
+        root,
         lp,
         size,
         prop_file,
@@ -180,32 +184,42 @@ pub fn run_upload_in_transaction(
 
     let (tx, rx) = mpsc::channel();
 
-    ctx.threadpool.install(|| {
-        vecs.into_par_iter()
-            .map(|(id, vec)| {
-                let bufman = bufman.clone();
-                let dense_index = dense_index.clone();
-                let hash_vec = convert_value(id);
-                let vec_emb = RawVectorEmbedding {
-                    raw_vec: vec,
-                    hash_vec,
-                };
-                tx.send(vec_emb.clone()).unwrap();
-                insert_embedding(
-                    bufman.clone(),
-                    dense_index.clone(),
-                    &vec_emb,
-                    current_version,
-                )
-            })
-            .collect::<Result<Vec<()>, WaCustomError>>()
-    })?;
+    let handle = {
+        let bufman = bufman.clone();
+        let dense_index = dense_index.clone();
+        std::thread::spawn(move || {
+            vecs.into_par_iter()
+                .map(|(id, vec)| {
+                    let hash_vec = convert_value(id);
+                    let vec_emb = RawVectorEmbedding {
+                        raw_vec: vec,
+                        hash_vec,
+                    };
+                    tx.send(vec_emb.clone()).unwrap();
+                    insert_embedding(
+                        bufman.clone(),
+                        dense_index.clone(),
+                        &vec_emb,
+                        current_version,
+                    )
+                })
+                .collect::<Result<Vec<()>, WaCustomError>>()
+        })
+    };
 
-    drop(tx);
+    index_embeddings_in_transaction(
+        ctx.clone(),
+        dense_index.clone(),
+        transaction_id,
+        rx,
+        THREAD_ID.fetch_add(1, Ordering::SeqCst),
+    )?;
 
-    index_embeddings_in_transaction(ctx.clone(), dense_index, transaction_id, rx)?;
+    handle.join().unwrap()?;
 
     bufman.flush()?;
+
+    // auto_commit_transaction(dense_index)?;
 
     Ok(())
 }
@@ -237,6 +251,7 @@ pub fn run_upload(
             let prev_bufman = dense_index.vec_raw_manager.get(&prev_version)?;
             let cursor = prev_bufman.open_cursor()?;
             let prev_file_len = prev_bufman.seek_with_cursor(cursor, SeekFrom::End(0))? as u32;
+            prev_bufman.close_cursor(cursor)?;
 
             prev_file_len > embedding_offset.offset
         }
@@ -249,7 +264,11 @@ pub fn run_upload(
     txn.abort();
 
     if index_before_insertion {
-        index_embeddings(dense_index.clone(), ctx.config.upload_process_batch_size)?;
+        index_embeddings(
+            dense_index.clone(),
+            ctx.config.upload_process_batch_size,
+            THREAD_ID.fetch_add(1, Ordering::SeqCst),
+        )?;
     }
 
     // Add next version
@@ -322,7 +341,11 @@ pub fn run_upload(
     txn.abort();
 
     if count_unindexed >= ctx.config.upload_threshold {
-        index_embeddings(dense_index.clone(), ctx.config.upload_process_batch_size)?;
+        index_embeddings(
+            dense_index.clone(),
+            ctx.config.upload_process_batch_size,
+            THREAD_ID.fetch_add(1, Ordering::SeqCst),
+        )?;
     }
 
     auto_commit_transaction(dense_index.clone())?;
@@ -338,7 +361,6 @@ pub async fn ann_vector_query(
 ) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
     let dense_index = dense_index.clone();
     let vec_hash = VectorId::Str("query".to_string());
-    let root = &dense_index.root_vec;
     let vector_list = dense_index
         .quantization_metric
         .quantize(&query, *dense_index.storage_type.clone().get())?;
@@ -351,7 +373,7 @@ pub async fn ann_vector_query(
     let results = ann_search(
         dense_index.clone(),
         vec_emb,
-        root.item.clone().get().clone(),
+        dense_index.get_root_vec(),
         HNSWLevel(dense_index.hnsw_params.clone().get().num_layers),
     )?;
     let output = remove_duplicates_and_filter(results);

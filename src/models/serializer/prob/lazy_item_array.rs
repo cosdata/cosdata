@@ -1,0 +1,161 @@
+use std::{
+    collections::HashSet,
+    io::{self, SeekFrom},
+    sync::Arc,
+};
+
+use crate::models::{
+    buffered_io::{BufIoError, BufferManagerFactory},
+    cache_loader::{Allocate, ProbCache, ProbCacheable},
+    lazy_load::{FileIndex, SyncPersist},
+    prob_lazy_load::{lazy_item::ProbLazyItem, lazy_item_array::ProbLazyItemArray},
+    types::FileOffset,
+    versioning::Hash,
+};
+
+use super::{ProbSerialize, UpdateSerialized};
+
+impl<T: ProbCacheable + UpdateSerialized + ProbSerialize + Allocate, const N: usize> ProbSerialize
+    for ProbLazyItemArray<T, N>
+{
+    fn serialize(
+        &self,
+        bufmans: Arc<BufferManagerFactory>,
+        version: Hash,
+        cursor: u64,
+    ) -> Result<u32, BufIoError> {
+        let bufman = bufmans.get(&version)?;
+        let (start_offset, _) = bufman.write_to_end_with_cursor(cursor, &vec![u8::MAX; 10 * N])?;
+
+        for i in 0..N {
+            let Some(item) = self.get(i) else {
+                break;
+            };
+            debug_assert!(i < self.len());
+            debug_assert!(!item.is_null());
+            bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
+            let offset = item.serialize(bufmans.clone(), version, cursor)?;
+            let placeholder_pos = start_offset + (i as u64 * 10);
+
+            bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_pos))?;
+            bufman.write_u32_with_cursor(cursor, offset)?;
+            unsafe {
+                bufman.write_u16_with_cursor(cursor, (*item).get_current_version_number())?;
+                bufman.write_u32_with_cursor(cursor, *(*item).get_current_version())?;
+            }
+        }
+        bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
+
+        Ok(u32::try_from(start_offset).unwrap())
+    }
+
+    fn deserialize(
+        bufmans: Arc<BufferManagerFactory>,
+        file_index: FileIndex,
+        cache: Arc<ProbCache>,
+        max_loads: u16,
+        skipm: &mut HashSet<u64>,
+    ) -> Result<Self, BufIoError> {
+        match file_index {
+            FileIndex::Invalid => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Cannot deserialize ProbLazyItemArray with an invalid FileIndex",
+            )
+            .into()),
+            FileIndex::Valid {
+                offset: FileOffset(offset),
+                version_id,
+                ..
+            } => {
+                let bufman = bufmans.get(&version_id)?;
+                let cursor = bufman.open_cursor()?;
+
+                let mut placeholder_offset = offset as u64;
+                let array = Self::new();
+
+                loop {
+                    bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_offset))?;
+                    let offset = bufman.read_u32_with_cursor(cursor)?;
+                    if offset == u32::MAX {
+                        break;
+                    }
+                    let version_number = bufman.read_u16_with_cursor(cursor)?;
+                    let version_id = Hash::from(bufman.read_u32_with_cursor(cursor)?);
+                    let file_index = FileIndex::Valid {
+                        offset: FileOffset(offset),
+                        version_number,
+                        version_id,
+                    };
+                    let item = <*mut ProbLazyItem<T>>::deserialize(
+                        bufmans.clone(),
+                        file_index,
+                        cache.clone(),
+                        max_loads,
+                        skipm,
+                    )?;
+                    array.push(item);
+                    placeholder_offset += 10;
+                }
+
+                bufman.close_cursor(cursor)?;
+
+                Ok(array)
+            }
+        }
+    }
+}
+
+impl<T: ProbCacheable + UpdateSerialized + ProbSerialize + Allocate, const N: usize> UpdateSerialized for ProbLazyItemArray<T, N> {
+    fn update_serialized(
+        &self,
+        bufmans: Arc<BufferManagerFactory>,
+        file_index: FileIndex,
+    ) -> Result<u32, BufIoError> {
+        match file_index {
+            FileIndex::Invalid => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Cannot update ProbLazyItemArray with an invalid FileIndex",
+            )
+            .into()),
+            FileIndex::Valid {
+                offset: FileOffset(offset),
+                version_id,
+                ..
+            } => {
+                let bufman = bufmans.get(&version_id)?;
+                let cursor = bufman.open_cursor()?;
+                let placeholder_start = offset as u64;
+                let mut i = 0;
+
+                for j in 0..N {
+                    let placeholder_pos = placeholder_start + (j as u64 * 10);
+                    bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_pos))?;
+                    let offset = bufman.read_u32_with_cursor(cursor)?;
+                    if offset == u32::MAX {
+                        break;
+                    }
+                    i += 1;
+                }
+
+                for j in i..N {
+                    let Some(item) = self.get(j) else {
+                        break;
+                    };
+                    bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
+                    let offset = item.serialize(bufmans.clone(), version_id, cursor)?;
+                    let placeholder_pos = placeholder_start + (j as u64 * 10);
+            
+                    bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_pos))?;
+                    bufman.write_u32_with_cursor(cursor, offset)?;
+                    unsafe {
+                        bufman.write_u16_with_cursor(cursor, (*item).get_current_version_number())?;
+                        bufman.write_u32_with_cursor(cursor, *(*item).get_current_version())?;
+                    }
+                }
+                bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
+
+                Ok(offset)
+            }
+        }
+    }
+}

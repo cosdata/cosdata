@@ -33,10 +33,6 @@ where
 {
     let bufman = bufmans.get(&version)?;
     let offset = if offset == u32::MAX {
-        if map.is_empty() {
-            return Ok(u32::MAX);
-        }
-
         // Serialize a new map
         bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
         map.serialize(bufmans, version, cursor)?
@@ -314,8 +310,8 @@ impl<T: Cacheable + CustomSerialize> CustomSerialize for LazyItem<T> {
                                     bufman.close_cursor(cursor)?;
                                 }
                             }
-                            return Ok(offset);
                         }
+                        return Ok(offset);
                     }
                 }
 

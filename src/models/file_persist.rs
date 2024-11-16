@@ -1,11 +1,11 @@
 use super::buffered_io::{BufIoError, BufferManagerFactory};
 use super::cache_loader::NodeRegistry;
 use super::common::WaCustomError;
-use super::lazy_load::{FileIndex, LazyItem, SyncPersist};
-use super::types::{BytesToRead, FileOffset, HNSWLevel, MergedNode, NodeProp, VectorId};
-use crate::models::serializer::CustomSerialize;
+use super::lazy_load::{FileIndex, SyncPersist};
+use super::prob_lazy_load::lazy_item::ProbLazyItem;
+use super::serializer::prob::ProbSerialize;
+use super::types::{BytesToRead, FileOffset, HNSWLevel, MergedNode, NodeProp, ProbNode, VectorId};
 use crate::storage::Storage;
-use arcshift::ArcShift;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -40,18 +40,12 @@ pub fn read_node_from_file(
     Ok(node)
 }
 pub fn write_node_to_file(
-    lazy_item: &LazyItem<MergedNode>,
+    lazy_item_ptr: *mut ProbLazyItem<ProbNode>,
     bufmans: Arc<BufferManagerFactory>,
-    file_index: Option<FileIndex>,
-) -> Result<FileIndex, WaCustomError> {
-    let mut node_arc = lazy_item
-        .get_lazy_data()
-        .ok_or(WaCustomError::LazyLoadingError("node in null".to_string()))?;
-    let node = node_arc.get().clone().unwrap();
-    let version = match file_index {
-        Some(FileIndex::Valid { version_id, .. }) => version_id,
-        _ => lazy_item.get_current_version(),
-    };
+) -> Result<(), WaCustomError> {
+    let lazy_item = unsafe { &*lazy_item_ptr };
+    let file_index = lazy_item.get_file_index();
+    let version = lazy_item.get_current_version();
     let bufman = bufmans.get(&version)?;
     let cursor = bufman.open_cursor()?;
 
@@ -62,70 +56,29 @@ pub fn write_node_to_file(
             ..
         }) => {
             println!(
-                "About to write at offset {}, version {}, node: {:#?}",
-                offset, *version_id, node
+                "About to write at offset {}, version {}",
+                offset, *version_id
             );
             bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
         }
         Some(FileIndex::Invalid) | None => {
-            println!("About to write node at the end of file: {:#?}", node);
+            println!("About to write node at the end of file");
             bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
         }
     }
 
-    let new_offset = node.serialize(bufmans, version, cursor)?;
+    lazy_item_ptr.serialize(bufmans, version, cursor)?;
 
     bufman.close_cursor(cursor)?;
-
-    // Create and return the new FileIndex
-    let new_file_index = match file_index {
-        Some(FileIndex::Valid {
-            version_number,
-            version_id,
-            ..
-        }) => FileIndex::Valid {
-            offset: FileOffset(new_offset),
-            version_number,
-            version_id,
-        },
-        Some(FileIndex::Invalid) => FileIndex::Invalid,
-        None => {
-            let version_id = lazy_item.get_current_version();
-            let version_number = lazy_item.get_current_version_number();
-
-            FileIndex::Valid {
-                offset: FileOffset(new_offset),
-                version_number,
-                version_id,
-            }
-        }
-    };
-
-    Ok(new_file_index)
-}
-
-pub fn persist_node_update_loc(
-    bufmans: Arc<BufferManagerFactory>,
-    node: &mut ArcShift<LazyItem<MergedNode>>,
-) -> Result<(), WaCustomError> {
-    let lazy_item = node.get();
-    let current_file_index = lazy_item.get_file_index();
-
-    // Write the node to file
-    let new_file_index = write_node_to_file(node.get(), bufmans, current_file_index)?;
-
-    // Update the file index in the lazy item
-    node.rcu(|lazy_item| {
-        let updated_item = lazy_item.clone();
-        updated_item.set_file_index(Some(new_file_index));
-        updated_item
-    });
 
     Ok(())
 }
 //
-pub fn load_vector_id_lsmdb(_level: HNSWLevel, _vector_id: VectorId) -> LazyItem<MergedNode> {
-    LazyItem::Invalid
+pub fn load_vector_id_lsmdb(
+    _level: HNSWLevel,
+    _vector_id: VectorId,
+) -> Option<ProbLazyItem<MergedNode>> {
+    None
 }
 
 pub fn load_neighbor_persist_ref(_level: HNSWLevel, _node_file_ref: u32) -> Option<MergedNode> {

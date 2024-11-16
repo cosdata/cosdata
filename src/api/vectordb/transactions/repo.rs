@@ -78,8 +78,6 @@ pub(crate) async fn commit_transaction(
         return Err(TransactionError::NotFound);
     }
 
-    auto_commit_transaction(vec_store.clone())
-        .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
 
     vec_store
         .current_version
@@ -163,12 +161,13 @@ pub(crate) async fn delete_vector_by_id(
         .get(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
 
-    crate::vector_store::delete_vector_by_id_in_transaction(
-        collection,
-        convert_value(vector_id.clone()),
-        transaction_id,
-    )
-    .map_err(|e| TransactionError::FailedToDeleteVector(e.to_string()))?;
+    // TODO(a-rustacean): uncomment
+    // crate::vector_store::delete_vector_by_id_in_transaction(
+    //     collection,
+    //     convert_value(vector_id.clone()),
+    //     transaction_id,
+    // )
+    // .map_err(|e| TransactionError::FailedToDeleteVector(e.to_string()))?;
 
     Ok(())
 }

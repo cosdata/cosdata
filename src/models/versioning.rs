@@ -1,5 +1,5 @@
 use crate::macros::key;
-use lmdb::{Database, Environment, Transaction, WriteFlags};
+use lmdb::{Database, Environment, RoTransaction, Transaction, WriteFlags};
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher24;
 use std::hash::Hasher;
@@ -355,10 +355,12 @@ impl VersionControl {
         Ok(Some(branch_info))
     }
 
-    pub fn get_version_hash(&self, hash: &Hash) -> lmdb::Result<Option<VersionHash>> {
+    pub fn get_version_hash(
+        &self,
+        hash: &Hash,
+        txn: &RoTransaction<'_>,
+    ) -> lmdb::Result<Option<VersionHash>> {
         let version_key = key!(v:hash);
-
-        let txn = self.env.begin_ro_txn()?;
 
         let bytes = match txn.get(*self.db, &version_key) {
             Ok(bytes) => bytes,
@@ -369,8 +371,6 @@ impl VersionControl {
         };
 
         let version_hash = VersionHash::deserialize(bytes).unwrap();
-
-        txn.abort();
 
         Ok(Some(version_hash))
     }

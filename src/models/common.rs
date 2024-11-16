@@ -1,7 +1,8 @@
 use super::buffered_io::BufIoError;
 use super::lazy_load::LazyItem;
+use super::prob_lazy_load::lazy_item::ProbLazyItem;
 use super::rpc::VectorIdValue;
-use super::types::{MergedNode, MetricResult, VectorId};
+use super::types::{MergedNode, MetricResult, ProbNode, VectorId};
 use crate::distance::DistanceError;
 use crate::models::rpc::Vector;
 use crate::models::types::PropState;
@@ -500,35 +501,26 @@ pub fn convert_vectors(vectors: Vec<Vector>) -> Vec<(VectorIdValue, Vec<f32>)> {
 }
 
 pub fn remove_duplicates_and_filter(
-    vec: Vec<(LazyItem<MergedNode>, MetricResult)>,
+    vec: Vec<(*mut ProbLazyItem<ProbNode>, MetricResult)>,
 ) -> Vec<(VectorId, MetricResult)> {
     let mut seen = HashSet::new();
     vec.into_iter()
         .filter_map(|(lazy_item, similarity)| {
-            if let LazyItem::Valid { mut data, .. } = lazy_item {
-                if let Some(data) = data.get() {
-                    let mut prop_arc = data.prop.clone();
-                    if let PropState::Ready(node_prop) = prop_arc.get() {
-                        let id = &node_prop.id;
-                        if let VectorId::Int(s) = id {
-                            if *s == -1 {
-                                return None;
-                            }
+            unsafe { &*lazy_item }
+                .get_lazy_data()
+                .and_then(|node| node.get_id())
+                .map_or(None, |id| {
+                    if let VectorId::Int(s) = id {
+                        if s == -1 {
+                            return None;
                         }
-                        if seen.insert(id.clone()) {
-                            Some((id.clone(), similarity))
-                        } else {
-                            None
-                        }
-                    } else {
-                        None // PropState is Pending
                     }
-                } else {
-                    None // data is None
-                }
-            } else {
-                None // LazyItem is Invalid
-            }
+                    if seen.insert(id.clone()) {
+                        Some((id, similarity))
+                    } else {
+                        None
+                    }
+                })
         })
         .collect()
 }
