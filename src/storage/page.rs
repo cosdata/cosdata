@@ -130,7 +130,7 @@ impl<const LEN: usize> CustomSerialize for Pagepool<LEN> {
             crate::models::lazy_load::FileIndex::Valid {
                 offset: FileOffset(offset),
                 version_id,
-                ..
+                version_number,
             } => {
                 let bufman = bufmans.get(&version_id)?;
                 let cursor = bufman.open_cursor()?;
@@ -141,13 +141,22 @@ impl<const LEN: usize> CustomSerialize for Pagepool<LEN> {
 
                 let mut page_pool = Pagepool::<LEN>::default();
                 for _ in 0..total_length {
+                    let current_offset = bufman.cursor_position(cursor)?;
+
+                    let file_index = crate::models::lazy_load::FileIndex::Valid {
+                        offset: FileOffset(current_offset as u32),
+                        version_id,
+                        version_number,
+                    };
+
                     let page = Page::<LEN>::deserialize(
                         bufmans.clone(),
-                        file_index.clone(),
+                        file_index,
                         cache.clone(),
                         max_loads,
                         skipm,
                     )?;
+
                     page_pool.push_chunk(page.data);
 
                     let next_chunk = bufman.read_u32_with_cursor(cursor)?;
