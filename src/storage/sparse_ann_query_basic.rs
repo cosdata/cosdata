@@ -15,8 +15,8 @@ const K: usize = 5;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SparseAnnResult {
-    vector_id: u32,
-    similarity: u32,
+    pub vector_id: u32,
+    pub similarity: u32,
 }
 
 impl Eq for SparseAnnResult {}
