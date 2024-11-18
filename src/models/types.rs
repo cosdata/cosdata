@@ -886,3 +886,27 @@ impl SparseVector {
         Self { vector_id, entries }
     }
 }
+
+// Dimension type for a sparse vector, based on the posting list length.
+// A dimension being common or rare is relative, and is defined based on the
+// query vector.
+#[derive(Debug, Clone)]
+pub enum SparseQueryVectorDimensionType {
+    Common,
+    Rare,
+}
+
+// A sparse query vector, which attaches a dimension type to each dimension
+// based on the posting list length. This is used to optimize sparse ANN search
+// using a cuckoo filter.
+#[derive(Debug, Clone)]
+pub struct SparseQueryVector {
+    pub vector_id: u32,
+    pub entries: Vec<(u32, SparseQueryVectorDimensionType, f32)>,
+}
+
+impl SparseQueryVector {
+    pub fn new(vector_id: u32, entries: Vec<(u32, SparseQueryVectorDimensionType, f32)>) -> Self {
+        Self { vector_id, entries }
+    }
+}
