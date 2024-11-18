@@ -1,7 +1,4 @@
-use std::{
-    ptr,
-    sync::{atomic::Ordering, Arc},
-};
+use std::{ptr, sync::Arc};
 
 use arcshift::ArcShift;
 use tempfile::{tempdir, TempDir};
@@ -53,12 +50,7 @@ fn test_lazy_item_serialization() {
     let root_version_id = Hash::from(0);
     let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version_id);
 
-    let lazy_item = ProbLazyItem::new(
-        &cache.get_allocator(),
-        node,
-        root_version_id,
-        root_version_number,
-    );
+    let lazy_item = ProbLazyItem::new(node, root_version_id, root_version_number);
 
     let offset = lazy_item
         .serialize(bufmans.clone(), root_version_id, cursor)
@@ -74,17 +66,7 @@ fn test_lazy_item_serialization() {
     let deserialized: *mut ProbLazyItem<ProbNode> = cache.load_item(file_index).unwrap();
 
     unsafe {
-        assert!(!(*deserialized)
-            .get_state()
-            .load(Ordering::Relaxed)
-            .is_null());
-    }
-
-    unsafe {
-        match (
-            &*(*lazy_item).get_state().load(Ordering::Relaxed),
-            &*(*deserialized).get_state().load(Ordering::Relaxed),
-        ) {
+        match (&*(*lazy_item).get_state(), &*(*deserialized).get_state()) {
             (
                 ProbLazyItemState::Ready {
                     data: original_data,

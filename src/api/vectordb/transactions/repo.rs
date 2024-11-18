@@ -3,17 +3,15 @@ use std::sync::Arc;
 use self::vectors::dtos::UpsertDto;
 
 use super::{dtos::CreateTransactionResponseDto, error::TransactionError};
-use crate::convert_value;
 use crate::models::rpc::VectorIdValue;
+use crate::models::types::DenseIndexTransaction;
 use crate::models::versioning::Hash;
-use crate::vector_store::auto_commit_transaction;
 use crate::{
     api::vectordb::vectors::{
         self,
         dtos::{CreateVectorDto, CreateVectorResponseDto},
     },
     app_context::AppContext,
-    models::versioning::Version,
 };
 use chrono::Utc;
 
@@ -28,29 +26,17 @@ pub(crate) async fn create_transaction(
         .get(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
 
-    let branch_info = vec_store
-        .vcs
-        .get_branch_info("main")
-        .map_err(|e| TransactionError::FailedToCreateTransaction(e.to_string()))?;
-
-    let branch_info = branch_info.ok_or(TransactionError::FailedToCreateTransaction(
-        "the main branch is not found!".into(),
-    ))?;
-
-    let current_version = branch_info.get_current_version();
-
     let mut current_open_transaction_arc = vec_store.current_open_transaction.clone();
 
     if current_open_transaction_arc.get().is_some() {
         return Err(TransactionError::OnGoingTransaction);
     }
 
-    let transaction_id = vec_store
-        .vcs
-        .generate_hash("main", Version::from(*current_version + 1))
-        .map_err(|_| TransactionError::FailedToCreateTransaction("LMDB Error".to_string()))?;
+    let transaction = DenseIndexTransaction::new(vec_store.clone())
+        .map_err(|err| TransactionError::FailedToCreateTransaction(err.to_string()))?;
+    let transaction_id = transaction.id;
 
-    current_open_transaction_arc.update(Some(transaction_id));
+    current_open_transaction_arc.update(Some(transaction));
 
     Ok(CreateTransactionResponseDto {
         transaction_id: transaction_id.to_string(),
@@ -71,13 +57,17 @@ pub(crate) async fn commit_transaction(
         .ok_or(TransactionError::CollectionNotFound)?;
 
     let mut current_open_transaction_arc = vec_store.current_open_transaction.clone();
-    let current_open_transaction = current_open_transaction_arc.get();
-    let current_transaction_id = current_open_transaction.ok_or(TransactionError::NotFound)?;
+    let current_open_transaction = current_open_transaction_arc.get().clone();
+    let current_transaction = current_open_transaction.ok_or(TransactionError::NotFound)?;
+    let current_transaction_id = current_transaction.id;
 
     if current_transaction_id != transaction_id {
         return Err(TransactionError::NotFound);
     }
 
+    current_transaction
+        .pre_commit()
+        .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
 
     vec_store
         .current_version
@@ -102,11 +92,12 @@ pub(crate) async fn create_vector_in_transaction(
 
     let mut current_open_transaction_arc = vec_store.current_open_transaction.clone();
 
-    let current_open_transaction_id = current_open_transaction_arc
+    let current_open_transaction = current_open_transaction_arc
         .get()
+        .clone()
         .ok_or(TransactionError::NotFound)?;
 
-    if current_open_transaction_id != transaction_id {
+    if current_open_transaction.id != transaction_id {
         return Err(TransactionError::FailedToCreateVector(
             "This is not the currently open transaction!".into(),
         ));
@@ -115,7 +106,7 @@ pub(crate) async fn create_vector_in_transaction(
     let vector = vectors::repo::create_vector_in_transaction(
         ctx,
         collection_id,
-        current_open_transaction_id,
+        current_open_transaction,
         create_vector_dto,
     )
     .await
@@ -138,9 +129,11 @@ pub(crate) async fn abort_transaction(
 
     let mut current_open_transaction_arc = vec_store.current_open_transaction.clone();
     let current_open_transaction = current_open_transaction_arc.get();
-    let current_transaction_id = current_open_transaction.ok_or(TransactionError::NotFound)?;
+    let current_transaction = current_open_transaction
+        .as_ref()
+        .ok_or(TransactionError::NotFound)?;
 
-    if current_transaction_id != transaction_id {
+    if current_transaction.id != transaction_id {
         return Err(TransactionError::NotFound);
     }
 
@@ -186,24 +179,20 @@ pub(crate) async fn upsert(
 
     let mut current_open_transaction_arc = vec_store.current_open_transaction.clone();
 
-    let current_open_transaction_id = current_open_transaction_arc
+    let current_open_transaction = current_open_transaction_arc
         .get()
+        .clone()
         .ok_or(TransactionError::NotFound)?;
 
-    if current_open_transaction_id != transaction_id {
+    if current_open_transaction.id != transaction_id {
         return Err(TransactionError::FailedToCreateVector(
             "This is not the currently open transaction!".into(),
         ));
     }
 
-    vectors::repo::upsert_in_transaction(
-        ctx,
-        collection_id,
-        current_open_transaction_id,
-        upsert_dto,
-    )
-    .await
-    .map_err(|e| TransactionError::FailedToCreateVector(e.to_string()))?;
+    vectors::repo::upsert_in_transaction(ctx, collection_id, current_open_transaction, upsert_dto)
+        .await
+        .map_err(|e| TransactionError::FailedToCreateVector(e.to_string()))?;
 
     Ok(())
 }

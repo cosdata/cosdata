@@ -326,8 +326,6 @@ impl BufferManager {
 
             let mut file_size = self.file_size.write().map_err(|_| BufIoError::Locking)?;
 
-            // println!("Cursor Id = {cursor_id}; Position = {curr_pos}; File Size = {}", *file_size);
-
             if cursor_is_at_eof && curr_pos < *file_size {
                 curr_pos = *file_size;
             }
@@ -356,8 +354,6 @@ impl BufferManager {
             }
             *file_size = curr_pos;
         } else {
-            // println!("Cursor Id = {cursor_id}; Position = {curr_pos};");
-
             while total_written < input_size {
                 let region = self.get_or_create_region(curr_pos)?;
                 {
@@ -443,55 +439,6 @@ impl BufferManager {
             .map_err(|_| BufIoError::Locking)?
             .flush()
             .map_err(BufIoError::Io)
-    }
-
-    pub fn write_to_end_with_cursor(
-        &self,
-        cursor_id: u64,
-        buf: &[u8],
-    ) -> Result<(u64, usize), BufIoError> {
-        let mut cursors = self.cursors.write().map_err(|_| BufIoError::Locking)?;
-        let cursor = cursors
-            .get_mut(&cursor_id)
-            .ok_or_else(|| BufIoError::InvalidCursor(cursor_id))?;
-
-        let input_size = buf.len();
-
-        let mut total_written = 0;
-
-        let mut file_size = self.file_size.write().map_err(|_| BufIoError::Locking)?;
-        let mut curr_pos = *file_size;
-        let start = curr_pos;
-
-        while total_written < input_size {
-            let region = self.get_or_create_region(curr_pos)?;
-            {
-                // @NOTE: Here we need a separate scope because the
-                // `buffer` guard on the next line needs to be dropped
-                // before `flush_region_if_needed` can be called.
-                let mut buffer = region.buffer.write().map_err(|_| BufIoError::Locking)?;
-                let buffer_pos = (curr_pos - region.start) as usize;
-                let available = BUFFER_SIZE - buffer_pos;
-                let to_write = (input_size - total_written).min(available);
-                buffer[buffer_pos..buffer_pos + to_write]
-                    .copy_from_slice(&buf[total_written..total_written + to_write]);
-                region.end.store(
-                    (buffer_pos + to_write).max(region.end.load(Ordering::SeqCst)),
-                    Ordering::SeqCst,
-                );
-                region.dirty.store(true, Ordering::SeqCst);
-                total_written += to_write;
-                curr_pos += to_write as u64;
-            }
-            self.flush_region_if_needed(&region)?;
-        }
-        *file_size = curr_pos;
-
-        cursor.position = curr_pos;
-        cursor.is_eof = true;
-        println!("Wrote data at end: {}", start);
-
-        Ok((start, total_written))
     }
 }
 

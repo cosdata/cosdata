@@ -6,7 +6,7 @@ use std::{
 
 use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
-    cache_loader::{Allocate, ProbCache, ProbCacheable},
+    cache_loader::{ProbCache, ProbCacheable},
     lazy_load::{FileIndex, SyncPersist},
     prob_lazy_load::{lazy_item::ProbLazyItem, lazy_item_array::ProbLazyItemArray},
     types::FileOffset,
@@ -15,7 +15,7 @@ use crate::models::{
 
 use super::{ProbSerialize, UpdateSerialized};
 
-impl<T: ProbCacheable + UpdateSerialized + ProbSerialize + Allocate, const N: usize> ProbSerialize
+impl<T: ProbCacheable + UpdateSerialized + ProbSerialize, const N: usize> ProbSerialize
     for ProbLazyItemArray<T, N>
 {
     fn serialize(
@@ -25,15 +25,15 @@ impl<T: ProbCacheable + UpdateSerialized + ProbSerialize + Allocate, const N: us
         cursor: u64,
     ) -> Result<u32, BufIoError> {
         let bufman = bufmans.get(&version)?;
-        let (start_offset, _) = bufman.write_to_end_with_cursor(cursor, &vec![u8::MAX; 10 * N])?;
+        let start_offset = bufman.cursor_position(cursor)?;
+        bufman.write_with_cursor(cursor, &vec![u8::MAX; 10 * N])?;
 
         for i in 0..N {
             let Some(item) = self.get(i) else {
                 break;
             };
-            debug_assert!(i < self.len());
-            debug_assert!(!item.is_null());
             bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
+
             let offset = item.serialize(bufmans.clone(), version, cursor)?;
             let placeholder_pos = start_offset + (i as u64 * 10);
 
@@ -46,7 +46,7 @@ impl<T: ProbCacheable + UpdateSerialized + ProbSerialize + Allocate, const N: us
         }
         bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
 
-        Ok(u32::try_from(start_offset).unwrap())
+        Ok(start_offset as u32)
     }
 
     fn deserialize(
@@ -73,8 +73,11 @@ impl<T: ProbCacheable + UpdateSerialized + ProbSerialize + Allocate, const N: us
                 let mut placeholder_offset = offset as u64;
                 let array = Self::new();
 
-                loop {
-                    bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_offset))?;
+                for i in 0..N {
+                    bufman.seek_with_cursor(
+                        cursor,
+                        SeekFrom::Start(placeholder_offset + (i as u64 * 10)),
+                    )?;
                     let offset = bufman.read_u32_with_cursor(cursor)?;
                     if offset == u32::MAX {
                         break;
@@ -105,7 +108,9 @@ impl<T: ProbCacheable + UpdateSerialized + ProbSerialize + Allocate, const N: us
     }
 }
 
-impl<T: ProbCacheable + UpdateSerialized + ProbSerialize + Allocate, const N: usize> UpdateSerialized for ProbLazyItemArray<T, N> {
+impl<T: ProbCacheable + UpdateSerialized + ProbSerialize, const N: usize> UpdateSerialized
+    for ProbLazyItemArray<T, N>
+{
     fn update_serialized(
         &self,
         bufmans: Arc<BufferManagerFactory>,
@@ -144,11 +149,12 @@ impl<T: ProbCacheable + UpdateSerialized + ProbSerialize + Allocate, const N: us
                     bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
                     let offset = item.serialize(bufmans.clone(), version_id, cursor)?;
                     let placeholder_pos = placeholder_start + (j as u64 * 10);
-            
+
                     bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_pos))?;
                     bufman.write_u32_with_cursor(cursor, offset)?;
                     unsafe {
-                        bufman.write_u16_with_cursor(cursor, (*item).get_current_version_number())?;
+                        bufman
+                            .write_u16_with_cursor(cursor, (*item).get_current_version_number())?;
                         bufman.write_u32_with_cursor(cursor, *(*item).get_current_version())?;
                     }
                 }

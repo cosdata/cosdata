@@ -4,11 +4,11 @@ use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::cache_loader::ProbCache;
 use crate::models::collection::Collection;
 use crate::models::common::*;
+use crate::models::file_persist::write_node_to_file;
 use crate::models::meta_persist::update_current_version;
 use crate::models::rpc::VectorIdValue;
 use crate::models::types::*;
 use crate::models::user::Statistics;
-use crate::models::versioning::Hash;
 use crate::models::versioning::VersionControl;
 use crate::quantization::{Quantization, StorageType};
 use crate::vector_store::*;
@@ -20,13 +20,9 @@ use std::array::TryFromSliceError;
 use std::fs;
 use std::io::SeekFrom;
 use std::path::Path;
-use std::sync::atomic::AtomicU32;
-use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
-
-static THREAD_ID: AtomicU32 = AtomicU32::new(0);
 
 /// creates a dense index for a collection
 pub async fn init_dense_index_for_collection(
@@ -54,8 +50,6 @@ pub async fn init_dense_index_for_collection(
 
     let vcs = Arc::new(vcs);
 
-    let exec_queue_nodes: ExecQueueUpdate = STM::new(Vec::new(), 16, true);
-
     // Note that setting .write(true).append(true) has the same effect
     // as setting only .append(true)
     let prop_file = Arc::new(
@@ -78,7 +72,6 @@ pub async fn init_dense_index_for_collection(
     let cache = Arc::new(ProbCache::new(1000, index_manager.clone()));
 
     let root = create_root_node(
-        &cache.get_allocator(),
         num_layers,
         &quantization_metric,
         storage_type,
@@ -96,7 +89,6 @@ pub async fn init_dense_index_for_collection(
     let lp = Arc::new(generate_tuples(factor_levels, num_layers));
 
     let dense_index = Arc::new(DenseIndex::new(
-        exec_queue_nodes,
         collection_name.clone(),
         root,
         lp,
@@ -172,10 +164,10 @@ pub async fn init_inverted_index_for_collection(
 pub fn run_upload_in_transaction(
     ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
-    transaction_id: Hash,
+    transaction: DenseIndexTransaction,
     vecs: Vec<(VectorIdValue, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
-    let current_version = transaction_id;
+    let current_version = transaction.id;
 
     let bufman = dense_index
         .vec_raw_manager
@@ -187,7 +179,7 @@ pub fn run_upload_in_transaction(
     let handle = {
         let bufman = bufman.clone();
         let dense_index = dense_index.clone();
-        std::thread::spawn(move || {
+        thread::spawn(move || {
             vecs.into_par_iter()
                 .map(|(id, vec)| {
                     let hash_vec = convert_value(id);
@@ -207,19 +199,12 @@ pub fn run_upload_in_transaction(
         })
     };
 
-    index_embeddings_in_transaction(
-        ctx.clone(),
-        dense_index.clone(),
-        transaction_id,
-        rx,
-        THREAD_ID.fetch_add(1, Ordering::SeqCst),
-    )?;
+    index_embeddings_in_transaction(ctx.clone(), dense_index.clone(), transaction.clone(), rx)?;
 
     handle.join().unwrap()?;
+    transaction.start_serialization();
 
     bufman.flush()?;
-
-    // auto_commit_transaction(dense_index)?;
 
     Ok(())
 }
@@ -262,12 +247,15 @@ pub fn run_upload(
     };
 
     txn.abort();
+    let serialization_table = Arc::new(TSHashTable::new(16));
+    let lazy_item_versions_table = Arc::new(TSHashTable::new(16));
 
     if index_before_insertion {
         index_embeddings(
             dense_index.clone(),
             ctx.config.upload_process_batch_size,
-            THREAD_ID.fetch_add(1, Ordering::SeqCst),
+            serialization_table.clone(),
+            lazy_item_versions_table.clone(),
         )?;
     }
 
@@ -344,11 +332,17 @@ pub fn run_upload(
         index_embeddings(
             dense_index.clone(),
             ctx.config.upload_process_batch_size,
-            THREAD_ID.fetch_add(1, Ordering::SeqCst),
+            serialization_table.clone(),
+            lazy_item_versions_table,
         )?;
     }
 
-    auto_commit_transaction(dense_index.clone())?;
+    let list = Arc::into_inner(serialization_table).unwrap().to_list();
+
+    for (node, _) in list {
+        write_node_to_file(node, dense_index.index_manager.clone())?;
+    }
+
     dense_index.vec_raw_manager.flush_all()?;
     dense_index.index_manager.flush_all()?;
 

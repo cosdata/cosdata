@@ -67,6 +67,7 @@ pub fn write_node_to_file(
         }
     }
 
+    lazy_item.set_persistence(true);
     lazy_item_ptr.serialize(bufmans, version, cursor)?;
 
     bufman.close_cursor(cursor)?;

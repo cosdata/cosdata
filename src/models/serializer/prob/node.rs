@@ -32,30 +32,27 @@ impl ProbSerialize for ProbNode {
         cursor: u64,
     ) -> Result<u32, BufIoError> {
         let bufman = bufmans.get(&version)?;
-
-        let mut buf = Vec::with_capacity(33);
+        let start_offset = bufman.cursor_position(cursor)?;
 
         // Serialize basic fields
-        buf.push(self.hnsw_level.0);
+        bufman.write_u8_with_cursor(cursor, self.hnsw_level.0)?;
 
         // Serialize prop
         let mut prop = self.prop.clone();
         let prop_state = prop.get();
         match &*prop_state {
             PropState::Ready(node_prop) => {
-                buf.extend(node_prop.location.0 .0.to_le_bytes());
-                buf.extend(node_prop.location.1 .0.to_le_bytes());
+                bufman.write_u32_with_cursor(cursor, node_prop.location.0 .0)?;
+                bufman.write_u32_with_cursor(cursor, node_prop.location.1 .0)?;
             }
             PropState::Pending((FileOffset(offset), BytesToRead(length))) => {
-                buf.extend(offset.to_le_bytes());
-                buf.extend(length.to_le_bytes());
+                bufman.write_u32_with_cursor(cursor, *offset)?;
+                bufman.write_u32_with_cursor(cursor, *length)?;
             }
         }
 
-        // parent + child + neighbor placeholders
-        buf.extend(vec![u8::MAX; 24]);
-
-        let (start_offset, _) = bufman.write_to_end_with_cursor(cursor, &buf)?;
+        // 10 bytes for parent offset + 10 bytes for child offset + 4 bytes for neighbors offset
+        bufman.write_with_cursor(cursor, &[u8::MAX; 24])?;
 
         let parent_ptr = self.get_parent();
         let child_ptr = self.get_child();
@@ -79,6 +76,8 @@ impl ProbSerialize for ProbNode {
             self.get_neighbors_raw()
                 .serialize(bufmans.clone(), version, cursor)?;
 
+        let end_offset = bufman.cursor_position(cursor)?;
+
         if let Some(offset) = parent_offset {
             bufman.seek_with_cursor(cursor, SeekFrom::Start(start_offset + 9))?;
             bufman.write_u32_with_cursor(cursor, offset)?;
@@ -100,7 +99,9 @@ impl ProbSerialize for ProbNode {
         bufman.seek_with_cursor(cursor, SeekFrom::Start(start_offset + 29))?;
         bufman.write_u32_with_cursor(cursor, neighbors_offset)?;
 
-        Ok(u32::try_from(start_offset).unwrap())
+        bufman.seek_with_cursor(cursor, SeekFrom::Start(end_offset))?;
+
+        Ok(start_offset as u32)
     }
 
     fn deserialize(

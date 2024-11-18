@@ -1,6 +1,5 @@
 mod lazy_item;
 mod lazy_item_array;
-mod metric_distance;
 mod neighbors;
 mod node;
 #[cfg(test)]
@@ -8,7 +7,7 @@ mod tests;
 
 pub use lazy_item::lazy_item_deserialize_impl;
 
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::HashSet, io, sync::Arc};
 
 use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
@@ -16,6 +15,8 @@ use crate::models::{
     lazy_load::FileIndex,
     versioning::Hash,
 };
+
+use super::SimpleSerialize;
 
 pub trait ProbSerialize: Sized {
     fn serialize(
@@ -40,4 +41,38 @@ pub trait UpdateSerialized {
         bufmans: Arc<BufferManagerFactory>,
         file_index: FileIndex,
     ) -> Result<u32, BufIoError>;
+}
+
+impl<T: SimpleSerialize> ProbSerialize for T {
+    fn serialize(
+        &self,
+        bufmans: Arc<BufferManagerFactory>,
+        version: Hash,
+        cursor: u64,
+    ) -> Result<u32, BufIoError> {
+        let bufman = bufmans.get(&version)?;
+        SimpleSerialize::serialize(self, bufman, cursor)
+    }
+
+    fn deserialize(
+        bufmans: Arc<BufferManagerFactory>,
+        file_index: FileIndex,
+        _cache: Arc<ProbCache>,
+        _max_loads: u16,
+        _skipm: &mut HashSet<u64>,
+    ) -> Result<Self, BufIoError> {
+        match file_index {
+            FileIndex::Invalid => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Cannot deserialize with an invalid FileIndex",
+            )
+            .into()),
+            FileIndex::Valid {
+                version_id, offset, ..
+            } => {
+                let bufman = bufmans.get(&version_id)?;
+                SimpleSerialize::deserialize(bufman, offset)
+            }
+        }
+    }
 }

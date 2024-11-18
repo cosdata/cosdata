@@ -6,7 +6,7 @@ use std::{
 
 use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
-    cache_loader::{Allocate, ProbCache, ProbCacheable},
+    cache_loader::{ProbCache, ProbCacheable},
     lazy_load::FileIndex,
     prob_lazy_load::{
         lazy_item::{ProbLazyItem, ProbLazyItemState},
@@ -18,53 +18,8 @@ use crate::models::{
 
 use super::{ProbSerialize, UpdateSerialized};
 
-fn lazy_item_serialize_impl<
-    T: ProbCacheable + UpdateSerialized + ProbSerialize + Allocate,
-    const N: usize,
->(
-    data: Arc<T>,
-    versions: &ProbLazyItemArray<T, N>,
-    bufmans: Arc<BufferManagerFactory>,
-    version: Hash,
-    version_number: u16,
-    cursor: u64,
-    serialized_flag: bool,
-    offset: u64,
-) -> Result<u32, BufIoError> {
-    let bufman = bufmans.get(&version)?;
-    if serialized_flag {
-        let data_offset = bufman.read_u32_with_cursor(cursor)?;
-        let versions_offset = bufman.read_u32_with_cursor(cursor)?;
-        let data_file_index = FileIndex::Valid {
-            offset: FileOffset(data_offset),
-            version_number,
-            version_id: version,
-        };
-        let versions_file_index = FileIndex::Valid {
-            offset: FileOffset(versions_offset),
-            version_number,
-            version_id: version,
-        };
-        data.update_serialized(bufmans.clone(), data_file_index)?;
-        versions.update_serialized(bufmans, versions_file_index)?;
-    } else {
-        bufman.seek_with_cursor(cursor, SeekFrom::Start(offset + 8))?;
-        let data_offset = data.serialize(bufmans.clone(), version, cursor)?;
-        let versions_offset = versions.serialize(bufmans.clone(), version, cursor)?;
-        let end_offset = bufman.cursor_position(cursor)?;
-
-        bufman.seek_with_cursor(cursor, SeekFrom::Start(offset))?;
-        bufman.write_u32_with_cursor(cursor, data_offset)?;
-        bufman.write_u32_with_cursor(cursor, versions_offset)?;
-
-        bufman.seek_with_cursor(cursor, SeekFrom::Start(end_offset))?;
-    }
-
-    Ok(u32::try_from(offset).unwrap())
-}
-
 pub fn lazy_item_deserialize_impl<
-    T: ProbCacheable + UpdateSerialized + ProbSerialize + Allocate,
+    T: ProbCacheable + UpdateSerialized + ProbSerialize,
     const N: usize,
 >(
     bufmans: Arc<BufferManagerFactory>,
@@ -117,22 +72,16 @@ pub fn lazy_item_deserialize_impl<
     }
 }
 
-impl<T: ProbCacheable + UpdateSerialized + ProbSerialize + Allocate> ProbSerialize
-    for *mut ProbLazyItem<T>
-{
+impl<T: ProbCacheable + UpdateSerialized + ProbSerialize> ProbSerialize for *mut ProbLazyItem<T> {
     fn serialize(
         &self,
         bufmans: Arc<BufferManagerFactory>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
+        assert!(!self.is_null());
         unsafe {
-            match (&**self)
-                .get_state()
-                .load(Ordering::SeqCst)
-                .as_ref()
-                .unwrap()
-            {
+            match &*(&**self).get_state() {
                 ProbLazyItemState::Pending { file_index } => Ok(file_index.get_offset().unwrap().0),
                 ProbLazyItemState::Ready {
                     data,
@@ -157,16 +106,20 @@ impl<T: ProbCacheable + UpdateSerialized + ProbSerialize + Allocate> ProbSeriali
                         };
                         bufman.seek_with_cursor(cursor, SeekFrom::Start(file_offset.0 as u64))?;
 
-                        lazy_item_serialize_impl(
-                            data.clone(),
-                            versions,
-                            bufmans,
-                            *version_id,
-                            *version_number,
-                            cursor,
-                            true,
-                            file_offset.0 as u64
-                        )?;
+                        let data_offset = bufman.read_u32_with_cursor(cursor)?;
+                        let versions_offset = bufman.read_u32_with_cursor(cursor)?;
+                        let data_file_index = FileIndex::Valid {
+                            offset: FileOffset(data_offset),
+                            version_number: *version_number,
+                            version_id: *version_id,
+                        };
+                        let versions_file_index = FileIndex::Valid {
+                            offset: FileOffset(versions_offset),
+                            version_number: *version_number,
+                            version_id: *version_id,
+                        };
+                        data.update_serialized(bufmans.clone(), data_file_index)?;
+                        versions.update_serialized(bufmans, versions_file_index)?;
 
                         if version_id != &version {
                             bufman.close_cursor(cursor)?;
@@ -180,27 +133,30 @@ impl<T: ProbCacheable + UpdateSerialized + ProbSerialize + Allocate> ProbSeriali
                             bufman.open_cursor()?
                         };
 
-                        let (offset, _) = bufman.write_to_end_with_cursor(cursor, &[u8::MAX; 8])?;
+                        let offset = bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
 
                         file_offset.set(Some(FileOffset(u32::try_from(offset).unwrap())));
                         persist_flag.store(false, Ordering::SeqCst);
 
-                        lazy_item_serialize_impl(
-                            data.clone(),
-                            versions,
-                            bufmans,
-                            *version_id,
-                            *version_number,
-                            cursor,
-                            false,
-                            offset
-                        )?;
+                        // 4 bytes for data offset + 4 bytes versions for offset
+                        bufman.write_with_cursor(cursor, &[u8::MAX; 8])?;
+
+                        let data_offset = data.serialize(bufmans.clone(), version, cursor)?;
+                        let versions_offset =
+                            versions.serialize(bufmans.clone(), version, cursor)?;
+                        let end_offset = bufman.cursor_position(cursor)?;
+
+                        bufman.seek_with_cursor(cursor, SeekFrom::Start(offset))?;
+                        bufman.write_u32_with_cursor(cursor, data_offset)?;
+                        bufman.write_u32_with_cursor(cursor, versions_offset)?;
+
+                        bufman.seek_with_cursor(cursor, SeekFrom::Start(end_offset))?;
 
                         if version_id != &version {
                             bufman.close_cursor(cursor)?;
                         }
 
-                        u32::try_from(offset).unwrap()
+                        offset as u32
                     };
 
                     Ok(offset)

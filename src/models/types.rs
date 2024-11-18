@@ -1,6 +1,7 @@
 use super::buffered_io::BufferManagerFactory;
 use super::cache_loader::ProbCache;
 use super::collection::Collection;
+use super::file_persist::write_node_to_file;
 use super::meta_persist::{
     delete_dense_index, lmdb_init_collections_db, lmdb_init_db, load_collections,
     load_dense_index_data, persist_dense_index, retrieve_current_version,
@@ -28,14 +29,13 @@ use lmdb::{Database, DatabaseFlags, Environment};
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher24;
 use std::collections::HashSet;
-use std::fs::*;
 use std::hash::{DefaultHasher, Hash as StdHash, Hasher};
-use std::mem::ManuallyDrop;
 use std::path::Path;
-use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 use std::{fmt, ptr};
+use std::{fs::*, thread};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct HNSWLevel(pub u8);
@@ -372,9 +372,6 @@ impl VectorQt {
 
 pub struct SizeBytes(pub u32);
 
-// needed to flatten and get uniques
-pub type ExecQueueUpdate = STM<Vec<*mut ProbLazyItem<ProbNode>>>;
-
 #[derive(Debug, Clone)]
 pub struct MetaDb {
     pub env: Arc<Environment>,
@@ -411,16 +408,94 @@ impl Default for HNSWHyperParams {
 }
 
 #[derive(Clone)]
+pub struct DenseIndexTransaction {
+    pub id: Hash,
+    pub serialization_table: Arc<TSHashTable<*mut ProbLazyItem<ProbNode>, ()>>,
+    pub lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16), *mut ProbLazyItem<ProbNode>>>,
+    serializer_thread_handle: Arc<thread::JoinHandle<Result<(), WaCustomError>>>,
+    serialize_flag: Arc<AtomicBool>,
+}
+
+impl DenseIndexTransaction {
+    pub fn new(dense_index: Arc<DenseIndex>) -> Result<Self, WaCustomError> {
+        let branch_info = dense_index
+            .vcs
+            .get_branch_info("main")
+            .map_err(|err| {
+                WaCustomError::DatabaseError(format!("Unable to get main branch info: {}", err))
+            })?
+            .unwrap();
+        let id = dense_index
+            .vcs
+            .generate_hash(
+                "main",
+                Version::from(*branch_info.get_current_version() + 1),
+            )
+            .map_err(|err| {
+                WaCustomError::DatabaseError(format!("Unable to get transaction hash: {}", err))
+            })?;
+
+        let serialization_table = Arc::new(TSHashTable::new(16));
+        let serialize_flag = Arc::new(AtomicBool::new(false));
+
+        let serializer_thread_handle = {
+            let serialization_table = serialization_table.clone();
+            let serialize_flag = serialize_flag.clone();
+
+            Arc::new(thread::spawn(move || {
+                while !serialize_flag.load(Ordering::Acquire) {
+                    thread::yield_now();
+                }
+
+                loop {
+                    let list = serialization_table.to_list();
+                    if list.is_empty() {
+                        println!("Breaking");
+                        break;
+                    }
+                    for (node, _) in list {
+                        serialization_table.delete(&node);
+                        println!("Serializing");
+                        write_node_to_file(node, dense_index.index_manager.clone())?;
+                    }
+                    thread::sleep(Duration::from_millis(250));
+                    dense_index.index_manager.flush_all()?;
+                }
+                Ok(())
+            }))
+        };
+
+        Ok(Self {
+            id,
+            serialization_table,
+            serializer_thread_handle,
+            serialize_flag,
+            lazy_item_versions_table: Arc::new(TSHashTable::new(16)),
+        })
+    }
+
+    pub fn start_serialization(&self) {
+        self.serialize_flag.store(true, Ordering::Release);
+    }
+
+    pub fn pre_commit(self) -> Result<(), WaCustomError> {
+        if let Some(handle) = Arc::into_inner(self.serializer_thread_handle) {
+            handle.join().unwrap()?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
 pub struct DenseIndex {
-    pub exec_queue_nodes: ExecQueueUpdate,
     pub database_name: String,
-    pub root_vec: Arc<AtomicPtr<ProbLazyItem<ProbNode>>>,
+    pub root_vec: Arc<RwLock<*mut ProbLazyItem<ProbNode>>>,
     pub levels_prob: Arc<Vec<(f64, i32)>>,
     pub dim: usize,
     pub prop_file: Arc<File>,
     pub lmdb: MetaDb,
     pub current_version: ArcShift<Hash>,
-    pub current_open_transaction: ArcShift<Option<Hash>>,
+    pub current_open_transaction: ArcShift<Option<DenseIndexTransaction>>,
     pub quantization_metric: ArcShift<QuantizationMetric>,
     pub distance_metric: ArcShift<DistanceMetric>,
     pub storage_type: ArcShift<StorageType>,
@@ -439,7 +514,6 @@ unsafe impl Sync for DenseIndex {}
 
 impl DenseIndex {
     pub fn new(
-        exec_queue_nodes: ExecQueueUpdate,
         database_name: String,
         root_vec: *mut ProbLazyItem<ProbNode>,
         levels_prob: Arc<Vec<(f64, i32)>>,
@@ -458,9 +532,8 @@ impl DenseIndex {
         vec_raw_manager: Arc<BufferManagerFactory>,
     ) -> Self {
         DenseIndex {
-            exec_queue_nodes,
             database_name,
-            root_vec: Arc::new(AtomicPtr::new(root_vec)),
+            root_vec: Arc::new(RwLock::new(root_vec)),
             levels_prob,
             dim,
             prop_file,
@@ -512,11 +585,7 @@ impl DenseIndex {
     }
 
     pub fn get_root_vec(&self) -> *mut ProbLazyItem<ProbNode> {
-        self.root_vec.load(Ordering::SeqCst)
-    }
-
-    pub fn set_root_vec(&self, root_vec: *mut ProbLazyItem<ProbNode>) {
-        self.root_vec.store(root_vec, Ordering::SeqCst)
+        *self.root_vec.read().unwrap()
     }
 
     /// Returns FileIndex (offset) corresponding to the root
@@ -664,8 +733,6 @@ impl CollectionsMap {
         };
         let current_version = retrieve_current_version(&lmdb)?;
         let dense_index = DenseIndex::new(
-            STM::new(Vec::new(), 16, true),
-            // dense_index_data.max_level,
             coll.name.clone(),
             root,
             dense_index_data.levels_prob,
@@ -934,7 +1001,7 @@ impl ProbNode {
         parent: *mut ProbLazyItem<ProbNode>,
         child: *mut ProbLazyItem<ProbNode>,
     ) -> Self {
-        let neighbors = Arc::new(std::array::from_fn(|_| AtomicPtr::new(null_mut())));
+        let neighbors = Arc::new(std::array::from_fn(|_| AtomicPtr::new(ptr::null_mut())));
 
         Self {
             hnsw_level,
@@ -1026,14 +1093,14 @@ impl ProbNode {
         }
     }
 
-    pub fn get_neighbors(&self) -> Vec<(*mut ProbLazyItem<Self>, MetricResult)> {
+    pub fn get_neighbors(&self) -> Vec<*mut ProbLazyItem<Self>> {
         self.neighbors
             .iter()
             .flat_map(|neighbor| unsafe {
                 neighbor
                     .load(Ordering::Relaxed)
                     .as_ref()
-                    .map(|neighbor| (*neighbor).clone())
+                    .map(|neighbor| neighbor.0)
             })
             .collect()
     }

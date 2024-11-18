@@ -3,7 +3,6 @@ use crate::distance::DistanceFunction;
 use crate::macros::key;
 use crate::models::buffered_io::BufferManager;
 use crate::models::buffered_io::BufferManagerFactory;
-use crate::models::cache_loader::Allocator;
 use crate::models::common::*;
 use crate::models::file_persist::*;
 use crate::models::kmeans::{concat_vectors, generate_initial_centroids, kmeans, should_continue};
@@ -24,11 +23,11 @@ use std::fs::OpenOptions;
 use std::io::SeekFrom;
 use std::path::Path;
 use std::ptr;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::sync::Arc;
 
 pub fn create_root_node(
-    allocator: &Allocator,
     num_layers: u8,
     quantization_metric: &QuantizationMetric,
     storage_type: StorageType,
@@ -66,7 +65,7 @@ pub fn create_root_node(
     for l in 0..=num_layers {
         let current_node = ProbNode::new(HNSWLevel(l), prop.clone(), ptr::null_mut(), root.clone());
 
-        let lazy_node = ProbLazyItem::new(allocator, current_node, hash, 0);
+        let lazy_node = ProbLazyItem::new(current_node, hash, 0);
 
         if let Some(prev_node) = unsafe { root.as_ref() }.and_then(|root| root.get_lazy_data()) {
             prev_node.set_parent(lazy_node.clone());
@@ -114,7 +113,6 @@ pub fn ann_search(
         0,
         &mut skipm,
         cur_level,
-        false,
     )?;
 
     let dist = dense_index
@@ -417,7 +415,8 @@ pub fn insert_embedding(
 pub fn index_embeddings(
     dense_index: Arc<DenseIndex>,
     upload_process_batch_size: usize,
-    thread_id: u32,
+    serialization_table: Arc<TSHashTable<*mut ProbLazyItem<ProbNode>, ()>>,
+    lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16), *mut ProbLazyItem<ProbNode>>>,
 ) -> Result<(), WaCustomError> {
     let env = dense_index.lmdb.env.clone();
     let db = dense_index.lmdb.db.clone();
@@ -535,7 +534,8 @@ pub fn index_embeddings(
                     current_level,
                     version,
                     version_number,
-                    thread_id,
+                    serialization_table.clone(),
+                    lazy_item_versions_table.clone(),
                 )
                 .expect("index_embedding failed");
             })
@@ -624,11 +624,10 @@ pub fn index_embeddings(
 pub fn index_embeddings_in_transaction(
     ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
-    transaction_id: Hash,
+    transaction: DenseIndexTransaction,
     embeddings: mpsc::Receiver<RawVectorEmbedding>,
-    thread_id: u32,
 ) -> Result<(), WaCustomError> {
-    let version = transaction_id;
+    let version = transaction.id;
 
     let txn = dense_index
         .lmdb
@@ -643,11 +642,25 @@ pub fn index_embeddings_in_transaction(
     let version_number = *version_hash.version as u16;
     txn.abort();
 
-    println!("debug 0");
     let mut quantization_arc = dense_index.quantization_metric.clone();
-    println!("debug 1");
+    dense_index.root_vec.read().unwrap();
     // Set to auto config but is not configured
     if dense_index.get_auto_config_flag() && !dense_index.get_configured_flag() {
+        let Ok(mut root_vec) = dense_index.root_vec.try_write() else {
+            dense_index.root_vec.read().unwrap();
+            let quantization = quantization_arc.get();
+            index_embeddings_in_transaction_inner(
+                ctx.clone(),
+                dense_index,
+                embeddings.into_iter(),
+                quantization,
+                version,
+                version_number,
+                transaction.serialization_table.clone(),
+                transaction.lazy_item_versions_table.clone(),
+            );
+            return Ok(());
+        };
         let quantization = quantization_arc.get();
         let mut new_quantization = quantization.clone();
         let embeddings: Vec<_> = embeddings.into_iter().collect();
@@ -663,17 +676,18 @@ pub fn index_embeddings_in_transaction(
         let quantization = quantization_arc.get();
 
         let root = create_root_node(
-            &dense_index.cache.get_allocator(),
             dense_index.hnsw_params.clone().get().num_layers,
             quantization,
             dense_index.storage_type.clone().get().clone(),
             dense_index.dim,
             dense_index.prop_file.clone(),
-            unsafe { &*dense_index.get_root_vec() }.get_current_version(),
+            unsafe { &**root_vec }.get_current_version(),
             dense_index.index_manager.clone(),
         )?;
 
-        dense_index.set_root_vec(root);
+        *root_vec = root;
+
+        drop(root_vec);
 
         index_embeddings_in_transaction_inner(
             ctx.clone(),
@@ -682,7 +696,8 @@ pub fn index_embeddings_in_transaction(
             quantization,
             version,
             version_number,
-            thread_id,
+            transaction.serialization_table.clone(),
+            transaction.lazy_item_versions_table.clone(),
         );
     } else {
         let quantization = quantization_arc.get();
@@ -693,7 +708,8 @@ pub fn index_embeddings_in_transaction(
             quantization,
             version,
             version_number,
-            thread_id,
+            transaction.serialization_table.clone(),
+            transaction.lazy_item_versions_table.clone(),
         );
     }
 
@@ -704,13 +720,17 @@ pub fn index_embeddings_in_transaction(
         quantization: &QuantizationMetric,
         version: Hash,
         version_number: u16,
-        thread_id: u32,
+        serialization_table: Arc<TSHashTable<*mut ProbLazyItem<ProbNode>, ()>>,
+        lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16), *mut ProbLazyItem<ProbNode>>>,
     ) {
         ctx.threadpool.scope(|s| {
             let workers: [_; 16] = std::array::from_fn(|_| {
                 let (tx, rx) = mpsc::channel::<RawVectorEmbedding>();
                 let dense_index = dense_index.clone();
                 let quantization = quantization.clone();
+                let serialization_table = serialization_table.clone();
+                let lazy_item_versions_table = lazy_item_versions_table.clone();
+
                 s.spawn(move |_| {
                     for raw_emb in rx {
                         let lp = &dense_index.levels_prob;
@@ -766,7 +786,8 @@ pub fn index_embeddings_in_transaction(
                             current_level,
                             version,
                             version_number,
-                            thread_id,
+                            serialization_table.clone(),
+                            lazy_item_versions_table.clone(),
                         )
                         .expect("index_embedding failed");
                     }
@@ -797,7 +818,8 @@ pub fn index_embedding(
     cur_level: HNSWLevel,
     version: Hash,
     version_number: u16,
-    thread_id: u32,
+    serialization_table: Arc<TSHashTable<*mut ProbLazyItem<ProbNode>, ()>>,
+    lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16), *mut ProbLazyItem<ProbNode>>>,
 ) -> Result<(), WaCustomError> {
     let fvec = vector_emb.quantized_vec.clone();
     let mut skipm = HashSet::new();
@@ -826,7 +848,6 @@ pub fn index_embedding(
         0,
         &mut skipm,
         cur_level,
-        true,
     )?;
 
     // @DOUBT: May be this distance can be calculated only if z is
@@ -849,7 +870,6 @@ pub fn index_embedding(
     let z_clone: Vec<_> = z.iter().map(|(first, _)| first.clone()).collect();
 
     let (lazy_node, node) = create_node(
-        &dense_index.cache.get_allocator(),
         version,
         version_number,
         cur_level,
@@ -876,7 +896,8 @@ pub fn index_embedding(
             HNSWLevel(cur_level.0 - 1),
             version,
             version_number,
-            thread_id,
+            serialization_table.clone(),
+            lazy_item_versions_table.clone(),
         )?;
     }
 
@@ -885,61 +906,17 @@ pub fn index_embedding(
         lazy_node,
         node,
         z,
-        cur_level,
         version,
         version_number,
-        thread_id,
+        serialization_table,
+        lazy_item_versions_table,
     )
     .expect("Failed insert_node_create_edges");
 
     Ok(())
 }
 
-pub fn queue_node_prop_exec(
-    dense_index: Arc<DenseIndex>,
-    lazy_node: *mut ProbLazyItem<ProbNode>,
-    node: Arc<ProbNode>,
-    thread_id: u32,
-) -> Result<(), WaCustomError> {
-    for neighbor in node.get_neighbors() {
-        unsafe {
-            let neighbor_node = &*neighbor.0;
-            // neighbor_node.lock(thread_id);
-            neighbor_node.set_persistence(true);
-        }
-    }
-
-    // Add the node to exec_queue_nodes
-    let mut exec_queue = dense_index.exec_queue_nodes.clone();
-    exec_queue
-        .transactional_update(|queue| {
-            let mut new_queue = queue.clone();
-            new_queue.push(lazy_node.clone());
-            new_queue
-        })
-        .unwrap();
-
-    Ok(())
-}
-
-pub fn auto_commit_transaction(dense_index: Arc<DenseIndex>) -> Result<(), WaCustomError> {
-    // Retrieve exec_queue_nodes from dense_index
-    let mut exec_queue_nodes_arc = dense_index.exec_queue_nodes.clone();
-    let exec_queue_nodes = exec_queue_nodes_arc.get().clone();
-
-    for node in exec_queue_nodes.iter() {
-        write_node_to_file(*node, dense_index.index_manager.clone())?;
-    }
-
-    exec_queue_nodes_arc.update(Vec::new());
-
-    dense_index.index_manager.flush_all()?;
-
-    Ok(())
-}
-
 fn create_node(
-    allocator: &Allocator,
     version_id: Hash,
     version_number: u16,
     hnsw_level: HNSWLevel,
@@ -948,64 +925,108 @@ fn create_node(
     child: *mut ProbLazyItem<ProbNode>,
 ) -> (*mut ProbLazyItem<ProbNode>, Arc<ProbNode>) {
     let node = Arc::new(ProbNode::new(hnsw_level, prop, parent, child));
-    let lazy_node = ProbLazyItem::from_arc(allocator, node.clone(), version_id, version_number);
+    let lazy_node = ProbLazyItem::from_arc(node.clone(), version_id, version_number);
     (lazy_node, node)
+}
+
+fn get_or_create_version(
+    dense_index: Arc<DenseIndex>,
+    lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16), *mut ProbLazyItem<ProbNode>>>,
+    lazy_item: *mut ProbLazyItem<ProbNode>,
+    version: Hash,
+    version_number: u16,
+) -> Result<*mut ProbLazyItem<ProbNode>, WaCustomError> {
+    let node = unsafe { &*lazy_item }.try_get_data(dense_index.cache.clone())?;
+
+    let new_version = lazy_item_versions_table.get_or_create(
+        (node.get_id().clone().unwrap(), version_number),
+        || {
+            if let Some(version) =
+                ProbLazyItem::get_version(lazy_item, version_number, dense_index.cache.clone())
+                    .expect("Deserialization failed")
+            {
+                return version;
+            }
+
+            let new_node = ProbNode::new_with_neighbors(
+                node.hnsw_level,
+                node.prop.clone(),
+                node.clone_neighbors(),
+                node.get_parent(),
+                node.get_child(),
+            );
+
+            let version = ProbLazyItem::new(
+                new_node,
+                version,
+                version_number,
+            );
+
+            ProbLazyItem::add_version(lazy_item, version, dense_index.cache.clone())
+                .expect("Failed to add version")
+                .unwrap();
+
+            version
+        },
+    );
+    // if let Some(version) =
+    //     ProbLazyItem::get_version(lazy_item, version_number, dense_index.cache.clone())?
+    // {
+    //     return Ok(version);
+    // }
+    // let new_node = ProbNode::new(
+    //     node.hnsw_level,
+    //     node.prop.clone(),
+    //     node.get_parent(),
+    //     node.get_child(),
+    // );
+    // let new_version = ProbLazyItem::new(
+    //     &dense_index.cache.get_allocator(),
+    //     new_node,
+    //     version,
+    //     version_number,
+    // );
+    // let result = ProbLazyItem::add_version(lazy_item, new_version, dense_index.cache.clone())?;
+
+    // let new_version = match result {
+    //     Ok(_) => new_version,
+    //     Err(existing_new_version) => {
+    //         ProbLazyItem::free(new_version, &dense_index.cache.get_allocator());
+    //         existing_new_version
+    //     }
+    // };
+
+    Ok(new_version)
 }
 
 fn create_node_edges(
     dense_index: Arc<DenseIndex>,
     lazy_node: *mut ProbLazyItem<ProbNode>,
     node: Arc<ProbNode>,
-    nbs: Vec<(*mut ProbLazyItem<ProbNode>, MetricResult)>,
-    cur_level: HNSWLevel,
+    neighbors: Vec<(*mut ProbLazyItem<ProbNode>, MetricResult)>,
     version: Hash,
     version_number: u16,
-    thread_id: u32,
+    serialization_table: Arc<TSHashTable<*mut ProbLazyItem<ProbNode>, ()>>,
+    lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16), *mut ProbLazyItem<ProbNode>>>,
 ) -> Result<(), WaCustomError> {
-    for (nbr1_ptr, dist) in nbs.into_iter() {
-        let nbr1 = unsafe { &*nbr1_ptr };
-        let old_neighbor = nbr1.try_get_data(dense_index.cache.clone())?;
+    for (neighbor, dist) in neighbors.into_iter() {
+        serialization_table.insert(neighbor, ());
 
-        let (new_lazy_neighbor, new_neighbor) = if let Some(version) =
-            ProbLazyItem::get_version(nbr1_ptr, version_number, dense_index.cache.clone())?
-        {
-            let node = unsafe { &*version }.try_get_data(dense_index.cache.clone())?;
-            (version, node)
-        } else {
-            let prop_arc = old_neighbor.prop.clone();
-            let parent = old_neighbor.get_parent();
-            let child = old_neighbor.get_child();
-            let new_neighbor = Arc::new(ProbNode::new_with_neighbors(
-                cur_level,
-                prop_arc,
-                old_neighbor.clone_neighbors(),
-                parent,
-                child,
-            ));
-            let new_lazy_neighbor = ProbLazyItem::from_arc(
-                &dense_index.cache.get_allocator(),
-                new_neighbor.clone(),
-                version,
-                version_number,
-            );
-            ProbLazyItem::add_version(nbr1_ptr, new_lazy_neighbor, dense_index.cache.clone())?;
-            let mut exec_queue = dense_index.exec_queue_nodes.clone();
-            exec_queue
-                .transactional_update(|queue| {
-                    let mut new_queue = queue.clone();
-                    new_queue.push(nbr1_ptr.clone());
-                    new_queue
-                })
-                .unwrap();
-
-            (new_lazy_neighbor, new_neighbor)
-        };
+        let new_lazy_neighbor = get_or_create_version(
+            dense_index.clone(),
+            lazy_item_versions_table.clone(),
+            neighbor,
+            version,
+            version_number,
+        )?;
+        let new_neighbor =
+            unsafe { &*new_lazy_neighbor }.try_get_data(dense_index.cache.clone())?;
 
         new_neighbor.add_neighbor(lazy_node.clone(), node.get_id().unwrap(), dist);
         node.add_neighbor(new_lazy_neighbor, new_neighbor.get_id().unwrap(), dist);
     }
 
-    queue_node_prop_exec(dense_index, lazy_node, node, thread_id)?;
+    serialization_table.insert(lazy_node, ());
 
     Ok(())
 }
@@ -1017,16 +1038,24 @@ fn traverse_find_nearest(
     hops: u8,
     skipm: &mut HashSet<VectorId>,
     cur_level: HNSWLevel,
-    skip_hop: bool,
 ) -> Result<Vec<(*mut ProbLazyItem<ProbNode>, MetricResult)>, WaCustomError> {
     let mut tasks: SmallVec<[Vec<(*mut ProbLazyItem<ProbNode>, MetricResult)>; 24]> =
         SmallVec::new();
 
-    let node = unsafe { &*ProbLazyItem::get_latest_version(vtm, dense_index.cache.clone())?.0 }
-        .try_get_data(dense_index.cache.clone())?;
+    let (latest_version_lazy_node, _latest_version) =
+        ProbLazyItem::get_latest_version(vtm, dense_index.cache.clone())?;
 
-    for (index, (nref, _)) in node.get_neighbors().into_iter().enumerate() {
-        if let Some(neighbor) = unsafe { &*nref }.get_lazy_data() {
+    let node = unsafe { &*latest_version_lazy_node }.try_get_data(dense_index.cache.clone())?;
+
+    for nref in &*node.get_neighbors_raw() {
+        let nptr = unsafe {
+            if let Some((nptr, _)) = nref.load(Ordering::SeqCst).as_ref() {
+                *nptr
+            } else {
+                continue;
+            }
+        };
+        if let Some(neighbor) = unsafe { &*nptr }.get_lazy_data() {
             let mut prop_arc = neighbor.prop.clone();
             let prop_state = prop_arc.get();
 
@@ -1041,10 +1070,6 @@ fn traverse_find_nearest(
             };
 
             let nb = node_prop.id.clone();
-
-            if index % 2 != 0 && skip_hop && index > 4 {
-                continue;
-            }
 
             let dense_index = dense_index.clone();
             let fvec = fvec.clone();
@@ -1064,17 +1089,16 @@ fn traverse_find_nearest(
                 {
                     let mut z = traverse_find_nearest(
                         dense_index.clone(),
-                        nref,
+                        nptr,
                         fvec.clone(),
                         hops + 1,
                         skipm,
                         cur_level,
-                        skip_hop,
                     )?;
-                    z.push((nref, dist));
+                    z.push((nptr, dist));
                     tasks.push(z);
                 } else {
-                    tasks.push(vec![(nref, dist)]);
+                    tasks.push(vec![(nptr, dist)]);
                 }
             }
         }
@@ -1111,7 +1135,6 @@ pub fn create_index_in_collection(dense_index: Arc<DenseIndex>) -> Result<(), Wa
     let hash = unsafe { &*dense_index.get_root_vec() }.get_current_version();
 
     let root = create_root_node(
-        &dense_index.cache.get_allocator(),
         dense_index.hnsw_params.num_layers,
         quantization_metric,
         *dense_index.storage_type.clone().get(),
@@ -1122,7 +1145,7 @@ pub fn create_index_in_collection(dense_index: Arc<DenseIndex>) -> Result<(), Wa
     )?;
 
     // The whole index is empty now
-    dense_index.set_root_vec(root);
+    *dense_index.root_vec.write().unwrap() = root;
     dense_index.set_auto_config_flag(false);
     dense_index.set_configured_flag(true);
 

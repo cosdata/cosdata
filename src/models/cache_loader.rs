@@ -271,49 +271,9 @@ macro_rules! define_prob_cache_items {
             $($variant(*mut ProbLazyItem<$type>)),+
         }
 
-        #[derive(Clone, PartialEq, Eq, Hash)]
-        pub enum AllocItem {
-            $($variant(*mut ProbLazyItem<$type>)),+
-        }
-
-        #[derive(Clone, PartialEq, Eq, Hash)]
-        pub enum AllocItemState {
-            $($variant(*mut ProbLazyItemState<$type>)),+
-        }
-
         pub trait ProbCacheable: Clone + 'static {
             fn from_cache_item(cache_item: ProbCacheItem) -> Option<*mut ProbLazyItem<Self>>;
             fn into_cache_item(item: *mut ProbLazyItem<Self>) -> ProbCacheItem;
-        }
-
-        pub trait Allocate: Sized {
-            fn from_alloc_item(alloc_item: AllocItem) -> Option<*mut ProbLazyItem<Self>>;
-            fn from_alloc_item_state(alloc_item_state: AllocItemState) -> Option<*mut ProbLazyItemState<Self>>;
-
-            fn into_alloc_item(item: *mut ProbLazyItem<Self>) -> AllocItem;
-            fn into_alloc_item_state(item: *mut ProbLazyItemState<Self>) -> AllocItemState;
-        }
-
-        impl AllocItem {
-            fn drop(&self) {
-                println!("dropping item");
-                unsafe {
-                    match self {
-                        $(Self::$variant(item) => if !item.is_null() { drop(Box::from_raw(*item)) }),+
-                    }
-                }
-            }
-        }
-
-        impl AllocItemState {
-            fn drop(&self) {
-                println!("dropping state");
-                unsafe {
-                    match self {
-                        $(Self::$variant(state) => if !state.is_null() { drop(Box::from_raw(*state)) }),+
-                    }
-                }
-            }
         }
 
         $(
@@ -331,34 +291,6 @@ macro_rules! define_prob_cache_items {
                 }
             }
         )+
-
-        $(
-            impl Allocate for $type {
-                fn from_alloc_item(alloc_item: AllocItem) -> Option<*mut ProbLazyItem<Self>> {
-                    if let AllocItem::$variant(item) = alloc_item {
-                        Some(item)
-                    } else {
-                        None
-                    }
-                }
-
-                fn into_alloc_item(item: *mut ProbLazyItem<Self>) -> AllocItem {
-                    AllocItem::$variant(item)
-                }
-
-                fn from_alloc_item_state(alloc_item_state: AllocItemState) -> Option<*mut ProbLazyItemState<Self>> {
-                    if let AllocItemState::$variant(state) = alloc_item_state {
-                        Some(state)
-                    } else {
-                        None
-                    }
-                }
-
-                fn into_alloc_item_state(state: *mut ProbLazyItemState<Self>) -> AllocItemState {
-                    AllocItemState::$variant(state)
-                }
-            }
-        )+
     };
 }
 
@@ -366,91 +298,7 @@ define_prob_cache_items! {
     ProbNode = ProbNode,
 }
 
-pub struct Allocator {
-    states: DashSet<AllocItemState>,
-    items: DashSet<AllocItem>,
-}
-
-impl Allocator {
-    pub fn new() -> Self {
-        Self {
-            states: DashSet::new(),
-            items: DashSet::new(),
-        }
-    }
-
-    pub fn alloc_state<T: Allocate>(
-        &self,
-        state: ProbLazyItemState<T>,
-    ) -> *mut ProbLazyItemState<T> {
-        let ptr = Box::into_raw(Box::new(state));
-        self.states.insert(T::into_alloc_item_state(ptr));
-        ptr
-    }
-
-    pub fn alloc_item<T: Allocate>(&self, item: ProbLazyItem<T>) -> *mut ProbLazyItem<T> {
-        let ptr = Box::into_raw(Box::new(item));
-        self.items.insert(T::into_alloc_item(ptr));
-        ptr
-    }
-
-    pub fn free_state<T: Allocate>(&self, state: *mut ProbLazyItemState<T>) -> bool {
-        if self
-            .states
-            .remove(&T::into_alloc_item_state(state))
-            .is_some()
-        {
-            println!("dropping state from allocator");
-            unsafe { drop(Box::from_raw(state)) };
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn free_item<T: Allocate>(&self, item: *mut ProbLazyItem<T>) -> bool {
-        if self.items.remove(&T::into_alloc_item(item)).is_some() {
-            println!("dropping item from allocator");
-            unsafe { drop(Box::from_raw(item)) };
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn get_state<T: Allocate>(
-        &self,
-        state: *mut ProbLazyItemState<T>,
-    ) -> Option<ProbLazyItemState<T>> {
-        if self
-            .states
-            .remove(&T::into_alloc_item_state(state))
-            .is_some()
-        {
-            Some(unsafe { ptr::read(state) })
-        } else {
-            None
-        }
-    }
-}
-
-unsafe impl Send for Allocator {}
-unsafe impl Sync for Allocator {}
-
-impl Drop for Allocator {
-    fn drop(&mut self) {
-        for item in self.items.iter() {
-            item.drop();
-        }
-
-        for state in self.states.iter() {
-            state.drop();
-        }
-    }
-}
-
 pub struct ProbCache {
-    allocator: Arc<Allocator>,
     cuckoo_filter: RwLock<CuckooFilter<u64>>,
     registry: LRUCache<u64, ProbCacheItem>,
     bufmans: Arc<BufferManagerFactory>,
@@ -458,23 +306,17 @@ pub struct ProbCache {
 
 impl ProbCache {
     pub fn new(cuckoo_filter_capacity: usize, bufmans: Arc<BufferManagerFactory>) -> Self {
-        let allocator = Arc::new(Allocator::new());
         let cuckoo_filter = CuckooFilter::new(cuckoo_filter_capacity);
         let registry = LRUCache::with_prob_eviction(1000, 0.03125);
 
         Self {
-            allocator,
             cuckoo_filter: RwLock::new(cuckoo_filter),
             registry,
             bufmans,
         }
     }
 
-    pub fn get_allocator(&self) -> Arc<Allocator> {
-        self.allocator.clone()
-    }
-
-    pub fn get_lazy_object<T: ProbCacheable + UpdateSerialized + ProbSerialize + Allocate>(
+    pub fn get_lazy_object<T: ProbCacheable + UpdateSerialized + ProbSerialize>(
         self: Arc<Self>,
         file_index: FileIndex,
         max_loads: u16,
@@ -501,7 +343,7 @@ impl ProbCache {
             }
         }
 
-        let node = ProbLazyItem::new_pending(&self.allocator, file_index);
+        let node = ProbLazyItem::new_pending(file_index);
         let cache_item = T::into_cache_item(node);
 
         {
@@ -534,30 +376,32 @@ impl ProbCache {
             skipm,
         )?;
         let data = Arc::new(data);
-        let new_state = self.allocator.alloc_state(ProbLazyItemState::Ready {
+        let new_state = Box::into_raw(Box::new(Arc::new(ProbLazyItemState::Ready {
             data,
             file_offset: Cell::new(Some(offset)),
             decay_counter: 0,
             persist_flag: AtomicBool::new(false),
-            serialized_flag: AtomicBool::new(true),
             version_id,
             version_number,
             versions,
-        });
+        })));
 
         let old_state = unsafe { &*node }.swap_state(new_state);
 
-        self.allocator.free_state(old_state);
+        unsafe {
+            drop(Box::from_raw(old_state));
+        }
 
         Ok(node)
     }
 
-    pub fn get_object<T: ProbCacheable + UpdateSerialized + ProbSerialize + Allocate>(
+    pub fn get_object<T: ProbCacheable + UpdateSerialized + ProbSerialize>(
         self: Arc<Self>,
         file_index: FileIndex,
         max_loads: u16,
         skipm: &mut HashSet<u64>,
     ) -> Result<(Arc<T>, ProbLazyItemArray<T, 4>), BufIoError> {
+        println!("get_object is called");
         let combined_index = Self::combine_index(&file_index);
 
         let (node, is_new) = {
@@ -571,22 +415,22 @@ impl ProbCache {
                     if let Some(item) = T::from_cache_item(obj) {
                         unsafe {
                             if let ProbLazyItemState::Ready { data, versions, .. } =
-                                &*(*item).get_state().load(Ordering::SeqCst)
+                                &*(*item).get_state()
                             {
                                 return Ok((data.clone(), versions.clone()));
                             }
                         }
                         (item, false)
                     } else {
-                        (ProbLazyItem::new_pending(&self.allocator, file_index), true)
+                        (ProbLazyItem::new_pending(file_index), true)
                     }
                 } else {
                     println!("Object not found in registry despite being in cuckoo_filter");
-                    (ProbLazyItem::new_pending(&self.allocator, file_index), true)
+                    (ProbLazyItem::new_pending(file_index), true)
                 }
             } else {
                 println!("FileIndex not found in cuckoo_filter");
-                (ProbLazyItem::new_pending(&self.allocator, file_index), true)
+                (ProbLazyItem::new_pending(file_index), true)
             }
         };
 
@@ -618,20 +462,21 @@ impl ProbCache {
             skipm,
         )?;
         let data: Arc<T> = Arc::new(data);
-        let new_state = self.allocator.alloc_state(ProbLazyItemState::Ready {
+        let new_state = Box::into_raw(Box::new(Arc::new(ProbLazyItemState::Ready {
             data: data.clone(),
             file_offset: Cell::new(Some(offset)),
             decay_counter: 0,
             persist_flag: AtomicBool::new(false),
-            serialized_flag: AtomicBool::new(true),
             version_id,
             version_number,
             versions: versions.clone(),
-        });
+        })));
 
         let old_state = unsafe { &*node }.swap_state(new_state);
 
-        self.allocator.free_state(old_state);
+        unsafe {
+            drop(Box::from_raw(old_state));
+        }
 
         Ok((data, versions))
     }

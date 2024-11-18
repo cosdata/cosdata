@@ -5,7 +5,7 @@ use crate::{
     api_service::{run_upload, run_upload_in_transaction},
     app_context::AppContext,
     convert_value, convert_vectors,
-    models::{rpc::VectorIdValue, types::VectorId, versioning::Hash},
+    models::{rpc::VectorIdValue, types::{DenseIndexTransaction, VectorId}, versioning::Hash},
     vector_store::get_embedding_by_id,
 };
 
@@ -59,7 +59,7 @@ pub(crate) async fn create_vector(
 pub(crate) async fn create_vector_in_transaction(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    transaction_id: Hash,
+    transaction: DenseIndexTransaction,
     create_vector_dto: CreateVectorDto,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
     let dense_index = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
@@ -69,7 +69,7 @@ pub(crate) async fn create_vector_in_transaction(
     run_upload_in_transaction(
         ctx.clone(),
         dense_index,
-        transaction_id,
+        transaction,
         vec![(
             create_vector_dto.id.clone(),
             create_vector_dto.values.clone(),
@@ -176,7 +176,7 @@ pub(crate) async fn delete_vector_by_id(
 pub(crate) async fn upsert_in_transaction(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    transaction_id: Hash,
+    transaction: DenseIndexTransaction,
     upsert_dto: UpsertDto,
 ) -> Result<(), VectorsError> {
     let dense_index = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
@@ -186,7 +186,7 @@ pub(crate) async fn upsert_in_transaction(
     run_upload_in_transaction(
         ctx.clone(),
         dense_index,
-        transaction_id,
+        transaction,
         convert_vectors(upsert_dto.vectors),
     )
     .map_err(VectorsError::WaCustom)?;
