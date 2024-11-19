@@ -39,10 +39,8 @@ impl<T: ProbCacheable + UpdateSerialized + ProbSerialize, const N: usize> ProbSe
 
             bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_pos))?;
             bufman.write_u32_with_cursor(cursor, offset)?;
-            unsafe {
-                bufman.write_u16_with_cursor(cursor, (*item).get_current_version_number())?;
-                bufman.write_u32_with_cursor(cursor, *(*item).get_current_version())?;
-            }
+            bufman.write_u16_with_cursor(cursor, item.get_current_version_number())?;
+            bufman.write_u32_with_cursor(cursor, *item.get_current_version())?;
         }
         bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
 
@@ -89,7 +87,7 @@ impl<T: ProbCacheable + UpdateSerialized + ProbSerialize, const N: usize> ProbSe
                         version_number,
                         version_id,
                     };
-                    let item = <*mut ProbLazyItem<T>>::deserialize(
+                    let item = Arc::<ProbLazyItem<T>>::deserialize(
                         bufmans.clone(),
                         file_index,
                         cache.clone(),
@@ -152,11 +150,8 @@ impl<T: ProbCacheable + UpdateSerialized + ProbSerialize, const N: usize> Update
 
                     bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_pos))?;
                     bufman.write_u32_with_cursor(cursor, offset)?;
-                    unsafe {
-                        bufman
-                            .write_u16_with_cursor(cursor, (*item).get_current_version_number())?;
-                        bufman.write_u32_with_cursor(cursor, *(*item).get_current_version())?;
-                    }
+                    bufman.write_u16_with_cursor(cursor, item.get_current_version_number())?;
+                    bufman.write_u32_with_cursor(cursor, *item.get_current_version())?;
                 }
                 bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
 

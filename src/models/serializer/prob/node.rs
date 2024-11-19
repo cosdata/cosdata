@@ -1,7 +1,6 @@
 use std::{
     collections::HashSet,
     io::{self, SeekFrom},
-    ptr,
     sync::Arc,
 };
 
@@ -11,8 +10,9 @@ use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
     cache_loader::ProbCache,
     lazy_load::{FileIndex, SyncPersist},
-    prob_lazy_load::lazy_item::ProbLazyItem,
-    types::{BytesToRead, FileOffset, HNSWLevel, ProbNode, PropState},
+    prob_lazy_load::{lazy_item::ProbLazyItem, lazy_item_array::ProbLazyItemArray},
+    prob_node::ProbNode,
+    types::{BytesToRead, FileOffset, HNSWLevel, PropState},
     versioning::Hash,
 };
 
@@ -23,7 +23,8 @@ use super::{ProbSerialize, UpdateSerialized};
 //              + parent placeholder (10)
 //              + child placeholder (10)
 //              + neighbors placeholder (4)
-//              = 33 bytes
+//              + versions placeholder (4)
+//              = 37 bytes
 impl ProbSerialize for ProbNode {
     fn serialize(
         &self,
@@ -40,7 +41,7 @@ impl ProbSerialize for ProbNode {
         // Serialize prop
         let mut prop = self.prop.clone();
         let prop_state = prop.get();
-        match &*prop_state {
+        match prop_state {
             PropState::Ready(node_prop) => {
                 bufman.write_u32_with_cursor(cursor, node_prop.location.0 .0)?;
                 bufman.write_u32_with_cursor(cursor, node_prop.location.1 .0)?;
@@ -51,22 +52,27 @@ impl ProbSerialize for ProbNode {
             }
         }
 
-        // 10 bytes for parent offset + 10 bytes for child offset + 4 bytes for neighbors offset
-        bufman.write_with_cursor(cursor, &[u8::MAX; 24])?;
-
-        let parent_ptr = self.get_parent();
-        let child_ptr = self.get_child();
+        // 10 bytes for parent offset + 10 bytes for child offset + 4 bytes for neighbors offset + 4 bytes for versions
+        bufman.write_with_cursor(cursor, &[u8::MAX; 28])?;
 
         // Serialize parent if present
-        let parent_offset = if !parent_ptr.is_null() {
-            Some(parent_ptr.serialize(bufmans.clone(), version, cursor)?)
+        let parent_file_index = if let Some(parent) = self.get_parent() {
+            Some((
+                parent.serialize(bufmans.clone(), version, cursor)?,
+                parent.get_current_version(),
+                parent.get_current_version_number(),
+            ))
         } else {
             None
         };
 
         // Serialize child if present
-        let child_offset = if !child_ptr.is_null() {
-            Some(child_ptr.serialize(bufmans.clone(), version, cursor)?)
+        let child_file_index = if let Some(child) = self.get_child() {
+            Some((
+                child.serialize(bufmans.clone(), version, cursor)?,
+                child.get_current_version(),
+                child.get_current_version_number(),
+            ))
         } else {
             None
         };
@@ -76,28 +82,27 @@ impl ProbSerialize for ProbNode {
             self.get_neighbors_raw()
                 .serialize(bufmans.clone(), version, cursor)?;
 
+        let versions_offset = self.versions.serialize(bufmans.clone(), version, cursor)?;
+
         let end_offset = bufman.cursor_position(cursor)?;
 
-        if let Some(offset) = parent_offset {
+        if let Some((offset, version_id, version_number)) = parent_file_index {
             bufman.seek_with_cursor(cursor, SeekFrom::Start(start_offset + 9))?;
             bufman.write_u32_with_cursor(cursor, offset)?;
-            unsafe {
-                bufman.write_u16_with_cursor(cursor, (*parent_ptr).get_current_version_number())?;
-                bufman.write_u32_with_cursor(cursor, *(*parent_ptr).get_current_version())?;
-            }
+            bufman.write_u16_with_cursor(cursor, version_number)?;
+            bufman.write_u32_with_cursor(cursor, *version_id)?;
         }
 
-        if let Some(offset) = child_offset {
+        if let Some((offset, version_id, version_number)) = child_file_index {
             bufman.seek_with_cursor(cursor, SeekFrom::Start(start_offset + 19))?;
             bufman.write_u32_with_cursor(cursor, offset)?;
-            unsafe {
-                bufman.write_u16_with_cursor(cursor, (*child_ptr).get_current_version_number())?;
-                bufman.write_u32_with_cursor(cursor, *(*child_ptr).get_current_version())?;
-            }
+            bufman.write_u16_with_cursor(cursor, version_number)?;
+            bufman.write_u32_with_cursor(cursor, *version_id)?;
         }
 
         bufman.seek_with_cursor(cursor, SeekFrom::Start(start_offset + 29))?;
         bufman.write_u32_with_cursor(cursor, neighbors_offset)?;
+        bufman.write_u32_with_cursor(cursor, versions_offset)?;
 
         bufman.seek_with_cursor(cursor, SeekFrom::Start(end_offset))?;
 
@@ -141,10 +146,11 @@ impl ProbSerialize for ProbNode {
                 let child_version_id = Hash::from(bufman.read_u32_with_cursor(cursor)?);
 
                 let neighbors_offset = bufman.read_u32_with_cursor(cursor)?;
+                let versions_offset = bufman.read_u32_with_cursor(cursor)?;
                 bufman.close_cursor(cursor)?;
                 // Deserialize parent
                 let parent = if parent_offset != u32::MAX {
-                    <*mut ProbLazyItem<Self>>::deserialize(
+                    Some(Arc::<ProbLazyItem<Self>>::deserialize(
                         bufmans.clone(),
                         FileIndex::Valid {
                             offset: FileOffset(parent_offset),
@@ -154,13 +160,13 @@ impl ProbSerialize for ProbNode {
                         cache.clone(),
                         max_loads,
                         skipm,
-                    )?
+                    )?)
                 } else {
-                    ptr::null_mut()
+                    None
                 };
                 // Deserialize child
                 let child = if child_offset != u32::MAX {
-                    <*mut ProbLazyItem<Self>>::deserialize(
+                    Some(Arc::<ProbLazyItem<Self>>::deserialize(
                         bufmans.clone(),
                         FileIndex::Valid {
                             offset: FileOffset(child_offset),
@@ -170,9 +176,9 @@ impl ProbSerialize for ProbNode {
                         cache.clone(),
                         max_loads,
                         skipm,
-                    )?
+                    )?)
                 } else {
-                    ptr::null_mut()
+                    None
                 };
 
                 let neighbors_file_index = FileIndex::Valid {
@@ -182,19 +188,34 @@ impl ProbSerialize for ProbNode {
                 };
                 // Deserialize neighbors
                 let neighbors = ProbSerialize::deserialize(
-                    bufmans,
+                    bufmans.clone(),
                     neighbors_file_index,
                     cache.clone(),
                     max_loads,
                     skipm,
                 )?;
 
-                Ok(Self::new_with_neighbors(
+                let versions_file_index = FileIndex::Valid {
+                    offset: FileOffset(versions_offset),
+                    version_number,
+                    version_id,
+                };
+
+                let versions = ProbLazyItemArray::deserialize(
+                    bufmans,
+                    versions_file_index,
+                    cache,
+                    max_loads,
+                    skipm,
+                )?;
+
+                Ok(Self::new_with_neighbors_and_versions(
                     hnsw_level,
                     ArcShift::new(prop),
                     neighbors,
                     parent,
                     child,
+                    versions,
                 ))
             }
         }
@@ -222,13 +243,21 @@ impl UpdateSerialized for ProbNode {
                 let cursor = bufman.open_cursor()?;
                 bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64 + 29))?;
                 let neighbors_offset = bufman.read_u32_with_cursor(cursor)?;
+                let versions_offset = bufman.read_u32_with_cursor(cursor)?;
                 let neighbors_file_index = FileIndex::Valid {
                     offset: FileOffset(neighbors_offset),
                     version_number,
                     version_id,
                 };
+                let versions_file_index = FileIndex::Valid {
+                    offset: FileOffset(versions_offset),
+                    version_number,
+                    version_id,
+                };
                 self.get_neighbors_raw()
-                    .update_serialized(bufmans, neighbors_file_index)?;
+                    .update_serialized(bufmans.clone(), neighbors_file_index)?;
+                self.versions
+                    .update_serialized(bufmans, versions_file_index)?;
 
                 Ok(offset)
             }

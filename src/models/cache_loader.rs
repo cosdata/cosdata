@@ -1,10 +1,9 @@
 use super::buffered_io::{BufIoError, BufferManagerFactory};
-use super::file_persist::*;
 use super::lazy_load::{FileIndex, LazyItem, LazyItemVec, VectorData};
 use super::lru_cache::LRUCache;
 use super::prob_lazy_load::lazy_item::{ProbLazyItem, ProbLazyItemState};
-use super::prob_lazy_load::lazy_item_array::ProbLazyItemArray;
-use super::serializer::prob::{lazy_item_deserialize_impl, ProbSerialize, UpdateSerialized};
+use super::prob_node::ProbNode;
+use super::serializer::prob::{ProbSerialize, UpdateSerialized};
 use super::serializer::CustomSerialize;
 use super::types::*;
 use crate::models::lru_cache::CachedValue;
@@ -19,14 +18,10 @@ use crate::storage::inverted_index_sparse_ann_basic::{
 use crate::storage::inverted_index_sparse_ann_new_ds::InvertedIndexNewDSNode;
 use crate::storage::Storage;
 use arcshift::ArcShift;
-use dashmap::DashSet;
 use probabilistic_collections::cuckoo::CuckooFilter;
 use std::cell::Cell;
 use std::collections::HashSet;
 use std::io;
-use std::path::Path;
-use std::ptr;
-use std::sync::atomic::Ordering;
 use std::sync::{atomic::AtomicBool, Arc, RwLock};
 
 macro_rules! define_cache_items {
@@ -74,7 +69,6 @@ define_cache_items! {
     InvertedIndexSparseAnnNodeBasicDashMap = InvertedIndexSparseAnnNodeBasicDashMap,
     InvertedIndexNewDSNode = InvertedIndexNewDSNode,
     VectorData = STM<VectorData>,
-    ProbNode = ProbNode,
 }
 
 pub struct NodeRegistry {
@@ -241,44 +235,22 @@ impl NodeRegistry {
     // }
 }
 
-pub fn load_cache() {
-    // TODO: include db name in the path
-    let bufmans = Arc::new(BufferManagerFactory::new(
-        Path::new(".").into(),
-        |root, ver| root.join(format!("{}.index", **ver)),
-    ));
-
-    // TODO: fill appropriate version info
-    let file_index = FileIndex::Valid {
-        offset: FileOffset(0),
-        version_id: 0.into(),
-        version_number: 0,
-    };
-    let cache = Arc::new(NodeRegistry::new(1000, bufmans));
-    match read_node_from_file(file_index.clone(), cache) {
-        Ok(_) => println!(
-            "Successfully read and printed node from file_index {:?}",
-            file_index
-        ),
-        Err(e) => println!("Failed to read node: {}", e),
-    }
-}
-
 macro_rules! define_prob_cache_items {
     ($($variant:ident = $type:ty),+ $(,)?) => {
         #[derive(Clone)]
         pub enum ProbCacheItem {
-            $($variant(*mut ProbLazyItem<$type>)),+
+            $($variant(Arc<ProbLazyItem<$type>>)),+
         }
 
-        pub trait ProbCacheable: Clone + 'static {
-            fn from_cache_item(cache_item: ProbCacheItem) -> Option<*mut ProbLazyItem<Self>>;
-            fn into_cache_item(item: *mut ProbLazyItem<Self>) -> ProbCacheItem;
+        pub trait ProbCacheable:  'static {
+            fn from_cache_item(cache_item: ProbCacheItem) -> Option<Arc<ProbLazyItem<Self>>>;
+            fn into_cache_item(item: Arc<ProbLazyItem<Self>>) -> ProbCacheItem;
         }
 
         $(
             impl ProbCacheable for $type {
-                fn from_cache_item(cache_item: ProbCacheItem) -> Option<*mut ProbLazyItem<Self>> {
+                fn from_cache_item(cache_item: ProbCacheItem) -> Option<Arc<ProbLazyItem<Self>>> {
+                    #[allow(irrefutable_let_patterns)]
                     if let ProbCacheItem::$variant(item) = cache_item {
                         Some(item)
                     } else {
@@ -286,7 +258,7 @@ macro_rules! define_prob_cache_items {
                     }
                 }
 
-                fn into_cache_item(item: *mut ProbLazyItem<Self>) -> ProbCacheItem {
+                fn into_cache_item(item: Arc<ProbLazyItem<Self>>) -> ProbCacheItem {
                     ProbCacheItem::$variant(item)
                 }
             }
@@ -321,7 +293,7 @@ impl ProbCache {
         file_index: FileIndex,
         max_loads: u16,
         skipm: &mut HashSet<u64>,
-    ) -> Result<*mut ProbLazyItem<T>, BufIoError> {
+    ) -> Result<Arc<ProbLazyItem<T>>, BufIoError> {
         let combined_index = Self::combine_index(&file_index);
 
         {
@@ -344,7 +316,7 @@ impl ProbCache {
         }
 
         let node = ProbLazyItem::new_pending(file_index);
-        let cache_item = T::into_cache_item(node);
+        let cache_item = T::into_cache_item(node.clone());
 
         {
             self.cuckoo_filter.write().unwrap().insert(&combined_index);
@@ -368,14 +340,13 @@ impl ProbCache {
 
         skipm.insert(combined_index);
 
-        let (data, versions) = lazy_item_deserialize_impl(
+        let data = Arc::new(T::deserialize(
             self.bufmans.clone(),
             file_index,
             self.clone(),
             max_loads - 1,
             skipm,
-        )?;
-        let data = Arc::new(data);
+        )?);
         let new_state = Box::into_raw(Box::new(Arc::new(ProbLazyItemState::Ready {
             data,
             file_offset: Cell::new(Some(offset)),
@@ -383,10 +354,9 @@ impl ProbCache {
             persist_flag: AtomicBool::new(false),
             version_id,
             version_number,
-            versions,
         })));
 
-        let old_state = unsafe { &*node }.swap_state(new_state);
+        let old_state = node.swap_state(new_state);
 
         unsafe {
             drop(Box::from_raw(old_state));
@@ -400,7 +370,7 @@ impl ProbCache {
         file_index: FileIndex,
         max_loads: u16,
         skipm: &mut HashSet<u64>,
-    ) -> Result<(Arc<T>, ProbLazyItemArray<T, 4>), BufIoError> {
+    ) -> Result<Arc<T>, BufIoError> {
         println!("get_object is called");
         let combined_index = Self::combine_index(&file_index);
 
@@ -413,13 +383,10 @@ impl ProbCache {
                 println!("FileIndex found in cuckoo_filter");
                 if let Some(obj) = self.registry.get(&combined_index) {
                     if let Some(item) = T::from_cache_item(obj) {
-                        unsafe {
-                            if let ProbLazyItemState::Ready { data, versions, .. } =
-                                &*(*item).get_state()
-                            {
-                                return Ok((data.clone(), versions.clone()));
-                            }
+                        if let ProbLazyItemState::Ready { data, .. } = &*item.get_state() {
+                            return Ok(data.clone());
                         }
+
                         (item, false)
                     } else {
                         (ProbLazyItem::new_pending(file_index), true)
@@ -434,7 +401,7 @@ impl ProbCache {
             }
         };
 
-        let cache_item = T::into_cache_item(node);
+        let cache_item = T::into_cache_item(node.clone());
 
         if is_new {
             self.cuckoo_filter.write().unwrap().insert(&combined_index);
@@ -454,14 +421,13 @@ impl ProbCache {
 
         skipm.insert(combined_index);
 
-        let (data, versions) = lazy_item_deserialize_impl(
+        let data = Arc::new(T::deserialize(
             self.bufmans.clone(),
             file_index,
             self.clone(),
             max_loads - 1,
             skipm,
-        )?;
-        let data: Arc<T> = Arc::new(data);
+        )?);
         let new_state = Box::into_raw(Box::new(Arc::new(ProbLazyItemState::Ready {
             data: data.clone(),
             file_offset: Cell::new(Some(offset)),
@@ -469,16 +435,15 @@ impl ProbCache {
             persist_flag: AtomicBool::new(false),
             version_id,
             version_number,
-            versions: versions.clone(),
         })));
 
-        let old_state = unsafe { &*node }.swap_state(new_state);
+        let old_state = node.swap_state(new_state);
 
         unsafe {
             drop(Box::from_raw(old_state));
         }
 
-        Ok((data, versions))
+        Ok(data)
     }
 
     pub fn combine_index(file_index: &FileIndex) -> u64 {

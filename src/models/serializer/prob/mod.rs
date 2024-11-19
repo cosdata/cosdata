@@ -5,8 +5,6 @@ mod node;
 #[cfg(test)]
 mod tests;
 
-pub use lazy_item::lazy_item_deserialize_impl;
-
 use std::{collections::HashSet, io, sync::Arc};
 
 use crate::models::{

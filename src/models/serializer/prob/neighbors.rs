@@ -13,13 +13,14 @@ use crate::models::{
     cache_loader::ProbCache,
     lazy_load::{FileIndex, SyncPersist},
     prob_lazy_load::lazy_item::ProbLazyItem,
-    types::{FileOffset, MetricResult, ProbNode},
+    prob_node::{ProbNode, SharedNode},
+    types::{FileOffset, MetricResult},
     versioning::Hash,
 };
 
 use super::{ProbSerialize, UpdateSerialized};
 
-impl<const N: usize> ProbSerialize for [AtomicPtr<(*mut ProbLazyItem<ProbNode>, MetricResult)>; N] {
+impl<const N: usize> ProbSerialize for [AtomicPtr<Arc<(SharedNode, MetricResult)>>; N] {
     fn serialize(
         &self,
         bufmans: Arc<BufferManagerFactory>,
@@ -33,13 +34,15 @@ impl<const N: usize> ProbSerialize for [AtomicPtr<(*mut ProbLazyItem<ProbNode>, 
         bufman.write_with_cursor(cursor, &vec![u8::MAX; 14 * N])?;
 
         for i in 0..N {
-            let (node, dist) = unsafe {
+            let neighbor = unsafe {
                 if let Some(neighbor) = self[i].load(Ordering::SeqCst).as_ref() {
-                    neighbor
+                    neighbor.clone()
                 } else {
                     continue;
                 }
             };
+
+            let (node, dist) = &*neighbor;
 
             let placeholder_pos = start_offset + (i as u64 * 14);
 
@@ -50,10 +53,8 @@ impl<const N: usize> ProbSerialize for [AtomicPtr<(*mut ProbLazyItem<ProbNode>, 
             bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_pos))?;
 
             bufman.write_u32_with_cursor(cursor, node_offset)?;
-            unsafe {
-                bufman.write_u16_with_cursor(cursor, (**node).get_current_version_number())?;
-                bufman.write_u32_with_cursor(cursor, *(**node).get_current_version())?;
-            }
+            bufman.write_u16_with_cursor(cursor, node.get_current_version_number())?;
+            bufman.write_u32_with_cursor(cursor, *node.get_current_version())?;
             bufman.write_u32_with_cursor(cursor, dist_offset)?;
 
             bufman.seek_with_cursor(cursor, SeekFrom::Start(end_offset))?;
@@ -108,7 +109,7 @@ impl<const N: usize> ProbSerialize for [AtomicPtr<(*mut ProbLazyItem<ProbNode>, 
                         version_id,
                     };
 
-                    let node = <*mut ProbLazyItem<ProbNode>>::deserialize(
+                    let node = Arc::<ProbLazyItem<ProbNode>>::deserialize(
                         bufmans.clone(),
                         node_file_index,
                         cache.clone(),
@@ -124,7 +125,7 @@ impl<const N: usize> ProbSerialize for [AtomicPtr<(*mut ProbLazyItem<ProbNode>, 
                         skipm,
                     )?;
 
-                    let ptr = Box::into_raw(Box::new((node, dist)));
+                    let ptr = Box::into_raw(Box::new(Arc::new((node, dist))));
 
                     neighbors[i].store(ptr, Ordering::SeqCst);
                 }
@@ -137,9 +138,7 @@ impl<const N: usize> ProbSerialize for [AtomicPtr<(*mut ProbLazyItem<ProbNode>, 
     }
 }
 
-impl<const N: usize> UpdateSerialized
-    for [AtomicPtr<(*mut ProbLazyItem<ProbNode>, MetricResult)>; N]
-{
+impl<const N: usize> UpdateSerialized for [AtomicPtr<Arc<(SharedNode, MetricResult)>>; N] {
     fn update_serialized(
         &self,
         bufmans: Arc<BufferManagerFactory>,
@@ -161,28 +160,31 @@ impl<const N: usize> UpdateSerialized
                 let start_offset = offset as u64;
 
                 for i in 0..N {
-                    unsafe {
-                        let Some((node, dist)) = self[i].load(Ordering::SeqCst).as_ref() else {
+                    let neighbor = unsafe {
+                        if let Some(neighbor) = self[i].load(Ordering::SeqCst).as_ref() {
+                            neighbor.clone()
+                        } else {
                             continue;
-                        };
-                        bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
+                        }
+                    };
 
-                        let placeholder_pos = start_offset + (i as u64 * 14);
+                    let (node, dist) = &*neighbor;
+                    bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
 
-                        let node_offset = node.serialize(bufmans.clone(), version_id, cursor)?;
-                        let dist_offset = dist.serialize(bufmans.clone(), version_id, cursor)?;
-                        let end_offset = bufman.cursor_position(cursor)?;
+                    let placeholder_pos = start_offset + (i as u64 * 14);
 
-                        bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_pos))?;
+                    let node_offset = node.serialize(bufmans.clone(), version_id, cursor)?;
+                    let dist_offset = dist.serialize(bufmans.clone(), version_id, cursor)?;
+                    let end_offset = bufman.cursor_position(cursor)?;
 
-                        bufman.write_u32_with_cursor(cursor, node_offset)?;
-                        bufman
-                            .write_u16_with_cursor(cursor, (**node).get_current_version_number())?;
-                        bufman.write_u32_with_cursor(cursor, *(**node).get_current_version())?;
-                        bufman.write_u32_with_cursor(cursor, dist_offset)?;
+                    bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_pos))?;
 
-                        bufman.seek_with_cursor(cursor, SeekFrom::Start(end_offset))?;
-                    }
+                    bufman.write_u32_with_cursor(cursor, node_offset)?;
+                    bufman.write_u16_with_cursor(cursor, node.get_current_version_number())?;
+                    bufman.write_u32_with_cursor(cursor, *node.get_current_version())?;
+                    bufman.write_u32_with_cursor(cursor, dist_offset)?;
+
+                    bufman.seek_with_cursor(cursor, SeekFrom::Start(end_offset))?;
                 }
                 bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
 

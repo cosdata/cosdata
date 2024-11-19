@@ -1,8 +1,8 @@
 use super::buffered_io::BufIoError;
 use super::lazy_load::LazyItem;
-use super::prob_lazy_load::lazy_item::ProbLazyItem;
+use super::prob_node::SharedNode;
 use super::rpc::VectorIdValue;
-use super::types::{MergedNode, MetricResult, ProbNode, VectorId};
+use super::types::{MergedNode, MetricResult, VectorId};
 use crate::distance::DistanceError;
 use crate::models::rpc::Vector;
 use crate::models::types::VectorQt;
@@ -500,12 +500,12 @@ pub fn convert_vectors(vectors: Vec<Vector>) -> Vec<(VectorIdValue, Vec<f32>)> {
 }
 
 pub fn remove_duplicates_and_filter(
-    vec: Vec<(*mut ProbLazyItem<ProbNode>, MetricResult)>,
+    vec: Vec<(SharedNode, MetricResult)>,
 ) -> Vec<(VectorId, MetricResult)> {
     let mut seen = HashSet::new();
     vec.into_iter()
         .filter_map(|(lazy_item, similarity)| {
-            unsafe { &*lazy_item }
+            lazy_item
                 .get_lazy_data()
                 .and_then(|node| node.get_id())
                 .map_or(None, |id| {

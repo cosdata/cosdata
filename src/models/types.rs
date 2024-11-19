@@ -6,7 +6,7 @@ use super::meta_persist::{
     delete_dense_index, lmdb_init_collections_db, lmdb_init_db, load_collections,
     load_dense_index_data, persist_dense_index, retrieve_current_version,
 };
-use super::prob_lazy_load::lazy_item::ProbLazyItem;
+use super::prob_node::SharedNode;
 use super::versioning::VersionControl;
 use crate::distance::cosine::CosineSimilarity;
 use crate::distance::DistanceError;
@@ -29,12 +29,12 @@ use lmdb::{Database, DatabaseFlags, Environment};
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher24;
 use std::collections::HashSet;
+use std::fmt;
 use std::hash::{DefaultHasher, Hash as StdHash, Hasher};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
-use std::{fmt, ptr};
 use std::{fs::*, thread};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -61,18 +61,6 @@ impl Identifiable for Neighbour {
 }
 
 impl Identifiable for MergedNode {
-    type Id = u64;
-
-    fn get_id(&self) -> Self::Id {
-        let mut prop_ref = self.prop.clone();
-        let prop = prop_ref.get();
-        let mut hasher = DefaultHasher::new();
-        prop.hash(&mut hasher);
-        hasher.finish()
-    }
-}
-
-impl Identifiable for ProbNode {
     type Id = u64;
 
     fn get_id(&self) -> Self::Id {
@@ -410,8 +398,8 @@ impl Default for HNSWHyperParams {
 #[derive(Clone)]
 pub struct DenseIndexTransaction {
     pub id: Hash,
-    pub serialization_table: Arc<TSHashTable<*mut ProbLazyItem<ProbNode>, ()>>,
-    pub lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16), *mut ProbLazyItem<ProbNode>>>,
+    pub serialization_table: Arc<TSHashTable<SharedNode, ()>>,
+    pub lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16), SharedNode>>,
     serializer_thread_handle: Arc<thread::JoinHandle<Result<(), WaCustomError>>>,
     serialize_flag: Arc<AtomicBool>,
 }
@@ -489,7 +477,7 @@ impl DenseIndexTransaction {
 #[derive(Clone)]
 pub struct DenseIndex {
     pub database_name: String,
-    pub root_vec: Arc<RwLock<*mut ProbLazyItem<ProbNode>>>,
+    pub root_vec: Arc<RwLock<SharedNode>>,
     pub levels_prob: Arc<Vec<(f64, i32)>>,
     pub dim: usize,
     pub prop_file: Arc<File>,
@@ -515,7 +503,7 @@ unsafe impl Sync for DenseIndex {}
 impl DenseIndex {
     pub fn new(
         database_name: String,
-        root_vec: *mut ProbLazyItem<ProbNode>,
+        root_vec: SharedNode,
         levels_prob: Arc<Vec<(f64, i32)>>,
         dim: usize,
         prop_file: Arc<File>,
@@ -584,15 +572,15 @@ impl DenseIndex {
         self.auto_config.store(flag, Ordering::Relaxed);
     }
 
-    pub fn get_root_vec(&self) -> *mut ProbLazyItem<ProbNode> {
-        *self.root_vec.read().unwrap()
+    pub fn get_root_vec(&self) -> SharedNode {
+        (*self.root_vec.read().unwrap()).clone()
     }
 
     /// Returns FileIndex (offset) corresponding to the root
     /// node. Returns None if the it's not set or the root node is an
     /// invalid LazyItem
     pub fn root_vec_offset(&self) -> Option<FileIndex> {
-        unsafe { (*self.get_root_vec()).get_file_index() }
+        self.get_root_vec().get_file_index()
     }
 }
 
@@ -977,169 +965,5 @@ pub struct SparseVector {
 impl SparseVector {
     pub fn new(vector_id: u32, entries: Vec<(u32, f32)>) -> Self {
         Self { vector_id, entries }
-    }
-}
-
-pub const NEIGHBORS_COUNT: usize = 16;
-
-#[derive(Clone)]
-pub struct ProbNode {
-    pub hnsw_level: HNSWLevel,
-    pub prop: ArcShift<PropState>,
-    neighbors: Arc<[AtomicPtr<(*mut ProbLazyItem<ProbNode>, MetricResult)>; NEIGHBORS_COUNT]>,
-    parent: Arc<AtomicPtr<ProbLazyItem<ProbNode>>>,
-    child: Arc<AtomicPtr<ProbLazyItem<ProbNode>>>,
-}
-
-unsafe impl Send for ProbNode {}
-unsafe impl Sync for ProbNode {}
-
-impl ProbNode {
-    pub fn new(
-        hnsw_level: HNSWLevel,
-        prop: ArcShift<PropState>,
-        parent: *mut ProbLazyItem<ProbNode>,
-        child: *mut ProbLazyItem<ProbNode>,
-    ) -> Self {
-        let neighbors = Arc::new(std::array::from_fn(|_| AtomicPtr::new(ptr::null_mut())));
-
-        Self {
-            hnsw_level,
-            prop,
-            neighbors,
-            parent: Arc::new(AtomicPtr::new(parent)),
-            child: Arc::new(AtomicPtr::new(child)),
-        }
-    }
-
-    pub fn new_with_neighbors(
-        hnsw_level: HNSWLevel,
-        prop: ArcShift<PropState>,
-        neighbors: [AtomicPtr<(*mut ProbLazyItem<ProbNode>, MetricResult)>; NEIGHBORS_COUNT],
-        parent: *mut ProbLazyItem<ProbNode>,
-        child: *mut ProbLazyItem<ProbNode>,
-    ) -> Self {
-        Self {
-            hnsw_level,
-            prop,
-            neighbors: Arc::new(neighbors),
-            parent: Arc::new(AtomicPtr::new(parent)),
-            child: Arc::new(AtomicPtr::new(child)),
-        }
-    }
-
-    pub fn get_parent(&self) -> *mut ProbLazyItem<Self> {
-        self.parent.load(Ordering::SeqCst)
-    }
-
-    pub fn set_parent(&self, parent: *mut ProbLazyItem<Self>) {
-        self.parent.swap(parent, Ordering::SeqCst);
-    }
-
-    pub fn get_child(&self) -> *mut ProbLazyItem<Self> {
-        self.child.load(Ordering::SeqCst)
-    }
-
-    pub fn set_child(&self, child: *mut ProbLazyItem<Self>) {
-        self.child.swap(child, Ordering::SeqCst);
-    }
-
-    pub fn get_id(&self) -> Option<VectorId> {
-        let mut prop_arc = self.prop.clone();
-        match prop_arc.get() {
-            PropState::Pending(_) => None,
-            PropState::Ready(prop) => Some(prop.id.clone()),
-        }
-    }
-
-    pub fn add_neighbor(
-        &self,
-        neighbor_node: *mut ProbLazyItem<Self>,
-        neighbor_id: VectorId,
-        dist: MetricResult,
-    ) {
-        let idx = ((self.get_id().unwrap().get_hash() ^ neighbor_id.get_hash())
-            % NEIGHBORS_COUNT as u64) as usize;
-        let neighbor = Box::new((neighbor_node, dist));
-
-        let neighbor_ptr = Box::into_raw(neighbor);
-
-        let result = self.neighbors[idx].fetch_update(
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-            |current_neighbor| {
-                if current_neighbor.is_null() {
-                    Some(neighbor_ptr)
-                } else {
-                    unsafe {
-                        if dist.get_value() > (*current_neighbor).1.get_value() {
-                            Some(neighbor_ptr)
-                        } else {
-                            None
-                        }
-                    }
-                }
-            },
-        );
-
-        unsafe {
-            if let Ok(prev_neighbor) = result {
-                if !prev_neighbor.is_null() {
-                    drop(Box::from_raw(prev_neighbor));
-                }
-            } else {
-                drop(Box::from_raw(neighbor_ptr));
-            }
-        }
-    }
-
-    pub fn get_neighbors(&self) -> Vec<*mut ProbLazyItem<Self>> {
-        self.neighbors
-            .iter()
-            .flat_map(|neighbor| unsafe {
-                neighbor
-                    .load(Ordering::Relaxed)
-                    .as_ref()
-                    .map(|neighbor| neighbor.0)
-            })
-            .collect()
-    }
-
-    pub fn clone_neighbors(
-        &self,
-    ) -> [AtomicPtr<(*mut ProbLazyItem<ProbNode>, MetricResult)>; NEIGHBORS_COUNT] {
-        std::array::from_fn(|i| unsafe {
-            AtomicPtr::new(
-                self.neighbors[i]
-                    .load(Ordering::SeqCst)
-                    .as_ref()
-                    .map_or_else(
-                        || ptr::null_mut(),
-                        |neighbor| Box::into_raw(Box::new(neighbor.clone())),
-                    ),
-            )
-        })
-    }
-
-    pub fn get_neighbors_raw(
-        &self,
-    ) -> Arc<[AtomicPtr<(*mut ProbLazyItem<ProbNode>, MetricResult)>; NEIGHBORS_COUNT]> {
-        self.neighbors.clone()
-    }
-}
-
-impl Drop for ProbNode {
-    fn drop(&mut self) {
-        for neighbor in &*self.neighbors {
-            let ptr = neighbor.load(Ordering::SeqCst);
-            if ptr.is_null() {
-                continue;
-            }
-
-            println!("dropping neighbor");
-            unsafe {
-                drop(Box::from_raw(ptr));
-            }
-        }
     }
 }

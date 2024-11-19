@@ -11,6 +11,7 @@ use crate::models::{
     buffered_io::BufIoError,
     cache_loader::{ProbCache, ProbCacheable},
     lazy_load::{largest_power_of_4_below, FileIndex, SyncPersist},
+    prob_node::ProbNode,
     serializer::prob::{ProbSerialize, UpdateSerialized},
     types::FileOffset,
     versioning::Hash,
@@ -21,7 +22,7 @@ use super::lazy_item_array::ProbLazyItemArray;
 // not cloneable, the data inside should NEVER be stored anywhere else, its wrapped in `Arc` to
 // prevent use-after-free, as some methods may have exposed the data, while the state has been
 // dropped
-pub enum ProbLazyItemState<T> {
+pub enum ProbLazyItemState<T: ?Sized> {
     Ready {
         data: Arc<T>,
         file_offset: Cell<Option<FileOffset>>,
@@ -29,14 +30,13 @@ pub enum ProbLazyItemState<T> {
         persist_flag: AtomicBool,
         version_id: Hash,
         version_number: u16,
-        versions: ProbLazyItemArray<T, 4>,
     },
     Pending {
         file_index: FileIndex,
     },
 }
 
-impl<T> ProbLazyItemState<T> {
+impl<T: ?Sized> ProbLazyItemState<T> {
     pub fn get_version_number(&self) -> u16 {
         match self {
             Self::Pending { file_index } => file_index.get_version_number().unwrap(),
@@ -52,13 +52,13 @@ impl<T> ProbLazyItemState<T> {
     }
 }
 
-pub struct ProbLazyItem<T> {
+pub struct ProbLazyItem<T: ?Sized> {
     state: AtomicPtr<Arc<ProbLazyItemState<T>>>,
 }
 
 impl<T> ProbLazyItem<T> {
-    pub fn new(data: T, version_id: Hash, version_number: u16) -> *mut Self {
-        Box::into_raw(Box::new(Self {
+    pub fn new(data: T, version_id: Hash, version_number: u16) -> Arc<Self> {
+        Arc::new(Self {
             state: AtomicPtr::new(Box::into_raw(Box::new(Arc::new(
                 ProbLazyItemState::Ready {
                     data: Arc::new(data),
@@ -67,16 +67,15 @@ impl<T> ProbLazyItem<T> {
                     persist_flag: AtomicBool::new(true),
                     version_id,
                     version_number,
-                    versions: ProbLazyItemArray::new(),
                 },
             )))),
-        }))
+        })
     }
 
     // the arc provided to this function should NOT be stored anywhere else, creating two LazyItem
     // with same value can cause undefined behavior, use `ProbLazyItem::new` if possible
-    pub fn from_arc(data: Arc<T>, version_id: Hash, version_number: u16) -> *mut Self {
-        Box::into_raw(Box::new(Self {
+    pub fn from_arc(data: Arc<T>, version_id: Hash, version_number: u16) -> Arc<Self> {
+        Arc::new(Self {
             state: AtomicPtr::new(Box::into_raw(Box::new(Arc::new(
                 ProbLazyItemState::Ready {
                     data,
@@ -85,22 +84,24 @@ impl<T> ProbLazyItem<T> {
                     persist_flag: AtomicBool::new(true),
                     version_id,
                     version_number,
-                    versions: ProbLazyItemArray::new(),
                 },
             )))),
-        }))
+        })
     }
 
-    pub fn new_pending(file_index: FileIndex) -> *mut Self {
-        Box::into_raw(Box::new(Self {
+    pub fn new_pending(file_index: FileIndex) -> Arc<Self> {
+        Arc::new(Self {
             state: AtomicPtr::new(Box::into_raw(Box::new(Arc::new(
                 ProbLazyItemState::Pending { file_index },
             )))),
-        }))
+        })
     }
 
     pub fn get_state(&self) -> Arc<ProbLazyItemState<T>> {
-        unsafe { (*self.state.load(Ordering::SeqCst)).clone() }
+        unsafe {
+            // SAFETY: state must be a valid pointer
+            (*self.state.load(Ordering::SeqCst)).clone()
+        }
     }
 
     pub fn swap_state(
@@ -152,140 +153,102 @@ impl<T: ProbCacheable + UpdateSerialized + ProbSerialize> ProbLazyItem<T> {
     pub fn try_get_data(&self, cache: Arc<ProbCache>) -> Result<Arc<T>, BufIoError> {
         match &*self.get_state() {
             ProbLazyItemState::Ready { data, .. } => Ok(data.clone()),
-            ProbLazyItemState::Pending { file_index } => Ok(cache
-                .get_object(file_index.clone(), 1000, &mut HashSet::new())?
-                .0),
-        }
-    }
-
-    pub fn try_get_versions(
-        &self,
-        cache: Arc<ProbCache>,
-    ) -> Result<ProbLazyItemArray<T, 4>, BufIoError> {
-        match &*self.get_state() {
-            ProbLazyItemState::Ready { versions, .. } => Ok(versions.clone()),
             ProbLazyItemState::Pending { file_index } => {
-                let (_, versions) =
-                    cache.get_object(file_index.clone(), 1000, &mut HashSet::new())?;
-                Ok(versions)
+                Ok(cache.get_object(file_index.clone(), 1000, &mut HashSet::new())?)
             }
         }
     }
+}
 
-    pub fn set_versions_persistence(
-        &self,
-        flag: bool,
-        cache: Arc<ProbCache>,
-    ) -> Result<(), BufIoError> {
-        self.set_persistence(flag);
-        let versions = self.try_get_versions(cache.clone())?;
-
-        for i in 0..4 {
-            let Some(version) = versions.get(i) else {
-                break;
-            };
-
-            unsafe { &*version }.set_versions_persistence(flag, cache.clone())?;
-        }
-
-        Ok(())
-    }
-
+impl ProbLazyItem<ProbNode> {
     pub fn add_version(
-        this: *mut Self,
-        version: *mut Self,
+        self: &Arc<Self>,
+        version: Arc<Self>,
         cache: Arc<ProbCache>,
-    ) -> Result<Result<*mut Self, *mut Self>, BufIoError> {
-        let versions = unsafe { &*this }.try_get_versions(cache.clone())?;
+    ) -> Result<Result<Arc<Self>, Arc<Self>>, BufIoError> {
+        let data = self.try_get_data(cache.clone())?;
+        let versions = &data.versions;
 
         let (_, latest_local_version_number) =
-            Self::get_latest_version_inner(this, versions.clone(), cache.clone())?;
-        let result = ProbLazyItem::add_version_inner(
-            this,
-            version,
-            0,
-            latest_local_version_number + 1,
-            cache.clone(),
-        )?;
+            self.get_latest_version_inner(versions, cache.clone())?;
+
+        let result =
+            self.add_version_inner(version, 0, latest_local_version_number + 1, cache.clone())?;
 
         Ok(result)
     }
 
     pub fn add_version_inner(
-        this: *mut Self,
-        version: *mut Self,
+        self: &Arc<Self>,
+        version: Arc<Self>,
         self_relative_version_number: u16,
         target_relative_version_number: u16,
         cache: Arc<ProbCache>,
-    ) -> Result<Result<*mut Self, *mut Self>, BufIoError> {
+    ) -> Result<Result<Arc<Self>, Arc<Self>>, BufIoError> {
         let target_diff = target_relative_version_number - self_relative_version_number;
         if target_diff == 0 {
-            return Ok(Err(this));
+            return Ok(Err(self.clone()));
         }
         let index = largest_power_of_4_below(target_diff);
-        let versions = unsafe { &*this }.try_get_versions(cache.clone())?;
+        let data = self.try_get_data(cache.clone())?;
+        let versions = &data.versions;
 
         if let Some(existing_version) = versions.get(index as usize) {
-            return ProbLazyItem::add_version_inner(
-                existing_version,
+            return existing_version.add_version_inner(
                 version,
                 self_relative_version_number + (1 << (2 * index)),
                 target_relative_version_number,
-                cache.clone(),
+                cache,
             );
         } else {
             debug_assert_eq!(versions.len(), index as usize);
-            versions.push(version);
+            versions.push(version.clone());
         }
 
         Ok(Ok(version))
     }
 
     pub fn get_latest_version(
-        this: *mut Self,
+        self: &Arc<Self>,
         cache: Arc<ProbCache>,
-    ) -> Result<(*mut Self, u16), BufIoError> {
-        let versions = unsafe { (&*this).try_get_versions(cache.clone())? };
+    ) -> Result<(Arc<Self>, u16), BufIoError> {
+        let data = self.try_get_data(cache.clone())?;
+        let versions = &data.versions;
 
-        Self::get_latest_version_inner(this, versions, cache)
+        self.get_latest_version_inner(versions, cache)
     }
 
     fn get_latest_version_inner(
-        this: *mut Self,
-        versions: ProbLazyItemArray<T, 4>,
+        self: &Arc<Self>,
+        versions: &ProbLazyItemArray<ProbNode, 4>,
         cache: Arc<ProbCache>,
-    ) -> Result<(*mut Self, u16), BufIoError> {
+    ) -> Result<(Arc<Self>, u16), BufIoError> {
         if let Some(last) = versions.last() {
-            let (latest_version, relative_local_version_number) =
-                Self::get_latest_version(last, cache)?;
+            let (latest_version, relative_local_version_number) = last.get_latest_version(cache)?;
             Ok((
                 latest_version,
                 (1u16 << ((versions.len() as u8 - 1) * 2)) + relative_local_version_number,
             ))
         } else {
-            Ok((this, 0))
+            Ok((self.clone(), 0))
         }
     }
 
     pub fn get_version(
-        this: *mut Self,
+        self: &Arc<Self>,
         version: u16,
         cache: Arc<ProbCache>,
-    ) -> Result<Option<*mut Self>, BufIoError> {
-        let (version_number, versions) = unsafe {
-            let this = &*this;
-            (
-                this.get_current_version_number(),
-                this.try_get_versions(cache.clone())?,
-            )
-        };
+    ) -> Result<Option<Arc<Self>>, BufIoError> {
+        let version_number = self.get_current_version_number();
+        let data = self.try_get_data(cache.clone())?;
+        let versions = &data.versions;
 
         if version < version_number {
             return Ok(None);
         }
 
         if version == version_number {
-            return Ok(Some(this));
+            return Ok(Some(self.clone()));
         }
 
         let Some(mut prev) = versions.get(0) else {
@@ -293,16 +256,14 @@ impl<T: ProbCacheable + UpdateSerialized + ProbSerialize> ProbLazyItem<T> {
         };
         let mut i = 1;
         while let Some(next) = versions.get(i) {
-            unsafe {
-                if version < (&*next).get_current_version_number() {
-                    return Self::get_version(prev, version, cache.clone());
-                }
+            if version < next.get_current_version_number() {
+                return prev.get_version(version, cache.clone());
             }
             prev = next;
             i += 1;
         }
 
-        Self::get_version(prev, version, cache)
+        prev.get_version(version, cache)
     }
 }
 
@@ -322,22 +283,37 @@ impl<T> SyncPersist for ProbLazyItem<T> {
     }
 
     fn get_current_version(&self) -> Hash {
-        unsafe {
-            self.state
-                .load(Ordering::SeqCst)
-                .as_ref()
-                .unwrap()
-                .get_version_id()
-        }
+        self.get_state().get_version_id()
     }
 
     fn get_current_version_number(&self) -> u16 {
+        self.get_state().get_version_number()
+    }
+}
+
+impl<T> std::hash::Hash for ProbLazyItem<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        (&self.state as *const AtomicPtr<_>).hash(state);
+    }
+}
+
+impl<T> PartialEq for ProbLazyItem<T> {
+    fn eq(&self, other: &Self) -> bool {
+        (&self.state as *const AtomicPtr<_>).eq(&(&other.state as *const AtomicPtr<_>))
+    }
+
+    fn ne(&self, other: &Self) -> bool {
+        (&self.state as *const AtomicPtr<_>).ne(&(&other.state as *const AtomicPtr<_>))
+    }
+}
+
+impl<T> Eq for ProbLazyItem<T> {}
+
+impl<T: ?Sized> Drop for ProbLazyItem<T> {
+    fn drop(&mut self) {
         unsafe {
-            self.state
-                .load(Ordering::SeqCst)
-                .as_ref()
-                .unwrap()
-                .get_version_number()
+            // SAFETY: state must be a valid pointer
+            drop(Box::from_raw(self.state.load(Ordering::SeqCst)));
         }
     }
 }

@@ -29,8 +29,8 @@ pub async fn init_dense_index_for_collection(
     ctx: Arc<AppContext>,
     collection: &Collection,
     size: usize,
-    lower_bound: Option<f32>,
-    upper_bound: Option<f32>,
+    _lower_bound: Option<f32>,
+    _upper_bound: Option<f32>,
     num_layers: u8,
     auto_config: bool,
 ) -> Result<Arc<DenseIndex>, WaCustomError> {

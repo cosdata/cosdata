@@ -1,4 +1,4 @@
-use std::{ptr, sync::Arc};
+use std::sync::Arc;
 
 use arcshift::ArcShift;
 use tempfile::{tempdir, TempDir};
@@ -8,7 +8,8 @@ use crate::models::{
     cache_loader::ProbCache,
     lazy_load::FileIndex,
     prob_lazy_load::lazy_item::{ProbLazyItem, ProbLazyItemState},
-    types::{BytesToRead, FileOffset, HNSWLevel, ProbNode, PropState},
+    prob_node::ProbNode,
+    types::{BytesToRead, FileOffset, HNSWLevel, PropState},
     versioning::Hash,
 };
 
@@ -43,8 +44,8 @@ fn test_lazy_item_serialization() {
     let node = ProbNode::new(
         HNSWLevel(2),
         ArcShift::new(PropState::Pending((FileOffset(0), BytesToRead(0)))),
-        ptr::null_mut(),
-        ptr::null_mut(),
+        None,
+        None,
     );
     let root_version_number = 0;
     let root_version_id = Hash::from(0);
@@ -63,30 +64,28 @@ fn test_lazy_item_serialization() {
         version_id: root_version_id,
     };
 
-    let deserialized: *mut ProbLazyItem<ProbNode> = cache.load_item(file_index).unwrap();
+    let deserialized: Arc<ProbLazyItem<ProbNode>> = cache.load_item(file_index).unwrap();
 
-    unsafe {
-        match (&*(*lazy_item).get_state(), &*(*deserialized).get_state()) {
-            (
-                ProbLazyItemState::Ready {
-                    data: original_data,
-                    version_id: original_version_id,
-                    version_number: original_version_number,
-                    ..
-                },
-                ProbLazyItemState::Ready {
-                    data: deserialized_data,
-                    version_id: deserialized_version_id,
-                    version_number: deserialized_version_number,
-                    ..
-                },
-            ) => {
-                assert_eq!(original_data.hnsw_level, deserialized_data.hnsw_level);
-                assert_eq!(original_version_number, deserialized_version_number);
-                assert_eq!(original_version_id, deserialized_version_id);
-            }
-            _ => panic!("Deserialization mismatch"),
+    match (&*lazy_item.get_state(), &*deserialized.get_state()) {
+        (
+            ProbLazyItemState::Ready {
+                data: original_data,
+                version_id: original_version_id,
+                version_number: original_version_number,
+                ..
+            },
+            ProbLazyItemState::Ready {
+                data: deserialized_data,
+                version_id: deserialized_version_id,
+                version_number: deserialized_version_number,
+                ..
+            },
+        ) => {
+            assert_eq!(original_data.hnsw_level, deserialized_data.hnsw_level);
+            assert_eq!(original_version_number, deserialized_version_number);
+            assert_eq!(original_version_id, deserialized_version_id);
         }
+        _ => panic!("Deserialization mismatch"),
     }
 }
 
@@ -96,8 +95,8 @@ fn test_prob_node_acyclic_serialization() {
     let node = ProbNode::new(
         HNSWLevel(2),
         ArcShift::new(PropState::Pending((FileOffset(0), BytesToRead(0)))),
-        ptr::null_mut(),
-        ptr::null_mut(),
+        None,
+        None,
     );
 
     let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version_id);
@@ -113,7 +112,7 @@ fn test_prob_node_acyclic_serialization() {
     let deserialized: ProbNode = cache.load_item(file_index).unwrap();
 
     assert_eq!(node.hnsw_level, deserialized.hnsw_level);
-    assert!(deserialized.get_parent().is_null());
-    assert!(deserialized.get_child().is_null());
+    assert!(deserialized.get_parent().is_none());
+    assert!(deserialized.get_child().is_none());
     assert_eq!(deserialized.get_neighbors().len(), 0);
 }

@@ -3,8 +3,9 @@ use super::cache_loader::NodeRegistry;
 use super::common::WaCustomError;
 use super::lazy_load::{FileIndex, SyncPersist};
 use super::prob_lazy_load::lazy_item::ProbLazyItem;
+use super::prob_node::ProbNode;
 use super::serializer::prob::ProbSerialize;
-use super::types::{BytesToRead, FileOffset, HNSWLevel, MergedNode, NodeProp, ProbNode, VectorId};
+use super::types::{BytesToRead, FileOffset, HNSWLevel, MergedNode, NodeProp, VectorId};
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
@@ -40,10 +41,9 @@ pub fn read_node_from_file(
     Ok(node)
 }
 pub fn write_node_to_file(
-    lazy_item_ptr: *mut ProbLazyItem<ProbNode>,
+    lazy_item: Arc<ProbLazyItem<ProbNode>>,
     bufmans: Arc<BufferManagerFactory>,
 ) -> Result<(), WaCustomError> {
-    let lazy_item = unsafe { &*lazy_item_ptr };
     let file_index = lazy_item.get_file_index();
     let version = lazy_item.get_current_version();
     let bufman = bufmans.get(&version)?;
@@ -68,7 +68,7 @@ pub fn write_node_to_file(
     }
 
     lazy_item.set_persistence(true);
-    lazy_item_ptr.serialize(bufmans, version, cursor)?;
+    lazy_item.serialize(bufmans, version, cursor)?;
 
     bufman.close_cursor(cursor)?;
 
