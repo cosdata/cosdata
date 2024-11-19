@@ -20,7 +20,7 @@ use crate::models::{
 
 use super::{ProbSerialize, UpdateSerialized};
 
-impl<const N: usize> ProbSerialize for [AtomicPtr<Arc<(SharedNode, MetricResult)>>; N] {
+impl<const N: usize> ProbSerialize for [AtomicPtr<(SharedNode, MetricResult)>; N] {
     fn serialize(
         &self,
         bufmans: Arc<BufferManagerFactory>,
@@ -34,15 +34,13 @@ impl<const N: usize> ProbSerialize for [AtomicPtr<Arc<(SharedNode, MetricResult)
         bufman.write_with_cursor(cursor, &vec![u8::MAX; 14 * N])?;
 
         for i in 0..N {
-            let neighbor = unsafe {
+            let (node, dist) = unsafe {
                 if let Some(neighbor) = self[i].load(Ordering::SeqCst).as_ref() {
                     neighbor.clone()
                 } else {
                     continue;
                 }
             };
-
-            let (node, dist) = &*neighbor;
 
             let placeholder_pos = start_offset + (i as u64 * 14);
 
@@ -125,7 +123,7 @@ impl<const N: usize> ProbSerialize for [AtomicPtr<Arc<(SharedNode, MetricResult)
                         skipm,
                     )?;
 
-                    let ptr = Box::into_raw(Box::new(Arc::new((node, dist))));
+                    let ptr = Box::into_raw(Box::new((node, dist)));
 
                     neighbors[i].store(ptr, Ordering::SeqCst);
                 }
@@ -138,7 +136,7 @@ impl<const N: usize> ProbSerialize for [AtomicPtr<Arc<(SharedNode, MetricResult)
     }
 }
 
-impl<const N: usize> UpdateSerialized for [AtomicPtr<Arc<(SharedNode, MetricResult)>>; N] {
+impl<const N: usize> UpdateSerialized for [AtomicPtr<(SharedNode, MetricResult)>; N] {
     fn update_serialized(
         &self,
         bufmans: Arc<BufferManagerFactory>,
@@ -160,7 +158,7 @@ impl<const N: usize> UpdateSerialized for [AtomicPtr<Arc<(SharedNode, MetricResu
                 let start_offset = offset as u64;
 
                 for i in 0..N {
-                    let neighbor = unsafe {
+                    let (node, dist) = unsafe {
                         if let Some(neighbor) = self[i].load(Ordering::SeqCst).as_ref() {
                             neighbor.clone()
                         } else {
@@ -168,7 +166,6 @@ impl<const N: usize> UpdateSerialized for [AtomicPtr<Arc<(SharedNode, MetricResu
                         }
                     };
 
-                    let (node, dist) = &*neighbor;
                     bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
 
                     let placeholder_pos = start_offset + (i as u64 * 14);

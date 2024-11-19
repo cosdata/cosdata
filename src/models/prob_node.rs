@@ -20,7 +20,7 @@ pub type SharedNode = Arc<ProbLazyItem<ProbNode>>;
 pub struct ProbNode {
     pub hnsw_level: HNSWLevel,
     pub prop: ArcShift<PropState>,
-    neighbors: [AtomicPtr<Arc<(SharedNode, MetricResult)>>; NEIGHBORS_COUNT],
+    neighbors: [AtomicPtr<(SharedNode, MetricResult)>; NEIGHBORS_COUNT],
     parent: AtomicPtr<SharedNode>,
     child: AtomicPtr<SharedNode>,
     pub versions: ProbLazyItemArray<ProbNode, 4>,
@@ -55,7 +55,7 @@ impl ProbNode {
     pub fn new_with_neighbors(
         hnsw_level: HNSWLevel,
         prop: ArcShift<PropState>,
-        neighbors: [AtomicPtr<Arc<(SharedNode, MetricResult)>>; NEIGHBORS_COUNT],
+        neighbors: [AtomicPtr<(SharedNode, MetricResult)>; NEIGHBORS_COUNT],
         parent: Option<SharedNode>,
         child: Option<SharedNode>,
     ) -> Self {
@@ -76,7 +76,7 @@ impl ProbNode {
     pub fn new_with_neighbors_and_versions(
         hnsw_level: HNSWLevel,
         prop: ArcShift<PropState>,
-        neighbors: [AtomicPtr<Arc<(SharedNode, MetricResult)>>; NEIGHBORS_COUNT],
+        neighbors: [AtomicPtr<(SharedNode, MetricResult)>; NEIGHBORS_COUNT],
         parent: Option<SharedNode>,
         child: Option<SharedNode>,
         versions: ProbLazyItemArray<ProbNode, 4>,
@@ -155,7 +155,7 @@ impl ProbNode {
     ) {
         let idx = ((self.get_id().unwrap().get_hash() ^ neighbor_id.get_hash())
             % NEIGHBORS_COUNT as u64) as usize;
-        let neighbor = Box::new(Arc::new((neighbor_node, dist)));
+        let neighbor = Box::new((neighbor_node, dist));
 
         let neighbor_ptr = Box::into_raw(neighbor);
 
@@ -200,7 +200,7 @@ impl ProbNode {
             .collect()
     }
 
-    pub fn clone_neighbors(&self) -> [AtomicPtr<Arc<(SharedNode, MetricResult)>>; NEIGHBORS_COUNT] {
+    pub fn clone_neighbors(&self) -> [AtomicPtr<(SharedNode, MetricResult)>; NEIGHBORS_COUNT] {
         std::array::from_fn(|i| unsafe {
             AtomicPtr::new(
                 self.neighbors[i]
@@ -214,9 +214,7 @@ impl ProbNode {
         })
     }
 
-    pub fn get_neighbors_raw(
-        &self,
-    ) -> &[AtomicPtr<Arc<(SharedNode, MetricResult)>>; NEIGHBORS_COUNT] {
+    pub fn get_neighbors_raw(&self) -> &[AtomicPtr<(SharedNode, MetricResult)>; NEIGHBORS_COUNT] {
         &self.neighbors
     }
 }
