@@ -91,10 +91,26 @@ fn make_index(v: &[f64]) -> (u16, Vec<u16>) {
 }
 
 fn standard_deviation(data: &[f64]) -> f64 {
-    let mean = data.iter().sum::<f64>() / data.len() as f64;
-    let variance = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / data.len() as f64;
-    variance.sqrt()
+    let mut mean = 0.0;
+    let mut sum_squares = 0.0;
+    let mut count = 0.0; // Use f64 directly for count to avoid casting
+
+    for &x in data {
+        count += 1.0;
+        let delta = x - mean;
+        mean += delta / count;
+        sum_squares += delta * (x - mean);
+    }
+
+    // Return 0.0 if data is empty or has only one element
+    if count < 2.0 {
+        return 0.0;
+    }
+
+    // Calculate and return sample standard deviation
+    (sum_squares / (count - 1.0)).sqrt()
 }
+
 
 fn main() {
     let mut rng = thread_rng();
