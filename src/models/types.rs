@@ -32,8 +32,8 @@ use std::collections::HashSet;
 use std::fmt;
 use std::hash::{DefaultHasher, Hash as StdHash, Hasher};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc, RwLock};
 use std::time::Duration;
 use std::{fs::*, thread};
 
@@ -401,7 +401,8 @@ pub struct DenseIndexTransaction {
     pub serialization_table: Arc<TSHashTable<SharedNode, ()>>,
     pub lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16), SharedNode>>,
     serializer_thread_handle: Arc<thread::JoinHandle<Result<(), WaCustomError>>>,
-    serialize_flag: Arc<AtomicBool>,
+    serialization_signal: mpsc::Sender<()>,
+    batch_count: Arc<AtomicUsize>,
 }
 
 impl DenseIndexTransaction {
@@ -424,30 +425,29 @@ impl DenseIndexTransaction {
             })?;
 
         let serialization_table = Arc::new(TSHashTable::new(16));
-        let serialize_flag = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = mpsc::channel();
+        let batch_count = Arc::new(AtomicUsize::new(0));
 
         let serializer_thread_handle = {
             let serialization_table = serialization_table.clone();
-            let serialize_flag = serialize_flag.clone();
+            let batch_count = batch_count.clone();
 
             Arc::new(thread::spawn(move || {
-                while !serialize_flag.load(Ordering::Acquire) {
-                    thread::yield_now();
-                }
+                let mut batches_processed = 0;
 
                 loop {
-                    let list = serialization_table.to_list();
-                    if list.is_empty() {
-                        println!("Breaking");
+                    rx.recv().unwrap();
+                    if batches_processed >= batch_count.load(Ordering::SeqCst) {
                         break;
                     }
+                    let list = serialization_table.to_list();
                     for (node, _) in list {
                         serialization_table.delete(&node);
                         println!("Serializing");
                         write_node_to_file(node, dense_index.index_manager.clone())?;
                     }
-                    thread::sleep(Duration::from_millis(250));
                     dense_index.index_manager.flush_all()?;
+                    batches_processed += 1;
                 }
                 Ok(())
             }))
@@ -457,16 +457,23 @@ impl DenseIndexTransaction {
             id,
             serialization_table,
             serializer_thread_handle,
-            serialize_flag,
             lazy_item_versions_table: Arc::new(TSHashTable::new(16)),
+            serialization_signal: tx,
+            batch_count,
         })
     }
 
-    pub fn start_serialization(&self) {
-        self.serialize_flag.store(true, Ordering::Release);
+    pub fn increment_batch_count(&self) {
+        self.batch_count.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub fn start_serialization_round(&self) {
+        self.serialization_signal.send(()).unwrap();
     }
 
     pub fn pre_commit(self) -> Result<(), WaCustomError> {
+        // sending a signal without incrementing the batch count will stop the serialization
+        self.serialization_signal.send(()).unwrap();
         if let Some(handle) = Arc::into_inner(self.serializer_thread_handle) {
             handle.join().unwrap()?;
         }
@@ -594,7 +601,7 @@ pub struct QuantizedVectorEmbedding {
 // Raw vector embedding
 #[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize, PartialEq)]
 pub struct RawVectorEmbedding {
-    pub raw_vec: Vec<f32>,
+    pub raw_vec: Arc<Vec<f32>>,
     pub hash_vec: VectorId,
 }
 

@@ -79,6 +79,7 @@ pub async fn init_dense_index_for_collection(
         prop_file.clone(),
         hash,
         index_manager.clone(),
+        ctx.config.hnsw.neighbors_count,
     )?;
 
     index_manager.flush_all()?;
@@ -167,6 +168,7 @@ pub fn run_upload_in_transaction(
     transaction: DenseIndexTransaction,
     vecs: Vec<(VectorIdValue, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
+    transaction.increment_batch_count();
     let current_version = transaction.id;
 
     let bufman = dense_index
@@ -184,7 +186,7 @@ pub fn run_upload_in_transaction(
                 .map(|(id, vec)| {
                     let hash_vec = convert_value(id);
                     let vec_emb = RawVectorEmbedding {
-                        raw_vec: vec,
+                        raw_vec: Arc::new(vec),
                         hash_vec,
                     };
                     tx.send(vec_emb.clone()).unwrap();
@@ -202,7 +204,7 @@ pub fn run_upload_in_transaction(
     index_embeddings_in_transaction(ctx.clone(), dense_index.clone(), transaction.clone(), rx)?;
 
     handle.join().unwrap()?;
-    transaction.start_serialization();
+    transaction.start_serialization_round();
 
     bufman.flush()?;
 
@@ -256,6 +258,7 @@ pub fn run_upload(
             ctx.config.upload_process_batch_size,
             serialization_table.clone(),
             lazy_item_versions_table.clone(),
+            ctx.config.hnsw.neighbors_count,
         )?;
     }
 
@@ -295,7 +298,7 @@ pub fn run_upload(
         .map(|(id, vec)| {
             let hash_vec = convert_value(id);
             let vec_emb = RawVectorEmbedding {
-                raw_vec: vec,
+                raw_vec: Arc::new(vec),
                 hash_vec,
             };
 
@@ -334,6 +337,7 @@ pub fn run_upload(
             ctx.config.upload_process_batch_size,
             serialization_table.clone(),
             lazy_item_versions_table,
+            ctx.config.hnsw.neighbors_count,
         )?;
     }
 
@@ -350,6 +354,7 @@ pub fn run_upload(
 }
 
 pub async fn ann_vector_query(
+    ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
     query: Vec<f32>,
 ) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
@@ -369,6 +374,7 @@ pub async fn ann_vector_query(
         vec_emb,
         dense_index.get_root_vec(),
         HNSWLevel(dense_index.hnsw_params.clone().get().num_layers),
+        ctx.config.hnsw.neighbors_count,
     )?;
     let output = remove_duplicates_and_filter(results);
     Ok(output)

@@ -8,6 +8,7 @@ pub struct Config {
     #[serde(default)]
     pub thread_pool: ThreadPool,
     pub server: Server,
+    pub hnsw: Hnsw,
     pub upload_threshold: u32,
     pub upload_process_batch_size: usize,
 }
@@ -139,6 +140,11 @@ impl Server {
     pub fn listen_address(&self) -> HostPort {
         HostPort(&self.host, &self.port)
     }
+}
+
+#[derive(Deserialize, Clone)]
+pub struct Hnsw {
+    pub neighbors_count: usize,
 }
 
 pub fn load_config() -> Config {

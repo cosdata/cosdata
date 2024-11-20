@@ -38,7 +38,7 @@ pub(crate) async fn create_index(
 
     collection.hnsw_params.clone().update(hnsw_param);
 
-    create_index_in_collection(collection)
+    create_index_in_collection(ctx, collection)
         .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;
 
     Ok(())

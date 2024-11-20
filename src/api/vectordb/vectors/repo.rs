@@ -102,7 +102,7 @@ pub(crate) async fn get_vector_by_id(
 
     Ok(CreateVectorResponseDto {
         id,
-        values: embedding.raw_vec,
+        values: (*embedding.raw_vec).clone(),
     })
 }
 

@@ -8,8 +8,9 @@ use crate::models::rpc::Vector;
 use crate::models::types::VectorQt;
 use crate::quantization::QuantizationError;
 use sha2::{Digest, Sha256};
+use std::cmp::Ordering;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 use std::{fmt, thread};
@@ -500,28 +501,27 @@ pub fn convert_vectors(vectors: Vec<Vector>) -> Vec<(VectorIdValue, Vec<f32>)> {
 }
 
 pub fn remove_duplicates_and_filter(
-    vec: Vec<(SharedNode, MetricResult)>,
+    vec: Vec<Option<(SharedNode, MetricResult)>>,
 ) -> Vec<(VectorId, MetricResult)> {
-    let mut seen = HashSet::new();
-    vec.into_iter()
-        .filter_map(|(lazy_item, similarity)| {
-            lazy_item
-                .get_lazy_data()
-                .and_then(|node| node.get_id())
-                .map_or(None, |id| {
-                    if let VectorId::Int(s) = id {
-                        if s == -1 {
-                            return None;
-                        }
-                    }
-                    if seen.insert(id.clone()) {
-                        Some((id, similarity))
-                    } else {
-                        None
-                    }
-                })
+    let mut collected = vec
+        .into_iter()
+        .filter_map(|result| {
+            let (lazy_item, similarity) = result?;
+            let id = lazy_item.get_lazy_data()?.get_id()?;
+            if let VectorId::Int(s) = id {
+                if s == -1 {
+                    return None;
+                }
+            }
+            Some((id, similarity))
         })
-        .collect()
+        .collect::<Vec<_>>();
+    collected.sort_unstable_by(|(_, a), (_, b)| {
+        b.get_value()
+            .partial_cmp(&a.get_value())
+            .unwrap_or(Ordering::Equal)
+    });
+    collected
 }
 
 pub fn generate_tuples(x: f64, num_levels: u8) -> Vec<(f64, i32)> {

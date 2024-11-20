@@ -13,14 +13,12 @@ use super::{
     types::{HNSWLevel, MetricResult, PropState, VectorId},
 };
 
-pub const NEIGHBORS_COUNT: usize = 16;
-
 pub type SharedNode = Arc<ProbLazyItem<ProbNode>>;
 
 pub struct ProbNode {
     pub hnsw_level: HNSWLevel,
     pub prop: ArcShift<PropState>,
-    neighbors: [AtomicPtr<(SharedNode, MetricResult)>; NEIGHBORS_COUNT],
+    neighbors: Box<[AtomicPtr<(SharedNode, MetricResult)>]>,
     parent: AtomicPtr<SharedNode>,
     child: AtomicPtr<SharedNode>,
     pub versions: ProbLazyItemArray<ProbNode, 4>,
@@ -35,13 +33,18 @@ impl ProbNode {
         prop: ArcShift<PropState>,
         parent: Option<SharedNode>,
         child: Option<SharedNode>,
+        neighbors_count: usize,
     ) -> Self {
-        let neighbors = std::array::from_fn(|_| AtomicPtr::new(ptr::null_mut()));
+        let mut neighbors = Vec::with_capacity(neighbors_count);
+
+        for _ in 0..neighbors_count {
+            neighbors.push(AtomicPtr::new(ptr::null_mut()));
+        }
 
         Self {
             hnsw_level,
             prop,
-            neighbors,
+            neighbors: neighbors.into_boxed_slice(),
             parent: AtomicPtr::new(
                 parent.map_or_else(|| ptr::null_mut(), |parent| Box::into_raw(Box::new(parent))),
             ),
@@ -55,7 +58,7 @@ impl ProbNode {
     pub fn new_with_neighbors(
         hnsw_level: HNSWLevel,
         prop: ArcShift<PropState>,
-        neighbors: [AtomicPtr<(SharedNode, MetricResult)>; NEIGHBORS_COUNT],
+        neighbors: Box<[AtomicPtr<(SharedNode, MetricResult)>]>,
         parent: Option<SharedNode>,
         child: Option<SharedNode>,
     ) -> Self {
@@ -76,7 +79,7 @@ impl ProbNode {
     pub fn new_with_neighbors_and_versions(
         hnsw_level: HNSWLevel,
         prop: ArcShift<PropState>,
-        neighbors: [AtomicPtr<(SharedNode, MetricResult)>; NEIGHBORS_COUNT],
+        neighbors: Box<[AtomicPtr<(SharedNode, MetricResult)>]>,
         parent: Option<SharedNode>,
         child: Option<SharedNode>,
         versions: ProbLazyItemArray<ProbNode, 4>,
@@ -154,7 +157,7 @@ impl ProbNode {
         dist: MetricResult,
     ) {
         let idx = ((self.get_id().unwrap().get_hash() ^ neighbor_id.get_hash())
-            % NEIGHBORS_COUNT as u64) as usize;
+            % self.neighbors.len() as u64) as usize;
         let neighbor = Box::new((neighbor_node, dist));
 
         let neighbor_ptr = Box::into_raw(neighbor);
@@ -200,21 +203,20 @@ impl ProbNode {
             .collect()
     }
 
-    pub fn clone_neighbors(&self) -> [AtomicPtr<(SharedNode, MetricResult)>; NEIGHBORS_COUNT] {
-        std::array::from_fn(|i| unsafe {
-            AtomicPtr::new(
-                self.neighbors[i]
-                    .load(Ordering::SeqCst)
-                    .as_ref()
-                    .map_or_else(
-                        || ptr::null_mut(),
-                        |neighbor| Box::into_raw(Box::new(neighbor.clone())),
-                    ),
-            )
-        })
+    pub fn clone_neighbors(&self) -> Box<[AtomicPtr<(SharedNode, MetricResult)>]> {
+        self.neighbors
+            .iter()
+            .map(|neighbor| unsafe {
+                AtomicPtr::new(neighbor.load(Ordering::SeqCst).as_ref().map_or_else(
+                    || ptr::null_mut(),
+                    |neighbor| Box::into_raw(Box::new(neighbor.clone())),
+                ))
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice()
     }
 
-    pub fn get_neighbors_raw(&self) -> &[AtomicPtr<(SharedNode, MetricResult)>; NEIGHBORS_COUNT] {
+    pub fn get_neighbors_raw(&self) -> &Box<[AtomicPtr<(SharedNode, MetricResult)>]> {
         &self.neighbors
     }
 }

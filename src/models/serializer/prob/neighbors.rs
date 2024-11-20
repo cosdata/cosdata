@@ -20,7 +20,7 @@ use crate::models::{
 
 use super::{ProbSerialize, UpdateSerialized};
 
-impl<const N: usize> ProbSerialize for [AtomicPtr<(SharedNode, MetricResult)>; N] {
+impl ProbSerialize for Box<[AtomicPtr<(SharedNode, MetricResult)>]> {
     fn serialize(
         &self,
         bufmans: Arc<BufferManagerFactory>,
@@ -30,19 +30,22 @@ impl<const N: usize> ProbSerialize for [AtomicPtr<(SharedNode, MetricResult)>; N
         let bufman = bufmans.get(&version)?;
 
         let start_offset = bufman.cursor_position(cursor)?;
+        bufman.write_u32_with_cursor(cursor, self.len() as u32)?;
         // (10 bytes for node offset + 4 bytes for distance offset) * neighbors count
-        bufman.write_with_cursor(cursor, &vec![u8::MAX; 14 * N])?;
+        bufman.write_with_cursor(cursor, &vec![u8::MAX; 14 * self.len()])?;
 
-        for i in 0..N {
+        let placeholder_start = start_offset + 4;
+
+        for (i, neighbor) in self.iter().enumerate() {
             let (node, dist) = unsafe {
-                if let Some(neighbor) = self[i].load(Ordering::SeqCst).as_ref() {
+                if let Some(neighbor) = neighbor.load(Ordering::SeqCst).as_ref() {
                     neighbor.clone()
                 } else {
                     continue;
                 }
             };
 
-            let placeholder_pos = start_offset + (i as u64 * 14);
+            let placeholder_pos = placeholder_start + (i as u64 * 14);
 
             let node_offset = node.serialize(bufmans.clone(), version, cursor)?;
             let dist_offset = dist.serialize(bufmans.clone(), version, cursor)?;
@@ -81,11 +84,19 @@ impl<const N: usize> ProbSerialize for [AtomicPtr<(SharedNode, MetricResult)>; N
             } => {
                 let bufman = bufmans.get(&version_id)?;
                 let cursor = bufman.open_cursor()?;
+                bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
 
-                let neighbors = std::array::from_fn(|_| AtomicPtr::new(ptr::null_mut()));
+                let len = bufman.read_u32_with_cursor(cursor)? as usize;
+                let mut neighbors = Vec::with_capacity(len);
 
-                for i in 0..N {
-                    let placeholder_offset = offset as u64 + i as u64 * 14;
+                let placeholder_start = offset as u64 + 4;
+
+                for _ in 0..len {
+                    neighbors.push(AtomicPtr::new(ptr::null_mut()));
+                }
+
+                for i in 0..len {
+                    let placeholder_offset = placeholder_start as u64 + i as u64 * 14;
                     bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_offset))?;
                     let node_offset = bufman.read_u32_with_cursor(cursor)?;
                     if node_offset == u32::MAX {
@@ -130,13 +141,13 @@ impl<const N: usize> ProbSerialize for [AtomicPtr<(SharedNode, MetricResult)>; N
 
                 bufman.close_cursor(cursor)?;
 
-                Ok(neighbors)
+                Ok(neighbors.into_boxed_slice())
             }
         }
     }
 }
 
-impl<const N: usize> UpdateSerialized for [AtomicPtr<(SharedNode, MetricResult)>; N] {
+impl UpdateSerialized for Box<[AtomicPtr<(SharedNode, MetricResult)>]> {
     fn update_serialized(
         &self,
         bufmans: Arc<BufferManagerFactory>,
@@ -155,9 +166,9 @@ impl<const N: usize> UpdateSerialized for [AtomicPtr<(SharedNode, MetricResult)>
             } => {
                 let bufman = bufmans.get(&version_id)?;
                 let cursor = bufman.open_cursor()?;
-                let start_offset = offset as u64;
+                let placeholder_offset = offset as u64 + 4;
 
-                for i in 0..N {
+                for i in 0..self.len() {
                     let (node, dist) = unsafe {
                         if let Some(neighbor) = self[i].load(Ordering::SeqCst).as_ref() {
                             neighbor.clone()
@@ -168,7 +179,7 @@ impl<const N: usize> UpdateSerialized for [AtomicPtr<(SharedNode, MetricResult)>
 
                     bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
 
-                    let placeholder_pos = start_offset + (i as u64 * 14);
+                    let placeholder_pos = placeholder_offset + (i as u64 * 14);
 
                     let node_offset = node.serialize(bufmans.clone(), version_id, cursor)?;
                     let dist_offset = dist.serialize(bufmans.clone(), version_id, cursor)?;

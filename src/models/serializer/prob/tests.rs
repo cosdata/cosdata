@@ -46,6 +46,7 @@ fn test_lazy_item_serialization() {
         ArcShift::new(PropState::Pending((FileOffset(0), BytesToRead(0)))),
         None,
         None,
+        8
     );
     let root_version_number = 0;
     let root_version_id = Hash::from(0);
@@ -97,6 +98,7 @@ fn test_prob_node_acyclic_serialization() {
         ArcShift::new(PropState::Pending((FileOffset(0), BytesToRead(0)))),
         None,
         None,
+        8
     );
 
     let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version_id);
