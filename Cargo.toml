@@ -124,3 +124,7 @@ harness = false
 [[bench]]
 name = "sparse_ann_query_tshashmap_benchmark"
 harness = false
+
+[[bench]]
+name = "bruteforce_vs_ann_benchmark"
+harness = false
