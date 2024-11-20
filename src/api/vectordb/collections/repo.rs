@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use cosdata::models::collection;
+
 use crate::{api_service::{init_dense_index_for_collection, init_inverted_index_for_collection},
     app_context::AppContext,
     indexes::inverted_index::InvertedIndex,
@@ -37,7 +39,7 @@ pub(crate) async fn create_collection(
     // adding the created collection into the in-memory map
     ctx.ain_env
         .collections_map
-        .insert_collection(Arc::new(collection.clone()))
+            .insert_collection(Arc::new(collection.clone()))
         .map_err(|e| CollectionsError::WaCustomError(e))?;
 
     // persisting collection after creation
@@ -85,19 +87,32 @@ pub(crate) async fn create_inverted_index(
 /// if no params provided, it returns all collections
 pub(crate) async fn get_collections(
     ctx: Arc<AppContext>,
-    _get_collections_dto: GetCollectionsDto,
+    get_collections_dto: &GetCollectionsDto,
 ) -> Result<Vec<GetCollectionsResponseDto>, CollectionsError> {
-    let collections = ctx
-        .ain_env
-        .collections_map
-        .iter_collections()
-        .map(|c| GetCollectionsResponseDto {
-            name: c.name.clone(),
-            description: c.description.clone(),
-        })
-        .collect();
+    let collections = if let Some(name) = &get_collections_dto.name{
+        let collection = ctx
+            .ain_env
+            .collections_map
+            .get_collection(&name)
+            .ok_or(CollectionsError::NotFound)?;
+        vec![GetCollectionsResponseDto {
+            name: collection.name.clone(),
+            description: collection.description.clone(),
+        }]
+    } else {
+        ctx.ain_env
+            .collections_map
+            .iter_collections()
+            .map(|c| GetCollectionsResponseDto {
+                name: c.name.clone(),
+                description: c.description.clone(),
+            })
+            .collect()
+    };
+
     Ok(collections)
 }
+
 
 /// gets a collection by its name
 pub(crate) async fn get_collection_by_name(
@@ -173,3 +188,4 @@ pub(crate) async fn delete_dense_index_by_name(
         }
     }
 }
+	 

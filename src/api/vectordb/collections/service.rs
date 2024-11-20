@@ -47,7 +47,7 @@ pub(crate) async fn get_collections(
     ctx: Arc<AppContext>,
     get_collections_dto: GetCollectionsDto,
 ) -> Result<Vec<GetCollectionsResponseDto>, CollectionsError> {
-    let collections = repo::get_collections(ctx, get_collections_dto).await?;
+    let collections = repo::get_collections(ctx, &get_collections_dto).await?;
     Ok(collections)
 }
 

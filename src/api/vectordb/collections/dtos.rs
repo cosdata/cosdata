@@ -20,10 +20,14 @@ pub(crate) struct CreateCollectionDtoResponse {
 }
 
 #[derive(Deserialize)]
-pub(crate) struct GetCollectionsDto {}
+pub(crate) struct GetCollectionsDto {
+    
+    pub name: Option<String>,
+    pub description: Option<String>,
+}
 
 #[derive(Serialize)]
 pub(crate) struct GetCollectionsResponseDto {
-    pub name: String,
+    pub name:String ,
     pub description: Option<String>,
 }
