@@ -34,12 +34,6 @@ pub(crate) async fn create_vector(
         ));
     }
 
-    if !dense_index.get_auto_config_flag() && !dense_index.get_configured_flag() {
-        return Err(VectorsError::FailedToCreateVector(
-            "Vector store is set to manual indexing but an index is not created".to_string(),
-        ));
-    }
-
     // TODO: handle the error
     run_upload(
         ctx,
@@ -121,12 +115,6 @@ pub(crate) async fn update_vector(
     if current_open_transaction_arc.get().is_some() {
         return Err(VectorsError::FailedToUpdateVector(
             "there is an ongoing transaction!".into(),
-        ));
-    }
-
-    if !dense_index.get_auto_config_flag() && !dense_index.get_configured_flag() {
-        return Err(VectorsError::FailedToCreateVector(
-            "Vector store is set to manual indexing but an index is not created".to_string(),
         ));
     }
 

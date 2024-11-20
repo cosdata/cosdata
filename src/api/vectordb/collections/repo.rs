@@ -55,7 +55,7 @@ pub(crate) async fn create_dense_index(
     lower_bound: Option<f32>,
     upper_bound: Option<f32>,
     num_layers: u8,
-    auto_config: bool,
+    _auto_config: bool,
 ) -> Result<Arc<DenseIndex>, CollectionsError> {
     // Call init_vector_store using web::block
     let result = init_dense_index_for_collection(
@@ -65,7 +65,6 @@ pub(crate) async fn create_dense_index(
         lower_bound,
         upper_bound,
         num_layers,
-        auto_config,
     )
     .await;
     result.map_err(|e| CollectionsError::FailedToCreateCollection(e.to_string()))

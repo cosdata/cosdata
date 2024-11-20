@@ -9,7 +9,6 @@ use core::panic;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
-use std::sync::atomic::AtomicPtr;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,

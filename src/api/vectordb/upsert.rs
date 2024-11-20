@@ -27,11 +27,6 @@ pub(crate) async fn upsert(
             .body("Cannot upsert while there's an on-going transaction");
     }
 
-    if !collection.get_auto_config_flag() && !collection.get_configured_flag() {
-        return HttpResponse::BadRequest()
-            .body("Vector store is set to manual indexing but an index is not created");
-    }
-
     // Call run_upload with the extracted parameters
     let res = web::block(move || {
         run_upload(ctx.into_inner(), collection, convert_vectors(body.vectors))

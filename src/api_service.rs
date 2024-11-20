@@ -32,7 +32,6 @@ pub async fn init_dense_index_for_collection(
     _lower_bound: Option<f32>,
     _upper_bound: Option<f32>,
     num_layers: u8,
-    auto_config: bool,
 ) -> Result<Arc<DenseIndex>, WaCustomError> {
     let collection_name = &collection.name;
     let collection_path: Arc<Path> = collection.get_path();
@@ -102,7 +101,6 @@ pub async fn init_dense_index_for_collection(
         ArcShift::new(storage_type),
         vcs,
         num_layers,
-        auto_config,
         cache,
         index_manager,
         vec_raw_manager,

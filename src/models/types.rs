@@ -32,9 +32,8 @@ use std::collections::HashSet;
 use std::fmt;
 use std::hash::{DefaultHasher, Hash as StdHash, Hasher};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, RwLock};
-use std::time::Duration;
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc};
 use std::{fs::*, thread};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -484,7 +483,7 @@ impl DenseIndexTransaction {
 #[derive(Clone)]
 pub struct DenseIndex {
     pub database_name: String,
-    pub root_vec: Arc<RwLock<SharedNode>>,
+    pub root_vec: Arc<AtomicPtr<SharedNode>>,
     pub levels_prob: Arc<Vec<(f64, i32)>>,
     pub dim: usize,
     pub prop_file: Arc<File>,
@@ -496,9 +495,6 @@ pub struct DenseIndex {
     pub storage_type: ArcShift<StorageType>,
     pub vcs: Arc<VersionControl>,
     pub hnsw_params: ArcShift<HNSWHyperParams>,
-    // Whether the VectorStore has been configured or not
-    pub configured: Arc<AtomicBool>,
-    pub auto_config: Arc<AtomicBool>,
     pub cache: Arc<ProbCache>,
     pub index_manager: Arc<BufferManagerFactory>,
     pub vec_raw_manager: Arc<BufferManagerFactory>,
@@ -521,14 +517,13 @@ impl DenseIndex {
         storage_type: ArcShift<StorageType>,
         vcs: Arc<VersionControl>,
         num_layers: u8,
-        auto_config: bool,
         cache: Arc<ProbCache>,
         index_manager: Arc<BufferManagerFactory>,
         vec_raw_manager: Arc<BufferManagerFactory>,
     ) -> Self {
         DenseIndex {
             database_name,
-            root_vec: Arc::new(RwLock::new(root_vec)),
+            root_vec: Arc::new(AtomicPtr::new(Box::into_raw(Box::new(root_vec)))),
             levels_prob,
             dim,
             prop_file,
@@ -543,8 +538,6 @@ impl DenseIndex {
                 num_layers,
                 ..Default::default()
             }),
-            configured: Arc::new(AtomicBool::new(false)),
-            auto_config: Arc::new(AtomicBool::new(auto_config)),
             cache,
             index_manager,
             vec_raw_manager,
@@ -563,24 +556,20 @@ impl DenseIndex {
         arc.update(new_version);
     }
 
-    pub fn get_configured_flag(&self) -> bool {
-        self.configured.load(Ordering::Relaxed)
-    }
+    pub fn set_root_vec(&self, root_vec: SharedNode) {
+        let old = self
+            .root_vec
+            .swap(Box::into_raw(Box::new(root_vec)), Ordering::SeqCst);
 
-    pub fn set_configured_flag(&self, flag: bool) {
-        self.configured.store(flag, Ordering::Relaxed);
-    }
-
-    pub fn get_auto_config_flag(&self) -> bool {
-        self.auto_config.load(Ordering::Relaxed)
-    }
-
-    pub fn set_auto_config_flag(&self, flag: bool) {
-        self.auto_config.store(flag, Ordering::Relaxed);
+        unsafe {
+            if !old.is_null() {
+                drop(Box::from_raw(old))
+            }
+        };
     }
 
     pub fn get_root_vec(&self) -> SharedNode {
-        (*self.root_vec.read().unwrap()).clone()
+        unsafe { (*self.root_vec.load(Ordering::SeqCst)).clone() }
     }
 
     /// Returns FileIndex (offset) corresponding to the root
@@ -740,8 +729,6 @@ impl CollectionsMap {
             ArcShift::new(dense_index_data.storage_type),
             vcs,
             dense_index_data.num_layers,
-            // TODO: persist
-            true,
             cache,
             index_manager,
             vec_raw_manager,

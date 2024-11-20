@@ -37,7 +37,7 @@ def create_db(name, description=None, dimension=1024):
         "description": description,
         "dense_vector": {
             "enabled": True,
-            "auto_create_index": True,
+            "auto_create_index": False,
             "dimension": dimension,
         },
         "sparse_vector": {"enabled": False, "auto_create_index": False},
@@ -49,6 +49,22 @@ def create_db(name, description=None, dimension=1024):
     )
     return response.json()
 
+def create_explicit_index(name):
+    data = {
+        "collection_name": name,
+        "name": name,
+        "distance_metric_type": "cosine",
+        "quantization": "scalar",
+        "data_type": "u8",
+        "index_type": "hnsw",
+        "params": {
+            "num_layers": 5,
+            "max_cache_size": 1000,
+        }
+    }
+    response = requests.post(f"{base_url}/indexes", headers=generate_headers(), data=json.dumps(data), verify=False)
+
+    return response.json()
 
 # Function to create database (collection)
 def create_db_old(vector_db_name, dimensions, max_val, min_val):
@@ -301,6 +317,7 @@ if __name__ == "__main__":
         dimension=dimensions,
     )
     print("Create Collection(DB) Response:", create_collection_response)
+    create_explicit_index(vector_db_name)
 
     shortlisted_vectors = []
     start_time = time.time()

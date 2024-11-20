@@ -20,9 +20,7 @@ use rand::Rng;
 use std::array::TryFromSliceError;
 use std::collections::HashSet;
 use std::fs::File;
-use std::fs::OpenOptions;
 use std::io::SeekFrom;
-use std::path::Path;
 use std::ptr;
 use std::sync::atomic::AtomicPtr;
 use std::sync::atomic::Ordering;
@@ -492,20 +490,8 @@ pub fn index_embeddings(
                      next_offset: u32|
      -> Result<(), WaCustomError> {
         let mut quantization_arc = dense_index.quantization_metric.clone();
-        // Set to auto config but is not configured
-        if dense_index.get_auto_config_flag() && !dense_index.get_configured_flag() {
-            let quantization = quantization_arc.get();
-            let mut new_quantization = quantization.clone();
-            let vectors: Vec<&[f32]> = embeddings
-                .iter()
-                .map(|embedding| &embedding.raw_vec as &[f32])
-                .collect();
-            new_quantization.train(&vectors)?;
-            quantization_arc.update(new_quantization);
-            auto_config_storage_type(dense_index.clone(), &vectors);
-            dense_index.set_configured_flag(true);
-        }
         let quantization = quantization_arc.get();
+
         let results: Vec<()> = embeddings
             .into_iter()
             .map(|raw_emb| {
@@ -801,81 +787,18 @@ pub fn index_embeddings_in_transaction(
     txn.abort();
 
     let mut quantization_arc = dense_index.quantization_metric.clone();
-    // make sure no other thread is writing
-    let lock = dense_index.root_vec.read().unwrap();
-    drop(lock);
-    // Set to auto config but is not configured
-    if dense_index.get_auto_config_flag() && !dense_index.get_configured_flag() {
-        // check if lock can be acquired (no other thread is writing)
-        let Ok(mut root_vec) = dense_index.root_vec.try_write() else {
-            // if cannot lock the root not, wait until its free
-            let lock = dense_index.root_vec.read().unwrap();
-            drop(lock);
-            let quantization = quantization_arc.get();
-            index_embeddings_in_transaction_inner(
-                ctx.clone(),
-                dense_index,
-                embeddings.into_iter(),
-                quantization,
-                version,
-                version_number,
-                transaction.serialization_table.clone(),
-                transaction.lazy_item_versions_table.clone(),
-            );
-            return Ok(());
-        };
-        let quantization = quantization_arc.get();
-        let mut new_quantization = quantization.clone();
-        let embeddings: Vec<_> = embeddings.into_iter().collect();
-        let vectors: Vec<&[f32]> = embeddings
-            .iter()
-            .map(|embedding| &embedding.raw_vec as &[f32])
-            .collect();
-        new_quantization.train(&vectors)?;
-        quantization_arc.update(new_quantization);
-        auto_config_storage_type(dense_index.clone(), &vectors);
-        dense_index.set_configured_flag(true);
 
-        let quantization = quantization_arc.get();
-
-        let root = create_root_node(
-            dense_index.hnsw_params.clone().get().num_layers,
-            quantization,
-            dense_index.storage_type.clone().get().clone(),
-            dense_index.dim,
-            dense_index.prop_file.clone(),
-            root_vec.get_current_version(),
-            dense_index.index_manager.clone(),
-            ctx.config.hnsw.neighbors_count,
-        )?;
-
-        *root_vec = root;
-
-        drop(root_vec);
-
-        index_embeddings_in_transaction_inner(
-            ctx.clone(),
-            dense_index,
-            embeddings.into_iter(),
-            quantization,
-            version,
-            version_number,
-            transaction.serialization_table.clone(),
-            transaction.lazy_item_versions_table.clone(),
-        );
-    } else {
-        let quantization = quantization_arc.get();
-        index_embeddings_in_transaction_inner(
-            ctx.clone(),
-            dense_index,
-            embeddings.into_iter(),
-            quantization,
-            version,
-            version_number,
-            transaction.serialization_table.clone(),
-            transaction.lazy_item_versions_table.clone(),
-        );
-    }
+    let quantization = quantization_arc.get();
+    index_embeddings_in_transaction_inner(
+        ctx.clone(),
+        dense_index,
+        embeddings.into_iter(),
+        quantization,
+        version,
+        version_number,
+        transaction.serialization_table.clone(),
+        transaction.lazy_item_versions_table.clone(),
+    );
 
     Ok(())
 }
@@ -1202,19 +1125,8 @@ pub fn create_index_in_collection(
     ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
 ) -> Result<(), WaCustomError> {
-    let collection_path: Arc<Path> = Path::new(&dense_index.database_name).into();
-
     let mut quantization_metric_arc = dense_index.quantization_metric.clone();
     let quantization_metric = quantization_metric_arc.get();
-
-    let prop_file = Arc::new(
-        OpenOptions::new()
-            .create(true)
-            .truncate(true) // removes all the previous data from the file
-            .append(true)
-            .open(collection_path.join("prop.data"))
-            .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?,
-    );
 
     let hash = dense_index.get_root_vec().get_current_version();
 
@@ -1223,16 +1135,14 @@ pub fn create_index_in_collection(
         quantization_metric,
         *dense_index.storage_type.clone().get(),
         dense_index.dim,
-        prop_file,
+        dense_index.prop_file.clone(),
         hash,
         dense_index.index_manager.clone(),
         ctx.config.hnsw.neighbors_count,
     )?;
 
     // The whole index is empty now
-    *dense_index.root_vec.write().unwrap() = root;
-    dense_index.set_auto_config_flag(false);
-    dense_index.set_configured_flag(true);
+    dense_index.set_root_vec(root);
 
     Ok(())
 }
