@@ -293,11 +293,53 @@ def process_base_vector_batch(
             f"Upsert complete for base vector {base_idx} and its {len(batch_vectors)-1} perturbations"
         )
 
-        return (base_idx, base_vector)
+        return (base_idx, generate_perturbation(
+                base_vector,
+                req_ct * 10000
+                + base_idx * 100
+                + i
+                + 1,  # Unique ID for each perturbation
+                perturbation_degree,
+                dimensions,
+            ), batch_vectors)
     except Exception as e:
         print(f"Error processing base vector {base_idx}: {e}")
         raise
 
+def cosine_similarity(vec1, vec2):
+    # Convert inputs to numpy arrays
+    vec1 = np.asarray(vec1)
+    vec2 = np.asarray(vec2)
+    
+    # Check if vectors have the same length
+    if vec1.shape != vec2.shape:
+        raise ValueError("Vectors must have the same length")
+    
+    # Calculate magnitudes
+    magnitude1 = np.linalg.norm(vec1)
+    magnitude2 = np.linalg.norm(vec2)
+    
+    # Check for zero vectors
+    if magnitude1 == 0 or magnitude2 == 0:
+        raise ValueError("Cannot compute cosine similarity for zero vectors")
+    
+    # Calculate dot product
+    dot_product = np.dot(vec1, vec2)
+    
+    # Calculate cosine similarity
+    cosine_sim = dot_product / (magnitude1 * magnitude2)
+    
+    return cosine_sim
+
+def bruteforce_search(vectors, query, k=5):
+    similarities = []
+    for idx, vector in enumerate(vectors):
+        similarity = cosine_similarity(query["values"], vector["values"])
+        similarities.append((idx, similarity))
+
+    similarities.sort(key=lambda x: x[1], reverse=True)
+
+    return similarities[:k]
 
 if __name__ == "__main__":
     # Create database
@@ -320,6 +362,7 @@ if __name__ == "__main__":
     create_explicit_index(vector_db_name)
 
     shortlisted_vectors = []
+    inserted_vectors = []
     start_time = time.time()
 
     for req_ct in range(1):
@@ -349,8 +392,9 @@ if __name__ == "__main__":
                 # Collect results
                 for future in as_completed(futures):
                     try:
-                        result = future.result()
-                        shortlisted_vectors.append(result)
+                        (id, vec, batch) = future.result()
+                        shortlisted_vectors.append((id, vec))
+                        inserted_vectors.extend(batch)
                     except Exception as e:
                         print(f"Error in future: {e}")
 
@@ -371,7 +415,8 @@ if __name__ == "__main__":
         # End time
     end_time = time.time()
     # Search vector concurrently using perturbed vectors
-    best_matches = []
+    best_matches_server = []
+    best_matches_bruteforce = []
     with ThreadPoolExecutor(max_workers=32) as executor:
         futures = []
         for idd, vector in shortlisted_vectors:
@@ -382,35 +427,39 @@ if __name__ == "__main__":
         for i, future in enumerate(as_completed(futures)):
             try:
                 (idr, ann_response) = future.result()
-                print(f"ANN Vector Response <<< {idr} >>>:", ann_response)
                 if (
                     "RespVectorKNN" in ann_response
                     and "knn" in ann_response["RespVectorKNN"]
                 ):
-                    best_matches.append(
-                        ann_response["RespVectorKNN"]["knn"][0][1]
+                    print(f"ANN Vector Response <<< {idr} >>>:")
+                    print("  Server:")
+                    for j, match in enumerate(ann_response["RespVectorKNN"]["knn"]):
+                        cs = match[1]["CosineSimilarity"]
+                        print(f"    {j + 1}: {cs}")
+                    best_matches_server.append(
+                        ann_response["RespVectorKNN"]["knn"][0][1]["CosineSimilarity"]
                     )  # Collect the second item in the knn list
+                    bruteforce_results = bruteforce_search(inserted_vectors, shortlisted_vectors[i][1], 5)
+
+                    print("  Brute force:")
+                    for j, result in enumerate(bruteforce_results):
+                        cs = result[1]
+                        print(f"    {j + 1}: {cs}")
+                    best_matches_bruteforce.append(bruteforce_results[0][1])
+
+
             except Exception as e:
                 print(f"Error in ANN vector {i + 1}: {e}")
 
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        futures = []
-        for idd, vector in shortlisted_vectors:
-            futures.append(executor.submit(fetch_vector, vector_db_name, vector["id"]))
-
-        for i, future in enumerate(as_completed(futures)):
-            try:
-                fetch_response = future.result()
-                print(f"Fetch Vector Response {i + 1}:", fetch_response)
-
-            except Exception as e:
-                print(f"Error in Fetch vector {i + 1}: {e}")
-
-    if best_matches:
-        best_match_average = sum(m["CosineSimilarity"] for m in best_matches) / len(
-            best_matches
+    if best_matches_server:
+        best_match_server_average = sum(best_matches_server) / len(
+            best_matches_server
         )
-        print(f"\n\nBest Match Average: {best_match_average}")
+        best_match_bruteforce_average = sum(best_matches_bruteforce) / len(
+            best_matches_bruteforce
+        )
+        print(f"\n\nBest Match Server Average: {best_match_server_average}")
+        print(f"Best Match Brute force Average: {best_match_bruteforce_average}")
     else:
         print("No valid matches found.")
 
