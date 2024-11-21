@@ -44,28 +44,9 @@ pub fn write_node_to_file(
     lazy_item: Arc<ProbLazyItem<ProbNode>>,
     bufmans: Arc<BufferManagerFactory>,
 ) -> Result<(), WaCustomError> {
-    let file_index = lazy_item.get_file_index();
     let version = lazy_item.get_current_version();
     let bufman = bufmans.get(&version)?;
     let cursor = bufman.open_cursor()?;
-
-    match file_index {
-        Some(FileIndex::Valid {
-            offset: FileOffset(offset),
-            version_id,
-            ..
-        }) => {
-            println!(
-                "About to write at offset {}, version {}",
-                offset, *version_id
-            );
-            bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
-        }
-        Some(FileIndex::Invalid) | None => {
-            println!("About to write node at the end of file");
-            bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
-        }
-    }
 
     lazy_item.set_persistence(true);
     lazy_item.serialize(bufmans, version, cursor)?;

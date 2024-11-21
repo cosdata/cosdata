@@ -442,7 +442,6 @@ impl DenseIndexTransaction {
                     let list = serialization_table.to_list();
                     for (node, _) in list {
                         serialization_table.delete(&node);
-                        println!("Serializing");
                         write_node_to_file(node, dense_index.index_manager.clone())?;
                     }
                     dense_index.index_manager.flush_all()?;
