@@ -645,13 +645,13 @@ const CHANNEL_BUFFER_SIZE: usize = 1000;
 fn index_embeddings_in_transaction_inner(
     ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
-    embeddings: impl Iterator<Item = RawVectorEmbedding> + Send,
-    quantization: &QuantizationMetric,
+    embeddings: mpsc::Receiver<RawVectorEmbedding>,
     version: Hash,
     version_number: u16,
     serialization_table: Arc<TSHashTable<SharedNode, ()>>,
     lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16), SharedNode>>,
 ) {
+    let quantization = &*dense_index.quantization_metric;
     let neighbors_count = ctx.config.hnsw.neighbors_count;
     ctx.threadpool.scope(|s| {
         let worker_count = num_cpus::get();
@@ -774,14 +774,10 @@ pub fn index_embeddings_in_transaction(
     let version = transaction.id;
     let version_number = transaction.version_number;
 
-    let mut quantization_arc = dense_index.quantization_metric.clone();
-
-    let quantization = quantization_arc.get();
     index_embeddings_in_transaction_inner(
-        ctx.clone(),
+        ctx,
         dense_index,
-        embeddings.into_iter(),
-        quantization,
+        embeddings,
         version,
         version_number,
         transaction.serialization_table.clone(),
