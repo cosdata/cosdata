@@ -772,19 +772,7 @@ pub fn index_embeddings_in_transaction(
     embeddings: mpsc::Receiver<RawVectorEmbedding>,
 ) -> Result<(), WaCustomError> {
     let version = transaction.id;
-
-    let txn = dense_index
-        .lmdb
-        .env
-        .begin_ro_txn()
-        .map_err(|err| WaCustomError::DatabaseError(err.to_string()))?;
-    let version_hash = dense_index
-        .vcs
-        .get_version_hash(&version, &txn)
-        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?
-        .expect("Current version hash not found");
-    let version_number = *version_hash.version as u16;
-    txn.abort();
+    let version_number = transaction.version_number;
 
     let mut quantization_arc = dense_index.quantization_metric.clone();
 

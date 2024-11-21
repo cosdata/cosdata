@@ -397,6 +397,7 @@ impl Default for HNSWHyperParams {
 #[derive(Clone)]
 pub struct DenseIndexTransaction {
     pub id: Hash,
+    pub version_number: u16,
     pub serialization_table: Arc<TSHashTable<SharedNode, ()>>,
     pub lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16), SharedNode>>,
     serializer_thread_handle: Arc<thread::JoinHandle<Result<(), WaCustomError>>>,
@@ -413,12 +414,10 @@ impl DenseIndexTransaction {
                 WaCustomError::DatabaseError(format!("Unable to get main branch info: {}", err))
             })?
             .unwrap();
+        let version_number = *branch_info.get_current_version() + 1;
         let id = dense_index
             .vcs
-            .generate_hash(
-                "main",
-                Version::from(*branch_info.get_current_version() + 1),
-            )
+            .generate_hash("main", Version::from(version_number))
             .map_err(|err| {
                 WaCustomError::DatabaseError(format!("Unable to get transaction hash: {}", err))
             })?;
@@ -444,9 +443,9 @@ impl DenseIndexTransaction {
                         serialization_table.delete(&node);
                         write_node_to_file(node, dense_index.index_manager.clone())?;
                     }
-                    dense_index.index_manager.flush_all()?;
                     batches_processed += 1;
                 }
+                dense_index.index_manager.flush_all()?;
                 Ok(())
             }))
         };
@@ -458,6 +457,7 @@ impl DenseIndexTransaction {
             lazy_item_versions_table: Arc::new(TSHashTable::new(16)),
             serialization_signal: tx,
             batch_count,
+            version_number: version_number as u16,
         })
     }
 
