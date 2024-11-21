@@ -199,9 +199,9 @@ pub fn run_upload_in_transaction(
         })
     };
 
+    handle.join().unwrap()?;
     index_embeddings_in_transaction(ctx.clone(), dense_index.clone(), transaction.clone(), rx)?;
 
-    handle.join().unwrap()?;
     transaction.start_serialization_round();
 
     bufman.flush()?;
