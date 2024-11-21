@@ -1,7 +1,7 @@
 use std::{
     ptr,
     sync::{
-        atomic::{AtomicPtr, AtomicUsize, Ordering},
+        atomic::{AtomicPtr, Ordering},
         Arc,
     },
 };
@@ -10,46 +10,53 @@ use super::lazy_item::ProbLazyItem;
 
 pub struct ProbLazyItemArray<T, const N: usize> {
     items: [AtomicPtr<Arc<ProbLazyItem<T>>>; N],
-    len: AtomicUsize,
 }
 
 impl<T, const N: usize> ProbLazyItemArray<T, N> {
     pub fn new() -> Self {
         Self {
             items: std::array::from_fn(|_| AtomicPtr::new(ptr::null_mut())),
-            len: AtomicUsize::new(0),
         }
     }
 
     pub fn push(&self, item: Arc<ProbLazyItem<T>>) {
-        let idx = self.len.fetch_add(1, Ordering::SeqCst);
-        debug_assert!(idx < N);
-        self.items[idx].store(Box::into_raw(Box::new(item)), Ordering::SeqCst);
+        for i in 0..N {
+            if self.items[i].load(Ordering::SeqCst).is_null() {
+                self.items[i].store(Box::into_raw(Box::new(item)), Ordering::SeqCst);
+                return;
+            }
+        }
+        debug_assert!(false, "Array is full");
     }
 
     pub fn len(&self) -> usize {
-        self.len.load(Ordering::SeqCst)
+        for i in 0..N {
+            if self.items[i].load(Ordering::SeqCst).is_null() {
+                return i;
+            }
+        }
+        N
     }
 
     pub fn last(&self) -> Option<Arc<ProbLazyItem<T>>> {
-        let len = self.len();
-        if len == 0 {
-            return None;
+        for i in (0..N).rev() {
+            let ptr = self.items[i].load(Ordering::SeqCst);
+            if !ptr.is_null() {
+                return Some(unsafe { &*ptr }.clone());
+            }
         }
-
-        Some(unsafe { &*self.items[len - 1].load(Ordering::SeqCst) }.clone())
+        None
     }
 
     pub fn get(&self, idx: usize) -> Option<Arc<ProbLazyItem<T>>> {
-        let len = self.len();
-        if idx >= len {
+        if idx >= N || self.items[idx].load(Ordering::SeqCst).is_null() {
             return None;
         }
         Some(unsafe { &*self.items[idx].load(Ordering::SeqCst) }.clone())
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.items[0].load(Ordering::SeqCst).is_null()
     }
 }
 
