@@ -4,6 +4,9 @@ use crate::macros::key;
 use crate::models::buffered_io::BufferManager;
 use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::common::*;
+use crate::models::embedding_persist::read_embedding;
+use crate::models::embedding_persist::write_embedding;
+use crate::models::embedding_persist::EmbeddingOffset;
 use crate::models::file_persist::*;
 use crate::models::kmeans::{concat_vectors, generate_initial_centroids, kmeans, should_continue};
 use crate::models::lazy_load::*;
@@ -187,56 +190,6 @@ pub fn vector_fetch(
     Ok(Vec::new())
 }
 
-pub fn write_embedding(
-    bufman: Arc<BufferManager>,
-    emb: &RawVectorEmbedding,
-) -> Result<u32, WaCustomError> {
-    // TODO: select a better value for `N` (number of bytes to pre-allocate)
-    let serialized = rkyv::to_bytes::<_, 256>(emb)
-        .map_err(|e| WaCustomError::SerializationError(e.to_string()))?;
-
-    let len = serialized.len() as u32;
-    let cursor = bufman.open_cursor()?;
-
-    let start = bufman.seek_with_cursor(cursor, SeekFrom::End(0))? as u32;
-    bufman.write_u32_with_cursor(cursor, len)?;
-    bufman.write_with_cursor(cursor, &serialized)?;
-
-    bufman.close_cursor(cursor)?;
-
-    Ok(start)
-}
-
-pub struct EmbeddingOffset {
-    pub version: Hash,
-    pub offset: u32,
-}
-
-impl EmbeddingOffset {
-    pub fn serialize(&self) -> Vec<u8> {
-        let mut result = Vec::with_capacity(8);
-
-        result.extend_from_slice(&self.version.to_le_bytes());
-        result.extend_from_slice(&self.offset.to_le_bytes());
-
-        result
-    }
-
-    pub fn deserialize(bytes: &[u8]) -> Result<Self, &'static str> {
-        if bytes.len() != 8 {
-            return Err("Input must be exactly 8 bytes");
-        }
-
-        let version = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
-        let offset = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
-
-        Ok(Self {
-            version: Hash::from(version),
-            offset,
-        })
-    }
-}
-
 /// Retrieves a raw embedding vector from the vector store by its ID.
 ///
 /// This function performs the following steps to retrieve the embedding:
@@ -315,72 +268,39 @@ pub fn get_embedding_by_id(
     Ok(embedding)
 }
 
-fn read_embedding(
-    bufman: Arc<BufferManager>,
-    offset: u32,
-) -> Result<(RawVectorEmbedding, u32), WaCustomError> {
-    let cursor = bufman.open_cursor()?;
+// fn auto_config_storage_type(dense_index: Arc<DenseIndex>, vectors: &[&[f32]]) {
+//     let threshold = 0.0;
+//     let iterations = 32;
 
-    bufman
-        .seek_with_cursor(cursor, SeekFrom::Start(offset as u64))
-        .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?;
+//     let vec = concat_vectors(vectors);
 
-    let len = bufman
-        .read_u32_with_cursor(cursor)
-        .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?;
+//     // First iteration with k = 16
+//     let initial_centroids_16 = generate_initial_centroids(&vec, 16);
+//     let (_, counts_16) = kmeans(&vec, &initial_centroids_16, iterations);
+//     let storage_type = if should_continue(&counts_16, threshold, 8) {
+//         // Second iteration with k = 8
+//         let initial_centroids_8 = generate_initial_centroids(&vec, 8);
+//         let (_, counts_8) = kmeans(&vec, &initial_centroids_8, iterations);
+//         if should_continue(&counts_8, threshold, 4) {
+//             // Third iteration with k = 4
+//             let initial_centroids_4 = generate_initial_centroids(&vec, 4);
+//             let (_, counts_4) = kmeans(&vec, &initial_centroids_4, iterations);
 
-    let mut buf = vec![0; len as usize];
+//             if should_continue(&counts_4, threshold, 2) {
+//                 StorageType::SubByte(1)
+//             } else {
+//                 StorageType::SubByte(2)
+//             }
+//         } else {
+//             // StorageType::SubByte(3)
+//             StorageType::UnsignedByte
+//         }
+//     } else {
+//         StorageType::UnsignedByte
+//     };
 
-    bufman
-        .read_with_cursor(cursor, &mut buf)
-        .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?;
-
-    let emb = unsafe { rkyv::from_bytes_unchecked(&buf) }.map_err(|e| {
-        WaCustomError::DeserializationError(format!("Failed to deserialize VectorEmbedding: {}", e))
-    })?;
-
-    let next = bufman
-        .cursor_position(cursor)
-        .map_err(|e| WaCustomError::DeserializationError(e.to_string()))? as u32;
-
-    bufman.close_cursor(cursor)?;
-
-    Ok((emb, next))
-}
-
-fn auto_config_storage_type(dense_index: Arc<DenseIndex>, vectors: &[&[f32]]) {
-    let threshold = 0.0;
-    let iterations = 32;
-
-    let vec = concat_vectors(vectors);
-
-    // First iteration with k = 16
-    let initial_centroids_16 = generate_initial_centroids(&vec, 16);
-    let (_, counts_16) = kmeans(&vec, &initial_centroids_16, iterations);
-    let storage_type = if should_continue(&counts_16, threshold, 8) {
-        // Second iteration with k = 8
-        let initial_centroids_8 = generate_initial_centroids(&vec, 8);
-        let (_, counts_8) = kmeans(&vec, &initial_centroids_8, iterations);
-        if should_continue(&counts_8, threshold, 4) {
-            // Third iteration with k = 4
-            let initial_centroids_4 = generate_initial_centroids(&vec, 4);
-            let (_, counts_4) = kmeans(&vec, &initial_centroids_4, iterations);
-
-            if should_continue(&counts_4, threshold, 2) {
-                StorageType::SubByte(1)
-            } else {
-                StorageType::SubByte(2)
-            }
-        } else {
-            // StorageType::SubByte(3)
-            StorageType::UnsignedByte
-        }
-    } else {
-        StorageType::UnsignedByte
-    };
-
-    dense_index.storage_type.update_shared(storage_type);
-}
+//     dense_index.storage_type.update_shared(storage_type);
+// }
 
 pub fn insert_embedding(
     bufman: Arc<BufferManager>,
@@ -768,20 +688,20 @@ fn index_embeddings_in_transaction_inner(
 pub fn index_embeddings_in_transaction(
     ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
-    transaction: DenseIndexTransaction,
+    version: Hash,
+    version_number: u16,
     embeddings: mpsc::Receiver<RawVectorEmbedding>,
+    serialization_table: Arc<TSHashTable<SharedNode, ()>>,
+    lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16), SharedNode>>,
 ) -> Result<(), WaCustomError> {
-    let version = transaction.id;
-    let version_number = transaction.version_number;
-
     index_embeddings_in_transaction_inner(
         ctx,
         dense_index,
         embeddings,
         version,
         version_number,
-        transaction.serialization_table.clone(),
-        transaction.lazy_item_versions_table.clone(),
+        serialization_table,
+        lazy_item_versions_table,
     );
 
     Ok(())
@@ -1375,62 +1295,3 @@ pub fn create_index_in_collection(
 
 //     Ok(())
 // }
-
-#[cfg(test)]
-mod tests {
-    use super::{read_embedding, write_embedding, RawVectorEmbedding};
-    use crate::models::{buffered_io::BufferManager, types::VectorId};
-    use rand::{distributions::Uniform, rngs::ThreadRng, thread_rng, Rng};
-    use std::sync::Arc;
-    use tempfile::tempfile;
-
-    fn get_random_embedding(rng: &mut ThreadRng) -> RawVectorEmbedding {
-        let range = Uniform::new(-1.0, 1.0);
-
-        let raw_vec: Vec<f32> = (0..rng.gen_range(100..200))
-            .into_iter()
-            .map(|_| rng.sample(&range))
-            .collect();
-
-        RawVectorEmbedding {
-            raw_vec: Arc::new(raw_vec),
-            hash_vec: VectorId::Int(rng.gen()),
-        }
-    }
-
-    #[test]
-    fn test_embedding_serialization() {
-        let mut rng = thread_rng();
-        let embedding = get_random_embedding(&mut rng);
-        let tempfile = tempfile().unwrap();
-
-        let bufman = Arc::new(BufferManager::new(tempfile).unwrap());
-        let offset = write_embedding(bufman.clone(), &embedding).unwrap();
-
-        let (deserialized, _) = read_embedding(bufman.clone(), offset).unwrap();
-
-        assert_eq!(embedding, deserialized);
-    }
-
-    #[test]
-    fn test_embeddings_serialization() {
-        let mut rng = thread_rng();
-        let embeddings: Vec<_> = (0..20).map(|_| get_random_embedding(&mut rng)).collect();
-        let tempfile = tempfile().unwrap();
-
-        let bufman = Arc::new(BufferManager::new(tempfile).unwrap());
-
-        for embedding in &embeddings {
-            write_embedding(bufman.clone(), embedding).unwrap();
-        }
-
-        let mut offset = 0;
-
-        for embedding in embeddings {
-            let (deserialized, next) = read_embedding(bufman.clone(), offset).unwrap();
-            offset = next;
-
-            assert_eq!(embedding, deserialized);
-        }
-    }
-}

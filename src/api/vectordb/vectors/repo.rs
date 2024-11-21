@@ -1,11 +1,14 @@
-use std::sync::Arc;
+use std::sync::{atomic::Ordering, Arc};
 
 use crate::{
     api::vectordb::collections,
     api_service::{run_upload, run_upload_in_transaction},
     app_context::AppContext,
-    convert_value, convert_vectors,
-    models::{rpc::VectorIdValue, types::{DenseIndexTransaction, VectorId}, versioning::Hash},
+    convert_vectors,
+    models::{
+        rpc::VectorIdValue,
+        types::{DenseIndexTransaction, VectorId},
+    },
     vector_store::get_embedding_by_id,
 };
 
@@ -26,9 +29,11 @@ pub(crate) async fn create_vector(
         .await
         .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
 
-    let mut current_open_transaction_arc = dense_index.current_open_transaction.clone();
-
-    if current_open_transaction_arc.get().is_some() {
+    if !dense_index
+        .current_open_transaction
+        .load(Ordering::SeqCst)
+        .is_null()
+    {
         return Err(VectorsError::FailedToCreateVector(
             "there is an ongoing transaction!".into(),
         ));
@@ -53,7 +58,7 @@ pub(crate) async fn create_vector(
 pub(crate) async fn create_vector_in_transaction(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    transaction: DenseIndexTransaction,
+    transaction: &DenseIndexTransaction,
     create_vector_dto: CreateVectorDto,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
     let dense_index = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
@@ -110,9 +115,11 @@ pub(crate) async fn update_vector(
         .await
         .map_err(|e| VectorsError::FailedToUpdateVector(e.to_string()))?;
 
-    let mut current_open_transaction_arc = dense_index.current_open_transaction.clone();
-
-    if current_open_transaction_arc.get().is_some() {
+    if !dense_index
+        .current_open_transaction
+        .load(Ordering::SeqCst)
+        .is_null()
+    {
         return Err(VectorsError::FailedToUpdateVector(
             "there is an ongoing transaction!".into(),
         ));
@@ -164,7 +171,7 @@ pub(crate) async fn delete_vector_by_id(
 pub(crate) async fn upsert_in_transaction(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    transaction: DenseIndexTransaction,
+    transaction: &DenseIndexTransaction,
     upsert_dto: UpsertDto,
 ) -> Result<(), VectorsError> {
     let dense_index = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)

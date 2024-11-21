@@ -1,3 +1,5 @@
+use std::ptr;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use self::vectors::dtos::UpsertDto;
@@ -26,9 +28,11 @@ pub(crate) async fn create_transaction(
         .get(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
 
-    let mut current_open_transaction_arc = vec_store.current_open_transaction.clone();
-
-    if current_open_transaction_arc.get().is_some() {
+    if !vec_store
+        .current_open_transaction
+        .load(Ordering::SeqCst)
+        .is_null()
+    {
         return Err(TransactionError::OnGoingTransaction);
     }
 
@@ -36,7 +40,9 @@ pub(crate) async fn create_transaction(
         .map_err(|err| TransactionError::FailedToCreateTransaction(err.to_string()))?;
     let transaction_id = transaction.id;
 
-    current_open_transaction_arc.update(Some(transaction));
+    vec_store
+        .current_open_transaction
+        .store(Box::into_raw(Box::new(transaction)), Ordering::SeqCst);
 
     Ok(CreateTransactionResponseDto {
         transaction_id: transaction_id.to_string(),
@@ -56,16 +62,22 @@ pub(crate) async fn commit_transaction(
         .get(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
 
-    let mut current_open_transaction_arc = vec_store.current_open_transaction.clone();
-    let current_open_transaction = current_open_transaction_arc.get().clone();
-    let current_transaction = current_open_transaction.ok_or(TransactionError::NotFound)?;
-    let current_transaction_id = current_transaction.id;
+    let current_open_transaction = unsafe {
+        let ptr = vec_store.current_open_transaction.load(Ordering::SeqCst);
+
+        if ptr.is_null() {
+            return Err(TransactionError::NotFound);
+        }
+
+        ptr::read(ptr)
+    };
+    let current_transaction_id = current_open_transaction.id;
 
     if current_transaction_id != transaction_id {
         return Err(TransactionError::NotFound);
     }
 
-    current_transaction
+    current_open_transaction
         .pre_commit()
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
 
@@ -73,7 +85,9 @@ pub(crate) async fn commit_transaction(
         .current_version
         .clone()
         .update(current_transaction_id);
-    current_open_transaction_arc.update(None);
+    vec_store
+        .current_open_transaction
+        .store(ptr::null_mut(), Ordering::SeqCst);
 
     Ok(())
 }
@@ -90,12 +104,13 @@ pub(crate) async fn create_vector_in_transaction(
         .get(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
 
-    let mut current_open_transaction_arc = vec_store.current_open_transaction.clone();
-
-    let current_open_transaction = current_open_transaction_arc
-        .get()
-        .clone()
-        .ok_or(TransactionError::NotFound)?;
+    let current_open_transaction = unsafe {
+        vec_store
+            .current_open_transaction
+            .load(Ordering::SeqCst)
+            .as_ref()
+            .ok_or(TransactionError::NotFound)?
+    };
 
     if current_open_transaction.id != transaction_id {
         return Err(TransactionError::FailedToCreateVector(
@@ -127,17 +142,28 @@ pub(crate) async fn abort_transaction(
         .get(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
 
-    let mut current_open_transaction_arc = vec_store.current_open_transaction.clone();
-    let current_open_transaction = current_open_transaction_arc.get();
-    let current_transaction = current_open_transaction
-        .as_ref()
-        .ok_or(TransactionError::NotFound)?;
+    let current_open_transaction = unsafe {
+        let ptr = vec_store.current_open_transaction.load(Ordering::SeqCst);
 
-    if current_transaction.id != transaction_id {
+        if ptr.is_null() {
+            return Err(TransactionError::NotFound);
+        }
+
+        ptr::read(ptr)
+    };
+    let current_transaction_id = current_open_transaction.id;
+
+    if current_transaction_id != transaction_id {
         return Err(TransactionError::NotFound);
     }
 
-    current_open_transaction_arc.update(None);
+    current_open_transaction
+        .pre_commit()
+        .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
+
+    vec_store
+        .current_open_transaction
+        .store(ptr::null_mut(), Ordering::SeqCst);
 
     Ok(())
 }
@@ -177,12 +203,13 @@ pub(crate) async fn upsert(
         .get(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
 
-    let mut current_open_transaction_arc = vec_store.current_open_transaction.clone();
-
-    let current_open_transaction = current_open_transaction_arc
-        .get()
-        .clone()
-        .ok_or(TransactionError::NotFound)?;
+    let current_open_transaction = unsafe {
+        vec_store
+            .current_open_transaction
+            .load(Ordering::SeqCst)
+            .as_ref()
+            .ok_or(TransactionError::NotFound)?
+    };
 
     if current_open_transaction.id != transaction_id {
         return Err(TransactionError::FailedToCreateVector(

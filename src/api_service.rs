@@ -4,6 +4,7 @@ use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::cache_loader::ProbCache;
 use crate::models::collection::Collection;
 use crate::models::common::*;
+use crate::models::embedding_persist::EmbeddingOffset;
 use crate::models::file_persist::write_node_to_file;
 use crate::models::meta_persist::update_current_version;
 use crate::models::rpc::VectorIdValue;
@@ -163,45 +164,46 @@ pub async fn init_inverted_index_for_collection(
 pub fn run_upload_in_transaction(
     ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
-    transaction: DenseIndexTransaction,
+    transaction: &DenseIndexTransaction,
     vecs: Vec<(VectorIdValue, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
     transaction.increment_batch_count();
-    let current_version = transaction.id;
+    let version = transaction.id;
+    let version_number = transaction.version_number;
 
     let bufman = dense_index
         .vec_raw_manager
-        .get(&current_version)
+        .get(&version)
         .map_err(|e| WaCustomError::BufIo(Arc::new(e)))?;
 
     let (tx, rx) = mpsc::channel();
 
     let handle = {
-        let bufman = bufman.clone();
-        let dense_index = dense_index.clone();
+        let raw_embedding_channel = transaction.raw_embedding_channel.clone();
         thread::spawn(move || {
-            vecs.into_par_iter()
-                .map(|(id, vec)| {
-                    let hash_vec = convert_value(id);
-                    let vec_emb = RawVectorEmbedding {
-                        raw_vec: Arc::new(vec),
-                        hash_vec,
-                    };
-                    tx.send(vec_emb.clone()).unwrap();
-                    insert_embedding(
-                        bufman.clone(),
-                        dense_index.clone(),
-                        &vec_emb,
-                        current_version,
-                    )
-                })
-                .collect::<Result<Vec<()>, WaCustomError>>()
+            vecs.into_par_iter().for_each(|(id, vec)| {
+                let hash_vec = convert_value(id);
+                let vec_emb = RawVectorEmbedding {
+                    raw_vec: Arc::new(vec),
+                    hash_vec,
+                };
+                tx.send(vec_emb.clone()).unwrap();
+                raw_embedding_channel.send(vec_emb).unwrap();
+            });
         })
     };
 
-    index_embeddings_in_transaction(ctx.clone(), dense_index.clone(), transaction.clone(), rx)?;
+    index_embeddings_in_transaction(
+        ctx.clone(),
+        dense_index.clone(),
+        version,
+        version_number,
+        rx,
+        transaction.serialization_table.clone(),
+        transaction.lazy_item_versions_table.clone(),
+    )?;
 
-    handle.join().unwrap()?;
+    handle.join().unwrap();
 
     transaction.start_serialization_round();
 

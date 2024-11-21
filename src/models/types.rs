@@ -1,6 +1,7 @@
-use super::buffered_io::BufferManagerFactory;
+use super::buffered_io::{BufferManager, BufferManagerFactory};
 use super::cache_loader::ProbCache;
 use super::collection::Collection;
+use super::embedding_persist::{write_embedding, EmbeddingOffset};
 use super::file_persist::write_node_to_file;
 use super::meta_persist::{
     delete_dense_index, lmdb_init_collections_db, lmdb_init_db, load_collections,
@@ -14,6 +15,7 @@ use crate::distance::{
     cosine::CosineDistance, dotproduct::DotProductDistance, euclidean::EuclideanDistance,
     hamming::HammingDistance, DistanceFunction,
 };
+use crate::macros::key;
 use crate::models::common::*;
 use crate::models::identity_collections::*;
 use crate::models::lazy_load::*;
@@ -25,11 +27,11 @@ use crate::quantization::{
 use crate::storage::Storage;
 use arcshift::ArcShift;
 use dashmap::DashMap;
-use lmdb::{Database, DatabaseFlags, Environment};
+use lmdb::{Database, DatabaseFlags, Environment, Transaction, WriteFlags};
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher24;
 use std::collections::HashSet;
-use std::fmt;
+use std::{fmt, ptr};
 use std::hash::{DefaultHasher, Hash as StdHash, Hasher};
 use std::path::Path;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
@@ -394,14 +396,15 @@ impl Default for HNSWHyperParams {
     }
 }
 
-#[derive(Clone)]
 pub struct DenseIndexTransaction {
     pub id: Hash,
     pub version_number: u16,
     pub serialization_table: Arc<TSHashTable<SharedNode, ()>>,
     pub lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16), SharedNode>>,
-    serializer_thread_handle: Arc<thread::JoinHandle<Result<(), WaCustomError>>>,
+    serializer_thread_handle: thread::JoinHandle<Result<(), WaCustomError>>,
+    raw_embedding_serializer_thread_handle: thread::JoinHandle<Result<(), WaCustomError>>,
     serialization_signal: mpsc::Sender<()>,
+    pub raw_embedding_channel: mpsc::SyncSender<RawVectorEmbedding>,
     batch_count: Arc<AtomicUsize>,
 }
 
@@ -423,14 +426,15 @@ impl DenseIndexTransaction {
             })?;
 
         let serialization_table = Arc::new(TSHashTable::new(16));
-        let (tx, rx) = mpsc::channel();
+        let (serialization_signal, rx) = mpsc::channel();
         let batch_count = Arc::new(AtomicUsize::new(0));
 
         let serializer_thread_handle = {
             let serialization_table = serialization_table.clone();
             let batch_count = batch_count.clone();
+            let dense_index = dense_index.clone();
 
-            Arc::new(thread::spawn(move || {
+            thread::spawn(move || {
                 let mut batches_processed = 0;
 
                 loop {
@@ -447,7 +451,46 @@ impl DenseIndexTransaction {
                 }
                 dense_index.index_manager.flush_all()?;
                 Ok(())
-            }))
+            })
+        };
+
+        let (raw_embedding_channel, rx) = mpsc::sync_channel(100);
+
+        let raw_embedding_serializer_thread_handle = {
+            let bufman = dense_index.vec_raw_manager.get(&id)?;
+
+            thread::spawn(move || {
+                let mut offsets = Vec::new();
+                for raw_emb in rx {
+                    let offset = write_embedding(bufman.clone(), &raw_emb)?;
+                    let embedding_key = key!(e:raw_emb.hash_vec);
+                    offsets.push((embedding_key, offset));
+                }
+
+                let env = dense_index.lmdb.env.clone();
+                let db = dense_index.lmdb.db.clone();
+
+                let mut txn = env.begin_rw_txn().map_err(|e| {
+                    WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e))
+                })?;
+                for (key, offset) in offsets {
+                    let offset = EmbeddingOffset {
+                        version: id,
+                        offset,
+                    };
+                    let offset_serialized = offset.serialize();
+
+                    txn.put(*db, &key, &offset_serialized, WriteFlags::empty())
+                        .map_err(|e| {
+                            WaCustomError::DatabaseError(format!("Failed to put data: {}", e))
+                        })?;
+                }
+
+                txn.commit().map_err(|e| {
+                    WaCustomError::DatabaseError(format!("Failed to commit transaction: {}", e))
+                })?;
+                Ok(())
+            })
         };
 
         Ok(Self {
@@ -455,10 +498,16 @@ impl DenseIndexTransaction {
             serialization_table,
             serializer_thread_handle,
             lazy_item_versions_table: Arc::new(TSHashTable::new(16)),
-            serialization_signal: tx,
+            serialization_signal,
             batch_count,
+            raw_embedding_channel,
+            raw_embedding_serializer_thread_handle,
             version_number: version_number as u16,
         })
+    }
+
+    pub fn post_raw_embedding(&self, raw_emb: RawVectorEmbedding) {
+        self.raw_embedding_channel.send(raw_emb).unwrap();
     }
 
     pub fn increment_batch_count(&self) {
@@ -472,9 +521,11 @@ impl DenseIndexTransaction {
     pub fn pre_commit(self) -> Result<(), WaCustomError> {
         // sending a signal without incrementing the batch count will stop the serialization
         self.serialization_signal.send(()).unwrap();
-        if let Some(handle) = Arc::into_inner(self.serializer_thread_handle) {
-            handle.join().unwrap()?;
-        }
+        self.serializer_thread_handle.join().unwrap()?;
+        drop(self.raw_embedding_channel);
+        self.raw_embedding_serializer_thread_handle
+            .join()
+            .unwrap()?;
         Ok(())
     }
 }
@@ -488,7 +539,7 @@ pub struct DenseIndex {
     pub prop_file: Arc<File>,
     pub lmdb: MetaDb,
     pub current_version: ArcShift<Hash>,
-    pub current_open_transaction: ArcShift<Option<DenseIndexTransaction>>,
+    pub current_open_transaction: Arc<AtomicPtr<DenseIndexTransaction>>,
     pub quantization_metric: ArcShift<QuantizationMetric>,
     pub distance_metric: ArcShift<DistanceMetric>,
     pub storage_type: ArcShift<StorageType>,
@@ -528,7 +579,7 @@ impl DenseIndex {
             prop_file,
             lmdb,
             current_version,
-            current_open_transaction: ArcShift::new(None),
+            current_open_transaction: Arc::new(AtomicPtr::new(ptr::null_mut())),
             quantization_metric,
             distance_metric,
             storage_type,

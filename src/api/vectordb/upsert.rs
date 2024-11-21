@@ -1,3 +1,5 @@
+use std::sync::atomic::Ordering;
+
 use actix_web::{web, HttpResponse};
 
 use crate::{
@@ -22,20 +24,25 @@ pub(crate) async fn upsert(
     }
     .clone();
 
-    if collection.current_open_transaction.clone().get().is_some() {
+    if !collection
+        .current_open_transaction
+        .load(Ordering::SeqCst)
+        .is_null()
+    {
         return HttpResponse::Conflict()
             .body("Cannot upsert while there's an on-going transaction");
     }
 
     // Call run_upload with the extracted parameters
-    let res = web::block(move || {
-        run_upload(ctx.into_inner(), collection, convert_vectors(body.vectors))
-    })
-    .await
-    .unwrap();
+    let res =
+        web::block(move || run_upload(ctx.into_inner(), collection, convert_vectors(body.vectors)))
+            .await
+            .unwrap();
 
     match res {
         Ok(_) => HttpResponse::Ok().json(RPCResponseBody::RespUpsertVectors { insert_stats: None }),
-        Err(err) => HttpResponse::InternalServerError().body(format!("error upserting vectors: {}", err)),
+        Err(err) => {
+            HttpResponse::InternalServerError().body(format!("error upserting vectors: {}", err))
+        }
     }
 }
