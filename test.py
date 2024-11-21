@@ -333,9 +333,9 @@ def cosine_similarity(vec1, vec2):
 
 def bruteforce_search(vectors, query, k=5):
     similarities = []
-    for idx, vector in enumerate(vectors):
+    for vector in vectors:
         similarity = cosine_similarity(query["values"], vector["values"])
-        similarities.append((idx, similarity))
+        similarities.append((vector["id"], similarity))
 
     similarities.sort(key=lambda x: x[1], reverse=True)
 
@@ -434,8 +434,9 @@ if __name__ == "__main__":
                     print(f"ANN Vector Response <<< {idr} >>>:")
                     print("  Server:")
                     for j, match in enumerate(ann_response["RespVectorKNN"]["knn"]):
+                        id = match[0]
                         cs = match[1]["CosineSimilarity"]
-                        print(f"    {j + 1}: {cs}")
+                        print(f"    {j + 1}: {id} ({cs})")
                     best_matches_server.append(
                         ann_response["RespVectorKNN"]["knn"][0][1]["CosineSimilarity"]
                     )  # Collect the second item in the knn list
@@ -444,7 +445,8 @@ if __name__ == "__main__":
                     print("  Brute force:")
                     for j, result in enumerate(bruteforce_results):
                         cs = result[1]
-                        print(f"    {j + 1}: {cs}")
+                        id = result[0]
+                        print(f"    {j + 1}: {id} ({cs})")
                     best_matches_bruteforce.append(bruteforce_results[0][1])
 
 
