@@ -8,7 +8,6 @@ use crate::models::embedding_persist::read_embedding;
 use crate::models::embedding_persist::write_embedding;
 use crate::models::embedding_persist::EmbeddingOffset;
 use crate::models::file_persist::*;
-use crate::models::kmeans::{concat_vectors, generate_initial_centroids, kmeans, should_continue};
 use crate::models::lazy_load::*;
 use crate::models::prob_lazy_load::lazy_item::ProbLazyItem;
 use crate::models::prob_node::ProbNode;
@@ -20,13 +19,13 @@ use crate::storage::Storage;
 use arcshift::ArcShift;
 use lmdb::{Transaction, WriteFlags};
 use rand::Rng;
+use smallvec::SmallVec;
 use std::array::TryFromSliceError;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::SeekFrom;
 use std::ptr;
-use std::sync::atomic::AtomicPtr;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::mpsc;
 use std::sync::mpsc::sync_channel;
 use std::sync::Arc;
@@ -103,7 +102,7 @@ pub fn ann_search(
     cur_entry: SharedNode,
     cur_level: HNSWLevel,
     neighbors_count: usize,
-) -> Result<Vec<Option<(SharedNode, MetricResult)>>, WaCustomError> {
+) -> Result<Vec<(SharedNode, MetricResult)>, WaCustomError> {
     let fvec = vector_emb.quantized_vec.clone();
     let mut skipm = HashSet::new();
     skipm.insert(vector_emb.hash_vec.clone());
@@ -122,40 +121,30 @@ pub fn ann_search(
         }
     };
 
-    let mut z = vec![None; neighbors_count];
-    let dist = dense_index
-        .distance_metric
-        .calculate(&fvec, &node_prop.value)?;
-
-    update_results(
-        &mut z,
-        0,
-        &cur_node.get_id().unwrap(),
-        cur_entry.clone(),
-        dist,
-        neighbors_count,
-    );
-    traverse_find_nearest(
+    let z = traverse_find_nearest(
         dense_index.clone(),
         cur_entry.clone(),
         fvec.clone(),
         0,
         &mut skipm,
         cur_level,
-        &mut z,
-        0,
-        neighbors_count,
     )?;
+
+    let mut z = if z.is_empty() {
+        let dist = dense_index
+            .distance_metric
+            .calculate(&fvec, &node_prop.value)?;
+
+        vec![(cur_entry.clone(), dist)]
+    } else {
+        z
+    };
 
     if cur_level.0 != 0 {
         let results = ann_search(
             dense_index.clone(),
             vector_emb,
-            z.iter()
-                .flat_map(|result| result.as_ref())
-                .next()
-                .unwrap()
-                .0
+            z[0].0
                 .try_get_data(dense_index.cache.clone())?
                 .get_child()
                 .unwrap(),
@@ -163,21 +152,7 @@ pub fn ann_search(
             neighbors_count,
         )?;
 
-        for result in results {
-            if let Some((node, dist)) = result {
-                update_results(
-                    &mut z,
-                    0,
-                    &node
-                        .try_get_data(dense_index.cache.clone())?
-                        .get_id()
-                        .unwrap(),
-                    node,
-                    dist,
-                    neighbors_count,
-                );
-            }
-        }
+        z.extend(results);
     };
 
     Ok(z)
@@ -741,42 +716,24 @@ pub fn index_embedding(
         }
     };
 
-    let id_hash = node_prop.id.get_hash();
-    let mut z = vec![None; neighbors_count];
-    let dist = dense_index
-        .distance_metric
-        .calculate(&fvec, &node_prop.value)?;
-
-    update_results(
-        &mut z,
-        id_hash,
-        &cur_node.get_id().unwrap(),
-        cur_entry.clone(),
-        dist,
-        neighbors_count,
-    );
-    traverse_find_nearest(
+    let z = traverse_find_nearest(
         dense_index.clone(),
-        cur_entry,
+        cur_entry.clone(),
         fvec.clone(),
         0,
         &mut skipm,
         cur_level,
-        &mut z,
-        id_hash,
-        neighbors_count,
     )?;
 
-    let neighbors = z
-        .iter()
-        .cloned()
-        .map(|result| {
-            AtomicPtr::new(
-                result.map_or_else(|| ptr::null_mut(), |result| Box::into_raw(Box::new(result))),
-            )
-        })
-        .collect::<Vec<_>>()
-        .into_boxed_slice();
+    let z = if z.is_empty() {
+        let dist = dense_index
+            .distance_metric
+            .calculate(&fvec, &node_prop.value)?;
+
+        vec![(cur_entry, dist)]
+    } else {
+        z
+    };
 
     let (lazy_node, node) = create_node(
         version,
@@ -785,7 +742,7 @@ pub fn index_embedding(
         prop.clone(),
         parent.clone(),
         None,
-        neighbors,
+        neighbors_count,
     );
 
     if let Some(parent) = parent {
@@ -798,11 +755,7 @@ pub fn index_embedding(
             Some(lazy_node.clone()),
             vector_emb.clone(),
             prop.clone(),
-            z.iter()
-                .flat_map(|result| result.as_ref())
-                .next()
-                .unwrap()
-                .0
+            z[0].0
                 .try_get_data(dense_index.cache.clone())?
                 .get_child()
                 .unwrap(),
@@ -837,10 +790,14 @@ fn create_node(
     prop: ArcShift<PropState>,
     parent: Option<SharedNode>,
     child: Option<SharedNode>,
-    neighbors: Box<[AtomicPtr<(SharedNode, MetricResult)>]>,
+    neighbors_count: usize,
 ) -> (SharedNode, Arc<ProbNode>) {
-    let node = Arc::new(ProbNode::new_with_neighbors(
-        hnsw_level, prop, neighbors, parent, child,
+    let node = Arc::new(ProbNode::new(
+        hnsw_level,
+        prop,
+        parent,
+        child,
+        neighbors_count,
     ));
     let lazy_node = ProbLazyItem::from_arc(node.clone(), version_id, version_number);
     (lazy_node, node)
@@ -892,16 +849,13 @@ fn create_node_edges(
     dense_index: Arc<DenseIndex>,
     lazy_node: SharedNode,
     node: Arc<ProbNode>,
-    neighbors: Vec<Option<(SharedNode, MetricResult)>>,
+    neighbors: Vec<(SharedNode, MetricResult)>,
     version: Hash,
     version_number: u16,
     serialization_table: Arc<TSHashTable<SharedNode, ()>>,
     lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16), SharedNode>>,
 ) -> Result<(), WaCustomError> {
-    for neighbor in neighbors.into_iter() {
-        let Some((neighbor, dist)) = neighbor else {
-            continue;
-        };
+    for (neighbor, dist) in neighbors.into_iter() {
         serialization_table.insert(neighbor.clone(), ());
 
         let new_lazy_neighbor = get_or_create_version(
@@ -922,26 +876,6 @@ fn create_node_edges(
     Ok(())
 }
 
-fn update_results(
-    results: &mut [Option<(SharedNode, MetricResult)>],
-    current_node_id_hash: u64,
-    new_node_id: &VectorId,
-    new_node: SharedNode,
-    dist: MetricResult,
-    neighbors_count: usize,
-) {
-    let idx = ((current_node_id_hash ^ new_node_id.get_hash()) % (neighbors_count as u64)) as usize;
-    let prev_result = &mut results[idx];
-
-    if let Some((_, prev_dist)) = prev_result {
-        if prev_dist.get_value() > dist.get_value() {
-            return;
-        }
-    }
-
-    *prev_result = Some((new_node, dist));
-}
-
 fn traverse_find_nearest(
     dense_index: Arc<DenseIndex>,
     vtm: SharedNode,
@@ -949,10 +883,9 @@ fn traverse_find_nearest(
     hops: u8,
     skipm: &mut HashSet<VectorId>,
     cur_level: HNSWLevel,
-    results: &mut [Option<(SharedNode, MetricResult)>],
-    current_node_id_hash: u64,
-    neighbors_count: usize,
-) -> Result<(), WaCustomError> {
+) -> Result<Vec<(SharedNode, MetricResult)>, WaCustomError> {
+    let mut tasks: SmallVec<[Vec<(SharedNode, MetricResult)>; 24]> = SmallVec::new();
+
     let (latest_version_lazy_node, _latest_version) =
         vtm.get_latest_version(dense_index.cache.clone())?;
 
@@ -998,31 +931,34 @@ fn traverse_find_nearest(
                         dense_index.hnsw_params.clone().get().num_layers,
                     )
                 {
-                    traverse_find_nearest(
+                    let mut z = traverse_find_nearest(
                         dense_index.clone(),
                         neighbor_node.clone(),
                         fvec.clone(),
                         hops + 1,
                         skipm,
                         cur_level,
-                        results,
-                        current_node_id_hash,
-                        neighbors_count,
                     )?;
+                    z.push((neighbor_node, dist));
+                    tasks.push(z);
+                } else {
+                    tasks.push(vec![(neighbor_node, dist)]);
                 }
-                update_results(
-                    results,
-                    current_node_id_hash,
-                    &nb,
-                    neighbor_node,
-                    dist,
-                    neighbors_count,
-                );
             }
         }
     }
 
-    Ok(())
+    let mut nn: Vec<_> = tasks.into_iter().flatten().collect();
+    nn.sort_by(|a, b| b.1.get_value().partial_cmp(&a.1.get_value()).unwrap());
+    let mut seen = HashSet::new();
+    nn.retain(|(lazy_node, _)| {
+        lazy_node
+            .get_lazy_data()
+            .and_then(|node| node.get_id())
+            .map_or(false, |id| seen.insert(id))
+    });
+
+    Ok(nn.into_iter().take(5).collect())
 }
 
 pub fn create_index_in_collection(

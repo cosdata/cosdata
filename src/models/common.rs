@@ -501,12 +501,11 @@ pub fn convert_vectors(vectors: Vec<Vector>) -> Vec<(VectorIdValue, Vec<f32>)> {
 }
 
 pub fn remove_duplicates_and_filter(
-    vec: Vec<Option<(SharedNode, MetricResult)>>,
+    vec: Vec<(SharedNode, MetricResult)>,
 ) -> Vec<(VectorId, MetricResult)> {
     let mut collected = vec
         .into_iter()
-        .filter_map(|result| {
-            let (lazy_item, similarity) = result?;
+        .filter_map(|(lazy_item, similarity)| {
             let id = lazy_item.get_lazy_data()?.get_id()?;
             if let VectorId::Int(s) = id {
                 if s == -1 {
