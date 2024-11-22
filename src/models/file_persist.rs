@@ -9,7 +9,7 @@ use super::types::{BytesToRead, FileOffset, HNSWLevel, MergedNode, NodeProp, Vec
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::sync::Arc;
 
 pub fn read_node_from_file(
@@ -104,15 +104,13 @@ pub fn write_prop_to_file(
 pub fn read_prop_from_file(
     (offset, bytes_to_read): (FileOffset, BytesToRead),
     mut file: &File,
-) -> Result<NodeProp, WaCustomError> {
+) -> Result<NodeProp, BufIoError> {
     let mut bytes = vec![0u8; bytes_to_read.0 as usize];
-    file.seek(SeekFrom::Start(offset.0 as u64))
-        .map_err(|e| WaCustomError::FsError(e.to_string()))?;
-    file.read_exact(&mut bytes)
-        .map_err(|e| WaCustomError::FsError(e.to_string()))?;
+    file.seek(SeekFrom::Start(offset.0 as u64))?;
+    file.read_exact(&mut bytes)?;
 
     let prop: NodePropDeserialize = serde_cbor::from_slice(&bytes)
-        .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?;
+        .map_err(|e| BufIoError::Io(io::Error::new(io::ErrorKind::InvalidData, e.to_string())))?;
 
     Ok(NodeProp {
         id: prop.id,

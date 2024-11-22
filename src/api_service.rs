@@ -55,6 +55,7 @@ pub async fn init_dense_index_for_collection(
     let prop_file = Arc::new(
         fs::OpenOptions::new()
             .create(true)
+            .read(true)
             .append(true)
             .open(collection_path.join("prop.data"))
             .map_err(|e| WaCustomError::FsError(e.to_string()))?,
@@ -69,7 +70,7 @@ pub async fn init_dense_index_for_collection(
         |root, ver| root.join(format!("{}.vec_raw", **ver)),
     ));
     // TODO: May be the value can be taken from config
-    let cache = Arc::new(ProbCache::new(1000, index_manager.clone()));
+    let cache = Arc::new(ProbCache::new(1000, index_manager.clone(), prop_file.clone()));
 
     let root = create_root_node(
         num_layers,
@@ -137,6 +138,7 @@ pub async fn init_inverted_index_for_collection(
     let prop_file = Arc::new(
         fs::OpenOptions::new()
             .create(true)
+            .read(true)
             .append(true)
             .open(collection_path.join("prop.data"))
             .map_err(|e| WaCustomError::FsError(e.to_string()))?,

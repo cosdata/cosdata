@@ -19,14 +19,13 @@ use crate::quantization::{Quantization, StorageType};
 use crate::storage::Storage;
 use lmdb::{Transaction, WriteFlags};
 use rand::Rng;
+use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
 use std::array::TryFromSliceError;
-use std::collections::HashSet;
 use std::fs::File;
 use std::io::SeekFrom;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
-use std::sync::mpsc::sync_channel;
 use std::sync::Arc;
 
 pub fn create_root_node(
@@ -103,7 +102,7 @@ pub fn ann_search(
     neighbors_count: usize,
 ) -> Result<Vec<(SharedNode, MetricResult)>, WaCustomError> {
     let fvec = vector_emb.quantized_vec.clone();
-    let mut skipm = HashSet::new();
+    let mut skipm = FxHashSet::default();
     skipm.insert(vector_emb.hash_vec.clone());
 
     let cur_node = cur_entry.try_get_data(dense_index.cache.clone())?;
@@ -583,7 +582,7 @@ fn index_embeddings_in_transaction_inner(
         // Create buffered channels for each worker
         let senders: Vec<_> = (0..worker_count)
             .map(|_| {
-                let (tx, rx) = sync_channel::<EmbeddingBatch>(CHANNEL_BUFFER_SIZE);
+                let (tx, rx) = mpsc::sync_channel::<EmbeddingBatch>(CHANNEL_BUFFER_SIZE);
 
                 let dense_index = dense_index.clone();
                 let quantization = quantization.clone();
@@ -725,7 +724,7 @@ pub fn index_embedding(
     neighbors_count: usize,
 ) -> Result<(), WaCustomError> {
     let fvec = vector_emb.quantized_vec.clone();
-    let mut skipm = HashSet::new();
+    let mut skipm = FxHashSet::default();
     skipm.insert(vector_emb.hash_vec.clone());
 
     let cur_node = cur_entry
@@ -897,7 +896,7 @@ fn traverse_find_nearest(
     vtm: &SharedNode,
     fvec: &Storage,
     hops: u8,
-    skipm: &mut HashSet<VectorId>,
+    skipm: &mut FxHashSet<VectorId>,
     cur_level: HNSWLevel,
     truncate_results: bool,
 ) -> Result<Vec<(SharedNode, MetricResult)>, WaCustomError> {
@@ -912,7 +911,7 @@ fn traverse_find_nearest(
 
     for neighbor in node.get_neighbors_raw() {
         let neighbor_node = unsafe {
-            if let Some(neighbor) = neighbor.load(Ordering::SeqCst).as_ref().cloned() {
+            if let Some(neighbor) = neighbor.load(Ordering::SeqCst).as_ref() {
                 neighbor.0.clone()
             } else {
                 continue;

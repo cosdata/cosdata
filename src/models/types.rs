@@ -31,11 +31,11 @@ use lmdb::{Database, DatabaseFlags, Environment, Transaction, WriteFlags};
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher24;
 use std::collections::HashSet;
-use std::{fmt, ptr};
 use std::hash::{DefaultHasher, Hash as StdHash, Hasher};
 use std::path::Path;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
+use std::{fmt, ptr};
 use std::{fs::*, thread};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -44,7 +44,7 @@ pub struct HNSWLevel(pub u8);
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct FileOffset(pub u32);
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize, Hash)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct BytesToRead(pub u32);
 
 #[derive(Clone)]
@@ -75,7 +75,7 @@ impl Identifiable for MergedNode {
 
 pub type PropPersistRef = (FileOffset, BytesToRead);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct NodeProp {
     pub id: VectorId,
     pub value: Arc<Storage>,
@@ -731,8 +731,20 @@ impl CollectionsMap {
             collection_path.clone(),
             |root, ver| root.join(format!("{}.vec_raw", **ver)),
         ));
+        let prop_file = Arc::new(
+            OpenOptions::new()
+                .create(true)
+                .read(true)
+                .append(true)
+                .open(collection_path.join("prop.data"))
+                .unwrap(),
+        );
         // TODO: May be the value can be taken from config
-        let cache = Arc::new(ProbCache::new(1000, index_manager.clone()));
+        let cache = Arc::new(ProbCache::new(
+            1000,
+            index_manager.clone(),
+            prop_file.clone(),
+        ));
 
         let db = Arc::new(
             self.lmdb_env
@@ -754,13 +766,6 @@ impl CollectionsMap {
             self.lmdb_env.clone(),
             db.clone(),
         ));
-        let prop_file = Arc::new(
-            OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(collection_path.join("prop.data"))
-                .unwrap(),
-        );
         let lmdb = MetaDb {
             env: self.lmdb_env.clone(),
             db,

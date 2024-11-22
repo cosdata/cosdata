@@ -4,15 +4,13 @@ use std::{
     sync::Arc,
 };
 
-use arcshift::ArcShift;
-
 use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
     cache_loader::ProbCache,
     lazy_load::{FileIndex, SyncPersist},
     prob_lazy_load::{lazy_item::ProbLazyItem, lazy_item_array::ProbLazyItemArray},
     prob_node::ProbNode,
-    types::{BytesToRead, FileOffset, HNSWLevel, PropState},
+    types::{BytesToRead, FileOffset, HNSWLevel},
     versioning::Hash,
 };
 
@@ -126,7 +124,7 @@ impl ProbSerialize for ProbNode {
                 // Read prop
                 let prop_offset = FileOffset(bufman.read_u32_with_cursor(cursor)?);
                 let prop_length = BytesToRead(bufman.read_u32_with_cursor(cursor)?);
-                let prop = Arc::new(PropState::Pending((prop_offset, prop_length)));
+                let prop = cache.get_prop(prop_offset, prop_length)?;
 
                 let parent_offset = bufman.read_u32_with_cursor(cursor)?;
                 let parent_version_number = bufman.read_u16_with_cursor(cursor)?;
@@ -201,12 +199,7 @@ impl ProbSerialize for ProbNode {
                 )?;
 
                 Ok(Self::new_with_neighbors_and_versions(
-                    hnsw_level,
-                    todo!(),
-                    neighbors,
-                    parent,
-                    child,
-                    versions,
+                    hnsw_level, prop, neighbors, parent, child, versions,
                 ))
             }
         }

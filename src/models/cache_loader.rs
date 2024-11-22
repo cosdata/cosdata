@@ -1,4 +1,5 @@
 use super::buffered_io::{BufIoError, BufferManagerFactory};
+use super::file_persist::read_prop_from_file;
 use super::lazy_load::{FileIndex, LazyItem, LazyItemVec, VectorData};
 use super::lru_cache::LRUCache;
 use super::prob_lazy_load::lazy_item::{ProbLazyItem, ProbLazyItemState};
@@ -18,10 +19,13 @@ use crate::storage::inverted_index_sparse_ann_basic::{
 use crate::storage::inverted_index_sparse_ann_new_ds::InvertedIndexNewDSNode;
 use crate::storage::Storage;
 use arcshift::ArcShift;
+use dashmap::DashMap;
 use probabilistic_collections::cuckoo::CuckooFilter;
 use std::cell::Cell;
 use std::collections::HashSet;
+use std::fs::File;
 use std::io;
+use std::sync::Weak;
 use std::sync::{atomic::AtomicBool, Arc, RwLock};
 
 macro_rules! define_cache_items {
@@ -273,19 +277,47 @@ define_prob_cache_items! {
 pub struct ProbCache {
     cuckoo_filter: RwLock<CuckooFilter<u64>>,
     registry: LRUCache<u64, ProbCacheItem>,
+    props_registry: DashMap<u64, Weak<NodeProp>>,
     bufmans: Arc<BufferManagerFactory>,
+    prop_file: Arc<File>,
 }
 
 impl ProbCache {
-    pub fn new(cuckoo_filter_capacity: usize, bufmans: Arc<BufferManagerFactory>) -> Self {
+    pub fn new(
+        cuckoo_filter_capacity: usize,
+        bufmans: Arc<BufferManagerFactory>,
+        prop_file: Arc<File>,
+    ) -> Self {
         let cuckoo_filter = CuckooFilter::new(cuckoo_filter_capacity);
         let registry = LRUCache::with_prob_eviction(1000, 0.03125);
+        let props_registry = DashMap::new();
 
         Self {
             cuckoo_filter: RwLock::new(cuckoo_filter),
             registry,
+            props_registry,
             bufmans,
+            prop_file,
         }
+    }
+
+    pub fn get_prop(
+        &self,
+        offset: FileOffset,
+        length: BytesToRead,
+    ) -> Result<Arc<NodeProp>, BufIoError> {
+        let key = Self::get_prop_key(offset, length);
+        if let Some(prop) = self
+            .props_registry
+            .get(&key)
+            .and_then(|prop| prop.upgrade())
+        {
+            return Ok(prop);
+        }
+        let prop = Arc::new(read_prop_from_file((offset, length), &self.prop_file)?);
+        let weak = Arc::downgrade(&prop);
+        self.props_registry.insert(key, weak);
+        Ok(prop)
     }
 
     pub fn get_lazy_object<T: ProbCacheable + UpdateSerialized + ProbSerialize>(
@@ -453,6 +485,13 @@ impl ProbCache {
             } => ((offset.0 as u64) << 32) | (**version_id as u64),
             FileIndex::Invalid => u64::MAX, // Use max u64 value for Invalid
         }
+    }
+
+    pub fn get_prop_key(
+        FileOffset(file_offset): FileOffset,
+        BytesToRead(length): BytesToRead,
+    ) -> u64 {
+        (file_offset as u64) << 32 | (length as u64)
     }
 
     pub fn load_item<T: ProbSerialize>(
