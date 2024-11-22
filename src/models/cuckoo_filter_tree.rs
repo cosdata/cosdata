@@ -11,7 +11,7 @@ pub struct CuckooFilterTreeNode {
 }
 
 impl CuckooFilterTreeNode {
-    fn new(index: usize, range_min: f32, range_max: f32) -> Self {
+    pub fn new(index: usize, range_min: f32, range_max: f32) -> Self {
         CuckooFilterTreeNode {
             filter: CuckooFilter::new(),
             left: None,
@@ -22,7 +22,7 @@ impl CuckooFilterTreeNode {
         }
     }
 
-    fn add_item(&mut self, id: u64, value: f32) {
+    pub fn add_item(&mut self, id: u64, value: f32) {
         if self.left.is_none() && self.right.is_none() {
             self.filter.add(&id);
             return;
@@ -42,7 +42,7 @@ impl CuckooFilterTreeNode {
         }
     }
 
-    fn search(&self, id: u64) -> (bool, usize) {
+    pub fn search(&self, id: u64) -> (bool, usize) {
         if !self.filter.contains(&id) {
             return (false, 0);
         }

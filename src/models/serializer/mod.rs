@@ -1,3 +1,4 @@
+mod cuckoo_filter_tree;
 mod dashmap;
 mod eager_lazy_item;
 mod eager_lazy_item_set;
