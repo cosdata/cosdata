@@ -6,18 +6,16 @@ use std::{
     },
 };
 
-use arcshift::ArcShift;
-
 use super::{
     prob_lazy_load::{lazy_item::ProbLazyItem, lazy_item_array::ProbLazyItemArray},
-    types::{HNSWLevel, MetricResult, PropState, VectorId},
+    types::{HNSWLevel, MetricResult, NodeProp, VectorId},
 };
 
 pub type SharedNode = Arc<ProbLazyItem<ProbNode>>;
 
 pub struct ProbNode {
     pub hnsw_level: HNSWLevel,
-    pub prop: ArcShift<PropState>,
+    pub prop: Arc<NodeProp>,
     neighbors: Box<[AtomicPtr<(SharedNode, MetricResult)>]>,
     parent: AtomicPtr<SharedNode>,
     child: AtomicPtr<SharedNode>,
@@ -30,7 +28,7 @@ unsafe impl Sync for ProbNode {}
 impl ProbNode {
     pub fn new(
         hnsw_level: HNSWLevel,
-        prop: ArcShift<PropState>,
+        prop: Arc<NodeProp>,
         parent: Option<SharedNode>,
         child: Option<SharedNode>,
         neighbors_count: usize,
@@ -57,7 +55,7 @@ impl ProbNode {
 
     pub fn new_with_neighbors(
         hnsw_level: HNSWLevel,
-        prop: ArcShift<PropState>,
+        prop: Arc<NodeProp>,
         neighbors: Box<[AtomicPtr<(SharedNode, MetricResult)>]>,
         parent: Option<SharedNode>,
         child: Option<SharedNode>,
@@ -78,7 +76,7 @@ impl ProbNode {
 
     pub fn new_with_neighbors_and_versions(
         hnsw_level: HNSWLevel,
-        prop: ArcShift<PropState>,
+        prop: Arc<NodeProp>,
         neighbors: Box<[AtomicPtr<(SharedNode, MetricResult)>]>,
         parent: Option<SharedNode>,
         child: Option<SharedNode>,
@@ -142,21 +140,17 @@ impl ProbNode {
         }
     }
 
-    pub fn get_id(&self) -> Option<VectorId> {
-        let mut prop_arc = self.prop.clone();
-        match prop_arc.get() {
-            PropState::Pending(_) => None,
-            PropState::Ready(prop) => Some(prop.id.clone()),
-        }
+    pub fn get_id(&self) -> &VectorId {
+        &self.prop.id
     }
 
     pub fn add_neighbor(
         &self,
         neighbor_node: SharedNode,
-        neighbor_id: VectorId,
+        neighbor_id: &VectorId,
         dist: MetricResult,
     ) {
-        let initial_idx = ((self.get_id().unwrap().get_hash() ^ neighbor_id.get_hash())
+        let initial_idx = ((self.get_id().get_hash() ^ neighbor_id.get_hash())
             % self.neighbors.len() as u64) as usize;
         let neighbor = Box::new((neighbor_node, dist));
         let neighbor_ptr = Box::into_raw(neighbor);

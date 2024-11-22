@@ -3,14 +3,17 @@ use std::sync::Arc;
 use arcshift::ArcShift;
 use tempfile::{tempdir, TempDir};
 
-use crate::models::{
-    buffered_io::{BufferManager, BufferManagerFactory},
-    cache_loader::ProbCache,
-    lazy_load::FileIndex,
-    prob_lazy_load::lazy_item::{ProbLazyItem, ProbLazyItemState},
-    prob_node::ProbNode,
-    types::{BytesToRead, FileOffset, HNSWLevel, PropState},
-    versioning::Hash,
+use crate::{
+    models::{
+        buffered_io::{BufferManager, BufferManagerFactory},
+        cache_loader::ProbCache,
+        lazy_load::FileIndex,
+        prob_lazy_load::lazy_item::{ProbLazyItem, ProbLazyItemState},
+        prob_node::ProbNode,
+        types::{BytesToRead, FileOffset, HNSWLevel, NodeProp, PropState, VectorId},
+        versioning::Hash,
+    },
+    storage::Storage,
 };
 
 use super::ProbSerialize;
@@ -43,10 +46,17 @@ fn setup_test(
 fn test_lazy_item_serialization() {
     let node = ProbNode::new(
         HNSWLevel(2),
-        ArcShift::new(PropState::Pending((FileOffset(0), BytesToRead(0)))),
+        Arc::new(NodeProp {
+            id: VectorId::Int(-1),
+            value: Arc::new(Storage::UnsignedByte {
+                mag: 10,
+                quant_vec: vec![1, 2, 3],
+            }),
+            location: (FileOffset(0), BytesToRead(0)),
+        }),
         None,
         None,
-        8
+        8,
     );
     let root_version_number = 0;
     let root_version_id = Hash::from(0);
@@ -95,10 +105,17 @@ fn test_prob_node_acyclic_serialization() {
     let root_version_id = Hash::from(0);
     let node = ProbNode::new(
         HNSWLevel(2),
-        ArcShift::new(PropState::Pending((FileOffset(0), BytesToRead(0)))),
+        Arc::new(NodeProp {
+            id: VectorId::Int(-1),
+            value: Arc::new(Storage::UnsignedByte {
+                mag: 10,
+                quant_vec: vec![1, 2, 3],
+            }),
+            location: (FileOffset(0), BytesToRead(0)),
+        }),
         None,
         None,
-        8
+        8,
     );
 
     let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version_id);

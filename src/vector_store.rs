@@ -17,18 +17,14 @@ use crate::models::types::*;
 use crate::models::versioning::Hash;
 use crate::quantization::{Quantization, StorageType};
 use crate::storage::Storage;
-use arcshift::ArcShift;
 use lmdb::{Transaction, WriteFlags};
-use probabilistic_collections::bloom::BloomFilter;
 use rand::Rng;
 use smallvec::SmallVec;
 use std::array::TryFromSliceError;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::SeekFrom;
-use std::ptr;
-use std::sync::atomic::AtomicU8;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::sync::mpsc::sync_channel;
 use std::sync::Arc;
@@ -59,11 +55,11 @@ pub fn create_root_node(
 
     let location = write_prop_to_file(&vec_hash, vector_list.clone(), &prop_file)?;
 
-    let prop = ArcShift::new(PropState::Ready(Arc::new(NodeProp {
+    let prop = Arc::new(NodeProp {
         id: vec_hash,
         value: vector_list.clone(),
         location,
-    })));
+    });
 
     let mut root = ProbLazyItem::new(
         ProbNode::new(HNSWLevel(0), prop.clone(), None, None, neighbors_count),
@@ -112,22 +108,10 @@ pub fn ann_search(
 
     let cur_node = cur_entry.try_get_data(dense_index.cache.clone())?;
 
-    let mut prop_arc = cur_node.prop.clone();
-    let prop_state = prop_arc.get();
-
-    let node_prop = match prop_state {
-        PropState::Ready(prop) => prop,
-        PropState::Pending(_) => {
-            return Err(WaCustomError::NodeError(
-                "Node prop is in pending state".to_string(),
-            ))
-        }
-    };
-
     let z = traverse_find_nearest(
-        dense_index.clone(),
-        cur_entry.clone(),
-        fvec.clone(),
+        &dense_index,
+        &cur_entry,
+        &fvec,
         0,
         &mut skipm,
         cur_level,
@@ -137,7 +121,7 @@ pub fn ann_search(
     let mut z = if z.is_empty() {
         let dist = dense_index
             .distance_metric
-            .calculate(&fvec, &node_prop.value)?;
+            .calculate(&fvec, &cur_node.prop.value)?;
 
         vec![(cur_entry.clone(), dist)]
     } else {
@@ -265,7 +249,7 @@ pub fn get_embedding_by_id(
     let db = dense_index.lmdb.db.clone();
 
     let txn = env
-        .begin_rw_txn()
+        .begin_ro_txn()
         .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
 
     let embedding_key = key!(e:vector_id);
@@ -276,6 +260,8 @@ pub fn get_embedding_by_id(
 
     let embedding_offset = EmbeddingOffset::deserialize(offset_serialized)
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+    txn.abort();
 
     let offset = embedding_offset.offset;
     let current_version = embedding_offset.version;
@@ -448,11 +434,11 @@ pub fn index_embeddings(
                     &dense_index.prop_file,
                 )
                 .expect("failed to write prop");
-                let prop = ArcShift::new(PropState::Ready(Arc::new(NodeProp {
+                let prop = Arc::new(NodeProp {
                     id: raw_emb.hash_vec.clone(),
                     value: quantized_vec.clone(),
                     location,
-                })));
+                });
                 let embedding = QuantizedVectorEmbedding {
                     quantized_vec,
                     hash_vec: raw_emb.hash_vec,
@@ -590,6 +576,7 @@ fn index_embeddings_in_transaction_inner(
 ) {
     let quantization = &*dense_index.quantization_metric;
     let neighbors_count = ctx.config.hnsw.neighbors_count;
+
     ctx.threadpool.scope(|s| {
         let worker_count = num_cpus::get();
 
@@ -625,11 +612,11 @@ fn index_embeddings_in_transaction_inner(
                             )
                             .expect("failed to write prop");
 
-                            let prop = ArcShift::new(PropState::Ready(Arc::new(NodeProp {
+                            let prop = Arc::new(NodeProp {
                                 id: raw_emb.hash_vec.clone(),
                                 value: quantized_vec.clone(),
                                 location,
-                            })));
+                            });
 
                             let embedding = QuantizedVectorEmbedding {
                                 quantized_vec,
@@ -728,7 +715,7 @@ pub fn index_embedding(
     dense_index: Arc<DenseIndex>,
     parent: Option<SharedNode>,
     vector_emb: QuantizedVectorEmbedding,
-    prop: ArcShift<PropState>,
+    prop: Arc<NodeProp>,
     cur_entry: SharedNode,
     cur_level: HNSWLevel,
     version: Hash,
@@ -746,22 +733,10 @@ pub fn index_embedding(
         .0
         .try_get_data(dense_index.cache.clone())?;
 
-    let mut prop_arc = cur_node.prop.clone();
-    let prop_state = prop_arc.get();
-
-    let node_prop = match prop_state {
-        PropState::Ready(prop) => prop,
-        PropState::Pending(_) => {
-            return Err(WaCustomError::NodeError(
-                "Node prop is in pending state".to_string(),
-            ))
-        }
-    };
-
     let z = traverse_find_nearest(
-        dense_index.clone(),
-        cur_entry.clone(),
-        fvec.clone(),
+        &dense_index,
+        &cur_entry,
+        &fvec,
         0,
         &mut skipm,
         cur_level,
@@ -771,7 +746,7 @@ pub fn index_embedding(
     let z = if z.is_empty() {
         let dist = dense_index
             .distance_metric
-            .calculate(&fvec, &node_prop.value)?;
+            .calculate(&fvec, &cur_node.prop.value)?;
 
         vec![(cur_entry, dist)]
     } else {
@@ -830,7 +805,7 @@ fn create_node(
     version_id: Hash,
     version_number: u16,
     hnsw_level: HNSWLevel,
-    prop: ArcShift<PropState>,
+    prop: Arc<NodeProp>,
     parent: Option<SharedNode>,
     child: Option<SharedNode>,
     neighbors_count: usize,
@@ -855,9 +830,8 @@ fn get_or_create_version(
 ) -> Result<SharedNode, WaCustomError> {
     let node = lazy_item.try_get_data(dense_index.cache.clone())?;
 
-    let new_version = lazy_item_versions_table.get_or_create(
-        (node.get_id().clone().unwrap(), version_number),
-        || {
+    let new_version =
+        lazy_item_versions_table.get_or_create((node.get_id().clone(), version_number), || {
             if let Some(version) = lazy_item
                 .get_version(version_number, dense_index.cache.clone())
                 .expect("Deserialization failed")
@@ -882,8 +856,7 @@ fn get_or_create_version(
                 .unwrap();
 
             version
-        },
-    );
+        });
 
     Ok(new_version)
 }
@@ -910,8 +883,8 @@ fn create_node_edges(
         )?;
         let new_neighbor = new_lazy_neighbor.try_get_data(dense_index.cache.clone())?;
 
-        new_neighbor.add_neighbor(lazy_node.clone(), node.get_id().unwrap(), dist);
-        node.add_neighbor(new_lazy_neighbor, new_neighbor.get_id().unwrap(), dist);
+        new_neighbor.add_neighbor(lazy_node.clone(), node.get_id(), dist);
+        node.add_neighbor(new_lazy_neighbor, new_neighbor.get_id(), dist);
     }
 
     serialization_table.insert(lazy_node, ());
@@ -920,9 +893,9 @@ fn create_node_edges(
 }
 
 fn traverse_find_nearest(
-    dense_index: Arc<DenseIndex>,
-    vtm: SharedNode,
-    fvec: Arc<Storage>,
+    dense_index: &DenseIndex,
+    vtm: &SharedNode,
+    fvec: &Storage,
     hops: u8,
     skipm: &mut HashSet<VectorId>,
     cur_level: HNSWLevel,
@@ -948,31 +921,14 @@ fn traverse_find_nearest(
         let Some(neighbor) = neighbor_node.get_lazy_data() else {
             continue;
         };
-        let mut prop_arc = neighbor.prop.clone();
-        let prop_state = prop_arc.get();
 
-        let node_prop = match prop_state {
-            PropState::Ready(prop) => prop.clone(),
-            PropState::Pending(loc) => {
-                return Err(WaCustomError::NodeError(format!(
-                    "Neighbor prop is in pending state at loc: {:?}",
-                    loc
-                )))
-            }
-        };
-
-        let nb = node_prop.id.clone();
-
-        let dense_index = dense_index.clone();
-        let fvec = fvec.clone();
-
-        if !skipm.insert(nb.clone()) {
+        if !skipm.insert(neighbor.prop.id.clone()) {
             continue;
         }
 
         let dist = dense_index
             .distance_metric
-            .calculate(&fvec, &node_prop.value)?;
+            .calculate(&fvec, &neighbor.prop.value)?;
 
         neighbors.push((neighbor_node, dist));
     }
@@ -986,9 +942,9 @@ fn traverse_find_nearest(
     for (i, (neighbor_node, dist)) in neighbors.into_iter().enumerate() {
         if hops <= 30 && i < 16 {
             let mut z = traverse_find_nearest(
-                dense_index.clone(),
-                neighbor_node.clone(),
-                fvec.clone(),
+                dense_index,
+                &neighbor_node,
+                fvec,
                 hops + 1,
                 skipm,
                 cur_level,
@@ -1002,7 +958,7 @@ fn traverse_find_nearest(
     }
 
     let mut nn: Vec<_> = tasks.into_iter().flatten().collect();
-    nn.sort_by(|a, b| b.1.get_value().partial_cmp(&a.1.get_value()).unwrap());
+    nn.sort_unstable_by(|a, b| b.1.get_value().partial_cmp(&a.1.get_value()).unwrap());
     if truncate_results {
         nn.truncate(5);
     }

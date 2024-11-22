@@ -39,18 +39,9 @@ impl ProbSerialize for ProbNode {
         bufman.write_u8_with_cursor(cursor, self.hnsw_level.0)?;
 
         // Serialize prop
-        let mut prop = self.prop.clone();
-        let prop_state = prop.get();
-        match prop_state {
-            PropState::Ready(node_prop) => {
-                bufman.write_u32_with_cursor(cursor, node_prop.location.0 .0)?;
-                bufman.write_u32_with_cursor(cursor, node_prop.location.1 .0)?;
-            }
-            PropState::Pending((FileOffset(offset), BytesToRead(length))) => {
-                bufman.write_u32_with_cursor(cursor, *offset)?;
-                bufman.write_u32_with_cursor(cursor, *length)?;
-            }
-        }
+        let (FileOffset(offset), BytesToRead(length)) = &self.prop.location;
+        bufman.write_u32_with_cursor(cursor, *offset)?;
+        bufman.write_u32_with_cursor(cursor, *length)?;
 
         // 10 bytes for parent offset + 10 bytes for child offset + 4 bytes for neighbors offset + 4 bytes for versions
         bufman.write_with_cursor(cursor, &[u8::MAX; 28])?;
@@ -135,7 +126,7 @@ impl ProbSerialize for ProbNode {
                 // Read prop
                 let prop_offset = FileOffset(bufman.read_u32_with_cursor(cursor)?);
                 let prop_length = BytesToRead(bufman.read_u32_with_cursor(cursor)?);
-                let prop = PropState::Pending((prop_offset, prop_length));
+                let prop = Arc::new(PropState::Pending((prop_offset, prop_length)));
 
                 let parent_offset = bufman.read_u32_with_cursor(cursor)?;
                 let parent_version_number = bufman.read_u16_with_cursor(cursor)?;
@@ -211,7 +202,7 @@ impl ProbSerialize for ProbNode {
 
                 Ok(Self::new_with_neighbors_and_versions(
                     hnsw_level,
-                    ArcShift::new(prop),
+                    todo!(),
                     neighbors,
                     parent,
                     child,
