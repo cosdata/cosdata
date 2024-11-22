@@ -1,4 +1,5 @@
 use crate::app_context::AppContext;
+use crate::distance::cosine::CosineSimilarity;
 use crate::distance::DistanceFunction;
 use crate::macros::key;
 use crate::models::buffered_io::BufferManager;
@@ -18,6 +19,7 @@ use crate::quantization::{Quantization, StorageType};
 use crate::storage::Storage;
 use arcshift::ArcShift;
 use lmdb::{Transaction, WriteFlags};
+use probabilistic_collections::bloom::BloomFilter;
 use rand::Rng;
 use smallvec::SmallVec;
 use std::array::TryFromSliceError;
@@ -25,6 +27,7 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::io::SeekFrom;
 use std::ptr;
+use std::sync::atomic::AtomicU8;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::mpsc;
 use std::sync::mpsc::sync_channel;
@@ -128,6 +131,7 @@ pub fn ann_search(
         0,
         &mut skipm,
         cur_level,
+        false,
     )?;
 
     let mut z = if z.is_empty() {
@@ -163,6 +167,44 @@ pub fn vector_fetch(
     _vector_id: VectorId,
 ) -> Result<Vec<Option<(VectorId, Vec<(VectorId, MetricResult)>)>>, WaCustomError> {
     Ok(Vec::new())
+}
+
+pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    assert_eq!(a.len(), b.len());
+
+    let dot_prod: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+
+    let mag_a: f32 = a.iter().map(|x| x.powi(2)).sum::<f32>().sqrt();
+    let mag_b: f32 = b.iter().map(|x| x.powi(2)).sum::<f32>().sqrt();
+
+    // Avoid division by zero
+    if mag_a == 0.0 || mag_b == 0.0 {
+        return 0.0;
+    }
+
+    dot_prod / (mag_a * mag_b)
+}
+
+pub fn finalize_ann_results(
+    dense_index: Arc<DenseIndex>,
+    results: Vec<(SharedNode, MetricResult)>,
+    query: &[f32],
+) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
+    let filtered = remove_duplicates_and_filter(results);
+    let mut results = Vec::new();
+
+    for (id, _) in filtered {
+        let raw = get_embedding_by_id(dense_index.clone(), &id)?;
+        let cs = cosine_similarity(query, &raw.raw_vec);
+        results.push((id, MetricResult::CosineSimilarity(CosineSimilarity(cs))));
+    }
+    results.sort_unstable_by(|(_, a), (_, b)| {
+        b.get_value()
+            .partial_cmp(&a.get_value())
+            .unwrap_or(std::cmp::Ordering::Greater)
+    });
+    results.truncate(5);
+    Ok(results)
 }
 
 /// Retrieves a raw embedding vector from the vector store by its ID.
@@ -217,7 +259,7 @@ pub fn vector_fetch(
 /// The function assumes the existence of methods and types like `EmbeddingOffset::deserialize`, `BufferManagerFactory::new`, and `read_embedding` which should be implemented correctly.
 pub fn get_embedding_by_id(
     dense_index: Arc<DenseIndex>,
-    vector_id: VectorId,
+    vector_id: &VectorId,
 ) -> Result<RawVectorEmbedding, WaCustomError> {
     let env = dense_index.lmdb.env.clone();
     let db = dense_index.lmdb.db.clone();
@@ -723,6 +765,7 @@ pub fn index_embedding(
         0,
         &mut skipm,
         cur_level,
+        true,
     )?;
 
     let z = if z.is_empty() {
@@ -883,6 +926,7 @@ fn traverse_find_nearest(
     hops: u8,
     skipm: &mut HashSet<VectorId>,
     cur_level: HNSWLevel,
+    truncate_results: bool,
 ) -> Result<Vec<(SharedNode, MetricResult)>, WaCustomError> {
     let mut tasks: SmallVec<[Vec<(SharedNode, MetricResult)>; 24]> = SmallVec::new();
 
@@ -890,6 +934,8 @@ fn traverse_find_nearest(
         vtm.get_latest_version(dense_index.cache.clone())?;
 
     let node = latest_version_lazy_node.try_get_data(dense_index.cache.clone())?;
+
+    let mut neighbors = Vec::new();
 
     for neighbor in node.get_neighbors_raw() {
         let neighbor_node = unsafe {
@@ -899,66 +945,68 @@ fn traverse_find_nearest(
                 continue;
             }
         };
-        if let Some(neighbor) = neighbor_node.get_lazy_data() {
-            let mut prop_arc = neighbor.prop.clone();
-            let prop_state = prop_arc.get();
+        let Some(neighbor) = neighbor_node.get_lazy_data() else {
+            continue;
+        };
+        let mut prop_arc = neighbor.prop.clone();
+        let prop_state = prop_arc.get();
 
-            let node_prop = match prop_state {
-                PropState::Ready(prop) => prop.clone(),
-                PropState::Pending(loc) => {
-                    return Err(WaCustomError::NodeError(format!(
-                        "Neighbor prop is in pending state at loc: {:?}",
-                        loc
-                    )))
-                }
-            };
-
-            let nb = node_prop.id.clone();
-
-            let dense_index = dense_index.clone();
-            let fvec = fvec.clone();
-
-            if skipm.insert(nb.clone()) {
-                let dist = dense_index
-                    .distance_metric
-                    .calculate(&fvec, &node_prop.value)?;
-
-                let full_hops = 30;
-                if hops
-                    <= tapered_total_hops(
-                        full_hops,
-                        cur_level.0,
-                        dense_index.hnsw_params.clone().get().num_layers,
-                    )
-                {
-                    let mut z = traverse_find_nearest(
-                        dense_index.clone(),
-                        neighbor_node.clone(),
-                        fvec.clone(),
-                        hops + 1,
-                        skipm,
-                        cur_level,
-                    )?;
-                    z.push((neighbor_node, dist));
-                    tasks.push(z);
-                } else {
-                    tasks.push(vec![(neighbor_node, dist)]);
-                }
+        let node_prop = match prop_state {
+            PropState::Ready(prop) => prop.clone(),
+            PropState::Pending(loc) => {
+                return Err(WaCustomError::NodeError(format!(
+                    "Neighbor prop is in pending state at loc: {:?}",
+                    loc
+                )))
             }
+        };
+
+        let nb = node_prop.id.clone();
+
+        let dense_index = dense_index.clone();
+        let fvec = fvec.clone();
+
+        if !skipm.insert(nb.clone()) {
+            continue;
+        }
+
+        let dist = dense_index
+            .distance_metric
+            .calculate(&fvec, &node_prop.value)?;
+
+        neighbors.push((neighbor_node, dist));
+    }
+
+    neighbors.sort_unstable_by(|(_, a), (_, b)| {
+        b.get_value()
+            .partial_cmp(&a.get_value())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    for (i, (neighbor_node, dist)) in neighbors.into_iter().enumerate() {
+        if hops <= 30 && i < 16 {
+            let mut z = traverse_find_nearest(
+                dense_index.clone(),
+                neighbor_node.clone(),
+                fvec.clone(),
+                hops + 1,
+                skipm,
+                cur_level,
+                truncate_results,
+            )?;
+            z.push((neighbor_node, dist));
+            tasks.push(z);
+        } else {
+            tasks.push(vec![(neighbor_node, dist)]);
         }
     }
 
     let mut nn: Vec<_> = tasks.into_iter().flatten().collect();
     nn.sort_by(|a, b| b.1.get_value().partial_cmp(&a.1.get_value()).unwrap());
-    let mut seen = HashSet::new();
-    nn.retain(|(lazy_node, _)| {
-        lazy_node
-            .get_lazy_data()
-            .and_then(|node| node.get_id())
-            .map_or(false, |id| seen.insert(id))
-    });
-
-    Ok(nn.into_iter().take(5).collect())
+    if truncate_results {
+        nn.truncate(5);
+    }
+    Ok(nn)
 }
 
 pub fn create_index_in_collection(

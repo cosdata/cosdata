@@ -341,6 +341,35 @@ def bruteforce_search(vectors, query, k=5):
 
     return similarities[:k]
 
+
+def generate_vectors(req_ct, batch_count, batch_size, dimensions, perturbation_degree):
+    vectors = []
+    
+    for base_idx in range(batch_count):
+        base_vector = generate_random_vector_with_id(
+            (req_ct * batch_count * batch_size) + (base_idx * batch_size), dimensions
+        )
+
+        vectors.append(base_vector)
+
+        for i in range(batch_size - 1):
+            perturbed_vector = generate_perturbation(
+                base_vector,
+                (req_ct * batch_count * batch_size) + (base_idx * batch_size + i + 1),  # Unique ID for each perturbation
+                perturbation_degree,
+                dimensions,
+            )
+            vectors.append(perturbed_vector)
+    
+    # Shuffle the vectors
+    np.random.shuffle(vectors)
+    return vectors
+
+def search(vectors, vector_db_name, query):
+    ann_response = ann_vector(query["id"], vector_db_name, query["values"])
+    bruteforce_result = bruteforce_search(vectors, query, 5)
+    return (ann_response, bruteforce_result)
+
 if __name__ == "__main__":
     # Create database
     vector_db_name = "testdb"
@@ -348,6 +377,8 @@ if __name__ == "__main__":
     max_val = 1.0
     min_val = -1.0
     perturbation_degree = 0.25  # Degree of perturbation
+    batch_size = 100
+    batch_count = 100
 
     # first login to get the auth jwt token
     login_response = login()
@@ -359,11 +390,11 @@ if __name__ == "__main__":
         dimension=dimensions,
     )
     print("Create Collection(DB) Response:", create_collection_response)
-    create_explicit_index(vector_db_name)
+    # create_explicit_index(vector_db_name)
+
+    start_time = time.time()
 
     shortlisted_vectors = []
-    inserted_vectors = []
-    start_time = time.time()
 
     for req_ct in range(1):
         transaction_id = None
@@ -372,29 +403,41 @@ if __name__ == "__main__":
             transaction_response = create_transaction(vector_db_name)
             transaction_id = transaction_response["transaction_id"]
             print(f"Created transaction: {transaction_id}")
+            
+            vectors = generate_vectors(req_ct, batch_count, batch_size, dimensions, perturbation_degree)
+
+            # for base_idx in range(5):
+            #     upsert_in_transaction(vector_db_name, transaction_id, vectors[base_idx*batch_size:(base_idx*batch_size)+batch_size])
+            #     shortlisted_vectors.append(generate_perturbation(
+            #         vectors[base_idx*batch_size],
+            #         base_idx,
+            #         perturbation_degree,
+            #         dimensions,
+            #     ))
 
             # Process vectors concurrently
             with ThreadPoolExecutor(max_workers=32) as executor:
                 futures = []
-                for base_idx in range(100):
+                for base_idx in range(batch_count):
                     futures.append(
                         executor.submit(
-                            process_base_vector_batch,
-                            req_ct,
-                            base_idx,
+                            upsert_in_transaction,
                             vector_db_name,
                             transaction_id,
-                            dimensions,
-                            perturbation_degree,
+                            vectors[base_idx*batch_size:(base_idx*batch_size)+batch_size]
                         )
                     )
+                    shortlisted_vectors.append(generate_perturbation(
+                        vectors[base_idx*batch_size],
+                        base_idx,
+                        perturbation_degree,
+                        dimensions,
+                    ))
 
                 # Collect results
                 for future in as_completed(futures):
                     try:
-                        (id, vec, batch) = future.result()
-                        shortlisted_vectors.append((id, vec))
-                        inserted_vectors.extend(batch)
+                        future.result()
                     except Exception as e:
                         print(f"Error in future: {e}")
 
@@ -419,28 +462,27 @@ if __name__ == "__main__":
     best_matches_bruteforce = []
     with ThreadPoolExecutor(max_workers=32) as executor:
         futures = []
-        for idd, vector in shortlisted_vectors:
+        for query in shortlisted_vectors:
             futures.append(
-                executor.submit(ann_vector, idd, vector_db_name, vector["values"])
+                executor.submit(search, vectors, vector_db_name, query)
             )
 
         for i, future in enumerate(as_completed(futures)):
             try:
-                (idr, ann_response) = future.result()
+                ((idr, ann_response), (bruteforce_results)) = future.result()
                 if (
                     "RespVectorKNN" in ann_response
                     and "knn" in ann_response["RespVectorKNN"]
                 ):
                     print(f"ANN Vector Response <<< {idr} >>>:")
                     print("  Server:")
-                    for j, match in enumerate(ann_response["RespVectorKNN"]["knn"]):
+                    for j, match in enumerate(ann_response["RespVectorKNN"]["knn"][:5]):
                         id = match[0]
                         cs = match[1]["CosineSimilarity"]
                         print(f"    {j + 1}: {id} ({cs})")
                     best_matches_server.append(
                         ann_response["RespVectorKNN"]["knn"][0][1]["CosineSimilarity"]
                     )  # Collect the second item in the knn list
-                    bruteforce_results = bruteforce_search(inserted_vectors, shortlisted_vectors[i][1], 5)
 
                     print("  Brute force:")
                     for j, result in enumerate(bruteforce_results):

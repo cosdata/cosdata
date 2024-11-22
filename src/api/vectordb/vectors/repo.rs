@@ -91,7 +91,7 @@ pub(crate) async fn get_vector_by_id(
         .await
         .map_err(|_| VectorsError::NotFound)?;
 
-    let embedding = get_embedding_by_id(vec_store, vector_id)
+    let embedding = get_embedding_by_id(vec_store, &vector_id)
         .map_err(|e| VectorsError::DatabaseError(e.to_string()))?;
 
     let id = match embedding.hash_vec {

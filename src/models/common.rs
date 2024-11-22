@@ -10,7 +10,7 @@ use crate::quantization::QuantizationError;
 use sha2::{Digest, Sha256};
 use std::cmp::Ordering;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 use std::{fmt, thread};
@@ -503,10 +503,14 @@ pub fn convert_vectors(vectors: Vec<Vector>) -> Vec<(VectorIdValue, Vec<f32>)> {
 pub fn remove_duplicates_and_filter(
     vec: Vec<(SharedNode, MetricResult)>,
 ) -> Vec<(VectorId, MetricResult)> {
+    let mut seen = HashSet::new();
     let mut collected = vec
         .into_iter()
         .filter_map(|(lazy_item, similarity)| {
             let id = lazy_item.get_lazy_data()?.get_id()?;
+            if !seen.insert(id.clone()) {
+                return None;
+            }
             if let VectorId::Int(s) = id {
                 if s == -1 {
                     return None;
@@ -515,11 +519,13 @@ pub fn remove_duplicates_and_filter(
             Some((id, similarity))
         })
         .collect::<Vec<_>>();
+
     collected.sort_unstable_by(|(_, a), (_, b)| {
         b.get_value()
             .partial_cmp(&a.get_value())
             .unwrap_or(Ordering::Equal)
     });
+    collected.truncate(100);
     collected
 }
 

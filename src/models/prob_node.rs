@@ -156,36 +156,54 @@ impl ProbNode {
         neighbor_id: VectorId,
         dist: MetricResult,
     ) {
-        let idx = ((self.get_id().unwrap().get_hash() ^ neighbor_id.get_hash())
+        let initial_idx = ((self.get_id().unwrap().get_hash() ^ neighbor_id.get_hash())
             % self.neighbors.len() as u64) as usize;
         let neighbor = Box::new((neighbor_node, dist));
-
         let neighbor_ptr = Box::into_raw(neighbor);
 
-        let result = self.neighbors[idx].fetch_update(
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-            |current_neighbor| {
-                if current_neighbor.is_null() {
-                    Some(neighbor_ptr)
-                } else {
-                    unsafe {
-                        if dist.get_value() > (*current_neighbor).1.get_value() {
-                            Some(neighbor_ptr)
-                        } else {
-                            None
+        let mut current_idx = initial_idx;
+        let mut inserted = false;
+
+        // Try half of indices, starting from initial_idx, with wrap around
+        for _ in 0..(self.neighbors.len() / 2) {
+            let result = self.neighbors[current_idx].fetch_update(
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+                |current_neighbor| {
+                    if current_neighbor.is_null() {
+                        Some(neighbor_ptr)
+                    } else {
+                        unsafe {
+                            if dist.get_value() > (*current_neighbor).1.get_value() {
+                                Some(neighbor_ptr)
+                            } else {
+                                None
+                            }
                         }
                     }
-                }
-            },
-        );
+                },
+            );
 
-        unsafe {
-            if let Ok(prev_neighbor) = result {
-                if !prev_neighbor.is_null() {
-                    drop(Box::from_raw(prev_neighbor));
+            match result {
+                Ok(prev_neighbor) => {
+                    unsafe {
+                        if !prev_neighbor.is_null() {
+                            drop(Box::from_raw(prev_neighbor));
+                        }
+                    }
+                    inserted = true;
+                    break;
                 }
-            } else {
+                Err(_) => {
+                    // Try next index with wraparound
+                    current_idx = (current_idx + 1) % self.neighbors.len();
+                }
+            }
+        }
+
+        // If we couldn't insert after trying all positions, clean up
+        if !inserted {
+            unsafe {
                 drop(Box::from_raw(neighbor_ptr));
             }
         }

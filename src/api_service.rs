@@ -171,11 +171,6 @@ pub fn run_upload_in_transaction(
     let version = transaction.id;
     let version_number = transaction.version_number;
 
-    let bufman = dense_index
-        .vec_raw_manager
-        .get(&version)
-        .map_err(|e| WaCustomError::BufIo(Arc::new(e)))?;
-
     let (tx, rx) = mpsc::channel();
 
     let handle = {
@@ -206,8 +201,6 @@ pub fn run_upload_in_transaction(
     handle.join().unwrap();
 
     transaction.start_serialization_round();
-
-    bufman.flush()?;
 
     Ok(())
 }
@@ -377,7 +370,7 @@ pub async fn ann_vector_query(
         HNSWLevel(dense_index.hnsw_params.clone().get().num_layers),
         ctx.config.hnsw.neighbors_count,
     )?;
-    let output = remove_duplicates_and_filter(results);
+    let output = finalize_ann_results(dense_index, results, &query)?;
     Ok(output)
 }
 
