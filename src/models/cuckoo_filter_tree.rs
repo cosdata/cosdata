@@ -1,18 +1,19 @@
-use probabilistic_collections::cuckoo::CuckooFilter;
+use cuckoofilter::CuckooFilter;
+use std::hash::DefaultHasher;
 
-struct CuckooFilterTreeNode {
-    filter: CuckooFilter<u64>,
-    left: Option<Box<CuckooFilterTreeNode>>,
-    right: Option<Box<CuckooFilterTreeNode>>,
-    index: usize,
-    range_min: f32,
-    range_max: f32,
+pub struct CuckooFilterTreeNode {
+    pub filter: CuckooFilter<DefaultHasher>,
+    pub left: Option<Box<CuckooFilterTreeNode>>,
+    pub right: Option<Box<CuckooFilterTreeNode>>,
+    pub index: usize,
+    pub range_min: f32,
+    pub range_max: f32,
 }
 
 impl CuckooFilterTreeNode {
     fn new(index: usize, range_min: f32, range_max: f32) -> Self {
         CuckooFilterTreeNode {
-            filter: CuckooFilter::new(100),
+            filter: CuckooFilter::new(),
             left: None,
             right: None,
             index,
@@ -23,11 +24,11 @@ impl CuckooFilterTreeNode {
 
     fn add_item(&mut self, id: u64, value: f32) {
         if self.left.is_none() && self.right.is_none() {
-            self.filter.insert(&id);
+            self.filter.add(&id);
             return;
         }
 
-        self.filter.insert(&id);
+        self.filter.add(&id);
         let mid = (self.range_min + self.range_max) / 2.0;
 
         if value <= mid {

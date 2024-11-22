@@ -952,6 +952,7 @@ dependencies = [
  "cbor",
  "chrono",
  "criterion",
+ "cuckoofilter",
  "dashmap",
  "env_logger 0.11.3",
  "futures",
@@ -1085,6 +1086,17 @@ checksum = "1bfb12502f3fc46cca1bb51ac28df9d618d813cdc3d2f25b9fe775a34af26bb3"
 dependencies = [
  "generic-array",
  "typenum",
+]
+
+[[package]]
+name = "cuckoofilter"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b810a8449931679f64cd7eef1bbd0fa315801b6d5d9cdc1ace2804d6529eee18"
+dependencies = [
+ "byteorder 1.5.0",
+ "fnv",
+ "rand 0.7.3",
 ]
 
 [[package]]
