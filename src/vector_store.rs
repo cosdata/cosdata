@@ -27,13 +27,14 @@ use std::io::SeekFrom;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::sync::Arc;
+use std::sync::RwLock;
 
 pub fn create_root_node(
     num_layers: u8,
     quantization_metric: &QuantizationMetric,
     storage_type: StorageType,
     dim: usize,
-    prop_file: Arc<File>,
+    prop_file: Arc<RwLock<File>>,
     hash: Hash,
     index_manager: Arc<BufferManagerFactory>,
     neighbors_count: usize,
@@ -52,7 +53,9 @@ pub fn create_root_node(
 
     let vector_list = Arc::new(quantization_metric.quantize(&vec, storage_type)?);
 
-    let location = write_prop_to_file(&vec_hash, vector_list.clone(), &prop_file)?;
+    let mut prop_file_guard = prop_file.write().unwrap();
+    let location = write_prop_to_file(&vec_hash, vector_list.clone(), &mut *prop_file_guard)?;
+    drop(prop_file_guard);
 
     let prop = Arc::new(NodeProp {
         id: vec_hash,
@@ -427,12 +430,14 @@ pub fn index_embeddings(
                         )
                         .expect("Quantization failed"),
                 );
+                let mut prop_file_guard = dense_index.prop_file.write().unwrap();
                 let location = write_prop_to_file(
                     &raw_emb.hash_vec,
                     quantized_vec.clone(),
-                    &dense_index.prop_file,
+                    &mut *prop_file_guard,
                 )
                 .expect("failed to write prop");
+                drop(prop_file_guard);
                 let prop = Arc::new(NodeProp {
                     id: raw_emb.hash_vec.clone(),
                     value: quantized_vec.clone(),
@@ -604,12 +609,14 @@ fn index_embeddings_in_transaction_inner(
                                     .expect("Quantization failed"),
                             );
 
+                            let mut prop_file_guard = dense_index.prop_file.write().unwrap();
                             let location = write_prop_to_file(
                                 &raw_emb.hash_vec,
                                 quantized_vec.clone(),
-                                &dense_index.prop_file,
+                                &mut *prop_file_guard,
                             )
                             .expect("failed to write prop");
+                            drop(prop_file_guard);
 
                             let prop = Arc::new(NodeProp {
                                 id: raw_emb.hash_vec.clone(),
@@ -917,9 +924,7 @@ fn traverse_find_nearest(
                 continue;
             }
         };
-        let Some(neighbor) = neighbor_node.get_lazy_data() else {
-            continue;
-        };
+        let neighbor = neighbor_node.try_get_data(dense_index.cache.clone())?;
 
         if !skipm.insert(neighbor.prop.id.clone()) {
             continue;

@@ -103,7 +103,7 @@ pub fn write_prop_to_file(
 
 pub fn read_prop_from_file(
     (offset, bytes_to_read): (FileOffset, BytesToRead),
-    mut file: &File,
+    file: &mut File,
 ) -> Result<NodeProp, BufIoError> {
     let mut bytes = vec![0u8; bytes_to_read.0 as usize];
     file.seek(SeekFrom::Start(offset.0 as u64))?;

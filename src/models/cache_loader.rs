@@ -280,14 +280,14 @@ pub struct ProbCache {
     registry: LRUCache<u64, ProbCacheItem>,
     props_registry: DashMap<u64, Weak<NodeProp>>,
     bufmans: Arc<BufferManagerFactory>,
-    prop_file: Arc<File>,
+    prop_file: Arc<RwLock<File>>,
 }
 
 impl ProbCache {
     pub fn new(
         cuckoo_filter_capacity: usize,
         bufmans: Arc<BufferManagerFactory>,
-        prop_file: Arc<File>,
+        prop_file: Arc<RwLock<File>>,
     ) -> Self {
         let cuckoo_filter = CuckooFilter::new(cuckoo_filter_capacity);
         let registry = LRUCache::with_prob_eviction(1000, 0.03125);
@@ -315,7 +315,12 @@ impl ProbCache {
         {
             return Ok(prop);
         }
-        let prop = Arc::new(read_prop_from_file((offset, length), &self.prop_file)?);
+        let mut prop_file_guard = self.prop_file.write().unwrap();
+        let prop = Arc::new(read_prop_from_file(
+            (offset, length),
+            &mut *prop_file_guard,
+        )?);
+        drop(prop_file_guard);
         let weak = Arc::downgrade(&prop);
         self.props_registry.insert(key, weak);
         Ok(prop)
@@ -349,20 +354,14 @@ impl ProbCache {
 
         {
             let cuckoo_filter = self.cuckoo_filter.read().unwrap();
-            println!("Acquired read lock on cuckoo_filter");
 
             // Initial check with Cuckoo filter
             if cuckoo_filter.contains(&combined_index) {
-                println!("FileIndex found in cuckoo_filter");
                 if let Some(obj) = self.registry.get(&combined_index) {
                     if let Some(item) = T::from_cache_item(obj) {
                         return Ok(item);
                     }
-                } else {
-                    println!("Object not found in registry despite being in cuckoo_filter");
                 }
-            } else {
-                println!("FileIndex not found in cuckoo_filter");
             }
         }
 
@@ -423,11 +422,9 @@ impl ProbCache {
 
         let (node, is_new) = {
             let cuckoo_filter = self.cuckoo_filter.read().unwrap();
-            println!("Acquired read lock on cuckoo_filter");
 
             // Initial check with Cuckoo filter
             if cuckoo_filter.contains(&combined_index) {
-                println!("FileIndex found in cuckoo_filter");
                 if let Some(obj) = self.registry.get(&combined_index) {
                     if let Some(item) = T::from_cache_item(obj) {
                         if let ProbLazyItemState::Ready { data, .. } = &*item.get_state() {
@@ -439,11 +436,9 @@ impl ProbCache {
                         (ProbLazyItem::new_pending(file_index), true)
                     }
                 } else {
-                    println!("Object not found in registry despite being in cuckoo_filter");
                     (ProbLazyItem::new_pending(file_index), true)
                 }
             } else {
-                println!("FileIndex not found in cuckoo_filter");
                 (ProbLazyItem::new_pending(file_index), true)
             }
         };

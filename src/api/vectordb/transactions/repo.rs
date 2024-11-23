@@ -5,6 +5,7 @@ use std::sync::Arc;
 use self::vectors::dtos::UpsertDto;
 
 use super::{dtos::CreateTransactionResponseDto, error::TransactionError};
+use crate::models::meta_persist::update_current_version;
 use crate::models::rpc::VectorIdValue;
 use crate::models::types::DenseIndexTransaction;
 use crate::models::versioning::Hash;
@@ -88,6 +89,8 @@ pub(crate) async fn commit_transaction(
     vec_store
         .current_open_transaction
         .store(ptr::null_mut(), Ordering::SeqCst);
+    update_current_version(&vec_store.lmdb, current_transaction_id)
+        .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
 
     Ok(())
 }

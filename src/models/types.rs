@@ -35,7 +35,7 @@ use std::collections::HashSet;
 use std::hash::{DefaultHasher, Hash as StdHash, Hasher};
 use std::path::Path;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, RwLock};
 use std::{fmt, ptr};
 use std::{fs::*, thread};
 
@@ -540,7 +540,7 @@ pub struct DenseIndex {
     pub root_vec: Arc<AtomicPtr<SharedNode>>,
     pub levels_prob: Arc<Vec<(f64, i32)>>,
     pub dim: usize,
-    pub prop_file: Arc<File>,
+    pub prop_file: Arc<RwLock<File>>,
     pub lmdb: MetaDb,
     pub current_version: ArcShift<Hash>,
     pub current_open_transaction: Arc<AtomicPtr<DenseIndexTransaction>>,
@@ -563,7 +563,7 @@ impl DenseIndex {
         root_vec: SharedNode,
         levels_prob: Arc<Vec<(f64, i32)>>,
         dim: usize,
-        prop_file: Arc<File>,
+        prop_file: Arc<RwLock<File>>,
         lmdb: MetaDb,
         current_version: ArcShift<Hash>,
         quantization_metric: ArcShift<QuantizationMetric>,
@@ -735,14 +735,14 @@ impl CollectionsMap {
             collection_path.clone(),
             |root, ver| root.join(format!("{}.vec_raw", **ver)),
         ));
-        let prop_file = Arc::new(
+        let prop_file = Arc::new(RwLock::new(
             OpenOptions::new()
                 .create(true)
                 .read(true)
                 .append(true)
                 .open(collection_path.join("prop.data"))
                 .unwrap(),
-        );
+        ));
         // TODO: May be the value can be taken from config
         let cache = Arc::new(ProbCache::new(
             1000,

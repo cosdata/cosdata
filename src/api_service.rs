@@ -21,7 +21,7 @@ use std::array::TryFromSliceError;
 use std::fs;
 use std::io::SeekFrom;
 use std::path::Path;
-use std::sync::mpsc;
+use std::sync::{mpsc, RwLock};
 use std::sync::Arc;
 use std::thread;
 
@@ -52,14 +52,14 @@ pub async fn init_dense_index_for_collection(
 
     // Note that setting .write(true).append(true) has the same effect
     // as setting only .append(true)
-    let prop_file = Arc::new(
+    let prop_file = Arc::new(RwLock::new(
         fs::OpenOptions::new()
             .create(true)
             .read(true)
             .append(true)
             .open(collection_path.join("prop.data"))
             .map_err(|e| WaCustomError::FsError(e.to_string()))?,
-    );
+    ));
 
     let index_manager = Arc::new(BufferManagerFactory::new(
         collection_path.clone(),
@@ -70,7 +70,11 @@ pub async fn init_dense_index_for_collection(
         |root, ver| root.join(format!("{}.vec_raw", **ver)),
     ));
     // TODO: May be the value can be taken from config
-    let cache = Arc::new(ProbCache::new(1000, index_manager.clone(), prop_file.clone()));
+    let cache = Arc::new(ProbCache::new(
+        1000,
+        index_manager.clone(),
+        prop_file.clone(),
+    ));
 
     let root = create_root_node(
         num_layers,
@@ -159,6 +163,7 @@ pub async fn init_inverted_index_for_collection(
         StorageType::UnsignedByte,
         vcs,
     );
+    update_current_version(&index.lmdb, hash)?;
     Ok(Arc::new(index))
 }
 

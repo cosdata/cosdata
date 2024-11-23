@@ -19,7 +19,7 @@ use std::{
     fs::{File, OpenOptions},
     sync::{
         atomic::{AtomicPtr, Ordering},
-        Arc,
+        Arc, RwLock,
     },
 };
 use tempfile::{tempdir, TempDir};
@@ -110,17 +110,19 @@ impl EqualityTester {
     }
 }
 
-fn get_cache(bufmans: Arc<BufferManagerFactory>, prop_file: Arc<File>) -> Arc<ProbCache> {
+fn get_cache(bufmans: Arc<BufferManagerFactory>, prop_file: Arc<RwLock<File>>) -> Arc<ProbCache> {
     Arc::new(ProbCache::new(1000, bufmans, prop_file))
 }
 
-fn create_prob_node(id: i32, prop_file: &File) -> ProbNode {
+fn create_prob_node(id: i32, prop_file: &RwLock<File>) -> ProbNode {
     let id = VectorId::Int(id);
     let value = Arc::new(Storage::UnsignedByte {
         mag: 10,
         quant_vec: vec![1, 2, 3],
     });
-    let location = write_prop_to_file(&id, value.clone(), &prop_file).unwrap();
+    let mut prop_file_guard = prop_file.write().unwrap();
+    let location = write_prop_to_file(&id, value.clone(), &mut *prop_file_guard).unwrap();
+    drop(prop_file_guard);
     let prop = Arc::new(NodeProp {
         id,
         value,
@@ -136,7 +138,7 @@ fn setup_test(
     Arc<ProbCache>,
     Arc<BufferManager>,
     u64,
-    Arc<File>,
+    Arc<RwLock<File>>,
     TempDir,
 ) {
     let dir = tempdir().unwrap();
@@ -144,14 +146,14 @@ fn setup_test(
         dir.as_ref().into(),
         |root, ver| root.join(format!("{}.index", **ver)),
     ));
-    let prop_file = Arc::new(
+    let prop_file = Arc::new(RwLock::new(
         OpenOptions::new()
             .create(true)
             .read(true)
             .append(true)
             .open(dir.as_ref().join("prop.data"))
             .unwrap(),
-    );
+    ));
     let cache = get_cache(bufmans.clone(), prop_file.clone());
     let bufman = bufmans.get(root_version).unwrap();
     let cursor = bufman.open_cursor().unwrap();
@@ -245,22 +247,11 @@ fn test_prob_node_serialization_with_neighbors() {
     let node = create_prob_node(-1, &prop_file);
 
     for i in 0..10 {
-        let id = VectorId::Int(i);
-        let value = Arc::new(Storage::UnsignedByte {
-            mag: 10,
-            quant_vec: vec![1, 2, 3],
-        });
-        let location = write_prop_to_file(&id, value.clone(), &prop_file).unwrap();
-        let prop = Arc::new(NodeProp {
-            id: id.clone(),
-            value,
-            location,
-        });
-        let neighbor_node = ProbNode::new(HNSWLevel(i as u8 + 45), prop.clone(), None, None, 8);
+        let neighbor_node = create_prob_node(i, &prop_file);
 
         let lazy_item = ProbLazyItem::new(neighbor_node, root_version_id, root_version_number);
         let dist = MetricResult::CosineSimilarity(CosineSimilarity((i as f32) / 5.0));
-        node.add_neighbor(lazy_item, &id, dist);
+        node.add_neighbor(lazy_item, &VectorId::Int(i), dist);
     }
 
     let offset = node.serialize(bufmans, root_version_id, cursor).unwrap();
@@ -342,14 +333,14 @@ fn test_prob_lazy_item_with_versions_serialization_and_validation() {
             .open(temp_dir.as_ref())
             .unwrap(),
     );
-    let prop_file = Arc::new(
+    let prop_file = Arc::new(RwLock::new(
         OpenOptions::new()
             .create(true)
             .read(true)
             .append(true)
             .open(temp_dir.as_ref().join("prop.data"))
             .unwrap(),
-    );
+    ));
     let db = Arc::new(env.create_db(None, DatabaseFlags::empty()).unwrap());
     let vcs = VersionControl::new(env, db).unwrap().0;
 
@@ -392,4 +383,3 @@ fn test_prob_lazy_item_with_versions_serialization_and_validation() {
 
     root.assert_eq(&deserialized, &mut tester);
 }
-
