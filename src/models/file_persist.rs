@@ -43,17 +43,17 @@ pub fn read_node_from_file(
 pub fn write_node_to_file(
     lazy_item: Arc<ProbLazyItem<ProbNode>>,
     bufmans: Arc<BufferManagerFactory>,
-) -> Result<(), WaCustomError> {
+) -> Result<u32, WaCustomError> {
     let version = lazy_item.get_current_version();
     let bufman = bufmans.get(&version)?;
     let cursor = bufman.open_cursor()?;
 
     lazy_item.set_persistence(true);
-    lazy_item.serialize(bufmans, version, cursor)?;
+    let offset = lazy_item.serialize(bufmans, version, cursor)?;
 
     bufman.close_cursor(cursor)?;
 
-    Ok(())
+    Ok(offset)
 }
 //
 pub fn load_vector_id_lsmdb(

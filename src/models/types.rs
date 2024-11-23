@@ -7,7 +7,8 @@ use super::meta_persist::{
     delete_dense_index, lmdb_init_collections_db, lmdb_init_db, load_collections,
     load_dense_index_data, persist_dense_index, retrieve_current_version,
 };
-use super::prob_node::SharedNode;
+use super::prob_lazy_load::lazy_item::ProbLazyItem;
+use super::prob_node::{ProbNode, SharedNode};
 use super::versioning::VersionControl;
 use crate::distance::cosine::CosineSimilarity;
 use crate::distance::DistanceError;
@@ -425,7 +426,7 @@ impl DenseIndexTransaction {
                 WaCustomError::DatabaseError(format!("Unable to get transaction hash: {}", err))
             })?;
 
-        let serialization_table = Arc::new(TSHashTable::new(16));
+        let serialization_table = Arc::new(TSHashTable::<Arc<ProbLazyItem<ProbNode>>, ()>::new(16));
         let (serialization_signal, rx) = mpsc::channel();
         let batch_count = Arc::new(AtomicUsize::new(0));
 
@@ -445,7 +446,10 @@ impl DenseIndexTransaction {
                     let list = serialization_table.to_list();
                     for (node, _) in list {
                         serialization_table.delete(&node);
-                        write_node_to_file(node, dense_index.index_manager.clone())?;
+                        let version = node.get_current_version();
+                        let offset =
+                            write_node_to_file(node.clone(), dense_index.index_manager.clone())?;
+                        dense_index.cache.insert_lazy_object(version, offset, node);
                     }
                     batches_processed += 1;
                 }
@@ -686,7 +690,7 @@ impl CollectionsMap {
         )
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
-        let root_path = Path::new(".");
+        let root_path = Path::new("./collections");
 
         // let bufmans = cache.get_bufmans();
 

@@ -104,11 +104,14 @@ impl<T> ProbLazyItem<T> {
         }
     }
 
-    pub fn swap_state(
-        &self,
-        new_state: *mut Arc<ProbLazyItemState<T>>,
-    ) -> *mut Arc<ProbLazyItemState<T>> {
-        self.state.swap(new_state, Ordering::SeqCst)
+    pub fn set_state(&self, new_state: Arc<ProbLazyItemState<T>>) {
+        let old_state = self
+            .state
+            .swap(Box::into_raw(Box::new(new_state)), Ordering::SeqCst);
+        unsafe {
+            // SAFETY: state must be a valid pointer
+            drop(Box::from_raw(old_state));
+        }
     }
 
     pub fn is_ready(&self) -> bool {

@@ -7,6 +7,7 @@ use super::prob_node::ProbNode;
 use super::serializer::prob::{ProbSerialize, UpdateSerialized};
 use super::serializer::CustomSerialize;
 use super::types::*;
+use super::versioning::Hash;
 use crate::models::lru_cache::CachedValue;
 use crate::storage::inverted_index_old::InvertedIndexItem;
 use crate::storage::inverted_index_sparse_ann::{
@@ -320,6 +321,24 @@ impl ProbCache {
         Ok(prop)
     }
 
+    pub fn insert_lazy_object(
+        &self,
+        version: Hash,
+        offset: u32,
+        item: Arc<ProbLazyItem<ProbNode>>,
+    ) {
+        let combined_index = (offset as u64) << 32 | (*version as u64);
+        let mut cuckoo_filter = self.cuckoo_filter.write().unwrap();
+        cuckoo_filter.insert(&combined_index);
+        if let Some(node) = item.get_lazy_data() {
+            let prop_key = Self::get_prop_key(node.prop.location.0, node.prop.location.1);
+            self.props_registry
+                .insert(prop_key, Arc::downgrade(&node.prop));
+        }
+        self.registry
+            .insert(combined_index, ProbCacheItem::ProbNode(item));
+    }
+
     pub fn get_lazy_object<T: ProbCacheable + UpdateSerialized + ProbSerialize>(
         self: Arc<Self>,
         file_index: FileIndex,
@@ -379,20 +398,16 @@ impl ProbCache {
             max_loads - 1,
             skipm,
         )?);
-        let new_state = Box::into_raw(Box::new(Arc::new(ProbLazyItemState::Ready {
+        let new_state = Arc::new(ProbLazyItemState::Ready {
             data,
             file_offset: Cell::new(Some(offset)),
             decay_counter: 0,
             persist_flag: AtomicBool::new(false),
             version_id,
             version_number,
-        })));
+        });
 
-        let old_state = node.swap_state(new_state);
-
-        unsafe {
-            drop(Box::from_raw(old_state));
-        }
+        node.set_state(new_state);
 
         Ok(node)
     }
@@ -460,20 +475,16 @@ impl ProbCache {
             max_loads - 1,
             skipm,
         )?);
-        let new_state = Box::into_raw(Box::new(Arc::new(ProbLazyItemState::Ready {
+        let new_state = Arc::new(ProbLazyItemState::Ready {
             data: data.clone(),
             file_offset: Cell::new(Some(offset)),
             decay_counter: 0,
             persist_flag: AtomicBool::new(false),
             version_id,
             version_number,
-        })));
+        });
 
-        let old_state = node.swap_state(new_state);
-
-        unsafe {
-            drop(Box::from_raw(old_state));
-        }
+        node.set_state(new_state);
 
         Ok(data)
     }
