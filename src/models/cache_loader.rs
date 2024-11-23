@@ -417,7 +417,6 @@ impl ProbCache {
         max_loads: u16,
         skipm: &mut HashSet<u64>,
     ) -> Result<Arc<T>, BufIoError> {
-        println!("get_object is called");
         let combined_index = Self::combine_index(&file_index);
 
         let (node, is_new) = {
