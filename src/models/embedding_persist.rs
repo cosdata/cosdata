@@ -124,9 +124,31 @@ mod tests {
     }
 
     #[test]
-    fn test_embeddings_serialization() {
+    fn test_multiple_embedding_serialization() {
         let mut rng = thread_rng();
         let embeddings: Vec<_> = (0..20).map(|_| get_random_embedding(&mut rng)).collect();
+        let tempfile = tempfile().unwrap();
+
+        let bufman = Arc::new(BufferManager::new(tempfile).unwrap());
+
+        for embedding in &embeddings {
+            write_embedding(bufman.clone(), embedding).unwrap();
+        }
+
+        let mut offset = 0;
+
+        for embedding in embeddings {
+            let (deserialized, next) = read_embedding(bufman.clone(), offset).unwrap();
+            offset = next;
+
+            assert_eq!(embedding, deserialized);
+        }
+    }
+
+    #[test]
+    fn test_10k_embeddings_serialization() {
+        let mut rng = thread_rng();
+        let embeddings: Vec<_> = (0..10000).map(|_| get_random_embedding(&mut rng)).collect();
         let tempfile = tempfile().unwrap();
 
         let bufman = Arc::new(BufferManager::new(tempfile).unwrap());
