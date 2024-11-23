@@ -406,15 +406,6 @@ if __name__ == "__main__":
             
             vectors = generate_vectors(req_ct, batch_count, batch_size, dimensions, perturbation_degree)
 
-            # for base_idx in range(5):
-            #     upsert_in_transaction(vector_db_name, transaction_id, vectors[base_idx*batch_size:(base_idx*batch_size)+batch_size])
-            #     shortlisted_vectors.append(generate_perturbation(
-            #         vectors[base_idx*batch_size],
-            #         base_idx,
-            #         perturbation_degree,
-            #         dimensions,
-            #     ))
-
             # Process vectors concurrently
             with ThreadPoolExecutor(max_workers=32) as executor:
                 futures = []
@@ -474,7 +465,7 @@ if __name__ == "__main__":
                     "RespVectorKNN" in ann_response
                     and "knn" in ann_response["RespVectorKNN"]
                 ):
-                    print(f"ANN Vector Response <<< {idr} >>>:")
+                    print(f"ANN Vector Response:")
                     print("  Server:")
                     for j, match in enumerate(ann_response["RespVectorKNN"]["knn"][:5]):
                         id = match[0]
