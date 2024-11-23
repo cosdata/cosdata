@@ -68,7 +68,7 @@ impl<T: ProbCacheable + UpdateSerialized + ProbSerialize, const N: usize> ProbSe
                 let bufman = bufmans.get(&version_id)?;
                 let cursor = bufman.open_cursor()?;
 
-                let mut placeholder_offset = offset as u64;
+                let placeholder_offset = offset as u64;
                 let array = Self::new();
 
                 for i in 0..N {
@@ -95,7 +95,6 @@ impl<T: ProbCacheable + UpdateSerialized + ProbSerialize, const N: usize> ProbSe
                         skipm,
                     )?;
                     array.push(item);
-                    placeholder_offset += 10;
                 }
 
                 bufman.close_cursor(cursor)?;
