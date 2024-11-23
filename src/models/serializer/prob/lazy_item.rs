@@ -45,6 +45,8 @@ impl<T: ProbCacheable + UpdateSerialized + ProbSerialize> ProbSerialize for Arc<
                         bufman.open_cursor()?
                     };
 
+                    bufman.seek_with_cursor(cursor, SeekFrom::Start(file_offset.0 as u64))?;
+
                     let file_index = FileIndex::Valid {
                         offset: file_offset,
                         version_number: *version_number,
@@ -69,7 +71,7 @@ impl<T: ProbCacheable + UpdateSerialized + ProbSerialize> ProbSerialize for Arc<
                     file_offset.set(Some(FileOffset(u32::try_from(offset).unwrap())));
                     persist_flag.store(false, Ordering::SeqCst);
 
-                    data.serialize(bufmans.clone(), version, cursor)?;
+                    data.serialize(bufmans.clone(), *version_id, cursor)?;
 
                     if version_id != &version {
                         bufman.close_cursor(cursor)?;
