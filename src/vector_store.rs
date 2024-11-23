@@ -924,7 +924,11 @@ fn traverse_find_nearest(
                 continue;
             }
         };
-        let neighbor = neighbor_node.try_get_data(dense_index.cache.clone())?;
+        let neighbor = if let Some(neighbor) = neighbor_node.get_lazy_data() {
+            neighbor
+        } else {
+            neighbor_node.try_get_data(dense_index.cache.clone())?
+        };
 
         if !skipm.insert(neighbor.prop.id.clone()) {
             continue;
