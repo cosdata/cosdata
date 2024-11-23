@@ -493,6 +493,7 @@ impl DenseIndexTransaction {
                 txn.commit().map_err(|e| {
                     WaCustomError::DatabaseError(format!("Failed to commit transaction: {}", e))
                 })?;
+                bufman.flush()?;
                 Ok(())
             })
         };
