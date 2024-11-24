@@ -5,6 +5,7 @@ use dashmap::DashMap;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hasher};
+use std::io::SeekFrom;
 use std::thread;
 use std::{path::Path, sync::RwLock};
 
@@ -13,8 +14,9 @@ use std::sync::{Arc, Mutex};
 use crate::models::{
     buffered_io::BufferManagerFactory,
     cache_loader::NodeRegistry,
-    lazy_load::{LazyItem, LazyItemArray},
-    types::SparseVector,
+    lazy_load::{FileIndex, LazyItem, LazyItemArray},
+    serializer::CustomSerialize,
+    types::{FileOffset, SparseVector},
 };
 
 use super::page::Pagepool;
@@ -401,6 +403,117 @@ type HashTable<K, V> = HashMap<K, V>;
 pub struct TSHashTable<K, V> {
     hash_table_list: Vec<Arc<Mutex<HashTable<K, V>>>>,
     size: i16,
+}
+
+impl<K, V> CustomSerialize for TSHashTable<K, V>
+where
+    K: CustomSerialize + Eq + Hash,
+    V: CustomSerialize,
+{
+    fn serialize(
+        &self,
+        bufmans: Arc<BufferManagerFactory>,
+        version: crate::models::versioning::Hash,
+        cursor: u64,
+    ) -> Result<u32, crate::models::buffered_io::BufIoError> {
+        let bufman = bufmans.get(&version)?;
+
+        // Move the cursor to the end of the file and start writing from there
+        bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
+
+        let start_offset = bufman.cursor_position(cursor)? as u32;
+
+        // Write the size of the list at first
+        bufman.write_u32_with_cursor(cursor, self.size as u32)?;
+
+        for i in &self.hash_table_list {
+            let item = i
+                .lock()
+                .map_err(|_| crate::models::buffered_io::BufIoError::Locking)?;
+
+            // Write the size of the hashmap
+            bufman.write_u32_with_cursor(cursor, item.len() as u32)?;
+
+            for (key, value) in item.iter() {
+                key.serialize(bufmans.clone(), version, cursor)?;
+                value.serialize(bufmans.clone(), version, cursor)?;
+            }
+        }
+        Ok(start_offset)
+    }
+
+    fn deserialize(
+        bufmans: Arc<BufferManagerFactory>,
+        file_index: crate::models::lazy_load::FileIndex,
+        cache: Arc<NodeRegistry>,
+        max_loads: u16,
+        skipm: &mut std::collections::HashSet<u64>,
+    ) -> Result<Self, crate::models::buffered_io::BufIoError> {
+        match file_index {
+            crate::models::lazy_load::FileIndex::Valid {
+                offset: FileOffset(offset),
+                version_id,
+                version_number,
+            } => {
+                let bufman = bufmans.get(&version_id)?;
+                let cursor = bufman.open_cursor()?;
+
+                bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
+
+                // Read the length of the vec
+                let len = bufman.read_u32_with_cursor(cursor)?;
+
+                let mut vec = Vec::<HashTable<K, V>>::with_capacity(len as usize);
+
+                for _ in 0..len as usize {
+                    let table_len = bufman.read_u32_with_cursor(cursor)? as usize;
+
+                    let mut hash_table = HashTable::<K, V>::with_capacity(table_len);
+                    for _ in 0..table_len {
+                        let current_offset = bufman.cursor_position(cursor)?;
+
+                        let file_index = FileIndex::Valid {
+                            offset: FileOffset(current_offset as u32),
+                            version_id,
+                            version_number,
+                        };
+
+                        let key = K::deserialize(
+                            bufmans.clone(),
+                            file_index.clone(),
+                            cache.clone(),
+                            max_loads,
+                            skipm,
+                        )?;
+
+                        let value = V::deserialize(
+                            bufmans.clone(),
+                            file_index,
+                            cache.clone(),
+                            max_loads,
+                            skipm,
+                        )?;
+
+                        hash_table.insert(key, value);
+                    }
+
+                    vec.push(hash_table);
+                }
+
+                bufman.close_cursor(cursor)?;
+
+                Ok(Self {
+                    hash_table_list: vec
+                        .into_iter()
+                        .map(|item| Arc::new(Mutex::new(item)))
+                        .collect(),
+                    size: len as i16,
+                })
+            }
+
+            FileIndex::Invalid => Err(crate::models::buffered_io::BufIoError::Locking),
+        }
+    }
 }
 
 impl<K: Eq + Hash, V> TSHashTable<K, V> {

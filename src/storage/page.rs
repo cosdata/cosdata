@@ -210,6 +210,8 @@ impl<const LEN: usize> CustomSerialize for Page<LEN> {
                     items.push(bufman.read_u32_with_cursor(cursor)?)
                 }
 
+                items.is_serialized = true;
+
                 Ok(items)
             }
 
@@ -291,7 +293,7 @@ mod page_tests {
         let root_version_number = 0;
 
         let (bufmgr_factory, bufmg, cursor, temp_dir, cache) = setup_test();
-        let offset = page_pool.serialize(bufmgr_factory.clone(), root_version_id.clone(), cursor);
+        let offset = page_pool.serialize(bufmgr_factory.clone(), root_version_id, cursor);
 
         assert!(offset.is_ok());
 
@@ -302,8 +304,8 @@ mod page_tests {
             bufmgr_factory.clone(),
             FileIndex::Valid {
                 offset: FileOffset(offset),
-                version_id: root_version_id.clone(),
-                version_number: root_version_number.clone(),
+                version_id: root_version_id,
+                version_number: root_version_number,
             },
             cache.clone(),
             0_u16,
