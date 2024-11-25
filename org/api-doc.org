@@ -263,6 +263,66 @@ The search API provides efficient similarity search capabilities for vectors.
 | =k=                 | integer | No       | 10      | Number of nearest neighbors |
 
 
+** Vector Lifecycle
+
+*** 1. Vector Creation
+Creates a new vector in a collection.
+
+- Method: POST
+- Path: =/collections/{collection_id}/vectors=
+- Request Body:
+#+BEGIN_SRC json
+{
+    "id": "vec1",
+    "values": [0.1, 0.2, ...],
+}
+#+END_SRC
+
+- Response: The same as the request body
+
+
+*** 2. Get a Vector 
+Finds a vector in a collection by id.
+
+- Method: GET
+- Path: =/collections/:collection_id/vectors/{vector_id}=
+- Response: The same as the create vector response
+
+
+*** 3. Vector Update
+Updates a vector in a collection.
+
+- Method: PUT
+- Path: =/collections/{collection_id}/vectors/{vector_id}=
+- Request Body:
+#+BEGIN_SRC json
+{
+    "id": "vec1",
+    "values": [0.1, 0.2, ...],
+}
+#+END_SRC
+
+- Response: The same as the request body
+
+
+*** 4. Vector Deletion
+Deletes a vector in a collection.
+
+- Method: DELETE
+- Path: =/collections/{collection_id}/vectors/{vector_id}=
+- Response: 204 No Content
+
+
+*** Vector Lifecycle Parameters
+#+CAPTION: Vector Lifecycle Parameters
+#+NAME: search-params
+| Parameter           | Type    | Required | Default | Description                 |
+|---------------------+---------+----------+---------+-----------------------------|
+| =collection_id=     | string  | Yes      | -       | Collection to search in     |
+| =vector_id=         | string  | Yes      | -       | Unique vector identifier    |
+
+
+
 * Index Management
 ** Index Operations
 Manage search indices for vector collections.
