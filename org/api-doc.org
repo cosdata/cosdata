@@ -309,18 +309,7 @@ Manage search indices for vector collections.
 * Error Handling
 ** Error Response Format
 All API errors follow a consistent format:
-
-#+BEGIN_SRC json
-{
-    "error": {
-        "code": "ERROR_CODE",
-        "message": "Human readable error message",
-        "details": {
-            "field": "Additional error context"
-        }
-    }
-}
-#+END_SRC
+- Response: Error message as plain text
 
 ** Common Error Codes
 #+CAPTION: Common API Error Codes
