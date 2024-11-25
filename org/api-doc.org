@@ -127,14 +127,12 @@ The API implements transactions as resources, providing ACID guarantees for vect
 Initiates a new transaction context.
 
 - Method: POST
-- Path: =/collections/{collection_name}/transactions=
+- Path: =/collections/{collection_id}/transactions=
 - Response:
 #+BEGIN_SRC json
 {
     "transaction_id": "txn_abc123",
     "created_at": "2024-11-23T12:00:00Z",
-    "status": "active",
-    "timeout_at": "2024-11-23T12:10:00Z"
 }
 #+END_SRC
 
@@ -143,22 +141,18 @@ Multiple vector operations can be performed within the transaction context.
 
 **** Vector Insertion
 - Method: POST
-- Path: =/collections/{collection_name}/transactions/{transaction_id}/vectors=
+- Path: =/collections/{collection_id}/transactions/{transaction_id}/vectors=
 - Request Body:
 #+BEGIN_SRC json
 {
     "id": "vec1",
-    "values": [0.1, 0.2, ...],
-    "metadata": {
-        "label": "example",
-        "timestamp": "2024-11-23T12:00:00Z"
-    }
+    "values": [0.1, 0.2, ...]
 }
 #+END_SRC
 
 **** Batch Upsert
 - Method: POST
-- Path: =/collections/{collection_name}/transactions/{transaction_id}/upsert=
+- Path: =/collections/{collection_id}/transactions/{transaction_id}/upsert=
 - Request Body:
 #+BEGIN_SRC json
 {
@@ -166,12 +160,10 @@ Multiple vector operations can be performed within the transaction context.
         {
             "id": "vec1",
             "values": [0.1, 0.2, ...],
-            "metadata": {}
         },
         {
             "id": "vec2",
             "values": [0.3, 0.4, ...],
-            "metadata": {}
         }
     ]
 }
@@ -182,12 +174,12 @@ Transactions must be explicitly completed through commit or abort.
 
 **** Commit Transaction
 - Method: POST
-- Path: =/collections/{collection_name}/transactions/{transaction_id}/commit=
+- Path: =/collections/{collection_id}/transactions/{transaction_id}/commit=
 - Response: 204 No Content
 
 **** Abort Transaction
 - Method: POST
-- Path: =/collections/{collection_name}/transactions/{transaction_id}/abort=
+- Path: =/collections/{collection_id}/transactions/{transaction_id}/abort=
 - Response: 204 No Content
 
 ** Transaction Field References
@@ -198,8 +190,8 @@ Transactions must be explicitly completed through commit or abort.
 |------------------+---------+----------+---------------------------------------|
 | =transaction_id= | string  | Yes      | Unique transaction identifier         |
 | =vectors=        | array   | Yes*     | Array of vectors for batch operations |
-| =vector_db_name= | string  | Yes      | Target collection name                |
-| =timeout=        | integer | No       | Custom timeout in seconds             |
+| =collection_id=  | string  | Yes      | Target collection id                  |
+
 
 *** Vector Fields within Transactions
 #+CAPTION: Vector Fields in Transactions
@@ -208,8 +200,6 @@ Transactions must be explicitly completed through commit or abort.
 |-------------+---------+----------+--------------------------------------------|
 | =id=        | string  | Yes      | Unique vector identifier                   |
 | =values=    | float[] | Yes      | Vector components (normalized -1.0 to 1.0) |
-| =metadata=  | object  | No       | Additional vector metadata                 |
-| =namespace= | string  | No       | Vector namespace for organization          |
 
 
 ** Transaction Guarantees and Constraints
