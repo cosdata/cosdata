@@ -75,8 +75,7 @@ Create a new vector collection with specified configuration.
 {
     "id": "col_123",
     "name": "testdb",
-    "description": "Test collection for vector database",
-    "created_at": "2024-11-23T12:00:00Z"
+    "description": "Test collection for vector database"
 }
 #+END_SRC
 
@@ -108,7 +107,7 @@ Retrieve all collections details and configuration.
 
 - Method: GET
 - Path: =/collections/=
-- Response: a list of the same format as Create Collection response
+- Response: a list of items each has the same format as Create Collection response
 
 *** Delete Collections
 Deletes a collection.
@@ -352,19 +351,19 @@ Manage search indices for vector collections.
 *** Index Configuration Fields
 #+CAPTION: Index Configuration Parameters
 #+NAME: index-params
-| Field                        | Type    | Required | Description                              |
-|------------------------------+---------+----------+------------------------------------------|
-| =collection_name=            | string  | Yes      | Target collection                        |
-| =name=                       | string  | Yes      | Index identifier                         |
-| =distance_metric_type=       | string  | Yes      | Distance metric (cosine, euclidean, dot) |
-| =quantization=               | string  | Yes      | Vector quantization method               |
-| =data_type=                  | string  | Yes      | Vector data type                         |
-| =index_type=                 | string  | Yes      | Index algorithm type                     |
-| =params.m=                   | integer | No       | HNSW number of layers                    |
-| =params.ef_construction=     | integer | No       | HNSW number of layers                    |
-| =params.ef_search=           | integer | No       | HNSW number of layers                    |
-| =params.num_layers=          | integer | No       | HNSW number of layers                    |
-| =params.max_cache_size=      | integer | No       | Maximum cache size                       |
+| Field                        | Type    | Required | Description                                   |
+|------------------------------+---------+----------+-----------------------------------------------|
+| =collection_name=            | string  | Yes      | Target collection                             |
+| =name=                       | string  | Yes      | Index identifier                              |
+| =distance_metric_type=       | string  | Yes      | Distance metric (cosine, euclidean, dot)      |
+| =quantization=               | string  | Yes      | Vector quantization method                    |
+| =data_type=                  | string  | Yes      | Vector data type                              |
+| =index_type=                 | string  | Yes      | Index algorithm type                          |
+| =params.m=                   | integer | No       | Maximum connections of graph element          |
+| =params.ef_construction=     | integer | No       | Candidate list size during index construction |
+| =params.ef_search=           | integer | No       | Candidate list size during search             |
+| =params.num_layers=          | integer | No       | HNSW number of layers                         |
+| =params.max_cache_size=      | integer | No       | Maximum cache size                            |
 
 * Error Handling
 ** Error Response Format
