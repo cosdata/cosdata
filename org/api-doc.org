@@ -280,6 +280,9 @@ Manage search indices for vector collections.
     "data_type": "u8",
     "index_type": "hnsw",
     "params": {
+        "m": 16,
+        "ef_construction": 100,
+        "ef_search": 50,
         "num_layers": 5,
         "max_cache_size": 1000
     }
@@ -289,16 +292,19 @@ Manage search indices for vector collections.
 *** Index Configuration Fields
 #+CAPTION: Index Configuration Parameters
 #+NAME: index-params
-| Field                   | Type    | Required | Description                              |
-|-------------------------+---------+----------+------------------------------------------|
-| =collection_name=       | string  | Yes      | Target collection                        |
-| =name=                  | string  | Yes      | Index identifier                         |
-| =distance_metric_type=  | string  | Yes      | Distance metric (cosine, euclidean, dot) |
-| =quantization=          | string  | Yes      | Vector quantization method               |
-| =data_type=             | string  | Yes      | Vector data type                         |
-| =index_type=            | string  | Yes      | Index algorithm type                     |
-| =params.num_layers=     | integer | No       | HNSW number of layers                    |
-| =params.max_cache_size= | integer | No       | Maximum cache size                       |
+| Field                        | Type    | Required | Description                              |
+|------------------------------+---------+----------+------------------------------------------|
+| =collection_name=            | string  | Yes      | Target collection                        |
+| =name=                       | string  | Yes      | Index identifier                         |
+| =distance_metric_type=       | string  | Yes      | Distance metric (cosine, euclidean, dot) |
+| =quantization=               | string  | Yes      | Vector quantization method               |
+| =data_type=                  | string  | Yes      | Vector data type                         |
+| =index_type=                 | string  | Yes      | Index algorithm type                     |
+| =params.m=                   | integer | No       | HNSW number of layers                    |
+| =params.ef_construction=     | integer | No       | HNSW number of layers                    |
+| =params.ef_search=           | integer | No       | HNSW number of layers                    |
+| =params.num_layers=          | integer | No       | HNSW number of layers                    |
+| =params.max_cache_size=      | integer | No       | Maximum cache size                       |
 
 * Error Handling
 ** Error Response Format
