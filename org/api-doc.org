@@ -226,42 +226,30 @@ The search API provides efficient similarity search capabilities for vectors.
 
 *** Basic Vector Search
 - Method: POST
-- Path: =/search=
+- Path: =/collections/{collection_id}/vectors/search=
 - Request Body:
 #+BEGIN_SRC json
 {
-    "vector_db_name": "testdb",
     "vector": [0.1, 0.2, ...],
     "k": 5,
-    "include_metadata": true
 }
 #+END_SRC
 
 - Response:
 #+BEGIN_SRC json
 {
-    "RespVectorKNN": {
-        "knn": [
-            [
-                "vec1",
-                {
-                    "CosineSimilarity": 0.95,
-                    "metadata": {
-                        "label": "example"
-                    }
-                }
-            ],
-            [
-                "vec2",
-                {
-                    "CosineSimilarity": 0.85,
-                    "metadata": {
-                        "label": "example2"
-                    }
-                }
-            ]
-        ]
-    }
+    "results": [
+        {
+            "id": "vec1",
+            "score": 0.95,
+            
+        },
+        {
+            "id": "vec2",
+            "score": 0.85,
+        }
+    ]
+    
 }
 #+END_SRC
 
@@ -270,12 +258,10 @@ The search API provides efficient similarity search capabilities for vectors.
 #+NAME: search-params
 | Parameter           | Type    | Required | Default | Description                 |
 |---------------------+---------+----------+---------+-----------------------------|
-| =vector_db_name=    | string  | Yes      | -       | Collection to search in     |
+| =collection_id=     | string  | Yes      | -       | Collection to search in     |
 | =vector=            | float[] | Yes      | -       | Query vector                |
 | =k=                 | integer | No       | 10      | Number of nearest neighbors |
-| =include_metadata=  | boolean | No       | false   | Include vector metadata     |
-| =namespace=         | string  | No       | default | Vector namespace            |
-| =similarity_metric= | string  | No       | cosine  | Similarity metric to use    |
+
 
 * Index Management
 ** Index Operations
