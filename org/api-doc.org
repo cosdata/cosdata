@@ -7,7 +7,8 @@ This document describes the complete REST API specification for the vector datab
 
 * Base URL and Authentication
 ** Base Configuration
-The base URL for all API endpoints is: =https://host:port/vectordb=
+The base URL for all API endpoints that handle database interactions is: =https://host:port/vectordb=
+The base URL for API endpoints related to authentication is: =https://host:port/auth=
 
 ** Authentication
 All requests require Bearer token authentication obtained through the login endpoint.
@@ -97,6 +98,20 @@ Create a new vector collection with specified configuration.
 
 *** Get Collection
 Retrieve collection details and configuration.
+
+- Method: GET
+- Path: =/collections/{collection_id}=
+- Response: Same format as Create Collection response
+
+*** Get Collections
+Retrieve all collections details and configuration.
+
+- Method: GET
+- Path: =/collections/=
+- Response: a list of the same format as Create Collection response
+
+*** Delete Collections
+Deletes a collection.
 
 - Method: GET
 - Path: =/collections/{collection_id}=
