@@ -39,9 +39,26 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Define your dynamic variables
-token = "8cf11a8cb97b0e002b31197c5808d13e3b18e488234a61946690668db5c5fece"
-base_url = "https://127.0.0.1:8443/vectordb"
-headers = {"Authorization": f"Bearer {token}", "Content-type": "application/json"}
+token = None
+host = "https://127.0.0.1:8443"
+base_url = f"{host}/vectordb"
+
+
+def generate_headers():
+    return {"Authorization": f"Bearer {token}", "Content-type": "application/json"}
+
+
+# Function to login with credentials
+def login():
+    url = f"{host}/auth/login"
+    data = {"username": "admin", "password": "admin", "pretty_print": False}
+    response = requests.post(
+        url, headers=generate_headers(), data=json.dumps(data), verify=False
+    )
+    global token
+    token = response.text
+    return token
+
 
 # Function to create sparse vectors inverted index
 def create_sparse_index(vector_db_name, records):
@@ -50,7 +67,7 @@ def create_sparse_index(vector_db_name, records):
         "vector_db_name": vector_db_name,
         "records": records
     }
-    response = requests.post(url, headers=headers, data=json.dumps(data), verify=False)
+    response = requests.post(url, headers=generate_headers(), data=json.dumps(data), verify=False)
     return response.json()
 
 # Function to query sparse vectors inverted index
@@ -61,7 +78,7 @@ def query_sparse_index(vector_db_name, sparse_query, limit):
         "sparse_query": sparse_query,
         "limit": limit
     }
-    response = requests.post(url, headers=headers, data=json.dumps(data), verify=False)
+    response = requests.post(url, headers=generate_headers(), data=json.dumps(data), verify=False)
     return response.json()
 
 # Updated function to generate multiple random sparse vectors
