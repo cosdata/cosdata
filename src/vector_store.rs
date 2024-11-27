@@ -27,7 +27,6 @@ use std::io::SeekFrom;
 use std::path::Path;
 use std::sync::mpsc;
 use std::sync::Arc;
-use std::thread;
 
 pub fn create_root_node(
     num_layers: u8,

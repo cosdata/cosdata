@@ -10,6 +10,7 @@ impl DistanceFunction for HammingDistance {
     type Item = Self;
 
     // Implementation here
+    #[allow(unused_variables)]
     fn calculate(&self, x: &Storage, y: &Storage) -> Result<Self::Item, DistanceError> {
         match (x, y) {
             (

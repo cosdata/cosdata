@@ -20,6 +20,7 @@ use std::arch::x86_64::*;
 #[cfg(target_arch = "x86_64")]
 use super::dot_product::x86_64::dot_product_u8_avx2;
 
+#[allow(dead_code)]
 #[cfg(target_arch = "x86_64")]
 pub fn dot_product_u8_avx2_fma(a: &[u8], b: &[u8]) -> u64 {
     assert_eq!(a.len(), b.len());
@@ -64,11 +65,13 @@ pub fn dot_product_u8_avx2_fma(a: &[u8], b: &[u8]) -> u64 {
     dot_product
 }
 
+#[allow(dead_code)]
 pub struct CosResult {
     pub dotprod: i32,
     pub premag_a: i32,
     pub premag_b: i32,
 }
+#[allow(dead_code)]
 pub fn dot_product_u8_xxx(src: &[(u8, u8)], dst: &mut [u64]) {
     let dst_known_bounds = &mut dst[0..src.len()];
     let size = 8;
@@ -92,6 +95,7 @@ pub fn dot_product_u8_xxx(src: &[(u8, u8)], dst: &mut [u64]) {
         i += 1;
     }
 }
+#[allow(dead_code)]
 pub fn dot_product_f32_xxx(src: &[(f32, f32)], dst: &mut [f32]) {
     let dst_known_bounds = &mut dst[0..src.len()];
     let size = 4;
@@ -112,6 +116,7 @@ pub fn dot_product_f32_xxx(src: &[(f32, f32)], dst: &mut [f32]) {
     }
 }
 
+#[allow(dead_code)]
 pub fn dot_product_f32_chunk(src: &[(f32, f32)], _dst: &mut [f32]) -> f32 {
     let mut d: f32 = 0.0;
     let size = 4;
@@ -133,6 +138,7 @@ pub fn dot_product_f32_chunk(src: &[(f32, f32)], _dst: &mut [f32]) -> f32 {
 
     d
 }
+#[allow(dead_code)]
 pub fn dot_product_u8_chunk(src: &[(u8, u8)]) -> u64 {
     let mut d: u64 = 0;
     let size = 8;
@@ -158,6 +164,7 @@ pub fn dot_product_u8_chunk(src: &[(u8, u8)]) -> u64 {
 
     d
 }
+#[allow(dead_code)]
 pub fn dot_product_a(src: &[(f32, f32)], dst: &mut [f32]) -> f32 {
     let mut d: f32 = 0.0;
     for (_dst_sample, src_sample) in dst.iter_mut().zip(src.iter()) {
@@ -166,28 +173,34 @@ pub fn dot_product_a(src: &[(f32, f32)], dst: &mut [f32]) -> f32 {
     d
 }
 
+#[allow(dead_code)]
 pub fn dot_product_b(src: &[(f32, f32)], dst: &mut [f32]) {
     for (dst_sample, src_sample) in dst.iter_mut().zip(src.iter()) {
         *dst_sample = src_sample.0 * src_sample.1;
     }
 }
 
+#[allow(dead_code)]
 pub fn dot_product_u8(src: &[(u8, u8)]) -> u64 {
     src.iter().map(|&(a, b)| (a as u64) * (b as u64)).sum()
 }
 
+#[allow(dead_code)]
 fn dot_product(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b.iter()).map(|(&x, &y)| x * y).sum()
 }
 
+#[allow(dead_code)]
 fn magnitude(vec: &[f32]) -> f32 {
     vec.iter().map(|&x| x * x).sum::<f32>().sqrt()
 }
 
+#[allow(dead_code)]
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     dot_product(a, b) / (magnitude(a) * magnitude(b))
 }
 
+#[allow(dead_code)]
 pub fn get_magnitude_plus_quantized_vec111(quant_vec: Vec<Vec<u32>>, _size: usize) -> Vec<u32> {
     let mut result = Vec::with_capacity(quant_vec.len());
 
@@ -199,6 +212,7 @@ pub fn get_magnitude_plus_quantized_vec111(quant_vec: Vec<Vec<u32>>, _size: usiz
     result
 }
 
+#[allow(dead_code)]
 pub fn get_magnitude_plus_quantized_vec(quant_vec: &[Vec<u32>], _size: usize) -> Vec<usize> {
     let mut result = Vec::with_capacity(quant_vec.len());
 
@@ -212,6 +226,7 @@ pub fn get_magnitude_plus_quantized_vec(quant_vec: &[Vec<u32>], _size: usize) ->
     result
 }
 
+#[allow(dead_code)]
 #[cfg(target_arch = "x86_64")]
 pub fn cosine_similarity_scalar_u8(x: &VectorQt, y: &VectorQt) -> f32 {
     if let (
@@ -231,6 +246,7 @@ pub fn cosine_similarity_scalar_u8(x: &VectorQt, y: &VectorQt) -> f32 {
         panic!("cosine_similarity_scalar_u8 called with non-UnsignedByte VectorQt")
     }
 }
+#[allow(dead_code)]
 pub fn cosine_coalesce(x: &VectorQt, y: &VectorQt, length: usize) -> f32 {
     if let (
         VectorQt::SubByte {
@@ -266,6 +282,7 @@ pub fn cosine_coalesce(x: &VectorQt, y: &VectorQt, length: usize) -> f32 {
         panic!("cosine_coalesce called with non-SubByte VectorQt")
     }
 }
+#[allow(dead_code)]
 #[cfg(target_arch = "x86_64")]
 pub fn cosine_similarity_qt(
     x: &VectorQt,
@@ -429,6 +446,7 @@ impl From<BufIoError> for WaCustomError {
     }
 }
 
+#[allow(dead_code)]
 pub fn hash_float_vec(vec: Vec<f32>) -> Vec<u8> {
     // Create a new hasher instance
     let mut hasher = Sha256::new();
@@ -451,6 +469,7 @@ pub fn get_max_insert_level(x: f64, levels: Arc<Vec<(f64, i32)>>) -> i32 {
     }
 }
 
+#[allow(dead_code)]
 pub fn add_option_vecs(
     a: &Option<Vec<(LazyItem<MergedNode>, MetricResult)>>,
     b: &Option<Vec<(LazyItem<MergedNode>, MetricResult)>>,
@@ -543,6 +562,7 @@ pub fn generate_tuples(x: f64, num_levels: u8) -> Vec<(f64, i32)> {
     result
 }
 
+#[allow(dead_code)]
 pub fn calculate_hash<T: Hash>(t: &T) -> u64 {
     let mut hasher = DefaultHasher::new();
     t.hash(&mut hasher);
@@ -550,6 +570,7 @@ pub fn calculate_hash<T: Hash>(t: &T) -> u64 {
 }
 
 // Extract VectorId values for hashing purposes
+#[allow(dead_code)]
 pub fn extract_ids(neighbors: &[(VectorId, f32)]) -> Vec<VectorId> {
     neighbors.iter().map(|(id, _)| id.clone()).collect()
 }
@@ -574,6 +595,7 @@ impl From<VectorIdValue> for VectorId {
     }
 }
 
+#[allow(dead_code)]
 pub fn cat_maybes<T>(iter: impl Iterator<Item = Option<T>>) -> Vec<T> {
     iter.flat_map(|maybe| maybe).collect()
 }
@@ -592,6 +614,7 @@ pub fn tapered_total_hops(hops: u8, cur_level: u8, max_level: u8) -> u8 {
     }
 }
 //typically skips is 1 while near
+#[allow(dead_code)]
 pub fn tapered_skips(skips: i8, cur_distance: i8, max_distance: i8) -> i8 {
     // Calculate the distance ratio (0.0 to 1.0)
     let distance_ratio = cur_distance as f32 / max_distance as f32;
@@ -605,6 +628,7 @@ pub fn tapered_skips(skips: i8, cur_distance: i8, max_distance: i8) -> i8 {
     }
 }
 
+#[allow(dead_code)]
 pub fn tuple_to_string(tuple: (u32, u32)) -> String {
     format!("{}_{}", tuple.0, tuple.1)
 }

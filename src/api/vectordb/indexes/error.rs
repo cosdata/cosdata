@@ -4,6 +4,7 @@ use actix_web::{
 };
 use std::fmt::Display;
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum IndexesError {
     NotFound,

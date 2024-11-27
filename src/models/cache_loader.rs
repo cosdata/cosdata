@@ -1,5 +1,4 @@
 use super::buffered_io::{BufIoError, BufferManagerFactory};
-use super::file_persist::*;
 use super::lazy_load::{FileIndex, LazyItem, LazyItemVec, VectorData};
 use super::lru_cache::LRUCache;
 use super::serializer::CustomSerialize;
@@ -19,7 +18,6 @@ use arcshift::ArcShift;
 use probabilistic_collections::cuckoo::CuckooFilter;
 use std::collections::HashSet;
 use std::io;
-use std::path::Path;
 use std::sync::{atomic::AtomicBool, Arc, RwLock};
 
 #[derive(Clone)]
@@ -377,38 +375,27 @@ impl NodeRegistry {
             FileIndex::Invalid => u64::MAX, // Use max u64 value for Invalid
         }
     }
-
-    // pub fn split_combined_index(combined: u64) -> FileIndex {
-    //     if combined == u64::MAX {
-    //         FileIndex::Invalid
-    //     } else {
-    //         FileIndex::Valid {
-    //             offset: FileOffset((combined >> 32) as u32),
-    //             version: (combined as u32).into(),
-    //         }
-    //     }
-    // }
 }
+// #[allow(dead_code)]
+// pub fn load_cache() {
+//     // TODO: include db name in the path
+//     let bufmans = Arc::new(BufferManagerFactory::new(
+//         Path::new(".").into(),
+//         |root, ver| root.join(format!("{}.index", **ver)),
+//     ));
 
-pub fn load_cache() {
-    // TODO: include db name in the path
-    let bufmans = Arc::new(BufferManagerFactory::new(
-        Path::new(".").into(),
-        |root, ver| root.join(format!("{}.index", **ver)),
-    ));
-
-    // TODO: fill appropriate version info
-    let file_index = FileIndex::Valid {
-        offset: FileOffset(0),
-        version_id: 0.into(),
-        version_number: 0,
-    };
-    let cache = Arc::new(NodeRegistry::new(1000, bufmans));
-    match read_node_from_file(file_index.clone(), cache) {
-        Ok(_) => println!(
-            "Successfully read and printed node from file_index {:?}",
-            file_index
-        ),
-        Err(e) => println!("Failed to read node: {}", e),
-    }
-}
+//     // TODO: fill appropriate version info
+//     let file_index = FileIndex::Valid {
+//         offset: FileOffset(0),
+//         version_id: 0.into(),
+//         version_number: 0,
+//     };
+//     let cache = Arc::new(NodeRegistry::new(1000, bufmans));
+//     match read_node_from_file(file_index.clone(), cache) {
+//         Ok(_) => println!(
+//             "Successfully read and printed node from file_index {:?}",
+//             file_index
+//         ),
+//         Err(e) => println!("Failed to read node: {}", e),
+//     }
+// }

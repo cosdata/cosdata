@@ -15,6 +15,7 @@ use crate::{
 
 use super::inverted_index_item::InvertedIndexItem;
 
+#[allow(dead_code)]
 pub(crate) struct InvertedIndex {
     pub name: String,
     pub description: Option<String>,
@@ -33,6 +34,7 @@ pub(crate) struct InvertedIndex {
     pub vcs: Arc<VersionControl>,
 }
 
+#[allow(dead_code)]
 impl InvertedIndex {
     pub fn new(
         name: String,

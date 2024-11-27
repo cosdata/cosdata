@@ -1,44 +1,43 @@
-use super::buffered_io::{BufIoError, BufferManagerFactory};
-use super::cache_loader::NodeRegistry;
+use super::buffered_io::BufferManagerFactory;
 use super::common::WaCustomError;
 use super::lazy_load::{FileIndex, LazyItem, SyncPersist};
-use super::types::{BytesToRead, FileOffset, HNSWLevel, MergedNode, NodeProp, VectorId};
+use super::types::{BytesToRead, FileOffset, HNSWLevel, MergedNode, VectorId};
 use crate::models::serializer::CustomSerialize;
 use crate::storage::Storage;
 use arcshift::ArcShift;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Seek, SeekFrom, Write};
 use std::sync::Arc;
 
-pub fn read_node_from_file(
-    file_index: FileIndex,
-    cache: Arc<NodeRegistry>,
-) -> Result<MergedNode, BufIoError> {
-    // Deserialize the MergedNode using the FileIndex
-    let node: MergedNode = cache.load_item(file_index.clone())?;
+// pub fn read_node_from_file(
+//     file_index: FileIndex,
+//     cache: Arc<NodeRegistry>,
+// ) -> Result<MergedNode, BufIoError> {
+//     // Deserialize the MergedNode using the FileIndex
+//     let node: MergedNode = cache.load_item(file_index.clone())?;
 
-    // Pretty print the node
-    match file_index {
-        FileIndex::Valid {
-            offset, version_id, ..
-        } => {
-            println!(
-                "Read MergedNode from offset: {}, version: {}",
-                offset.0, *version_id
-            );
-        }
-        FileIndex::Invalid => {
-            println!("Attempted to read MergedNode with an invalid FileIndex");
-        }
-    }
+//     // Pretty print the node
+//     match file_index {
+//         FileIndex::Valid {
+//             offset, version_id, ..
+//         } => {
+//             println!(
+//                 "Read MergedNode from offset: {}, version: {}",
+//                 offset.0, *version_id
+//             );
+//         }
+//         FileIndex::Invalid => {
+//             println!("Attempted to read MergedNode with an invalid FileIndex");
+//         }
+//     }
 
-    // You might want to add more detailed printing here, depending on what information
-    // you want to see about the node
-    // println!("{:#?}", node);
+//     // You might want to add more detailed printing here, depending on what information
+//     // you want to see about the node
+//     // println!("{:#?}", node);
 
-    Ok(node)
-}
+//     Ok(node)
+// }
 pub fn write_node_to_file(
     lazy_item: &LazyItem<MergedNode>,
     bufmans: Arc<BufferManagerFactory>,
@@ -128,9 +127,10 @@ pub fn load_vector_id_lsmdb(_level: HNSWLevel, _vector_id: VectorId) -> LazyItem
     LazyItem::Invalid
 }
 
-pub fn load_neighbor_persist_ref(_level: HNSWLevel, _node_file_ref: u32) -> Option<MergedNode> {
-    None
-}
+// #[allow(dead_code)]
+// pub fn load_neighbor_persist_ref(_level: HNSWLevel, _node_file_ref: u32) -> Option<MergedNode> {
+//     None
+// }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct NodePropSerialize<'a> {
@@ -138,6 +138,7 @@ pub struct NodePropSerialize<'a> {
     pub value: Arc<Storage>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct NodePropDeserialize {
     pub id: VectorId,
@@ -166,22 +167,23 @@ pub fn write_prop_to_file(
     ))
 }
 
-pub fn read_prop_from_file(
-    (offset, bytes_to_read): (FileOffset, BytesToRead),
-    mut file: &File,
-) -> Result<NodeProp, WaCustomError> {
-    let mut bytes = vec![0u8; bytes_to_read.0 as usize];
-    file.seek(SeekFrom::Start(offset.0 as u64))
-        .map_err(|e| WaCustomError::FsError(e.to_string()))?;
-    file.read_exact(&mut bytes)
-        .map_err(|e| WaCustomError::FsError(e.to_string()))?;
+// #[allow(dead_code)]
+// pub fn read_prop_from_file(
+//     (offset, bytes_to_read): (FileOffset, BytesToRead),
+//     mut file: &File,
+// ) -> Result<NodeProp, WaCustomError> {
+//     let mut bytes = vec![0u8; bytes_to_read.0 as usize];
+//     file.seek(SeekFrom::Start(offset.0 as u64))
+//         .map_err(|e| WaCustomError::FsError(e.to_string()))?;
+//     file.read_exact(&mut bytes)
+//         .map_err(|e| WaCustomError::FsError(e.to_string()))?;
 
-    let prop: NodePropDeserialize = serde_cbor::from_slice(&bytes)
-        .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?;
+//     let prop: NodePropDeserialize = serde_cbor::from_slice(&bytes)
+//         .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?;
 
-    Ok(NodeProp {
-        id: prop.id,
-        value: prop.value,
-        location: (offset, bytes_to_read),
-    })
-}
+//     Ok(NodeProp {
+//         id: prop.id,
+//         value: prop.value,
+//         location: (offset, bytes_to_read),
+//     })
+// }

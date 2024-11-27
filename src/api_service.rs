@@ -23,9 +23,9 @@ use std::io::SeekFrom;
 use std::path::Path;
 use std::sync::mpsc;
 use std::sync::Arc;
-use std::thread;
 
 /// creates a dense index for a collection
+#[allow(unused_variables)]
 pub async fn init_dense_index_for_collection(
     ctx: Arc<AppContext>,
     collection: &Collection,
@@ -366,11 +366,13 @@ pub async fn fetch_vector_neighbors(
     return results.expect("Failed fetching vector neighbors");
 }
 
+#[allow(dead_code)]
 fn calculate_statistics(_: &[i32]) -> Option<Statistics> {
     // Placeholder for calculating statistics
     None
 }
 
+#[allow(dead_code)]
 fn vector_knn(_vs: &Vec<f32>, _vecs: &Vec<f32>) -> Vec<(i8, i8, String, f64)> {
     // Placeholder for vector KNN
     vec![]
