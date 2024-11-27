@@ -447,8 +447,7 @@ impl DenseIndexTransaction {
                     for (node, _) in list {
                         serialization_table.delete(&node);
                         let version = node.get_current_version();
-                        let offset =
-                            write_node_to_file(&node, &dense_index.index_manager)?;
+                        let offset = write_node_to_file(&node, &dense_index.index_manager)?;
                         dense_index.cache.insert_lazy_object(version, offset, node);
                     }
                     batches_processed += 1;
@@ -761,11 +760,7 @@ impl CollectionsMap {
             load_dense_index_data(&self.lmdb_env, self.lmdb_dense_index_db, &coll.get_key())
                 .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
-        let root = cache.get_lazy_object(
-            dense_index_data.file_index,
-            1000,
-            &mut HashSet::new(),
-        )?;
+        let root = cache.get_lazy_object(dense_index_data.file_index, 1000, &mut HashSet::new())?;
 
         let vcs = Arc::new(VersionControl::from_existing(
             self.lmdb_env.clone(),

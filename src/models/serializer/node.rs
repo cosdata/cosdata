@@ -31,8 +31,8 @@ impl CustomSerialize for MergedNode {
         let prop_state = prop.get();
         match &*prop_state {
             PropState::Ready(node_prop) => {
-                bufman.write_u32_with_cursor(cursor, node_prop.location.0.0)?;
-                bufman.write_u32_with_cursor(cursor, node_prop.location.1.0)?;
+                bufman.write_u32_with_cursor(cursor, node_prop.location.0 .0)?;
+                bufman.write_u32_with_cursor(cursor, node_prop.location.1 .0)?;
             }
             PropState::Pending((FileOffset(offset), BytesToRead(length))) => {
                 bufman.write_u32_with_cursor(cursor, *offset)?;

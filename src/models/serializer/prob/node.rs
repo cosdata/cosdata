@@ -60,9 +60,9 @@ impl ProbSerialize for ProbNode {
         };
 
         // Serialize neighbors
-        let neighbors_offset =
-            self.get_neighbors_raw()
-                .serialize(bufmans, version, cursor)?;
+        let neighbors_offset = self
+            .get_neighbors_raw()
+            .serialize(bufmans, version, cursor)?;
 
         let versions_offset = self.versions.serialize(bufmans, version, cursor)?;
 

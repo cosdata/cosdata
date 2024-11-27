@@ -1,9 +1,11 @@
 use std::sync::Arc;
 
-use crate::{api_service::{init_dense_index_for_collection, init_inverted_index_for_collection},
+use crate::{
+    api_service::{init_dense_index_for_collection, init_inverted_index_for_collection},
     app_context::AppContext,
     indexes::inverted_index::InvertedIndex,
-    models::{collection::Collection, types::DenseIndex},};
+    models::{collection::Collection, types::DenseIndex},
+};
 
 use super::{
     dtos::{CreateCollectionDto, GetCollectionsDto, GetCollectionsResponseDto},

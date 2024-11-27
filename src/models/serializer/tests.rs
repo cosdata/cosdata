@@ -913,8 +913,7 @@ fn test_storage_serialization() {
         let version_id = Hash::from(version as u32);
         let bufman = bufmans.get(&version_id).unwrap();
         let cursor = bufman.open_cursor().unwrap();
-        let offset = SimpleSerialize::serialize(&storage, bufman.clone(), cursor)
-            .unwrap();
+        let offset = SimpleSerialize::serialize(&storage, bufman.clone(), cursor).unwrap();
         let file_index = FileIndex::Valid {
             offset: FileOffset(offset),
             version_number: version as u16,
