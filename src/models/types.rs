@@ -1,11 +1,14 @@
-use super::buffered_io::BufferManagerFactory;
-use super::cache_loader::NodeRegistry;
+use super::buffered_io::{BufferManager, BufferManagerFactory};
+use super::cache_loader::ProbCache;
 use super::collection::Collection;
+use super::embedding_persist::{write_embedding, EmbeddingOffset};
+use super::file_persist::write_node_to_file;
 use super::meta_persist::{
     delete_dense_index, lmdb_init_collections_db, lmdb_init_db, load_collections,
     load_dense_index_data, persist_dense_index, retrieve_current_version,
 };
-use super::serializer::CustomSerialize;
+use super::prob_lazy_load::lazy_item::ProbLazyItem;
+use super::prob_node::{ProbNode, SharedNode};
 use super::versioning::VersionControl;
 use crate::distance::cosine::CosineSimilarity;
 use crate::distance::DistanceError;
@@ -13,6 +16,7 @@ use crate::distance::{
     cosine::CosineDistance, dotproduct::DotProductDistance, euclidean::EuclideanDistance,
     hamming::HammingDistance, DistanceFunction,
 };
+use crate::macros::key;
 use crate::models::common::*;
 use crate::models::identity_collections::*;
 use crate::models::lazy_load::*;
@@ -24,15 +28,16 @@ use crate::quantization::{
 use crate::storage::Storage;
 use arcshift::ArcShift;
 use dashmap::DashMap;
-use lmdb::{Database, DatabaseFlags, Environment};
+use lmdb::{Database, DatabaseFlags, Environment, Transaction, WriteFlags};
 use serde::{Deserialize, Serialize};
+use siphasher::sip::SipHasher24;
 use std::collections::HashSet;
-use std::fmt;
-use std::fs::*;
 use std::hash::{DefaultHasher, Hash as StdHash, Hasher};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc, RwLock};
+use std::{fmt, ptr};
+use std::{fs::*, thread};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct HNSWLevel(pub u8);
@@ -40,7 +45,7 @@ pub struct HNSWLevel(pub u8);
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct FileOffset(pub u32);
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize, Hash)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct BytesToRead(pub u32);
 
 #[derive(Clone)]
@@ -71,7 +76,7 @@ impl Identifiable for MergedNode {
 
 pub type PropPersistRef = (FileOffset, BytesToRead);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct NodeProp {
     pub id: VectorId,
     pub value: Arc<Storage>,
@@ -108,6 +113,14 @@ pub enum PropState {
 pub enum VectorId {
     Str(String),
     Int(i32),
+}
+
+impl VectorId {
+    pub fn get_hash(&self) -> u64 {
+        let mut hasher = SipHasher24::new();
+        self.hash(&mut hasher);
+        hasher.finish()
+    }
 }
 
 #[derive(Clone)]
@@ -243,7 +256,6 @@ impl MergedNode {
         self.child.clone()
     }
 
-
     pub fn get_prop_location(&self) -> PropPersistRef {
         let mut arc = self.prop.clone();
         match arc.get() {
@@ -350,9 +362,6 @@ impl VectorQt {
 
 pub struct SizeBytes(pub u32);
 
-// needed to flatten and get uniques
-pub type ExecQueueUpdate = STM<Vec<ArcShift<LazyItem<MergedNode>>>>;
-
 #[derive(Debug, Clone)]
 pub struct MetaDb {
     pub env: Arc<Environment>,
@@ -388,38 +397,173 @@ impl Default for HNSWHyperParams {
     }
 }
 
+pub struct DenseIndexTransaction {
+    pub id: Hash,
+    pub version_number: u16,
+    pub serialization_table: Arc<TSHashTable<SharedNode, ()>>,
+    pub lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16), SharedNode>>,
+    serializer_thread_handle: thread::JoinHandle<Result<(), WaCustomError>>,
+    raw_embedding_serializer_thread_handle: thread::JoinHandle<Result<(), WaCustomError>>,
+    serialization_signal: mpsc::Sender<()>,
+    pub raw_embedding_channel: mpsc::SyncSender<RawVectorEmbedding>,
+    batch_count: Arc<AtomicUsize>,
+}
+
+impl DenseIndexTransaction {
+    pub fn new(dense_index: Arc<DenseIndex>) -> Result<Self, WaCustomError> {
+        let branch_info = dense_index
+            .vcs
+            .get_branch_info("main")
+            .map_err(|err| {
+                WaCustomError::DatabaseError(format!("Unable to get main branch info: {}", err))
+            })?
+            .unwrap();
+        let version_number = *branch_info.get_current_version() + 1;
+        let id = dense_index
+            .vcs
+            .generate_hash("main", Version::from(version_number))
+            .map_err(|err| {
+                WaCustomError::DatabaseError(format!("Unable to get transaction hash: {}", err))
+            })?;
+
+        let serialization_table = Arc::new(TSHashTable::<Arc<ProbLazyItem<ProbNode>>, ()>::new(16));
+        let (serialization_signal, rx) = mpsc::channel();
+        let batch_count = Arc::new(AtomicUsize::new(0));
+
+        let serializer_thread_handle = {
+            let serialization_table = serialization_table.clone();
+            let batch_count = batch_count.clone();
+            let dense_index = dense_index.clone();
+
+            thread::spawn(move || {
+                let mut batches_processed = 0;
+
+                loop {
+                    rx.recv().unwrap();
+                    if batches_processed >= batch_count.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let list = serialization_table.to_list();
+                    for (node, _) in list {
+                        serialization_table.delete(&node);
+                        let version = node.get_current_version();
+                        let offset = write_node_to_file(&node, &dense_index.index_manager)?;
+                        dense_index.cache.insert_lazy_object(version, offset, node);
+                    }
+                    batches_processed += 1;
+                }
+                dense_index.index_manager.flush_all()?;
+                Ok(())
+            })
+        };
+
+        let (raw_embedding_channel, rx) = mpsc::sync_channel(100);
+
+        let raw_embedding_serializer_thread_handle = {
+            let bufman = dense_index.vec_raw_manager.get(&id)?;
+
+            thread::spawn(move || {
+                let mut offsets = Vec::new();
+                for raw_emb in rx {
+                    let offset = write_embedding(bufman.clone(), &raw_emb)?;
+                    let embedding_key = key!(e:raw_emb.hash_vec);
+                    offsets.push((embedding_key, offset));
+                }
+
+                let env = dense_index.lmdb.env.clone();
+                let db = dense_index.lmdb.db.clone();
+
+                let mut txn = env.begin_rw_txn().map_err(|e| {
+                    WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e))
+                })?;
+                for (key, offset) in offsets {
+                    let offset = EmbeddingOffset {
+                        version: id,
+                        offset,
+                    };
+                    let offset_serialized = offset.serialize();
+
+                    txn.put(*db, &key, &offset_serialized, WriteFlags::empty())
+                        .map_err(|e| {
+                            WaCustomError::DatabaseError(format!("Failed to put data: {}", e))
+                        })?;
+                }
+
+                txn.commit().map_err(|e| {
+                    WaCustomError::DatabaseError(format!("Failed to commit transaction: {}", e))
+                })?;
+                bufman.flush()?;
+                Ok(())
+            })
+        };
+
+        Ok(Self {
+            id,
+            serialization_table,
+            serializer_thread_handle,
+            lazy_item_versions_table: Arc::new(TSHashTable::new(16)),
+            serialization_signal,
+            batch_count,
+            raw_embedding_channel,
+            raw_embedding_serializer_thread_handle,
+            version_number: version_number as u16,
+        })
+    }
+
+    pub fn post_raw_embedding(&self, raw_emb: RawVectorEmbedding) {
+        self.raw_embedding_channel.send(raw_emb).unwrap();
+    }
+
+    pub fn increment_batch_count(&self) {
+        self.batch_count.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub fn start_serialization_round(&self) {
+        self.serialization_signal.send(()).unwrap();
+    }
+
+    pub fn pre_commit(self) -> Result<(), WaCustomError> {
+        // sending a signal without incrementing the batch count will stop the serialization
+        self.serialization_signal.send(()).unwrap();
+        self.serializer_thread_handle.join().unwrap()?;
+        drop(self.raw_embedding_channel);
+        self.raw_embedding_serializer_thread_handle
+            .join()
+            .unwrap()?;
+        Ok(())
+    }
+}
+
 #[derive(Clone)]
 pub struct DenseIndex {
-    pub exec_queue_nodes: ExecQueueUpdate,
     pub database_name: String,
-    pub root_vec: LazyItemRef<MergedNode>,
+    pub root_vec: Arc<AtomicPtr<SharedNode>>,
     pub levels_prob: Arc<Vec<(f64, i32)>>,
     pub dim: usize,
-    pub prop_file: Arc<File>,
+    pub prop_file: Arc<RwLock<File>>,
     pub lmdb: MetaDb,
     pub current_version: ArcShift<Hash>,
-    pub current_open_transaction: ArcShift<Option<Hash>>,
+    pub current_open_transaction: Arc<AtomicPtr<DenseIndexTransaction>>,
     pub quantization_metric: ArcShift<QuantizationMetric>,
     pub distance_metric: ArcShift<DistanceMetric>,
     pub storage_type: ArcShift<StorageType>,
     pub vcs: Arc<VersionControl>,
     pub hnsw_params: ArcShift<HNSWHyperParams>,
-    // Whether the VectorStore has been configured or not
-    pub configured: Arc<AtomicBool>,
-    pub auto_config: Arc<AtomicBool>,
-    pub cache: Arc<NodeRegistry>,
+    pub cache: Arc<ProbCache>,
     pub index_manager: Arc<BufferManagerFactory>,
     pub vec_raw_manager: Arc<BufferManagerFactory>,
 }
 
+unsafe impl Send for DenseIndex {}
+unsafe impl Sync for DenseIndex {}
+
 impl DenseIndex {
     pub fn new(
-        exec_queue_nodes: ExecQueueUpdate,
         database_name: String,
-        root_vec: LazyItemRef<MergedNode>,
+        root_vec: SharedNode,
         levels_prob: Arc<Vec<(f64, i32)>>,
         dim: usize,
-        prop_file: Arc<File>,
+        prop_file: Arc<RwLock<File>>,
         lmdb: MetaDb,
         current_version: ArcShift<Hash>,
         quantization_metric: ArcShift<QuantizationMetric>,
@@ -427,21 +571,19 @@ impl DenseIndex {
         storage_type: ArcShift<StorageType>,
         vcs: Arc<VersionControl>,
         num_layers: u8,
-        auto_config: bool,
-        cache: Arc<NodeRegistry>,
+        cache: Arc<ProbCache>,
         index_manager: Arc<BufferManagerFactory>,
         vec_raw_manager: Arc<BufferManagerFactory>,
     ) -> Self {
         DenseIndex {
-            exec_queue_nodes,
             database_name,
-            root_vec,
+            root_vec: Arc::new(AtomicPtr::new(Box::into_raw(Box::new(root_vec)))),
             levels_prob,
             dim,
             prop_file,
             lmdb,
             current_version,
-            current_open_transaction: ArcShift::new(None),
+            current_open_transaction: Arc::new(AtomicPtr::new(ptr::null_mut())),
             quantization_metric,
             distance_metric,
             storage_type,
@@ -450,8 +592,6 @@ impl DenseIndex {
                 num_layers,
                 ..Default::default()
             }),
-            configured: Arc::new(AtomicBool::new(false)),
-            auto_config: Arc::new(AtomicBool::new(auto_config)),
             cache,
             index_manager,
             vec_raw_manager,
@@ -470,31 +610,27 @@ impl DenseIndex {
         arc.update(new_version);
     }
 
-    pub fn get_configured_flag(&self) -> bool {
-        self.configured.load(Ordering::Relaxed)
+    pub fn set_root_vec(&self, root_vec: SharedNode) {
+        let old = self
+            .root_vec
+            .swap(Box::into_raw(Box::new(root_vec)), Ordering::SeqCst);
+
+        unsafe {
+            if !old.is_null() {
+                drop(Box::from_raw(old))
+            }
+        };
     }
 
-    pub fn set_configured_flag(&self, flag: bool) {
-        self.configured.store(flag, Ordering::Relaxed);
-    }
-
-    pub fn get_auto_config_flag(&self) -> bool {
-        self.auto_config.load(Ordering::Relaxed)
-    }
-
-    pub fn set_auto_config_flag(&self, flag: bool) {
-        self.auto_config.store(flag, Ordering::Relaxed);
+    pub fn get_root_vec(&self) -> SharedNode {
+        unsafe { (*self.root_vec.load(Ordering::SeqCst)).clone() }
     }
 
     /// Returns FileIndex (offset) corresponding to the root
     /// node. Returns None if the it's not set or the root node is an
     /// invalid LazyItem
     pub fn root_vec_offset(&self) -> Option<FileIndex> {
-        let lazy_item = self.root_vec.item.shared_get();
-        match lazy_item {
-            LazyItem::Valid { file_index, .. } => file_index.shared_get().clone(),
-            LazyItem::Invalid => None,
-        }
+        self.get_root_vec().get_file_index()
     }
 }
 
@@ -508,7 +644,7 @@ pub struct QuantizedVectorEmbedding {
 // Raw vector embedding
 #[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize, PartialEq)]
 pub struct RawVectorEmbedding {
-    pub raw_vec: Vec<f32>,
+    pub raw_vec: Arc<Vec<f32>>,
     pub hash_vec: VectorId,
 }
 
@@ -554,7 +690,7 @@ impl CollectionsMap {
         )
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
-        let root_path = Path::new(".");
+        let root_path = Path::new("./collections");
 
         // let bufmans = cache.get_bufmans();
 
@@ -599,8 +735,20 @@ impl CollectionsMap {
             collection_path.clone(),
             |root, ver| root.join(format!("{}.vec_raw", **ver)),
         ));
+        let prop_file = Arc::new(RwLock::new(
+            OpenOptions::new()
+                .create(true)
+                .read(true)
+                .append(true)
+                .open(collection_path.join("prop.data"))
+                .unwrap(),
+        ));
         // TODO: May be the value can be taken from config
-        let cache = Arc::new(NodeRegistry::new(1000, index_manager.clone()));
+        let cache = Arc::new(ProbCache::new(
+            1000,
+            index_manager.clone(),
+            prop_file.clone(),
+        ));
 
         let db = Arc::new(
             self.lmdb_env
@@ -612,34 +760,18 @@ impl CollectionsMap {
             load_dense_index_data(&self.lmdb_env, self.lmdb_dense_index_db, &coll.get_key())
                 .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
-        let root_item: LazyItem<MergedNode> = LazyItem::deserialize(
-            index_manager.clone(),
-            dense_index_data.file_index,
-            cache.clone(),
-            1000,
-            &mut HashSet::new(),
-        )?;
-        let root = LazyItemRef::from_lazy(root_item);
+        let root = cache.get_lazy_object(dense_index_data.file_index, 1000, &mut HashSet::new())?;
 
         let vcs = Arc::new(VersionControl::from_existing(
             self.lmdb_env.clone(),
             db.clone(),
         ));
-        let prop_file = Arc::new(
-            OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(collection_path.join("prop.data"))
-                .unwrap(),
-        );
         let lmdb = MetaDb {
             env: self.lmdb_env.clone(),
             db,
         };
         let current_version = retrieve_current_version(&lmdb)?;
         let dense_index = DenseIndex::new(
-            STM::new(Vec::new(), 16, true),
-            // dense_index_data.max_level,
             coll.name.clone(),
             root,
             dense_index_data.levels_prob,
@@ -652,8 +784,6 @@ impl CollectionsMap {
             ArcShift::new(dense_index_data.storage_type),
             vcs,
             dense_index_data.num_layers,
-            // TODO: persist
-            true,
             cache,
             index_manager,
             vec_raw_manager,

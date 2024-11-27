@@ -19,26 +19,26 @@ pub(crate) async fn create_index(
     data_type: DataType,
     index_params: IndexParamsDTo,
 ) -> Result<(), IndexesError> {
-    let collection = ctx
+    let dense_index = ctx
         .ain_env
         .collections_map
         .get(&collection_name)
         .map(|collection| collection.clone())
         .ok_or(IndexesError::CollectionNotFound)?;
 
-    collection.distance_metric.clone().update(distance_metric);
-    collection
+    dense_index.distance_metric.clone().update(distance_metric);
+    dense_index
         .quantization_metric
         .clone()
         .update(quantization.into());
-    collection.storage_type.clone().update(data_type.into());
+    dense_index.storage_type.clone().update(data_type.into());
 
     let IndexParamsDTo::Hnsw(hnsw_hyper_param_dto) = index_params;
     let hnsw_param = hnsw_hyper_param_dto.into();
 
-    collection.hnsw_params.clone().update(hnsw_param);
+    dense_index.hnsw_params.clone().update(hnsw_param);
 
-    create_index_in_collection(collection)
+    create_index_in_collection(ctx, dense_index)
         .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;
 
     Ok(())

@@ -28,7 +28,7 @@ pub(crate) async fn create_collection(
             None,
             None,
             5,
-            true
+            true,
         )
         .await?;
     }
