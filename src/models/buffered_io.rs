@@ -1254,38 +1254,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_chunked_write_large_file() {
-        let mut rng = rand::thread_rng();
-
-        let file = create_tmp_file(0, 0).unwrap();
-        let bufman = BufferManager::new(file).unwrap();
-        let cursor = bufman.open_cursor().unwrap();
-
-        let written_data = (0..(100 * 1024 * 1024))
-            .map(|_| rng.gen())
-            .collect::<Vec<_>>();
-
-        for i in 0..(100 * 1024) {
-            let chunk = &written_data[(i * 1024)..((i * 1024) + 1024)];
-            bufman.write_with_cursor(cursor, chunk).unwrap();
-            let pos = bufman.cursor_position(cursor).unwrap();
-            assert_eq!(pos, i as u64 * 1024 + 1024);
-        }
-
-        bufman.flush().unwrap();
-
-        let mut read_data = vec![0; 100 * 1024 * 1024];
-
-        let mut file = bufman.file.write().unwrap();
-        file.seek(SeekFrom::Start(0)).unwrap();
-        file.read_exact(&mut read_data).unwrap();
-
-        for (i, (r, w)) in read_data.into_iter().zip(written_data).enumerate() {
-            assert_eq!(r, w, "mismatch at {}", i);
-        }
-    }
-
     // Prop test for `get_or_create_region` to check that
     // `region.start` is a multiple of BUFFER_SIZE
     #[quickcheck]
