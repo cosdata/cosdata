@@ -1,8 +1,4 @@
-use std::{
-    collections::HashSet,
-    io::SeekFrom,
-    sync::{atomic::Ordering, Arc},
-};
+use std::{collections::HashSet, io::SeekFrom, sync::atomic::Ordering};
 
 use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
@@ -19,7 +15,7 @@ use super::{ProbSerialize, UpdateSerialized};
 impl ProbSerialize for SharedNode {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: &BufferManagerFactory,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
@@ -53,7 +49,7 @@ impl ProbSerialize for SharedNode {
                         version_number: *version_number,
                         version_id: *version_id,
                     };
-                    data.update_serialized(bufmans.clone(), file_index)?;
+                    data.update_serialized(bufmans, file_index)?;
 
                     if version_id != &version {
                         bufman.close_cursor(cursor)?;
@@ -72,7 +68,7 @@ impl ProbSerialize for SharedNode {
                     file_offset.set(Some(FileOffset(u32::try_from(offset).unwrap())));
                     persist_flag.store(false, Ordering::SeqCst);
 
-                    data.serialize(bufmans.clone(), *version_id, cursor)?;
+                    data.serialize(bufmans, *version_id, cursor)?;
 
                     if version_id != &version {
                         bufman.close_cursor(cursor)?;
@@ -87,9 +83,9 @@ impl ProbSerialize for SharedNode {
     }
 
     fn deserialize(
-        _bufmans: Arc<BufferManagerFactory>,
+        _bufmans: &BufferManagerFactory,
         file_index: FileIndex,
-        cache: Arc<ProbCache>,
+        cache: &ProbCache,
         max_loads: u16,
         skipm: &mut HashSet<u64>,
     ) -> Result<Self, BufIoError> {

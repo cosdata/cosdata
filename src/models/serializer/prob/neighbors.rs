@@ -23,7 +23,7 @@ use super::{ProbSerialize, UpdateSerialized};
 impl ProbSerialize for Box<[AtomicPtr<(SharedNode, MetricResult)>]> {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: &BufferManagerFactory,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
@@ -47,8 +47,8 @@ impl ProbSerialize for Box<[AtomicPtr<(SharedNode, MetricResult)>]> {
 
             let placeholder_pos = placeholder_start + (i as u64 * 14);
 
-            let node_offset = node.serialize(bufmans.clone(), version, cursor)?;
-            let dist_offset = dist.serialize(bufmans.clone(), version, cursor)?;
+            let node_offset = node.serialize(bufmans, version, cursor)?;
+            let dist_offset = dist.serialize(bufmans, version, cursor)?;
             let end_offset = bufman.cursor_position(cursor)?;
 
             bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_pos))?;
@@ -65,9 +65,9 @@ impl ProbSerialize for Box<[AtomicPtr<(SharedNode, MetricResult)>]> {
     }
 
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: &BufferManagerFactory,
         file_index: FileIndex,
-        cache: Arc<ProbCache>,
+        cache: &ProbCache,
         max_loads: u16,
         skipm: &mut HashSet<u64>,
     ) -> Result<Self, BufIoError> {
@@ -119,17 +119,17 @@ impl ProbSerialize for Box<[AtomicPtr<(SharedNode, MetricResult)>]> {
                     };
 
                     let node = Arc::<ProbLazyItem<ProbNode>>::deserialize(
-                        bufmans.clone(),
+                        bufmans,
                         node_file_index,
-                        cache.clone(),
+                        &cache,
                         max_loads,
                         skipm,
                     )?;
 
                     let dist = MetricResult::deserialize(
-                        bufmans.clone(),
+                        bufmans,
                         dist_file_index,
-                        cache.clone(),
+                        cache,
                         max_loads,
                         skipm,
                     )?;
@@ -150,7 +150,7 @@ impl ProbSerialize for Box<[AtomicPtr<(SharedNode, MetricResult)>]> {
 impl UpdateSerialized for Box<[AtomicPtr<(SharedNode, MetricResult)>]> {
     fn update_serialized(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: &BufferManagerFactory,
         file_index: FileIndex,
     ) -> Result<u32, BufIoError> {
         match file_index {
@@ -181,8 +181,8 @@ impl UpdateSerialized for Box<[AtomicPtr<(SharedNode, MetricResult)>]> {
 
                     let placeholder_pos = placeholder_offset + (i as u64 * 14);
 
-                    let node_offset = node.serialize(bufmans.clone(), version_id, cursor)?;
-                    let dist_offset = dist.serialize(bufmans.clone(), version_id, cursor)?;
+                    let node_offset = node.serialize(bufmans, version_id, cursor)?;
+                    let dist_offset = dist.serialize(bufmans, version_id, cursor)?;
                     let end_offset = bufman.cursor_position(cursor)?;
 
                     bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_pos))?;

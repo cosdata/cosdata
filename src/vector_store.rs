@@ -91,7 +91,7 @@ pub fn create_root_node(
     }
 
     for item in nodes {
-        write_node_to_file(item, index_manager.clone())?;
+        write_node_to_file(&item, &index_manager)?;
     }
 
     Ok(root)

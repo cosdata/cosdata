@@ -170,7 +170,7 @@ fn test_lazy_item_serialization() {
     let lazy_item = ProbLazyItem::new(node, root_version_id, root_version_number);
 
     let offset = lazy_item
-        .serialize(bufmans.clone(), root_version_id, cursor)
+        .serialize(&bufmans, root_version_id, cursor)
         .unwrap();
     bufman.close_cursor(cursor).unwrap();
 
@@ -194,7 +194,7 @@ fn test_prob_node_acyclic_serialization() {
 
     let node = create_prob_node(-1, &prop_file);
 
-    let offset = node.serialize(bufmans, root_version_id, cursor).unwrap();
+    let offset = node.serialize(&bufmans, root_version_id, cursor).unwrap();
     let file_index = FileIndex::Valid {
         offset: FileOffset(offset),
         version_number: 0,
@@ -223,7 +223,7 @@ fn test_prob_lazy_item_array_serialization() {
         array.push(lazy_item);
     }
 
-    let offset = array.serialize(bufmans, root_version_id, cursor).unwrap();
+    let offset = array.serialize(&bufmans, root_version_id, cursor).unwrap();
     let file_index = FileIndex::Valid {
         offset: FileOffset(offset),
         version_number: 0,
@@ -254,7 +254,7 @@ fn test_prob_node_serialization_with_neighbors() {
         node.add_neighbor(lazy_item, &VectorId::Int(i), dist);
     }
 
-    let offset = node.serialize(bufmans, root_version_id, cursor).unwrap();
+    let offset = node.serialize(&bufmans, root_version_id, cursor).unwrap();
     let file_index = FileIndex::Valid {
         offset: FileOffset(offset),
         version_number: 0,
@@ -284,7 +284,7 @@ fn test_prob_lazy_item_cyclic_serialization() {
     node0.set_parent(lazy1.clone());
     node1.set_child(lazy0.clone());
 
-    let offset = lazy0.serialize(bufmans, root_version_id, cursor).unwrap();
+    let offset = lazy0.serialize(&bufmans, root_version_id, cursor).unwrap();
     let file_index = FileIndex::Valid {
         offset: FileOffset(offset),
         version_number: 0,
@@ -366,7 +366,7 @@ fn test_prob_lazy_item_with_versions_serialization_and_validation() {
 
     validate_lazy_item_versions(&cache, root.clone(), 0);
 
-    let offset = root.serialize(bufmans.clone(), v0_hash, cursor).unwrap();
+    let offset = root.serialize(&bufmans, v0_hash, cursor).unwrap();
     let file_index = FileIndex::Valid {
         offset: FileOffset(offset),
         version_number: 0,

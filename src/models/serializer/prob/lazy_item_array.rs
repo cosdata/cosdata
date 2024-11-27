@@ -1,7 +1,6 @@
 use std::{
     collections::HashSet,
     io::{self, SeekFrom},
-    sync::Arc,
 };
 
 use crate::models::{
@@ -19,7 +18,7 @@ use super::{ProbSerialize, UpdateSerialized};
 impl<const N: usize> ProbSerialize for ProbLazyItemArray<ProbNode, N> {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: &BufferManagerFactory,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
@@ -33,7 +32,7 @@ impl<const N: usize> ProbSerialize for ProbLazyItemArray<ProbNode, N> {
             };
             bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
 
-            let offset = item.serialize(bufmans.clone(), version, cursor)?;
+            let offset = item.serialize(bufmans, version, cursor)?;
             let placeholder_pos = start_offset + (i as u64 * 10);
 
             bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_pos))?;
@@ -47,9 +46,9 @@ impl<const N: usize> ProbSerialize for ProbLazyItemArray<ProbNode, N> {
     }
 
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: &BufferManagerFactory,
         file_index: FileIndex,
-        cache: Arc<ProbCache>,
+        cache: &ProbCache,
         max_loads: u16,
         skipm: &mut HashSet<u64>,
     ) -> Result<Self, BufIoError> {
@@ -87,7 +86,7 @@ impl<const N: usize> ProbSerialize for ProbLazyItemArray<ProbNode, N> {
                         version_id,
                     };
                     let item = SharedNode::deserialize(
-                        bufmans.clone(),
+                        bufmans,
                         file_index,
                         cache.clone(),
                         max_loads,
@@ -107,7 +106,7 @@ impl<const N: usize> ProbSerialize for ProbLazyItemArray<ProbNode, N> {
 impl<const N: usize> UpdateSerialized for ProbLazyItemArray<ProbNode, N> {
     fn update_serialized(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: &BufferManagerFactory,
         file_index: FileIndex,
     ) -> Result<u32, BufIoError> {
         match file_index {
@@ -141,7 +140,7 @@ impl<const N: usize> UpdateSerialized for ProbLazyItemArray<ProbNode, N> {
                         break;
                     };
                     bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
-                    let offset = item.serialize(bufmans.clone(), version_id, cursor)?;
+                    let offset = item.serialize(bufmans, version_id, cursor)?;
                     let placeholder_pos = placeholder_start + (j as u64 * 10);
 
                     bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_pos))?;

@@ -132,7 +132,7 @@ impl BufferManager {
     pub fn new(mut file: File) -> io::Result<Self> {
         let file_size = file.seek(SeekFrom::End(0))?;
         file.seek(SeekFrom::Start(0))?;
-        let regions = LRUCache::with_prob_eviction(100, 0.03125);
+        let regions = LRUCache::with_prob_eviction(10000, 0.03125);
         Ok(BufferManager {
             file: Arc::new(RwLock::new(file)),
             regions,

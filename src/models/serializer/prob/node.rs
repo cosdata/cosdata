@@ -16,17 +16,10 @@ use crate::models::{
 
 use super::{ProbSerialize, UpdateSerialized};
 
-// Size in bytes: HNSW level (1)
-//              + prop location (8)
-//              + parent placeholder (10)
-//              + child placeholder (10)
-//              + neighbors placeholder (4)
-//              + versions placeholder (4)
-//              = 37 bytes
 impl ProbSerialize for ProbNode {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: &BufferManagerFactory,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
@@ -47,7 +40,7 @@ impl ProbSerialize for ProbNode {
         // Serialize parent if present
         let parent_file_index = if let Some(parent) = self.get_parent() {
             Some((
-                parent.serialize(bufmans.clone(), version, cursor)?,
+                parent.serialize(bufmans, version, cursor)?,
                 parent.get_current_version(),
                 parent.get_current_version_number(),
             ))
@@ -58,7 +51,7 @@ impl ProbSerialize for ProbNode {
         // Serialize child if present
         let child_file_index = if let Some(child) = self.get_child() {
             Some((
-                child.serialize(bufmans.clone(), version, cursor)?,
+                child.serialize(bufmans, version, cursor)?,
                 child.get_current_version(),
                 child.get_current_version_number(),
             ))
@@ -69,9 +62,9 @@ impl ProbSerialize for ProbNode {
         // Serialize neighbors
         let neighbors_offset =
             self.get_neighbors_raw()
-                .serialize(bufmans.clone(), version, cursor)?;
+                .serialize(bufmans, version, cursor)?;
 
-        let versions_offset = self.versions.serialize(bufmans.clone(), version, cursor)?;
+        let versions_offset = self.versions.serialize(bufmans, version, cursor)?;
 
         let end_offset = bufman.cursor_position(cursor)?;
 
@@ -99,9 +92,9 @@ impl ProbSerialize for ProbNode {
     }
 
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: &BufferManagerFactory,
         file_index: FileIndex,
-        cache: Arc<ProbCache>,
+        cache: &ProbCache,
         max_loads: u16,
         skipm: &mut HashSet<u64>,
     ) -> Result<Self, BufIoError> {
@@ -140,13 +133,13 @@ impl ProbSerialize for ProbNode {
                 // Deserialize parent
                 let parent = if parent_offset != u32::MAX {
                     Some(Arc::<ProbLazyItem<Self>>::deserialize(
-                        bufmans.clone(),
+                        bufmans,
                         FileIndex::Valid {
                             offset: FileOffset(parent_offset),
                             version_number: parent_version_number,
                             version_id: parent_version_id,
                         },
-                        cache.clone(),
+                        cache,
                         max_loads,
                         skipm,
                     )?)
@@ -156,13 +149,13 @@ impl ProbSerialize for ProbNode {
                 // Deserialize child
                 let child = if child_offset != u32::MAX {
                     Some(Arc::<ProbLazyItem<Self>>::deserialize(
-                        bufmans.clone(),
+                        bufmans,
                         FileIndex::Valid {
                             offset: FileOffset(child_offset),
                             version_number: child_version_number,
                             version_id: child_version_id,
                         },
-                        cache.clone(),
+                        cache,
                         max_loads,
                         skipm,
                     )?)
@@ -177,9 +170,9 @@ impl ProbSerialize for ProbNode {
                 };
                 // Deserialize neighbors
                 let neighbors = ProbSerialize::deserialize(
-                    bufmans.clone(),
+                    bufmans,
                     neighbors_file_index,
-                    cache.clone(),
+                    cache,
                     max_loads,
                     skipm,
                 )?;
@@ -209,7 +202,7 @@ impl ProbSerialize for ProbNode {
 impl UpdateSerialized for ProbNode {
     fn update_serialized(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: &BufferManagerFactory,
         file_index: FileIndex,
     ) -> Result<u32, BufIoError> {
         match file_index {
@@ -239,7 +232,7 @@ impl UpdateSerialized for ProbNode {
                     version_id,
                 };
                 self.get_neighbors_raw()
-                    .update_serialized(bufmans.clone(), neighbors_file_index)?;
+                    .update_serialized(bufmans, neighbors_file_index)?;
                 self.versions
                     .update_serialized(bufmans, versions_file_index)?;
 

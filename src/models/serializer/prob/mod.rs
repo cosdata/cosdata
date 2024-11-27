@@ -5,7 +5,7 @@ mod node;
 #[cfg(test)]
 mod tests;
 
-use std::{collections::HashSet, io, sync::Arc};
+use std::{collections::HashSet, io};
 
 use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
@@ -19,15 +19,15 @@ use super::SimpleSerialize;
 pub trait ProbSerialize: Sized {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: &BufferManagerFactory,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError>;
 
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: &BufferManagerFactory,
         file_index: FileIndex,
-        cache: Arc<ProbCache>,
+        cache: &ProbCache,
         max_loads: u16,
         skipm: &mut HashSet<u64>,
     ) -> Result<Self, BufIoError>;
@@ -36,7 +36,7 @@ pub trait ProbSerialize: Sized {
 pub trait UpdateSerialized {
     fn update_serialized(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: &BufferManagerFactory,
         file_index: FileIndex,
     ) -> Result<u32, BufIoError>;
 }
@@ -44,7 +44,7 @@ pub trait UpdateSerialized {
 impl<T: SimpleSerialize> ProbSerialize for T {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: &BufferManagerFactory,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
@@ -53,9 +53,9 @@ impl<T: SimpleSerialize> ProbSerialize for T {
     }
 
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: &BufferManagerFactory,
         file_index: FileIndex,
-        _cache: Arc<ProbCache>,
+        _cache: &ProbCache,
         _max_loads: u16,
         _skipm: &mut HashSet<u64>,
     ) -> Result<Self, BufIoError> {

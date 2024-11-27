@@ -3,7 +3,7 @@ use super::cache_loader::NodeRegistry;
 use super::common::WaCustomError;
 use super::lazy_load::{FileIndex, SyncPersist};
 use super::prob_lazy_load::lazy_item::ProbLazyItem;
-use super::prob_node::ProbNode;
+use super::prob_node::SharedNode;
 use super::serializer::prob::ProbSerialize;
 use super::types::{BytesToRead, FileOffset, HNSWLevel, MergedNode, NodeProp, VectorId};
 use crate::storage::Storage;
@@ -41,8 +41,8 @@ pub fn read_node_from_file(
     Ok(node)
 }
 pub fn write_node_to_file(
-    lazy_item: Arc<ProbLazyItem<ProbNode>>,
-    bufmans: Arc<BufferManagerFactory>,
+    lazy_item: &SharedNode,
+    bufmans: &BufferManagerFactory,
 ) -> Result<u32, WaCustomError> {
     let version = lazy_item.get_current_version();
     let bufman = bufmans.get(&version)?;

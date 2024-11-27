@@ -21,8 +21,8 @@ use std::array::TryFromSliceError;
 use std::fs;
 use std::io::SeekFrom;
 use std::path::Path;
-use std::sync::{mpsc, RwLock};
 use std::sync::Arc;
+use std::sync::{mpsc, RwLock};
 use std::thread;
 
 /// creates a dense index for a collection
@@ -345,7 +345,7 @@ pub fn run_upload(
     let list = Arc::into_inner(serialization_table).unwrap().to_list();
 
     for (node, _) in list {
-        write_node_to_file(node, dense_index.index_manager.clone())?;
+        write_node_to_file(&node, &dense_index.index_manager)?;
     }
 
     dense_index.vec_raw_manager.flush_all()?;

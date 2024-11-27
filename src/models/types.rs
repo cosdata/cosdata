@@ -448,7 +448,7 @@ impl DenseIndexTransaction {
                         serialization_table.delete(&node);
                         let version = node.get_current_version();
                         let offset =
-                            write_node_to_file(node.clone(), dense_index.index_manager.clone())?;
+                            write_node_to_file(&node, &dense_index.index_manager)?;
                         dense_index.cache.insert_lazy_object(version, offset, node);
                     }
                     batches_processed += 1;
