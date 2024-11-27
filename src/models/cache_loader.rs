@@ -1,10 +1,11 @@
 use super::buffered_io::{BufIoError, BufferManagerFactory};
+use super::common::TSHashTable;
 use super::file_persist::read_prop_from_file;
 use super::lazy_load::{FileIndex, LazyItem, LazyItemVec, VectorData};
 use super::lru_cache::LRUCache;
 use super::prob_lazy_load::lazy_item::{ProbLazyItem, ProbLazyItemState};
-use super::prob_node::ProbNode;
-use super::serializer::prob::{ProbSerialize, UpdateSerialized};
+use super::prob_node::{ProbNode, SharedNode};
+use super::serializer::prob::ProbSerialize;
 use super::serializer::CustomSerialize;
 use super::types::*;
 use super::versioning::Hash;
@@ -26,8 +27,8 @@ use std::cell::Cell;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io;
-use std::sync::Weak;
-use std::sync::{atomic::AtomicBool, Arc, RwLock};
+use std::sync::TryLockError;
+use std::sync::{atomic::AtomicBool, Arc, Mutex, RwLock, Weak};
 
 macro_rules! define_cache_items {
     ($($variant:ident = $type:ty),+ $(,)?) => {
@@ -240,47 +241,22 @@ impl NodeRegistry {
     // }
 }
 
-macro_rules! define_prob_cache_items {
-    ($($variant:ident = $type:ty),+ $(,)?) => {
-        #[derive(Clone)]
-        pub enum ProbCacheItem {
-            $($variant(Arc<ProbLazyItem<$type>>)),+
-        }
-
-        pub trait ProbCacheable:  'static {
-            fn from_cache_item(cache_item: ProbCacheItem) -> Option<Arc<ProbLazyItem<Self>>>;
-            fn into_cache_item(item: Arc<ProbLazyItem<Self>>) -> ProbCacheItem;
-        }
-
-        $(
-            impl ProbCacheable for $type {
-                fn from_cache_item(cache_item: ProbCacheItem) -> Option<Arc<ProbLazyItem<Self>>> {
-                    #[allow(irrefutable_let_patterns)]
-                    if let ProbCacheItem::$variant(item) = cache_item {
-                        Some(item)
-                    } else {
-                        None
-                    }
-                }
-
-                fn into_cache_item(item: Arc<ProbLazyItem<Self>>) -> ProbCacheItem {
-                    ProbCacheItem::$variant(item)
-                }
-            }
-        )+
-    };
-}
-
-define_prob_cache_items! {
-    ProbNode = ProbNode,
-}
-
 pub struct ProbCache {
     cuckoo_filter: RwLock<CuckooFilter<u64>>,
-    registry: LRUCache<u64, ProbCacheItem>,
+    registry: LRUCache<u64, SharedNode>,
     props_registry: DashMap<u64, Weak<NodeProp>>,
     bufmans: Arc<BufferManagerFactory>,
     prop_file: Arc<RwLock<File>>,
+    loading_items: TSHashTable<u64, Arc<Mutex<bool>>>,
+    // A global lock to prevent deadlocks during batch loading of cache entries when `max_loads > 1`.
+    //
+    // This lock ensures that only one thread is allowed to load large batches of nodes (where `max_loads > 1`)
+    // at any given time. If multiple threads attempt to load interconnected nodes in parallel with high `max_loads`,
+    // it can lead to a deadlock situation due to circular dependencies between the locks. By serializing access to
+    // large batch loads, this mutex ensures that only one thread can initiate a batch load with a high `max_loads`
+    // value, preventing such circular waiting conditions. Threads with `max_loads = 1` can still load nodes in parallel
+    // without causing conflicts, allowing for efficient loading of smaller batches.
+    batch_load_lock: Mutex<()>,
 }
 
 impl ProbCache {
@@ -299,6 +275,8 @@ impl ProbCache {
             props_registry,
             bufmans,
             prop_file,
+            loading_items: TSHashTable::new(16),
+            batch_load_lock: Mutex::new(()),
         }
     }
 
@@ -340,16 +318,15 @@ impl ProbCache {
             self.props_registry
                 .insert(prop_key, Arc::downgrade(&node.prop));
         }
-        self.registry
-            .insert(combined_index, ProbCacheItem::ProbNode(item));
+        self.registry.insert(combined_index, item);
     }
 
-    pub fn get_lazy_object<T: ProbCacheable + UpdateSerialized + ProbSerialize>(
-        self: Arc<Self>,
+    pub fn get_lazy_object(
+        self: &Arc<Self>,
         file_index: FileIndex,
         max_loads: u16,
         skipm: &mut HashSet<u64>,
-    ) -> Result<Arc<ProbLazyItem<T>>, BufIoError> {
+    ) -> Result<SharedNode, BufIoError> {
         let combined_index = Self::combine_index(&file_index);
 
         {
@@ -357,20 +334,45 @@ impl ProbCache {
 
             // Initial check with Cuckoo filter
             if cuckoo_filter.contains(&combined_index) {
-                if let Some(obj) = self.registry.get(&combined_index) {
-                    if let Some(item) = T::from_cache_item(obj) {
+                if let Some(item) = self.registry.get(&combined_index) {
+                    return Ok(item);
+                }
+            }
+        }
+
+        if max_loads == 0 || !skipm.insert(combined_index) {
+            return Ok(ProbLazyItem::new_pending(file_index));
+        }
+
+        let mut mutex = self
+            .loading_items
+            .get_or_create(combined_index, || Arc::new(Mutex::new(false)));
+        let mut load_complete = mutex.lock().unwrap();
+
+        loop {
+            // check again
+            {
+                let cuckoo_filter = self.cuckoo_filter.read().unwrap();
+
+                // Initial check with Cuckoo filter
+                if cuckoo_filter.contains(&combined_index) {
+                    if let Some(item) = self.registry.get(&combined_index) {
                         return Ok(item);
                     }
                 }
             }
-        }
 
-        let node = ProbLazyItem::new_pending(file_index);
-        let cache_item = T::into_cache_item(node.clone());
+            // another thread loaded the data but its not in the registry (got evicted), retry
+            if *load_complete {
+                drop(load_complete);
+                mutex = self
+                    .loading_items
+                    .get_or_create(combined_index, || Arc::new(Mutex::new(false)));
+                load_complete = mutex.lock().unwrap();
+                continue;
+            }
 
-        {
-            self.cuckoo_filter.write().unwrap().insert(&combined_index);
-            self.registry.insert(combined_index, cache_item);
+            break;
         }
 
         let (offset, version_number, version_id) = if let FileIndex::Valid {
@@ -384,103 +386,61 @@ impl ProbCache {
             (FileOffset(0), 0, 0.into())
         };
 
-        if max_loads == 0 || skipm.contains(&combined_index) {
-            return Ok(node);
-        }
-
-        skipm.insert(combined_index);
-
-        let data = Arc::new(T::deserialize(
+        let data = Arc::new(ProbNode::deserialize(
             self.bufmans.clone(),
             file_index,
             self.clone(),
             max_loads - 1,
             skipm,
         )?);
-        let new_state = Arc::new(ProbLazyItemState::Ready {
+        let state = ProbLazyItemState::Ready {
             data,
             file_offset: Cell::new(Some(offset)),
-            decay_counter: 0,
             persist_flag: AtomicBool::new(false),
             version_id,
             version_number,
-        });
+        };
 
-        node.set_state(new_state);
+        let node = ProbLazyItem::new_from_state(state);
+
+        {
+            self.cuckoo_filter.write().unwrap().insert(&combined_index);
+            self.registry.insert(combined_index, node.clone());
+        }
+
+        *load_complete = true;
+        self.loading_items.delete(&combined_index);
 
         Ok(node)
     }
 
-    pub fn get_object<T: ProbCacheable + UpdateSerialized + ProbSerialize>(
-        self: Arc<Self>,
+    // Retrieves an object from the cache, attempting to batch load if possible, based on the state of the batch load lock.
+    //
+    // This function first attempts to acquire the `batch_load_lock` using a non-blocking `try_lock`. If successful,
+    // it sets a high `max_loads` value (1000), allowing for a larger batch load. This is the preferred scenario where
+    // the system is capable of performing a more efficient batch load, loading multiple nodes at once. If the lock is
+    // already held (i.e., another thread is performing a large batch load), the function falls back to a lower `max_loads`
+    // value (1), effectively loading nodes one at a time to avoid blocking or deadlocking.
+    //
+    // The key idea here is to **always attempt to load as many nodes as possible** (with `max_loads = 1000`) unless
+    // another thread is already performing a large load, in which case the function resorts to a smaller load size.
+    // This dynamic loading strategy balances efficient batch loading with the need to avoid blocking or deadlocks in high-concurrency situations.
+    //
+    // After determining the appropriate `max_loads`, the function proceeds by calling `get_lazy_object`, which handles
+    // the actual loading process, and retrieves the lazy-loaded data.
+    pub fn get_object(
+        self: &Arc<Self>,
         file_index: FileIndex,
-        max_loads: u16,
-        skipm: &mut HashSet<u64>,
-    ) -> Result<Arc<T>, BufIoError> {
-        let combined_index = Self::combine_index(&file_index);
-
-        let (node, is_new) = {
-            let cuckoo_filter = self.cuckoo_filter.read().unwrap();
-
-            // Initial check with Cuckoo filter
-            if cuckoo_filter.contains(&combined_index) {
-                if let Some(obj) = self.registry.get(&combined_index) {
-                    if let Some(item) = T::from_cache_item(obj) {
-                        if let ProbLazyItemState::Ready { data, .. } = &*item.get_state() {
-                            return Ok(data.clone());
-                        }
-
-                        (item, false)
-                    } else {
-                        (ProbLazyItem::new_pending(file_index), true)
-                    }
-                } else {
-                    (ProbLazyItem::new_pending(file_index), true)
-                }
-            } else {
-                (ProbLazyItem::new_pending(file_index), true)
-            }
+    ) -> Result<Arc<ProbNode>, BufIoError> {
+        let (_lock, max_loads) = match self.batch_load_lock.try_lock() {
+            Ok(lock) => (Some(lock), 1000),
+            Err(TryLockError::Poisoned(poison_err)) => panic!("lock error: {}", poison_err),
+            Err(TryLockError::WouldBlock) => (None, 1),
         };
-
-        let cache_item = T::into_cache_item(node.clone());
-
-        if is_new {
-            self.cuckoo_filter.write().unwrap().insert(&combined_index);
-            self.registry.insert(combined_index, cache_item);
-        }
-
-        let (offset, version_number, version_id) = if let FileIndex::Valid {
-            offset,
-            version_number,
-            version_id,
-        } = &file_index
-        {
-            (*offset, *version_number, *version_id)
-        } else {
-            (FileOffset(0), 0, 0.into())
-        };
-
-        skipm.insert(combined_index);
-
-        let data = Arc::new(T::deserialize(
-            self.bufmans.clone(),
-            file_index,
-            self.clone(),
-            max_loads - 1,
-            skipm,
-        )?);
-        let new_state = Arc::new(ProbLazyItemState::Ready {
-            data: data.clone(),
-            file_offset: Cell::new(Some(offset)),
-            decay_counter: 0,
-            persist_flag: AtomicBool::new(false),
-            version_id,
-            version_number,
-        });
-
-        node.set_state(new_state);
-
-        Ok(data)
+        Ok(self
+            .get_lazy_object(file_index, max_loads, &mut HashSet::new())?
+            .get_lazy_data()
+            .unwrap())
     }
 
     pub fn combine_index(file_index: &FileIndex) -> u64 {

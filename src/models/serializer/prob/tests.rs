@@ -94,8 +94,8 @@ impl EqualityTest for SharedNode {
                 self.get_current_version_number(),
                 other.get_current_version_number()
             );
-            let self_data = self.try_get_data(tester.cache.clone()).unwrap();
-            let other_data = other.try_get_data(tester.cache.clone()).unwrap();
+            let self_data = self.try_get_data(&tester.cache).unwrap();
+            let other_data = other.try_get_data(&tester.cache).unwrap();
             self_data.assert_eq(&other_data, tester);
         }
     }
@@ -300,11 +300,11 @@ fn test_prob_lazy_item_cyclic_serialization() {
 }
 
 fn validate_lazy_item_versions(
-    cache: Arc<ProbCache>,
+    cache: &Arc<ProbCache>,
     lazy_item: Arc<ProbLazyItem<ProbNode>>,
     version_number: u16,
 ) {
-    let data = lazy_item.try_get_data(cache.clone()).unwrap();
+    let data = lazy_item.try_get_data(cache).unwrap();
     let versions = &data.versions;
 
     for i in 0..versions.len() {
@@ -319,7 +319,7 @@ fn validate_lazy_item_versions(
         let current_version_number = version.get_current_version_number();
 
         assert_eq!(current_version_number - version_number, 4_u16.pow(i as u32));
-        validate_lazy_item_versions(cache.clone(), version, current_version_number);
+        validate_lazy_item_versions(cache, version, current_version_number);
     }
 }
 
@@ -358,13 +358,13 @@ fn test_prob_lazy_item_with_versions_serialization_and_validation() {
     for i in 1..=100 {
         let (hash, _) = vcs.add_next_version("main").unwrap();
         let next_version = ProbLazyItem::new(create_prob_node(0, &prop_file), hash, i);
-        root.add_version(next_version, cache.clone())
+        root.add_version(next_version, &cache)
             .unwrap()
             .map_err(|_| "unable to insert neighbor")
             .unwrap();
     }
 
-    validate_lazy_item_versions(cache.clone(), root.clone(), 0);
+    validate_lazy_item_versions(&cache, root.clone(), 0);
 
     let offset = root.serialize(bufmans.clone(), v0_hash, cursor).unwrap();
     let file_index = FileIndex::Valid {
@@ -377,7 +377,7 @@ fn test_prob_lazy_item_with_versions_serialization_and_validation() {
 
     let deserialized: SharedNode = cache.clone().load_item(file_index).unwrap();
 
-    validate_lazy_item_versions(cache.clone(), deserialized.clone(), 0);
+    validate_lazy_item_versions(&cache, deserialized.clone(), 0);
 
     let mut tester = EqualityTester::new(cache.clone());
 

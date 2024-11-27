@@ -6,18 +6,17 @@ use std::{
 
 use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
-    cache_loader::{ProbCache, ProbCacheable},
+    cache_loader::ProbCache,
     lazy_load::{FileIndex, SyncPersist},
-    prob_lazy_load::{lazy_item::ProbLazyItem, lazy_item_array::ProbLazyItemArray},
+    prob_lazy_load::lazy_item_array::ProbLazyItemArray,
+    prob_node::{ProbNode, SharedNode},
     types::FileOffset,
     versioning::Hash,
 };
 
 use super::{ProbSerialize, UpdateSerialized};
 
-impl<T: ProbCacheable + UpdateSerialized + ProbSerialize, const N: usize> ProbSerialize
-    for ProbLazyItemArray<T, N>
-{
+impl<const N: usize> ProbSerialize for ProbLazyItemArray<ProbNode, N> {
     fn serialize(
         &self,
         bufmans: Arc<BufferManagerFactory>,
@@ -87,7 +86,7 @@ impl<T: ProbCacheable + UpdateSerialized + ProbSerialize, const N: usize> ProbSe
                         version_number,
                         version_id,
                     };
-                    let item = Arc::<ProbLazyItem<T>>::deserialize(
+                    let item = SharedNode::deserialize(
                         bufmans.clone(),
                         file_index,
                         cache.clone(),
@@ -105,9 +104,7 @@ impl<T: ProbCacheable + UpdateSerialized + ProbSerialize, const N: usize> ProbSe
     }
 }
 
-impl<T: ProbCacheable + UpdateSerialized + ProbSerialize, const N: usize> UpdateSerialized
-    for ProbLazyItemArray<T, N>
-{
+impl<const N: usize> UpdateSerialized for ProbLazyItemArray<ProbNode, N> {
     fn update_serialized(
         &self,
         bufmans: Arc<BufferManagerFactory>,

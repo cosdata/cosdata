@@ -108,7 +108,7 @@ pub fn ann_search(
     let mut skipm = FxHashSet::default();
     skipm.insert(vector_emb.hash_vec.clone());
 
-    let cur_node = cur_entry.try_get_data(dense_index.cache.clone())?;
+    let cur_node = cur_entry.try_get_data(&dense_index.cache)?;
 
     let z = traverse_find_nearest(
         &dense_index,
@@ -135,7 +135,7 @@ pub fn ann_search(
             dense_index.clone(),
             vector_emb,
             z[0].0
-                .try_get_data(dense_index.cache.clone())?
+                .try_get_data(&dense_index.cache)?
                 .get_child()
                 .unwrap(),
             HNSWLevel(cur_level.0 - 1),
@@ -454,7 +454,7 @@ pub fn index_embeddings(
 
                 loop {
                     let data = current_entry
-                        .try_get_data(dense_index.cache.clone())
+                        .try_get_data(&dense_index.cache)
                         .expect("Unable to load data");
                     if data.hnsw_level.0 > current_level.0 {
                         current_entry = data.get_child().unwrap();
@@ -634,7 +634,7 @@ fn index_embeddings_in_transaction_inner(
 
                             loop {
                                 let data = current_entry
-                                    .try_get_data(dense_index.cache.clone())
+                                    .try_get_data(&dense_index.cache)
                                     .expect("Unable to load data");
                                 if data.hnsw_level.0 > current_level.0 {
                                     current_entry = data.get_child().unwrap();
@@ -735,9 +735,9 @@ pub fn index_embedding(
     skipm.insert(vector_emb.hash_vec.clone());
 
     let cur_node = cur_entry
-        .get_latest_version(dense_index.cache.clone())?
+        .get_latest_version(&dense_index.cache)?
         .0
-        .try_get_data(dense_index.cache.clone())?;
+        .try_get_data(&dense_index.cache)?;
 
     let z = traverse_find_nearest(
         &dense_index,
@@ -780,7 +780,7 @@ pub fn index_embedding(
             vector_emb.clone(),
             prop.clone(),
             z[0].0
-                .try_get_data(dense_index.cache.clone())?
+                .try_get_data(&dense_index.cache)?
                 .get_child()
                 .unwrap(),
             HNSWLevel(cur_level.0 - 1),
@@ -834,12 +834,12 @@ fn get_or_create_version(
     version: Hash,
     version_number: u16,
 ) -> Result<SharedNode, WaCustomError> {
-    let node = lazy_item.try_get_data(dense_index.cache.clone())?;
+    let node = lazy_item.try_get_data(&dense_index.cache)?;
 
     let new_version =
         lazy_item_versions_table.get_or_create((node.get_id().clone(), version_number), || {
             if let Some(version) = lazy_item
-                .get_version(version_number, dense_index.cache.clone())
+                .get_version(version_number, &dense_index.cache)
                 .expect("Deserialization failed")
             {
                 return version;
@@ -856,7 +856,7 @@ fn get_or_create_version(
             let version = ProbLazyItem::new(new_node, version, version_number);
 
             lazy_item
-                .add_version(version.clone(), dense_index.cache.clone())
+                .add_version(version.clone(), &dense_index.cache)
                 .expect("Failed to add version")
                 .map_err(|_| "Failed to add version")
                 .unwrap();
@@ -887,7 +887,7 @@ fn create_node_edges(
             version,
             version_number,
         )?;
-        let new_neighbor = new_lazy_neighbor.try_get_data(dense_index.cache.clone())?;
+        let new_neighbor = new_lazy_neighbor.try_get_data(&dense_index.cache)?;
 
         new_neighbor.add_neighbor(lazy_node.clone(), node.get_id(), dist);
         node.add_neighbor(new_lazy_neighbor, new_neighbor.get_id(), dist);
@@ -909,10 +909,9 @@ fn traverse_find_nearest(
 ) -> Result<Vec<(SharedNode, MetricResult)>, WaCustomError> {
     let mut tasks: SmallVec<[Vec<(SharedNode, MetricResult)>; 24]> = SmallVec::new();
 
-    let (latest_version_lazy_node, _latest_version) =
-        vtm.get_latest_version(dense_index.cache.clone())?;
+    let (latest_version_lazy_node, _latest_version) = vtm.get_latest_version(&dense_index.cache)?;
 
-    let node = latest_version_lazy_node.try_get_data(dense_index.cache.clone())?;
+    let node = latest_version_lazy_node.try_get_data(&dense_index.cache)?;
 
     let mut neighbors = Vec::new();
 
@@ -924,11 +923,7 @@ fn traverse_find_nearest(
                 continue;
             }
         };
-        let neighbor = if let Some(neighbor) = neighbor_node.get_lazy_data() {
-            neighbor
-        } else {
-            neighbor_node.try_get_data(dense_index.cache.clone())?
-        };
+        let neighbor = neighbor_node.try_get_data(&dense_index.cache)?;
 
         if !skipm.insert(neighbor.prop.id.clone()) {
             continue;

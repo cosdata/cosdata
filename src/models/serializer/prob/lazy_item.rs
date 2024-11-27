@@ -6,16 +6,17 @@ use std::{
 
 use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
-    cache_loader::{ProbCache, ProbCacheable},
+    cache_loader::ProbCache,
     lazy_load::FileIndex,
-    prob_lazy_load::lazy_item::{ProbLazyItem, ProbLazyItemState},
+    prob_lazy_load::lazy_item::ProbLazyItemState,
+    prob_node::SharedNode,
     types::FileOffset,
     versioning::Hash,
 };
 
 use super::{ProbSerialize, UpdateSerialized};
 
-impl<T: ProbCacheable + UpdateSerialized + ProbSerialize> ProbSerialize for Arc<ProbLazyItem<T>> {
+impl ProbSerialize for SharedNode {
     fn serialize(
         &self,
         bufmans: Arc<BufferManagerFactory>,

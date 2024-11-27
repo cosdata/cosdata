@@ -761,7 +761,7 @@ impl CollectionsMap {
             load_dense_index_data(&self.lmdb_env, self.lmdb_dense_index_db, &coll.get_key())
                 .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
-        let root = cache.clone().get_lazy_object(
+        let root = cache.get_lazy_object(
             dense_index_data.file_index,
             1000,
             &mut HashSet::new(),
