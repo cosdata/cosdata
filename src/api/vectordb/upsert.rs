@@ -33,14 +33,15 @@ pub(crate) async fn upsert(
     }
 
     // Call run_upload with the extracted parameters
-    let res = web::block(move || {
-        run_upload(ctx.into_inner(), collection, convert_vectors(body.vectors))
-    })
-    .await
-    .unwrap();
+    let res =
+        web::block(move || run_upload(ctx.into_inner(), collection, convert_vectors(body.vectors)))
+            .await
+            .unwrap();
 
     match res {
         Ok(_) => HttpResponse::Ok().json(RPCResponseBody::RespUpsertVectors { insert_stats: None }),
-        Err(err) => HttpResponse::InternalServerError().body(format!("error upserting vectors: {}", err)),
+        Err(err) => {
+            HttpResponse::InternalServerError().body(format!("error upserting vectors: {}", err))
+        }
     }
 }

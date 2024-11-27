@@ -347,7 +347,7 @@ impl VectorQt {
     }
 }
 
-// #[allow(dead_code)] 
+// #[allow(dead_code)]
 // pub struct SizeBytes(pub u32);
 
 // needed to flatten and get uniques

@@ -1,8 +1,8 @@
 use dashmap::DashMap;
-use rand::Rng;
 use half::f16;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use rand::Rng;
 use std::iter::Iterator;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 // Calculates counter age, while considering a possibility of
 // wraparound (with the assumption that wraparound will happen at most
@@ -26,7 +26,6 @@ pub struct EvictionIndex {
 }
 
 impl EvictionIndex {
-
     fn new() -> Self {
         Self {
             // @NOTE: Uses inline constants; will only work for msrv =
@@ -94,7 +93,6 @@ pub struct ProbEviction {
 }
 
 impl ProbEviction {
-
     pub fn new(prob: f16) -> Self {
         Self {
             prob,
@@ -125,7 +123,7 @@ pub enum EvictStrategy {
     Immediate,
     // All extra items will be evicted together at a probabilistically
     // calculated frequency
-    Probabilistic(ProbEviction)
+    Probabilistic(ProbEviction),
 }
 
 pub struct LRUCache<K, V>
@@ -176,9 +174,7 @@ where
 
     // Constructs a new LRUCache with probabilistic eviction strategy
     pub fn with_prob_eviction(capacity: usize, prob: f32) -> Self {
-        let strategy = EvictStrategy::Probabilistic(
-            ProbEviction::new(f16::from_f32_const(prob))
-        );
+        let strategy = EvictStrategy::Probabilistic(ProbEviction::new(f16::from_f32_const(prob)));
         Self::new(capacity, strategy)
     }
 
@@ -191,7 +187,8 @@ where
             let old_counter = *counter_val;
             let new_counter = self.increment_counter();
             *counter_val = new_counter;
-            self.index.on_cache_hit(old_counter, new_counter, key.clone().into());
+            self.index
+                .on_cache_hit(old_counter, new_counter, key.clone().into());
             Some(value.clone())
         } else {
             None
@@ -212,11 +209,16 @@ where
     /// Gets the value from the cache if it exists, else tries to
     /// insert the result of the fn `f` into the cache and returns the
     /// same
-    pub fn get_or_insert<E>(&self, key: K, f: impl FnOnce() -> Result<V, E>) -> Result<CachedValue<V>, E> {
+    pub fn get_or_insert<E>(
+        &self,
+        key: K,
+        f: impl FnOnce() -> Result<V, E>,
+    ) -> Result<CachedValue<V>, E> {
         let mut inserted = false;
         let k1 = key.clone();
         let k2 = key.clone();
-        let res = self.map
+        let res = self
+            .map
             .entry(key)
             .and_modify(|(_, counter)| {
                 let old_counter = counter.clone();
@@ -243,7 +245,7 @@ where
                     Ok(CachedValue::Hit(v))
                 }
             }
-            Err(e) => Err(e)
+            Err(e) => Err(e),
         }
     }
 
@@ -255,7 +257,7 @@ where
                     if self.map.len() > self.capacity && prob.should_trigger() {
                         self.evict_lru_probabilistic(&prob);
                     }
-                },
+                }
             }
         }
     }
@@ -293,7 +295,7 @@ where
             // @TODO: What if num_to_evict is > 256?
             for (idx, key) in self.index.get_keys(num_to_evict as u8) {
                 if pairs_to_evict.len() as u8 >= num_to_evict {
-                    break
+                    break;
                 }
                 if let Some(entry) = self.map.get(&K::from(key)) {
                     let (key, (_, counter_val)) = entry.pair();
@@ -315,12 +317,16 @@ where
         }
     }
 
-    pub fn iter(&self) -> dashmap::iter::Iter<K, (V, u32), std::hash::RandomState, DashMap<K, (V, u32)>> {
+    pub fn iter(
+        &self,
+    ) -> dashmap::iter::Iter<K, (V, u32), std::hash::RandomState, DashMap<K, (V, u32)>> {
         self.map.iter()
     }
 
     pub fn values(&self) -> Values<K, V> {
-        Values { iter: self.map.iter() }
+        Values {
+            iter: self.map.iter(),
+        }
     }
 
     fn increment_counter(&self) -> u32 {
@@ -385,31 +391,33 @@ mod tests {
 
         // Insert two values using `try_insert_with`, verifying that
         // the method returns the correct value
-        let x = cache.get_or_insert::<FakeError>(1, || {
-            Ok("value1")
-        }).map(|entry| entry.inner());
+        let x = cache
+            .get_or_insert::<FakeError>(1, || Ok("value1"))
+            .map(|entry| entry.inner());
         assert_eq!("value1", x.unwrap());
         assert_eq!(1, cache.map.len());
 
-        let y = cache.get_or_insert::<FakeError>(2, || {
-            Ok("value2")
-        }).map(|entry| entry.inner());
+        let y = cache
+            .get_or_insert::<FakeError>(2, || Ok("value2"))
+            .map(|entry| entry.inner());
         assert_eq!("value2", y.unwrap());
         assert_eq!(2, cache.map.len());
 
         // Try getting key1 again. The closure shouldn't get executed
         // this time.
-        let x1 = cache.get_or_insert(1, || {
-            // This code will not be executed
-            assert!(false);
-            Err(FakeError("must not be called"))
-        }).map(|entry| entry.inner());
+        let x1 = cache
+            .get_or_insert(1, || {
+                // This code will not be executed
+                assert!(false);
+                Err(FakeError("must not be called"))
+            })
+            .map(|entry| entry.inner());
         assert!(x1.is_ok_and(|x| x == "value1"));
 
         // Insert a third value. It will cause key2 to be evicted
-        let z = cache.get_or_insert::<FakeError>(3, || {
-            Ok("value3")
-        }).map(|entry| entry.inner());
+        let z = cache
+            .get_or_insert::<FakeError>(3, || Ok("value3"))
+            .map(|entry| entry.inner());
         assert_eq!("value3", z.unwrap());
 
         // Verify that key2 is evicted
@@ -434,9 +442,9 @@ mod tests {
         let t1 = {
             let c = cache.clone();
             thread::spawn(move || {
-                let x = c.get_or_insert::<FakeError>(1, || {
-                    Ok("value1")
-                }).map(|entry| entry.inner());
+                let x = c
+                    .get_or_insert::<FakeError>(1, || Ok("value1"))
+                    .map(|entry| entry.inner());
                 assert_eq!("value1", x.unwrap());
             })
         };
@@ -444,9 +452,9 @@ mod tests {
         let t2 = {
             let c = cache.clone();
             thread::spawn(move || {
-                let x = c.get_or_insert::<FakeError>(1, || {
-                    Ok("value1")
-                }).map(|entry| entry.inner());
+                let x = c
+                    .get_or_insert::<FakeError>(1, || Ok("value1"))
+                    .map(|entry| entry.inner());
                 assert_eq!("value1", x.unwrap());
             })
         };
@@ -457,9 +465,9 @@ mod tests {
         assert_eq!(1, cache.map.len());
 
         // Insert 2nd entry
-        let y = cache.get_or_insert::<FakeError>(2, || {
-            Ok("value2")
-        }).map(|entry| entry.inner());
+        let y = cache
+            .get_or_insert::<FakeError>(2, || Ok("value2"))
+            .map(|entry| entry.inner());
         assert_eq!("value2", y.unwrap());
         assert_eq!(2, cache.map.len());
 
@@ -467,9 +475,9 @@ mod tests {
         let t3 = {
             let c = cache.clone();
             thread::spawn(move || {
-                let x = c.get_or_insert::<FakeError>(3, || {
-                    Ok("value3")
-                }).map(|entry| entry.inner());
+                let x = c
+                    .get_or_insert::<FakeError>(3, || Ok("value3"))
+                    .map(|entry| entry.inner());
                 assert_eq!("value3", x.unwrap());
             })
         };
@@ -477,9 +485,9 @@ mod tests {
         let t4 = {
             let c = cache.clone();
             thread::spawn(move || {
-                let x = c.get_or_insert::<FakeError>(4, || {
-                    Ok("value4")
-                }).map(|entry| entry.inner());
+                let x = c
+                    .get_or_insert::<FakeError>(4, || Ok("value4"))
+                    .map(|entry| entry.inner());
                 assert_eq!("value4", x.unwrap());
             })
         };
@@ -513,9 +521,7 @@ mod tests {
     }
 
     fn gen_rand_nums(rng: &mut rand::rngs::ThreadRng, n: u64, min: u32, max: u32) -> Vec<u32> {
-        (0..n)
-            .map(|_| rng.gen_range(min..max))
-            .collect()
+        (0..n).map(|_| rng.gen_range(min..max)).collect()
     }
 
     #[test]
@@ -579,8 +585,9 @@ mod tests {
         }
 
         let expected = (1..=256).collect::<Vec<u64>>();
-        let actual = index.inner.
-            iter()
+        let actual = index
+            .inner
+            .iter()
             .map(|x| AtomicU64::load(x, Ordering::SeqCst))
             .collect::<Vec<u64>>();
 
@@ -594,8 +601,9 @@ mod tests {
             global_counter += 1;
         }
 
-        let actual2 = index.inner.
-            iter()
+        let actual2 = index
+            .inner
+            .iter()
             .map(|x| AtomicU64::load(x, Ordering::SeqCst))
             .collect::<Vec<u64>>();
 
@@ -634,11 +642,16 @@ mod tests {
             index.on_cache_hit(old_counter, new_counter, y);
 
             // Slot corresponding to old counter is cleared
-            assert_eq!(u64::MAX, index.inner[old_counter as usize % 256].load(Ordering::SeqCst));
+            assert_eq!(
+                u64::MAX,
+                index.inner[old_counter as usize % 256].load(Ordering::SeqCst)
+            );
 
             // Slot corresponding to new counter has this value
-            assert_eq!(202, index.inner[new_counter as usize % 256].load(Ordering::SeqCst));
+            assert_eq!(
+                202,
+                index.inner[new_counter as usize % 256].load(Ordering::SeqCst)
+            );
         }
     }
-
 }

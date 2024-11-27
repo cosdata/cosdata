@@ -5,8 +5,8 @@ use super::serializer::CustomSerialize;
 use super::types::{FileOffset, STM};
 use super::versioning::*;
 use arcshift::ArcShift;
-use serde::{Deserialize, Serialize};
 use core::panic;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
 use std::sync::{

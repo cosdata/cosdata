@@ -1,5 +1,6 @@
 pub mod buffered_io;
 pub mod cache_loader;
+pub mod collection;
 pub mod common;
 pub mod dot_product;
 pub mod dry_run_writer;
@@ -16,4 +17,3 @@ pub mod serializer;
 pub mod types;
 pub mod user;
 pub mod versioning;
-pub mod collection;
