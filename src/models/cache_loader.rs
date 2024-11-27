@@ -389,7 +389,7 @@ impl ProbCache {
         let data = Arc::new(ProbNode::deserialize(
             &self.bufmans,
             file_index,
-            self.clone(),
+            self,
             max_loads - 1,
             skipm,
         )?);
@@ -428,10 +428,7 @@ impl ProbCache {
     //
     // After determining the appropriate `max_loads`, the function proceeds by calling `get_lazy_object`, which handles
     // the actual loading process, and retrieves the lazy-loaded data.
-    pub fn get_object(
-        &self,
-        file_index: FileIndex,
-    ) -> Result<Arc<ProbNode>, BufIoError> {
+    pub fn get_object(&self, file_index: FileIndex) -> Result<Arc<ProbNode>, BufIoError> {
         let (_lock, max_loads) = match self.batch_load_lock.try_lock() {
             Ok(lock) => (Some(lock), 1000),
             Err(TryLockError::Poisoned(poison_err)) => panic!("lock error: {}", poison_err),
@@ -459,10 +456,7 @@ impl ProbCache {
         (file_offset as u64) << 32 | (length as u64)
     }
 
-    pub fn load_item<T: ProbSerialize>(
-        &self,
-        file_index: FileIndex,
-    ) -> Result<T, BufIoError> {
+    pub fn load_item<T: ProbSerialize>(&self, file_index: FileIndex) -> Result<T, BufIoError> {
         let mut skipm: HashSet<u64> = HashSet::new();
 
         if file_index == FileIndex::Invalid {
@@ -473,12 +467,6 @@ impl ProbCache {
             .into());
         };
 
-        T::deserialize(
-            &self.bufmans,
-            file_index,
-            self,
-            1000,
-            &mut skipm,
-        )
+        T::deserialize(&self.bufmans, file_index, self, 1000, &mut skipm)
     }
 }
