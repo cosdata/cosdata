@@ -37,7 +37,7 @@ def create_db(name, description=None, dimension=1024):
         "description": description,
         "dense_vector": {
             "enabled": True,
-            "auto_create_index": True,
+            "auto_create_index": False,
             "dimension": dimension,
         },
         "sparse_vector": {"enabled": False, "auto_create_index": False},
@@ -49,6 +49,22 @@ def create_db(name, description=None, dimension=1024):
     )
     return response.json()
 
+def create_explicit_index(name):
+    data = {
+        "collection_name": name,
+        "name": name,
+        "distance_metric_type": "cosine",
+        "quantization": "scalar",
+        "data_type": "u8",
+        "index_type": "hnsw",
+        "params": {
+            "num_layers": 5,
+            "max_cache_size": 1000,
+        }
+    }
+    response = requests.post(f"{base_url}/indexes", headers=generate_headers(), data=json.dumps(data), verify=False)
+
+    return response.json()
 
 # Function to create database (collection)
 def create_db_old(vector_db_name, dimensions, max_val, min_val):
@@ -277,11 +293,82 @@ def process_base_vector_batch(
             f"Upsert complete for base vector {base_idx} and its {len(batch_vectors)-1} perturbations"
         )
 
-        return (base_idx, base_vector)
+        return (base_idx, generate_perturbation(
+                base_vector,
+                req_ct * 10000
+                + base_idx * 100
+                + i
+                + 1,  # Unique ID for each perturbation
+                perturbation_degree,
+                dimensions,
+            ), batch_vectors)
     except Exception as e:
         print(f"Error processing base vector {base_idx}: {e}")
         raise
 
+def cosine_similarity(vec1, vec2):
+    # Convert inputs to numpy arrays
+    vec1 = np.asarray(vec1)
+    vec2 = np.asarray(vec2)
+    
+    # Check if vectors have the same length
+    if vec1.shape != vec2.shape:
+        raise ValueError("Vectors must have the same length")
+    
+    # Calculate magnitudes
+    magnitude1 = np.linalg.norm(vec1)
+    magnitude2 = np.linalg.norm(vec2)
+    
+    # Check for zero vectors
+    if magnitude1 == 0 or magnitude2 == 0:
+        raise ValueError("Cannot compute cosine similarity for zero vectors")
+    
+    # Calculate dot product
+    dot_product = np.dot(vec1, vec2)
+    
+    # Calculate cosine similarity
+    cosine_sim = dot_product / (magnitude1 * magnitude2)
+    
+    return cosine_sim
+
+def bruteforce_search(vectors, query, k=5):
+    similarities = []
+    for vector in vectors:
+        similarity = cosine_similarity(query["values"], vector["values"])
+        similarities.append((vector["id"], similarity))
+
+    similarities.sort(key=lambda x: x[1], reverse=True)
+
+    return similarities[:k]
+
+
+def generate_vectors(req_ct, batch_count, batch_size, dimensions, perturbation_degree):
+    vectors = []
+    
+    for base_idx in range(batch_count):
+        base_vector = generate_random_vector_with_id(
+            (req_ct * batch_count * batch_size) + (base_idx * batch_size), dimensions
+        )
+
+        vectors.append(base_vector)
+
+        for i in range(batch_size - 1):
+            perturbed_vector = generate_perturbation(
+                base_vector,
+                (req_ct * batch_count * batch_size) + (base_idx * batch_size + i + 1),  # Unique ID for each perturbation
+                perturbation_degree,
+                dimensions,
+            )
+            vectors.append(perturbed_vector)
+    
+    # Shuffle the vectors
+    np.random.shuffle(vectors)
+    return vectors
+
+def search(vectors, vector_db_name, query):
+    ann_response = ann_vector(query["id"], vector_db_name, query["values"])
+    bruteforce_result = bruteforce_search(vectors, query, 5)
+    return (ann_response, bruteforce_result)
 
 if __name__ == "__main__":
     # Create database
@@ -290,6 +377,8 @@ if __name__ == "__main__":
     max_val = 1.0
     min_val = -1.0
     perturbation_degree = 0.25  # Degree of perturbation
+    batch_size = 100
+    batch_count = 100
 
     # first login to get the auth jwt token
     login_response = login()
@@ -301,9 +390,11 @@ if __name__ == "__main__":
         dimension=dimensions,
     )
     print("Create Collection(DB) Response:", create_collection_response)
+    # create_explicit_index(vector_db_name)
+
+    start_time = time.time()
 
     shortlisted_vectors = []
-    start_time = time.time()
 
     for req_ct in range(1):
         transaction_id = None
@@ -312,28 +403,32 @@ if __name__ == "__main__":
             transaction_response = create_transaction(vector_db_name)
             transaction_id = transaction_response["transaction_id"]
             print(f"Created transaction: {transaction_id}")
+            
+            vectors = generate_vectors(req_ct, batch_count, batch_size, dimensions, perturbation_degree)
 
             # Process vectors concurrently
             with ThreadPoolExecutor(max_workers=32) as executor:
                 futures = []
-                for base_idx in range(100):
+                for base_idx in range(batch_count):
                     futures.append(
                         executor.submit(
-                            process_base_vector_batch,
-                            req_ct,
-                            base_idx,
+                            upsert_in_transaction,
                             vector_db_name,
                             transaction_id,
-                            dimensions,
-                            perturbation_degree,
+                            vectors[base_idx*batch_size:(base_idx*batch_size)+batch_size]
                         )
                     )
+                    shortlisted_vectors.append(generate_perturbation(
+                        vectors[base_idx*batch_size],
+                        base_idx,
+                        perturbation_degree,
+                        dimensions,
+                    ))
 
                 # Collect results
                 for future in as_completed(futures):
                     try:
-                        result = future.result()
-                        shortlisted_vectors.append(result)
+                        future.result()
                     except Exception as e:
                         print(f"Error in future: {e}")
 
@@ -354,46 +449,52 @@ if __name__ == "__main__":
         # End time
     end_time = time.time()
     # Search vector concurrently using perturbed vectors
-    best_matches = []
+    best_matches_server = []
+    best_matches_bruteforce = []
     with ThreadPoolExecutor(max_workers=32) as executor:
         futures = []
-        for idd, vector in shortlisted_vectors:
+        for query in shortlisted_vectors:
             futures.append(
-                executor.submit(ann_vector, idd, vector_db_name, vector["values"])
+                executor.submit(search, vectors, vector_db_name, query)
             )
 
         for i, future in enumerate(as_completed(futures)):
             try:
-                (idr, ann_response) = future.result()
-                print(f"ANN Vector Response <<< {idr} >>>:", ann_response)
+                ((idr, ann_response), (bruteforce_results)) = future.result()
                 if (
                     "RespVectorKNN" in ann_response
                     and "knn" in ann_response["RespVectorKNN"]
                 ):
-                    best_matches.append(
-                        ann_response["RespVectorKNN"]["knn"][0][1]
+                    print(f"ANN Vector Response:")
+                    print("  Server:")
+                    for j, match in enumerate(ann_response["RespVectorKNN"]["knn"][:5]):
+                        id = match[0]
+                        cs = match[1]["CosineSimilarity"]
+                        print(f"    {j + 1}: {id} ({cs})")
+                    best_matches_server.append(
+                        ann_response["RespVectorKNN"]["knn"][0][1]["CosineSimilarity"]
                     )  # Collect the second item in the knn list
+
+                    print("  Brute force:")
+                    for j, result in enumerate(bruteforce_results):
+                        cs = result[1]
+                        id = result[0]
+                        print(f"    {j + 1}: {id} ({cs})")
+                    best_matches_bruteforce.append(bruteforce_results[0][1])
+
+
             except Exception as e:
                 print(f"Error in ANN vector {i + 1}: {e}")
 
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        futures = []
-        for idd, vector in shortlisted_vectors:
-            futures.append(executor.submit(fetch_vector, vector_db_name, vector["id"]))
-
-        for i, future in enumerate(as_completed(futures)):
-            try:
-                fetch_response = future.result()
-                print(f"Fetch Vector Response {i + 1}:", fetch_response)
-
-            except Exception as e:
-                print(f"Error in Fetch vector {i + 1}: {e}")
-
-    if best_matches:
-        best_match_average = sum(m["CosineSimilarity"] for m in best_matches) / len(
-            best_matches
+    if best_matches_server:
+        best_match_server_average = sum(best_matches_server) / len(
+            best_matches_server
         )
-        print(f"\n\nBest Match Average: {best_match_average}")
+        best_match_bruteforce_average = sum(best_matches_bruteforce) / len(
+            best_matches_bruteforce
+        )
+        print(f"\n\nBest Match Server Average: {best_match_server_average}")
+        print(f"Best Match Brute force Average: {best_match_bruteforce_average}")
     else:
         print("No valid matches found.")
 

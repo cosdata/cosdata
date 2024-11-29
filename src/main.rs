@@ -9,9 +9,9 @@ pub(crate) mod api;
 pub mod config_loader;
 pub mod cosql;
 pub mod distance;
+pub mod indexes;
 pub mod quantization;
 pub mod storage;
-pub mod indexes;
 
 use crate::models::common::*;
 

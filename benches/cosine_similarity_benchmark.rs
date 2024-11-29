@@ -37,10 +37,13 @@ fn simp_quant(v: &[f32]) -> Result<Vec<u8>, String> {
         ));
     }
 
-    let res: Vec<u8> = v.iter().map(|&x| {
-        let y = if has_negative { x + 1.0 } else { x };
-        (y * 255.0).round() as u8
-    }).collect();
+    let res: Vec<u8> = v
+        .iter()
+        .map(|&x| {
+            let y = if has_negative { x + 1.0 } else { x };
+            (y * 255.0).round() as u8
+        })
+        .collect();
     Ok(res)
 }
 

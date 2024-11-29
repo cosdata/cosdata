@@ -132,7 +132,7 @@ impl BufferManager {
     pub fn new(mut file: File) -> io::Result<Self> {
         let file_size = file.seek(SeekFrom::End(0))?;
         file.seek(SeekFrom::Start(0))?;
-        let regions = LRUCache::with_prob_eviction(100, 0.03125);
+        let regions = LRUCache::with_prob_eviction(10000, 0.03125);
         Ok(BufferManager {
             file: Arc::new(RwLock::new(file)),
             regions,
@@ -326,8 +326,6 @@ impl BufferManager {
 
             let mut file_size = self.file_size.write().map_err(|_| BufIoError::Locking)?;
 
-            // println!("Cursor Id = {cursor_id}; Position = {curr_pos}; File Size = {}", *file_size);
-
             if cursor_is_at_eof && curr_pos < *file_size {
                 curr_pos = *file_size;
             }
@@ -356,8 +354,6 @@ impl BufferManager {
             }
             *file_size = curr_pos;
         } else {
-            // println!("Cursor Id = {cursor_id}; Position = {curr_pos};");
-
             while total_written < input_size {
                 let region = self.get_or_create_region(curr_pos)?;
                 {
@@ -450,8 +446,9 @@ impl BufferManager {
 mod tests {
 
     use super::*;
-    use std::thread;
     use quickcheck_macros::quickcheck;
+    use rand::Rng;
+    use std::thread;
     use tempfile::tempfile;
 
     #[test]
@@ -1106,7 +1103,9 @@ mod tests {
             assert!(!c.is_eof);
         }
 
-        let pos = bufman.seek_with_cursor(cursor, SeekFrom::Start(478)).unwrap();
+        let pos = bufman
+            .seek_with_cursor(cursor, SeekFrom::Start(478))
+            .unwrap();
         assert_eq!(478, pos);
         {
             let cursors = bufman.cursors.read().unwrap();
@@ -1115,7 +1114,9 @@ mod tests {
             assert!(!c.is_eof);
         }
 
-        let pos = bufman.seek_with_cursor(cursor, SeekFrom::Start(filesize as u64)).unwrap();
+        let pos = bufman
+            .seek_with_cursor(cursor, SeekFrom::Start(filesize as u64))
+            .unwrap();
         assert_eq!(filesize as u64, pos);
         {
             let cursors = bufman.cursors.read().unwrap();
@@ -1143,7 +1144,9 @@ mod tests {
             assert!(c.is_eof);
         }
 
-        let pos = bufman.seek_with_cursor(cursor, SeekFrom::End(-115)).unwrap();
+        let pos = bufman
+            .seek_with_cursor(cursor, SeekFrom::End(-115))
+            .unwrap();
         assert_eq!(filesize as u64 - 115, pos);
         {
             let cursors = bufman.cursors.read().unwrap();
@@ -1154,7 +1157,9 @@ mod tests {
 
         // Test SeekFrom::Current cases
         let curr_pos = pos;
-        let pos = bufman.seek_with_cursor(cursor, SeekFrom::Current(0)).unwrap();
+        let pos = bufman
+            .seek_with_cursor(cursor, SeekFrom::Current(0))
+            .unwrap();
         assert_eq!(curr_pos as u64, pos);
         {
             let cursors = bufman.cursors.read().unwrap();
@@ -1164,7 +1169,9 @@ mod tests {
         }
 
         let curr_pos = pos;
-        let pos = bufman.seek_with_cursor(cursor, SeekFrom::Current(-100)).unwrap();
+        let pos = bufman
+            .seek_with_cursor(cursor, SeekFrom::Current(-100))
+            .unwrap();
         assert_eq!(curr_pos as u64 - 100, pos);
         {
             let cursors = bufman.cursors.read().unwrap();
@@ -1174,7 +1181,9 @@ mod tests {
         }
 
         let curr_pos = pos;
-        let pos = bufman.seek_with_cursor(cursor, SeekFrom::Current(100)).unwrap();
+        let pos = bufman
+            .seek_with_cursor(cursor, SeekFrom::Current(100))
+            .unwrap();
         assert_eq!(curr_pos as u64 + 100, pos);
         {
             let cursors = bufman.cursors.read().unwrap();
@@ -1185,7 +1194,9 @@ mod tests {
 
         let curr_pos = pos;
         let delta = filesize as i64 - curr_pos as i64;
-        let pos = bufman.seek_with_cursor(cursor, SeekFrom::Current(delta)).unwrap();
+        let pos = bufman
+            .seek_with_cursor(cursor, SeekFrom::Current(delta))
+            .unwrap();
         assert_eq!(filesize as u64, pos);
         {
             let cursors = bufman.cursors.read().unwrap();
@@ -1197,6 +1208,51 @@ mod tests {
         bufman.close_cursor(cursor).unwrap();
     }
 
+    #[test]
+    fn test_read_large_file() {
+        let mut rng = rand::thread_rng();
+
+        let mut file = create_tmp_file(0, 0).unwrap();
+
+        let written_data = (0..(100 * 1024 * 1024))
+            .map(|_| rng.gen())
+            .collect::<Vec<_>>();
+        file.write_all(&written_data).unwrap();
+
+        let bufman = BufferManager::new(file).unwrap();
+        let cursor = bufman.open_cursor().unwrap();
+
+        let mut read_data = vec![0; 100 * 1024 * 1024];
+        let bytes_read = bufman.read_with_cursor(cursor, &mut read_data).unwrap();
+
+        assert_eq!(bytes_read, read_data.len());
+        assert_eq!(read_data, written_data);
+    }
+
+    #[test]
+    fn test_write_large_file() {
+        let mut rng = rand::thread_rng();
+
+        let file = create_tmp_file(0, 0).unwrap();
+        let bufman = BufferManager::new(file).unwrap();
+        let cursor = bufman.open_cursor().unwrap();
+
+        let written_data = (0..(100 * 1024 * 1024))
+            .map(|_| rng.gen())
+            .collect::<Vec<_>>();
+        bufman.write_with_cursor(cursor, &written_data).unwrap();
+        bufman.flush().unwrap();
+
+        let mut read_data = vec![0; 100 * 1024 * 1024];
+
+        let mut file = bufman.file.write().unwrap();
+        file.seek(SeekFrom::Start(0)).unwrap();
+        file.read_exact(&mut read_data).unwrap();
+
+        for (i, (r, w)) in read_data.into_iter().zip(written_data).enumerate() {
+            assert_eq!(r, w, "mismatch at {}", i);
+        }
+    }
 
     // Prop test for `get_or_create_region` to check that
     // `region.start` is a multiple of BUFFER_SIZE
@@ -1270,13 +1326,17 @@ mod tests {
         // Write to the file
         let mut input_buffer = vec![1; bufsize];
         let cursor = bufman.open_cursor().unwrap();
-        bufman.write_with_cursor(cursor, &mut input_buffer[..]).unwrap();
+        bufman
+            .write_with_cursor(cursor, &mut input_buffer[..])
+            .unwrap();
         bufman.close_cursor(cursor).unwrap();
 
         // Read from the file
         let mut output_buffer = vec![0; bufsize];
         let cursor = bufman.open_cursor().unwrap();
-        bufman.read_with_cursor(cursor, &mut output_buffer[..]).unwrap();
+        bufman
+            .read_with_cursor(cursor, &mut output_buffer[..])
+            .unwrap();
         bufman.close_cursor(cursor).unwrap();
 
         output_buffer[..bufsize] == input_buffer[..bufsize]
