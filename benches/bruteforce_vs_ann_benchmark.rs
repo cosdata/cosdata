@@ -2,14 +2,12 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use rand::Rng;
 
 use cosdata::models::types::SparseVector;
-use cosdata::storage::sparse_ann_query_basic::{SparseAnnQueryBasic, SparseAnnResult};
 use cosdata::storage::inverted_index_sparse_ann_basic::InvertedIndexSparseAnnBasic;
+use cosdata::storage::sparse_ann_query_basic::{SparseAnnQueryBasic, SparseAnnResult};
 
-const NUM_OF_VECTORS: usize = 1000000;  // Adjust as needed
+const NUM_OF_VECTORS: usize = 1000000; // Adjust as needed
 const NUM_OF_DIMENSIONS: u32 = 1024; // Adjust as needed
 const K: usize = 5; // Number of nearest neighbors
-
-
 
 fn bruteforce_vs_ann_benchmark(c: &mut Criterion) {
     // Create inverted index and generate test vectors
@@ -55,7 +53,9 @@ fn create_inverted_index_and_test_vectors(
 
     for vector_id in 0..num_vectors {
         let sparse_vector = generate_random_sparse_vector(vector_id as u32, num_dimensions);
-        inverted_index.add_sparse_vector(sparse_vector.clone()).expect("Unable to add sparse vector");
+        inverted_index
+            .add_sparse_vector(sparse_vector.clone())
+            .expect("Unable to add sparse vector");
         vectors.push(sparse_vector);
     }
 
@@ -74,14 +74,14 @@ fn generate_random_sparse_vector(vector_id: u32, num_dimensions: u32) -> SparseV
         entries.push((dim, val));
     }
 
-    SparseVector {
-        vector_id,
-        entries,
-    }
+    SparseVector { vector_id, entries }
 }
 
 // Function to perform brute-force search
-fn brute_force_search(query_vector: &SparseVector, vectors: &[SparseVector]) -> Vec<SparseAnnResult> {
+fn brute_force_search(
+    query_vector: &SparseVector,
+    vectors: &[SparseVector],
+) -> Vec<SparseAnnResult> {
     let mut results = Vec::new();
 
     for vector in vectors {
@@ -129,7 +129,6 @@ fn compute_similarity(a: &[(u32, f32)], b: &[(u32, f32)]) -> f32 {
 fn compare_results(ann_results: &[SparseAnnResult], bf_results: &[SparseAnnResult]) {
     for (ann_result, bf_result) in ann_results.iter().zip(bf_results.iter()) {
         assert_eq!(ann_result, bf_result);
-        
     }
     println!("ANN results match brute-force results.");
 }
