@@ -1,0 +1,527 @@
+#+TITLE: Vector Database REST API Specification
+#+AUTHOR: Nithin
+#+DATE: 2024-11-23
+
+* Overview
+This document describes the complete REST API specification for the vector database service, supporting high-dimensional vector storage, retrieval, and similarity search with transactional guarantees.
+
+* Base URL and Authentication
+** Base Configuration
+The base URL for all API endpoints that handle database interactions is: =https://host:port/vectordb=
+The base URL for API endpoints related to authentication is: =https://host:port/auth=
+
+** Authentication
+All requests require Bearer token authentication obtained through the login endpoint.
+
+*** Login Endpoint
+Obtain authentication token for subsequent requests.
+
+- Method: POST 
+- Path: =/auth/login=
+- Request Body:
+#+BEGIN_SRC json
+{
+    "username": "admin",
+    "password": "admin",
+    "pretty_print": false
+}
+#+END_SRC
+
+- Response: JWT token as plain text
+#+BEGIN_SRC text
+eyJhbGciOiJIUzI1...
+#+END_SRC
+
+*** Using Authentication
+For all subsequent requests, include the Bearer token in the Authorization header:
+#+BEGIN_SRC text
+Authorization: Bearer eyJhbGciOiJIUzI1...
+Content-Type: application/json
+#+END_SRC
+
+* Collections API
+** Collection Management
+Collections are the primary containers for vectors and their metadata.
+
+*** Create Collection
+Create a new vector collection with specified configuration.
+
+- Method: POST
+- Path: =/collections=
+- Request Body:
+#+BEGIN_SRC json
+{
+    "name": "testdb",
+    "description": "Test collection for vector database",
+    "dense_vector": {
+        "enabled": true,
+        "auto_create_index": false,
+        "dimension": 1024
+    },
+    "sparse_vector": {
+        "enabled": false,
+        "auto_create_index": false
+    },
+    "metadata_schema": null,
+    "config": {
+        "max_vectors": null,
+        "replication_factor": null
+    }
+}
+#+END_SRC
+
+- Response:
+#+BEGIN_SRC json
+{
+    "id": "col_123",
+    "name": "testdb",
+    "description": "Test collection for vector database"
+}
+#+END_SRC
+
+*** Collection Configuration Fields
+#+CAPTION: Collection Creation Parameters
+#+NAME: collection-params
+| Field                             | Type    | Required | Description                                            |
+|-----------------------------------+---------+----------+--------------------------------------------------------|
+| =name=                            | string  | Yes      | Unique identifier for the collection                   |
+| =description=                     | string  | No       | Human-readable description                             |
+| =dense_vector.enabled=            | boolean | Yes      | Enables dense vector storage and operations            |
+| =dense_vector.auto_create_index=  | boolean | Yes      | Creates search index automatically on vector insertion |
+| =dense_vector.dimension=          | integer | Yes      | Dimension size for all vectors in collection           |
+| =sparse_vector.enabled=           | boolean | Yes      | Enables sparse vector storage and operations           |
+| =sparse_vector.auto_create_index= | boolean | Yes      | Creates sparse vector index automatically              |
+| =metadata_schema=                 | object  | No       | JSON schema for vector metadata validation             |
+| =config.max_vectors=              | integer | No       | Maximum number of vectors allowed                      |
+| =config.replication_factor=       | integer | No       | Number of replicas for high availability               |
+
+*** Get Collection
+Retrieve collection details and configuration.
+
+- Method: GET
+- Path: =/collections/{collection_id}=
+- Response: Same format as Create Collection response
+
+*** Get Collections
+Retrieve all collections details and configuration.
+
+- Method: GET
+- Path: =/collections/=
+- Response: a list of items each has the same format as Create Collection response
+
+*** Delete Collections
+Deletes a collection.
+
+- Method: GET
+- Path: =/collections/{collection_id}=
+- Response: Same format as Create Collection response
+
+* Transaction API
+** Transaction Overview
+The API implements transactions as resources, providing ACID guarantees for vector operations. This approach allows complex vector operations to be performed atomically across multiple requests while maintaining consistency.
+
+** Transaction Lifecycle
+
+*** 1. Transaction Creation
+Initiates a new transaction context.
+
+- Method: POST
+- Path: =/collections/{collection_id}/transactions=
+- Response:
+#+BEGIN_SRC json
+{
+    "transaction_id": "txn_abc123",
+    "created_at": "2024-11-23T12:00:00Z",
+}
+#+END_SRC
+
+*** 2. Transaction Operations
+Multiple vector operations can be performed within the transaction context.
+
+**** Vector Insertion
+- Method: POST
+- Path: =/collections/{collection_id}/transactions/{transaction_id}/vectors=
+- Request Body:
+#+BEGIN_SRC json
+{
+    "id": "vec1",
+    "values": [0.1, 0.2, ...]
+}
+#+END_SRC
+
+**** Batch Upsert
+- Method: POST
+- Path: =/collections/{collection_id}/transactions/{transaction_id}/upsert=
+- Request Body:
+#+BEGIN_SRC json
+{
+    "vectors": [
+        {
+            "id": "vec1",
+            "values": [0.1, 0.2, ...],
+        },
+        {
+            "id": "vec2",
+            "values": [0.3, 0.4, ...],
+        }
+    ]
+}
+#+END_SRC
+
+*** 3. Transaction Completion
+Transactions must be explicitly completed through commit or abort.
+
+**** Commit Transaction
+- Method: POST
+- Path: =/collections/{collection_id}/transactions/{transaction_id}/commit=
+- Response: 204 No Content
+
+**** Abort Transaction
+- Method: POST
+- Path: =/collections/{collection_id}/transactions/{transaction_id}/abort=
+- Response: 204 No Content
+
+** Transaction Field References
+*** Transaction Operation Fields
+#+CAPTION: Transaction Operation Parameters
+#+NAME: transaction-fields
+| Field            | Type    | Required | Description                           |
+|------------------+---------+----------+---------------------------------------|
+| =transaction_id= | string  | Yes      | Unique transaction identifier         |
+| =vectors=        | array   | Yes*     | Array of vectors for batch operations |
+| =collection_id=  | string  | Yes      | Target collection id                  |
+
+
+*** Vector Fields within Transactions
+#+CAPTION: Vector Fields in Transactions
+#+NAME: vector-transaction-fields
+| Field       | Type    | Required | Description                                |
+|-------------+---------+----------+--------------------------------------------|
+| =id=        | string  | Yes      | Unique vector identifier                   |
+| =values=    | float[] | Yes      | Vector components (normalized -1.0 to 1.0) |
+
+
+** Transaction Guarantees and Constraints
+
+*** ACID Properties
+- *Atomicity*: All operations in a transaction either succeed or fail together
+- *Consistency*: Vector relationships and indices remain consistent
+- *Isolation*: Transactions are isolated from each other until commit
+- *Durability*: Committed changes are permanent
+
+*** Operational Constraints
+#+CAPTION: Transaction Constraints
+#+NAME: transaction-constraints
+| Constraint              | Value | Description                         |
+|-------------------------+-------+-------------------------------------|
+| Max Batch Size          | 1000  | Maximum vectors per batch operation |
+| Transaction Timeout     | 600s  | Default transaction timeout         |
+| Max Active Transactions | 100   | Per collection limit                |
+| Vector Dimension        | Fixed | Must match collection configuration |
+
+* Vector Search API
+** Search Operations
+The search API provides efficient similarity search capabilities for vectors.
+
+*** Basic Vector Search
+- Method: POST
+- Path: =/collections/{collection_id}/vectors/search=
+- Request Body:
+#+BEGIN_SRC json
+{
+    "vector": [0.1, 0.2, ...],
+    "k": 5,
+}
+#+END_SRC
+
+- Response:
+#+BEGIN_SRC json
+{
+    "results": [
+        {
+            "id": "vec1",
+            "score": 0.95,
+            
+        },
+        {
+            "id": "vec2",
+            "score": 0.85,
+        }
+    ]
+    
+}
+#+END_SRC
+
+*** Search Parameters
+#+CAPTION: Vector Search Parameters
+#+NAME: search-params
+| Parameter           | Type    | Required | Default | Description                 |
+|---------------------+---------+----------+---------+-----------------------------|
+| =collection_id=     | string  | Yes      | -       | Collection to search in     |
+| =vector=            | float[] | Yes      | -       | Query vector                |
+| =k=                 | integer | No       | 10      | Number of nearest neighbors |
+
+
+** Vector Lifecycle
+
+*** 1. Vector Creation
+Creates a new vector in a collection.
+
+- Method: POST
+- Path: =/collections/{collection_id}/vectors=
+- Request Body:
+#+BEGIN_SRC json
+{
+    "id": "vec1",
+    "values": [0.1, 0.2, ...],
+}
+#+END_SRC
+
+- Response: The same as the request body
+
+
+*** 2. Get a Vector 
+Finds a vector in a collection by id.
+
+- Method: GET
+- Path: =/collections/:collection_id/vectors/{vector_id}=
+- Response: The same as the create vector response
+
+
+*** 3. Vector Update
+Updates a vector in a collection.
+
+- Method: PUT
+- Path: =/collections/{collection_id}/vectors/{vector_id}=
+- Request Body:
+#+BEGIN_SRC json
+{
+    "id": "vec1",
+    "values": [0.1, 0.2, ...],
+}
+#+END_SRC
+
+- Response: The same as the request body
+
+
+*** 4. Vector Deletion
+Deletes a vector in a collection.
+
+- Method: DELETE
+- Path: =/collections/{collection_id}/vectors/{vector_id}=
+- Response: 204 No Content
+
+
+*** Vector Lifecycle Parameters
+#+CAPTION: Vector Lifecycle Parameters
+#+NAME: search-params
+| Parameter           | Type    | Required | Default | Description                 |
+|---------------------+---------+----------+---------+-----------------------------|
+| =collection_id=     | string  | Yes      | -       | Collection to search in     |
+| =vector_id=         | string  | Yes      | -       | Unique vector identifier    |
+
+
+
+* Index Management
+** Index Operations
+Manage search indices for vector collections.
+
+*** Create Index
+- Method: POST
+- Path: =/indexes=
+- Request Body:
+#+BEGIN_SRC json
+{
+    "collection_name": "testdb",
+    "name": "testdb_index",
+    "distance_metric_type": "cosine",
+    "quantization": "scalar",
+    "data_type": "u8",
+    "index_type": "hnsw",
+    "params": {
+        "m": 16,
+        "ef_construction": 100,
+        "ef_search": 50,
+        "num_layers": 5,
+        "max_cache_size": 1000
+    }
+}
+#+END_SRC
+
+*** Index Configuration Fields
+#+CAPTION: Index Configuration Parameters
+#+NAME: index-params
+| Field                        | Type    | Required | Description                                   |
+|------------------------------+---------+----------+-----------------------------------------------|
+| =collection_name=            | string  | Yes      | Target collection                             |
+| =name=                       | string  | Yes      | Index identifier                              |
+| =distance_metric_type=       | string  | Yes      | Distance metric (cosine, euclidean, dot)      |
+| =quantization=               | string  | Yes      | Vector quantization method                    |
+| =data_type=                  | string  | Yes      | Vector data type                              |
+| =index_type=                 | string  | Yes      | Index algorithm type                          |
+| =params.m=                   | integer | No       | Maximum connections of graph element          |
+| =params.ef_construction=     | integer | No       | Candidate list size during index construction |
+| =params.ef_search=           | integer | No       | Candidate list size during search             |
+| =params.num_layers=          | integer | No       | HNSW number of layers                         |
+| =params.max_cache_size=      | integer | No       | Maximum cache size                            |
+
+* Error Handling
+** Error Response Format
+All API errors follow a consistent format:
+- Response: Error message as plain text
+
+** Common Error Codes
+#+CAPTION: Common API Error Codes
+#+NAME: error-codes
+| Code                   | HTTP Status | Description                | Resolution                 |
+|------------------------+-------------+----------------------------+----------------------------|
+| =INVALID_REQUEST=      |         400 | Malformed request          | Check request format       |
+| =UNAUTHORIZED=         |         401 | Invalid authentication     | Refresh token              |
+| =COLLECTION_NOT_FOUND= |         404 | Collection doesn't exist   | Verify collection name     |
+| =TRANSACTION_TIMEOUT=  |         408 | Transaction expired        | Retry with new transaction |
+| =DIMENSION_MISMATCH=   |         400 | Vector dimension incorrect | Check vector dimensions    |
+| =TRANSACTION_CONFLICT= |         409 | Concurrent modification    | Retry transaction          |
+| =INTERNAL_ERROR=       |         500 | Server error               | Contact support            |
+
+* Best Practices
+** Transaction Management
+
+*** Transaction Lifecycle
+1. Create transaction before batch operations
+2. Group related operations in single transaction
+3. Keep transaction duration short
+4. Always commit or abort to release resources
+
+*** Error Handling
+1. Implement proper error handling
+2. Abort transactions on errors
+3. Use retry logic for transient failures
+4. Monitor transaction timeouts
+
+*** Performance Optimization
+1. Batch vector operations (100-1000 vectors)
+2. Use parallel requests for large datasets
+3. Monitor response times
+4. Index important vector fields
+
+** Vector Operations
+
+*** Vector Normalization
+1. Normalize vectors to unit length
+2. Keep values between -1.0 and 1.0
+3. Consistent dimension across collection
+4. Handle sparse vectors efficiently
+
+*** Search Optimization
+1. Use appropriate k values
+2. Include relevant metadata
+3. Choose proper similarity metrics
+4. Consider index parameters
+
+* Implementation Notes
+** Transaction Implementation
+- Uses MVCC (Multi-Version Concurrency Control)
+- Each transaction has isolated snapshot view
+- Two-phase commit protocol
+- Automatic rollback on failures
+
+** Vector Storage
+- Optimized for high-dimensional data
+- Efficient similarity search
+- Configurable indexing strategies
+- Metadata indexing support
+
+** Performance Considerations
+- Index build time vs query performance
+- Memory usage vs search speed
+- Transaction overhead
+- Batch operation efficiency
+
+* Sample Workflows
+
+** Batch Vector Insertion
+#+BEGIN_SRC python
+# 1. Login and get token
+login_response = login()
+token = login_response.text
+
+# 2. Create collection
+create_collection_response = create_db(
+    name="testdb",
+    dimension=1024
+)
+
+# 3. Start transaction
+transaction_response = create_transaction("testdb")
+transaction_id = transaction_response["transaction_id"]
+
+# 4. Batch insert vectors
+vectors = [
+    {
+        "id": f"vec_{i}",
+        "values": [...],
+        "metadata": {"label": f"example_{i}"}
+    }
+    for i in range(100)
+]
+
+try:
+    upsert_in_transaction("testdb", transaction_id, vectors)
+    commit_transaction("testdb", transaction_id)
+except Exception as e:
+    abort_transaction("testdb", transaction_id)
+    raise e
+#+END_SRC
+
+** Search Workflow
+#+BEGIN_SRC python
+# 1. Prepare search vector
+search_vector = [0.1, 0.2, ...]
+
+# 2. Perform search
+search_response = ann_vector(
+    1,
+    "testdb",
+    search_vector
+)
+
+# 3. Process results
+results = search_response[1]["RespVectorKNN"]["knn"]
+for vector_id, similarity in results:
+    print(f"Vector {vector_id}: {similarity}")
+#+END_SRC
+
+* API Version and Compatibility
+- Current API Version: 1.0
+- Base Path: /vectordb
+- Backwards Compatibility: Guaranteed for minor versions
+- Deprecation Policy: Minimum 6 months notice
+
+* Security Considerations
+** Authentication
+- JWT-based authentication
+- Token expiration and renewal
+- Role-based access control
+
+** Data Protection
+- TLS encryption required
+- Vector data encryption at rest
+- Secure credential handling
+
+** Access Control
+- Collection-level permissions
+- Operation-level authorization
+- Transaction isolation
+
+* Monitoring and Diagnostics
+** Available Metrics
+- Transaction success/failure rates
+- Query latency
+- Index performance
+- Resource utilization
+
+** Health Checks
+- API endpoint health
+- Database connectivity
+- Index status
+- Transaction manager status
