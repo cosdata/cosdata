@@ -155,9 +155,13 @@ impl<T> ProbLazyItem<T> {
 
 impl ProbLazyItem<ProbNode> {
     pub fn try_get_data(&self, cache: &Arc<ProbCache>) -> Result<Arc<ProbNode>, BufIoError> {
-        match &*self.get_state() {
-            ProbLazyItemState::Ready { data, .. } => Ok(data.clone()),
-            ProbLazyItemState::Pending { file_index } => Ok(cache.get_object(file_index.clone())?),
+        unsafe {
+            match &**self.state.load(Ordering::Acquire) {
+                ProbLazyItemState::Ready { data, .. } => Ok(data.clone()),
+                ProbLazyItemState::Pending { file_index } => {
+                    Ok(cache.get_object(file_index.clone())?)
+                }
+            }
         }
     }
 

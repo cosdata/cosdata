@@ -121,7 +121,7 @@ impl ProbSerialize for Box<[AtomicPtr<(SharedNode, MetricResult)>]> {
                     let node = Arc::<ProbLazyItem<ProbNode>>::deserialize(
                         bufmans,
                         node_file_index,
-                        &cache,
+                        cache,
                         max_loads,
                         skipm,
                     )?;

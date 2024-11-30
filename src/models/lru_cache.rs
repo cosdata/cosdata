@@ -209,7 +209,7 @@ where
         let counter = self.increment_counter();
         self.map.insert(key.clone(), (value, counter));
         self.index.on_cache_miss(counter, key.into());
-        self.evict();
+        // self.evict();
     }
 
     /// Gets the value from the cache if it exists, else tries to
@@ -245,7 +245,7 @@ where
         match res {
             Ok(v) => {
                 if inserted {
-                    self.evict();
+                    // self.evict();
                     Ok(CachedValue::Miss(v))
                 } else {
                     Ok(CachedValue::Hit(v))

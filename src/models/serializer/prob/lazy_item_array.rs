@@ -88,7 +88,7 @@ impl<const N: usize> ProbSerialize for ProbLazyItemArray<ProbNode, N> {
                     let item = SharedNode::deserialize(
                         bufmans,
                         file_index,
-                        cache.clone(),
+                        cache,
                         max_loads,
                         skipm,
                     )?;

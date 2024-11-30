@@ -770,7 +770,10 @@ pub fn index_embedding(
     );
 
     if let Some(parent) = parent {
-        parent.get_lazy_data().unwrap().set_child(lazy_node.clone());
+        parent
+            .try_get_data(&dense_index.cache)
+            .unwrap()
+            .set_child(lazy_node.clone());
     }
 
     if cur_level.0 != 0 {
@@ -917,7 +920,7 @@ fn traverse_find_nearest(
 
     for neighbor in node.get_neighbors_raw() {
         let neighbor_node = unsafe {
-            if let Some(neighbor) = neighbor.load(Ordering::SeqCst).as_ref() {
+            if let Some(neighbor) = neighbor.load(Ordering::Acquire).as_ref() {
                 neighbor.0.clone()
             } else {
                 continue;
