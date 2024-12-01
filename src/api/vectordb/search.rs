@@ -21,7 +21,7 @@ pub(crate) async fn search(
         }
     };
 
-    let result = match ann_vector_query(vec_store.clone(), body.vector).await {
+    let result = match ann_vector_query(ctx.into_inner(), vec_store.clone(), body.vector).await {
         Ok(result) => result,
         Err(err) => return HttpResponse::InternalServerError().body(err.to_string()),
     };

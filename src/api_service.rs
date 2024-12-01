@@ -1,15 +1,15 @@
 use crate::app_context::AppContext;
 use crate::indexes::inverted_index::InvertedIndex;
 use crate::models::buffered_io::BufferManagerFactory;
-use crate::models::cache_loader::NodeRegistry;
+use crate::models::cache_loader::ProbCache;
 use crate::models::collection::Collection;
 use crate::models::common::*;
-use crate::models::lazy_load::*;
+use crate::models::embedding_persist::EmbeddingOffset;
+use crate::models::file_persist::write_node_to_file;
 use crate::models::meta_persist::update_current_version;
 use crate::models::rpc::VectorIdValue;
 use crate::models::types::*;
 use crate::models::user::Statistics;
-use crate::models::versioning::Hash;
 use crate::models::versioning::VersionControl;
 use crate::quantization::{Quantization, StorageType};
 use crate::vector_store::*;
@@ -21,8 +21,9 @@ use std::array::TryFromSliceError;
 use std::fs;
 use std::io::SeekFrom;
 use std::path::Path;
-use std::sync::mpsc;
 use std::sync::Arc;
+use std::sync::{mpsc, RwLock};
+use std::thread;
 
 /// creates a dense index for a collection
 #[allow(unused_variables)]
@@ -30,10 +31,9 @@ pub async fn init_dense_index_for_collection(
     ctx: Arc<AppContext>,
     collection: &Collection,
     size: usize,
-    lower_bound: Option<f32>,
-    upper_bound: Option<f32>,
+    _lower_bound: Option<f32>,
+    _upper_bound: Option<f32>,
     num_layers: u8,
-    auto_config: bool,
 ) -> Result<Arc<DenseIndex>, WaCustomError> {
     let collection_name = &collection.name;
     let collection_path: Arc<Path> = collection.get_path();
@@ -51,17 +51,16 @@ pub async fn init_dense_index_for_collection(
 
     let vcs = Arc::new(vcs);
 
-    let exec_queue_nodes: ExecQueueUpdate = STM::new(Vec::new(), 16, true);
-
     // Note that setting .write(true).append(true) has the same effect
     // as setting only .append(true)
-    let prop_file = Arc::new(
+    let prop_file = Arc::new(RwLock::new(
         fs::OpenOptions::new()
             .create(true)
+            .read(true)
             .append(true)
             .open(collection_path.join("prop.data"))
             .map_err(|e| WaCustomError::FsError(e.to_string()))?,
-    );
+    ));
 
     let index_manager = Arc::new(BufferManagerFactory::new(
         collection_path.clone(),
@@ -72,7 +71,11 @@ pub async fn init_dense_index_for_collection(
         |root, ver| root.join(format!("{}.vec_raw", **ver)),
     ));
     // TODO: May be the value can be taken from config
-    let cache = Arc::new(NodeRegistry::new(1000, index_manager.clone()));
+    let cache = Arc::new(ProbCache::new(
+        1000,
+        index_manager.clone(),
+        prop_file.clone(),
+    ));
 
     let root = create_root_node(
         num_layers,
@@ -82,6 +85,7 @@ pub async fn init_dense_index_for_collection(
         prop_file.clone(),
         hash,
         index_manager.clone(),
+        ctx.config.hnsw.neighbors_count,
     )?;
 
     index_manager.flush_all()?;
@@ -92,9 +96,8 @@ pub async fn init_dense_index_for_collection(
     let lp = Arc::new(generate_tuples(factor_levels, num_layers));
 
     let dense_index = Arc::new(DenseIndex::new(
-        exec_queue_nodes,
         collection_name.clone(),
-        LazyItemRef::from_lazy(root),
+        root,
         lp,
         size,
         prop_file,
@@ -105,7 +108,6 @@ pub async fn init_dense_index_for_collection(
         ArcShift::new(storage_type),
         vcs,
         num_layers,
-        auto_config,
         cache,
         index_manager,
         vec_raw_manager,
@@ -141,6 +143,7 @@ pub async fn init_inverted_index_for_collection(
     let prop_file = Arc::new(
         fs::OpenOptions::new()
             .create(true)
+            .read(true)
             .append(true)
             .open(collection_path.join("prop.data"))
             .map_err(|e| WaCustomError::FsError(e.to_string()))?,
@@ -161,6 +164,7 @@ pub async fn init_inverted_index_for_collection(
         StorageType::UnsignedByte,
         vcs,
     );
+    update_current_version(&index.lmdb, hash)?;
     Ok(Arc::new(index))
 }
 
@@ -168,44 +172,43 @@ pub async fn init_inverted_index_for_collection(
 pub fn run_upload_in_transaction(
     ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
-    transaction_id: Hash,
+    transaction: &DenseIndexTransaction,
     vecs: Vec<(VectorIdValue, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
-    let current_version = transaction_id;
-
-    let bufman = dense_index
-        .vec_raw_manager
-        .get(&current_version)
-        .map_err(|e| WaCustomError::BufIo(Arc::new(e)))?;
+    transaction.increment_batch_count();
+    let version = transaction.id;
+    let version_number = transaction.version_number;
 
     let (tx, rx) = mpsc::channel();
 
-    ctx.threadpool.install(|| {
-        vecs.into_par_iter()
-            .map(|(id, vec)| {
-                let bufman = bufman.clone();
-                let dense_index = dense_index.clone();
+    let handle = {
+        let raw_embedding_channel = transaction.raw_embedding_channel.clone();
+        thread::spawn(move || {
+            vecs.into_par_iter().for_each(|(id, vec)| {
                 let hash_vec = convert_value(id);
                 let vec_emb = RawVectorEmbedding {
-                    raw_vec: vec,
+                    raw_vec: Arc::new(vec),
                     hash_vec,
                 };
                 tx.send(vec_emb.clone()).unwrap();
-                insert_embedding(
-                    bufman.clone(),
-                    dense_index.clone(),
-                    &vec_emb,
-                    current_version,
-                )
-            })
-            .collect::<Result<Vec<()>, WaCustomError>>()
-    })?;
+                raw_embedding_channel.send(vec_emb).unwrap();
+            });
+        })
+    };
 
-    drop(tx);
+    index_embeddings_in_transaction(
+        ctx.clone(),
+        dense_index.clone(),
+        version,
+        version_number,
+        rx,
+        transaction.serialization_table.clone(),
+        transaction.lazy_item_versions_table.clone(),
+    )?;
 
-    index_embeddings_in_transaction(ctx.clone(), dense_index, transaction_id, rx)?;
+    handle.join().unwrap();
 
-    bufman.flush()?;
+    transaction.start_serialization_round();
 
     Ok(())
 }
@@ -237,6 +240,7 @@ pub fn run_upload(
             let prev_bufman = dense_index.vec_raw_manager.get(&prev_version)?;
             let cursor = prev_bufman.open_cursor()?;
             let prev_file_len = prev_bufman.seek_with_cursor(cursor, SeekFrom::End(0))? as u32;
+            prev_bufman.close_cursor(cursor)?;
 
             prev_file_len > embedding_offset.offset
         }
@@ -247,9 +251,17 @@ pub fn run_upload(
     };
 
     txn.abort();
+    let serialization_table = Arc::new(TSHashTable::new(16));
+    let lazy_item_versions_table = Arc::new(TSHashTable::new(16));
 
     if index_before_insertion {
-        index_embeddings(dense_index.clone(), ctx.config.upload_process_batch_size)?;
+        index_embeddings(
+            dense_index.clone(),
+            ctx.config.upload_process_batch_size,
+            serialization_table.clone(),
+            lazy_item_versions_table.clone(),
+            ctx.config.hnsw.neighbors_count,
+        )?;
     }
 
     // Add next version
@@ -288,7 +300,7 @@ pub fn run_upload(
         .map(|(id, vec)| {
             let hash_vec = convert_value(id);
             let vec_emb = RawVectorEmbedding {
-                raw_vec: vec,
+                raw_vec: Arc::new(vec),
                 hash_vec,
             };
 
@@ -322,10 +334,21 @@ pub fn run_upload(
     txn.abort();
 
     if count_unindexed >= ctx.config.upload_threshold {
-        index_embeddings(dense_index.clone(), ctx.config.upload_process_batch_size)?;
+        index_embeddings(
+            dense_index.clone(),
+            ctx.config.upload_process_batch_size,
+            serialization_table.clone(),
+            lazy_item_versions_table,
+            ctx.config.hnsw.neighbors_count,
+        )?;
     }
 
-    auto_commit_transaction(dense_index.clone())?;
+    let list = Arc::into_inner(serialization_table).unwrap().to_list();
+
+    for (node, _) in list {
+        write_node_to_file(&node, &dense_index.index_manager)?;
+    }
+
     dense_index.vec_raw_manager.flush_all()?;
     dense_index.index_manager.flush_all()?;
 
@@ -333,12 +356,12 @@ pub fn run_upload(
 }
 
 pub async fn ann_vector_query(
+    ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
     query: Vec<f32>,
 ) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
     let dense_index = dense_index.clone();
     let vec_hash = VectorId::Str("query".to_string());
-    let root = &dense_index.root_vec;
     let vector_list = dense_index
         .quantization_metric
         .quantize(&query, *dense_index.storage_type.clone().get())?;
@@ -351,10 +374,11 @@ pub async fn ann_vector_query(
     let results = ann_search(
         dense_index.clone(),
         vec_emb,
-        root.item.clone().get().clone(),
+        dense_index.get_root_vec(),
         HNSWLevel(dense_index.hnsw_params.clone().get().num_layers),
+        ctx.config.hnsw.neighbors_count,
     )?;
-    let output = remove_duplicates_and_filter(results);
+    let output = finalize_ann_results(dense_index, results, &query)?;
     Ok(output)
 }
 

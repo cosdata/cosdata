@@ -1,3 +1,5 @@
+use std::sync::atomic::Ordering;
+
 use actix_web::{web, HttpResponse};
 
 use crate::{
@@ -22,14 +24,13 @@ pub(crate) async fn upsert(
     }
     .clone();
 
-    if collection.current_open_transaction.clone().get().is_some() {
+    if !collection
+        .current_open_transaction
+        .load(Ordering::SeqCst)
+        .is_null()
+    {
         return HttpResponse::Conflict()
             .body("Cannot upsert while there's an on-going transaction");
-    }
-
-    if !collection.get_auto_config_flag() && !collection.get_configured_flag() {
-        return HttpResponse::BadRequest()
-            .body("Vector store is set to manual indexing but an index is not created");
     }
 
     // Call run_upload with the extracted parameters

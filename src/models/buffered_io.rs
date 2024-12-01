@@ -132,7 +132,7 @@ impl BufferManager {
     pub fn new(mut file: File) -> io::Result<Self> {
         let file_size = file.seek(SeekFrom::End(0))?;
         file.seek(SeekFrom::Start(0))?;
-        let regions = LRUCache::with_prob_eviction(100, 0.03125);
+        let regions = LRUCache::with_prob_eviction(10000, 0.03125);
         Ok(BufferManager {
             file: Arc::new(RwLock::new(file)),
             regions,
@@ -326,8 +326,6 @@ impl BufferManager {
 
             let mut file_size = self.file_size.write().map_err(|_| BufIoError::Locking)?;
 
-            // println!("Cursor Id = {cursor_id}; Position = {curr_pos}; File Size = {}", *file_size);
-
             if cursor_is_at_eof && curr_pos < *file_size {
                 curr_pos = *file_size;
             }
@@ -356,8 +354,6 @@ impl BufferManager {
             }
             *file_size = curr_pos;
         } else {
-            // println!("Cursor Id = {cursor_id}; Position = {curr_pos};");
-
             while total_written < input_size {
                 let region = self.get_or_create_region(curr_pos)?;
                 {
@@ -451,6 +447,7 @@ mod tests {
 
     use super::*;
     use quickcheck_macros::quickcheck;
+    use rand::Rng;
     use std::thread;
     use tempfile::tempfile;
 
@@ -1209,6 +1206,52 @@ mod tests {
         }
 
         bufman.close_cursor(cursor).unwrap();
+    }
+
+    #[test]
+    fn test_read_large_file() {
+        let mut rng = rand::thread_rng();
+
+        let mut file = create_tmp_file(0, 0).unwrap();
+
+        let written_data = (0..(100 * 1024 * 1024))
+            .map(|_| rng.gen())
+            .collect::<Vec<_>>();
+        file.write_all(&written_data).unwrap();
+
+        let bufman = BufferManager::new(file).unwrap();
+        let cursor = bufman.open_cursor().unwrap();
+
+        let mut read_data = vec![0; 100 * 1024 * 1024];
+        let bytes_read = bufman.read_with_cursor(cursor, &mut read_data).unwrap();
+
+        assert_eq!(bytes_read, read_data.len());
+        assert_eq!(read_data, written_data);
+    }
+
+    #[test]
+    fn test_write_large_file() {
+        let mut rng = rand::thread_rng();
+
+        let file = create_tmp_file(0, 0).unwrap();
+        let bufman = BufferManager::new(file).unwrap();
+        let cursor = bufman.open_cursor().unwrap();
+
+        let written_data = (0..(100 * 1024 * 1024))
+            .map(|_| rng.gen())
+            .collect::<Vec<_>>();
+        bufman.write_with_cursor(cursor, &written_data).unwrap();
+        bufman.flush().unwrap();
+
+        let mut read_data = vec![0; 100 * 1024 * 1024];
+
+        let mut file = bufman.file.write().unwrap();
+        file.seek(SeekFrom::Start(0)).unwrap();
+        file.read_exact(&mut read_data).unwrap();
+
+        for (i, (r, w)) in read_data.into_iter().zip(written_data).enumerate() {
+            assert_eq!(r, w, "mismatch at {}", i);
+        }
     }
 
     // Prop test for `get_or_create_region` to check that

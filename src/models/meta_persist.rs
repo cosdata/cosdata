@@ -80,7 +80,6 @@ impl TryFrom<Arc<DenseIndex>> for DenseIndexData {
             .ok_or(WaCustomError::NodeError(
                 "FileIndex must be set for root node".to_owned(),
             ))?;
-        println!("Offset of root node: {offset:?}");
         if let FileIndex::Invalid = offset {
             return Err(WaCustomError::NodeError(
                 "FileIndex must be valid for root node".to_owned(),

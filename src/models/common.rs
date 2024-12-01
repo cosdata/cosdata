@@ -1,18 +1,19 @@
 use super::buffered_io::BufIoError;
 use super::lazy_load::LazyItem;
+use super::prob_node::SharedNode;
 use super::rpc::VectorIdValue;
 use super::types::{MergedNode, MetricResult, VectorId};
 use crate::distance::DistanceError;
 use crate::models::rpc::Vector;
-use crate::models::types::PropState;
 use crate::models::types::VectorQt;
 use crate::quantization::QuantizationError;
 use sha2::{Digest, Sha256};
+use std::cmp::Ordering;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashSet;
-use std::fmt;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::{fmt, thread};
 
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
@@ -519,37 +520,32 @@ pub fn convert_vectors(vectors: Vec<Vector>) -> Vec<(VectorIdValue, Vec<f32>)> {
 }
 
 pub fn remove_duplicates_and_filter(
-    vec: Vec<(LazyItem<MergedNode>, MetricResult)>,
+    vec: Vec<(SharedNode, MetricResult)>,
 ) -> Vec<(VectorId, MetricResult)> {
     let mut seen = HashSet::new();
-    vec.into_iter()
+    let mut collected = vec
+        .into_iter()
         .filter_map(|(lazy_item, similarity)| {
-            if let LazyItem::Valid { mut data, .. } = lazy_item {
-                if let Some(data) = data.get() {
-                    let mut prop_arc = data.prop.clone();
-                    if let PropState::Ready(node_prop) = prop_arc.get() {
-                        let id = &node_prop.id;
-                        if let VectorId::Int(s) = id {
-                            if *s == -1 {
-                                return None;
-                            }
-                        }
-                        if seen.insert(id.clone()) {
-                            Some((id.clone(), similarity))
-                        } else {
-                            None
-                        }
-                    } else {
-                        None // PropState is Pending
-                    }
-                } else {
-                    None // data is None
-                }
-            } else {
-                None // LazyItem is Invalid
+            let id = lazy_item.get_lazy_data()?.get_id().clone();
+            if !seen.insert(id.clone()) {
+                return None;
             }
+            if let VectorId::Int(s) = id {
+                if s == -1 {
+                    return None;
+                }
+            }
+            Some((id, similarity))
         })
-        .collect()
+        .collect::<Vec<_>>();
+
+    collected.sort_unstable_by(|(_, a), (_, b)| {
+        b.get_value()
+            .partial_cmp(&a.get_value())
+            .unwrap_or(Ordering::Equal)
+    });
+    collected.truncate(100);
+    collected
 }
 
 pub fn generate_tuples(x: f64, num_levels: u8) -> Vec<(f64, i32)> {
@@ -631,4 +627,143 @@ pub fn tapered_skips(skips: i8, cur_distance: i8, max_distance: i8) -> i8 {
 #[allow(dead_code)]
 pub fn tuple_to_string(tuple: (u32, u32)) -> String {
     format!("{}_{}", tuple.0, tuple.1)
+}
+
+type HashTable<K, V> = HashMap<K, V>;
+
+/// This is a custom Hashtable made to use for data variable in Node of InvertedIndex
+#[derive(Clone)]
+pub struct TSHashTable<K, V> {
+    hash_table_list: Vec<Arc<Mutex<HashTable<K, V>>>>,
+    size: i16,
+}
+
+unsafe impl<K, V> Send for TSHashTable<K, V> {}
+unsafe impl<K, V> Sync for TSHashTable<K, V> {}
+
+impl<K: Eq + Hash, V> TSHashTable<K, V> {
+    pub fn new(size: i16) -> Self {
+        let hash_table_list = (0..size)
+            .map(|_| Arc::new(Mutex::new(HashMap::new())))
+            .collect();
+        TSHashTable {
+            hash_table_list,
+            size,
+        }
+    }
+    pub fn hash_key(&self, k: &K) -> usize {
+        let mut hasher = DefaultHasher::new();
+        k.hash(&mut hasher);
+        (hasher.finish() as usize) % (self.size as usize)
+    }
+
+    pub fn insert(&self, k: K, v: V) {
+        let index = self.hash_key(&k);
+        let mut ht = self.hash_table_list[index].lock().unwrap();
+        ht.insert(k, v);
+    }
+
+    pub fn delete(&self, k: &K) {
+        let index = self.hash_key(k);
+        let mut ht = self.hash_table_list[index].lock().unwrap();
+        ht.remove(k);
+    }
+
+    pub fn lookup(&self, k: &K) -> Option<V>
+    where
+        V: Clone,
+    {
+        let index = self.hash_key(k);
+        let ht = self.hash_table_list[index].lock().unwrap();
+        ht.get(k).cloned()
+    }
+
+    pub fn mutate<F>(&self, k: K, f: F)
+    where
+        F: FnOnce(Option<V>) -> Option<V>,
+        V: Clone,
+    {
+        let index = self.hash_key(&k);
+        let mut ht = self.hash_table_list[index].lock().unwrap();
+        let v = ht.remove(&k);
+        let new_v = f(v);
+        if let Some(new_v) = new_v {
+            ht.insert(k, new_v);
+        }
+    }
+
+    pub fn get_or_create<F>(&self, k: K, f: F) -> V
+    where
+        F: FnOnce() -> V,
+        V: Clone,
+    {
+        let index = self.hash_key(&k);
+        let mut ht = self.hash_table_list[index].lock().unwrap();
+        match ht.get(&k) {
+            Some(v) => v.clone(),
+            None => {
+                let new_v = f();
+                ht.insert(k, new_v.clone());
+                new_v
+            }
+        }
+    }
+
+    pub fn map_m<F>(&self, f: F)
+    where
+        F: Fn(&K, &V) + Send + Sync + 'static,
+        K: Send + Sync + 'static,
+        V: Send + Sync + 'static,
+    {
+        let f = Arc::new(f);
+        let handles: Vec<_> = self
+            .hash_table_list
+            .iter()
+            .map(|ht| {
+                let ht = Arc::clone(ht);
+                let f = f.clone();
+                thread::spawn(move || {
+                    let ht = ht.lock().unwrap();
+                    for (k, v) in ht.iter() {
+                        f(k, v);
+                    }
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+    }
+
+    pub fn to_list(&self) -> Vec<(K, V)>
+    where
+        K: Clone,
+        V: Clone,
+    {
+        self.hash_table_list
+            .iter()
+            .flat_map(|ht| {
+                let ht = ht.lock().unwrap();
+                ht.iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    pub fn from_list(size: i16, kv: Vec<(K, V)>) -> Self {
+        let tsh = Self::new(size);
+        for (k, v) in kv {
+            tsh.insert(k, v);
+        }
+        tsh
+    }
+
+    pub fn purge_all(&self) {
+        for ht in &self.hash_table_list {
+            let mut ht = ht.lock().unwrap();
+            *ht = HashMap::new();
+        }
+    }
 }

@@ -138,6 +138,7 @@ where
     counter: AtomicU32,
     evict_strategy: EvictStrategy,
     index: EvictionIndex,
+    evict_hook: Option<fn(&V)>,
 }
 
 /// Wrapper for the value that's returned from the LRUCache when
@@ -167,6 +168,7 @@ where
             map: DashMap::new(),
             counter: AtomicU32::new(0),
             index: EvictionIndex::new(),
+            evict_hook: None,
             capacity,
             evict_strategy,
         }
@@ -176,6 +178,10 @@ where
     pub fn with_prob_eviction(capacity: usize, prob: f32) -> Self {
         let strategy = EvictStrategy::Probabilistic(ProbEviction::new(f16::from_f32_const(prob)));
         Self::new(capacity, strategy)
+    }
+
+    pub fn set_evict_hook(&mut self, hook: Option<fn(&V)>) {
+        self.evict_hook = hook;
     }
 
     /// Returns an entry from the cache
@@ -263,23 +269,26 @@ where
     }
 
     fn evict_lru(&self) {
-        let mut oldest_key = None;
+        let mut oldest_pair = None;
         let mut oldest_counter = u32::MAX;
 
         for entry in self.map.iter() {
-            let (key, (_, counter_val)) = entry.pair();
+            let (key, (value, counter_val)) = entry.pair();
             if *counter_val < oldest_counter {
                 oldest_counter = *counter_val;
-                oldest_key = Some(key.clone());
+                oldest_pair = Some((key.clone(), value.clone()));
             }
         }
 
-        if let Some(key) = oldest_key {
+        if let Some((key, value)) = oldest_pair {
             // If item didn't exist it will return None. This can
             // happen if another thread finds the same item to evict
             // and "wins". This implies for temporarily the dashmap
             // size could exceed max capacity. It's fine for now but
             // needs to be fixed.
+            if let Some(evict_hook) = self.evict_hook {
+                evict_hook(&value);
+            }
             let removed = self.map.remove(&key);
             if removed.is_none() {
                 log::warn!("Item already evicted by another thread");
@@ -298,19 +307,24 @@ where
                     break;
                 }
                 if let Some(entry) = self.map.get(&K::from(key)) {
-                    let (key, (_, counter_val)) = entry.pair();
+                    let (key, (value, counter_val)) = entry.pair();
                     if strategy.should_evict(global_counter, *counter_val) {
-                        // @NOTE: We need to collect the keys in a
-                        // vector and remove them from the dashmap
-                        // later. Directly calling the `remove` method
-                        // here causes a deadlock because of the
-                        // existing reference into the dashmap. See
-                        // `DashMap.remove` docs for more info.
-                        pairs_to_evict.push((idx, key.clone()));
+                        // @NOTE: We need to collect the pairs in a
+                        // vector and remove the keys from the dashmap
+                        // later whereas values are used for calling
+                        // `evict_hook` (if specified). Directly
+                        // calling the `remove` method here causes a
+                        // deadlock because of the existing reference
+                        // into the dashmap. See `DashMap.remove` docs
+                        // for more info.
+                        pairs_to_evict.push((idx, key.clone(), value.clone()));
                     }
                 }
             }
-            for (idx, key) in pairs_to_evict {
+            for (idx, key, value) in pairs_to_evict {
+                if let Some(evict_hook) = self.evict_hook {
+                    evict_hook(&value)
+                }
                 self.map.remove(&key);
                 self.index.remove(idx);
             }
@@ -653,5 +667,32 @@ mod tests {
                 index.inner[new_counter as usize % 256].load(Ordering::SeqCst)
             );
         }
+    }
+
+    #[test]
+    fn test_evict_hook() {
+        let mut cache: LRUCache<u64, &'static str> = LRUCache::new(2, EvictStrategy::Immediate);
+        cache.set_evict_hook(Some(|&value| {
+            assert_eq!("value2", value);
+        }));
+
+        cache.insert(1, "value1");
+        cache.insert(2, "value2");
+
+        match cache.get(&1) {
+            Some(v) => assert_eq!("value1", v),
+            None => assert!(false),
+        }
+
+        cache.insert(3, "value3"); // This should evict key2
+
+        match cache.get(&3) {
+            Some(v) => assert_eq!("value3", v),
+            None => assert!(false),
+        }
+
+        // Verify that key2 is evicted
+        assert_eq!(2, cache.map.len());
+        assert!(!cache.map.contains_key(&2));
     }
 }
