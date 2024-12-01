@@ -131,6 +131,22 @@ pub(crate) async fn get_dense_index_by_name(
     Ok(dense_index)
 }
 
+/// gets an inverted index for a collection by name
+pub(crate) async fn get_inverted_index_by_name(
+    ctx: Arc<AppContext>,
+    name: &str,
+) -> Result<Arc<InvertedIndex>, CollectionsError> {
+    // Try to get the dense_index from the environment
+    let index = match ctx.ain_env.collections_map.get_inverted_index(name) {
+        Some(index) => index.clone(),
+        None => {
+            // dense index not found, return an error response
+            return Err(CollectionsError::NotFound);
+        }
+    };
+    Ok(index)
+}
+
 pub(crate) async fn delete_collection_by_name(
     ctx: Arc<AppContext>,
     name: &str,
