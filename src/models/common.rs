@@ -596,6 +596,7 @@ pub fn cat_maybes<T>(iter: impl Iterator<Item = Option<T>>) -> Vec<T> {
     iter.flat_map(|maybe| maybe).collect()
 }
 
+#[allow(dead_code)]
 pub fn tapered_total_hops(hops: u8, cur_level: u8, max_level: u8) -> u8 {
     //div by 2
     if cur_level > max_level >> 1 {

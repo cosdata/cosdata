@@ -1,10 +1,9 @@
 use super::buffered_io::{BufIoError, BufferManagerFactory};
 use super::common::WaCustomError;
-use super::lazy_load::{FileIndex, SyncPersist};
-use super::prob_lazy_load::lazy_item::ProbLazyItem;
+use super::lazy_load::SyncPersist;
 use super::prob_node::SharedNode;
 use super::serializer::prob::ProbSerialize;
-use super::types::{BytesToRead, FileOffset, HNSWLevel, MergedNode, NodeProp, VectorId};
+use super::types::{BytesToRead, FileOffset, NodeProp, VectorId};
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
@@ -54,13 +53,13 @@ pub fn write_node_to_file(
 
     Ok(offset)
 }
-//
-pub fn load_vector_id_lsmdb(
-    _level: HNSWLevel,
-    _vector_id: VectorId,
-) -> Option<ProbLazyItem<MergedNode>> {
-    None
-}
+// #[allow(dead_code)]
+// pub fn load_vector_id_lsmdb(
+//     _level: HNSWLevel,
+//     _vector_id: VectorId,
+// ) -> Option<ProbLazyItem<MergedNode>> {
+//     None
+// }
 
 // #[allow(dead_code)]
 // pub fn load_neighbor_persist_ref(_level: HNSWLevel, _node_file_ref: u32) -> Option<MergedNode> {

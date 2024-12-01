@@ -1,4 +1,4 @@
-use super::buffered_io::{BufferManager, BufferManagerFactory};
+use super::buffered_io::BufferManagerFactory;
 use super::cache_loader::ProbCache;
 use super::collection::Collection;
 use super::embedding_persist::{write_embedding, EmbeddingOffset};
