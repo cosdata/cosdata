@@ -5,6 +5,7 @@ use crate::{
     api_service::{run_upload, run_upload_in_transaction},
     app_context::AppContext,
     convert_vectors,
+    indexes::inverted_index,
     models::{
         rpc::VectorIdValue,
         types::{DenseIndexTransaction, VectorId},
@@ -14,8 +15,8 @@ use crate::{
 
 use super::{
     dtos::{
-        CreateVectorDto, CreateVectorResponseDto, FindSimilarVectorsDto, SimilarVector,
-        UpdateVectorDto, UpdateVectorResponseDto, UpsertDto,
+        CreateVectorDto, CreateVectorDtox, CreateVectorResponseDto, FindSimilarVectorsDto,
+        SimilarVector, UpdateVectorDto, UpdateVectorResponseDto, UpsertDto,
     },
     error::VectorsError,
 };
@@ -23,7 +24,51 @@ use super::{
 pub(crate) async fn create_vector(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    create_vector_dto: CreateVectorDto,
+    create_vector_dto: CreateVectorDtox,
+) -> Result<CreateVectorResponseDto, VectorsError> {
+    match create_vector_dto {
+        CreateVectorDtox::Dense { id, values } => {
+            create_dense_vector(ctx, collection_id, id, values).await
+        }
+        CreateVectorDtox::Sparse { id, values } => {
+            create_sparse_vector(ctx, collection_id, id, values).await
+        }
+    }
+}
+
+/// Creates a sparse vector for inverted index
+///
+pub(crate) async fn create_sparse_vector(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    vector_id: VectorIdValue,
+    values: Vec<(f32, u32)>,
+) -> Result<CreateVectorResponseDto, VectorsError> {
+    // let inverted_index = collections::service::get_inverted_index_by_id(ctx.clone(), collection_id)
+    //     .await
+    //     .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
+
+    // if !inverted_index
+    //     .current_open_transaction
+    //     .load(Ordering::SeqCst)
+    //     .is_null()
+    // {
+    //     return Err(VectorsError::FailedToCreateVector(
+    //         "there is an ongoing transaction!".into(),
+    //     ));
+    // }
+
+    Err(VectorsError::NotImplemented)
+}
+
+/// Creates a vector for dense index
+///
+pub(crate) async fn create_dense_vector(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    vector_id: VectorIdValue,
+    values: Vec<f32>,
+    // create_vector_dto: CreateVectorDto,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
     let dense_index = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
         .await
@@ -40,18 +85,11 @@ pub(crate) async fn create_vector(
     }
 
     // TODO: handle the error
-    run_upload(
-        ctx,
-        dense_index,
-        vec![(
-            create_vector_dto.id.clone(),
-            create_vector_dto.values.clone(),
-        )],
-    )
-    .map_err(VectorsError::WaCustom)?;
+    run_upload(ctx, dense_index, vec![(vector_id.clone(), values.clone())])
+        .map_err(VectorsError::WaCustom)?;
     Ok(CreateVectorResponseDto {
-        id: create_vector_dto.id,
-        values: create_vector_dto.values,
+        id: vector_id,
+        values,
     })
 }
 

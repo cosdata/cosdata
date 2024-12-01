@@ -1,7 +1,7 @@
 use actix_web::{web, HttpResponse, Result};
 
 use super::{
-    dtos::{CreateVectorDto, FindSimilarVectorsDto, UpdateVectorDto},
+    dtos::{CreateVectorDtox, FindSimilarVectorsDto, UpdateVectorDto},
     service,
 };
 use crate::{
@@ -11,7 +11,7 @@ use crate::{
 
 pub(crate) async fn create_vector(
     collection_id: web::Path<String>,
-    web::Json(create_vector_dto): web::Json<CreateVectorDto>,
+    web::Json(create_vector_dto): web::Json<CreateVectorDtox>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse> {
     let vector =

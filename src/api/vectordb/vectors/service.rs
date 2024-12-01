@@ -7,7 +7,7 @@ use crate::{
 
 use super::{
     dtos::{
-        CreateVectorDto, CreateVectorResponseDto, FindSimilarVectorsDto,
+        CreateVectorDtox, CreateVectorResponseDto, FindSimilarVectorsDto,
         FindSimilarVectorsResponseDto, UpdateVectorDto, UpdateVectorResponseDto,
     },
     error::VectorsError,
@@ -17,7 +17,8 @@ use super::{
 pub(crate) async fn create_vector(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    create_vector_dto: CreateVectorDto,
+    // create_vector_dto: CreateVectorDto,
+    create_vector_dto: CreateVectorDtox,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
     repo::create_vector(ctx, collection_id, create_vector_dto).await
 }
