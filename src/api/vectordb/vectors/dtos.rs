@@ -8,6 +8,19 @@ pub(crate) struct CreateVectorDto {
     pub values: Vec<f32>,
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum CreateVectorDtox {
+    Dense {
+        id: VectorIdValue,
+        values: Vec<f32>,
+    },
+    Sparse {
+        id: VectorIdValue,
+        values: Vec<(f32, u32)>,
+    },
+}
+
 #[derive(Serialize)]
 pub(crate) struct CreateVectorResponseDto {
     pub id: VectorIdValue,
