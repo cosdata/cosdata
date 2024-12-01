@@ -16,6 +16,7 @@ use crate::distance::{
     cosine::CosineDistance, dotproduct::DotProductDistance, euclidean::EuclideanDistance,
     hamming::HammingDistance, DistanceFunction,
 };
+use crate::indexes::inverted_index::InvertedIndex;
 use crate::macros::key;
 use crate::models::common::*;
 use crate::models::identity_collections::*;
@@ -651,6 +652,7 @@ pub struct RawVectorEmbedding {
 pub(crate) struct CollectionsMap {
     /// holds an in-memory map of all dense indexes for all collections
     inner: DashMap<String, Arc<DenseIndex>>,
+    inner_inverted_index: DashMap<String, Arc<InvertedIndex>>,
     inner_collections: DashMap<String, Arc<Collection>>,
     lmdb_env: Arc<Environment>,
     // made it public temporarily
@@ -667,6 +669,7 @@ impl CollectionsMap {
         let inverted_index_db = lmdb_init_db(&env, "inverted_indexes")?;
         let res = Self {
             inner: DashMap::new(),
+            inner_inverted_index: DashMap::new(),
             inner_collections: DashMap::new(),
             lmdb_env: env,
             lmdb_collections_db: collections_db,
@@ -823,6 +826,25 @@ impl CollectionsMap {
     /// required for the current use case.
     pub fn get(&self, name: &str) -> Option<Arc<DenseIndex>> {
         self.inner.get(name).map(|index| index.clone())
+    }
+
+    /// Returns the `InvertedIndex` by collection's name
+    ///
+    /// If not found, None is returned
+    ///
+    /// Note that it tried to look up the InvertedIndex in the DashMap
+    /// only and doesn't check LMDB. This is because of the assumption
+    /// that at startup, all InvertedIndexes will be loaded from LMDB
+    /// into the in-memory DashMap and when a new InvertedIndex is
+    /// added, it will be written to the DashMap as well.
+    ///
+    /// @TODO: As a future improvement, we can fallback to checking if
+    /// the InvertedIndex exists in LMDB and caching it. But it's not
+    /// required for the current use case.
+    pub fn get_inverted_index(&self, name: &str) -> Option<Arc<InvertedIndex>> {
+        self.inner_inverted_index
+            .get(name)
+            .map(|index| index.clone())
     }
 
     /// Returns the `Collection` by collection's name
