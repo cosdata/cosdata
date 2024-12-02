@@ -7,7 +7,7 @@ use crate::storage::{
     inverted_index_sparse_ann_basic::InvertedIndexSparseAnnBasicTSHashmap, page::Pagepool,
 };
 
-use crate::models::types::SparseVector;
+use crate::models::types::{SparseQueryVector, SparseQueryVectorDimensionType, SparseVector};
 use std::collections::HashMap;
 use std::{cmp::Ordering, collections::BinaryHeap};
 
@@ -41,6 +41,75 @@ pub struct SparseAnnQueryBasic {
 impl SparseAnnQueryBasic {
     pub fn new(query_vector: SparseVector) -> Self {
         SparseAnnQueryBasic { query_vector }
+    }
+
+    // Creates a sparse query vector with dimension types based on the posting list length.
+    // This is used to optimize sparse ANN search using a cuckoo filter and two-stage search.
+    fn create_sparse_query_vector(
+        &self,
+        index: &InvertedIndexSparseAnnBasicTSHashmap,
+    ) -> SparseQueryVector {
+        let mut posting_list_lengths: Vec<(u32, usize)> = Vec::new();
+        for (dim_index, _) in &self.query_vector.entries {
+            if let Some(node) = index.find_node(*dim_index) {
+                let mut length = 0;
+                for key in 0..64 {
+                    length += node.data.get_or_create(key, Pagepool::default).len();
+                }
+                posting_list_lengths.push((*dim_index, length));
+            }
+        }
+
+        // Sort in descending order of posting list length
+        posting_list_lengths.sort_by(|a, b| b.1.cmp(&a.1));
+
+        // Calculate mean and standard deviation of posting list lengths
+        // This is used to classify dimensions as common or rare
+        let mean_length = if !posting_list_lengths.is_empty() {
+            posting_list_lengths
+                .iter()
+                .map(|(_, len)| *len)
+                .sum::<usize>() as f64
+                / posting_list_lengths.len() as f64
+        } else {
+            0.0
+        };
+
+        let variance = if !posting_list_lengths.is_empty() {
+            posting_list_lengths
+                .iter()
+                .map(|(_, len)| {
+                    let diff = *len as f64 - mean_length;
+                    diff * diff
+                })
+                .sum::<f64>()
+                / posting_list_lengths.len() as f64
+        } else {
+            0.0
+        };
+
+        let std_dev = variance.sqrt();
+        let std_dev_threshold = 2.0;
+        let rare_threshold = mean_length - (std_dev_threshold * std_dev);
+
+        let mut query_entries = Vec::new();
+        for (dim_index, length) in posting_list_lengths {
+            if let Some((_, value)) = self
+                .query_vector
+                .entries
+                .iter()
+                .find(|(d, _)| *d == dim_index)
+            {
+                let dim_type = if length > rare_threshold as usize {
+                    SparseQueryVectorDimensionType::Common
+                } else {
+                    SparseQueryVectorDimensionType::Rare
+                };
+                query_entries.push((dim_index, dim_type, *value));
+            }
+        }
+
+        SparseQueryVector::new(self.query_vector.vector_id, query_entries)
     }
 
     pub fn sequential_search(&self, index: &InvertedIndexSparseAnnBasic) -> Vec<SparseAnnResult> {
@@ -100,6 +169,7 @@ impl SparseAnnQueryBasic {
         &self,
         index: &InvertedIndexSparseAnnBasicTSHashmap,
     ) -> Vec<SparseAnnResult> {
+        let sparse_query_vector = self.create_sparse_query_vector(index);
         let mut dot_products: HashMap<u32, u32> = HashMap::new();
 
         let mut sorted_query_dims: Vec<(u32, f32)> = self.query_vector.entries.clone();
