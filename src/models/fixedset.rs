@@ -15,25 +15,19 @@ impl PerformantFixedSet {
         ((value ^ self.static_random) % 59) as usize
     }
 
-    fn custom_bit_mapping(&self, value: u32) -> u8 {
-        let mut hash = value;
-        hash = hash.wrapping_mul(0x5bd1e995);
-        hash ^= hash >> 15;
-        hash = hash.wrapping_mul(0x5bd1e995);
-
-        (hash % 128) as u8
-    }
 
     pub fn insert(&mut self, value: u32) {
         let index = self.get_bucket_index(value);
-        let bit_position = self.custom_bit_mapping(value);
+        let hash = value ^ 0xA5A5A5A5;
+        let bit_position = (hash % 128) as u8;
 
         self.buckets[index] |= 1u128 << bit_position;
     }
 
     pub fn is_member(&self, value: u32) -> bool {
         let index = self.get_bucket_index(value);
-        let bit_position = self.custom_bit_mapping(value);
+        let hash = value ^ 0xA5A5A5A5;
+        let bit_position = (hash % 128) as u8;
 
         (self.buckets[index] & (1u128 << bit_position)) != 0
     }
