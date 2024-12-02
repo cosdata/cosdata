@@ -1020,7 +1020,7 @@ impl SparseVector {
 // Dimension type for a sparse vector, based on the posting list length.
 // A dimension being common or rare is relative, and is defined based on the
 // query vector.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum SparseQueryVectorDimensionType {
     Common,
     Rare,
