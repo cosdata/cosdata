@@ -38,7 +38,7 @@ pub fn create_root_node(
     hash: Hash,
     index_manager: Arc<BufferManagerFactory>,
     neighbors_count: usize,
-) -> Result<Arc<ProbLazyItem<ProbNode>>, WaCustomError> {
+) -> Result<SharedNode, WaCustomError> {
     let min = -1.0;
     let max = 1.0;
     let vec = (0..dim)
@@ -759,7 +759,7 @@ pub fn index_embedding(
         z
     };
 
-    let (lazy_node, node) = create_node(
+    let lazy_node = create_node(
         version,
         version_number,
         cur_level,
@@ -768,6 +768,8 @@ pub fn index_embedding(
         None,
         neighbors_count,
     );
+
+    let node = lazy_node.get_lazy_data().unwrap();
 
     if let Some(parent) = parent {
         parent
@@ -818,16 +820,9 @@ fn create_node(
     parent: Option<SharedNode>,
     child: Option<SharedNode>,
     neighbors_count: usize,
-) -> (SharedNode, Arc<ProbNode>) {
-    let node = Arc::new(ProbNode::new(
-        hnsw_level,
-        prop,
-        parent,
-        child,
-        neighbors_count,
-    ));
-    let lazy_node = ProbLazyItem::from_arc(node.clone(), version_id, version_number);
-    (lazy_node, node)
+) -> SharedNode {
+    let node = ProbNode::new(hnsw_level, prop, parent, child, neighbors_count);
+    ProbLazyItem::new(node, version_id, version_number)
 }
 
 fn get_or_create_version(
@@ -873,7 +868,7 @@ fn get_or_create_version(
 fn create_node_edges(
     dense_index: Arc<DenseIndex>,
     lazy_node: SharedNode,
-    node: Arc<ProbNode>,
+    node: &ProbNode,
     neighbors: Vec<(SharedNode, MetricResult)>,
     version: Hash,
     version_number: u16,

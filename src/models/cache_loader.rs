@@ -309,12 +309,7 @@ impl ProbCache {
         Ok(prop)
     }
 
-    pub fn insert_lazy_object(
-        &self,
-        version: Hash,
-        offset: u32,
-        item: Arc<ProbLazyItem<ProbNode>>,
-    ) {
+    pub fn insert_lazy_object(&self, version: Hash, offset: u32, item: SharedNode) {
         let combined_index = (offset as u64) << 32 | (*version as u64);
         let mut cuckoo_filter = self.cuckoo_filter.write().unwrap();
         cuckoo_filter.insert(&combined_index);
@@ -391,13 +386,7 @@ impl ProbCache {
             (FileOffset(0), 0, 0.into())
         };
 
-        let data = Arc::new(ProbNode::deserialize(
-            &self.bufmans,
-            file_index,
-            self,
-            max_loads - 1,
-            skipm,
-        )?);
+        let data = ProbNode::deserialize(&self.bufmans, file_index, self, max_loads - 1, skipm)?;
         let state = ProbLazyItemState::Ready {
             data,
             file_offset: Cell::new(Some(offset)),
@@ -433,100 +422,13 @@ impl ProbCache {
     //
     // After determining the appropriate `max_loads`, the function proceeds by calling `get_lazy_object`, which handles
     // the actual loading process, and retrieves the lazy-loaded data.
-    pub fn get_object(&self, file_index: FileIndex) -> Result<Arc<ProbNode>, BufIoError> {
+    pub fn get_object(&self, file_index: FileIndex) -> Result<SharedNode, BufIoError> {
         let (_lock, max_loads) = match self.batch_load_lock.try_lock() {
             Ok(lock) => (Some(lock), 1000),
             Err(TryLockError::Poisoned(poison_err)) => panic!("lock error: {}", poison_err),
             Err(TryLockError::WouldBlock) => (None, 1),
         };
-        let combined_index = Self::combine_index(&file_index);
-
-        {
-            let cuckoo_filter = self.cuckoo_filter.read().unwrap();
-
-            // Initial check with Cuckoo filter
-            if cuckoo_filter.contains(&combined_index) {
-                if let Some(item) = self.registry.get(&combined_index) {
-                    if let Some(data) = item.get_lazy_data() {
-                        return Ok(data);
-                    }
-                }
-            }
-        }
-        let mut skipm = HashSet::new();
-        skipm.insert(combined_index);
-
-        let mut mutex = self
-            .loading_items
-            .get_or_create(combined_index, || Arc::new(Mutex::new(false)));
-        let mut load_complete = mutex.lock().unwrap();
-
-        loop {
-            // check again
-            {
-                let cuckoo_filter = self.cuckoo_filter.read().unwrap();
-
-                // Initial check with Cuckoo filter
-                if cuckoo_filter.contains(&combined_index) {
-                    if let Some(item) = self.registry.get(&combined_index) {
-                        if let Some(data) = item.get_lazy_data() {
-                            return Ok(data);
-                        }
-                    }
-                }
-            }
-
-            // another thread loaded the data but its not in the registry (got evicted), retry
-            if *load_complete {
-                drop(load_complete);
-                mutex = self
-                    .loading_items
-                    .get_or_create(combined_index, || Arc::new(Mutex::new(false)));
-                load_complete = mutex.lock().unwrap();
-                continue;
-            }
-
-            break;
-        }
-
-        let (offset, version_number, version_id) = if let FileIndex::Valid {
-            offset,
-            version_number,
-            version_id,
-        } = &file_index
-        {
-            (*offset, *version_number, *version_id)
-        } else {
-            (FileOffset(0), 0, 0.into())
-        };
-
-        let data = Arc::new(ProbNode::deserialize(
-            &self.bufmans,
-            file_index,
-            self,
-            max_loads - 1,
-            &mut skipm,
-        )?);
-        let state = ProbLazyItemState::Ready {
-            data: data.clone(),
-            file_offset: Cell::new(Some(offset)),
-            persist_flag: AtomicBool::new(false),
-            version_id,
-            version_number,
-        };
-
-        let item = ProbLazyItem::new_from_state(state);
-
-        {
-            self.cuckoo_filter.write().unwrap().insert(&combined_index);
-            self.registry
-                .get_or_insert::<BufIoError>(combined_index.clone(), || Ok(item.clone()))?;
-        }
-
-        *load_complete = true;
-        self.loading_items.delete(&combined_index);
-
-        Ok(data)
+        self.get_lazy_object(file_index, max_loads, &mut HashSet::new())
     }
 
     pub fn combine_index(file_index: &FileIndex) -> u64 {

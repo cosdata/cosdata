@@ -7,7 +7,7 @@ use crate::{
         file_persist::write_prop_to_file,
         lazy_load::{FileIndex, SyncPersist},
         prob_lazy_load::{lazy_item::ProbLazyItem, lazy_item_array::ProbLazyItemArray},
-        prob_node::{ProbNode, SharedNode},
+        prob_node::{ProbNode, SharedNode, SharedNodeInner},
         types::{FileOffset, HNSWLevel, MetricResult, NodeProp, VectorId},
         versioning::{Hash, Version, VersionControl},
     },
@@ -25,7 +25,7 @@ use std::{
 use tempfile::{tempdir, TempDir};
 
 pub struct EqualityTester {
-    checked: HashSet<(*const ProbLazyItem<ProbNode>, *const ProbLazyItem<ProbNode>)>,
+    checked: HashSet<(*mut SharedNodeInner, *mut SharedNodeInner)>,
     cache: Arc<ProbCache>,
 }
 
@@ -86,8 +86,8 @@ impl<const N: usize> EqualityTest for ProbLazyItemArray<ProbNode, N> {
 
 impl EqualityTest for SharedNode {
     fn assert_eq(&self, other: &Self, tester: &mut EqualityTester) {
-        let self_ptr = Arc::as_ptr(self);
-        let other_ptr = Arc::as_ptr(other);
+        let self_ptr = self.as_ptr();
+        let other_ptr = other.as_ptr();
         if tester.checked.insert((self_ptr, other_ptr)) {
             assert_eq!(self.get_current_version(), other.get_current_version());
             assert_eq!(
@@ -180,7 +180,7 @@ fn test_lazy_item_serialization() {
         version_id: root_version_id,
     };
 
-    let deserialized: Arc<ProbLazyItem<ProbNode>> = cache.load_item(file_index).unwrap();
+    let deserialized: SharedNode = cache.load_item(file_index).unwrap();
 
     let mut tester = EqualityTester::new(cache.clone());
 
@@ -275,14 +275,14 @@ fn test_prob_lazy_item_cyclic_serialization() {
     let root_version_number = 0;
     let (bufmans, cache, bufman, cursor, prop_file, _temp_dir) = setup_test(&root_version_id);
 
-    let node0 = Arc::new(create_prob_node(0, &prop_file));
-    let node1 = Arc::new(create_prob_node(1, &prop_file));
+    let node0 = create_prob_node(0, &prop_file);
+    let node1 = create_prob_node(1, &prop_file);
 
-    let lazy0 = ProbLazyItem::from_arc(node0.clone(), root_version_id, root_version_number);
-    let lazy1 = ProbLazyItem::from_arc(node1.clone(), root_version_id, root_version_number);
+    let lazy0 = ProbLazyItem::new(node0, root_version_id, root_version_number);
+    let lazy1 = ProbLazyItem::new(node1, root_version_id, root_version_number);
 
-    node0.set_parent(lazy1.clone());
-    node1.set_child(lazy0.clone());
+    lazy0.get_lazy_data().unwrap().set_parent(lazy1.clone());
+    lazy1.get_lazy_data().unwrap().set_child(lazy0.clone());
 
     let offset = lazy0.serialize(&bufmans, root_version_id, cursor).unwrap();
     let file_index = FileIndex::Valid {
@@ -299,11 +299,7 @@ fn test_prob_lazy_item_cyclic_serialization() {
     lazy0.assert_eq(&deserialized, &mut tester);
 }
 
-fn validate_lazy_item_versions(
-    cache: &Arc<ProbCache>,
-    lazy_item: Arc<ProbLazyItem<ProbNode>>,
-    version_number: u16,
-) {
+fn validate_lazy_item_versions(cache: &Arc<ProbCache>, lazy_item: SharedNode, version_number: u16) {
     let data = lazy_item.try_get_data(cache).unwrap();
     let versions = &data.versions;
 

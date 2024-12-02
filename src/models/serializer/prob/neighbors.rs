@@ -2,18 +2,14 @@ use std::{
     collections::HashSet,
     io::{self, SeekFrom},
     ptr,
-    sync::{
-        atomic::{AtomicPtr, Ordering},
-        Arc,
-    },
+    sync::atomic::{AtomicPtr, Ordering},
 };
 
 use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
     cache_loader::ProbCache,
     lazy_load::{FileIndex, SyncPersist},
-    prob_lazy_load::lazy_item::ProbLazyItem,
-    prob_node::{ProbNode, SharedNode},
+    prob_node::SharedNode,
     types::{FileOffset, MetricResult},
     versioning::Hash,
 };
@@ -118,13 +114,8 @@ impl ProbSerialize for Box<[AtomicPtr<(SharedNode, MetricResult)>]> {
                         version_id,
                     };
 
-                    let node = Arc::<ProbLazyItem<ProbNode>>::deserialize(
-                        bufmans,
-                        node_file_index,
-                        cache,
-                        max_loads,
-                        skipm,
-                    )?;
+                    let node =
+                        SharedNode::deserialize(bufmans, node_file_index, cache, max_loads, skipm)?;
 
                     let dist = MetricResult::deserialize(
                         bufmans,

@@ -1,4 +1,4 @@
-use super::buffered_io::{BufferManager, BufferManagerFactory};
+use super::buffered_io::BufferManagerFactory;
 use super::cache_loader::ProbCache;
 use super::collection::Collection;
 use super::embedding_persist::{write_embedding, EmbeddingOffset};
@@ -7,8 +7,7 @@ use super::meta_persist::{
     delete_dense_index, lmdb_init_collections_db, lmdb_init_db, load_collections,
     load_dense_index_data, persist_dense_index, retrieve_current_version,
 };
-use super::prob_lazy_load::lazy_item::ProbLazyItem;
-use super::prob_node::{ProbNode, SharedNode};
+use super::prob_node::{SharedNode, SharedNodeInner};
 use super::versioning::VersionControl;
 use crate::distance::cosine::CosineSimilarity;
 use crate::distance::DistanceError;
@@ -420,7 +419,7 @@ impl DenseIndexTransaction {
                 WaCustomError::DatabaseError(format!("Unable to get transaction hash: {}", err))
             })?;
 
-        let serialization_table = Arc::new(TSHashTable::<Arc<ProbLazyItem<ProbNode>>, ()>::new(16));
+        let serialization_table = Arc::new(TSHashTable::<SharedNode, ()>::new(16));
         let (serialization_signal, rx) = mpsc::channel();
         let batch_count = Arc::new(AtomicUsize::new(0));
 
@@ -531,7 +530,7 @@ impl DenseIndexTransaction {
 #[derive(Clone)]
 pub struct DenseIndex {
     pub database_name: String,
-    pub root_vec: Arc<AtomicPtr<SharedNode>>,
+    pub root_vec: Arc<AtomicPtr<SharedNodeInner>>,
     pub levels_prob: Arc<Vec<(f64, i32)>>,
     pub dim: usize,
     pub prop_file: Arc<RwLock<File>>,
@@ -571,7 +570,7 @@ impl DenseIndex {
     ) -> Self {
         DenseIndex {
             database_name,
-            root_vec: Arc::new(AtomicPtr::new(Box::into_raw(Box::new(root_vec)))),
+            root_vec: Arc::new(AtomicPtr::new(root_vec.as_ptr())),
             levels_prob,
             dim,
             prop_file,
@@ -605,19 +604,11 @@ impl DenseIndex {
     }
 
     pub fn set_root_vec(&self, root_vec: SharedNode) {
-        let old = self
-            .root_vec
-            .swap(Box::into_raw(Box::new(root_vec)), Ordering::SeqCst);
-
-        unsafe {
-            if !old.is_null() {
-                drop(Box::from_raw(old))
-            }
-        };
+        self.root_vec.store(root_vec.as_ptr(), Ordering::SeqCst);
     }
 
     pub fn get_root_vec(&self) -> SharedNode {
-        unsafe { (*self.root_vec.load(Ordering::SeqCst)).clone() }
+        SharedNode::from_ptr(self.root_vec.load(Ordering::SeqCst))
     }
 
     /// Returns FileIndex (offset) corresponding to the root
