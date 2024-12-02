@@ -1,18 +1,18 @@
 pub struct PerformantFixedSet {
     static_random: u32,
-    buckets: [u128; 64],
+    buckets: [u128; 59], // its a prime number
 }
 
 impl PerformantFixedSet {
     pub fn new(static_random: u32) -> Self {
         PerformantFixedSet {
             static_random,
-            buckets: [0; 64],
+            buckets: [0; 59],
         }
     }
 
     fn get_bucket_index(&self, value: u32) -> usize {
-        ((value ^ self.static_random) % 64) as usize
+        ((value ^ self.static_random) % 59) as usize
     }
 
     fn custom_bit_mapping(&self, value: u32) -> u8 {
