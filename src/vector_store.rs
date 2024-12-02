@@ -9,6 +9,7 @@ use crate::models::embedding_persist::read_embedding;
 use crate::models::embedding_persist::write_embedding;
 use crate::models::embedding_persist::EmbeddingOffset;
 use crate::models::file_persist::*;
+use crate::models::fixedset::PerformantFixedSet;
 use crate::models::lazy_load::*;
 use crate::models::prob_lazy_load::lazy_item::ProbLazyItem;
 use crate::models::prob_node::ProbNode;
@@ -19,7 +20,6 @@ use crate::quantization::{Quantization, StorageType};
 use crate::storage::Storage;
 use lmdb::{Transaction, WriteFlags};
 use rand::Rng;
-use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
 use std::array::TryFromSliceError;
 use std::fs::File;
@@ -105,8 +105,8 @@ pub fn ann_search(
     neighbors_count: usize,
 ) -> Result<Vec<(SharedNode, MetricResult)>, WaCustomError> {
     let fvec = vector_emb.quantized_vec.clone();
-    let mut skipm = FxHashSet::default();
-    skipm.insert(vector_emb.hash_vec.clone());
+    let mut skipm = PerformantFixedSet::new(0x42573644);
+    skipm.insert(vector_emb.hash_vec.0);
 
     let cur_node = cur_entry.try_get_data(&dense_index.cache)?;
 
@@ -731,8 +731,8 @@ pub fn index_embedding(
     neighbors_count: usize,
 ) -> Result<(), WaCustomError> {
     let fvec = vector_emb.quantized_vec.clone();
-    let mut skipm = FxHashSet::default();
-    skipm.insert(vector_emb.hash_vec.clone());
+    let mut skipm = PerformantFixedSet::new(0x54636755);
+    skipm.insert(vector_emb.hash_vec.0);
 
     let cur_node = cur_entry
         .get_latest_version(&dense_index.cache)?
@@ -906,7 +906,7 @@ fn traverse_find_nearest(
     vtm: &SharedNode,
     fvec: &Storage,
     hops: u8,
-    skipm: &mut FxHashSet<VectorId>,
+    skipm: &mut PerformantFixedSet,
     cur_level: HNSWLevel,
     truncate_results: bool,
 ) -> Result<Vec<(SharedNode, MetricResult)>, WaCustomError> {
@@ -928,9 +928,11 @@ fn traverse_find_nearest(
         };
         let neighbor = neighbor_node.try_get_data(&dense_index.cache)?;
 
-        if !skipm.insert(neighbor.prop.id.clone()) {
+        if skipm.is_member(neighbor.prop.id.0) {
             continue;
         }
+
+        skipm.insert(neighbor.prop.id.0);
 
         let dist = dense_index
             .distance_metric
