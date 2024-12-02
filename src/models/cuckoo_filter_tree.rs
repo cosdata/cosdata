@@ -10,6 +10,22 @@ pub struct CuckooFilterTreeNode {
     pub range_max: f32,
 }
 
+impl Clone for CuckooFilterTreeNode {
+    fn clone(&self) -> Self {
+        let exported_filter = self.filter.export();
+        let cloned_filter = CuckooFilter::from(exported_filter);
+
+        CuckooFilterTreeNode {
+            filter: cloned_filter,
+            left: self.left.clone(),
+            right: self.right.clone(),
+            index: self.index,
+            range_min: self.range_min,
+            range_max: self.range_max,
+        }
+    }
+}
+
 impl CuckooFilterTreeNode {
     pub fn new(index: usize, range_min: f32, range_max: f32) -> Self {
         CuckooFilterTreeNode {
@@ -20,6 +36,28 @@ impl CuckooFilterTreeNode {
             range_min,
             range_max,
         }
+    }
+
+    pub fn build_tree(depth: usize, index: usize, range_min: f32, range_max: f32) -> Self {
+        let mut node = CuckooFilterTreeNode::new(index, range_min, range_max);
+
+        if depth > 0 {
+            let mid = (range_min + range_max) / 2.0;
+            node.left = Some(Box::new(CuckooFilterTreeNode::build_tree(
+                depth - 1,
+                index * 2,
+                range_min,
+                mid,
+            )));
+            node.right = Some(Box::new(CuckooFilterTreeNode::build_tree(
+                depth - 1,
+                index * 2 + 1,
+                mid,
+                range_max,
+            )));
+        }
+
+        node
     }
 
     pub fn add_item(&mut self, id: u64, value: f32) {
