@@ -49,7 +49,7 @@ pub fn create_root_node(
             random_number
         })
         .collect::<Vec<f32>>();
-    let vec_hash = VectorId::Int(-1);
+    let vec_hash = VectorId(u32::MAX);
 
     let vector_list = Arc::new(quantization_metric.quantize(&vec, storage_type)?);
 

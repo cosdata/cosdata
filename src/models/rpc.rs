@@ -1,9 +1,7 @@
-use super::types::{MetricResult, VectorId};
-use crate::models::user::{AddUserResp, AuthResp, Statistics, User};
-use rayon::iter::WhileSome;
+use super::types::MetricResult;
+use crate::models::user::{AddUserResp, AuthResp, Statistics};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 
@@ -34,7 +32,7 @@ pub struct VectorANN {
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct FetchNeighbors {
     pub vector_db_name: String,
-    pub vector_id: VectorIdValue,
+    pub vector_id: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -65,11 +63,11 @@ pub enum RPCResponseBody {
         insert_stats: Option<Statistics>,
     },
     RespVectorKNN {
-        knn: Vec<(VectorIdValue, MetricResult)>,
+        knn: Vec<(u32, MetricResult)>,
     },
     RespFetchNeighbors {
         vector: Vector,
-        neighbors: Vec<(VectorIdValue, MetricResult)>,
+        neighbors: Vec<(u32, MetricResult)>,
     },
     #[serde(untagged)]
     RespCreateVectorDb {
@@ -82,16 +80,9 @@ pub enum RPCResponseBody {
     },
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(untagged)]
-pub enum VectorIdValue {
-    StringValue(String),
-    IntValue(i32),
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Vector {
-    pub id: VectorIdValue,
+    pub id: u32,
     pub values: Vec<f32>,
 }
 

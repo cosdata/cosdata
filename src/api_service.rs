@@ -7,7 +7,6 @@ use crate::models::common::*;
 use crate::models::embedding_persist::EmbeddingOffset;
 use crate::models::file_persist::write_node_to_file;
 use crate::models::meta_persist::update_current_version;
-use crate::models::rpc::VectorIdValue;
 use crate::models::types::*;
 use crate::models::user::Statistics;
 use crate::models::versioning::VersionControl;
@@ -172,7 +171,7 @@ pub fn run_upload_in_transaction(
     ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
     transaction: &DenseIndexTransaction,
-    vecs: Vec<(VectorIdValue, Vec<f32>)>,
+    vecs: Vec<(u32, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
     transaction.increment_batch_count();
     let version = transaction.id;
@@ -184,7 +183,7 @@ pub fn run_upload_in_transaction(
         let raw_embedding_channel = transaction.raw_embedding_channel.clone();
         thread::spawn(move || {
             vecs.into_par_iter().for_each(|(id, vec)| {
-                let hash_vec = convert_value(id);
+                let hash_vec = VectorId(id);
                 let vec_emb = RawVectorEmbedding {
                     raw_vec: Arc::new(vec),
                     hash_vec,
@@ -216,7 +215,7 @@ pub fn run_upload_in_transaction(
 pub fn run_upload(
     ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
-    vecs: Vec<(VectorIdValue, Vec<f32>)>,
+    vecs: Vec<(u32, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
     let env = dense_index.lmdb.env.clone();
     let db = dense_index.lmdb.db.clone();
@@ -297,7 +296,7 @@ pub fn run_upload(
 
     vecs.into_par_iter()
         .map(|(id, vec)| {
-            let hash_vec = convert_value(id);
+            let hash_vec = VectorId(id);
             let vec_emb = RawVectorEmbedding {
                 raw_vec: Arc::new(vec),
                 hash_vec,
@@ -360,7 +359,7 @@ pub async fn ann_vector_query(
     query: Vec<f32>,
 ) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
     let dense_index = dense_index.clone();
-    let vec_hash = VectorId::Str("query".to_string());
+    let vec_hash = VectorId(u32::MAX - 1);
     let vector_list = dense_index
         .quantization_metric
         .quantize(&query, *dense_index.storage_type.clone().get())?;

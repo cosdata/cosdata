@@ -5,7 +5,6 @@ use actix_web::{web, HttpResponse};
 use crate::{
     api_service::run_upload,
     app_context::AppContext,
-    convert_vectors,
     models::rpc::{RPCResponseBody, UpsertVectors},
 };
 
@@ -34,10 +33,18 @@ pub(crate) async fn upsert(
     }
 
     // Call run_upload with the extracted parameters
-    let res =
-        web::block(move || run_upload(ctx.into_inner(), collection, convert_vectors(body.vectors)))
-            .await
-            .unwrap();
+    let res = web::block(move || {
+        run_upload(
+            ctx.into_inner(),
+            collection,
+            body.vectors
+                .into_iter()
+                .map(|vec| (vec.id, vec.values))
+                .collect(),
+        )
+    })
+    .await
+    .unwrap();
 
     match res {
         Ok(_) => HttpResponse::Ok().json(RPCResponseBody::RespUpsertVectors { insert_stats: None }),

@@ -114,8 +114,8 @@ fn get_cache(bufmans: Arc<BufferManagerFactory>, prop_file: Arc<RwLock<File>>) -
     Arc::new(ProbCache::new(1000, bufmans, prop_file))
 }
 
-fn create_prob_node(id: i32, prop_file: &RwLock<File>) -> ProbNode {
-    let id = VectorId::Int(id);
+fn create_prob_node(id: u32, prop_file: &RwLock<File>) -> ProbNode {
+    let id = VectorId(id);
     let value = Arc::new(Storage::UnsignedByte {
         mag: 10,
         quant_vec: vec![1, 2, 3],
@@ -165,7 +165,7 @@ fn test_lazy_item_serialization() {
     let root_version_number = 0;
     let root_version_id = Hash::from(0);
     let (bufmans, cache, bufman, cursor, prop_file, _temp_dir) = setup_test(&root_version_id);
-    let node = create_prob_node(-1, &prop_file);
+    let node = create_prob_node(0, &prop_file);
 
     let lazy_item = ProbLazyItem::new(node, root_version_id, root_version_number);
 
@@ -192,7 +192,7 @@ fn test_prob_node_acyclic_serialization() {
     let root_version_id = Hash::from(0);
     let (bufmans, cache, bufman, cursor, prop_file, _temp_dir) = setup_test(&root_version_id);
 
-    let node = create_prob_node(-1, &prop_file);
+    let node = create_prob_node(0, &prop_file);
 
     let offset = node.serialize(&bufmans, root_version_id, cursor).unwrap();
     let file_index = FileIndex::Valid {
@@ -244,14 +244,14 @@ fn test_prob_node_serialization_with_neighbors() {
     let root_version_number = 0;
     let (bufmans, cache, bufman, cursor, prop_file, _temp_dir) = setup_test(&root_version_id);
 
-    let node = create_prob_node(-1, &prop_file);
+    let node = create_prob_node(0, &prop_file);
 
     for i in 0..10 {
         let neighbor_node = create_prob_node(i, &prop_file);
 
         let lazy_item = ProbLazyItem::new(neighbor_node, root_version_id, root_version_number);
         let dist = MetricResult::CosineSimilarity(CosineSimilarity((i as f32) / 5.0));
-        node.add_neighbor(lazy_item, &VectorId::Int(i), dist);
+        node.add_neighbor(lazy_item, &VectorId(i), dist);
     }
 
     let offset = node.serialize(&bufmans, root_version_id, cursor).unwrap();

@@ -6,7 +6,6 @@ use self::vectors::dtos::UpsertDto;
 
 use super::{dtos::CreateTransactionResponseDto, error::TransactionError};
 use crate::models::meta_persist::update_current_version;
-use crate::models::rpc::VectorIdValue;
 use crate::models::types::DenseIndexTransaction;
 use crate::models::versioning::Hash;
 use crate::{
@@ -175,7 +174,7 @@ pub(crate) async fn delete_vector_by_id(
     ctx: Arc<AppContext>,
     collection_id: &str,
     transaction_id: Hash,
-    vector_id: VectorIdValue,
+    vector_id: i32,
 ) -> Result<(), TransactionError> {
     let collection = ctx
         .ain_env

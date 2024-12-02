@@ -110,10 +110,7 @@ pub enum PropState {
     rkyv::Serialize,
     rkyv::Deserialize,
 )]
-pub enum VectorId {
-    Str(String),
-    Int(i32),
-}
+pub struct VectorId(pub u32);
 
 impl VectorId {
     pub fn get_hash(&self) -> u64 {
@@ -283,10 +280,7 @@ impl MergedNode {
 // Implementing the std::fmt::Display trait for VectorId
 impl fmt::Display for VectorId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            VectorId::Str(s) => write!(f, "{}", s),
-            VectorId::Int(i) => write!(f, "{}", i),
-        }
+        write!(f, "{}", self.0)
     }
 }
 

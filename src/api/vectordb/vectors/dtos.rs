@@ -1,16 +1,16 @@
 use serde::{Deserialize, Serialize};
 
-use crate::models::rpc::{Vector, VectorIdValue};
+use crate::models::rpc::Vector;
 
 #[derive(Deserialize)]
 pub(crate) struct CreateVectorDto {
-    pub id: VectorIdValue,
+    pub id: u32,
     pub values: Vec<f32>,
 }
 
 #[derive(Serialize)]
 pub(crate) struct CreateVectorResponseDto {
-    pub id: VectorIdValue,
+    pub id: u32,
     pub values: Vec<f32>,
     // pub created_at: String
 }
@@ -22,7 +22,7 @@ pub(crate) struct UpdateVectorDto {
 
 #[derive(Serialize)]
 pub(crate) struct UpdateVectorResponseDto {
-    pub id: VectorIdValue,
+    pub id: u32,
     pub values: Vec<f32>,
     // pub created_at: String
 }
@@ -30,12 +30,12 @@ pub(crate) struct UpdateVectorResponseDto {
 #[derive(Deserialize)]
 pub(crate) struct FindSimilarVectorsDto {
     pub vector: Vec<f32>,
-    pub k: i32,
+    pub k: u32,
 }
 
 #[derive(Serialize)]
 pub(crate) struct SimilarVector {
-    pub id: VectorIdValue,
+    pub id: u32,
     pub score: f32,
 }
 
