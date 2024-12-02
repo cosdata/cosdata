@@ -943,7 +943,7 @@ fn traverse_find_nearest(
     });
 
     for (i, (neighbor_node, dist)) in neighbors.into_iter().enumerate() {
-        if hops <= 30 && i < 16 {
+        if hops <= 15 && i < 16 {
             let mut z = traverse_find_nearest(
                 dense_index,
                 &neighbor_node,
