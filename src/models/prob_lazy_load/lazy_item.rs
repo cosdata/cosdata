@@ -52,7 +52,7 @@ pub struct ProbLazyItemInner<T> {
     state: AtomicPtr<ProbLazyItemState<T>>,
 }
 
-// Just a convinient wrapper for `*mut ProbLazyItemInner<T>`
+// Just a convenient wrapper for `*mut ProbLazyItemInner<T>`
 pub struct ProbLazyItem<T> {
     inner: NonNull<ProbLazyItemInner<T>>,
 }
