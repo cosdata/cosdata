@@ -15,7 +15,6 @@ impl PerformantFixedSet {
         ((value ^ self.static_random) % 59) as usize
     }
 
-
     pub fn insert(&mut self, value: u32) {
         let index = self.get_bucket_index(value);
         let hash = value ^ 0xA5A5A5A5;
