@@ -16,6 +16,7 @@ use crate::{
 use std::collections::HashSet;
 use std::sync::Arc;
 
+#[allow(unused_variables)]
 impl CustomSerialize for InvertedIndexSparseAnnNode {
     fn serialize(
         &self,
@@ -41,6 +42,7 @@ impl CustomSerialize for InvertedIndexSparseAnnNode {
     }
 }
 
+#[allow(unused_variables)]
 impl CustomSerialize for InvertedIndexSparseAnnNodeBasic {
     fn serialize(
         &self,
@@ -66,6 +68,7 @@ impl CustomSerialize for InvertedIndexSparseAnnNodeBasic {
     }
 }
 
+#[allow(unused_variables)]
 impl CustomSerialize for InvertedIndexSparseAnnNodeBasicTSHashmap {
     fn serialize(
         &self,
@@ -91,6 +94,7 @@ impl CustomSerialize for InvertedIndexSparseAnnNodeBasicTSHashmap {
     }
 }
 
+#[allow(unused_variables)]
 impl CustomSerialize for InvertedIndexNewDSNode {
     fn serialize(
         &self,
@@ -116,6 +120,7 @@ impl CustomSerialize for InvertedIndexNewDSNode {
     }
 }
 
+#[allow(unused_variables)]
 impl CustomSerialize for InvertedIndexSparseAnnNodeBasicDashMap {
     fn serialize(
         &self,

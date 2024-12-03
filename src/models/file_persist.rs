@@ -1,45 +1,43 @@
 use super::buffered_io::{BufIoError, BufferManagerFactory};
-use super::cache_loader::NodeRegistry;
 use super::common::WaCustomError;
-use super::lazy_load::{FileIndex, SyncPersist};
-use super::prob_lazy_load::lazy_item::ProbLazyItem;
+use super::lazy_load::SyncPersist;
 use super::prob_node::SharedNode;
 use super::serializer::prob::ProbSerialize;
-use super::types::{BytesToRead, FileOffset, HNSWLevel, MergedNode, NodeProp, VectorId};
+use super::types::{BytesToRead, FileOffset, NodeProp, VectorId};
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::sync::Arc;
 
-pub fn read_node_from_file(
-    file_index: FileIndex,
-    cache: Arc<NodeRegistry>,
-) -> Result<MergedNode, BufIoError> {
-    // Deserialize the MergedNode using the FileIndex
-    let node: MergedNode = cache.load_item(file_index.clone())?;
+// pub fn read_node_from_file(
+//     file_index: FileIndex,
+//     cache: Arc<NodeRegistry>,
+// ) -> Result<MergedNode, BufIoError> {
+//     // Deserialize the MergedNode using the FileIndex
+//     let node: MergedNode = cache.load_item(file_index.clone())?;
 
-    // Pretty print the node
-    match file_index {
-        FileIndex::Valid {
-            offset, version_id, ..
-        } => {
-            println!(
-                "Read MergedNode from offset: {}, version: {}",
-                offset.0, *version_id
-            );
-        }
-        FileIndex::Invalid => {
-            println!("Attempted to read MergedNode with an invalid FileIndex");
-        }
-    }
+//     // Pretty print the node
+//     match file_index {
+//         FileIndex::Valid {
+//             offset, version_id, ..
+//         } => {
+//             println!(
+//                 "Read MergedNode from offset: {}, version: {}",
+//                 offset.0, *version_id
+//             );
+//         }
+//         FileIndex::Invalid => {
+//             println!("Attempted to read MergedNode with an invalid FileIndex");
+//         }
+//     }
 
-    // You might want to add more detailed printing here, depending on what information
-    // you want to see about the node
-    // println!("{:#?}", node);
+//     // You might want to add more detailed printing here, depending on what information
+//     // you want to see about the node
+//     // println!("{:#?}", node);
 
-    Ok(node)
-}
+//     Ok(node)
+// }
 pub fn write_node_to_file(
     lazy_item: &SharedNode,
     bufmans: &BufferManagerFactory,
@@ -55,17 +53,18 @@ pub fn write_node_to_file(
 
     Ok(offset)
 }
-//
-pub fn load_vector_id_lsmdb(
-    _level: HNSWLevel,
-    _vector_id: VectorId,
-) -> Option<ProbLazyItem<MergedNode>> {
-    None
-}
+// #[allow(dead_code)]
+// pub fn load_vector_id_lsmdb(
+//     _level: HNSWLevel,
+//     _vector_id: VectorId,
+// ) -> Option<ProbLazyItem<MergedNode>> {
+//     None
+// }
 
-pub fn load_neighbor_persist_ref(_level: HNSWLevel, _node_file_ref: u32) -> Option<MergedNode> {
-    None
-}
+// #[allow(dead_code)]
+// pub fn load_neighbor_persist_ref(_level: HNSWLevel, _node_file_ref: u32) -> Option<MergedNode> {
+//     None
+// }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct NodePropSerialize<'a> {
@@ -73,6 +72,7 @@ pub struct NodePropSerialize<'a> {
     pub value: Arc<Storage>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct NodePropDeserialize {
     pub id: VectorId,

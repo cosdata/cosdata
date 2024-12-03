@@ -1,15 +1,12 @@
 use arcshift::ArcShift;
 use core::array::from_fn;
-use core::hash::Hash;
 use dashmap::DashMap;
 use rayon::prelude::*;
-use std::collections::HashMap;
-use std::hash::{DefaultHasher, Hasher};
-use std::thread;
 use std::{path::Path, sync::RwLock};
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+use crate::models::cuckoo_filter_tree::CuckooFilterTreeNode;
 use crate::models::{
     buffered_io::BufferManagerFactory,
     cache_loader::NodeRegistry,
@@ -230,6 +227,7 @@ pub struct InvertedIndexSparseAnnNodeBasicTSHashmap {
     pub implicit: bool,
     pub data: TSHashTable<u8, Pagepool<PAGE_SIZE>>,
     pub lazy_children: LazyItemArray<InvertedIndexSparseAnnNodeBasicTSHashmap, 16>,
+    pub cuckoo_filter_tree: Arc<CuckooFilterTreeNode>,
 }
 
 #[derive(Clone)]
@@ -247,6 +245,7 @@ impl InvertedIndexSparseAnnNodeBasicTSHashmap {
             implicit,
             data,
             lazy_children: LazyItemArray::new(),
+            cuckoo_filter_tree: Arc::new(CuckooFilterTreeNode::build_tree(5, 0, 0.0, 10.0)),
         }
     }
 
@@ -300,6 +299,9 @@ impl InvertedIndexSparseAnnNodeBasicTSHashmap {
             vecof_vec_id.push(vector_id);
             Some(vecof_vec_id)
         });
+
+        let mut tree = node.cuckoo_filter_tree.clone();
+        Arc::make_mut(&mut tree).add_item(vector_id as u64, value);
     }
 
     /// Retrieves a value from the index at the specified dimension index.

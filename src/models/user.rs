@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct AuthResp {
@@ -36,33 +35,4 @@ pub struct Statistics {
     pub min_val: i32,
     pub max_val: i32,
     pub count: i32,
-}
-
-pub fn login(user: &str, pass: &str) -> AuthResp {
-    // Placeholder for login function
-    AuthResp {
-        session_key: None,
-        calls_used: 0,
-        calls_remaining: 0,
-    }
-}
-
-pub fn lookup_user_data(session_key: &str) -> Option<(String, i32, i32, String, Vec<String>)> {
-    // Placeholder for looking up user data
-    None
-}
-
-pub fn update_user_data(
-    session_key: &str,
-    name: String,
-    quota: i32,
-    used: i32,
-    exp: String,
-    roles: &Vec<String>,
-) {
-    // Placeholder for updating user data
-}
-
-pub fn delete_user_data(session_key: &str) {
-    // Placeholder for deleting user data
 }

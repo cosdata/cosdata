@@ -41,6 +41,7 @@ fn generate_random_sparse_vectors(
     records
 }
 
+#[allow(dead_code)]
 fn benchmark_sequential_inserts(c: &mut Criterion) {
     // Random vector generation parameters
     let vector_counts = [1000];

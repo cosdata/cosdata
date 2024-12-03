@@ -56,7 +56,7 @@ fn benchmark_writes(c: &mut Criterion) {
     let file_size = 100 * 1024 * 1024; // 100 MB
     let file_path = "test_file.bin";
     // Create file outside of the benchmark
-    let file = create_file(file_path, file_size).unwrap();
+    let _file = create_file(file_path, file_size).unwrap();
 
     let mut group = c.benchmark_group("Random Writes");
 
