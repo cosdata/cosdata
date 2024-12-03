@@ -2,10 +2,9 @@ use std::sync::{atomic::Ordering, Arc};
 
 use crate::{
     api::vectordb::collections,
-    api_service::{run_upload, run_upload_in_transaction},
+    api_service::{run_upload, run_upload_in_transaction, run_upload_sparse_vector},
     app_context::AppContext,
     convert_vectors,
-    indexes::inverted_index,
     models::{
         rpc::VectorIdValue,
         types::{DenseIndexTransaction, VectorId},
@@ -44,19 +43,27 @@ pub(crate) async fn create_sparse_vector(
     vector_id: VectorIdValue,
     values: Vec<(f32, u32)>,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
-    // let inverted_index = collections::service::get_inverted_index_by_id(ctx.clone(), collection_id)
-    //     .await
-    //     .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
+    let inverted_index = collections::service::get_inverted_index_by_id(ctx.clone(), collection_id)
+        .await
+        .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
 
-    // if !inverted_index
-    //     .current_open_transaction
-    //     .load(Ordering::SeqCst)
-    //     .is_null()
-    // {
-    //     return Err(VectorsError::FailedToCreateVector(
-    //         "there is an ongoing transaction!".into(),
-    //     ));
-    // }
+    if inverted_index.current_open_transaction.is_some() {
+        return Err(VectorsError::FailedToCreateVector(
+            "there is an ongoing transaction!".into(),
+        ));
+    }
+
+    run_upload_sparse_vector(
+        ctx,
+        inverted_index,
+        vec![(vector_id.clone(), values.clone())],
+    )
+    .map_err(VectorsError::WaCustom)?;
+
+    // Ok(CreateVectorResponseDto {
+    //     id: vector_id,
+    //     values,
+    // })
 
     Err(VectorsError::NotImplemented)
 }

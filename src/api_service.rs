@@ -212,6 +212,23 @@ pub fn run_upload_in_transaction(
     Ok(())
 }
 
+/// uploads a sparse vector for inverted index
+pub fn run_upload_sparse_vector(
+    ctx: Arc<AppContext>,
+    inverted_index: Arc<InvertedIndex>,
+    vecs: Vec<(VectorIdValue, Vec<(f32, u32)>)>,
+) -> Result<(), WaCustomError> {
+    let env = inverted_index.lmdb.env.clone();
+    let db = inverted_index.lmdb.db.clone();
+    let txn = env
+        .begin_ro_txn()
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+        
+        
+    Err(WaCustomError::CalculationError)
+}
+
 /// uploads a vector embedding
 pub fn run_upload(
     ctx: Arc<AppContext>,
