@@ -1,32 +1,24 @@
 pub struct PerformantFixedSet {
-    static_random: u32,
     buckets: [u128; 59], // its a prime number
 }
 
 impl PerformantFixedSet {
-    pub fn new(static_random: u32) -> Self {
-        PerformantFixedSet {
-            static_random,
-            buckets: [0; 59],
-        }
-    }
-
-    fn get_bucket_index(&self, value: u32) -> usize {
-        ((value ^ self.static_random) % 59) as usize
+    pub fn new() -> Self {
+        PerformantFixedSet { buckets: [0; 59] }
     }
 
     pub fn insert(&mut self, value: u32) {
-        let index = self.get_bucket_index(value);
-        let hash = value ^ 0xA5A5A5A5;
-        let bit_position = (hash % 128) as u8;
+        let index = (value % 59) as usize;
+        // let hash = value ^ 0xA5A5A5A5;
+        let bit_position = (value % 128) as u8;
 
         self.buckets[index] |= 1u128 << bit_position;
     }
 
     pub fn is_member(&self, value: u32) -> bool {
-        let index = self.get_bucket_index(value);
-        let hash = value ^ 0xA5A5A5A5;
-        let bit_position = (hash % 128) as u8;
+        let index = (value % 59) as usize;
+        // let hash = value ^ 0xA5A5A5A5;
+        let bit_position = (value % 128) as u8;
 
         (self.buckets[index] & (1u128 << bit_position)) != 0
     }

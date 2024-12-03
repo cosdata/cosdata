@@ -105,7 +105,7 @@ pub fn ann_search(
     neighbors_count: usize,
 ) -> Result<Vec<(SharedNode, MetricResult)>, WaCustomError> {
     let fvec = vector_emb.quantized_vec.clone();
-    let mut skipm = PerformantFixedSet::new(0x42573644);
+    let mut skipm = PerformantFixedSet::new();
     skipm.insert(vector_emb.hash_vec.0);
 
     let cur_node = cur_entry.try_get_data(&dense_index.cache)?;
@@ -731,7 +731,7 @@ pub fn index_embedding(
     neighbors_count: usize,
 ) -> Result<(), WaCustomError> {
     let fvec = vector_emb.quantized_vec.clone();
-    let mut skipm = PerformantFixedSet::new(0x54636755);
+    let mut skipm = PerformantFixedSet::new();
     skipm.insert(vector_emb.hash_vec.0);
 
     let cur_node = cur_entry
@@ -945,7 +945,7 @@ fn traverse_find_nearest(
     });
 
     for (i, (neighbor_node, dist)) in neighbors.into_iter().enumerate() {
-        if hops <= 15 && i < 16 {
+        if hops <= 10 && i < 16 {
             let mut z = traverse_find_nearest(
                 dense_index,
                 &neighbor_node,
