@@ -1,14 +1,10 @@
 use arcshift::ArcShift;
 use core::array::from_fn;
-use core::hash::Hash;
 use dashmap::DashMap;
 use rayon::prelude::*;
-use std::collections::HashMap;
-use std::hash::{DefaultHasher, Hasher};
-use std::thread;
 use std::{path::Path, sync::RwLock};
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use crate::models::{
     buffered_io::BufferManagerFactory,

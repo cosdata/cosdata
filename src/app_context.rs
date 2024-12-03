@@ -8,18 +8,21 @@ use crate::models::types::{get_app_env, AppEnv};
 use crate::WaCustomError;
 use rayon::ThreadPool;
 
+#[allow(dead_code)]
 fn init_index_manager() -> BufferManagerFactory {
     BufferManagerFactory::new(Path::new(".").into(), |root, ver| {
         root.join(format!("{}.index", **ver))
     })
 }
 
+#[allow(dead_code)]
 fn init_node_registry(index_manager: Arc<BufferManagerFactory>) -> NodeRegistry {
     // @TODO: May be the value can be taken from config
     let cuckoo_filter_capacity = 1000;
     NodeRegistry::new(cuckoo_filter_capacity, index_manager)
 }
 
+#[allow(dead_code)]
 fn init_vec_raw_manager() -> BufferManagerFactory {
     BufferManagerFactory::new(Path::new(".").into(), |root, ver| {
         root.join(format!("{}.vec_raw", **ver))

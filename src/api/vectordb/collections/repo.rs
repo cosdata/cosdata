@@ -155,6 +155,7 @@ pub(crate) async fn delete_collection_by_name(
     Ok(collection)
 }
 
+#[allow(dead_code)]
 /// deletes a dense index of a collection by name
 pub(crate) async fn delete_dense_index_by_name(
     ctx: Arc<AppContext>,

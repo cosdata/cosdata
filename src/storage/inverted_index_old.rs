@@ -147,7 +147,7 @@ where
     /// # Safety:
     /// The function does not modify the structure but accesses internal state.
     /// It is meant only for debugging and testing purposes
-    pub fn print_tree(&mut self, depth: usize, prev_dim_index: u32, cache: Arc<NodeRegistry>) {}
+    pub fn print_tree(&mut self, _depth: usize, _prev_dim_index: u32, _cache: Arc<NodeRegistry>) {}
     // pub fn print_tree(&mut self, depth: usize, prev_dim_index: u32, cache: Arc<NodeRegistry>) {
     //     let indent = "  ".repeat(depth);
     //     let dim_index = prev_dim_index + self.dim_index;
@@ -364,6 +364,7 @@ mod test {
     }
 
     /// Converts a vector to a HashMap of non-zero elements.
+    #[allow(dead_code)]
     fn vector_to_hashmap(vec: &[f32]) -> HashMap<usize, f32> {
         vec.iter()
             .enumerate()

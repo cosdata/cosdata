@@ -3,6 +3,7 @@ use std::arch::x86_64::*;
 
 use rand::{seq::SliceRandom, thread_rng};
 
+#[allow(dead_code)]
 pub fn should_continue(counts: &[usize], threshold: f64, min_clusters: usize) -> bool {
     let mean_count = counts.iter().sum::<usize>() as f64 / counts.len() as f64;
     let threshold_count = mean_count * (1.0 + threshold);
@@ -13,6 +14,7 @@ pub fn should_continue(counts: &[usize], threshold: f64, min_clusters: usize) ->
         >= min_clusters
 }
 
+#[allow(dead_code)]
 pub fn concat_vectors(vectors: &[&[f32]]) -> Vec<i8> {
     let mut vec = Vec::new();
     for &vector in vectors {
@@ -23,11 +25,13 @@ pub fn concat_vectors(vectors: &[&[f32]]) -> Vec<i8> {
     vec
 }
 
+#[allow(dead_code)]
 pub fn generate_initial_centroids(x_vec: &[i8], k: usize) -> Vec<i8> {
     let mut rng = thread_rng();
     x_vec.choose_multiple(&mut rng, k).cloned().collect()
 }
 
+#[allow(dead_code)]
 fn kmeans_scalar(
     x_vec: &[i8],
     initial_centroids: &[i8],
@@ -60,6 +64,7 @@ fn kmeans_scalar(
     (centroids, cluster_counts)
 }
 
+#[allow(dead_code)]
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx")]
 #[target_feature(enable = "avx2")]
@@ -116,6 +121,7 @@ unsafe fn kmeans_simd(
     (centroids, cluster_counts)
 }
 
+#[allow(dead_code)]
 pub fn kmeans(x_vec: &[i8], initial_centroids: &[i8], iterations: usize) -> (Vec<i8>, Vec<usize>) {
     #[cfg(target_arch = "x86_64")]
     {

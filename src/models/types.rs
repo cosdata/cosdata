@@ -1,4 +1,4 @@
-use super::buffered_io::{BufferManager, BufferManagerFactory};
+use super::buffered_io::BufferManagerFactory;
 use super::cache_loader::ProbCache;
 use super::collection::Collection;
 use super::embedding_persist::{write_embedding, EmbeddingOffset};
@@ -360,7 +360,8 @@ impl VectorQt {
     }
 }
 
-pub struct SizeBytes(pub u32);
+// #[allow(dead_code)]
+// pub struct SizeBytes(pub u32);
 
 #[derive(Debug, Clone)]
 pub struct MetaDb {
@@ -376,6 +377,7 @@ impl MetaDb {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct HNSWHyperParams {
     pub m: usize,
@@ -648,7 +650,7 @@ pub struct RawVectorEmbedding {
     pub hash_vec: VectorId,
 }
 
-pub(crate) struct CollectionsMap {
+pub struct CollectionsMap {
     /// holds an in-memory map of all dense indexes for all collections
     inner: DashMap<String, Arc<DenseIndex>>,
     inner_collections: DashMap<String, Arc<Collection>>,
@@ -657,6 +659,7 @@ pub(crate) struct CollectionsMap {
     // just to be able to persist collections from outside CollectionsMap
     pub(crate) lmdb_collections_db: Database,
     lmdb_dense_index_db: Database,
+    #[allow(dead_code)]
     lmdb_inverted_index_db: Database,
 }
 
@@ -792,6 +795,7 @@ impl CollectionsMap {
         Ok(dense_index)
     }
 
+    #[allow(dead_code)]
     pub fn insert(&self, name: &str, dense_index: Arc<DenseIndex>) -> Result<(), WaCustomError> {
         self.inner.insert(name.to_owned(), dense_index.clone());
         persist_dense_index(
@@ -802,6 +806,7 @@ impl CollectionsMap {
     }
 
     /// inserts a collection into the collections map
+    #[allow(dead_code)]
     pub fn insert_collection(&self, collection: Arc<Collection>) -> Result<(), WaCustomError> {
         self.inner_collections
             .insert(collection.name.to_owned(), collection);
@@ -821,6 +826,7 @@ impl CollectionsMap {
     /// @TODO: As a future improvement, we can fallback to checking if
     /// the DenseIndex exists in LMDB and caching it. But it's not
     /// required for the current use case.
+    #[allow(dead_code)]
     pub fn get(&self, name: &str) -> Option<Arc<DenseIndex>> {
         self.inner.get(name).map(|index| index.clone())
     }
@@ -838,10 +844,12 @@ impl CollectionsMap {
     /// @TODO: As a future improvement, we can fallback to checking if
     /// the Collection exists in LMDB and caching it. But it's not
     /// required for the current use case.
+    #[allow(dead_code)]
     pub fn get_collection(&self, name: &str) -> Option<Arc<Collection>> {
         self.inner_collections.get(name).map(|index| index.clone())
     }
 
+    #[allow(dead_code)]
     pub fn remove(&self, name: &str) -> Result<Option<(String, Arc<DenseIndex>)>, WaCustomError> {
         match self.inner.remove(name) {
             Some((key, index)) => {
@@ -862,6 +870,7 @@ impl CollectionsMap {
     /// returns the removed collection in case of success
     ///
     /// returns error if not found
+    #[allow(dead_code)]
     pub fn remove_collection(&self, name: &str) -> Result<Arc<Collection>, WaCustomError> {
         match self.inner_collections.remove(name) {
             Some((_, collection)) => Ok(collection),
@@ -872,6 +881,7 @@ impl CollectionsMap {
         }
     }
 
+    #[allow(dead_code)]
     pub fn iter(
         &self,
     ) -> dashmap::iter::Iter<
@@ -884,6 +894,7 @@ impl CollectionsMap {
     }
 
     /// returns an iterator
+    #[allow(dead_code)]
     pub fn iter_collections(
         &self,
     ) -> dashmap::iter::Iter<
@@ -896,11 +907,11 @@ impl CollectionsMap {
     }
 }
 
-type UserDataCache = DashMap<String, (String, i32, i32, std::time::SystemTime, Vec<String>)>;
-
+// type UserDataCache = DashMap<String, (String, i32, i32, std::time::SystemTime, Vec<String>)>;
 // Define the AppEnv struct
 pub struct AppEnv {
-    pub user_data_cache: UserDataCache,
+    // #[allow(dead_code)]
+    // pub user_data_cache: UserDataCache,
     pub collections_map: CollectionsMap,
     pub persist: Arc<Environment>,
 }
@@ -923,7 +934,8 @@ pub fn get_app_env() -> Result<Arc<AppEnv>, WaCustomError> {
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
     Ok(Arc::new(AppEnv {
-        user_data_cache: DashMap::new(),
+        // #[allow(dead_code)]
+        // user_data_cache: DashMap::new(),
         collections_map,
         persist: env_arc,
     }))
