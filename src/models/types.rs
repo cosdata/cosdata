@@ -394,7 +394,7 @@ pub struct DenseIndexTransaction {
     pub id: Hash,
     pub version_number: u16,
     pub serialization_table: Arc<TSHashTable<SharedNode, ()>>,
-    pub lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16), SharedNode>>,
+    pub lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16, u8), SharedNode>>,
     serializer_thread_handle: thread::JoinHandle<Result<(), WaCustomError>>,
     raw_embedding_serializer_thread_handle: thread::JoinHandle<Result<(), WaCustomError>>,
     serialization_signal: mpsc::Sender<()>,

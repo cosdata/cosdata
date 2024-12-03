@@ -365,7 +365,7 @@ pub fn index_embeddings(
     dense_index: Arc<DenseIndex>,
     upload_process_batch_size: usize,
     serialization_table: Arc<TSHashTable<SharedNode, ()>>,
-    lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16), SharedNode>>,
+    lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16, u8), SharedNode>>,
     neighbors_count: usize,
 ) -> Result<(), WaCustomError> {
     let env = dense_index.lmdb.env.clone();
@@ -576,7 +576,7 @@ fn index_embeddings_in_transaction_inner(
     version: Hash,
     version_number: u16,
     serialization_table: Arc<TSHashTable<SharedNode, ()>>,
-    lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16), SharedNode>>,
+    lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16, u8), SharedNode>>,
 ) {
     let quantization = &*dense_index.quantization_metric;
     let neighbors_count = ctx.config.hnsw.neighbors_count;
@@ -702,7 +702,7 @@ pub fn index_embeddings_in_transaction(
     version_number: u16,
     embeddings: mpsc::Receiver<RawVectorEmbedding>,
     serialization_table: Arc<TSHashTable<SharedNode, ()>>,
-    lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16), SharedNode>>,
+    lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16, u8), SharedNode>>,
 ) -> Result<(), WaCustomError> {
     index_embeddings_in_transaction_inner(
         ctx,
@@ -727,7 +727,7 @@ pub fn index_embedding(
     version: Hash,
     version_number: u16,
     serialization_table: Arc<TSHashTable<SharedNode, ()>>,
-    lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16), SharedNode>>,
+    lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16, u8), SharedNode>>,
     neighbors_count: usize,
 ) -> Result<(), WaCustomError> {
     let fvec = vector_emb.quantized_vec.clone();
@@ -827,15 +827,16 @@ fn create_node(
 
 fn get_or_create_version(
     dense_index: Arc<DenseIndex>,
-    lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16), SharedNode>>,
+    lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16, u8), SharedNode>>,
     lazy_item: SharedNode,
     version: Hash,
     version_number: u16,
 ) -> Result<SharedNode, WaCustomError> {
     let node = lazy_item.try_get_data(&dense_index.cache)?;
 
-    let new_version =
-        lazy_item_versions_table.get_or_create((node.get_id().clone(), version_number), || {
+    let new_version = lazy_item_versions_table.get_or_create(
+        (node.get_id().clone(), version_number, node.hnsw_level.0),
+        || {
             if let Some(version) = lazy_item
                 .get_version(version_number, &dense_index.cache)
                 .expect("Deserialization failed")
@@ -860,7 +861,8 @@ fn get_or_create_version(
                 .unwrap();
 
             version
-        });
+        },
+    );
 
     Ok(new_version)
 }
@@ -873,7 +875,7 @@ fn create_node_edges(
     version: Hash,
     version_number: u16,
     serialization_table: Arc<TSHashTable<SharedNode, ()>>,
-    lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16), SharedNode>>,
+    lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16, u8), SharedNode>>,
 ) -> Result<(), WaCustomError> {
     for (neighbor, dist) in neighbors.into_iter() {
         serialization_table.insert(neighbor.clone(), ());
