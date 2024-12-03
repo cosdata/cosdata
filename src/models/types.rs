@@ -457,6 +457,7 @@ impl DenseIndexTransaction {
 
             thread::spawn(move || {
                 let mut offsets = Vec::new();
+
                 for raw_emb in rx {
                     let offset = write_embedding(bufman.clone(), &raw_emb)?;
                     let embedding_key = key!(e:raw_emb.hash_vec);
@@ -898,7 +899,7 @@ pub fn get_app_env() -> Result<Arc<AppEnv>, WaCustomError> {
     // Initialize the environment
     let env = Environment::new()
         .set_max_dbs(10)
-        .set_map_size(10485760) // Set the maximum size of the database to 10MB
+        .set_map_size(1048576000) // Set the maximum size of the database to 1GB
         .open(&path)
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
