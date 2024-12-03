@@ -122,7 +122,7 @@ def upsert_in_transaction(collection_name, transaction_id, vectors):
     )
     print(f"Response Status: {response.status_code}")
     if response.status_code not in [200, 204]:
-        raise Exception(f"Failed to create vector: {response.reason}")
+        raise Exception(f"Failed to create vector: {response.status_code}")
 
 
 def upsert_vectors_in_transaction(collection_name, transaction_id, vectors):
@@ -342,54 +342,17 @@ def bruteforce_search(vectors, query, k=5):
     return similarities[:k]
 
 
-def generate_vectors(req_ct, batch_count, batch_size, dimensions, perturbation_degree):
-    vectors = []
-    
-    for base_idx in range(batch_count):
-        base_vector = generate_random_vector_with_id(
-            (req_ct * batch_count * batch_size) + (base_idx * batch_size), dimensions
-        )
-
-        vectors.append(base_vector)
-
-        for i in range(batch_size - 1):
-            perturbed_vector = generate_perturbation(
-                base_vector,
-                (req_ct * batch_count * batch_size) + (base_idx * batch_size + i + 1),  # Unique ID for each perturbation
-                perturbation_degree,
-                dimensions,
-            )
-            vectors.append(perturbed_vector)
+def generate_vectors(txn_count, batch_count, batch_size, dimensions, perturbation_degree):
+    vectors = [generate_random_vector_with_id(id, dimensions) for id in range(txn_count * batch_count * batch_size)]
     
     # Shuffle the vectors
     np.random.shuffle(vectors)
     return vectors
 
-def generate_base_vector(id, dimensions, min_val=-1.0, max_val=1.0):
-    values = np.random.uniform(min_val, max_val, dimensions).tolist()
-    return {"id": id, "values": values}
-
 def search(vectors, vector_db_name, query):
     ann_response = ann_vector(query["id"], vector_db_name, query["values"])
     bruteforce_result = bruteforce_search(vectors, query, 5)
     return (ann_response, bruteforce_result)
-
-# Function to generate perturbed vectors
-def generate_perturbed_vector(base_vector, dimensions, perturbation_degree, id):
-    # Generate the perturbation
-    perturbation = np.random.uniform(-perturbation_degree, perturbation_degree, dimensions)
-    
-    # Apply the perturbation and clamp the values within the range of -1 to 1
-    perturbed_values = np.array(base_vector["values"]) + perturbation
-    clamped_values = np.clip(perturbed_values, -1, 1)
-    
-    # Create a new perturbed vector
-    perturbed_vector = {
-        "id": id,
-        "values": clamped_values.tolist()
-    }
-    
-    return perturbed_vector
 
 if __name__ == "__main__":
     # Create database
@@ -399,7 +362,8 @@ if __name__ == "__main__":
     min_val = -1.0
     perturbation_degree = 0.25  # Degree of perturbation
     batch_size = 100
-    batch_count = 10_000
+    batch_count = 2500
+    txn_count = 3
 
     # first login to get the auth jwt token
     login_response = login()
@@ -413,59 +377,47 @@ if __name__ == "__main__":
     print("Create Collection(DB) Response:", create_collection_response)
     # create_explicit_index(vector_db_name)
 
+    vectors = generate_vectors(txn_count, batch_count, batch_size, dimensions, perturbation_degree)
+            
     start_time = time.time()
 
-    # Generate base vectors
-    print("Generating base vectors...")
-    base_vectors = [generate_base_vector(i, dimensions) for i in range(batch_count)]
-
-    for req_ct in range(1):
+    for req_ct in range(txn_count):
         transaction_id = None
         try:
             # Create a new transaction
             transaction_response = create_transaction(vector_db_name)
             transaction_id = transaction_response["transaction_id"]
             print(f"Created transaction: {transaction_id}")
+            
 
+            # Process vectors concurrently
             with ThreadPoolExecutor(max_workers=32) as executor:
-              futures = []
-          
-              # Iterate through base vectors in batches
-              for i in range(batch_count):
-                  batch_start = (i * batch_size) % batch_count
-                  batch_end = min(batch_start + batch_size, batch_count)
-                  current_batch = base_vectors[batch_start:batch_end]
-                  
-                  # Generate perturbed vectors for each base vector in the current batch
-                  upsert_batch = []
-                  for base_vector in current_batch:
-                      # Include the base vector itself
-                      # upsert_batch.append(base_vector)
-                      
-                      # Generate and add perturbed vectors
-                      perturbed_vector = generate_perturbed_vector(
-                          base_vector,
-                          dimensions, 
-                          perturbation_degree,
-                          base_vector["id"] + i
-                      )
-                      upsert_batch.append(perturbed_vector)
-                  
-                  # Submit upsert task for the batch
-                  futures.append(executor.submit(upsert_in_transaction, vector_db_name, transaction_id, upsert_batch))
+                futures = []
+                for base_idx in range(batch_count):
+                    req_start = req_ct * batch_count * batch_size
+                    batch_start = req_start + base_idx * batch_size
+                    # upsert_in_transaction(vector_db_name, transaction_id, vectors[batch_start:batch_start+batch_size])
+                    futures.append(
+                        executor.submit(
+                            upsert_in_transaction,
+                            vector_db_name,
+                            transaction_id,
+                            vectors[batch_start:batch_start+batch_size]
+                        )
+                    )
 
-              # Wait for all upsert tasks to complete
-              for i, future in enumerate(as_completed(futures)):
-                  try:
-                      upsert_response = future.result()
-                      print(f"Upsert Batch {i + 1} Response: ", upsert_response)
-                  except Exception as e:
-                      print(f"Error in upsert batch {i + 1}: {e}")
+                # Collect results
+                for future in as_completed(futures):
+                    try:
+                        future.result()
+                    except Exception as e:
+                        print(f"Error in future: {e}")
 
             # Commit the transaction after all vectors are inserted
             commit_response = commit_transaction(vector_db_name, transaction_id)
             print(f"Committed transaction {transaction_id}: {commit_response}")
             transaction_id = None
+            # time.sleep(10)
 
         except Exception as e:
             print(f"Error in transaction: {e}")
@@ -478,7 +430,7 @@ if __name__ == "__main__":
 
     # End time
     end_time = time.time()
-
+    
     # Calculate elapsed time
     elapsed_time = end_time - start_time
 
