@@ -17,10 +17,16 @@ use super::{
 pub(crate) async fn create_vector(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    // create_vector_dto: CreateVectorDto,
     create_vector_dto: CreateVectorDtox,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
-    repo::create_vector(ctx, collection_id, create_vector_dto).await
+    match create_vector_dto {
+        CreateVectorDtox::Dense { id, values } => {
+            repo::create_dense_vector(ctx, collection_id, id, values).await
+        }
+        CreateVectorDtox::Sparse { id, values } => {
+            repo::create_sparse_vector(ctx, collection_id, id, values).await
+        }
+    }
 }
 
 pub(crate) async fn get_vector_by_id(

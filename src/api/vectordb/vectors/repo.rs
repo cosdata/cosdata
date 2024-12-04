@@ -14,26 +14,11 @@ use crate::{
 
 use super::{
     dtos::{
-        CreateVectorDto, CreateVectorDtox, CreateVectorResponseDto, FindSimilarVectorsDto,
-        SimilarVector, UpdateVectorDto, UpdateVectorResponseDto, UpsertDto,
+        CreateVectorDto, CreateVectorResponseDto, FindSimilarVectorsDto, SimilarVector,
+        UpdateVectorDto, UpdateVectorResponseDto, UpsertDto,
     },
     error::VectorsError,
 };
-
-pub(crate) async fn create_vector(
-    ctx: Arc<AppContext>,
-    collection_id: &str,
-    create_vector_dto: CreateVectorDtox,
-) -> Result<CreateVectorResponseDto, VectorsError> {
-    match create_vector_dto {
-        CreateVectorDtox::Dense { id, values } => {
-            create_dense_vector(ctx, collection_id, id, values).await
-        }
-        CreateVectorDtox::Sparse { id, values } => {
-            create_sparse_vector(ctx, collection_id, id, values).await
-        }
-    }
-}
 
 /// Creates a sparse vector for inverted index
 ///
