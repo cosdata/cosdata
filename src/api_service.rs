@@ -15,14 +15,12 @@ use crate::vector_store::*;
 use arcshift::ArcShift;
 use lmdb::Transaction;
 use lmdb::WriteFlags;
-use rand::seq::SliceRandom;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::array::TryFromSliceError;
+use std::fs;
 use std::io::SeekFrom;
 use std::path::Path;
-use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::{Arc, RwLock};
-use std::{fs, ptr};
 
 /// creates a dense index for a collection
 pub async fn init_dense_index_for_collection(

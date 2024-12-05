@@ -1,13 +1,11 @@
 use crate::app_context::AppContext;
+use crate::config_loader::VectorsIndexingMode;
 use crate::distance::cosine::CosineSimilarity;
 use crate::distance::DistanceFunction;
 use crate::macros::key;
-use crate::models::buffered_io::BufferManager;
-use crate::models::buffered_io::BufferManagerFactory;
+use crate::models::buffered_io::*;
 use crate::models::common::*;
-use crate::models::embedding_persist::read_embedding;
-use crate::models::embedding_persist::write_embedding;
-use crate::models::embedding_persist::EmbeddingOffset;
+use crate::models::embedding_persist::*;
 use crate::models::file_persist::*;
 use crate::models::fixedset::PerformantFixedSet;
 use crate::models::lazy_load::*;
@@ -20,6 +18,7 @@ use crate::quantization::{Quantization, StorageType};
 use crate::storage::Storage;
 use lmdb::{Transaction, WriteFlags};
 use rand::Rng;
+use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use smallvec::SmallVec;
 use std::array::TryFromSliceError;
 use std::fs::File;
@@ -562,10 +561,6 @@ pub fn index_embeddings(
     Ok(())
 }
 
-struct EmbeddingBatch {
-    embeddings: Vec<RawVectorEmbedding>,
-}
-
 pub fn index_embeddings_in_transaction(
     ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
@@ -575,77 +570,81 @@ pub fn index_embeddings_in_transaction(
     vecs: Vec<(u32, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
     let quantization = &*dense_index.quantization_metric;
-    for (id, values) in vecs {
-        let raw_emb = RawVectorEmbedding {
-            hash_vec: VectorId(id),
-            raw_vec: Arc::new(values),
-        };
-        transaction.post_raw_embedding(raw_emb.clone());
-        let lp = &dense_index.levels_prob;
-        let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
+    let index = |vecs: Vec<(u32, Vec<f32>)>| {
+        for (id, values) in vecs {
+            let raw_emb = RawVectorEmbedding {
+                hash_vec: VectorId(id),
+                raw_vec: Arc::new(values),
+            };
+            transaction.post_raw_embedding(raw_emb.clone());
+            let lp = &dense_index.levels_prob;
+            let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
 
-        let quantized_vec = Arc::new(
-            quantization
-                .quantize(
-                    &raw_emb.raw_vec,
-                    dense_index.storage_type.clone().get().clone(),
-                )
-                .expect("Quantization failed"),
-        );
+            let quantized_vec = Arc::new(quantization.quantize(
+                &raw_emb.raw_vec,
+                dense_index.storage_type.clone().get().clone(),
+            )?);
 
-        // let mut prop_file_guard = dense_index.prop_file.write().unwrap();
-        // let location = write_prop_to_file(
-        //     &raw_emb.hash_vec,
-        //     quantized_vec.clone(),
-        //     &mut *prop_file_guard,
-        // )
-        // .expect("failed to write prop");
-        // drop(prop_file_guard);
+            let mut prop_file_guard = dense_index.prop_file.write().unwrap();
+            let location = write_prop_to_file(
+                &raw_emb.hash_vec,
+                quantized_vec.clone(),
+                &mut *prop_file_guard,
+            )?;
+            drop(prop_file_guard);
 
-        // TODO(a-rustacean): remove dummy values
-        let location = (FileOffset(0), BytesToRead(0));
+            let prop = Arc::new(NodeProp {
+                id: raw_emb.hash_vec.clone(),
+                value: quantized_vec.clone(),
+                location,
+            });
 
-        let prop = Arc::new(NodeProp {
-            id: raw_emb.hash_vec.clone(),
-            value: quantized_vec.clone(),
-            location,
-        });
+            let embedding = QuantizedVectorEmbedding {
+                quantized_vec,
+                hash_vec: raw_emb.hash_vec,
+            };
 
-        let embedding = QuantizedVectorEmbedding {
-            quantized_vec,
-            hash_vec: raw_emb.hash_vec,
-        };
+            let current_level = HNSWLevel(iv as u8);
+            let mut current_entry = dense_index.get_root_vec();
 
-        let current_level = HNSWLevel(iv as u8);
-        let mut current_entry = dense_index.get_root_vec();
-
-        loop {
-            let data = current_entry
-                .try_get_data(&dense_index.cache)
-                .expect("Unable to load data");
-            if data.hnsw_level.0 > current_level.0 {
-                current_entry = data.get_child().unwrap();
-            } else if data.hnsw_level == current_level {
-                break;
-            } else {
-                panic!("missing node");
+            loop {
+                let data = current_entry.try_get_data(&dense_index.cache)?;
+                if data.hnsw_level.0 > current_level.0 {
+                    current_entry = data.get_child().unwrap();
+                } else if data.hnsw_level == current_level {
+                    break;
+                } else {
+                    panic!("missing node");
+                }
             }
-        }
 
-        index_embedding(
-            dense_index.clone(),
-            None,
-            embedding,
-            prop,
-            current_entry,
-            current_level,
-            version,
-            version_number,
-            transaction.serialization_table.clone(),
-            transaction.lazy_item_versions_table.clone(),
-            ctx.config.hnsw.neighbors_count,
-        )
-        .expect("index_embedding failed");
+            index_embedding(
+                dense_index.clone(),
+                None,
+                embedding,
+                prop,
+                current_entry,
+                current_level,
+                version,
+                version_number,
+                transaction.serialization_table.clone(),
+                transaction.lazy_item_versions_table.clone(),
+                ctx.config.hnsw.neighbors_count,
+            )?;
+        }
+        Ok::<_, WaCustomError>(())
+    };
+
+    match ctx.config.indexing.mode {
+        VectorsIndexingMode::Sequential => {
+            index(vecs)?;
+        }
+        VectorsIndexingMode::Batch { batch_size } => {
+            vecs.into_par_iter()
+                .chunks(batch_size)
+                .map(index)
+                .collect::<Result<_, _>>()?;
+        }
     }
 
     Ok(())
