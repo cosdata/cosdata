@@ -44,7 +44,7 @@ pub(crate) async fn delete_vector_by_id(
     ctx: Arc<AppContext>,
     collection_id: &str,
     transaction_id: Hash,
-    vector_id: i32,
+    vector_id: u32,
 ) -> Result<(), TransactionError> {
     repo::delete_vector_by_id(ctx, collection_id, transaction_id, vector_id).await
 }

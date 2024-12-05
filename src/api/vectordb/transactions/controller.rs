@@ -53,7 +53,7 @@ pub(crate) async fn abort_transaction(
 }
 
 pub(crate) async fn delete_vector_by_id(
-    path: web::Path<(String, u32, i32)>,
+    path: web::Path<(String, u32, u32)>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse, TransactionError> {
     let (collection_id, transaction_id, vector_id) = path.into_inner();
