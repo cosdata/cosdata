@@ -15,14 +15,14 @@ use crate::vector_store::*;
 use arcshift::ArcShift;
 use lmdb::Transaction;
 use lmdb::WriteFlags;
+use rand::seq::SliceRandom;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::array::TryFromSliceError;
-use std::fs;
 use std::io::SeekFrom;
 use std::path::Path;
-use std::sync::Arc;
-use std::sync::{mpsc, RwLock};
-use std::thread;
+use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::{Arc, RwLock};
+use std::{fs, ptr};
 
 /// creates a dense index for a collection
 pub async fn init_dense_index_for_collection(
@@ -171,40 +171,20 @@ pub fn run_upload_in_transaction(
     ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
     transaction: &DenseIndexTransaction,
-    vecs: Vec<(u32, Vec<f32>)>,
+    sample_points: Vec<(u32, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
     transaction.increment_batch_count();
     let version = transaction.id;
     let version_number = transaction.version_number;
-
-    let (tx, rx) = mpsc::channel();
-
-    let handle = {
-        let raw_embedding_channel = transaction.raw_embedding_channel.clone();
-        thread::spawn(move || {
-            vecs.into_par_iter().for_each(|(id, vec)| {
-                let hash_vec = VectorId(id);
-                let vec_emb = RawVectorEmbedding {
-                    raw_vec: Arc::new(vec),
-                    hash_vec,
-                };
-                tx.send(vec_emb.clone()).unwrap();
-                raw_embedding_channel.send(vec_emb).unwrap();
-            });
-        })
-    };
 
     index_embeddings_in_transaction(
         ctx.clone(),
         dense_index.clone(),
         version,
         version_number,
-        rx,
-        transaction.serialization_table.clone(),
-        transaction.lazy_item_versions_table.clone(),
+        transaction,
+        sample_points,
     )?;
-
-    handle.join().unwrap();
 
     transaction.start_serialization_round();
 

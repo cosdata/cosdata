@@ -113,6 +113,7 @@ impl<T> ProbLazyItem<T> {
         })
     }
 
+    #[inline(always)]
     pub fn from_ptr(inner: *mut ProbLazyItemInner<T>) -> Self {
         Self {
             inner: unsafe { NonNull::new_unchecked(inner) },

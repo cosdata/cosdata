@@ -95,7 +95,7 @@ impl ProbNode {
     }
 
     pub fn get_parent(&self) -> Option<SharedNode> {
-        let ptr = self.parent.load(Ordering::SeqCst);
+        let ptr = self.parent.load(Ordering::Acquire);
         if ptr.is_null() {
             None
         } else {
@@ -104,11 +104,11 @@ impl ProbNode {
     }
 
     pub fn set_parent(&self, parent: SharedNode) {
-        self.parent.store(parent.as_ptr(), Ordering::SeqCst);
+        self.parent.store(parent.as_ptr(), Ordering::Release);
     }
 
     pub fn get_child(&self) -> Option<SharedNode> {
-        let ptr = self.child.load(Ordering::SeqCst);
+        let ptr = self.child.load(Ordering::Acquire);
         if ptr.is_null() {
             None
         } else {
@@ -117,7 +117,7 @@ impl ProbNode {
     }
 
     pub fn set_child(&self, child: SharedNode) {
-        self.child.store(child.as_ptr(), Ordering::SeqCst);
+        self.child.store(child.as_ptr(), Ordering::Release);
     }
 
     pub fn get_id(&self) -> &VectorId {

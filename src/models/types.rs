@@ -398,7 +398,7 @@ pub struct DenseIndexTransaction {
     serializer_thread_handle: thread::JoinHandle<Result<(), WaCustomError>>,
     raw_embedding_serializer_thread_handle: thread::JoinHandle<Result<(), WaCustomError>>,
     serialization_signal: mpsc::Sender<()>,
-    pub raw_embedding_channel: mpsc::SyncSender<RawVectorEmbedding>,
+    pub raw_embedding_channel: mpsc::Sender<RawVectorEmbedding>,
     batch_count: Arc<AtomicUsize>,
 }
 
@@ -450,14 +450,13 @@ impl DenseIndexTransaction {
             })
         };
 
-        let (raw_embedding_channel, rx) = mpsc::sync_channel(100);
+        let (raw_embedding_channel, rx) = mpsc::channel();
 
         let raw_embedding_serializer_thread_handle = {
             let bufman = dense_index.vec_raw_manager.get(&id)?;
 
             thread::spawn(move || {
                 let mut offsets = Vec::new();
-
                 for raw_emb in rx {
                     let offset = write_embedding(bufman.clone(), &raw_emb)?;
                     let embedding_key = key!(e:raw_emb.hash_vec);
