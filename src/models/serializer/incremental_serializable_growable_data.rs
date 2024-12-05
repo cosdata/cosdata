@@ -123,6 +123,7 @@ impl CustomSerialize for IncrementalSerializableGrowableData {
     }
 }
 
+#[allow(unused_variables)]
 impl CustomSerialize for STM<VectorData> {
     fn serialize(
         &self,

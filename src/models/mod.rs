@@ -2,6 +2,7 @@ pub mod buffered_io;
 pub mod cache_loader;
 pub mod collection;
 pub mod common;
+pub mod cuckoo_filter_tree;
 pub mod dot_product;
 pub mod dry_run_writer;
 pub mod embedding_persist;

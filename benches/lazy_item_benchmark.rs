@@ -8,7 +8,7 @@ use rand::Rng;
 
 fn create_lazy_item_vec_list(index_count: u32, lazy_vec_count: u32) -> Vec<LazyItemVec<String>> {
     let mut res: Vec<LazyItemVec<String>> = Vec::new();
-    for i in 0..lazy_vec_count {
+    for _ in 0..lazy_vec_count {
         let lazy_item_vec: LazyItemVec<String> = LazyItemVec::new();
         for i in 0..index_count {
             let version_id = Hash::from(i);
@@ -22,7 +22,7 @@ fn create_lazy_item_vec_list(index_count: u32, lazy_vec_count: u32) -> Vec<LazyI
 
 fn create_lazy_item_map_list(index_count: u32, lazy_map_count: u32) -> Vec<LazyItemMap<String>> {
     let mut res: Vec<LazyItemMap<String>> = Vec::new();
-    for i in 0..lazy_map_count {
+    for _ in 0..lazy_map_count {
         let lazy_item_map: LazyItemMap<String> = LazyItemMap::new();
         for i in 0..index_count {
             let version_id = Hash::from(i);

@@ -173,10 +173,10 @@ pub(crate) async fn abort_transaction(
 pub(crate) async fn delete_vector_by_id(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    transaction_id: Hash,
-    vector_id: i32,
+    _transaction_id: Hash,
+    _vector_id: u32,
 ) -> Result<(), TransactionError> {
-    let collection = ctx
+    let _collection = ctx
         .ain_env
         .collections_map
         .get(collection_id)

@@ -148,9 +148,9 @@ pub(crate) async fn find_similar_vectors(
 pub(crate) async fn delete_vector_by_id(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    vector_id: u32,
+    _vector_id: u32,
 ) -> Result<(), VectorsError> {
-    let collection = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
+    let _collection = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
         .await
         .map_err(|e| VectorsError::FailedToDeleteVector(e.to_string()))?;
 

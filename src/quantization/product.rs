@@ -14,6 +14,7 @@ pub struct Centroid {
     pub centroids: Vec<u16>,
 }
 
+#[allow(unused_variables)]
 impl Quantization for ProductQuantization {
     // Implementation here
     fn quantize(

@@ -5,6 +5,7 @@ use actix_web::{
     HttpResponse, ResponseError,
 };
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) enum TransactionError {
     NotFound,

@@ -139,7 +139,8 @@ pub fn dot_product_octal(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], res: u8) -> f32 {
     dot_product_octal_scalar(x_vec, y_vec, res)
 }
 
-pub fn dot_product_f32_chunk(src: &[(f32, f32)], dst: &mut [f32]) -> f32 {
+#[allow(dead_code)]
+pub fn dot_product_f32_chunk(src: &[(f32, f32)], _dst: &mut [f32]) -> f32 {
     let mut d: f32 = 0.0;
     let chunk_size = 4;
 
@@ -161,6 +162,7 @@ pub fn dot_product_f32_chunk(src: &[(f32, f32)], dst: &mut [f32]) -> f32 {
     d
 }
 
+#[allow(dead_code)]
 pub fn dot_product_u8_chunk(src: &[(u8, u8)]) -> u64 {
     let mut d: u64 = 0;
     let chunk_size = 8;
@@ -187,20 +189,23 @@ pub fn dot_product_u8_chunk(src: &[(u8, u8)]) -> u64 {
     d
 }
 
+#[allow(dead_code)]
 pub fn dot_product_a(src: &[(f32, f32)], dst: &mut [f32]) -> f32 {
     let mut d: f32 = 0.0;
-    for (dst_sample, src_sample) in dst.iter_mut().zip(src.iter()) {
+    for (_dst_sample, src_sample) in dst.iter_mut().zip(src.iter()) {
         d += src_sample.0 * src_sample.1;
     }
     d
 }
 
+#[allow(dead_code)]
 pub fn dot_product_b(src: &[(f32, f32)], dst: &mut [f32]) {
     for (dst_sample, src_sample) in dst.iter_mut().zip(src.iter()) {
         *dst_sample = src_sample.0 * src_sample.1;
     }
 }
 
+#[allow(dead_code)]
 pub fn dot_product_u8_zipped(src: &[(u8, u8)]) -> u64 {
     src.iter().map(|&(a, b)| (a as u64) * (b as u64)).sum()
 }
@@ -228,12 +233,12 @@ mod tests {
                 .map(|(&a, &b)| (a, b))
                 .collect();
             // Pack two consecutive `u8` values into a single `u8`
-            let packed_a_u8: Vec<u8> = a_u8
+            let _packed_a_u8: Vec<u8> = a_u8
                 .chunks(2)
                 .map(|chunk| (chunk[0] & 0x0F) | ((chunk[1] & 0x0F) << 4))
                 .collect();
             // Pack two consecutive `u8` values into a single `u8`
-            let packed_b_u8: Vec<u8> = b_u8
+            let _packed_b_u8: Vec<u8> = b_u8
                 .chunks(2)
                 .map(|chunk| (chunk[0] & 0x0F) | ((chunk[1] & 0x0F) << 4))
                 .collect();

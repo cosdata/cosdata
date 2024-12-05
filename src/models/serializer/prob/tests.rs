@@ -30,7 +30,7 @@ pub struct EqualityTester {
 }
 
 pub trait EqualityTest {
-    fn assert_eq(&self, other: &Self, tester: &mut EqualityTester) {}
+    fn assert_eq(&self, _other: &Self, _tester: &mut EqualityTester) {}
 }
 
 impl EqualityTest for ProbNode {
