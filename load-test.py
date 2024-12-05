@@ -361,9 +361,9 @@ if __name__ == "__main__":
     max_val = 1.0
     min_val = -1.0
     perturbation_degree = 0.25  # Degree of perturbation
-    batch_size = 100
-    batch_count = 2500
-    txn_count = 3
+    batch_size = 256
+    batch_count = 977
+    txn_count = 2
 
     # first login to get the auth jwt token
     login_response = login()
@@ -391,7 +391,7 @@ if __name__ == "__main__":
             
 
             # Process vectors concurrently
-            with ThreadPoolExecutor(max_workers=32) as executor:
+            with ThreadPoolExecutor(max_workers=64) as executor:
                 futures = []
                 for base_idx in range(batch_count):
                     req_start = req_ct * batch_count * batch_size
