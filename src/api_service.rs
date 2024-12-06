@@ -149,6 +149,11 @@ pub async fn init_inverted_index_for_collection(
             .map_err(|e| WaCustomError::FsError(e.to_string()))?,
     );
 
+    let vec_raw_manager = Arc::new(BufferManagerFactory::new(
+        collection_path.clone(),
+        |root, ver| root.join(format!("{}.vec_raw", **ver)),
+    ));
+
     let index = InvertedIndex::new(
         collection_name.clone(),
         collection.description.clone(),
@@ -163,6 +168,7 @@ pub async fn init_inverted_index_for_collection(
         Arc::new(DistanceMetric::DotProduct),
         StorageType::UnsignedByte,
         vcs,
+        vec_raw_manager,
     );
     update_current_version(&index.lmdb, hash)?;
     Ok(Arc::new(index))
