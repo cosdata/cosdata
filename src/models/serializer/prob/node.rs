@@ -1,15 +1,14 @@
 use std::{
     collections::HashSet,
     io::{self, SeekFrom},
-    sync::Arc,
 };
 
 use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
     cache_loader::ProbCache,
     lazy_load::{FileIndex, SyncPersist},
-    prob_lazy_load::{lazy_item::ProbLazyItem, lazy_item_array::ProbLazyItemArray},
-    prob_node::ProbNode,
+    prob_lazy_load::lazy_item_array::ProbLazyItemArray,
+    prob_node::{ProbNode, SharedNode},
     types::{BytesToRead, FileOffset, HNSWLevel},
     versioning::Hash,
 };
@@ -132,7 +131,7 @@ impl ProbSerialize for ProbNode {
                 bufman.close_cursor(cursor)?;
                 // Deserialize parent
                 let parent = if parent_offset != u32::MAX {
-                    Some(Arc::<ProbLazyItem<Self>>::deserialize(
+                    Some(SharedNode::deserialize(
                         bufmans,
                         FileIndex::Valid {
                             offset: FileOffset(parent_offset),
@@ -148,7 +147,7 @@ impl ProbSerialize for ProbNode {
                 };
                 // Deserialize child
                 let child = if child_offset != u32::MAX {
-                    Some(Arc::<ProbLazyItem<Self>>::deserialize(
+                    Some(SharedNode::deserialize(
                         bufmans,
                         FileIndex::Valid {
                             offset: FileOffset(child_offset),

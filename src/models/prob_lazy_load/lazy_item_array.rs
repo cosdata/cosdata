@@ -1,15 +1,12 @@
 use std::{
     ptr,
-    sync::{
-        atomic::{AtomicPtr, Ordering},
-        Arc,
-    },
+    sync::atomic::{AtomicPtr, Ordering},
 };
 
-use super::lazy_item::ProbLazyItem;
+use super::lazy_item::{ProbLazyItem, ProbLazyItemInner};
 
 pub struct ProbLazyItemArray<T, const N: usize> {
-    items: [AtomicPtr<Arc<ProbLazyItem<T>>>; N],
+    items: [AtomicPtr<ProbLazyItemInner<T>>; N],
 }
 
 impl<T, const N: usize> ProbLazyItemArray<T, N> {
@@ -19,10 +16,10 @@ impl<T, const N: usize> ProbLazyItemArray<T, N> {
         }
     }
 
-    pub fn push(&self, item: Arc<ProbLazyItem<T>>) {
+    pub fn push(&self, item: ProbLazyItem<T>) {
         for i in 0..N {
             if self.items[i].load(Ordering::SeqCst).is_null() {
-                self.items[i].store(Box::into_raw(Box::new(item)), Ordering::SeqCst);
+                self.items[i].store(item.as_ptr(), Ordering::SeqCst);
                 return;
             }
         }
@@ -38,37 +35,26 @@ impl<T, const N: usize> ProbLazyItemArray<T, N> {
         N
     }
 
-    pub fn last(&self) -> Option<Arc<ProbLazyItem<T>>> {
+    pub fn last(&self) -> Option<ProbLazyItem<T>> {
         for i in (0..N).rev() {
             let ptr = self.items[i].load(Ordering::SeqCst);
             if !ptr.is_null() {
-                return Some(unsafe { &*ptr }.clone());
+                return Some(ProbLazyItem::from_ptr(ptr));
             }
         }
         None
     }
 
-    pub fn get(&self, idx: usize) -> Option<Arc<ProbLazyItem<T>>> {
+    pub fn get(&self, idx: usize) -> Option<ProbLazyItem<T>> {
         if idx >= N || self.items[idx].load(Ordering::SeqCst).is_null() {
             return None;
         }
-        Some(unsafe { &*self.items[idx].load(Ordering::SeqCst) }.clone())
+        Some(ProbLazyItem::from_ptr(
+            self.items[idx].load(Ordering::SeqCst),
+        ))
     }
 
     pub fn is_empty(&self) -> bool {
         self.items[0].load(Ordering::SeqCst).is_null()
-    }
-}
-
-impl<T, const N: usize> Drop for ProbLazyItemArray<T, N> {
-    fn drop(&mut self) {
-        let len = self.len();
-
-        for i in 0..len {
-            unsafe {
-                let ptr = self.items[i].load(Ordering::SeqCst);
-                drop(Box::from_raw(ptr));
-            }
-        }
     }
 }

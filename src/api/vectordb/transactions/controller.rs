@@ -3,7 +3,6 @@ use actix_web::{web, HttpResponse};
 use crate::{
     api::vectordb::vectors::dtos::{CreateVectorDto, UpsertDto},
     app_context::AppContext,
-    models::rpc::VectorIdValue,
 };
 
 use super::{error::TransactionError, service};
@@ -54,7 +53,7 @@ pub(crate) async fn abort_transaction(
 }
 
 pub(crate) async fn delete_vector_by_id(
-    path: web::Path<(String, u32, String)>,
+    path: web::Path<(String, u32, u32)>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse, TransactionError> {
     let (collection_id, transaction_id, vector_id) = path.into_inner();
@@ -62,7 +61,7 @@ pub(crate) async fn delete_vector_by_id(
         ctx.into_inner(),
         &collection_id,
         transaction_id.into(),
-        VectorIdValue::StringValue(vector_id),
+        vector_id,
     )
     .await?;
     Ok(HttpResponse::NoContent().finish())

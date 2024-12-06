@@ -1,10 +1,8 @@
 use super::buffered_io::BufIoError;
 use super::lazy_load::LazyItem;
 use super::prob_node::SharedNode;
-use super::rpc::VectorIdValue;
 use super::types::{MergedNode, MetricResult, VectorId};
 use crate::distance::DistanceError;
-use crate::models::rpc::Vector;
 use crate::models::types::VectorQt;
 use crate::quantization::QuantizationError;
 use sha2::{Digest, Sha256};
@@ -486,39 +484,6 @@ pub fn add_option_vecs(
     }
 }
 
-// Function to convert VectorIdValue to VectorId
-pub fn convert_value(id_value: VectorIdValue) -> VectorId {
-    match id_value {
-        VectorIdValue::StringValue(s) => VectorId::Str(s),
-        VectorIdValue::IntValue(i) => VectorId::Int(i),
-    }
-}
-
-// Function to convert VectorId to VectorIdValue
-fn convert_id(id: VectorId) -> VectorIdValue {
-    match id {
-        VectorId::Str(s) => VectorIdValue::StringValue(s),
-        VectorId::Int(i) => VectorIdValue::IntValue(i),
-    }
-}
-
-// Function to convert the Option<Vec<(VectorId, _)>> to Option<Vec<(VectorIdValue, _)>>
-pub fn convert_search_results(
-    vec: Vec<(VectorId, MetricResult)>,
-) -> Vec<(VectorIdValue, MetricResult)> {
-    vec.into_iter()
-        .map(|(id, value)| (convert_id(id), value))
-        .collect()
-}
-
-// Function to convert Vec<Vector> to Vec<(VectorIdValue, Vec<f32>)>
-pub fn convert_vectors(vectors: Vec<Vector>) -> Vec<(VectorIdValue, Vec<f32>)> {
-    vectors
-        .into_iter()
-        .map(|vector| (vector.id.clone(), vector.values))
-        .collect()
-}
-
 pub fn remove_duplicates_and_filter(
     vec: Vec<(SharedNode, MetricResult)>,
 ) -> Vec<(VectorId, MetricResult)> {
@@ -530,10 +495,8 @@ pub fn remove_duplicates_and_filter(
             if !seen.insert(id.clone()) {
                 return None;
             }
-            if let VectorId::Int(s) = id {
-                if s == -1 {
-                    return None;
-                }
+            if id.0 == u32::MAX {
+                return None;
             }
             Some((id, similarity))
         })
@@ -569,26 +532,6 @@ pub fn calculate_hash<T: Hash>(t: &T) -> u64 {
 #[allow(dead_code)]
 pub fn extract_ids(neighbors: &[(VectorId, f32)]) -> Vec<VectorId> {
     neighbors.iter().map(|(id, _)| id.clone()).collect()
-}
-
-// Optional: Implement From trait for more idiomatic conversion
-
-impl From<VectorId> for VectorIdValue {
-    fn from(vector_id: VectorId) -> Self {
-        match vector_id {
-            VectorId::Str(s) => VectorIdValue::StringValue(s),
-            VectorId::Int(i) => VectorIdValue::IntValue(i),
-        }
-    }
-}
-
-impl From<VectorIdValue> for VectorId {
-    fn from(vector_id_value: VectorIdValue) -> Self {
-        match vector_id_value {
-            VectorIdValue::StringValue(s) => VectorId::Str(s),
-            VectorIdValue::IntValue(i) => VectorId::Int(i),
-        }
-    }
 }
 
 #[allow(dead_code)]

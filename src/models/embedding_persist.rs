@@ -105,7 +105,7 @@ mod tests {
 
         RawVectorEmbedding {
             raw_vec: Arc::new(raw_vec),
-            hash_vec: VectorId::Int(rng.gen()),
+            hash_vec: VectorId(rng.gen()),
         }
     }
 

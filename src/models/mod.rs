@@ -8,6 +8,7 @@ pub mod dry_run_writer;
 pub mod embedding_persist;
 pub mod encoding_format;
 pub mod file_persist;
+pub mod fixedset;
 pub mod identity_collections;
 pub mod kmeans;
 pub mod lazy_load;
