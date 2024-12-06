@@ -231,8 +231,48 @@ pub fn run_upload_sparse_vector(
         .begin_ro_txn()
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
-        
-        
+    // Check if the previous version is unindexed, and continue from where we left.
+    let prev_version = inverted_index.get_current_version();
+    let index_before_insertion = match txn.get(*db, &"next_embedding_offset") {
+        Ok(bytes) => {
+            let embedding_offset = EmbeddingOffset::deserialize(bytes)
+                .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?;
+
+            debug_assert_eq!(
+                embedding_offset.version, prev_version,
+                "Last unindexed embedding's version must be the previous version of the collection"
+            );
+
+            let prev_bufman = inverted_index.vec_raw_manager.get(&prev_version)?;
+            let cursor = prev_bufman.open_cursor()?;
+            let prev_file_len = prev_bufman.seek_with_cursor(cursor, SeekFrom::End(0))? as u32;
+            prev_bufman.close_cursor(cursor)?;
+
+            prev_file_len > embedding_offset.offset
+        }
+        Err(lmdb::Error::NotFound) => false,
+        Err(e) => {
+            return Err(WaCustomError::DatabaseError(e.to_string()));
+        }
+    };
+
+    txn.abort();
+
+    let serialization_table = Arc::new(TSHashTable::new(16));
+    let lazy_item_versions_table = Arc::new(TSHashTable::new(16));
+
+    if index_before_insertion {
+        index_embeddings(
+            inverted_index.clone(),
+            ctx.config.upload_process_batch_size,
+            serialization_table.clone(),
+            lazy_item_versions_table.clone(),
+            ctx.config.hnsw.neighbors_count,
+        )?;
+    }
+
+    
+
     Err(WaCustomError::CalculationError)
 }
 
