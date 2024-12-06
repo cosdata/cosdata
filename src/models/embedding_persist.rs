@@ -1,5 +1,7 @@
 use std::{io::SeekFrom, sync::Arc};
 
+use crate::indexes::inverted_index_item::RawSparseVectorEmbedding;
+
 use super::{
     buffered_io::BufferManager, common::WaCustomError, types::RawVectorEmbedding, versioning::Hash,
 };
@@ -52,6 +54,39 @@ pub fn write_embedding(
     bufman.close_cursor(cursor)?;
 
     Ok(start)
+}
+
+pub fn read_sparse_embedding(
+    bufman: Arc<BufferManager>,
+    offset: u32,
+) -> Result<(RawSparseVectorEmbedding, u32), WaCustomError> {
+    let cursor = bufman.open_cursor()?;
+
+    bufman
+        .seek_with_cursor(cursor, SeekFrom::Start(offset as u64))
+        .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?;
+
+    let len = bufman
+        .read_u32_with_cursor(cursor)
+        .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?;
+
+    let mut buf = vec![0; len as usize];
+
+    bufman
+        .read_with_cursor(cursor, &mut buf)
+        .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?;
+
+    let emb = unsafe { rkyv::from_bytes_unchecked(&buf) }.map_err(|e| {
+        WaCustomError::DeserializationError(format!("Failed to deserialize VectorEmbedding: {}", e))
+    })?;
+
+    let next = bufman
+        .cursor_position(cursor)
+        .map_err(|e| WaCustomError::DeserializationError(e.to_string()))? as u32;
+
+    bufman.close_cursor(cursor)?;
+
+    Ok((emb, next))
 }
 
 pub fn read_embedding(

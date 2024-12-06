@@ -1,5 +1,6 @@
 use crate::app_context::AppContext;
 use crate::indexes::inverted_index::InvertedIndex;
+use crate::indexes::inverted_index_item::RawSparseVectorEmbedding;
 use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::cache_loader::ProbCache;
 use crate::models::collection::Collection;
@@ -140,18 +141,23 @@ pub async fn init_inverted_index_for_collection(
 
     // Note that setting .write(true).append(true) has the same effect
     // as setting only .append(true)
-    let prop_file = Arc::new(
+    let prop_file = Arc::new(RwLock::new(
         fs::OpenOptions::new()
             .create(true)
             .read(true)
             .append(true)
             .open(collection_path.join("prop.data"))
             .map_err(|e| WaCustomError::FsError(e.to_string()))?,
-    );
+    ));
 
     let vec_raw_manager = Arc::new(BufferManagerFactory::new(
         collection_path.clone(),
         |root, ver| root.join(format!("{}.vec_raw", **ver)),
+    ));
+
+    let index_manager = Arc::new(BufferManagerFactory::new(
+        collection_path.clone(),
+        |root, ver| root.join(format!("{}.index", **ver)),
     ));
 
     let index = InvertedIndex::new(
@@ -164,11 +170,12 @@ pub async fn init_inverted_index_for_collection(
         prop_file,
         lmdb,
         ArcShift::new(hash),
-        Arc::new(QuantizationMetric::Scalar),
+        ArcShift::new(QuantizationMetric::Scalar),
         Arc::new(DistanceMetric::DotProduct),
-        StorageType::UnsignedByte,
+        ArcShift::new(StorageType::UnsignedByte),
         vcs,
         vec_raw_manager,
+        index_manager,
     );
     update_current_version(&index.lmdb, hash)?;
     Ok(Arc::new(index))
@@ -233,6 +240,8 @@ pub fn run_upload_sparse_vector(
 
     // Check if the previous version is unindexed, and continue from where we left.
     let prev_version = inverted_index.get_current_version();
+    // TODO (mohamed.eliwa) check the db here, isn't the "next_embedding_offset" kitting
+    // the same value for the dense index?
     let index_before_insertion = match txn.get(*db, &"next_embedding_offset") {
         Ok(bytes) => {
             let embedding_offset = EmbeddingOffset::deserialize(bytes)
@@ -262,7 +271,7 @@ pub fn run_upload_sparse_vector(
     let lazy_item_versions_table = Arc::new(TSHashTable::new(16));
 
     if index_before_insertion {
-        index_embeddings(
+        index_sparse_embeddings(
             inverted_index.clone(),
             ctx.config.upload_process_batch_size,
             serialization_table.clone(),
@@ -271,9 +280,95 @@ pub fn run_upload_sparse_vector(
         )?;
     }
 
-    
+    // Add next version
+    let (current_version, _) = inverted_index
+        .vcs
+        .add_next_version("main")
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+    inverted_index.set_current_version(current_version);
+    update_current_version(&inverted_index.lmdb, current_version)?;
 
-    Err(WaCustomError::CalculationError)
+    // Update LMDB metadata
+    let new_offset = EmbeddingOffset {
+        version: current_version,
+        offset: 0,
+    };
+    let new_offset_serialized = new_offset.serialize();
+
+    let mut txn = env
+        .begin_rw_txn()
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+    txn.put(
+        *db,
+        &"next_embedding_offset",
+        &new_offset_serialized,
+        WriteFlags::empty(),
+    )
+    .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+    txn.commit()
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+    // Insert vectors
+    let bufman = inverted_index.vec_raw_manager.get(&current_version)?;
+
+    vecs.into_par_iter()
+        .map(|(id, vec)| {
+            let hash_vec = convert_value(id);
+            let vec_emb = RawSparseVectorEmbedding {
+                raw_vec: Arc::new(vec),
+                hash_vec,
+            };
+
+            insert_sparse_embedding(
+                bufman.clone(),
+                inverted_index.clone(),
+                &vec_emb,
+                current_version,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    bufman.flush()?;
+
+    let env = inverted_index.lmdb.env.clone();
+    let db = inverted_index.lmdb.db.clone();
+
+    let txn = env
+        .begin_ro_txn()
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+    let count_unindexed = txn
+        .get(*db, &"count_unindexed")
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))
+        .and_then(|bytes| {
+            let bytes = bytes.try_into().map_err(|e: TryFromSliceError| {
+                WaCustomError::DeserializationError(e.to_string())
+            })?;
+            Ok(u32::from_le_bytes(bytes))
+        })?;
+
+    txn.abort();
+
+    if count_unindexed >= ctx.config.upload_threshold {
+        index_sparse_embeddings(
+            inverted_index.clone(),
+            ctx.config.upload_process_batch_size,
+            serialization_table.clone(),
+            lazy_item_versions_table,
+            ctx.config.hnsw.neighbors_count,
+        )?;
+    }
+
+    let list = Arc::into_inner(serialization_table).unwrap().to_list();
+
+    for (node, _) in list {
+        write_node_to_file(&node, &inverted_index.index_manager)?;
+    }
+
+    inverted_index.vec_raw_manager.flush_all()?;
+    inverted_index.index_manager.flush_all()?;
+
+    Ok(())
 }
 
 /// uploads a vector embedding

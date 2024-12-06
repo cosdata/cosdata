@@ -1,6 +1,6 @@
 use std::{
     fs::File,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
 };
 
 use arcshift::ArcShift;
@@ -25,15 +25,16 @@ pub(crate) struct InvertedIndex {
     pub max_vectors: Option<i32>,
     pub replication_factor: Option<i32>,
     pub root: Arc<Mutex<InvertedIndexItem>>,
-    pub prop_file: Arc<File>,
+    pub prop_file: Arc<RwLock<File>>,
     pub lmdb: MetaDb,
     pub current_version: ArcShift<Hash>,
     pub current_open_transaction: ArcShift<Option<Hash>>,
-    pub quantization_metric: Arc<QuantizationMetric>,
+    pub quantization_metric: ArcShift<QuantizationMetric>,
     pub distance_metric: Arc<DistanceMetric>,
-    pub storage_type: StorageType,
+    pub storage_type: ArcShift<StorageType>,
     pub vcs: Arc<VersionControl>,
     pub vec_raw_manager: Arc<BufferManagerFactory>,
+    pub index_manager: Arc<BufferManagerFactory>,
 }
 
 #[allow(dead_code)]
@@ -45,14 +46,15 @@ impl InvertedIndex {
         metadata_schema: Option<String>,
         max_vectors: Option<i32>,
         replication_factor: Option<i32>,
-        prop_file: Arc<File>,
+        prop_file: Arc<RwLock<File>>,
         lmdb: MetaDb,
         current_version: ArcShift<Hash>,
-        quantization_metric: Arc<QuantizationMetric>,
+        quantization_metric: ArcShift<QuantizationMetric>,
         distance_metric: Arc<DistanceMetric>,
-        storage_type: StorageType,
+        storage_type: ArcShift<StorageType>,
         vcs: Arc<VersionControl>,
         vec_raw_manager: Arc<BufferManagerFactory>,
+        index_manager: Arc<BufferManagerFactory>,
     ) -> Self {
         InvertedIndex {
             name,
@@ -71,6 +73,7 @@ impl InvertedIndex {
             storage_type,
             vcs,
             vec_raw_manager,
+            index_manager,
         }
     }
 
@@ -89,5 +92,11 @@ impl InvertedIndex {
     pub fn get_current_version(&self) -> Hash {
         let mut arc = self.current_version.clone();
         arc.get().clone()
+    }
+
+    // Set method
+    pub fn set_current_version(&self, new_version: Hash) {
+        let mut arc = self.current_version.clone();
+        arc.update(new_version);
     }
 }

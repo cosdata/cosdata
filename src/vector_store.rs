@@ -1,11 +1,14 @@
 use crate::app_context::AppContext;
 use crate::distance::cosine::CosineSimilarity;
 use crate::distance::DistanceFunction;
+use crate::indexes::inverted_index::InvertedIndex;
+use crate::indexes::inverted_index_item::RawSparseVectorEmbedding;
 use crate::macros::key;
 use crate::models::buffered_io::BufferManager;
 use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::common::*;
 use crate::models::embedding_persist::read_embedding;
+use crate::models::embedding_persist::read_sparse_embedding;
 use crate::models::embedding_persist::write_embedding;
 use crate::models::embedding_persist::EmbeddingOffset;
 use crate::models::file_persist::*;
@@ -307,6 +310,17 @@ pub fn get_embedding_by_id(
 //     dense_index.storage_type.update_shared(storage_type);
 // }
 
+pub fn insert_sparse_embedding(
+    bufman: Arc<BufferManager>,
+    dense_index: Arc<InvertedIndex>,
+    emb: &RawSparseVectorEmbedding,
+    current_version: Hash,
+) -> Result<(), WaCustomError> {
+    // TODO (mohamed.eliwa) emplement this function
+
+    Ok(())
+}
+
 pub fn insert_embedding(
     bufman: Arc<BufferManager>,
     dense_index: Arc<DenseIndex>,
@@ -357,6 +371,189 @@ pub fn insert_embedding(
     txn.commit().map_err(|e| {
         WaCustomError::DatabaseError(format!("Failed to commit transaction: {}", e))
     })?;
+
+    Ok(())
+}
+
+pub fn index_sparse_embeddings(
+    inverted_index: Arc<InvertedIndex>,
+    upload_process_batch_size: usize,
+    serialization_table: Arc<TSHashTable<SharedNode, ()>>,
+    lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16), SharedNode>>,
+    neighbors_count: usize,
+) -> Result<(), WaCustomError> {
+    let env = inverted_index.lmdb.env.clone();
+    let db = inverted_index.lmdb.db.clone();
+
+    let txn = env
+        .begin_ro_txn()
+        .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
+
+    let mut count_indexed = match txn.get(*db, &"count_indexed") {
+        Ok(bytes) => {
+            let bytes = bytes.try_into().map_err(|e: TryFromSliceError| {
+                WaCustomError::DeserializationError(e.to_string())
+            })?;
+            u32::from_le_bytes(bytes)
+        }
+        Err(lmdb::Error::NotFound) => 0,
+        Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
+    };
+
+    let mut count_unindexed = match txn.get(*db, &"count_unindexed") {
+        Ok(bytes) => {
+            let bytes = bytes.try_into().map_err(|e: TryFromSliceError| {
+                WaCustomError::DeserializationError(e.to_string())
+            })?;
+            u32::from_le_bytes(bytes)
+        }
+        Err(lmdb::Error::NotFound) => 0,
+        Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
+    };
+
+    let embedding_offset = match txn.get(*db, &"next_embedding_offset") {
+        Ok(bytes) => EmbeddingOffset::deserialize(bytes)
+            .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?,
+        Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
+    };
+
+    let version = embedding_offset.version;
+    let version_hash = inverted_index
+        .vcs
+        .get_version_hash(&version, &txn)
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?
+        .expect("Current version hash not found");
+    let version_number = *version_hash.version as u16;
+
+    txn.abort();
+
+    let mut index = |embeddings: Vec<RawSparseVectorEmbedding>,
+                     next_offset: u32|
+     -> Result<(), WaCustomError> {
+        let mut quantization_arc = inverted_index.quantization_metric.clone();
+        let quantization = quantization_arc.get();
+
+        let results: Vec<()> = embeddings
+            .into_iter()
+            .map(|raw_emb| {
+                let raw_values: Vec<f32> = raw_emb.raw_vec.iter().map(|e| e.0).collect();
+
+                let quantized_vec = Arc::new(
+                    quantization
+                        .quantize(
+                            &raw_values,
+                            inverted_index.storage_type.clone().get().clone(),
+                        )
+                        .expect("Quantization failed"),
+                );
+                let mut prop_file_guard = inverted_index.prop_file.write().unwrap();
+                let location = write_prop_to_file(
+                    &raw_emb.hash_vec,
+                    quantized_vec.clone(),
+                    &mut *prop_file_guard,
+                )
+                .expect("failed to write prop");
+                drop(prop_file_guard);
+                let prop = Arc::new(NodeProp {
+                    id: raw_emb.hash_vec.clone(),
+                    value: quantized_vec.clone(),
+                    location,
+                });
+                let embedding = QuantizedVectorEmbedding {
+                    quantized_vec,
+                    hash_vec: raw_emb.hash_vec,
+                };
+
+                index_sparse_embedding(
+                    inverted_index.clone(),
+                    None,
+                    embedding,
+                    prop,
+                    version,
+                    version_number,
+                    serialization_table.clone(),
+                    lazy_item_versions_table.clone(),
+                    neighbors_count,
+                )
+                .expect("index_embedding failed");
+            })
+            .collect();
+
+        let batch_size = results.len() as u32;
+        count_indexed += batch_size;
+        count_unindexed -= batch_size;
+
+        let mut txn = env.begin_rw_txn().map_err(|e| {
+            WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e))
+        })?;
+
+        let next_embedding_offset = EmbeddingOffset {
+            version,
+            offset: next_offset,
+        };
+        let next_embedding_offset_serialized = next_embedding_offset.serialize();
+
+        txn.put(
+            *db,
+            &"next_embedding_offset",
+            &next_embedding_offset_serialized,
+            WriteFlags::empty(),
+        )
+        .map_err(|e| {
+            WaCustomError::DatabaseError(format!("Failed to update `next_embedding_offset`: {}", e))
+        })?;
+
+        txn.put(
+            *db,
+            &"count_indexed",
+            &count_indexed.to_le_bytes(),
+            WriteFlags::empty(),
+        )
+        .map_err(|e| {
+            WaCustomError::DatabaseError(format!("Failed to update `count_indexed`: {}", e))
+        })?;
+
+        txn.put(
+            *db,
+            &"count_unindexed",
+            &count_unindexed.to_le_bytes(),
+            WriteFlags::empty(),
+        )
+        .map_err(|e| {
+            WaCustomError::DatabaseError(format!("Failed to update `count_unindexed`: {}", e))
+        })?;
+
+        txn.commit().map_err(|e| {
+            WaCustomError::DatabaseError(format!("Failed to commit transaction: {}", e))
+        })?;
+
+        Ok(())
+    };
+
+    let bufman = inverted_index.vec_raw_manager.get(&version)?;
+
+    let mut i = embedding_offset.offset;
+    let cursor = bufman.open_cursor()?;
+    let file_len = bufman.seek_with_cursor(cursor, SeekFrom::End(0))? as u32;
+    bufman.seek_with_cursor(cursor, SeekFrom::Start(0))?;
+
+    let mut embeddings = Vec::new();
+    loop {
+        if i == file_len {
+            index(embeddings, i)?;
+            bufman.close_cursor(cursor)?;
+            break;
+        }
+
+        let (embedding, next) = read_sparse_embedding(bufman.clone(), i)?;
+        embeddings.push(embedding);
+        i = next;
+
+        if embeddings.len() == upload_process_batch_size {
+            index(embeddings, i)?;
+            embeddings = Vec::new();
+        }
+    }
 
     Ok(())
 }
@@ -715,6 +912,27 @@ pub fn index_embeddings_in_transaction(
     );
 
     Ok(())
+}
+
+pub fn index_sparse_embedding(
+    inverted_index: Arc<InvertedIndex>,
+    parent: Option<SharedNode>,
+    vector_emb: QuantizedVectorEmbedding,
+    prop: Arc<NodeProp>,
+    version: Hash,
+    version_number: u16,
+    serialization_table: Arc<TSHashTable<SharedNode, ()>>,
+    lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16), SharedNode>>,
+    neighbors_count: usize,
+) -> Result<(), WaCustomError> {
+    let fvec = vector_emb.quantized_vec.clone();
+    let mut skipm = FxHashSet::default();
+    skipm.insert(vector_emb.hash_vec.clone());
+
+    // TODO (mohamed.eliwa) implement this function
+    Err(WaCustomError::DatabaseError(
+        "index_sparse_embedding is not yet implemented".into(),
+    ))
 }
 
 pub fn index_embedding(
