@@ -7,6 +7,7 @@ use arcshift::ArcShift;
 
 use crate::{
     models::{
+        buffered_io::BufferManagerFactory,
         types::{DistanceMetric, MetaDb, QuantizationMetric},
         versioning::{Hash, VersionControl},
     },
@@ -32,6 +33,7 @@ pub(crate) struct InvertedIndex {
     pub distance_metric: Arc<DistanceMetric>,
     pub storage_type: StorageType,
     pub vcs: Arc<VersionControl>,
+    pub vec_raw_manager: Arc<BufferManagerFactory>,
 }
 
 #[allow(dead_code)]
@@ -50,6 +52,7 @@ impl InvertedIndex {
         distance_metric: Arc<DistanceMetric>,
         storage_type: StorageType,
         vcs: Arc<VersionControl>,
+        vec_raw_manager: Arc<BufferManagerFactory>,
     ) -> Self {
         InvertedIndex {
             name,
@@ -67,6 +70,7 @@ impl InvertedIndex {
             distance_metric,
             storage_type,
             vcs,
+            vec_raw_manager,
         }
     }
 
@@ -79,5 +83,11 @@ impl InvertedIndex {
 
     pub fn print_tree(&self) {
         self.root.lock().unwrap().print_tree(0);
+    }
+
+    // Get method
+    pub fn get_current_version(&self) -> Hash {
+        let mut arc = self.current_version.clone();
+        arc.get().clone()
     }
 }
