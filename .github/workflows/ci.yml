@@ -56,6 +56,22 @@ jobs:
           cache-key: warm
       - run: cargo test
 
+  clippy-check:
+    name: Clippy Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: taiki-e/checkout-action@v1
+      - uses: Boshen/setup-rust@main
+        with:
+          components: clippy
+          save-cache: ${{ github.ref_name == 'main' }}
+          cache-key: warm
+      - uses: taiki-e/install-action@cargo-hack
+      - run: cargo hack check --all-features --locked
+      - run: cargo hack check --no-default-features --locked
+      - run: cargo hack check --each-feature --no-dev-deps --locked
+
+
   format:
     name: Format
     runs-on: ubuntu-latest
