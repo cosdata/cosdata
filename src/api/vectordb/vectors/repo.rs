@@ -14,8 +14,8 @@ use crate::{
 
 use super::{
     dtos::{
-        CreateDenseVectorDto, CreateVectorResponseDto, FindSimilarVectorsDto, SimilarVector,
-        UpdateVectorDto, UpdateVectorResponseDto, UpsertDto,
+        CreateDenseVectorDto, CreateSparseVectorDto, CreateVectorResponseDto,
+        FindSimilarVectorsDto, SimilarVector, UpdateVectorDto, UpdateVectorResponseDto, UpsertDto,
     },
     error::VectorsError,
 };
@@ -25,8 +25,7 @@ use super::{
 pub(crate) async fn create_sparse_vector(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    vector_id: VectorIdValue,
-    values: Vec<(f32, u32)>,
+    create_vector_dto: CreateSparseVectorDto,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
     let inverted_index = collections::service::get_inverted_index_by_id(ctx.clone(), collection_id)
         .await
@@ -41,7 +40,10 @@ pub(crate) async fn create_sparse_vector(
     run_upload_sparse_vector(
         ctx,
         inverted_index,
-        vec![(vector_id.clone(), values.clone())],
+        vec![(
+            create_vector_dto.id.clone(),
+            create_vector_dto.values.clone(),
+        )],
     )
     .map_err(VectorsError::WaCustom)?;
 
@@ -58,9 +60,7 @@ pub(crate) async fn create_sparse_vector(
 pub(crate) async fn create_dense_vector(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    vector_id: VectorIdValue,
-    values: Vec<f32>,
-    // create_vector_dto: CreateVectorDto,
+    create_vector_dto: CreateDenseVectorDto,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
     let dense_index = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
         .await
@@ -77,11 +77,18 @@ pub(crate) async fn create_dense_vector(
     }
 
     // TODO: handle the error
-    run_upload(ctx, dense_index, vec![(vector_id.clone(), values.clone())])
-        .map_err(VectorsError::WaCustom)?;
+    run_upload(
+        ctx,
+        dense_index,
+        vec![(
+            create_vector_dto.id.clone(),
+            create_vector_dto.values.clone(),
+        )],
+    )
+    .map_err(VectorsError::WaCustom)?;
     Ok(CreateVectorResponseDto {
-        id: vector_id,
-        values,
+        id: create_vector_dto.id,
+        values: create_vector_dto.values,
     })
 }
 

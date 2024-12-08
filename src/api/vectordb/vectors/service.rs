@@ -20,24 +20,8 @@ pub(crate) async fn create_vector(
     create_vector_dto: CreateVectorDto,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
     match create_vector_dto {
-        CreateVectorDto::Dense(create_dense_vector_dto) => {
-            repo::create_dense_vector(
-                ctx,
-                collection_id,
-                create_dense_vector_dto.id,
-                create_dense_vector_dto.values,
-            )
-            .await
-        }
-        CreateVectorDto::Sparse(create_sparse_vector_dto) => {
-            repo::create_sparse_vector(
-                ctx,
-                collection_id,
-                create_sparse_vector_dto.id,
-                create_sparse_vector_dto.values,
-            )
-            .await
-        }
+        CreateVectorDto::Dense(dto) => repo::create_dense_vector(ctx, collection_id, dto).await,
+        CreateVectorDto::Sparse(dto) => repo::create_sparse_vector(ctx, collection_id, dto).await,
     }
 }
 
