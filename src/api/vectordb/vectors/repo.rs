@@ -47,12 +47,10 @@ pub(crate) async fn create_sparse_vector(
     )
     .map_err(VectorsError::WaCustom)?;
 
-    // Ok(CreateVectorResponseDto {
-    //     id: vector_id,
-    //     values,
-    // })
-
-    Err(VectorsError::NotImplemented)
+    Ok(CreateVectorResponseDto::Sparse(CreateSparseVectorDto {
+        id: create_vector_dto.id,
+        values: create_vector_dto.values,
+    }))
 }
 
 /// Creates a vector for dense index
@@ -86,10 +84,10 @@ pub(crate) async fn create_dense_vector(
         )],
     )
     .map_err(VectorsError::WaCustom)?;
-    Ok(CreateVectorResponseDto {
+    Ok(CreateVectorResponseDto::Dense(CreateDenseVectorDto {
         id: create_vector_dto.id,
         values: create_vector_dto.values,
-    })
+    }))
 }
 
 pub(crate) async fn create_vector_in_transaction(
@@ -113,10 +111,10 @@ pub(crate) async fn create_vector_in_transaction(
     )
     .map_err(VectorsError::WaCustom)?;
 
-    Ok(CreateVectorResponseDto {
+    Ok(CreateVectorResponseDto::Dense(CreateDenseVectorDto {
         id: create_vector_dto.id,
         values: create_vector_dto.values,
-    })
+    }))
 }
 
 pub(crate) async fn get_vector_by_id(
@@ -136,10 +134,10 @@ pub(crate) async fn get_vector_by_id(
         VectorId::Str(v) => VectorIdValue::StringValue(v),
     };
 
-    Ok(CreateVectorResponseDto {
+    Ok(CreateVectorResponseDto::Dense(CreateDenseVectorDto {
         id,
         values: (*embedding.raw_vec).clone(),
-    })
+    }))
 }
 
 pub(crate) async fn update_vector(

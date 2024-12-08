@@ -98,10 +98,9 @@ pub(crate) enum CreateVectorDto {
 }
 
 #[derive(Serialize)]
-pub(crate) struct CreateVectorResponseDto {
-    pub id: VectorIdValue,
-    pub values: Vec<f32>,
-    // pub created_at: String
+pub(crate) enum CreateVectorResponseDto {
+    Dense(CreateDenseVectorDto),
+    Sparse(CreateSparseVectorDto),
 }
 
 #[derive(Deserialize)]
