@@ -7,7 +7,7 @@ use crate::{
 
 use super::{
     dtos::{
-        CreateVectorDtox, CreateVectorResponseDto, FindSimilarVectorsDto,
+        CreateVectorDto, CreateVectorResponseDto, FindSimilarVectorsDto,
         FindSimilarVectorsResponseDto, UpdateVectorDto, UpdateVectorResponseDto,
     },
     error::VectorsError,
@@ -17,14 +17,26 @@ use super::{
 pub(crate) async fn create_vector(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    create_vector_dto: CreateVectorDtox,
+    create_vector_dto: CreateVectorDto,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
     match create_vector_dto {
-        CreateVectorDtox::Dense { id, values } => {
-            repo::create_dense_vector(ctx, collection_id, id, values).await
+        CreateVectorDto::Dense(create_dense_vector_dto) => {
+            repo::create_dense_vector(
+                ctx,
+                collection_id,
+                create_dense_vector_dto.id,
+                create_dense_vector_dto.values,
+            )
+            .await
         }
-        CreateVectorDtox::Sparse { id, values } => {
-            repo::create_sparse_vector(ctx, collection_id, id, values).await
+        CreateVectorDto::Sparse(create_sparse_vector_dto) => {
+            repo::create_sparse_vector(
+                ctx,
+                collection_id,
+                create_sparse_vector_dto.id,
+                create_sparse_vector_dto.values,
+            )
+            .await
         }
     }
 }

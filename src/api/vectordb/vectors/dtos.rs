@@ -1,24 +1,100 @@
-use serde::{Deserialize, Serialize};
+use std::fmt;
+
+use serde::{
+    de::{self, Visitor},
+    Deserialize, Deserializer, Serialize,
+};
 
 use crate::models::rpc::{Vector, VectorIdValue};
 
-#[derive(Deserialize)]
-pub(crate) struct CreateVectorDto {
+#[derive(Deserialize, Serialize, Debug)]
+pub(crate) struct CreateDenseVectorDto {
     pub id: VectorIdValue,
     pub values: Vec<f32>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Serialize, Debug)]
+pub(crate) struct CreateSparseVectorDto {
+    pub id: VectorIdValue,
+    pub values: Vec<(f32, u32)>,
+}
+
+impl<'de> Deserialize<'de> for CreateSparseVectorDto {
+    fn deserialize<D>(deserializer: D) -> Result<CreateSparseVectorDto, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // A custom visitor to process the deserialization
+        struct CreateSparseVectorDtoVisitor;
+
+        impl<'de> Visitor<'de> for CreateSparseVectorDtoVisitor {
+            type Value = CreateSparseVectorDto;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                write!(formatter, "struct CreateSparseVectorDto")
+            }
+
+            fn visit_map<M>(self, mut map: M) -> Result<CreateSparseVectorDto, M::Error>
+            where
+                M: de::MapAccess<'de>,
+            {
+                let mut id = None;
+                let mut values: Option<Vec<f32>> = None;
+                let mut indices: Option<Vec<u32>> = None;
+
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "id" => {
+                            if id.is_some() {
+                                return Err(de::Error::duplicate_field("id"));
+                            }
+                            id = Some(map.next_value()?);
+                        }
+                        "values" => {
+                            if values.is_some() {
+                                return Err(de::Error::duplicate_field("values"));
+                            }
+                            values = Some(map.next_value()?);
+                        }
+                        "indices" => {
+                            if indices.is_some() {
+                                return Err(de::Error::duplicate_field("indices"));
+                            }
+                            indices = Some(map.next_value()?);
+                        }
+                        _ => {
+                            return Err(de::Error::unknown_field(
+                                key.as_str(),
+                                &["id", "values", "indices"],
+                            ));
+                        }
+                    }
+                }
+
+                let id = id.ok_or_else(|| de::Error::missing_field("id"))?;
+                let values = values.ok_or_else(|| de::Error::missing_field("values"))?;
+                let indices = indices.ok_or_else(|| de::Error::missing_field("indices"))?;
+
+                // Combine the values and indices into a Vec<(f32, u32)>
+                let values = values
+                    .into_iter()
+                    .zip(indices.into_iter())
+                    .map(|(value, id)| (value, id))
+                    .collect();
+
+                Ok(CreateSparseVectorDto { id, values })
+            }
+        }
+
+        deserializer.deserialize_map(CreateSparseVectorDtoVisitor)
+    }
+}
+
+#[derive(Deserialize, Serialize, Debug)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum CreateVectorDtox {
-    Dense {
-        id: VectorIdValue,
-        values: Vec<f32>,
-    },
-    Sparse {
-        id: VectorIdValue,
-        values: Vec<(f32, u32)>,
-    },
+pub(crate) enum CreateVectorDto {
+    Dense(CreateDenseVectorDto),
+    Sparse(CreateSparseVectorDto),
 }
 
 #[derive(Serialize)]

@@ -14,7 +14,7 @@ use crate::{
 
 use super::{
     dtos::{
-        CreateVectorDto, CreateVectorResponseDto, FindSimilarVectorsDto, SimilarVector,
+        CreateDenseVectorDto, CreateVectorResponseDto, FindSimilarVectorsDto, SimilarVector,
         UpdateVectorDto, UpdateVectorResponseDto, UpsertDto,
     },
     error::VectorsError,
@@ -89,7 +89,7 @@ pub(crate) async fn create_vector_in_transaction(
     ctx: Arc<AppContext>,
     collection_id: &str,
     transaction: &DenseIndexTransaction,
-    create_vector_dto: CreateVectorDto,
+    create_vector_dto: CreateDenseVectorDto,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
     let dense_index = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
         .await
