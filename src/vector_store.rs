@@ -827,7 +827,7 @@ fn traverse_find_nearest(
     hops: u8,
     skipm: &mut PerformantFixedSet,
     cur_level: HNSWLevel,
-    truncate_results: bool,
+    is_indexing: bool,
     shortlist: bool,
 ) -> Result<Vec<(SharedNode, MetricResult)>, WaCustomError> {
     let mut tasks: SmallVec<[Vec<(SharedNode, MetricResult)>; 24]> = SmallVec::new();
@@ -876,7 +876,7 @@ fn traverse_find_nearest(
                     hops + 1,
                     skipm,
                     cur_level,
-                    truncate_results,
+                    is_indexing,
                     true,
                 )?;
                 z.push((neighbor_node, dist));
@@ -913,7 +913,7 @@ fn traverse_find_nearest(
                     hops + 1,
                     skipm,
                     cur_level,
-                    truncate_results,
+                    is_indexing,
                     false,
                 )?;
                 z.push((neighbor_node, dist));
@@ -926,9 +926,11 @@ fn traverse_find_nearest(
 
     let mut nn: Vec<_> = tasks.into_iter().flatten().collect();
     nn.sort_unstable_by(|a, b| b.1.get_value().partial_cmp(&a.1.get_value()).unwrap());
-    if truncate_results {
+    if is_indexing {
+        // During indexing we want to truncate heavily
         nn.truncate(5);
     } else {
+        //ANN search
         if cur_level.0 == 0 {
             nn.truncate(100);
         } else {
