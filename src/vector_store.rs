@@ -5,6 +5,7 @@ use crate::distance::DistanceFunction;
 use crate::macros::key;
 use crate::models::buffered_io::*;
 use crate::models::common::*;
+use crate::models::dot_product::dot_product_f32;
 use crate::models::embedding_persist::*;
 use crate::models::file_persist::*;
 use crate::models::fixedset::PerformantFixedSet;
@@ -154,22 +155,6 @@ pub fn vector_fetch(
     Ok(Vec::new())
 }
 
-pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    assert_eq!(a.len(), b.len());
-
-    let dot_prod: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-
-    let mag_a: f32 = a.iter().map(|x| x.powi(2)).sum::<f32>().sqrt();
-    let mag_b: f32 = b.iter().map(|x| x.powi(2)).sum::<f32>().sqrt();
-
-    // Avoid division by zero
-    if mag_a == 0.0 || mag_b == 0.0 {
-        return 0.0;
-    }
-
-    dot_prod / (mag_a * mag_b)
-}
-
 pub fn finalize_ann_results(
     dense_index: Arc<DenseIndex>,
     results: Vec<(SharedNode, MetricResult)>,
@@ -180,7 +165,10 @@ pub fn finalize_ann_results(
 
     for (id, _) in filtered {
         let raw = get_embedding_by_id(dense_index.clone(), &id)?;
-        let cs = cosine_similarity(query, &raw.raw_vec);
+        let dp = dot_product_f32(query, &raw.raw_vec);
+        let mag_query = query.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let mag_raw = raw.raw_vec.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let cs = dp / (mag_query * mag_raw);
         results.push((id, MetricResult::CosineSimilarity(CosineSimilarity(cs))));
     }
     results.sort_unstable_by(|(_, a), (_, b)| {
