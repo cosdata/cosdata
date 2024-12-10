@@ -18,11 +18,11 @@ use super::{ProbSerialize, UpdateSerialized};
 impl<const N: usize> ProbSerialize for ProbLazyItemArray<ProbNode, N> {
     fn serialize(
         &self,
-        bufmans: &BufferManagerFactory,
+        bufmans: &BufferManagerFactory<Hash>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
-        let bufman = bufmans.get(&version)?;
+        let bufman = bufmans.get(version)?;
         let start_offset = bufman.cursor_position(cursor)?;
         bufman.write_with_cursor(cursor, &vec![u8::MAX; 10 * N])?;
 
@@ -46,7 +46,7 @@ impl<const N: usize> ProbSerialize for ProbLazyItemArray<ProbNode, N> {
     }
 
     fn deserialize(
-        bufmans: &BufferManagerFactory,
+        bufmans: &BufferManagerFactory<Hash>,
         file_index: FileIndex,
         cache: &ProbCache,
         max_loads: u16,
@@ -63,7 +63,7 @@ impl<const N: usize> ProbSerialize for ProbLazyItemArray<ProbNode, N> {
                 version_id,
                 ..
             } => {
-                let bufman = bufmans.get(&version_id)?;
+                let bufman = bufmans.get(version_id)?;
                 let cursor = bufman.open_cursor()?;
 
                 let placeholder_offset = offset as u64;
@@ -101,7 +101,7 @@ impl<const N: usize> ProbSerialize for ProbLazyItemArray<ProbNode, N> {
 impl<const N: usize> UpdateSerialized for ProbLazyItemArray<ProbNode, N> {
     fn update_serialized(
         &self,
-        bufmans: &BufferManagerFactory,
+        bufmans: &BufferManagerFactory<Hash>,
         file_index: FileIndex,
     ) -> Result<u32, BufIoError> {
         match file_index {
@@ -115,7 +115,7 @@ impl<const N: usize> UpdateSerialized for ProbLazyItemArray<ProbNode, N> {
                 version_id,
                 ..
             } => {
-                let bufman = bufmans.get(&version_id)?;
+                let bufman = bufmans.get(version_id)?;
                 let cursor = bufman.open_cursor()?;
                 let placeholder_start = offset as u64;
                 let mut i = 0;

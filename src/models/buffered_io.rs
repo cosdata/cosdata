@@ -2,13 +2,13 @@ use dashmap::DashMap;
 use std::collections::HashMap;
 use std::fmt;
 use std::fs::{File, OpenOptions};
+use std::hash::Hash;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 
 use super::lru_cache::LRUCache;
-use super::versioning::Hash;
 
 const BUFFER_SIZE: usize = 8192;
 const FLUSH_THRESHOLD: usize = (BUFFER_SIZE as f32 * 0.7) as usize; // 70% of buffer size
@@ -78,14 +78,14 @@ impl Cursor {
     }
 }
 
-pub struct BufferManagerFactory {
-    bufmans: Arc<DashMap<Hash, Arc<BufferManager>>>,
+pub struct BufferManagerFactory<K> {
+    bufmans: Arc<DashMap<K, Arc<BufferManager>>>,
     root_path: Arc<Path>,
-    path_function: fn(&Path, &Hash) -> PathBuf,
+    path_function: fn(&Path, &K) -> PathBuf,
 }
 
-impl BufferManagerFactory {
-    pub fn new(root_path: Arc<Path>, path_function: fn(&Path, &Hash) -> PathBuf) -> Self {
+impl<K: Hash + Eq> BufferManagerFactory<K> {
+    pub fn new(root_path: Arc<Path>, path_function: fn(&Path, &K) -> PathBuf) -> Self {
         Self {
             bufmans: Arc::new(DashMap::new()),
             root_path,
@@ -93,12 +93,12 @@ impl BufferManagerFactory {
         }
     }
 
-    pub fn get(&self, hash: &Hash) -> Result<Arc<BufferManager>, BufIoError> {
-        if let Some(bufman) = self.bufmans.get(hash) {
+    pub fn get(&self, key: K) -> Result<Arc<BufferManager>, BufIoError> {
+        if let Some(bufman) = self.bufmans.get(&key) {
             return Ok(bufman.clone());
         }
 
-        let path = (self.path_function)(&self.root_path, hash);
+        let path = (self.path_function)(&self.root_path, &key);
 
         let file = OpenOptions::new()
             .read(true)
@@ -107,7 +107,7 @@ impl BufferManagerFactory {
             .open(&path)?;
         let bufman = Arc::new(BufferManager::new(file)?);
 
-        self.bufmans.insert(*hash, bufman.clone());
+        self.bufmans.insert(key, bufman.clone());
 
         Ok(bufman)
     }

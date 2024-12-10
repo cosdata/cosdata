@@ -15,7 +15,7 @@ use super::{ProbSerialize, UpdateSerialized};
 impl ProbSerialize for SharedNode {
     fn serialize(
         &self,
-        bufmans: &BufferManagerFactory,
+        bufmans: &BufferManagerFactory<Hash>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
@@ -29,7 +29,7 @@ impl ProbSerialize for SharedNode {
                 version_number,
                 ..
             } => {
-                let bufman = bufmans.get(version_id)?;
+                let bufman = bufmans.get(*version_id)?;
 
                 let offset = if let Some(file_offset) = file_offset.get() {
                     if !persist_flag.swap(false, Ordering::SeqCst) {
@@ -83,7 +83,7 @@ impl ProbSerialize for SharedNode {
     }
 
     fn deserialize(
-        _bufmans: &BufferManagerFactory,
+        _bufmans: &BufferManagerFactory<Hash>,
         file_index: FileIndex,
         cache: &ProbCache,
         max_loads: u16,

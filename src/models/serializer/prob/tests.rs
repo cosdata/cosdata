@@ -110,7 +110,10 @@ impl EqualityTester {
     }
 }
 
-fn get_cache(bufmans: Arc<BufferManagerFactory>, prop_file: Arc<RwLock<File>>) -> Arc<ProbCache> {
+fn get_cache(
+    bufmans: Arc<BufferManagerFactory<Hash>>,
+    prop_file: Arc<RwLock<File>>,
+) -> Arc<ProbCache> {
     Arc::new(ProbCache::new(1000, bufmans, prop_file))
 }
 
@@ -132,9 +135,9 @@ fn create_prob_node(id: u32, prop_file: &RwLock<File>) -> ProbNode {
 }
 
 fn setup_test(
-    root_version: &Hash,
+    root_version: Hash,
 ) -> (
-    Arc<BufferManagerFactory>,
+    Arc<BufferManagerFactory<Hash>>,
     Arc<ProbCache>,
     Arc<BufferManager>,
     u64,
@@ -144,7 +147,7 @@ fn setup_test(
     let dir = tempdir().unwrap();
     let bufmans = Arc::new(BufferManagerFactory::new(
         dir.as_ref().into(),
-        |root, ver| root.join(format!("{}.index", **ver)),
+        |root, ver: &Hash| root.join(format!("{}.index", **ver)),
     ));
     let prop_file = Arc::new(RwLock::new(
         OpenOptions::new()
@@ -164,7 +167,7 @@ fn setup_test(
 fn test_lazy_item_serialization() {
     let root_version_number = 0;
     let root_version_id = Hash::from(0);
-    let (bufmans, cache, bufman, cursor, prop_file, _temp_dir) = setup_test(&root_version_id);
+    let (bufmans, cache, bufman, cursor, prop_file, _temp_dir) = setup_test(root_version_id);
     let node = create_prob_node(0, &prop_file);
 
     let lazy_item = ProbLazyItem::new(node, root_version_id, root_version_number);
@@ -190,7 +193,7 @@ fn test_lazy_item_serialization() {
 #[test]
 fn test_prob_node_acyclic_serialization() {
     let root_version_id = Hash::from(0);
-    let (bufmans, cache, bufman, cursor, prop_file, _temp_dir) = setup_test(&root_version_id);
+    let (bufmans, cache, bufman, cursor, prop_file, _temp_dir) = setup_test(root_version_id);
 
     let node = create_prob_node(0, &prop_file);
 
@@ -213,7 +216,7 @@ fn test_prob_node_acyclic_serialization() {
 fn test_prob_lazy_item_array_serialization() {
     let root_version_id = Hash::from(0);
     let root_version_number = 0;
-    let (bufmans, cache, bufman, cursor, prop_file, _temp_dir) = setup_test(&root_version_id);
+    let (bufmans, cache, bufman, cursor, prop_file, _temp_dir) = setup_test(root_version_id);
     let array = ProbLazyItemArray::<_, 8>::new();
 
     for i in 0..5 {
@@ -242,7 +245,7 @@ fn test_prob_lazy_item_array_serialization() {
 fn test_prob_node_serialization_with_neighbors() {
     let root_version_id = Hash::from(0);
     let root_version_number = 0;
-    let (bufmans, cache, bufman, cursor, prop_file, _temp_dir) = setup_test(&root_version_id);
+    let (bufmans, cache, bufman, cursor, prop_file, _temp_dir) = setup_test(root_version_id);
 
     let node = create_prob_node(0, &prop_file);
 
@@ -273,7 +276,7 @@ fn test_prob_node_serialization_with_neighbors() {
 fn test_prob_lazy_item_cyclic_serialization() {
     let root_version_id = Hash::from(0);
     let root_version_number = 0;
-    let (bufmans, cache, bufman, cursor, prop_file, _temp_dir) = setup_test(&root_version_id);
+    let (bufmans, cache, bufman, cursor, prop_file, _temp_dir) = setup_test(root_version_id);
 
     let node0 = create_prob_node(0, &prop_file);
     let node1 = create_prob_node(1, &prop_file);
@@ -345,10 +348,10 @@ fn test_prob_lazy_item_with_versions_serialization_and_validation() {
 
     let bufmans = Arc::new(BufferManagerFactory::new(
         temp_dir.as_ref().into(),
-        |root, ver| root.join(format!("{}.index", **ver)),
+        |root, ver: &Hash| root.join(format!("{}.index", **ver)),
     ));
     let cache = get_cache(bufmans.clone(), prop_file.clone());
-    let bufman = bufmans.get(&v0_hash).unwrap();
+    let bufman = bufmans.get(v0_hash).unwrap();
     let cursor = bufman.open_cursor().unwrap();
 
     for i in 1..=100 {

@@ -18,11 +18,11 @@ use super::{ProbSerialize, UpdateSerialized};
 impl ProbSerialize for ProbNode {
     fn serialize(
         &self,
-        bufmans: &BufferManagerFactory,
+        bufmans: &BufferManagerFactory<Hash>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
-        let bufman = bufmans.get(&version)?;
+        let bufman = bufmans.get(version)?;
         let start_offset = bufman.cursor_position(cursor)?;
 
         // Serialize basic fields
@@ -91,7 +91,7 @@ impl ProbSerialize for ProbNode {
     }
 
     fn deserialize(
-        bufmans: &BufferManagerFactory,
+        bufmans: &BufferManagerFactory<Hash>,
         file_index: FileIndex,
         cache: &ProbCache,
         max_loads: u16,
@@ -108,7 +108,7 @@ impl ProbSerialize for ProbNode {
                 version_number,
                 offset: FileOffset(offset),
             } => {
-                let bufman = bufmans.get(&version_id)?;
+                let bufman = bufmans.get(version_id)?;
                 let cursor = bufman.open_cursor()?;
                 bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
                 // Read basic fields
@@ -201,7 +201,7 @@ impl ProbSerialize for ProbNode {
 impl UpdateSerialized for ProbNode {
     fn update_serialized(
         &self,
-        bufmans: &BufferManagerFactory,
+        bufmans: &BufferManagerFactory<Hash>,
         file_index: FileIndex,
     ) -> Result<u32, BufIoError> {
         match file_index {
@@ -215,7 +215,7 @@ impl UpdateSerialized for ProbNode {
                 version_number,
                 offset: FileOffset(offset),
             } => {
-                let bufman = bufmans.get(&version_id)?;
+                let bufman = bufmans.get(version_id)?;
                 let cursor = bufman.open_cursor()?;
                 bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64 + 29))?;
                 let neighbors_offset = bufman.read_u32_with_cursor(cursor)?;

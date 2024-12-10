@@ -10,6 +10,7 @@ use crate::models::identity_collections::IdentityMapKey;
 use crate::models::lazy_load::{LazyItem, LazyItemArray};
 use crate::models::serializer::CustomSerialize;
 use crate::models::types::SparseVector;
+use crate::models::versioning::Hash;
 
 // TODO: Add more powers for larger jumps
 // TODO: Or switch to dynamic calculation of power of max power of 4
@@ -201,7 +202,7 @@ where
     pub fn new() -> Self {
         let bufmans = Arc::new(BufferManagerFactory::new(
             Path::new(".").into(),
-            |root, ver| root.join(format!("{}.index", **ver)),
+            |root, ver: &Hash| root.join(format!("{}.index", **ver)),
         ));
         let cache = Arc::new(NodeRegistry::new(1000, bufmans));
         InvertedIndex {
@@ -409,7 +410,7 @@ mod test {
             let root_clone2 = root.clone();
             let bufmans = Arc::new(BufferManagerFactory::new(
                 Path::new(".").into(),
-                |root, ver| root.join(format!("{}.index", **ver)),
+                |root, ver: &Hash| root.join(format!("{}.index", **ver)),
             ));
             let cache = Arc::new(NodeRegistry::new(1000, bufmans));
             let cache1 = cache.clone();

@@ -19,13 +19,13 @@ use super::SimpleSerialize;
 pub trait ProbSerialize: Sized {
     fn serialize(
         &self,
-        bufmans: &BufferManagerFactory,
+        bufmans: &BufferManagerFactory<Hash>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError>;
 
     fn deserialize(
-        bufmans: &BufferManagerFactory,
+        bufmans: &BufferManagerFactory<Hash>,
         file_index: FileIndex,
         cache: &ProbCache,
         max_loads: u16,
@@ -36,7 +36,7 @@ pub trait ProbSerialize: Sized {
 pub trait UpdateSerialized {
     fn update_serialized(
         &self,
-        bufmans: &BufferManagerFactory,
+        bufmans: &BufferManagerFactory<Hash>,
         file_index: FileIndex,
     ) -> Result<u32, BufIoError>;
 }
@@ -44,16 +44,16 @@ pub trait UpdateSerialized {
 impl<T: SimpleSerialize> ProbSerialize for T {
     fn serialize(
         &self,
-        bufmans: &BufferManagerFactory,
+        bufmans: &BufferManagerFactory<Hash>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
-        let bufman = bufmans.get(&version)?;
+        let bufman = bufmans.get(version)?;
         SimpleSerialize::serialize(self, bufman, cursor)
     }
 
     fn deserialize(
-        bufmans: &BufferManagerFactory,
+        bufmans: &BufferManagerFactory<Hash>,
         file_index: FileIndex,
         _cache: &ProbCache,
         _max_loads: u16,
@@ -68,7 +68,7 @@ impl<T: SimpleSerialize> ProbSerialize for T {
             FileIndex::Valid {
                 version_id, offset, ..
             } => {
-                let bufman = bufmans.get(&version_id)?;
+                let bufman = bufmans.get(version_id)?;
                 SimpleSerialize::deserialize(bufman, offset)
             }
         }

@@ -4,6 +4,7 @@ use super::lazy_load::SyncPersist;
 use super::prob_node::SharedNode;
 use super::serializer::prob::ProbSerialize;
 use super::types::{BytesToRead, FileOffset, NodeProp, VectorId};
+use super::versioning::Hash;
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
@@ -40,10 +41,10 @@ use std::sync::Arc;
 // }
 pub fn write_node_to_file(
     lazy_item: &SharedNode,
-    bufmans: &BufferManagerFactory,
+    bufmans: &BufferManagerFactory<Hash>,
 ) -> Result<u32, WaCustomError> {
     let version = lazy_item.get_current_version();
-    let bufman = bufmans.get(&version)?;
+    let bufman = bufmans.get(version)?;
     let cursor = bufman.open_cursor()?;
 
     lazy_item.set_persistence(true);

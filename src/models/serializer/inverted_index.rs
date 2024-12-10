@@ -19,7 +19,7 @@ where
 {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
@@ -27,7 +27,7 @@ where
     }
 
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         file_index: FileIndex,
         cache: Arc<NodeRegistry>,
         max_loads: u16,

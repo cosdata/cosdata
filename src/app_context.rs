@@ -5,25 +5,26 @@ use crate::config_loader::Config;
 use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::cache_loader::NodeRegistry;
 use crate::models::types::{get_app_env, AppEnv};
+use crate::models::versioning::Hash;
 use crate::WaCustomError;
 use rayon::ThreadPool;
 
 #[allow(dead_code)]
-fn init_index_manager() -> BufferManagerFactory {
+fn init_index_manager() -> BufferManagerFactory<Hash> {
     BufferManagerFactory::new(Path::new(".").into(), |root, ver| {
         root.join(format!("{}.index", **ver))
     })
 }
 
 #[allow(dead_code)]
-fn init_node_registry(index_manager: Arc<BufferManagerFactory>) -> NodeRegistry {
+fn init_node_registry(index_manager: Arc<BufferManagerFactory<Hash>>) -> NodeRegistry {
     // @TODO: May be the value can be taken from config
     let cuckoo_filter_capacity = 1000;
     NodeRegistry::new(cuckoo_filter_capacity, index_manager)
 }
 
 #[allow(dead_code)]
-fn init_vec_raw_manager() -> BufferManagerFactory {
+fn init_vec_raw_manager() -> BufferManagerFactory<Hash> {
     BufferManagerFactory::new(Path::new(".").into(), |root, ver| {
         root.join(format!("{}.vec_raw", **ver))
     })

@@ -455,7 +455,7 @@ impl DenseIndexTransaction {
         let (raw_embedding_channel, rx) = mpsc::channel();
 
         let raw_embedding_serializer_thread_handle = {
-            let bufman = dense_index.vec_raw_manager.get(&id)?;
+            let bufman = dense_index.vec_raw_manager.get(id)?;
 
             thread::spawn(move || {
                 let mut offsets = Vec::new();
@@ -545,8 +545,8 @@ pub struct DenseIndex {
     pub vcs: Arc<VersionControl>,
     pub hnsw_params: ArcShift<HNSWHyperParams>,
     pub cache: Arc<ProbCache>,
-    pub index_manager: Arc<BufferManagerFactory>,
-    pub vec_raw_manager: Arc<BufferManagerFactory>,
+    pub index_manager: Arc<BufferManagerFactory<Hash>>,
+    pub vec_raw_manager: Arc<BufferManagerFactory<Hash>>,
 }
 
 unsafe impl Send for DenseIndex {}
@@ -567,8 +567,8 @@ impl DenseIndex {
         vcs: Arc<VersionControl>,
         num_layers: u8,
         cache: Arc<ProbCache>,
-        index_manager: Arc<BufferManagerFactory>,
-        vec_raw_manager: Arc<BufferManagerFactory>,
+        index_manager: Arc<BufferManagerFactory<Hash>>,
+        vec_raw_manager: Arc<BufferManagerFactory<Hash>>,
     ) -> Self {
         DenseIndex {
             database_name,
@@ -717,11 +717,11 @@ impl CollectionsMap {
 
         let index_manager = Arc::new(BufferManagerFactory::new(
             collection_path.clone(),
-            |root, ver| root.join(format!("{}.index", **ver)),
+            |root, ver: &Hash| root.join(format!("{}.index", **ver)),
         ));
         let vec_raw_manager = Arc::new(BufferManagerFactory::new(
             collection_path.clone(),
-            |root, ver| root.join(format!("{}.vec_raw", **ver)),
+            |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
         ));
         let prop_file = Arc::new(RwLock::new(
             OpenOptions::new()

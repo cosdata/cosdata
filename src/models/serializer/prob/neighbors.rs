@@ -19,11 +19,11 @@ use super::{ProbSerialize, UpdateSerialized};
 impl ProbSerialize for Box<[AtomicPtr<(SharedNode, MetricResult)>]> {
     fn serialize(
         &self,
-        bufmans: &BufferManagerFactory,
+        bufmans: &BufferManagerFactory<Hash>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
-        let bufman = bufmans.get(&version)?;
+        let bufman = bufmans.get(version)?;
 
         let start_offset = bufman.cursor_position(cursor)?;
         bufman.write_u32_with_cursor(cursor, self.len() as u32)?;
@@ -61,7 +61,7 @@ impl ProbSerialize for Box<[AtomicPtr<(SharedNode, MetricResult)>]> {
     }
 
     fn deserialize(
-        bufmans: &BufferManagerFactory,
+        bufmans: &BufferManagerFactory<Hash>,
         file_index: FileIndex,
         cache: &ProbCache,
         max_loads: u16,
@@ -78,7 +78,7 @@ impl ProbSerialize for Box<[AtomicPtr<(SharedNode, MetricResult)>]> {
                 version_number,
                 offset: FileOffset(offset),
             } => {
-                let bufman = bufmans.get(&version_id)?;
+                let bufman = bufmans.get(version_id)?;
                 let cursor = bufman.open_cursor()?;
                 bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
 
@@ -141,7 +141,7 @@ impl ProbSerialize for Box<[AtomicPtr<(SharedNode, MetricResult)>]> {
 impl UpdateSerialized for Box<[AtomicPtr<(SharedNode, MetricResult)>]> {
     fn update_serialized(
         &self,
-        bufmans: &BufferManagerFactory,
+        bufmans: &BufferManagerFactory<Hash>,
         file_index: FileIndex,
     ) -> Result<u32, BufIoError> {
         match file_index {
@@ -155,7 +155,7 @@ impl UpdateSerialized for Box<[AtomicPtr<(SharedNode, MetricResult)>]> {
                 offset: FileOffset(offset),
                 ..
             } => {
-                let bufman = bufmans.get(&version_id)?;
+                let bufman = bufmans.get(version_id)?;
                 let cursor = bufman.open_cursor()?;
                 let placeholder_offset = offset as u64 + 4;
 

@@ -35,7 +35,7 @@ pub fn create_root_node(
     dim: usize,
     prop_file: Arc<RwLock<File>>,
     hash: Hash,
-    index_manager: Arc<BufferManagerFactory>,
+    index_manager: Arc<BufferManagerFactory<Hash>>,
     neighbors_count: usize,
 ) -> Result<SharedNode, WaCustomError> {
     let min = -1.0;
@@ -254,7 +254,7 @@ pub fn get_embedding_by_id(
 
     let offset = embedding_offset.offset;
     let current_version = embedding_offset.version;
-    let bufman = dense_index.vec_raw_manager.get(&current_version)?;
+    let bufman = dense_index.vec_raw_manager.get(current_version)?;
     let (embedding, _next) = read_embedding(bufman.clone(), offset)?;
 
     Ok(embedding)
@@ -520,7 +520,7 @@ pub fn index_embeddings(
         Ok(())
     };
 
-    let bufman = dense_index.vec_raw_manager.get(&version)?;
+    let bufman = dense_index.vec_raw_manager.get(version)?;
 
     let mut i = embedding_offset.offset;
     let cursor = bufman.open_cursor()?;

@@ -9,7 +9,7 @@ use crate::models::file_persist::write_node_to_file;
 use crate::models::meta_persist::update_current_version;
 use crate::models::types::*;
 use crate::models::user::Statistics;
-use crate::models::versioning::VersionControl;
+use crate::models::versioning::{Hash, VersionControl};
 use crate::quantization::{Quantization, StorageType};
 use crate::vector_store::*;
 use arcshift::ArcShift;
@@ -61,11 +61,11 @@ pub async fn init_dense_index_for_collection(
 
     let index_manager = Arc::new(BufferManagerFactory::new(
         collection_path.clone(),
-        |root, ver| root.join(format!("{}.index", **ver)),
+        |root, ver: &Hash| root.join(format!("{}.index", **ver)),
     ));
     let vec_raw_manager = Arc::new(BufferManagerFactory::new(
         collection_path.clone(),
-        |root, ver| root.join(format!("{}.vec_raw", **ver)),
+        |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
     ));
     // TODO: May be the value can be taken from config
     let cache = Arc::new(ProbCache::new(
@@ -214,7 +214,7 @@ pub fn run_upload(
                 "Last unindexed embedding's version must be the previous version of the collection"
             );
 
-            let prev_bufman = dense_index.vec_raw_manager.get(&prev_version)?;
+            let prev_bufman = dense_index.vec_raw_manager.get(prev_version)?;
             let cursor = prev_bufman.open_cursor()?;
             let prev_file_len = prev_bufman.seek_with_cursor(cursor, SeekFrom::End(0))? as u32;
             prev_bufman.close_cursor(cursor)?;
@@ -271,7 +271,7 @@ pub fn run_upload(
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
     // Insert vectors
-    let bufman = dense_index.vec_raw_manager.get(&current_version)?;
+    let bufman = dense_index.vec_raw_manager.get(current_version)?;
 
     vecs.into_par_iter()
         .map(|(id, vec)| {

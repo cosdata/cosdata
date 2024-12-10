@@ -32,13 +32,13 @@ use std::sync::Arc;
 pub trait CustomSerialize: Sized {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError>;
 
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         file_index: FileIndex,
         cache: Arc<NodeRegistry>,
         max_loads: u16,
@@ -55,16 +55,16 @@ trait SimpleSerialize: Sized {
 impl<T: SimpleSerialize> CustomSerialize for T {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
-        let bufman = bufmans.get(&version)?;
+        let bufman = bufmans.get(version)?;
         SimpleSerialize::serialize(self, bufman, cursor)
     }
 
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         file_index: FileIndex,
         _cache: Arc<NodeRegistry>,
         _max_loads: u16,
@@ -74,7 +74,7 @@ impl<T: SimpleSerialize> CustomSerialize for T {
             FileIndex::Valid {
                 offset, version_id, ..
             } => {
-                let bufman = bufmans.get(&version_id)?;
+                let bufman = bufmans.get(version_id)?;
                 SimpleSerialize::deserialize(bufman, offset)
             }
             FileIndex::Invalid => Err(io::Error::new(

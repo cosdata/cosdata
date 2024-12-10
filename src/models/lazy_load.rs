@@ -1309,7 +1309,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let bufmans = Arc::new(BufferManagerFactory::new(
             temp_dir.as_ref().into(),
-            |root, ver| root.join(format!("{}.index", **ver)),
+            |root, ver: &Hash| root.join(format!("{}.index", **ver)),
         ));
         let cache = Arc::new(NodeRegistry::new(1000, bufmans));
         let root = LazyItem::new(Hash::from(0), 0, 0.0);
@@ -1334,7 +1334,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let bufmans = Arc::new(BufferManagerFactory::new(
             temp_dir.as_ref().into(),
-            |root, ver| root.join(format!("{}.index", **ver)),
+            |root, ver: &Hash| root.join(format!("{}.index", **ver)),
         ));
         let cache = Arc::new(NodeRegistry::new(1000, bufmans));
         let root = LazyItem::new(Hash::from(0), 0, 0.0);
