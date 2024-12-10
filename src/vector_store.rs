@@ -928,6 +928,12 @@ fn traverse_find_nearest(
     nn.sort_unstable_by(|a, b| b.1.get_value().partial_cmp(&a.1.get_value()).unwrap());
     if truncate_results {
         nn.truncate(5);
+    } else {
+        if cur_level.0 == 0 {
+            nn.truncate(100);
+        } else {
+            nn.truncate(20);
+        }
     }
     Ok(nn)
 }
