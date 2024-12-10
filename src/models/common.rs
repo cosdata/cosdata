@@ -507,7 +507,7 @@ pub fn remove_duplicates_and_filter(
             .partial_cmp(&a.get_value())
             .unwrap_or(Ordering::Equal)
     });
-    collected.truncate(100);
+    collected.truncate(50);
     collected
 }
 

@@ -68,6 +68,10 @@ pub async fn run_actix_server() -> std::io::Result<()> {
                     .service(indexes_module())
                     .service(web::resource("/upsert").route(web::post().to(api::vectordb::upsert)))
                     .service(web::resource("/search").route(web::post().to(api::vectordb::search)))
+                    .service(
+                        web::resource("/batch-search")
+                            .route(web::post().to(api::vectordb::batch_search)),
+                    )
                     .service(web::resource("/fetch").route(web::post().to(api::vectordb::fetch)))
                     .service(
                         web::scope("{database_name}/transactions")

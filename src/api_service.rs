@@ -359,6 +359,37 @@ pub async fn ann_vector_query(
     Ok(output)
 }
 
+pub async fn batch_ann_vector_query(
+    ctx: Arc<AppContext>,
+    dense_index: Arc<DenseIndex>,
+    queries: Vec<Vec<f32>>,
+) -> Result<Vec<Vec<(VectorId, MetricResult)>>, WaCustomError> {
+    queries
+        .into_par_iter()
+        .map(|query| {
+            let vec_hash = VectorId(u32::MAX - 1);
+            let vector_list = dense_index
+                .quantization_metric
+                .quantize(&query, *dense_index.storage_type.clone().get())?;
+
+            let vec_emb = QuantizedVectorEmbedding {
+                quantized_vec: Arc::new(vector_list.clone()),
+                hash_vec: vec_hash.clone(),
+            };
+
+            let results = ann_search(
+                dense_index.clone(),
+                vec_emb,
+                dense_index.get_root_vec(),
+                HNSWLevel(dense_index.hnsw_params.clone().get().num_layers),
+                ctx.config.hnsw.neighbors_count,
+            )?;
+            let output = finalize_ann_results(dense_index.clone(), results, &query)?;
+            Ok::<_, WaCustomError>(output)
+        })
+        .collect()
+}
+
 pub async fn fetch_vector_neighbors(
     dense_index: Arc<DenseIndex>,
     vector_id: VectorId,
