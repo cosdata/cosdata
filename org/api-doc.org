@@ -272,7 +272,7 @@ Creates a new vector in a collection.
 - Request Body for dense vectors:
 #+BEGIN_SRC json
 {
-    dense: {
+    "dense": {
         "id": "vec1",
         "values": [0.1, 0.2, ...],
     }
@@ -282,7 +282,7 @@ Creates a new vector in a collection.
 - Request Body for sparse vectors:
 #+BEGIN_SRC json
 {
-    sparse: {
+    "sparse": {
         "id": "vec1",
         "indices": [2, 3, ...],
         "values": [0.1, 0.2, ...],
