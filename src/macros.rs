@@ -7,11 +7,9 @@ macro_rules! key {
         key
     }};
     (e:$embedding_id:expr) => {{
-        let string = $embedding_id.to_string();
-        let key: &[u8] = string.as_ref();
-        let mut prefixed_key = Vec::with_capacity(key.len() + 1); // prefix = 1 bytes
+        let mut prefixed_key = Vec::with_capacity(5); // prefix = 1 bytes, id = 4 byte
         prefixed_key.push(1);
-        prefixed_key.extend_from_slice(key);
+        prefixed_key.extend_from_slice(&$embedding_id.0.to_le_bytes());
         prefixed_key
     }};
     (b:$branch_id:expr) => {{

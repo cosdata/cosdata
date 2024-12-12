@@ -4,11 +4,7 @@ use crate::{
     api::vectordb::collections,
     api_service::{run_upload, run_upload_in_transaction, run_upload_sparse_vector},
     app_context::AppContext,
-    convert_vectors,
-    models::{
-        rpc::VectorIdValue,
-        types::{DenseIndexTransaction, VectorId},
-    },
+    models::types::{DenseIndexTransaction, VectorId},
     vector_store::get_embedding_by_id,
 };
 
@@ -129,10 +125,7 @@ pub(crate) async fn get_vector_by_id(
     let embedding = get_embedding_by_id(vec_store, &vector_id)
         .map_err(|e| VectorsError::DatabaseError(e.to_string()))?;
 
-    let id = match embedding.hash_vec {
-        VectorId::Int(v) => VectorIdValue::IntValue(v),
-        VectorId::Str(v) => VectorIdValue::StringValue(v),
-    };
+    let id = embedding.hash_vec.0;
 
     Ok(CreateVectorResponseDto::Dense(CreateDenseVectorDto {
         id,
@@ -143,7 +136,7 @@ pub(crate) async fn get_vector_by_id(
 pub(crate) async fn update_vector(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    vector_id: VectorIdValue,
+    vector_id: u64,
     update_vector_dto: UpdateVectorDto,
 ) -> Result<UpdateVectorResponseDto, VectorsError> {
     let dense_index = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
@@ -182,7 +175,7 @@ pub(crate) async fn find_similar_vectors(
         ));
     }
     Ok(vec![SimilarVector {
-        id: VectorIdValue::IntValue(find_similar_vectors.k),
+        id: find_similar_vectors.k,
         score: find_similar_vectors.vector[0],
     }])
 }
@@ -190,7 +183,7 @@ pub(crate) async fn find_similar_vectors(
 pub(crate) async fn delete_vector_by_id(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    _vector_id: VectorIdValue,
+    _vector_id: u64,
 ) -> Result<(), VectorsError> {
     let _collection = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
         .await
@@ -217,7 +210,11 @@ pub(crate) async fn upsert_in_transaction(
         ctx.clone(),
         dense_index,
         transaction,
-        convert_vectors(upsert_dto.vectors),
+        upsert_dto
+            .vectors
+            .into_iter()
+            .map(|vec| (vec.id, vec.values))
+            .collect(),
     )
     .map_err(VectorsError::WaCustom)?;
 

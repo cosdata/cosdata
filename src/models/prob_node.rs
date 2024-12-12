@@ -7,18 +7,22 @@ use std::{
 };
 
 use super::{
-    prob_lazy_load::{lazy_item::ProbLazyItem, lazy_item_array::ProbLazyItemArray},
+    prob_lazy_load::{
+        lazy_item::{ProbLazyItem, ProbLazyItemInner},
+        lazy_item_array::ProbLazyItemArray,
+    },
     types::{HNSWLevel, MetricResult, NodeProp, VectorId},
 };
 
-pub type SharedNode = Arc<ProbLazyItem<ProbNode>>;
+pub type SharedNode = ProbLazyItem<ProbNode>;
+pub type SharedNodeInner = ProbLazyItemInner<ProbNode>;
 
 pub struct ProbNode {
     pub hnsw_level: HNSWLevel,
     pub prop: Arc<NodeProp>,
     neighbors: Box<[AtomicPtr<(SharedNode, MetricResult)>]>,
-    parent: AtomicPtr<SharedNode>,
-    child: AtomicPtr<SharedNode>,
+    parent: AtomicPtr<SharedNodeInner>,
+    child: AtomicPtr<SharedNodeInner>,
     pub versions: ProbLazyItemArray<ProbNode, 4>,
 }
 
@@ -44,11 +48,9 @@ impl ProbNode {
             prop,
             neighbors: neighbors.into_boxed_slice(),
             parent: AtomicPtr::new(
-                parent.map_or_else(|| ptr::null_mut(), |parent| Box::into_raw(Box::new(parent))),
+                parent.map_or_else(|| ptr::null_mut(), |parent| parent.as_ptr()),
             ),
-            child: AtomicPtr::new(
-                child.map_or_else(|| ptr::null_mut(), |child| Box::into_raw(Box::new(child))),
-            ),
+            child: AtomicPtr::new(child.map_or_else(|| ptr::null_mut(), |child| child.as_ptr())),
             versions: ProbLazyItemArray::new(),
         }
     }
@@ -65,11 +67,9 @@ impl ProbNode {
             prop,
             neighbors,
             parent: AtomicPtr::new(
-                parent.map_or_else(|| ptr::null_mut(), |parent| Box::into_raw(Box::new(parent))),
+                parent.map_or_else(|| ptr::null_mut(), |parent| parent.as_ptr()),
             ),
-            child: AtomicPtr::new(
-                child.map_or_else(|| ptr::null_mut(), |child| Box::into_raw(Box::new(child))),
-            ),
+            child: AtomicPtr::new(child.map_or_else(|| ptr::null_mut(), |child| child.as_ptr())),
             versions: ProbLazyItemArray::new(),
         }
     }
@@ -87,57 +87,37 @@ impl ProbNode {
             prop,
             neighbors,
             parent: AtomicPtr::new(
-                parent.map_or_else(|| ptr::null_mut(), |parent| Box::into_raw(Box::new(parent))),
+                parent.map_or_else(|| ptr::null_mut(), |parent| parent.as_ptr()),
             ),
-            child: AtomicPtr::new(
-                child.map_or_else(|| ptr::null_mut(), |child| Box::into_raw(Box::new(child))),
-            ),
+            child: AtomicPtr::new(child.map_or_else(|| ptr::null_mut(), |child| child.as_ptr())),
             versions,
         }
     }
 
     pub fn get_parent(&self) -> Option<SharedNode> {
-        unsafe {
-            let ptr = self.parent.load(Ordering::SeqCst);
-            if ptr.is_null() {
-                None
-            } else {
-                Some((*ptr).clone())
-            }
+        let ptr = self.parent.load(Ordering::Acquire);
+        if ptr.is_null() {
+            None
+        } else {
+            Some(SharedNode::from_ptr(ptr))
         }
     }
 
     pub fn set_parent(&self, parent: SharedNode) {
-        unsafe {
-            let old = self
-                .parent
-                .swap(Box::into_raw(Box::new(parent)), Ordering::SeqCst);
-            if !old.is_null() {
-                drop(Box::from_raw(old));
-            }
-        }
+        self.parent.store(parent.as_ptr(), Ordering::Release);
     }
 
     pub fn get_child(&self) -> Option<SharedNode> {
-        unsafe {
-            let ptr = self.child.load(Ordering::SeqCst);
-            if ptr.is_null() {
-                None
-            } else {
-                Some((*ptr).clone())
-            }
+        let ptr = self.child.load(Ordering::Acquire);
+        if ptr.is_null() {
+            None
+        } else {
+            Some(SharedNode::from_ptr(ptr))
         }
     }
 
     pub fn set_child(&self, child: SharedNode) {
-        unsafe {
-            let old = self
-                .child
-                .swap(Box::into_raw(Box::new(child)), Ordering::SeqCst);
-            if !old.is_null() {
-                drop(Box::from_raw(old));
-            }
-        }
+        self.child.store(child.as_ptr(), Ordering::Release);
     }
 
     pub fn get_id(&self) -> &VectorId {

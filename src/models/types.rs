@@ -7,8 +7,7 @@ use super::meta_persist::{
     delete_dense_index, lmdb_init_collections_db, lmdb_init_db, load_collections,
     load_dense_index_data, persist_dense_index, retrieve_current_version,
 };
-use super::prob_lazy_load::lazy_item::ProbLazyItem;
-use super::prob_node::{ProbNode, SharedNode};
+use super::prob_node::{SharedNode, SharedNodeInner};
 use super::versioning::VersionControl;
 use crate::distance::cosine::CosineSimilarity;
 use crate::distance::DistanceError;
@@ -111,10 +110,7 @@ pub enum PropState {
     rkyv::Serialize,
     rkyv::Deserialize,
 )]
-pub enum VectorId {
-    Str(String),
-    Int(i32),
-}
+pub struct VectorId(pub u64);
 
 impl VectorId {
     pub fn get_hash(&self) -> u64 {
@@ -284,10 +280,7 @@ impl MergedNode {
 // Implementing the std::fmt::Display trait for VectorId
 impl fmt::Display for VectorId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            VectorId::Str(s) => write!(f, "{}", s),
-            VectorId::Int(i) => write!(f, "{}", i),
-        }
+        write!(f, "{}", self.0)
     }
 }
 
@@ -404,11 +397,11 @@ pub struct DenseIndexTransaction {
     pub id: Hash,
     pub version_number: u16,
     pub serialization_table: Arc<TSHashTable<SharedNode, ()>>,
-    pub lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16), SharedNode>>,
+    pub lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16, u8), SharedNode>>,
     serializer_thread_handle: thread::JoinHandle<Result<(), WaCustomError>>,
     raw_embedding_serializer_thread_handle: thread::JoinHandle<Result<(), WaCustomError>>,
     serialization_signal: mpsc::Sender<()>,
-    pub raw_embedding_channel: mpsc::SyncSender<RawVectorEmbedding>,
+    pub raw_embedding_channel: mpsc::Sender<RawVectorEmbedding>,
     batch_count: Arc<AtomicUsize>,
 }
 
@@ -429,7 +422,7 @@ impl DenseIndexTransaction {
                 WaCustomError::DatabaseError(format!("Unable to get transaction hash: {}", err))
             })?;
 
-        let serialization_table = Arc::new(TSHashTable::<Arc<ProbLazyItem<ProbNode>>, ()>::new(16));
+        let serialization_table = Arc::new(TSHashTable::<SharedNode, ()>::new(16));
         let (serialization_signal, rx) = mpsc::channel();
         let batch_count = Arc::new(AtomicUsize::new(0));
 
@@ -460,7 +453,7 @@ impl DenseIndexTransaction {
             })
         };
 
-        let (raw_embedding_channel, rx) = mpsc::sync_channel(100);
+        let (raw_embedding_channel, rx) = mpsc::channel();
 
         let raw_embedding_serializer_thread_handle = {
             let bufman = dense_index.vec_raw_manager.get(&id)?;
@@ -540,7 +533,7 @@ impl DenseIndexTransaction {
 #[derive(Clone)]
 pub struct DenseIndex {
     pub database_name: String,
-    pub root_vec: Arc<AtomicPtr<SharedNode>>,
+    pub root_vec: Arc<AtomicPtr<SharedNodeInner>>,
     pub levels_prob: Arc<Vec<(f64, i32)>>,
     pub dim: usize,
     pub prop_file: Arc<RwLock<File>>,
@@ -580,7 +573,7 @@ impl DenseIndex {
     ) -> Self {
         DenseIndex {
             database_name,
-            root_vec: Arc::new(AtomicPtr::new(Box::into_raw(Box::new(root_vec)))),
+            root_vec: Arc::new(AtomicPtr::new(root_vec.as_ptr())),
             levels_prob,
             dim,
             prop_file,
@@ -614,19 +607,11 @@ impl DenseIndex {
     }
 
     pub fn set_root_vec(&self, root_vec: SharedNode) {
-        let old = self
-            .root_vec
-            .swap(Box::into_raw(Box::new(root_vec)), Ordering::SeqCst);
-
-        unsafe {
-            if !old.is_null() {
-                drop(Box::from_raw(old))
-            }
-        };
+        self.root_vec.store(root_vec.as_ptr(), Ordering::SeqCst);
     }
 
     pub fn get_root_vec(&self) -> SharedNode {
-        unsafe { (*self.root_vec.load(Ordering::SeqCst)).clone() }
+        SharedNode::from_ptr(self.root_vec.load(Ordering::SeqCst))
     }
 
     /// Returns FileIndex (offset) corresponding to the root
@@ -946,7 +931,7 @@ pub fn get_app_env() -> Result<Arc<AppEnv>, WaCustomError> {
     // Initialize the environment
     let env = Environment::new()
         .set_max_dbs(10)
-        .set_map_size(10485760) // Set the maximum size of the database to 10MB
+        .set_map_size(1048576000) // Set the maximum size of the database to 1GB
         .open(&path)
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 

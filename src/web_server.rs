@@ -55,7 +55,7 @@ pub async fn run_actix_server() -> std::io::Result<()> {
             // so it is able to add headers to error responses
             .wrap(Cors::permissive())
             // register simple handler, handle all methods
-            .app_data(web::JsonConfig::default().limit(4096 * 1048576))
+            .app_data(web::JsonConfig::default().limit(8_388_608)) // 8 MB
             .service(auth_module())
             .service(
                 web::scope("/vectordb")

@@ -19,7 +19,7 @@ impl ProbSerialize for SharedNode {
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
-        match &*self.get_state() {
+        match self.unsafe_get_state() {
             ProbLazyItemState::Pending { file_index } => Ok(file_index.get_offset().unwrap().0),
             ProbLazyItemState::Ready {
                 data,

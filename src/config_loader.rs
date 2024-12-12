@@ -9,6 +9,7 @@ pub struct Config {
     pub thread_pool: ThreadPool,
     pub server: Server,
     pub hnsw: Hnsw,
+    pub indexing: Indexing,
     pub upload_threshold: u32,
     pub upload_process_batch_size: usize,
 }
@@ -145,6 +146,19 @@ impl Server {
 #[derive(Deserialize, Clone)]
 pub struct Hnsw {
     pub neighbors_count: usize,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(tag = "mode", rename_all = "lowercase")]
+pub enum VectorsIndexingMode {
+    Sequential,
+    Batch { batch_size: usize },
+}
+
+#[derive(Deserialize, Clone)]
+pub struct Indexing {
+    #[serde(flatten)]
+    pub mode: VectorsIndexingMode,
 }
 
 pub fn load_config() -> Config {

@@ -266,7 +266,12 @@ impl ProbCache {
         prop_file: Arc<RwLock<File>>,
     ) -> Self {
         let cuckoo_filter = CuckooFilter::new(cuckoo_filter_capacity);
-        let registry = LRUCache::with_prob_eviction(1000, 0.03125);
+        let mut registry = LRUCache::with_prob_eviction(1_000_000, 0.03125);
+        // registry.set_evict_hook(Some(|item: &SharedNode| {
+        //     let file_index = item.get_file_index().unwrap();
+        //     let new_state = Arc::new(ProbLazyItemState::Pending { file_index });
+        //     item.set_state(new_state);
+        // }));
         let props_registry = DashMap::new();
 
         Self {
@@ -304,12 +309,7 @@ impl ProbCache {
         Ok(prop)
     }
 
-    pub fn insert_lazy_object(
-        &self,
-        version: Hash,
-        offset: u32,
-        item: Arc<ProbLazyItem<ProbNode>>,
-    ) {
+    pub fn insert_lazy_object(&self, version: Hash, offset: u32, item: SharedNode) {
         let combined_index = (offset as u64) << 32 | (*version as u64);
         let mut cuckoo_filter = self.cuckoo_filter.write().unwrap();
         cuckoo_filter.insert(&combined_index);
@@ -386,13 +386,7 @@ impl ProbCache {
             (FileOffset(0), 0, 0.into())
         };
 
-        let data = Arc::new(ProbNode::deserialize(
-            &self.bufmans,
-            file_index,
-            self,
-            max_loads - 1,
-            skipm,
-        )?);
+        let data = ProbNode::deserialize(&self.bufmans, file_index, self, max_loads - 1, skipm)?;
         let state = ProbLazyItemState::Ready {
             data,
             file_offset: Cell::new(Some(offset)),
@@ -401,17 +395,17 @@ impl ProbCache {
             version_number,
         };
 
-        let node = ProbLazyItem::new_from_state(state);
+        let item = ProbLazyItem::new_from_state(state);
 
         {
             self.cuckoo_filter.write().unwrap().insert(&combined_index);
-            self.registry.insert(combined_index, node.clone());
+            self.registry.insert(combined_index.clone(), item.clone());
         }
 
         *load_complete = true;
         self.loading_items.delete(&combined_index);
 
-        Ok(node)
+        Ok(item)
     }
 
     // Retrieves an object from the cache, attempting to batch load if possible, based on the state of the batch load lock.
@@ -428,16 +422,13 @@ impl ProbCache {
     //
     // After determining the appropriate `max_loads`, the function proceeds by calling `get_lazy_object`, which handles
     // the actual loading process, and retrieves the lazy-loaded data.
-    pub fn get_object(&self, file_index: FileIndex) -> Result<Arc<ProbNode>, BufIoError> {
+    pub fn get_object(&self, file_index: FileIndex) -> Result<SharedNode, BufIoError> {
         let (_lock, max_loads) = match self.batch_load_lock.try_lock() {
             Ok(lock) => (Some(lock), 1000),
             Err(TryLockError::Poisoned(poison_err)) => panic!("lock error: {}", poison_err),
             Err(TryLockError::WouldBlock) => (None, 1),
         };
-        Ok(self
-            .get_lazy_object(file_index, max_loads, &mut HashSet::new())?
-            .get_lazy_data()
-            .unwrap())
+        self.get_lazy_object(file_index, max_loads, &mut HashSet::new())
     }
 
     pub fn combine_index(file_index: &FileIndex) -> u64 {
