@@ -17,7 +17,7 @@ pub(crate) async fn create_vector(
 }
 
 pub(crate) async fn get_vector_by_id(
-    path: web::Path<(String, u32)>,
+    path: web::Path<(String, u64)>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse> {
     let (collection_id, vector_id) = path.into_inner();
@@ -27,7 +27,7 @@ pub(crate) async fn get_vector_by_id(
 }
 
 pub(crate) async fn update_vector_by_id(
-    path: web::Path<(String, u32)>,
+    path: web::Path<(String, u64)>,
     web::Json(update_vector_dto): web::Json<UpdateVectorDto>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse> {
@@ -50,7 +50,7 @@ pub(crate) async fn find_similar_vectors(
 }
 
 pub(crate) async fn delete_vector_by_id(
-    path: web::Path<(String, u32)>,
+    path: web::Path<(String, u64)>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse> {
     let (collection_id, vector_id) = path.into_inner();

@@ -47,7 +47,7 @@ pub fn create_root_node(
             random_number
         })
         .collect::<Vec<f32>>();
-    let vec_hash = VectorId(u32::MAX);
+    let vec_hash = VectorId(u64::MAX);
 
     let vector_list = Arc::new(quantization_metric.quantize(&vec, storage_type)?);
 
@@ -567,10 +567,10 @@ pub fn index_embeddings_in_transaction(
     version: Hash,
     version_number: u16,
     transaction: &DenseIndexTransaction,
-    vecs: Vec<(u32, Vec<f32>)>,
+    vecs: Vec<(u64, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
     let quantization = &*dense_index.quantization_metric;
-    let index = |vecs: Vec<(u32, Vec<f32>)>| {
+    let index = |vecs: Vec<(u64, Vec<f32>)>| {
         for (id, values) in vecs {
             let raw_emb = RawVectorEmbedding {
                 hash_vec: VectorId(id),
