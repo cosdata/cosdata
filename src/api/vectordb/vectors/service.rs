@@ -33,7 +33,7 @@ pub(crate) async fn get_vector_by_id(
 pub(crate) async fn update_vector_by_id(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    vector_id: u64,
+    vector_id: VectorId,
     update_vector_dto: UpdateVectorDto,
 ) -> Result<UpdateVectorResponseDto, VectorsError> {
     repo::update_vector(ctx, collection_id, vector_id, update_vector_dto).await

@@ -125,7 +125,7 @@ pub(crate) async fn get_vector_by_id(
     let embedding = get_embedding_by_id(vec_store, &vector_id)
         .map_err(|e| VectorsError::DatabaseError(e.to_string()))?;
 
-    let id = embedding.hash_vec.0;
+    let id = embedding.hash_vec;
 
     Ok(CreateVectorResponseDto::Dense(CreateDenseVectorDto {
         id,
@@ -136,7 +136,7 @@ pub(crate) async fn get_vector_by_id(
 pub(crate) async fn update_vector(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    vector_id: u64,
+    vector_id: VectorId,
     update_vector_dto: UpdateVectorDto,
 ) -> Result<UpdateVectorResponseDto, VectorsError> {
     let dense_index = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)

@@ -183,7 +183,7 @@ pub fn run_upload_in_transaction(
     ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
     transaction: &DenseIndexTransaction,
-    sample_points: Vec<(u64, Vec<f32>)>,
+    sample_points: Vec<(VectorId, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
     transaction.increment_batch_count();
     let version = transaction.id;
@@ -207,7 +207,7 @@ pub fn run_upload_in_transaction(
 pub fn run_upload_sparse_vector(
     ctx: Arc<AppContext>,
     inverted_index: Arc<InvertedIndex>,
-    vecs: Vec<(u64, Vec<(f32, u32)>)>,
+    vecs: Vec<(VectorId, Vec<(f32, u32)>)>,
 ) -> Result<(), WaCustomError> {
     let env = inverted_index.lmdb.env.clone();
     let db = inverted_index.lmdb.db.clone();
@@ -291,10 +291,9 @@ pub fn run_upload_sparse_vector(
 
     vecs.into_par_iter()
         .map(|(id, vec)| {
-            let hash_vec = VectorId(id);
             let vec_emb = RawSparseVectorEmbedding {
                 raw_vec: Arc::new(vec),
-                hash_vec,
+                hash_vec: id,
             };
 
             insert_sparse_embedding(
@@ -352,7 +351,7 @@ pub fn run_upload_sparse_vector(
 pub fn run_upload(
     ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
-    vecs: Vec<(u64, Vec<f32>)>,
+    vecs: Vec<(VectorId, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
     let env = dense_index.lmdb.env.clone();
     let db = dense_index.lmdb.db.clone();
@@ -433,10 +432,9 @@ pub fn run_upload(
 
     vecs.into_par_iter()
         .map(|(id, vec)| {
-            let hash_vec = VectorId(id);
             let vec_emb = RawVectorEmbedding {
                 raw_vec: Arc::new(vec),
-                hash_vec,
+                hash_vec: id,
             };
 
             insert_embedding(

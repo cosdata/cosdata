@@ -5,17 +5,17 @@ use serde::{
     Deserialize, Deserializer, Serialize,
 };
 
-use crate::models::rpc::Vector;
+use crate::models::{rpc::Vector, types::VectorId};
 
 #[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct CreateDenseVectorDto {
-    pub id: u64,
+    pub id: VectorId,
     pub values: Vec<f32>,
 }
 
 #[derive(Serialize, Debug)]
 pub(crate) struct CreateSparseVectorDto {
-    pub id: u64,
+    pub id: VectorId,
     pub values: Vec<(f32, u32)>,
 }
 
@@ -110,7 +110,7 @@ pub(crate) struct UpdateVectorDto {
 
 #[derive(Serialize)]
 pub(crate) struct UpdateVectorResponseDto {
-    pub id: u64,
+    pub id: VectorId,
     pub values: Vec<f32>,
     // pub created_at: String
 }
@@ -118,12 +118,12 @@ pub(crate) struct UpdateVectorResponseDto {
 #[derive(Deserialize)]
 pub(crate) struct FindSimilarVectorsDto {
     pub vector: Vec<f32>,
-    pub k: u64,
+    pub k: VectorId,
 }
 
 #[derive(Serialize)]
 pub(crate) struct SimilarVector {
-    pub id: u64,
+    pub id: VectorId,
     pub score: f32,
 }
 

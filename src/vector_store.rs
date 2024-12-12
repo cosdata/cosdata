@@ -763,13 +763,13 @@ pub fn index_embeddings_in_transaction(
     version: Hash,
     version_number: u16,
     transaction: &DenseIndexTransaction,
-    vecs: Vec<(u64, Vec<f32>)>,
+    vecs: Vec<(VectorId, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
     let quantization = &*dense_index.quantization_metric;
-    let index = |vecs: Vec<(u64, Vec<f32>)>| {
+    let index = |vecs: Vec<(VectorId, Vec<f32>)>| {
         for (id, values) in vecs {
             let raw_emb = RawVectorEmbedding {
-                hash_vec: VectorId(id),
+                hash_vec: id,
                 raw_vec: Arc::new(values),
             };
             transaction.post_raw_embedding(raw_emb.clone());

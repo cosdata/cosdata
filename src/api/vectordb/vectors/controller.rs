@@ -27,7 +27,7 @@ pub(crate) async fn get_vector_by_id(
 }
 
 pub(crate) async fn update_vector_by_id(
-    path: web::Path<(String, u64)>,
+    path: web::Path<(String, VectorId)>,
     web::Json(update_vector_dto): web::Json<UpdateVectorDto>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse> {
