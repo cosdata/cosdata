@@ -170,7 +170,7 @@ pub fn run_upload_in_transaction(
     ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
     transaction: &DenseIndexTransaction,
-    sample_points: Vec<(u32, Vec<f32>)>,
+    sample_points: Vec<(u64, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
     transaction.increment_batch_count();
     let version = transaction.id;
@@ -194,7 +194,7 @@ pub fn run_upload_in_transaction(
 pub fn run_upload(
     ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
-    vecs: Vec<(u32, Vec<f32>)>,
+    vecs: Vec<(u64, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
     let env = dense_index.lmdb.env.clone();
     let db = dense_index.lmdb.db.clone();
@@ -338,7 +338,7 @@ pub async fn ann_vector_query(
     query: Vec<f32>,
 ) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
     let dense_index = dense_index.clone();
-    let vec_hash = VectorId(u32::MAX - 1);
+    let vec_hash = VectorId(u64::MAX - 1);
     let vector_list = dense_index
         .quantization_metric
         .quantize(&query, *dense_index.storage_type.clone().get())?;

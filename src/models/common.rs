@@ -495,7 +495,7 @@ pub fn remove_duplicates_and_filter(
             if !seen.insert(id.clone()) {
                 return None;
             }
-            if id.0 == u32::MAX {
+            if id.0 == u64::MAX {
                 return None;
             }
             Some((id, similarity))

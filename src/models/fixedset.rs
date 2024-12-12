@@ -7,7 +7,7 @@ impl PerformantFixedSet {
         PerformantFixedSet { buckets: [0; 59] }
     }
 
-    pub fn insert(&mut self, value: u32) {
+    pub fn insert(&mut self, value: u64) {
         let index = (value % 59) as usize;
         // let hash = value ^ 0xA5A5A5A5;
         let bit_position = (value % 128) as u8;
@@ -15,7 +15,7 @@ impl PerformantFixedSet {
         self.buckets[index] |= 1u128 << bit_position;
     }
 
-    pub fn is_member(&self, value: u32) -> bool {
+    pub fn is_member(&self, value: u64) -> bool {
         let index = (value % 59) as usize;
         // let hash = value ^ 0xA5A5A5A5;
         let bit_position = (value % 128) as u8;

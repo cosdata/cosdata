@@ -30,7 +30,7 @@ pub(crate) async fn get_vector_by_id(
 pub(crate) async fn update_vector_by_id(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    vector_id: u32,
+    vector_id: u64,
     update_vector_dto: UpdateVectorDto,
 ) -> Result<UpdateVectorResponseDto, VectorsError> {
     repo::update_vector(ctx, collection_id, vector_id, update_vector_dto).await
@@ -49,7 +49,7 @@ pub(crate) async fn find_similar_vectors(
 pub(crate) async fn delete_vector_by_id(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    vector_id: u32,
+    vector_id: u64,
 ) -> Result<(), VectorsError> {
     repo::delete_vector_by_id(ctx, collection_id, vector_id).await
 }

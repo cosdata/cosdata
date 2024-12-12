@@ -101,7 +101,7 @@ pub(crate) async fn get_vector_by_id(
 pub(crate) async fn update_vector(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    vector_id: u32,
+    vector_id: u64,
     update_vector_dto: UpdateVectorDto,
 ) -> Result<UpdateVectorResponseDto, VectorsError> {
     let dense_index = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
@@ -148,7 +148,7 @@ pub(crate) async fn find_similar_vectors(
 pub(crate) async fn delete_vector_by_id(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    _vector_id: u32,
+    _vector_id: u64,
 ) -> Result<(), VectorsError> {
     let _collection = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
         .await
