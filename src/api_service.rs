@@ -138,6 +138,10 @@ pub async fn init_inverted_index_for_collection(
 
     // Note that setting .write(true).append(true) has the same effect
     // as setting only .append(true)
+    // TODO (Question)
+    // should the prop file for inverted index has different path than of dense index?
+    //
+    // what is the prop file exactly?
     let prop_file = Arc::new(RwLock::new(
         fs::OpenOptions::new()
             .create(true)
@@ -147,6 +151,15 @@ pub async fn init_inverted_index_for_collection(
             .map_err(|e| WaCustomError::FsError(e.to_string()))?,
     ));
 
+    // TODO (Question)
+    // how the embedding are stored on the disk exactly?
+    //
+    // each embedding is stored in its own file, or we use log structured similar files?
+    //
+    // what is the difference between vec_raw_manager and index_manager?
+    //
+    // shouldn't index and vec_raw managers have different paths/names than of dense
+    // index?
     let vec_raw_manager = Arc::new(BufferManagerFactory::new(
         collection_path.clone(),
         |root, ver| root.join(format!("{}.vec_raw", **ver)),
@@ -215,10 +228,17 @@ pub fn run_upload_sparse_vector(
         .begin_ro_txn()
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
+    // TODO (Question)
+    // what do you mean by unindexed here?
+    //
     // Check if the previous version is unindexed, and continue from where we left.
     let prev_version = inverted_index.get_current_version();
-    // TODO (mohamed.eliwa) check the db here, isn't the "next_embedding_offset" kitting
+    // TODO (Question)
+    // isn't the "next_embedding_offset" hitting
     // the same value for the dense index?
+    // because both have the same db, as db is created after the collection name
+    //
+    // what next_embedding_offset used for?
     let index_before_insertion = match txn.get(*db, &"next_embedding_offset") {
         Ok(bytes) => {
             let embedding_offset = EmbeddingOffset::deserialize(bytes)
@@ -234,6 +254,8 @@ pub fn run_upload_sparse_vector(
             let prev_file_len = prev_bufman.seek_with_cursor(cursor, SeekFrom::End(0))? as u32;
             prev_bufman.close_cursor(cursor)?;
 
+            // TODO (Question)
+            // in what case this might happen, and the condition evaluates to true?
             prev_file_len > embedding_offset.offset
         }
         Err(lmdb::Error::NotFound) => false,
@@ -244,20 +266,33 @@ pub fn run_upload_sparse_vector(
 
     txn.abort();
 
+    // TODO (Question)
+    // what are these used for in dense index?
+    //
     let serialization_table = Arc::new(TSHashTable::new(16));
     let lazy_item_versions_table = Arc::new(TSHashTable::new(16));
 
     if index_before_insertion {
+        // TODO (Question)
+        // are we here loading embedding from disk into the in-memory index?
         index_sparse_embeddings(
             inverted_index.clone(),
             ctx.config.upload_process_batch_size,
             serialization_table.clone(),
             lazy_item_versions_table.clone(),
+            // TODO (Question)
+            // is this should be removed for sparse?
             ctx.config.hnsw.neighbors_count,
         )?;
     }
 
     // Add next version
+    // TODO (Question)
+    // does mean we are creating a new version with each vector?
+    //
+    // each version == a new file on the disk?
+    //
+    // means we are storing each embedding in a new file (or list embeddings that come in one api call)?
     let (current_version, _) = inverted_index
         .vcs
         .add_next_version("main")
@@ -268,6 +303,8 @@ pub fn run_upload_sparse_vector(
     // Update LMDB metadata
     let new_offset = EmbeddingOffset {
         version: current_version,
+        // TODO (Question)
+        // why setting the offset here to 0?
         offset: 0,
     };
     let new_offset_serialized = new_offset.serialize();
@@ -296,6 +333,8 @@ pub fn run_upload_sparse_vector(
                 hash_vec: id,
             };
 
+            // TODO (Question)
+            // inserting here means "writing to disk"?
             insert_sparse_embedding(
                 bufman.clone(),
                 inverted_index.clone(),
@@ -313,6 +352,8 @@ pub fn run_upload_sparse_vector(
         .begin_ro_txn()
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
+    // TODO (Question)
+    // what are we doing here ?
     let count_unindexed = txn
         .get(*db, &"count_unindexed")
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))
@@ -325,6 +366,12 @@ pub fn run_upload_sparse_vector(
 
     txn.abort();
 
+    // TODO (Question)
+    // what if its less than?
+    // I think this condition is useless
+    // bcz next time we call the run_upload function
+    // we will index the unindexed version if index_before_insertion
+    // At (Line 275)
     if count_unindexed >= ctx.config.upload_threshold {
         index_sparse_embeddings(
             inverted_index.clone(),
@@ -335,9 +382,21 @@ pub fn run_upload_sparse_vector(
         )?;
     }
 
+    // TODO (Question)
+    // what is this ?
+    //
+    // should it be removed for inverted index?
+    // as it contains ProbLazyItem<ProbNode>
     let list = Arc::into_inner(serialization_table).unwrap().to_list();
 
+    // TODO (Question)
+    // what is this ?
+    //
+    // should it be removed for inverted index?
+    // as it contains ProbLazyItem<ProbNode>
     for (node, _) in list {
+        // TODO (Question)
+        // what is its purpose if we already inserted the vecs before?
         write_node_to_file(&node, &inverted_index.index_manager)?;
     }
 
