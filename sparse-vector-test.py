@@ -40,7 +40,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Define your dynamic variables
 token = None
-host = "http://127.0.0.1:8443"
+host = "https://127.0.0.1:8443"
 base_url = f"{host}/vectordb"
 
 
