@@ -56,10 +56,42 @@ pub fn write_embedding(
     Ok(start)
 }
 
+/// Reads a sparse embedding from a buffer and returns it along with the next offset.
+///
+/// This function is designed to read a sparse vector embedding from a specified
+/// buffer managed by the `BufferManager`. It retrieves the embedding located at
+/// a given offset and returns it as a `RawSparseVectorEmbedding`, along with the
+/// updated offset for further processing.
+///
+/// # Arguments
+///
+/// * `bufman` - A reference-counted (`Arc`) `BufferManager` that provides access
+///   to the buffer from which the embedding is read. The `BufferManager` is expected
+///   to handle the underlying buffer resources and manage memory efficiently.
+/// * `offset` - The byte offset (of type `u32`) from which the embedding data is
+///   to be read. This is used to locate the sparse embedding in the buffer.
+///
+/// # Returns
+///
+/// This function returns a `Result` containing a tuple on success:
+/// - `RawSparseVectorEmbedding` - The read sparse vector embedding.
+/// - `u32` - The updated offset that can be used to read further data if necessary.
+///
+/// If the operation encounters an error, it will return a `WaCustomError`.
+///
+/// # Errors
+///
+/// - Returns a `WaCustomError` if reading from the buffer fails, or if the data at
+///   the specified offset cannot be parsed correctly into a sparse embedding.
 pub fn read_sparse_embedding(
     bufman: Arc<BufferManager>,
     offset: u32,
 ) -> Result<(RawSparseVectorEmbedding, u32), WaCustomError> {
+    // TODO (Question)
+    // should this function modified more to suit sparse vectors?
+    // now we are reading and deserializing directly as RawSparseVectorEmbedding
+    // would this cause an issue ?
+
     let cursor = bufman.open_cursor()?;
 
     bufman
@@ -76,9 +108,13 @@ pub fn read_sparse_embedding(
         .read_with_cursor(cursor, &mut buf)
         .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?;
 
-    let emb = unsafe { rkyv::from_bytes_unchecked(&buf) }.map_err(|e| {
-        WaCustomError::DeserializationError(format!("Failed to deserialize VectorEmbedding: {}", e))
-    })?;
+    let emb: RawSparseVectorEmbedding =
+        unsafe { rkyv::from_bytes_unchecked(&buf) }.map_err(|e| {
+            WaCustomError::DeserializationError(format!(
+                "Failed to deserialize VectorEmbedding: {}",
+                e
+            ))
+        })?;
 
     let next = bufman
         .cursor_position(cursor)
