@@ -1,6 +1,15 @@
 use std::sync::{Arc, Mutex};
 
+use crate::models::types::VectorId;
+
 use super::helpers::generate_power_of_4_list;
+
+// Raw vector embedding
+#[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize, PartialEq)]
+pub struct RawSparseVectorEmbedding {
+    pub raw_vec: Arc<Vec<(f32, u32)>>,
+    pub hash_vec: VectorId,
+}
 
 #[derive(Debug)]
 pub(crate) struct InvertedIndexItem {

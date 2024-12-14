@@ -2,7 +2,7 @@ use std::sync::{atomic::Ordering, Arc};
 
 use crate::{
     api::vectordb::collections,
-    api_service::{run_upload, run_upload_in_transaction},
+    api_service::{run_upload, run_upload_in_transaction, run_upload_sparse_vector},
     app_context::AppContext,
     models::types::{DenseIndexTransaction, VectorId},
     vector_store::get_embedding_by_id,
@@ -10,16 +10,51 @@ use crate::{
 
 use super::{
     dtos::{
-        CreateVectorDto, CreateVectorResponseDto, FindSimilarVectorsDto, SimilarVector,
-        UpdateVectorDto, UpdateVectorResponseDto, UpsertDto,
+        CreateDenseVectorDto, CreateSparseVectorDto, CreateVectorResponseDto,
+        FindSimilarVectorsDto, SimilarVector, UpdateVectorDto, UpdateVectorResponseDto, UpsertDto,
     },
     error::VectorsError,
 };
 
-pub(crate) async fn create_vector(
+/// Creates a sparse vector for inverted index
+///
+pub(crate) async fn create_sparse_vector(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    create_vector_dto: CreateVectorDto,
+    create_vector_dto: CreateSparseVectorDto,
+) -> Result<CreateVectorResponseDto, VectorsError> {
+    let inverted_index = collections::service::get_inverted_index_by_id(ctx.clone(), collection_id)
+        .await
+        .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
+
+    if inverted_index.current_open_transaction.is_some() {
+        return Err(VectorsError::FailedToCreateVector(
+            "there is an ongoing transaction!".into(),
+        ));
+    }
+
+    run_upload_sparse_vector(
+        ctx,
+        inverted_index,
+        vec![(
+            create_vector_dto.id.clone(),
+            create_vector_dto.values.clone(),
+        )],
+    )
+    .map_err(VectorsError::WaCustom)?;
+
+    Ok(CreateVectorResponseDto::Sparse(CreateSparseVectorDto {
+        id: create_vector_dto.id,
+        values: create_vector_dto.values,
+    }))
+}
+
+/// Creates a vector for dense index
+///
+pub(crate) async fn create_dense_vector(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    create_vector_dto: CreateDenseVectorDto,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
     let dense_index = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
         .await
@@ -45,17 +80,17 @@ pub(crate) async fn create_vector(
         )],
     )
     .map_err(VectorsError::WaCustom)?;
-    Ok(CreateVectorResponseDto {
+    Ok(CreateVectorResponseDto::Dense(CreateDenseVectorDto {
         id: create_vector_dto.id,
         values: create_vector_dto.values,
-    })
+    }))
 }
 
 pub(crate) async fn create_vector_in_transaction(
     ctx: Arc<AppContext>,
     collection_id: &str,
     transaction: &DenseIndexTransaction,
-    create_vector_dto: CreateVectorDto,
+    create_vector_dto: CreateDenseVectorDto,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
     let dense_index = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
         .await
@@ -72,10 +107,10 @@ pub(crate) async fn create_vector_in_transaction(
     )
     .map_err(VectorsError::WaCustom)?;
 
-    Ok(CreateVectorResponseDto {
+    Ok(CreateVectorResponseDto::Dense(CreateDenseVectorDto {
         id: create_vector_dto.id,
         values: create_vector_dto.values,
-    })
+    }))
 }
 
 pub(crate) async fn get_vector_by_id(
@@ -90,18 +125,18 @@ pub(crate) async fn get_vector_by_id(
     let embedding = get_embedding_by_id(vec_store, &vector_id)
         .map_err(|e| VectorsError::DatabaseError(e.to_string()))?;
 
-    let id = embedding.hash_vec.0;
+    let id = embedding.hash_vec;
 
-    Ok(CreateVectorResponseDto {
+    Ok(CreateVectorResponseDto::Dense(CreateDenseVectorDto {
         id,
         values: (*embedding.raw_vec).clone(),
-    })
+    }))
 }
 
 pub(crate) async fn update_vector(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    vector_id: u64,
+    vector_id: VectorId,
     update_vector_dto: UpdateVectorDto,
 ) -> Result<UpdateVectorResponseDto, VectorsError> {
     let dense_index = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)

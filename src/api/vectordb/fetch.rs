@@ -29,11 +29,10 @@ pub(crate) async fn fetch(
         .iter()
         .map(|res_item| {
             res_item.as_ref().map(|(vect, neig)| {
-                let nvid = vect.0;
                 let response_data = RPCResponseBody::RespFetchNeighbors {
                     neighbors: neig.iter().map(|(vid, x)| (vid.0, x.clone())).collect(),
                     vector: Vector {
-                        id: nvid,
+                        id: vect.clone(),
                         values: vec![],
                     },
                 };
