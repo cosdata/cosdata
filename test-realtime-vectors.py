@@ -93,11 +93,12 @@ def write_to_csv(bruteforce_results, csv_file):
 # Function to read from the parquet file
 def read_dataset_from_parquet():
 
-    df = pd.read_parquet("test.parquet", engine='pyarrow')
+    df1 = pd.read_parquet("test.parquet", engine='pyarrow')
+    df2 = pd.read_parquet("test2.parquet", engine="pyarrow")
+
+    df = pd.concat([df1, df2], ignore_index=True)
 
     dataset = df[['id', 'emb']]
-
-    columns = list(dataset.columns)
 
     vectors = []
 
