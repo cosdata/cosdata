@@ -18,6 +18,15 @@ base_url = f"{host}/vectordb"
 def generate_headers():
     return {"Authorization": f"Bearer {token}", "Content-type": "application/json"}
 
+def login():
+    url = f"{host}/auth/login"
+    data = {"username": "admin", "password": "admin", "pretty_print": False}
+    response = requests.post(
+        url, headers=generate_headers(), data=json.dumps(data), verify=False
+    )
+    global token
+    token = response.text
+    return token
 
 def create_db(name, description=None, dimension=1024):
     url = f"{base_url}/collections"
@@ -282,6 +291,26 @@ def search(vectors, vector_db_name, query):
     bruteforce_result = bruteforce_search(vectors, query, 5)
     return (ann_response, bruteforce_result)
 
+def generate_perturbation(base_vector, idd, perturbation_degree, dimensions):
+    # Generate the perturbation
+    perturbation = np.random.uniform(
+        -perturbation_degree, perturbation_degree, dimensions
+    )
+
+    # Apply the perturbation and clamp the values within the range of -1 to 1
+    # perturbed_values = base_vector["values"] + perturbation
+    perturbed_values = np.array(base_vector["values"]) + perturbation
+    clamped_values = np.clip(perturbed_values, -1, 1)
+
+    perturbed_vector = {"id": idd, "values": clamped_values.tolist()}
+    # print(base_vector["values"][:10])
+    # print( perturbed_vector["values"][:10] )
+    # cs = cosine_similarity(base_vector["values"], perturbed_vector["values"] )
+    # print ("cosine similarity of perturbed vec: ", row_ct, cs)
+    return perturbed_vector
+    # if np.random.rand() < 0.01:  # 1 in 100 probability
+    #     shortlisted_vectors.append(perturbed_vector)
+
 
 def read_dataset_from_parquet():
     df1 = pd.read_parquet("test.parquet")
@@ -295,7 +324,7 @@ def read_dataset_from_parquet():
     for row in dataset:
         vector = {
             "id": int(row[0]),
-            "values": [float(v) for v in row[1][:5]]
+            "values": [float(v) for v in row[1][:4]]
         }
         vectors.append(vector)
 
@@ -305,12 +334,12 @@ def read_dataset_from_parquet():
 if __name__ == "__main__":
     # Create database
     vector_db_name = "testdb"
-    dimensions = 5
+    dimensions = 4
     max_val = 1.0
     min_val = -1.0
     perturbation_degree = 0.25  # Degree of perturbation
-    batch_size = 20
-    batch_count = 100
+    batch_size = 16
+    batch_count = 10
 
     create_collection_response = create_db(
         name=vector_db_name,
@@ -321,6 +350,8 @@ if __name__ == "__main__":
     # create_explicit_index(vector_db_name)
 
     vectors = read_dataset_from_parquet()
+
+    shortlisted_vectors = []
 
     start_time = time.time()
 
@@ -347,6 +378,12 @@ if __name__ == "__main__":
                             vectors[batch_start:batch_start + batch_size]
                         )
                     )
+                    shortlisted_vectors.append(generate_perturbation(
+                        vectors[base_idx * batch_size],
+                        base_idx,
+                        perturbation_degree,
+                        dimensions,
+                    ))
 
                 # Collect results
                 for future in as_completed(futures):
@@ -356,9 +393,9 @@ if __name__ == "__main__":
                         print(f"Error in future: {e}")
 
             # Commit the transaction after all vectors are inserted
-            # commit_response = commit_transaction(vector_db_name, transaction_id)
-            # print(f"Committed transaction {transaction_id}: {commit_response}")
-            # transaction_id = None
+            commit_response = commit_transaction(vector_db_name, transaction_id)
+            print(f"Committed transaction {transaction_id}: {commit_response}")
+            transaction_id = None
             # time.sleep(10)
 
         except Exception as e:
@@ -372,6 +409,55 @@ if __name__ == "__main__":
 
     # End time
     end_time = time.time()
+
+    best_matches_server = []
+    best_matches_bruteforce = []
+    with ThreadPoolExecutor(max_workers=32) as executor:
+        futures = []
+        for query in shortlisted_vectors:
+            futures.append(
+                executor.submit(search, vectors, vector_db_name, query)
+            )
+
+        for i, future in enumerate(as_completed(futures)):
+            try:
+                ((idr, ann_response), (bruteforce_results)) = future.result()
+                if (
+                        "RespVectorKNN" in ann_response
+                        and "knn" in ann_response["RespVectorKNN"]
+                ):
+                    print(f"ANN Vector Response:")
+                    print("  Server:")
+                    for j, match in enumerate(ann_response["RespVectorKNN"]["knn"][:5]):
+                        id = match[0]
+                        cs = match[1]["CosineSimilarity"]
+                        print(f"    {j + 1}: {id} ({cs})")
+                    best_matches_server.append(
+                        ann_response["RespVectorKNN"]["knn"][0][1]["CosineSimilarity"]
+                    )  # Collect the second item in the knn list
+
+                    print("  Brute force:")
+                    for j, result in enumerate(bruteforce_results):
+                        cs = result[1]
+                        id = result[0]
+                        print(f"    {j + 1}: {id} ({cs})")
+                    best_matches_bruteforce.append(bruteforce_results[0][1])
+
+
+            except Exception as e:
+                print(f"Error in ANN vector {i + 1}: {e}")
+
+    if best_matches_server:
+        best_match_server_average = sum(best_matches_server) / len(
+            best_matches_server
+        )
+        best_match_bruteforce_average = sum(best_matches_bruteforce) / len(
+            best_matches_bruteforce
+        )
+        print(f"\n\nBest Match Server Average: {best_match_server_average}")
+        print(f"Best Match Brute force Average: {best_match_bruteforce_average}")
+    else:
+        print("No valid matches found.")
 
     # Calculate elapsed time
     elapsed_time = end_time - start_time
