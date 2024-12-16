@@ -322,24 +322,27 @@ def read_dataset_from_parquet():
     vectors = []
 
     for row in dataset:
+        # Validate the range of values in the 'emb' column
+        emb_values = row[1]
+        corrected_values = [float(v) if -1 <= float(v) <= 1 else 1.0 for v in emb_values]
+        
         vector = {
             "id": int(row[0]),
-            "values": [float(v) for v in row[1][:4]]
+            "values": corrected_values
         }
         vectors.append(vector)
 
     return vectors
 
-
 if __name__ == "__main__":
     # Create database
     vector_db_name = "testdb"
-    dimensions = 4
+    dimensions = 768
     max_val = 1.0
     min_val = -1.0
     perturbation_degree = 0.25  # Degree of perturbation
-    batch_size = 16
-    batch_count = 10
+    batch_size = 100
+    batch_count = 100
 
     create_collection_response = create_db(
         name=vector_db_name,
