@@ -10,9 +10,19 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Define your dynamic variables
-token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJleHAiOjE3MzQ0MzY3NTAsImlhdCI6MTczNDM1MDM1MCwidXNlcm5hbWUiOiJhZG1pbiJ9.dPqZcXSUO4Tj-jyE7aiuvmPpYG3TB8XgwINrB6eeTDQ"
+token = None
 host = "http://127.0.0.1:8443"
 base_url = f"{host}/vectordb"
+
+def login():
+    url = f"{host}/auth/login"
+    data = {"username": "admin", "password": "admin", "pretty_print": False}
+    response = requests.post(
+        url, headers=generate_headers(), data=json.dumps(data), verify=False
+    )
+    global token
+    token = response.text
+    return token
 
 
 def generate_headers():
@@ -324,7 +334,7 @@ def read_dataset_from_parquet():
     for row in dataset:
         # Validate the range of values in the 'emb' column
         emb_values = row[1]
-        corrected_values = [float(v) if -1 <= float(v) <= 1 else 1.0 for v in emb_values]
+        corrected_values = [max(-1.0, min(float(v), 1.0)) for v in emb_values]
         
         vector = {
             "id": int(row[0]),
@@ -343,6 +353,9 @@ if __name__ == "__main__":
     perturbation_degree = 0.25  # Degree of perturbation
     batch_size = 100
     batch_count = 100
+
+    login_response = login()
+    print("Login Response:", login_response)
 
     create_collection_response = create_db(
         name=vector_db_name,
