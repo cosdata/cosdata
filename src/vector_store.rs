@@ -464,6 +464,8 @@ pub fn index_embeddings(
                     serialization_table.clone(),
                     lazy_item_versions_table.clone(),
                     neighbors_count,
+                    None,
+                    2,
                 )
                 .expect("index_embedding failed");
             })
@@ -566,8 +568,7 @@ pub fn index_embeddings_in_transaction(
             };
             transaction.post_raw_embedding(raw_emb.clone());
             let lp = &dense_index.levels_prob;
-            let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
-
+            let max_level = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
             let quantized_vec = Arc::new(quantization.quantize(
                 &raw_emb.raw_vec,
                 dense_index.storage_type.clone().get().clone(),
@@ -592,32 +593,24 @@ pub fn index_embeddings_in_transaction(
                 hash_vec: raw_emb.hash_vec,
             };
 
-            let current_level = HNSWLevel(iv as u8);
-            let mut current_entry = dense_index.get_root_vec();
-
-            loop {
-                let data = current_entry.try_get_data(&dense_index.cache)?;
-                if data.hnsw_level.0 > current_level.0 {
-                    current_entry = data.get_child().unwrap();
-                } else if data.hnsw_level == current_level {
-                    break;
-                } else {
-                    panic!("missing node");
-                }
-            }
+            // Start from root at highest level
+            let root_entry = dense_index.get_root_vec();
+            let highest_level = HNSWLevel(dense_index.hnsw_params.num_layers);
 
             index_embedding(
                 dense_index.clone(),
                 None,
                 embedding,
                 prop,
-                current_entry,
-                current_level,
+                root_entry,
+                highest_level,
                 version,
                 version_number,
                 transaction.serialization_table.clone(),
                 transaction.lazy_item_versions_table.clone(),
                 ctx.config.hnsw.neighbors_count,
+                None,
+                max_level as u8, // Pass max_level to let index_embedding control node creation
             )?;
         }
         Ok::<_, WaCustomError>(())
@@ -650,6 +643,8 @@ pub fn index_embedding(
     serialization_table: Arc<TSHashTable<SharedNode, ()>>,
     lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16, u8), SharedNode>>,
     neighbors_count: usize,
+    cousins: Option<Vec<SharedNode>>,
+    max_level: u8,
 ) -> Result<(), WaCustomError> {
     let fvec = vector_emb.quantized_vec.clone();
     let mut skipm = PerformantFixedSet::new();
@@ -668,7 +663,7 @@ pub fn index_embedding(
         &mut skipm,
         cur_level,
         true,
-        false,
+        true,
     )?;
 
     let z = if z.is_empty() {
@@ -680,56 +675,110 @@ pub fn index_embedding(
     } else {
         z
     };
+    let mut uncle_children = Vec::new();
+    for (uncle, _) in z.iter().take(5) {
+        if let Ok(uncle_node) = uncle.try_get_data(&dense_index.cache) {
+            if let Some(child) = uncle_node.get_child() {
+                if let Ok(child_node) = child.try_get_data(&dense_index.cache) {
+                    // Get neighbors from the child node
+                    let neighbors = child_node.get_neighbors_raw();
+                    // Use hash to select a neighbor index
+                    let neighbor_idx = (vector_emb.hash_vec.get_hash()
+                        ^ child_node.get_id().get_hash())
+                        % neighbors.len() as u64;
 
-    let lazy_node = create_node(
-        version,
-        version_number,
-        cur_level,
-        prop.clone(),
-        parent.clone(),
-        None,
-        neighbors_count,
-    );
-
-    let node = lazy_node.get_lazy_data().unwrap();
-
-    if let Some(parent) = parent {
-        parent
-            .try_get_data(&dense_index.cache)
-            .unwrap()
-            .set_child(lazy_node.clone());
+                    // Try to get neighbor at the computed index
+                    if let Some(neighbor) = unsafe {
+                        neighbors[neighbor_idx as usize]
+                            .load(Ordering::Acquire)
+                            .as_ref()
+                            .map(|n| &n.0)
+                    } {
+                        uncle_children.push(neighbor.clone());
+                    } else {
+                        // If no neighbor found at that index, use the child itself
+                        uncle_children.push(child);
+                    }
+                }
+            }
+        }
     }
-
-    if cur_level.0 != 0 {
-        index_embedding(
-            dense_index.clone(),
-            Some(lazy_node.clone()),
-            vector_emb.clone(),
-            prop.clone(),
-            z[0].0
-                .try_get_data(&dense_index.cache)?
-                .get_child()
-                .unwrap(),
-            HNSWLevel(cur_level.0 - 1),
+    if cur_level.0 > max_level {
+        // Just traverse down without creating nodes
+        if cur_level.0 != 0 {
+            index_embedding(
+                dense_index.clone(),
+                None,
+                vector_emb.clone(),
+                prop.clone(),
+                z[0].0
+                    .try_get_data(&dense_index.cache)?
+                    .get_child()
+                    .unwrap(),
+                HNSWLevel(cur_level.0 - 1),
+                version,
+                version_number,
+                serialization_table.clone(),
+                lazy_item_versions_table.clone(),
+                neighbors_count,
+                Some(uncle_children),
+                max_level,
+            )?;
+        }
+    } else {
+        // Create node and edges at max_level and below
+        let lazy_node = create_node(
             version,
             version_number,
-            serialization_table.clone(),
-            lazy_item_versions_table.clone(),
+            cur_level,
+            prop.clone(),
+            parent.clone(),
+            None,
             neighbors_count,
+        );
+
+        let node = lazy_node.get_lazy_data().unwrap();
+
+        if let Some(parent) = parent {
+            parent
+                .try_get_data(&dense_index.cache)
+                .unwrap()
+                .set_child(lazy_node.clone());
+        }
+
+        if cur_level.0 != 0 {
+            index_embedding(
+                dense_index.clone(),
+                Some(lazy_node.clone()),
+                vector_emb.clone(),
+                prop.clone(),
+                z[0].0
+                    .try_get_data(&dense_index.cache)?
+                    .get_child()
+                    .unwrap(),
+                HNSWLevel(cur_level.0 - 1),
+                version,
+                version_number,
+                serialization_table.clone(),
+                lazy_item_versions_table.clone(),
+                neighbors_count,
+                Some(uncle_children),
+                max_level,
+            )?;
+        }
+
+        create_node_edges(
+            dense_index.clone(),
+            lazy_node,
+            node,
+            z,
+            version,
+            version_number,
+            serialization_table,
+            lazy_item_versions_table,
+            cousins,
         )?;
     }
-
-    create_node_edges(
-        dense_index.clone(),
-        lazy_node,
-        node,
-        z,
-        version,
-        version_number,
-        serialization_table,
-        lazy_item_versions_table,
-    )
-    .expect("Failed insert_node_create_edges");
 
     Ok(())
 }
@@ -798,8 +847,23 @@ fn create_node_edges(
     version_number: u16,
     serialization_table: Arc<TSHashTable<SharedNode, ()>>,
     lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16, u8), SharedNode>>,
+    cousins: Option<Vec<SharedNode>>,
 ) -> Result<(), WaCustomError> {
-    for (neighbor, dist) in neighbors.into_iter() {
+    // Handle uncle nodes first for distant neighbors
+    if let Some(uncles) = cousins {
+        for uncle in uncles {
+            let uncle_node = uncle.try_get_data(&dense_index.cache)?;
+            let dist = dense_index
+                .distance_metric
+                .calculate(&node.prop.value, &uncle_node.prop.value)?;
+
+            node.add_neighbor(uncle.clone(), uncle_node.get_id(), dist);
+            uncle_node.add_neighbor(lazy_node.clone(), &node.prop.id, dist);
+        }
+    }
+
+    // Handle regular neighbors
+    for (neighbor, dist) in neighbors {
         serialization_table.insert(neighbor.clone(), ());
 
         let new_lazy_neighbor = get_or_create_version(
@@ -811,7 +875,7 @@ fn create_node_edges(
         )?;
         let new_neighbor = new_lazy_neighbor.try_get_data(&dense_index.cache)?;
 
-        node.add_neighbor(new_lazy_neighbor, new_neighbor.get_id(), dist);
+        node.add_neighbor(new_lazy_neighbor.clone(), new_neighbor.get_id(), dist);
         new_neighbor.add_neighbor(lazy_node.clone(), &node.prop.id, dist);
     }
 
@@ -830,7 +894,7 @@ fn traverse_find_nearest(
     is_indexing: bool,
     shortlist: bool,
 ) -> Result<Vec<(SharedNode, MetricResult)>, WaCustomError> {
-    let mut tasks: SmallVec<[Vec<(SharedNode, MetricResult)>; 24]> = SmallVec::new();
+    let mut tasks: SmallVec<[Vec<(SharedNode, MetricResult)>; 32]> = SmallVec::new();
 
     let (latest_version_lazy_node, _latest_version) = vtm.get_latest_version(&dense_index.cache)?;
 
@@ -868,7 +932,8 @@ fn traverse_find_nearest(
         });
 
         for (neighbor_idx, (neighbor_node, dist)) in neighbors.into_iter().enumerate() {
-            if hops <= 10 && neighbor_idx < 10 {
+            if hops <= 25 {
+                // && (neighbor_idx < 10 || neighbor_idx % 4 == 0) {
                 let mut z = traverse_find_nearest(
                     dense_index,
                     &neighbor_node,
@@ -877,7 +942,7 @@ fn traverse_find_nearest(
                     skipm,
                     cur_level,
                     is_indexing,
-                    true,
+                    shortlist,
                 )?;
                 z.push((neighbor_node, dist));
                 tasks.push(z);
@@ -905,7 +970,7 @@ fn traverse_find_nearest(
                 .distance_metric
                 .calculate(&fvec, &neighbor.prop.value)?;
 
-            if hops <= 10 {
+            if hops <= 25 {
                 let mut z = traverse_find_nearest(
                     dense_index,
                     &neighbor_node,
@@ -914,7 +979,7 @@ fn traverse_find_nearest(
                     skipm,
                     cur_level,
                     is_indexing,
-                    false,
+                    shortlist,
                 )?;
                 z.push((neighbor_node, dist));
                 tasks.push(z);
@@ -926,15 +991,16 @@ fn traverse_find_nearest(
 
     let mut nn: Vec<_> = tasks.into_iter().flatten().collect();
     nn.sort_unstable_by(|a, b| b.1.get_value().partial_cmp(&a.1.get_value()).unwrap());
+
     if is_indexing {
-        // During indexing we want to truncate heavily
+        // Truncate to top 4
         nn.truncate(5);
     } else {
         //ANN search
         if cur_level.0 == 0 {
-            nn.truncate(100);
+            nn.truncate(10000);
         } else {
-            nn.truncate(20);
+            nn.truncate(2000);
         }
     }
     Ok(nn)

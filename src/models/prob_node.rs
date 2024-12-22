@@ -130,15 +130,15 @@ impl ProbNode {
         neighbor_id: &VectorId,
         dist: MetricResult,
     ) {
-        let initial_idx = ((self.get_id().get_hash() ^ neighbor_id.get_hash())
-            % self.neighbors.len() as u64) as usize;
         let neighbor = Box::new((neighbor_node, dist));
         let neighbor_ptr = Box::into_raw(neighbor);
-
-        let mut current_idx = initial_idx;
         let mut inserted = false;
 
-        // Try half of indices, starting from initial_idx, with wrap around
+        let initial_idx =
+            (self.get_id().get_hash() ^ neighbor_id.get_hash()) % self.neighbors.len() as u64;
+        let mut current_idx = initial_idx as usize;
+
+        // Try half of total indices
         for _ in 0..(self.neighbors.len() / 2) {
             let result = self.neighbors[current_idx].fetch_update(
                 Ordering::SeqCst,
@@ -157,7 +157,6 @@ impl ProbNode {
                     }
                 },
             );
-
             match result {
                 Ok(prev_neighbor) => {
                     unsafe {
@@ -169,13 +168,13 @@ impl ProbNode {
                     break;
                 }
                 Err(_) => {
-                    // Try next index with wraparound
-                    current_idx = (current_idx + 1) % self.neighbors.len();
+                    // Hash-based jump probing with wraparound
+                    let jump = (self.get_id().get_hash() ^ neighbor_id.get_hash()) % 5 + 1;
+                    current_idx = (current_idx + jump as usize) % self.neighbors.len();
                 }
             }
         }
 
-        // If we couldn't insert after trying all positions, clean up
         if !inserted {
             unsafe {
                 drop(Box::from_raw(neighbor_ptr));

@@ -4,13 +4,13 @@ upload_process_batch_size = 1000
 [server]
 host = "127.0.0.1"
 port= 8443
-mode = "https"   # Options: "http" or "https"
+mode = "http"   # Options: "http" or "https"
 
 [thread_pool]
 pool_size = 64
 
 [hnsw]
-neighbors_count = 16
+neighbors_count = 32
 
 [server.ssl]
 cert_file = "/etc/ssl/certs/cosdata-ssl.crt"

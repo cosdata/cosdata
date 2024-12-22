@@ -4,7 +4,7 @@ import numpy as np
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib3
-
+import random
 # Suppress only the single InsecureRequestWarning from urllib3 needed for this script
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -376,9 +376,9 @@ if __name__ == "__main__":
     dimensions = 1024
     max_val = 1.0
     min_val = -1.0
-    perturbation_degree = 0.25  # Degree of perturbation
+    perturbation_degree = 0.95  # Degree of perturbation
     batch_size = 100
-    batch_count = 100
+    batch_count = 1000
 
     # first login to get the auth jwt token
     login_response = login()
@@ -418,6 +418,9 @@ if __name__ == "__main__":
                             vectors[base_idx*batch_size:(base_idx*batch_size)+batch_size]
                         )
                     )
+                    if random.random() < 0.9:
+                        continue
+                    
                     shortlisted_vectors.append(generate_perturbation(
                         vectors[base_idx*batch_size],
                         base_idx,

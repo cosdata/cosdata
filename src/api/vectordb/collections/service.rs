@@ -27,7 +27,7 @@ pub(crate) async fn create_collection(
             collection.dense_vector.dimension as usize,
             None,
             None,
-            5,
+            7,
             true,
         )
         .await?;
