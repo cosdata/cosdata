@@ -123,7 +123,6 @@ impl ProbNode {
     pub fn get_id(&self) -> &VectorId {
         &self.prop.id
     }
-
     pub fn add_neighbor(
         &self,
         neighbor_node: SharedNode,
@@ -133,7 +132,6 @@ impl ProbNode {
         let neighbor = Box::new((neighbor_node, dist));
         let neighbor_ptr = Box::into_raw(neighbor);
         let mut inserted = false;
-
         let initial_idx =
             (self.get_id().get_hash() ^ neighbor_id.get_hash()) % self.neighbors.len() as u64;
         let mut current_idx = initial_idx as usize;

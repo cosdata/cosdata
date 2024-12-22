@@ -10,7 +10,7 @@ mode = "http"   # Options: "http" or "https"
 pool_size = 64
 
 [hnsw]
-neighbors_count = 32
+neighbors_count = 64
 
 [server.ssl]
 cert_file = "/etc/ssl/certs/cosdata-ssl.crt"
