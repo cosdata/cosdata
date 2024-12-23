@@ -1,5 +1,7 @@
 use std::sync::{Arc, Mutex};
 
+use serde::Serialize;
+
 use crate::models::types::VectorId;
 
 use super::helpers::generate_power_of_4_list;
@@ -7,15 +9,18 @@ use super::helpers::generate_power_of_4_list;
 // Raw vector embedding
 #[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize, PartialEq)]
 pub struct RawSparseVectorEmbedding {
-    pub raw_vec: Arc<Vec<(f32, u32)>>,
+    pub raw_vec: Arc<Vec<SparsePair>>,
     pub hash_vec: VectorId,
 }
+
+#[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize, PartialEq, Serialize)]
+pub struct SparsePair(pub u32, pub f32);
 
 #[derive(Debug)]
 pub(crate) struct InvertedIndexItem {
     dim_index: u32,
     implicit: bool,
-    data: Vec<(f32, u32)>,
+    data: Vec<SparsePair>,
     pointers: Vec<Option<Arc<Mutex<InvertedIndexItem>>>>,
 }
 
@@ -83,12 +88,12 @@ impl InvertedIndexItem {
     }
 
     fn insert_data(&mut self, value: f32, vector_id: u32) {
-        let is_repeated = self.data.iter().find(|i| i.1 == vector_id);
+        let is_repeated = self.data.iter().find(|i| i.0 == vector_id);
 
         // TODO should this return error if the vector id is already registered ?
         //  or should it skip inserting and return nothing ?
         if is_repeated.is_none() {
-            self.data.push((value, vector_id))
+            self.data.push(SparsePair(vector_id, value))
         }
     }
 

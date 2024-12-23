@@ -5,7 +5,10 @@ use serde::{
     Deserialize, Deserializer, Serialize,
 };
 
-use crate::models::{rpc::Vector, types::VectorId};
+use crate::{
+    indexes::inverted_index_item::SparsePair,
+    models::{rpc::Vector, types::VectorId},
+};
 
 #[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct CreateDenseVectorDto {
@@ -16,7 +19,7 @@ pub(crate) struct CreateDenseVectorDto {
 #[derive(Serialize, Debug)]
 pub(crate) struct CreateSparseVectorDto {
     pub id: VectorId,
-    pub values: Vec<(f32, u32)>,
+    pub values: Vec<SparsePair>,
 }
 
 impl<'de> Deserialize<'de> for CreateSparseVectorDto {
@@ -75,11 +78,11 @@ impl<'de> Deserialize<'de> for CreateSparseVectorDto {
                 let values = values.ok_or_else(|| de::Error::missing_field("values"))?;
                 let indices = indices.ok_or_else(|| de::Error::missing_field("indices"))?;
 
-                // Combine the values and indices into a Vec<(f32, u32)>
-                let values = values
+                // Combine the values and indices into a Vec<SparsePair>
+                let values = indices
                     .into_iter()
-                    .zip(indices.into_iter())
-                    .map(|(value, id)| (value, id))
+                    .zip(values.into_iter())
+                    .map(|(index, value)| SparsePair(index, value))
                     .collect();
 
                 Ok(CreateSparseVectorDto { id, values })

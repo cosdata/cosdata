@@ -529,7 +529,7 @@ pub fn index_sparse_embeddings(
         let results: Vec<()> = embeddings
             .into_iter()
             .map(|raw_emb| {
-                let raw_values: Vec<f32> = raw_emb.raw_vec.iter().map(|e| e.0).collect();
+                let raw_values: Vec<f32> = raw_emb.raw_vec.iter().map(|e| e.1).collect();
 
                 let quantized_vec = Arc::new(
                     quantization

@@ -1,6 +1,6 @@
 use crate::app_context::AppContext;
 use crate::indexes::inverted_index::InvertedIndex;
-use crate::indexes::inverted_index_item::RawSparseVectorEmbedding;
+use crate::indexes::inverted_index_item::{RawSparseVectorEmbedding, SparsePair};
 use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::cache_loader::ProbCache;
 use crate::models::collection::Collection;
@@ -220,7 +220,7 @@ pub fn run_upload_in_transaction(
 pub fn run_upload_sparse_vector(
     ctx: Arc<AppContext>,
     inverted_index: Arc<InvertedIndex>,
-    vecs: Vec<(VectorId, Vec<(f32, u32)>)>,
+    vecs: Vec<(VectorId, Vec<SparsePair>)>,
 ) -> Result<(), WaCustomError> {
     let env = inverted_index.lmdb.env.clone();
     let db = inverted_index.lmdb.db.clone();
