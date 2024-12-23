@@ -1,7 +1,7 @@
 use actix_web::{web, HttpResponse};
 
 use crate::{
-    api::vectordb::vectors::dtos::{CreateVectorDto, UpsertDto},
+    api::vectordb::vectors::dtos::{CreateDenseVectorDto, UpsertDto},
     app_context::AppContext,
 };
 
@@ -28,7 +28,7 @@ pub(crate) async fn commit_transaction(
 
 pub(crate) async fn create_vector_in_transaction(
     params: web::Path<(String, u32)>,
-    web::Json(create_vector_dto): web::Json<CreateVectorDto>,
+    web::Json(create_vector_dto): web::Json<CreateDenseVectorDto>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse, TransactionError> {
     let (collection_id, transaction_id) = params.into_inner();

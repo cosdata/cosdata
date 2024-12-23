@@ -1,5 +1,6 @@
 use crate::app_context::AppContext;
 use crate::indexes::inverted_index::InvertedIndex;
+use crate::indexes::inverted_index_item::{RawSparseVectorEmbedding, SparsePair};
 use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::cache_loader::ProbCache;
 use crate::models::collection::Collection;
@@ -137,14 +138,29 @@ pub async fn init_inverted_index_for_collection(
 
     // Note that setting .write(true).append(true) has the same effect
     // as setting only .append(true)
-    let prop_file = Arc::new(
-        fs::OpenOptions::new()
-            .create(true)
-            .read(true)
-            .append(true)
-            .open(collection_path.join("prop.data"))
-            .map_err(|e| WaCustomError::FsError(e.to_string()))?,
-    );
+    // TODO (Question)
+    // should the prop file for inverted index has different path than of dense index?
+    //
+    // what is the prop file exactly?
+
+    // TODO (Question)
+    // how the embedding are stored on the disk exactly?
+    //
+    // each embedding is stored in its own file, or we use log structured similar files?
+    //
+    // what is the difference between vec_raw_manager and index_manager?
+    //
+    // shouldn't index and vec_raw managers have different paths/names than of dense
+    // index?
+    let vec_raw_manager = Arc::new(BufferManagerFactory::new(
+        collection_path.clone(),
+        |root, ver| root.join(format!("{}.vec_raw", **ver)),
+    ));
+
+    let index_manager = Arc::new(BufferManagerFactory::new(
+        collection_path.clone(),
+        |root, ver| root.join(format!("{}.index", **ver)),
+    ));
 
     let index = InvertedIndex::new(
         collection_name.clone(),
@@ -153,13 +169,14 @@ pub async fn init_inverted_index_for_collection(
         collection.metadata_schema.clone(),
         collection.config.max_vectors,
         collection.config.replication_factor,
-        prop_file,
         lmdb,
         ArcShift::new(hash),
-        Arc::new(QuantizationMetric::Scalar),
+        ArcShift::new(QuantizationMetric::Scalar),
         Arc::new(DistanceMetric::DotProduct),
-        StorageType::UnsignedByte,
+        ArcShift::new(StorageType::UnsignedByte),
         vcs,
+        vec_raw_manager,
+        index_manager,
     );
     update_current_version(&index.lmdb, hash)?;
     Ok(Arc::new(index))
@@ -170,7 +187,7 @@ pub fn run_upload_in_transaction(
     ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
     transaction: &DenseIndexTransaction,
-    sample_points: Vec<(u64, Vec<f32>)>,
+    sample_points: Vec<(VectorId, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
     transaction.increment_batch_count();
     let version = transaction.id;
@@ -190,11 +207,201 @@ pub fn run_upload_in_transaction(
     Ok(())
 }
 
+/// uploads a sparse vector for inverted index
+pub fn run_upload_sparse_vector(
+    ctx: Arc<AppContext>,
+    inverted_index: Arc<InvertedIndex>,
+    vecs: Vec<(VectorId, Vec<SparsePair>)>,
+) -> Result<(), WaCustomError> {
+    let env = inverted_index.lmdb.env.clone();
+    let db = inverted_index.lmdb.db.clone();
+    let txn = env
+        .begin_ro_txn()
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+    // TODO (Question)
+    // what do you mean by unindexed here?
+    //
+    // Check if the previous version is unindexed, and continue from where we left.
+    let prev_version = inverted_index.get_current_version();
+    // TODO (Question)
+    // isn't the "next_embedding_offset" hitting
+    // the same value for the dense index?
+    // because both have the same db, as db is created after the collection name
+    //
+    // what next_embedding_offset used for?
+    let index_before_insertion = match txn.get(*db, &"next_embedding_offset") {
+        Ok(bytes) => {
+            let embedding_offset = EmbeddingOffset::deserialize(bytes)
+                .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?;
+
+            debug_assert_eq!(
+                embedding_offset.version, prev_version,
+                "Last unindexed embedding's version must be the previous version of the collection"
+            );
+
+            let prev_bufman = inverted_index.vec_raw_manager.get(&prev_version)?;
+            let cursor = prev_bufman.open_cursor()?;
+            let prev_file_len = prev_bufman.seek_with_cursor(cursor, SeekFrom::End(0))? as u32;
+            prev_bufman.close_cursor(cursor)?;
+
+            // TODO (Question)
+            // in what case this might happen, and the condition evaluates to true?
+            prev_file_len > embedding_offset.offset
+        }
+        Err(lmdb::Error::NotFound) => false,
+        Err(e) => {
+            return Err(WaCustomError::DatabaseError(e.to_string()));
+        }
+    };
+
+    txn.abort();
+
+    // TODO (Question)
+    // what are these used for in dense index?
+    //
+    let serialization_table = Arc::new(TSHashTable::new(16));
+    let lazy_item_versions_table = Arc::new(TSHashTable::new(16));
+
+    if index_before_insertion {
+        // TODO (Question)
+        // are we here loading embedding from disk into the in-memory index?
+        index_sparse_embeddings(
+            inverted_index.clone(),
+            ctx.config.upload_process_batch_size,
+            serialization_table.clone(),
+            lazy_item_versions_table.clone(),
+            // TODO (Question)
+            // is this should be removed for sparse?
+            ctx.config.hnsw.neighbors_count,
+        )?;
+    }
+
+    // Add next version
+    // TODO (Question)
+    // does mean we are creating a new version with each vector?
+    //
+    // each version == a new file on the disk?
+    //
+    // means we are storing each embedding in a new file (or list embeddings that come in one api call)?
+    let (current_version, _) = inverted_index
+        .vcs
+        .add_next_version("main")
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+    inverted_index.set_current_version(current_version);
+    update_current_version(&inverted_index.lmdb, current_version)?;
+
+    // Update LMDB metadata
+    let new_offset = EmbeddingOffset {
+        version: current_version,
+        // TODO (Question)
+        // why setting the offset here to 0?
+        offset: 0,
+    };
+    let new_offset_serialized = new_offset.serialize();
+
+    let mut txn = env
+        .begin_rw_txn()
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+    txn.put(
+        *db,
+        &"next_embedding_offset",
+        &new_offset_serialized,
+        WriteFlags::empty(),
+    )
+    .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+    txn.commit()
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+    // Insert vectors
+    let bufman = inverted_index.vec_raw_manager.get(&current_version)?;
+
+    vecs.into_par_iter()
+        .map(|(id, vec)| {
+            let vec_emb = RawSparseVectorEmbedding {
+                raw_vec: Arc::new(vec),
+                hash_vec: id,
+            };
+
+            // TODO (Question)
+            // inserting here means "writing to disk"?
+            insert_sparse_embedding(
+                bufman.clone(),
+                inverted_index.clone(),
+                &vec_emb,
+                current_version,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    bufman.flush()?;
+
+    let env = inverted_index.lmdb.env.clone();
+    let db = inverted_index.lmdb.db.clone();
+
+    let txn = env
+        .begin_ro_txn()
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+    // TODO (Question)
+    // what are we doing here ?
+    let count_unindexed = txn
+        .get(*db, &"count_unindexed")
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))
+        .and_then(|bytes| {
+            let bytes = bytes.try_into().map_err(|e: TryFromSliceError| {
+                WaCustomError::DeserializationError(e.to_string())
+            })?;
+            Ok(u32::from_le_bytes(bytes))
+        })?;
+
+    txn.abort();
+
+    // TODO (Question)
+    // what if its less than?
+    // I think this condition is useless
+    // bcz next time we call the run_upload function
+    // we will index the unindexed version if index_before_insertion
+    // At (Line 275)
+    if count_unindexed >= ctx.config.upload_threshold {
+        index_sparse_embeddings(
+            inverted_index.clone(),
+            ctx.config.upload_process_batch_size,
+            serialization_table.clone(),
+            lazy_item_versions_table,
+            ctx.config.hnsw.neighbors_count,
+        )?;
+    }
+
+    // TODO (Question)
+    // what is this ?
+    //
+    // should it be removed for inverted index?
+    // as it contains ProbLazyItem<ProbNode>
+    let list = Arc::into_inner(serialization_table).unwrap().to_list();
+
+    // TODO (Question)
+    // what is this ?
+    //
+    // should it be removed for inverted index?
+    // as it contains ProbLazyItem<ProbNode>
+    for (node, _) in list {
+        // TODO (Question)
+        // what is its purpose if we already inserted the vecs before?
+        write_node_to_file(&node, &inverted_index.index_manager)?;
+    }
+
+    inverted_index.vec_raw_manager.flush_all()?;
+    inverted_index.index_manager.flush_all()?;
+
+    Ok(())
+}
+
 /// uploads a vector embedding
 pub fn run_upload(
     ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
-    vecs: Vec<(u64, Vec<f32>)>,
+    vecs: Vec<(VectorId, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
     let env = dense_index.lmdb.env.clone();
     let db = dense_index.lmdb.db.clone();
@@ -275,10 +482,9 @@ pub fn run_upload(
 
     vecs.into_par_iter()
         .map(|(id, vec)| {
-            let hash_vec = VectorId(id);
             let vec_emb = RawVectorEmbedding {
                 raw_vec: Arc::new(vec),
-                hash_vec,
+                hash_vec: id,
             };
 
             insert_embedding(

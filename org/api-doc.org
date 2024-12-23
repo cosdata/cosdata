@@ -269,11 +269,24 @@ Creates a new vector in a collection.
 
 - Method: POST
 - Path: =/collections/{collection_id}/vectors=
-- Request Body:
+- Request Body for dense vectors:
 #+BEGIN_SRC json
 {
-    "id": "vec1",
-    "values": [0.1, 0.2, ...],
+    "dense": {
+        "id": "vec1",
+        "values": [0.1, 0.2, ...],
+    }
+}
+#+END_SRC
+
+- Request Body for sparse vectors:
+#+BEGIN_SRC json
+{
+    "sparse": {
+        "id": "vec1",
+        "indices": [2, 3, ...],
+        "values": [0.1, 0.2, ...],
+    }
 }
 #+END_SRC
 

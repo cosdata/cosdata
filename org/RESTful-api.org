@@ -75,21 +75,29 @@
      - Method: POST
      - Path: =/collections/{collection_id}/vectors=
      - Description: Add a new vector to the collection
-     - Request Body:
-       #+BEGIN_SRC json
-       {
-         "id": "vec_1",
-         "values": [0.1, 0.2, 0.3, ...]
-       }
-       #+END_SRC
-     - Response:
-       #+BEGIN_SRC json
-       {
-         "id": "vec_1",
-         "values": [0.1, 0.2, 0.3, ...],
-         "created_at": "2024-07-30T12:05:00Z"
-       }
-       #+END_SRC
+     - Request Body for dense vectors:
+
+        #+BEGIN_SRC json
+        {
+          "dense": {
+              "id": "vec1",
+              "values": [0.1, 0.2, ...],
+          }
+        }
+        #+END_SRC
+
+        - Request Body for sparse vectors:
+        
+        #+BEGIN_SRC json
+        {
+          "sparse": {
+              "id": "vec1",
+              "indices": [2, 3, ...],
+              "values": [0.1, 0.2, ...],
+          }
+        }
+        #+END_SRC
+     - Response: The same as the request body
 
 **** Get Vector
      - Method: GET
