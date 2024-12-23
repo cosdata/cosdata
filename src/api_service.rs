@@ -142,14 +142,6 @@ pub async fn init_inverted_index_for_collection(
     // should the prop file for inverted index has different path than of dense index?
     //
     // what is the prop file exactly?
-    let prop_file = Arc::new(RwLock::new(
-        fs::OpenOptions::new()
-            .create(true)
-            .read(true)
-            .append(true)
-            .open(collection_path.join("prop.data"))
-            .map_err(|e| WaCustomError::FsError(e.to_string()))?,
-    ));
 
     // TODO (Question)
     // how the embedding are stored on the disk exactly?
@@ -177,7 +169,6 @@ pub async fn init_inverted_index_for_collection(
         collection.metadata_schema.clone(),
         collection.config.max_vectors,
         collection.config.replication_factor,
-        prop_file,
         lmdb,
         ArcShift::new(hash),
         ArcShift::new(QuantizationMetric::Scalar),

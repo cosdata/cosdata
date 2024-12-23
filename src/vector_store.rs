@@ -539,19 +539,7 @@ pub fn index_sparse_embeddings(
                         )
                         .expect("Quantization failed"),
                 );
-                let mut prop_file_guard = inverted_index.prop_file.write().unwrap();
-                let location = write_prop_to_file(
-                    &raw_emb.hash_vec,
-                    quantized_vec.clone(),
-                    &mut *prop_file_guard,
-                )
-                .expect("failed to write prop");
-                drop(prop_file_guard);
-                let prop = Arc::new(NodeProp {
-                    id: raw_emb.hash_vec.clone(),
-                    value: quantized_vec.clone(),
-                    location,
-                });
+
                 let embedding = QuantizedVectorEmbedding {
                     quantized_vec,
                     hash_vec: raw_emb.hash_vec,
@@ -561,7 +549,6 @@ pub fn index_sparse_embeddings(
                     inverted_index.clone(),
                     None,
                     embedding,
-                    prop,
                     version,
                     version_number,
                     serialization_table.clone(),
@@ -946,7 +933,6 @@ pub fn index_sparse_embedding(
     inverted_index: Arc<InvertedIndex>,
     parent: Option<SharedNode>,
     vector_emb: QuantizedVectorEmbedding,
-    prop: Arc<NodeProp>,
     version: Hash,
     version_number: u16,
     serialization_table: Arc<TSHashTable<SharedNode, ()>>,

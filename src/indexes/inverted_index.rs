@@ -1,7 +1,4 @@
-use std::{
-    fs::File,
-    sync::{Arc, Mutex, RwLock},
-};
+use std::sync::{Arc, Mutex};
 
 use arcshift::ArcShift;
 
@@ -25,7 +22,6 @@ pub(crate) struct InvertedIndex {
     pub max_vectors: Option<i32>,
     pub replication_factor: Option<i32>,
     pub root: Arc<Mutex<InvertedIndexItem>>,
-    pub prop_file: Arc<RwLock<File>>,
     pub lmdb: MetaDb,
     pub current_version: ArcShift<Hash>,
     pub current_open_transaction: ArcShift<Option<Hash>>,
@@ -46,7 +42,6 @@ impl InvertedIndex {
         metadata_schema: Option<String>,
         max_vectors: Option<i32>,
         replication_factor: Option<i32>,
-        prop_file: Arc<RwLock<File>>,
         lmdb: MetaDb,
         current_version: ArcShift<Hash>,
         quantization_metric: ArcShift<QuantizationMetric>,
@@ -64,7 +59,6 @@ impl InvertedIndex {
             metadata_schema,
             replication_factor,
             root: Arc::new(Mutex::new(InvertedIndexItem::new(0, false))),
-            prop_file,
             lmdb,
             current_version,
             current_open_transaction: ArcShift::new(None),
