@@ -370,7 +370,7 @@ pub fn insert_sparse_embedding(
     };
 
     // TODO make `write_sparse_embedding` function generic over embedding
-    // writing the embeding on disk
+    // writing the embedding on disk
     let offset = write_sparse_embedding(bufman, emb)?;
 
     // generating embedding key
@@ -386,7 +386,7 @@ pub fn insert_sparse_embedding(
     // the insertion that happens in `write_sparse_embedding`
     // aren't both of them persisted on the disk at the end?
     //
-    // storing (key, embedding) pair in in-memory database
+    // storing (key_embedding, offset_serialized) pair in in-memory database
     txn.put(*db, &embedding_key, &offset_serialized, WriteFlags::empty())
         .map_err(|e| WaCustomError::DatabaseError(format!("Failed to put data: {}", e)))?;
 
@@ -461,6 +461,9 @@ pub fn insert_embedding(
     Ok(())
 }
 
+// TODO (Question)
+// what is the purpose of this function?
+// what the difference between it and `insert_sparse_embedding` function?
 pub fn index_sparse_embeddings(
     inverted_index: Arc<InvertedIndex>,
     upload_process_batch_size: usize,
@@ -513,6 +516,10 @@ pub fn index_sparse_embeddings(
 
     txn.abort();
 
+    // TODO (Question)
+    // why do we have a closure defined inside a function?
+    //
+    // what does it do?
     let mut index = |embeddings: Vec<RawSparseVectorEmbedding>,
                      next_offset: u32|
      -> Result<(), WaCustomError> {
