@@ -123,52 +123,38 @@ impl ProbNode {
     pub fn get_id(&self) -> &VectorId {
         &self.prop.id
     }
+
     pub fn add_neighbor(
         &self,
         neighbor_node: SharedNode,
         neighbor_id: &VectorId,
         dist: MetricResult,
     ) {
+        let mut neighbor_dist = dist.get_value();
         let neighbor = Box::new((neighbor_node, dist));
-        let neighbor_ptr = Box::into_raw(neighbor);
+        let mut neighbor_ptr = Box::into_raw(neighbor);
         let mut inserted = false;
-        let initial_idx =
-            (self.get_id().get_hash() ^ neighbor_id.get_hash()) % self.neighbors.len() as u64;
-        let mut current_idx = initial_idx as usize;
 
-        // Try half of total indices
-        for _ in 0..(self.neighbors.len() / 2) {
-            let result = self.neighbors[current_idx].fetch_update(
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-                |current_neighbor| {
-                    if current_neighbor.is_null() {
-                        Some(neighbor_ptr)
-                    } else {
-                        unsafe {
-                            if dist.get_value() > (*current_neighbor).1.get_value() {
-                                Some(neighbor_ptr)
-                            } else {
-                                None
-                            }
+        for neighbor in &self.neighbors {
+            let result =
+                neighbor.fetch_update(Ordering::Release, Ordering::Acquire, |current_neighbor| {
+                    if let Some((_, current_neighbor_similarity)) =
+                        unsafe { current_neighbor.as_ref() }
+                    {
+                        if neighbor_dist < current_neighbor_similarity.get_value() {
+                            return None;
                         }
                     }
-                },
-            );
-            match result {
-                Ok(prev_neighbor) => {
-                    unsafe {
-                        if !prev_neighbor.is_null() {
-                            drop(Box::from_raw(prev_neighbor));
-                        }
-                    }
+                    Some(neighbor_ptr)
+                });
+
+            if let Ok(prev_neighbor_ptr) = result {
+                if let Some((_, prev_neighbor_dist)) = unsafe { prev_neighbor_ptr.as_ref() } {
+                    neighbor_dist = prev_neighbor_dist.get_value();
+                    neighbor_ptr = prev_neighbor_ptr;
+                } else {
                     inserted = true;
                     break;
-                }
-                Err(_) => {
-                    // Hash-based jump probing with wraparound
-                    let jump = (self.get_id().get_hash() ^ neighbor_id.get_hash()) % 5 + 1;
-                    current_idx = (current_idx + jump as usize) % self.neighbors.len();
                 }
             }
         }

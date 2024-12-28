@@ -945,7 +945,7 @@ fn traverse_find_nearest(
 
     if is_indexing {
         // Truncate to top 4
-        nn.truncate(5);
+        nn.truncate(10);
     } else {
         //ANN search
         if cur_level.0 == 0 {
