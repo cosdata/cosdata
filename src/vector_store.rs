@@ -918,7 +918,6 @@ fn traverse_find_nearest(
             if skipm.is_member(neighbor.prop.id.0) {
                 continue;
             }
-            //let neighbor_node = neighbor_nd.0.clone();
             skipm.insert(neighbor.prop.id.0);
 
             let dist = dense_index
