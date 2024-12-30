@@ -15,11 +15,12 @@ use crate::vector_store::*;
 use arcshift::ArcShift;
 use lmdb::Transaction;
 use lmdb::WriteFlags;
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use std::array::TryFromSliceError;
 use std::fs;
 use std::io::SeekFrom;
 use std::path::Path;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
 
 /// creates a dense index for a collection
@@ -83,6 +84,7 @@ pub async fn init_dense_index_for_collection(
         hash,
         index_manager.clone(),
         ctx.config.hnsw.neighbors_count,
+        (-1.0, 1.0),
     )?;
 
     index_manager.flush_all()?;
@@ -108,6 +110,7 @@ pub async fn init_dense_index_for_collection(
         cache,
         index_manager,
         vec_raw_manager,
+        (-1.0, 1.0),
     ));
 
     ctx.ain_env
@@ -170,20 +173,217 @@ pub fn run_upload_in_transaction(
     ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
     transaction: &DenseIndexTransaction,
-    sample_points: Vec<(u32, Vec<f32>)>,
+    mut sample_points: Vec<(u32, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
-    transaction.increment_batch_count();
     let version = transaction.id;
     let version_number = transaction.version_number;
 
-    index_embeddings_in_transaction(
-        ctx.clone(),
-        dense_index.clone(),
-        version,
-        version_number,
-        transaction,
-        sample_points,
-    )?;
+    let mut is_first_batch = false;
+
+    if !dense_index.is_configured.load(Ordering::Acquire) {
+        let collected_count = dense_index
+            .vectors_collected
+            .fetch_add(sample_points.len(), Ordering::SeqCst);
+
+        if collected_count < ctx.config.indexing.threshold {
+            for (_, values) in &sample_points {
+                for value in values {
+                    let value = *value;
+
+                    if value > 0.1 {
+                        dense_index
+                            .sampling_data
+                            .above_01
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    if value > 0.2 {
+                        dense_index
+                            .sampling_data
+                            .above_02
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    if value > 0.3 {
+                        dense_index
+                            .sampling_data
+                            .above_03
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    if value > 0.4 {
+                        dense_index
+                            .sampling_data
+                            .above_04
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    if value > 0.5 {
+                        dense_index
+                            .sampling_data
+                            .above_05
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    if value < -0.1 {
+                        dense_index
+                            .sampling_data
+                            .below_01
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    if value < -0.2 {
+                        dense_index
+                            .sampling_data
+                            .below_02
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    if value < -0.3 {
+                        dense_index
+                            .sampling_data
+                            .below_03
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    if value < -0.4 {
+                        dense_index
+                            .sampling_data
+                            .below_04
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    if value < -0.5 {
+                        dense_index
+                            .sampling_data
+                            .below_05
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+
+            let mut vectors = dense_index.vectors.write().unwrap();
+            vectors.extend(sample_points);
+            if vectors.len() < ctx.config.indexing.threshold {
+                return Ok(());
+            }
+
+            let dimension = vectors[0].1.len();
+            let values_count = (dimension * vectors.len()) as f32;
+
+            let above_05_pecent =
+                (dense_index.sampling_data.above_05.load(Ordering::Relaxed) as f32 / values_count)
+                    * 100.0;
+            let above_04_pecent =
+                (dense_index.sampling_data.above_04.load(Ordering::Relaxed) as f32 / values_count)
+                    * 100.0;
+            let above_03_pecent =
+                (dense_index.sampling_data.above_03.load(Ordering::Relaxed) as f32 / values_count)
+                    * 100.0;
+            let above_02_pecent =
+                (dense_index.sampling_data.above_02.load(Ordering::Relaxed) as f32 / values_count)
+                    * 100.0;
+            let above_01_pecent =
+                (dense_index.sampling_data.above_01.load(Ordering::Relaxed) as f32 / values_count)
+                    * 100.0;
+
+            let below_05_pecent =
+                (dense_index.sampling_data.below_05.load(Ordering::Relaxed) as f32 / values_count)
+                    * 100.0;
+            let below_04_pecent =
+                (dense_index.sampling_data.below_04.load(Ordering::Relaxed) as f32 / values_count)
+                    * 100.0;
+            let below_03_pecent =
+                (dense_index.sampling_data.below_03.load(Ordering::Relaxed) as f32 / values_count)
+                    * 100.0;
+            let below_02_pecent =
+                (dense_index.sampling_data.below_02.load(Ordering::Relaxed) as f32 / values_count)
+                    * 100.0;
+            let below_01_pecent =
+                (dense_index.sampling_data.below_01.load(Ordering::Relaxed) as f32 / values_count)
+                    * 100.0;
+
+            println!("Above percentages:");
+            println!("> 0.5: {:.2}%", above_05_pecent);
+            println!("> 0.4: {:.2}%", above_04_pecent);
+            println!("> 0.3: {:.2}%", above_03_pecent);
+            println!("> 0.2: {:.2}%", above_02_pecent);
+            println!("> 0.1: {:.2}%", above_01_pecent);
+
+            println!("Below percentages:");
+            println!("< -0.5: {:.2}%", below_05_pecent);
+            println!("< -0.4: {:.2}%", below_04_pecent);
+            println!("< -0.3: {:.2}%", below_03_pecent);
+            println!("< -0.2: {:.2}%", below_02_pecent);
+            println!("< -0.1: {:.2}%", below_01_pecent);
+
+            let range_start = if below_01_pecent <= ctx.config.indexing.clamp_margin_percent {
+                -0.1
+            } else if below_02_pecent <= ctx.config.indexing.clamp_margin_percent {
+                -0.2
+            } else if below_03_pecent <= ctx.config.indexing.clamp_margin_percent {
+                -0.3
+            } else if below_04_pecent <= ctx.config.indexing.clamp_margin_percent {
+                -0.4
+            } else if below_05_pecent <= ctx.config.indexing.clamp_margin_percent {
+                -0.5
+            } else {
+                -1.0
+            };
+
+            let range_end = if above_01_pecent <= ctx.config.indexing.clamp_margin_percent {
+                0.1
+            } else if above_02_pecent <= ctx.config.indexing.clamp_margin_percent {
+                0.2
+            } else if above_03_pecent <= ctx.config.indexing.clamp_margin_percent {
+                0.3
+            } else if above_04_pecent <= ctx.config.indexing.clamp_margin_percent {
+                0.4
+            } else if above_05_pecent <= ctx.config.indexing.clamp_margin_percent {
+                0.5
+            } else {
+                1.0
+            };
+
+            let range = (range_start, range_end);
+            println!("Range: {:?}", range);
+            *dense_index.values_range.write().unwrap() = range;
+            dense_index.is_configured.store(true, Ordering::Release);
+            sample_points = std::mem::replace(&mut *vectors, Vec::new());
+            is_first_batch = true;
+        } else {
+            while !dense_index.is_configured.load(Ordering::Relaxed) {
+                drop(dense_index.vectors.read().unwrap());
+            }
+        }
+    }
+    transaction.increment_batch_count();
+
+    if is_first_batch {
+        sample_points
+            .into_par_iter()
+            .chunks(100)
+            .map(|chunk| {
+                index_embeddings_in_transaction(
+                    ctx.clone(),
+                    dense_index.clone(),
+                    version,
+                    version_number,
+                    transaction,
+                    chunk,
+                )
+            })
+            .collect::<Result<(), WaCustomError>>()?;
+    } else {
+        index_embeddings_in_transaction(
+            ctx.clone(),
+            dense_index.clone(),
+            version,
+            version_number,
+            transaction,
+            sample_points,
+        )?;
+    }
 
     transaction.start_serialization_round();
 
@@ -323,7 +523,7 @@ pub fn run_upload(
     let list = Arc::into_inner(serialization_table).unwrap().to_list();
 
     for (node, _) in list {
-        write_node_to_file(&node, &dense_index.index_manager)?;
+        write_node_to_file(node, &dense_index.index_manager)?;
     }
 
     dense_index.vec_raw_manager.flush_all()?;
@@ -339,9 +539,11 @@ pub async fn ann_vector_query(
 ) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
     let dense_index = dense_index.clone();
     let vec_hash = VectorId(u32::MAX - 1);
-    let vector_list = dense_index
-        .quantization_metric
-        .quantize(&query, *dense_index.storage_type.clone().get())?;
+    let vector_list = dense_index.quantization_metric.quantize(
+        &query,
+        *dense_index.storage_type.clone().get(),
+        *dense_index.values_range.read().unwrap(),
+    )?;
 
     let vec_emb = QuantizedVectorEmbedding {
         quantized_vec: Arc::new(vector_list.clone()),
@@ -368,9 +570,11 @@ pub async fn batch_ann_vector_query(
         .into_par_iter()
         .map(|query| {
             let vec_hash = VectorId(u32::MAX - 1);
-            let vector_list = dense_index
-                .quantization_metric
-                .quantize(&query, *dense_index.storage_type.clone().get())?;
+            let vector_list = dense_index.quantization_metric.quantize(
+                &query,
+                *dense_index.storage_type.clone().get(),
+                *dense_index.values_range.read().unwrap(),
+            )?;
 
             let vec_emb = QuantizedVectorEmbedding {
                 quantized_vec: Arc::new(vector_list.clone()),

@@ -10,12 +10,14 @@ mode = "http"   # Options: "http" or "https"
 pool_size = 64
 
 [hnsw]
-neighbors_count = 64
+neighbors_count = 32
 
 [server.ssl]
 cert_file = "/etc/ssl/certs/cosdata-ssl.crt"
 key_file = "/etc/ssl/private/cosdata-ssl.key"
 
 [indexing]
-mode = "batch"   # Options: "sequential" or "batch"
-batch_size = 32  # only required with "batch" indexing mode
+threshold = 100
+clamp_margin_percent = 1.0 # 1%
+mode = "sequential"   # Options: "sequential" or "batch"
+# batch_size = 32  # only required with "batch" indexing mode

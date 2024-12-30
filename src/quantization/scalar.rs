@@ -11,23 +11,15 @@ impl Quantization for ScalarQuantization {
         &self,
         vector: &[f32],
         storage_type: StorageType,
+        range: (f32, f32),
     ) -> Result<Storage, QuantizationError> {
         match storage_type {
             StorageType::UnsignedByte => {
-                let (out_of_range, has_negative) =
-                    vector.iter().fold((false, false), |(oor, neg), &x| {
-                        (oor || x > 1.0 || x < -1.0, neg || x < 0.0)
-                    });
-                if out_of_range {
-                    return Err(QuantizationError::InvalidInput(String::from(
-                        "Values sent in vector for quantization are out of range [-1,+1]",
-                    )));
-                }
                 let quant_vec: Vec<u8> = vector
                     .iter()
                     .map(|&x| {
-                        let y = if has_negative { x + 1.0 } else { x };
-                        (y * 255.0).round() as u8
+                        (((x.max(range.0).min(range.1) - range.0) / (range.1 - range.0)) * 255.0)
+                            as u8
                     })
                     .collect();
                 let mag = quant_vec.iter().map(|&x| x as u32 * x as u32).sum();

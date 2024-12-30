@@ -24,6 +24,7 @@ use smallvec::SmallVec;
 use std::array::TryFromSliceError;
 use std::fs::File;
 use std::io::SeekFrom;
+use std::ptr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -37,20 +38,19 @@ pub fn create_root_node(
     hash: Hash,
     index_manager: Arc<BufferManagerFactory<Hash>>,
     neighbors_count: usize,
+    values_range: (f32, f32),
 ) -> Result<SharedNode, WaCustomError> {
-    let min = -1.0;
-    let max = 1.0;
     let vec = (0..dim)
         .map(|_| {
             let mut rng = rand::thread_rng();
 
-            let random_number: f32 = rng.gen_range(min..max);
+            let random_number: f32 = rng.gen_range(values_range.0..values_range.1);
             random_number
         })
         .collect::<Vec<f32>>();
     let vec_hash = VectorId(u32::MAX);
 
-    let vector_list = Arc::new(quantization_metric.quantize(&vec, storage_type)?);
+    let vector_list = Arc::new(quantization_metric.quantize(&vec, storage_type, values_range)?);
 
     let mut prop_file_guard = prop_file.write().unwrap();
     let location = write_prop_to_file(&vec_hash, vector_list.clone(), &mut *prop_file_guard)?;
@@ -419,6 +419,7 @@ pub fn index_embeddings(
                         .quantize(
                             &raw_emb.raw_vec,
                             dense_index.storage_type.clone().get().clone(),
+                            *dense_index.values_range.read().unwrap(),
                         )
                         .expect("Quantization failed"),
                 );
@@ -576,6 +577,7 @@ pub fn index_embeddings_in_transaction(
             let quantized_vec = Arc::new(quantization.quantize(
                 &raw_emb.raw_vec,
                 dense_index.storage_type.clone().get().clone(),
+                *dense_index.values_range.read().unwrap(),
             )?);
 
             let mut prop_file_guard = dense_index.prop_file.write().unwrap();
@@ -977,6 +979,7 @@ pub fn create_index_in_collection(
         hash,
         dense_index.index_manager.clone(),
         ctx.config.hnsw.neighbors_count,
+        *dense_index.values_range.read().unwrap(),
     )?;
 
     // The whole index is empty now

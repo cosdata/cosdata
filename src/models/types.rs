@@ -34,7 +34,7 @@ use siphasher::sip::SipHasher24;
 use std::collections::HashSet;
 use std::hash::{DefaultHasher, Hash as StdHash, Hasher};
 use std::path::Path;
-use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, RwLock};
 use std::{fmt, ptr};
 use std::{fs::*, thread};
@@ -195,10 +195,11 @@ impl Quantization for QuantizationMetric {
         &self,
         vector: &[f32],
         storage_type: StorageType,
+        range: (f32, f32),
     ) -> Result<Storage, QuantizationError> {
         match self {
-            Self::Scalar => ScalarQuantization.quantize(vector, storage_type),
-            Self::Product(product) => product.quantize(vector, storage_type),
+            Self::Scalar => ScalarQuantization.quantize(vector, storage_type, range),
+            Self::Product(product) => product.quantize(vector, storage_type, range),
         }
     }
 
@@ -442,8 +443,8 @@ impl DenseIndexTransaction {
                     let list = serialization_table.to_list();
                     for (node, _) in list {
                         serialization_table.delete(&node);
-                        let version = node.get_current_version();
-                        let offset = write_node_to_file(&node, &dense_index.index_manager)?;
+                        let version = unsafe { &*node }.get_current_version();
+                        let offset = write_node_to_file(node, &dense_index.index_manager)?;
                         dense_index.cache.insert_lazy_object(version, offset, node);
                     }
                     batches_processed += 1;
@@ -530,6 +531,21 @@ impl DenseIndexTransaction {
     }
 }
 
+#[derive(Default)]
+pub struct SamplingData {
+    pub above_05: AtomicUsize,
+    pub above_04: AtomicUsize,
+    pub above_03: AtomicUsize,
+    pub above_02: AtomicUsize,
+    pub above_01: AtomicUsize,
+
+    pub below_05: AtomicUsize,
+    pub below_04: AtomicUsize,
+    pub below_03: AtomicUsize,
+    pub below_02: AtomicUsize,
+    pub below_01: AtomicUsize,
+}
+
 #[derive(Clone)]
 pub struct DenseIndex {
     pub database_name: String,
@@ -548,6 +564,11 @@ pub struct DenseIndex {
     pub cache: Arc<ProbCache>,
     pub index_manager: Arc<BufferManagerFactory<Hash>>,
     pub vec_raw_manager: Arc<BufferManagerFactory<Hash>>,
+    pub is_configured: Arc<AtomicBool>,
+    pub values_range: Arc<RwLock<(f32, f32)>>,
+    pub vectors: Arc<RwLock<Vec<(u32, Vec<f32>)>>>,
+    pub sampling_data: Arc<SamplingData>,
+    pub vectors_collected: Arc<AtomicUsize>,
 }
 
 unsafe impl Send for DenseIndex {}
@@ -570,6 +591,7 @@ impl DenseIndex {
         cache: Arc<ProbCache>,
         index_manager: Arc<BufferManagerFactory<Hash>>,
         vec_raw_manager: Arc<BufferManagerFactory<Hash>>,
+        values_range: (f32, f32),
     ) -> Self {
         DenseIndex {
             database_name,
@@ -591,6 +613,11 @@ impl DenseIndex {
             cache,
             index_manager,
             vec_raw_manager,
+            is_configured: Arc::new(AtomicBool::new(false)),
+            values_range: Arc::new(RwLock::new(values_range)),
+            vectors: Arc::new(RwLock::new(Vec::new())),
+            sampling_data: Arc::new(SamplingData::default()),
+            vectors_collected: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -776,6 +803,8 @@ impl CollectionsMap {
             cache,
             index_manager,
             vec_raw_manager,
+            // TODO: persist
+            (-1.0, 1.0),
         );
 
         Ok(dense_index)
