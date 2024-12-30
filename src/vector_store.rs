@@ -906,14 +906,14 @@ fn traverse_find_nearest(
         }
     } else {
         for neighbor in node.get_neighbors_raw() {
-            let neighbor_nd = unsafe {
+            let neighbor_lazy_item = unsafe {
                 if let Some((neighbor, _)) = neighbor.load(Ordering::Relaxed).as_ref() {
                     *neighbor
                 } else {
                     continue;
                 }
             };
-            let neighbor = unsafe { &*neighbor_nd }.try_get_data(&dense_index.cache)?;
+            let neighbor = unsafe { &*neighbor_lazy_item }.try_get_data(&dense_index.cache)?;
 
             if skipm.is_member(neighbor.prop.id.0) {
                 continue;
@@ -928,7 +928,7 @@ fn traverse_find_nearest(
             if hops <= 50 {
                 let mut z = traverse_find_nearest(
                     dense_index,
-                    neighbor_nd,
+                    neighbor_lazy_item,
                     fvec,
                     hops + 1,
                     skipm,
@@ -936,10 +936,10 @@ fn traverse_find_nearest(
                     is_indexing,
                     shortlist,
                 )?;
-                z.push((neighbor_nd, dist));
+                z.push((neighbor_lazy_item, dist));
                 tasks.push(z);
             } else {
-                tasks.push(vec![(neighbor_nd, dist)]);
+                tasks.push(vec![(neighbor_lazy_item, dist)]);
             }
         }
     }
