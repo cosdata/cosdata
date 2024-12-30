@@ -33,7 +33,7 @@ impl ProbSerialize for Box<[AtomicPtr<(SharedNode, MetricResult)>]> {
         let placeholder_start = start_offset + 4;
 
         for (i, neighbor) in self.iter().enumerate() {
-            let (node, dist) = unsafe {
+            let (node_ptr, dist) = unsafe {
                 if let Some(neighbor) = neighbor.load(Ordering::SeqCst).as_ref() {
                     neighbor.clone()
                 } else {
@@ -43,11 +43,13 @@ impl ProbSerialize for Box<[AtomicPtr<(SharedNode, MetricResult)>]> {
 
             let placeholder_pos = placeholder_start + (i as u64 * 14);
 
-            let node_offset = node.serialize(bufmans, version, cursor)?;
+            let node_offset = node_ptr.serialize(bufmans, version, cursor)?;
             let dist_offset = dist.serialize(bufmans, version, cursor)?;
             let end_offset = bufman.cursor_position(cursor)?;
 
             bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_pos))?;
+
+            let node = unsafe { &*node_ptr };
 
             bufman.write_u32_with_cursor(cursor, node_offset)?;
             bufman.write_u16_with_cursor(cursor, node.get_current_version_number())?;
@@ -160,7 +162,7 @@ impl UpdateSerialized for Box<[AtomicPtr<(SharedNode, MetricResult)>]> {
                 let placeholder_offset = offset as u64 + 4;
 
                 for i in 0..self.len() {
-                    let (node, dist) = unsafe {
+                    let (node_ptr, dist) = unsafe {
                         if let Some(neighbor) = self[i].load(Ordering::SeqCst).as_ref() {
                             neighbor.clone()
                         } else {
@@ -172,11 +174,13 @@ impl UpdateSerialized for Box<[AtomicPtr<(SharedNode, MetricResult)>]> {
 
                     let placeholder_pos = placeholder_offset + (i as u64 * 14);
 
-                    let node_offset = node.serialize(bufmans, version_id, cursor)?;
+                    let node_offset = node_ptr.serialize(bufmans, version_id, cursor)?;
                     let dist_offset = dist.serialize(bufmans, version_id, cursor)?;
                     let end_offset = bufman.cursor_position(cursor)?;
 
                     bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_pos))?;
+
+                    let node = unsafe { &*node_ptr };
 
                     bufman.write_u32_with_cursor(cursor, node_offset)?;
                     bufman.write_u16_with_cursor(cursor, node.get_current_version_number())?;

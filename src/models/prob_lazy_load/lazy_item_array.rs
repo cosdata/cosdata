@@ -3,10 +3,10 @@ use std::{
     sync::atomic::{AtomicPtr, Ordering},
 };
 
-use super::lazy_item::{ProbLazyItem, ProbLazyItemInner};
+use super::lazy_item::ProbLazyItem;
 
 pub struct ProbLazyItemArray<T, const N: usize> {
-    items: [AtomicPtr<ProbLazyItemInner<T>>; N],
+    items: [AtomicPtr<ProbLazyItem<T>>; N],
 }
 
 impl<T, const N: usize> ProbLazyItemArray<T, N> {
@@ -16,10 +16,10 @@ impl<T, const N: usize> ProbLazyItemArray<T, N> {
         }
     }
 
-    pub fn push(&self, item: ProbLazyItem<T>) {
+    pub fn push(&self, item: *mut ProbLazyItem<T>) {
         for i in 0..N {
             if self.items[i].load(Ordering::SeqCst).is_null() {
-                self.items[i].store(item.as_ptr(), Ordering::SeqCst);
+                self.items[i].store(item, Ordering::SeqCst);
                 return;
             }
         }
@@ -35,23 +35,21 @@ impl<T, const N: usize> ProbLazyItemArray<T, N> {
         N
     }
 
-    pub fn last(&self) -> Option<ProbLazyItem<T>> {
+    pub fn last(&self) -> Option<*mut ProbLazyItem<T>> {
         for i in (0..N).rev() {
             let ptr = self.items[i].load(Ordering::SeqCst);
             if !ptr.is_null() {
-                return Some(ProbLazyItem::from_ptr(ptr));
+                return Some(ptr);
             }
         }
         None
     }
 
-    pub fn get(&self, idx: usize) -> Option<ProbLazyItem<T>> {
+    pub fn get(&self, idx: usize) -> Option<*mut ProbLazyItem<T>> {
         if idx >= N || self.items[idx].load(Ordering::SeqCst).is_null() {
             return None;
         }
-        Some(ProbLazyItem::from_ptr(
-            self.items[idx].load(Ordering::SeqCst),
-        ))
+        Some(self.items[idx].load(Ordering::SeqCst))
     }
 
     pub fn is_empty(&self) -> bool {

@@ -63,7 +63,13 @@ pub fn create_root_node(
     });
 
     let mut root = ProbLazyItem::new(
-        ProbNode::new(HNSWLevel(0), prop.clone(), None, None, neighbors_count),
+        ProbNode::new(
+            HNSWLevel(0),
+            prop.clone(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            neighbors_count,
+        ),
         hash,
         0,
     );
@@ -74,14 +80,14 @@ pub fn create_root_node(
         let current_node = ProbNode::new(
             HNSWLevel(l),
             prop.clone(),
-            None,
-            Some(root.clone()),
+            ptr::null_mut(),
+            root,
             neighbors_count,
         );
 
         let lazy_node = ProbLazyItem::new(current_node, hash, 0);
 
-        if let Some(prev_node) = root.get_lazy_data() {
+        if let Some(prev_node) = unsafe { &*root }.get_lazy_data() {
             prev_node.set_parent(lazy_node.clone());
         }
         root = lazy_node.clone();
@@ -90,7 +96,7 @@ pub fn create_root_node(
     }
 
     for item in nodes {
-        write_node_to_file(&item, &index_manager)?;
+        write_node_to_file(item, &index_manager)?;
     }
 
     Ok(root)
@@ -107,11 +113,11 @@ pub fn ann_search(
     let mut skipm = PerformantFixedSet::new();
     skipm.insert(vector_emb.hash_vec.0);
 
-    let cur_node = cur_entry.try_get_data(&dense_index.cache)?;
+    let cur_node = unsafe { &*cur_entry }.try_get_data(&dense_index.cache)?;
 
     let z = traverse_find_nearest(
         &dense_index,
-        &cur_entry,
+        cur_entry,
         &fvec,
         0,
         &mut skipm,
@@ -125,7 +131,7 @@ pub fn ann_search(
             .distance_metric
             .calculate(&fvec, &cur_node.prop.value)?;
 
-        vec![(cur_entry.clone(), dist)]
+        vec![(cur_entry, dist)]
     } else {
         z
     };
@@ -134,10 +140,9 @@ pub fn ann_search(
         let results = ann_search(
             dense_index.clone(),
             vector_emb,
-            z[0].0
+            unsafe { &*z[0].0 }
                 .try_get_data(&dense_index.cache)?
-                .get_child()
-                .unwrap(),
+                .get_child(),
             HNSWLevel(cur_level.0 - 1),
             neighbors_count,
         )?;
@@ -440,11 +445,11 @@ pub fn index_embeddings(
                 let mut current_entry = dense_index.get_root_vec();
 
                 loop {
-                    let data = current_entry
+                    let data = unsafe { &*current_entry }
                         .try_get_data(&dense_index.cache)
                         .expect("Unable to load data");
                     if data.hnsw_level.0 > current_level.0 {
-                        current_entry = data.get_child().unwrap();
+                        current_entry = data.get_child();
                     } else if data.hnsw_level == current_level {
                         break;
                     } else {
@@ -454,7 +459,7 @@ pub fn index_embeddings(
 
                 index_embedding(
                     dense_index.clone(),
-                    None,
+                    ptr::null_mut(),
                     embedding,
                     prop,
                     current_entry,
@@ -598,7 +603,7 @@ pub fn index_embeddings_in_transaction(
 
             index_embedding(
                 dense_index.clone(),
-                None,
+                ptr::null_mut(),
                 embedding,
                 prop,
                 root_entry,
@@ -631,7 +636,7 @@ pub fn index_embeddings_in_transaction(
 
 pub fn index_embedding(
     dense_index: Arc<DenseIndex>,
-    parent: Option<SharedNode>,
+    parent: SharedNode,
     vector_emb: QuantizedVectorEmbedding,
     prop: Arc<NodeProp>,
     cur_entry: SharedNode,
@@ -647,14 +652,12 @@ pub fn index_embedding(
     let mut skipm = PerformantFixedSet::new();
     skipm.insert(vector_emb.hash_vec.0);
 
-    let cur_node = cur_entry
-        .get_latest_version(&dense_index.cache)?
-        .0
+    let cur_node = unsafe { &*ProbLazyItem::get_latest_version(cur_entry, &dense_index.cache)?.0 }
         .try_get_data(&dense_index.cache)?;
 
     let z = traverse_find_nearest(
         &dense_index,
-        &cur_entry,
+        cur_entry,
         &fvec,
         0,
         &mut skipm,
@@ -677,13 +680,12 @@ pub fn index_embedding(
         if cur_level.0 != 0 {
             index_embedding(
                 dense_index.clone(),
-                None,
+                ptr::null_mut(),
                 vector_emb.clone(),
                 prop.clone(),
-                z[0].0
+                unsafe { &*z[0].0 }
                     .try_get_data(&dense_index.cache)?
-                    .get_child()
-                    .unwrap(),
+                    .get_child(),
                 HNSWLevel(cur_level.0 - 1),
                 version,
                 version_number,
@@ -700,14 +702,14 @@ pub fn index_embedding(
             version_number,
             cur_level,
             prop.clone(),
-            parent.clone(),
-            None,
+            parent,
+            ptr::null_mut(),
             neighbors_count,
         );
 
-        let node = lazy_node.get_lazy_data().unwrap();
+        let node = unsafe { &*lazy_node }.get_lazy_data().unwrap();
 
-        if let Some(parent) = parent {
+        if let Some(parent) = unsafe { parent.as_ref() } {
             parent
                 .try_get_data(&dense_index.cache)
                 .unwrap()
@@ -717,13 +719,12 @@ pub fn index_embedding(
         if cur_level.0 != 0 {
             index_embedding(
                 dense_index.clone(),
-                Some(lazy_node.clone()),
+                lazy_node,
                 vector_emb.clone(),
                 prop.clone(),
-                z[0].0
+                unsafe { &*z[0].0 }
                     .try_get_data(&dense_index.cache)?
-                    .get_child()
-                    .unwrap(),
+                    .get_child(),
                 HNSWLevel(cur_level.0 - 1),
                 version,
                 version_number,
@@ -754,8 +755,8 @@ fn create_node(
     version_number: u16,
     hnsw_level: HNSWLevel,
     prop: Arc<NodeProp>,
-    parent: Option<SharedNode>,
-    child: Option<SharedNode>,
+    parent: SharedNode,
+    child: SharedNode,
     neighbors_count: usize,
 ) -> SharedNode {
     let node = ProbNode::new(hnsw_level, prop, parent, child, neighbors_count);
@@ -769,14 +770,14 @@ fn get_or_create_version(
     version: Hash,
     version_number: u16,
 ) -> Result<SharedNode, WaCustomError> {
-    let node = lazy_item.try_get_data(&dense_index.cache)?;
+    let node = unsafe { &*lazy_item }.try_get_data(&dense_index.cache)?;
 
     let new_version = lazy_item_versions_table.get_or_create(
         (node.get_id().clone(), version_number, node.hnsw_level.0),
         || {
-            if let Some(version) = lazy_item
-                .get_version(version_number, &dense_index.cache)
-                .expect("Deserialization failed")
+            if let Some(version) =
+                ProbLazyItem::get_version(lazy_item, version_number, &dense_index.cache)
+                    .expect("Deserialization failed")
             {
                 return version;
             }
@@ -791,8 +792,7 @@ fn get_or_create_version(
 
             let version = ProbLazyItem::new(new_node, version, version_number);
 
-            lazy_item
-                .add_version(version.clone(), &dense_index.cache)
+            ProbLazyItem::add_version(lazy_item, version, &dense_index.cache)
                 .expect("Failed to add version")
                 .map_err(|_| "Failed to add version")
                 .unwrap();
@@ -825,10 +825,10 @@ fn create_node_edges(
             version,
             version_number,
         )?;
-        let new_neighbor = new_lazy_neighbor.try_get_data(&dense_index.cache)?;
+        let new_neighbor = unsafe { &*new_lazy_neighbor }.try_get_data(&dense_index.cache)?;
 
-        node.add_neighbor(new_lazy_neighbor.clone(), new_neighbor.get_id(), dist);
-        new_neighbor.add_neighbor(lazy_node.clone(), &node.prop.id, dist);
+        node.add_neighbor(new_lazy_neighbor.clone(), dist);
+        new_neighbor.add_neighbor(lazy_node.clone(), dist);
     }
 
     serialization_table.insert(lazy_node, ());
@@ -838,7 +838,7 @@ fn create_node_edges(
 
 fn traverse_find_nearest(
     dense_index: &DenseIndex,
-    vtm: &SharedNode,
+    vtm: SharedNode,
     fvec: &Storage,
     hops: u8,
     skipm: &mut PerformantFixedSet,
@@ -848,33 +848,34 @@ fn traverse_find_nearest(
 ) -> Result<Vec<(SharedNode, MetricResult)>, WaCustomError> {
     let mut tasks: SmallVec<[Vec<(SharedNode, MetricResult)>; 32]> = SmallVec::new();
 
-    let (latest_version_lazy_node, _latest_version) = vtm.get_latest_version(&dense_index.cache)?;
+    let (latest_version_lazy_node, _latest_version) =
+        ProbLazyItem::get_latest_version(vtm, &dense_index.cache)?;
 
-    let node = latest_version_lazy_node.try_get_data(&dense_index.cache)?;
+    let node = unsafe { &*latest_version_lazy_node }.try_get_data(&dense_index.cache)?;
     if shortlist {
         let mut neighbors = Vec::new();
 
         for neighbor in node.get_neighbors_raw() {
-            let neighbor_node = unsafe {
-                if let Some(neighbor) = neighbor.load(Ordering::Acquire).as_ref() {
-                    neighbor.0.clone()
+            let neighbor_lazy_item = unsafe {
+                if let Some((neighbor, _)) = neighbor.load(Ordering::Relaxed).as_ref() {
+                    *neighbor
                 } else {
                     continue;
                 }
             };
-            let neighbor = neighbor_node.try_get_data(&dense_index.cache)?;
+            let neighbor_node = unsafe { &*neighbor_lazy_item }.try_get_data(&dense_index.cache)?;
 
-            if skipm.is_member(neighbor.prop.id.0) {
+            if skipm.is_member(neighbor_node.prop.id.0) {
                 continue;
             }
 
-            skipm.insert(neighbor.prop.id.0);
+            skipm.insert(neighbor_node.prop.id.0);
 
             let dist = dense_index
                 .distance_metric
-                .calculate(&fvec, &neighbor.prop.value)?;
+                .calculate(&fvec, &neighbor_node.prop.value)?;
 
-            neighbors.push((neighbor_node, dist));
+            neighbors.push((neighbor_lazy_item, dist));
         }
 
         neighbors.sort_unstable_by(|(_, a), (_, b)| {
@@ -887,7 +888,7 @@ fn traverse_find_nearest(
             if hops <= 50 && neighbor_idx < 10 {
                 let mut z = traverse_find_nearest(
                     dense_index,
-                    &neighbor_node,
+                    neighbor_node,
                     fvec,
                     hops + 1,
                     skipm,
@@ -903,18 +904,19 @@ fn traverse_find_nearest(
         }
     } else {
         for neighbor in node.get_neighbors_raw() {
-            let neighbor_node = unsafe {
-                if let Some(neighbor) = neighbor.load(Ordering::Acquire).as_ref() {
-                    neighbor.0.clone()
+            let neighbor_nd = unsafe {
+                if let Some((neighbor, _)) = neighbor.load(Ordering::Relaxed).as_ref() {
+                    *neighbor
                 } else {
                     continue;
                 }
             };
-            let neighbor = neighbor_node.try_get_data(&dense_index.cache)?;
+            let neighbor = unsafe { &*neighbor_nd }.try_get_data(&dense_index.cache)?;
 
             if skipm.is_member(neighbor.prop.id.0) {
                 continue;
             }
+            //let neighbor_node = neighbor_nd.0.clone();
             skipm.insert(neighbor.prop.id.0);
 
             let dist = dense_index
@@ -924,7 +926,7 @@ fn traverse_find_nearest(
             if hops <= 50 {
                 let mut z = traverse_find_nearest(
                     dense_index,
-                    &neighbor_node,
+                    neighbor_nd,
                     fvec,
                     hops + 1,
                     skipm,
@@ -932,10 +934,10 @@ fn traverse_find_nearest(
                     is_indexing,
                     shortlist,
                 )?;
-                z.push((neighbor_node, dist));
+                z.push((neighbor_nd, dist));
                 tasks.push(z);
             } else {
-                tasks.push(vec![(neighbor_node, dist)]);
+                tasks.push(vec![(neighbor_nd, dist)]);
             }
         }
     }
@@ -964,7 +966,7 @@ pub fn create_index_in_collection(
     let mut quantization_metric_arc = dense_index.quantization_metric.clone();
     let quantization_metric = quantization_metric_arc.get();
 
-    let hash = dense_index.get_root_vec().get_current_version();
+    let hash = unsafe { &*dense_index.get_root_vec() }.get_current_version();
 
     let root = create_root_node(
         dense_index.hnsw_params.num_layers,

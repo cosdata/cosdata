@@ -157,6 +157,8 @@ pub enum VectorsIndexingMode {
 
 #[derive(Deserialize, Clone)]
 pub struct Indexing {
+    pub threshold: usize,
+    pub clamp_margin_percent: f32,
     #[serde(flatten)]
     pub mode: VectorsIndexingMode,
 }

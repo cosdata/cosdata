@@ -7,7 +7,8 @@ use super::meta_persist::{
     delete_dense_index, lmdb_init_collections_db, lmdb_init_db, load_collections,
     load_dense_index_data, persist_dense_index, retrieve_current_version,
 };
-use super::prob_node::{SharedNode, SharedNodeInner};
+use super::prob_lazy_load::lazy_item::ProbLazyItem;
+use super::prob_node::{ProbNode, SharedNode};
 use super::versioning::VersionControl;
 use crate::distance::cosine::CosineSimilarity;
 use crate::distance::DistanceError;
@@ -532,7 +533,7 @@ impl DenseIndexTransaction {
 #[derive(Clone)]
 pub struct DenseIndex {
     pub database_name: String,
-    pub root_vec: Arc<AtomicPtr<SharedNodeInner>>,
+    pub root_vec: Arc<AtomicPtr<ProbLazyItem<ProbNode>>>,
     pub levels_prob: Arc<Vec<(f64, i32)>>,
     pub dim: usize,
     pub prop_file: Arc<RwLock<File>>,
@@ -572,7 +573,7 @@ impl DenseIndex {
     ) -> Self {
         DenseIndex {
             database_name,
-            root_vec: Arc::new(AtomicPtr::new(root_vec.as_ptr())),
+            root_vec: Arc::new(AtomicPtr::new(root_vec)),
             levels_prob,
             dim,
             prop_file,
@@ -606,18 +607,18 @@ impl DenseIndex {
     }
 
     pub fn set_root_vec(&self, root_vec: SharedNode) {
-        self.root_vec.store(root_vec.as_ptr(), Ordering::SeqCst);
+        self.root_vec.store(root_vec, Ordering::SeqCst);
     }
 
     pub fn get_root_vec(&self) -> SharedNode {
-        SharedNode::from_ptr(self.root_vec.load(Ordering::SeqCst))
+        self.root_vec.load(Ordering::SeqCst)
     }
 
     /// Returns FileIndex (offset) corresponding to the root
     /// node. Returns None if the it's not set or the root node is an
     /// invalid LazyItem
     pub fn root_vec_offset(&self) -> Option<FileIndex> {
-        self.get_root_vec().get_file_index()
+        unsafe { &*self.get_root_vec() }.get_file_index()
     }
 }
 

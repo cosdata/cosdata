@@ -491,7 +491,7 @@ pub fn remove_duplicates_and_filter(
     let mut collected = vec
         .into_iter()
         .filter_map(|(lazy_item, similarity)| {
-            let id = lazy_item.get_lazy_data()?.get_id().clone();
+            let id = unsafe { &*lazy_item }.get_lazy_data()?.get_id().clone();
             if !seen.insert(id.clone()) {
                 return None;
             }

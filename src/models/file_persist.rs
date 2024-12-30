@@ -40,14 +40,15 @@ use std::sync::Arc;
 //     Ok(node)
 // }
 pub fn write_node_to_file(
-    lazy_item: &SharedNode,
+    lazy_item: SharedNode,
     bufmans: &BufferManagerFactory<Hash>,
 ) -> Result<u32, WaCustomError> {
-    let version = lazy_item.get_current_version();
+    let lazy_item_ref = unsafe { &*lazy_item };
+    let version = lazy_item_ref.get_current_version();
     let bufman = bufmans.get(version)?;
     let cursor = bufman.open_cursor()?;
 
-    lazy_item.set_persistence(true);
+    lazy_item_ref.set_persistence(true);
     let offset = lazy_item.serialize(bufmans, version, cursor)?;
 
     bufman.close_cursor(cursor)?;

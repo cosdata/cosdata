@@ -3,7 +3,7 @@ use super::common::TSHashTable;
 use super::file_persist::read_prop_from_file;
 use super::lazy_load::{FileIndex, LazyItem, LazyItemVec, VectorData};
 use super::lru_cache::LRUCache;
-use super::prob_lazy_load::lazy_item::{ProbLazyItem, ProbLazyItemState};
+use super::prob_lazy_load::lazy_item::{ProbLazyItem, ProbLazyItemState, ReadyState};
 use super::prob_node::{ProbNode, SharedNode};
 use super::serializer::prob::ProbSerialize;
 use super::serializer::CustomSerialize;
@@ -308,7 +308,7 @@ impl ProbCache {
         let combined_index = (offset as u64) << 32 | (*version as u64);
         let mut cuckoo_filter = self.cuckoo_filter.write().unwrap();
         cuckoo_filter.insert(&combined_index);
-        if let Some(node) = item.get_lazy_data() {
+        if let Some(node) = unsafe { &*item }.get_lazy_data() {
             let prop_key = Self::get_prop_key(node.prop.location.0, node.prop.location.1);
             self.props_registry
                 .insert(prop_key, Arc::downgrade(&node.prop));
@@ -382,13 +382,13 @@ impl ProbCache {
         };
 
         let data = ProbNode::deserialize(&self.bufmans, file_index, self, max_loads - 1, skipm)?;
-        let state = ProbLazyItemState::Ready {
+        let state = ProbLazyItemState::Ready(ReadyState {
             data,
             file_offset: Cell::new(Some(offset)),
             persist_flag: AtomicBool::new(false),
             version_id,
             version_number,
-        };
+        });
 
         let item = ProbLazyItem::new_from_state(state);
 
