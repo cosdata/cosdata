@@ -6,7 +6,7 @@ use serde::{
 };
 
 use crate::{
-    indexes::inverted_index_item::SparsePair,
+    indexes::inverted_index_types::SparsePair,
     models::{rpc::Vector, types::VectorId},
 };
 

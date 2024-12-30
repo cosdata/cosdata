@@ -1,6 +1,6 @@
 use std::{io::SeekFrom, sync::Arc};
 
-use crate::indexes::inverted_index_item::RawSparseVectorEmbedding;
+use crate::indexes::inverted_index_types::RawSparseVectorEmbedding;
 
 use super::{
     buffered_io::BufferManager, common::WaCustomError, types::RawVectorEmbedding, versioning::Hash,
