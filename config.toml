@@ -10,11 +10,19 @@ mode = "http"   # Options: "http" or "https"
 pool_size = 64
 
 [hnsw]
-neighbors_count = 32
+default_neighbors_count = 32
+default_level_0_neighbors_count = 64
+default_ef_construction = 128
+default_ef_search = 256
+default_num_layer = 5
+default_max_cache_size = 1000
 
 [server.ssl]
 cert_file = "/etc/ssl/certs/cosdata-ssl.crt"
 key_file = "/etc/ssl/private/cosdata-ssl.key"
+
+[search]
+shortlist_size = 10
 
 [indexing]
 threshold = 100

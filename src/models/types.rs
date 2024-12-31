@@ -10,6 +10,7 @@ use super::meta_persist::{
 use super::prob_lazy_load::lazy_item::ProbLazyItem;
 use super::prob_node::{ProbNode, SharedNode};
 use super::versioning::VersionControl;
+use crate::config_loader::Config;
 use crate::distance::cosine::CosineSimilarity;
 use crate::distance::DistanceError;
 use crate::distance::{
@@ -372,24 +373,25 @@ impl MetaDb {
     }
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HNSWHyperParams {
-    pub m: usize,
-    pub ef_construction: usize,
-    pub ef_search: usize,
     pub num_layers: u8,
+    pub ef_construction: u32,
+    pub ef_search: u32,
     pub max_cache_size: usize,
+    pub level_0_neighbors_count: usize,
+    pub neighbors_count: usize,
 }
 
-impl Default for HNSWHyperParams {
-    fn default() -> Self {
+impl HNSWHyperParams {
+    pub fn default_from_config(config: &Config) -> Self {
         Self {
-            m: 16,
-            ef_construction: 100,
-            ef_search: 15,
-            num_layers: 5,
-            max_cache_size: 1000,
+            ef_construction: config.hnsw.default_ef_construction,
+            ef_search: config.hnsw.default_ef_search,
+            num_layers: config.hnsw.default_num_layer,
+            max_cache_size: config.hnsw.default_max_cache_size,
+            level_0_neighbors_count: config.hnsw.default_level_0_neighbors_count,
+            neighbors_count: config.hnsw.default_neighbors_count,
         }
     }
 }
@@ -521,12 +523,17 @@ impl DenseIndexTransaction {
 
     pub fn pre_commit(self) -> Result<(), WaCustomError> {
         // sending a signal without incrementing the batch count will stop the serialization
+        println!("debug 1");
         self.serialization_signal.send(()).unwrap();
+        println!("debug 2");
         self.serializer_thread_handle.join().unwrap()?;
+        println!("debug 3");
         drop(self.raw_embedding_channel);
+        println!("debug 4");
         self.raw_embedding_serializer_thread_handle
             .join()
             .unwrap()?;
+        println!("debug 5");
         Ok(())
     }
 }
@@ -560,7 +567,7 @@ pub struct DenseIndex {
     pub distance_metric: ArcShift<DistanceMetric>,
     pub storage_type: ArcShift<StorageType>,
     pub vcs: Arc<VersionControl>,
-    pub hnsw_params: ArcShift<HNSWHyperParams>,
+    pub hnsw_params: Arc<RwLock<HNSWHyperParams>>,
     pub cache: Arc<ProbCache>,
     pub index_manager: Arc<BufferManagerFactory<Hash>>,
     pub vec_raw_manager: Arc<BufferManagerFactory<Hash>>,
@@ -569,6 +576,7 @@ pub struct DenseIndex {
     pub vectors: Arc<RwLock<Vec<(u32, Vec<f32>)>>>,
     pub sampling_data: Arc<SamplingData>,
     pub vectors_collected: Arc<AtomicUsize>,
+    pub sample_threshold: usize,
 }
 
 unsafe impl Send for DenseIndex {}
@@ -587,11 +595,13 @@ impl DenseIndex {
         distance_metric: ArcShift<DistanceMetric>,
         storage_type: ArcShift<StorageType>,
         vcs: Arc<VersionControl>,
-        num_layers: u8,
+        hnsw_params: HNSWHyperParams,
         cache: Arc<ProbCache>,
         index_manager: Arc<BufferManagerFactory<Hash>>,
         vec_raw_manager: Arc<BufferManagerFactory<Hash>>,
         values_range: (f32, f32),
+        sample_threshold: usize,
+        is_configured: bool,
     ) -> Self {
         DenseIndex {
             database_name,
@@ -606,18 +616,16 @@ impl DenseIndex {
             distance_metric,
             storage_type,
             vcs,
-            hnsw_params: ArcShift::new(HNSWHyperParams {
-                num_layers,
-                ..Default::default()
-            }),
+            hnsw_params: Arc::new(RwLock::new(hnsw_params)),
             cache,
             index_manager,
             vec_raw_manager,
-            is_configured: Arc::new(AtomicBool::new(false)),
+            is_configured: Arc::new(AtomicBool::new(is_configured)),
             values_range: Arc::new(RwLock::new(values_range)),
             vectors: Arc::new(RwLock::new(Vec::new())),
             sampling_data: Arc::new(SamplingData::default()),
             vectors_collected: Arc::new(AtomicUsize::new(0)),
+            sample_threshold,
         }
     }
 
@@ -799,12 +807,14 @@ impl CollectionsMap {
             ArcShift::new(dense_index_data.distance_metric),
             ArcShift::new(dense_index_data.storage_type),
             vcs,
-            dense_index_data.num_layers,
+            dense_index_data.hnsw_params,
             cache,
             index_manager,
             vec_raw_manager,
             // TODO: persist
             (-1.0, 1.0),
+            0,
+            true,
         );
 
         Ok(dense_index)

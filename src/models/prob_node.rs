@@ -16,7 +16,7 @@ pub type SharedNode = *mut ProbLazyItem<ProbNode>;
 pub struct ProbNode {
     pub hnsw_level: HNSWLevel,
     pub prop: Arc<NodeProp>,
-    neighbors: Box<[AtomicPtr<(SharedNode, MetricResult)>]>,
+    neighbors: Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]>,
     parent: AtomicPtr<ProbLazyItem<ProbNode>>,
     child: AtomicPtr<ProbLazyItem<ProbNode>>,
     pub versions: ProbLazyItemArray<ProbNode, 4>,
@@ -52,7 +52,7 @@ impl ProbNode {
     pub fn new_with_neighbors(
         hnsw_level: HNSWLevel,
         prop: Arc<NodeProp>,
-        neighbors: Box<[AtomicPtr<(SharedNode, MetricResult)>]>,
+        neighbors: Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]>,
         parent: SharedNode,
         child: SharedNode,
     ) -> Self {
@@ -69,7 +69,7 @@ impl ProbNode {
     pub fn new_with_neighbors_and_versions(
         hnsw_level: HNSWLevel,
         prop: Arc<NodeProp>,
-        neighbors: Box<[AtomicPtr<(SharedNode, MetricResult)>]>,
+        neighbors: Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]>,
         parent: SharedNode,
         child: SharedNode,
         versions: ProbLazyItemArray<ProbNode, 4>,
@@ -104,16 +104,16 @@ impl ProbNode {
         &self.prop.id
     }
 
-    pub fn add_neighbor(&self, neighbor_node: SharedNode, dist: MetricResult) {
+    pub fn add_neighbor(&self, neighbor_id: u32, neighbor_node: SharedNode, dist: MetricResult) {
         let mut neighbor_dist = dist.get_value();
-        let neighbor = Box::new((neighbor_node, dist));
+        let neighbor = Box::new((neighbor_id, neighbor_node, dist));
         let mut neighbor_ptr = Box::into_raw(neighbor);
         let mut inserted = false;
 
         for neighbor in &self.neighbors {
             let result =
                 neighbor.fetch_update(Ordering::Release, Ordering::Acquire, |current_neighbor| {
-                    if let Some((_, current_neighbor_similarity)) =
+                    if let Some((_, _, current_neighbor_similarity)) =
                         unsafe { current_neighbor.as_ref() }
                     {
                         if neighbor_dist < current_neighbor_similarity.get_value() {
@@ -124,7 +124,7 @@ impl ProbNode {
                 });
 
             if let Ok(prev_neighbor_ptr) = result {
-                if let Some((_, prev_neighbor_dist)) = unsafe { prev_neighbor_ptr.as_ref() } {
+                if let Some((_, _, prev_neighbor_dist)) = unsafe { prev_neighbor_ptr.as_ref() } {
                     neighbor_dist = prev_neighbor_dist.get_value();
                     neighbor_ptr = prev_neighbor_ptr;
                 } else {
@@ -148,12 +148,12 @@ impl ProbNode {
                 neighbor
                     .load(Ordering::Relaxed)
                     .as_ref()
-                    .map(|neighbor| neighbor.0.clone())
+                    .map(|neighbor| neighbor.1.clone())
             })
             .collect()
     }
 
-    pub fn clone_neighbors(&self) -> Box<[AtomicPtr<(SharedNode, MetricResult)>]> {
+    pub fn clone_neighbors(&self) -> Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]> {
         self.neighbors
             .iter()
             .map(|neighbor| unsafe {
@@ -166,7 +166,7 @@ impl ProbNode {
             .into_boxed_slice()
     }
 
-    pub fn get_neighbors_raw(&self) -> &Box<[AtomicPtr<(SharedNode, MetricResult)>]> {
+    pub fn get_neighbors_raw(&self) -> &Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]> {
         &self.neighbors
     }
 }

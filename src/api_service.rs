@@ -28,16 +28,18 @@ use std::sync::{Arc, RwLock};
 pub async fn init_dense_index_for_collection(
     ctx: Arc<AppContext>,
     collection: &Collection,
-    size: usize,
-    _lower_bound: Option<f32>,
-    _upper_bound: Option<f32>,
-    num_layers: u8,
+    values_range: Option<(f32, f32)>,
+    hnsw_params: HNSWHyperParams,
+    quantization_metric: QuantizationMetric,
+    distance_metric: DistanceMetric,
+    storage_type: StorageType,
+    sample_threshold: usize,
+    is_configured: bool,
 ) -> Result<Arc<DenseIndex>, WaCustomError> {
     let collection_name = &collection.name;
     let collection_path: Arc<Path> = collection.get_path();
 
-    let quantization_metric = QuantizationMetric::Scalar;
-    let storage_type = StorageType::UnsignedByte;
+    let values_range = values_range.unwrap_or((-1.0, 1.0));
 
     let env = ctx.ain_env.persist.clone();
 
@@ -76,15 +78,14 @@ pub async fn init_dense_index_for_collection(
     ));
 
     let root = create_root_node(
-        num_layers,
         &quantization_metric,
         storage_type,
-        size,
+        collection.dense_vector.dimension,
         prop_file.clone(),
         hash,
         index_manager.clone(),
-        ctx.config.hnsw.neighbors_count,
-        (-1.0, 1.0),
+        values_range,
+        &hnsw_params,
     )?;
 
     index_manager.flush_all()?;
@@ -92,25 +93,27 @@ pub async fn init_dense_index_for_collection(
     // -- TODO level entry ratio
     // ---------------------------
     let factor_levels = 10.0;
-    let lp = Arc::new(generate_tuples(factor_levels, num_layers));
+    let lp = Arc::new(generate_tuples(factor_levels, hnsw_params.num_layers));
 
     let dense_index = Arc::new(DenseIndex::new(
         collection_name.clone(),
         root,
         lp,
-        size,
+        collection.dense_vector.dimension,
         prop_file,
         lmdb,
         ArcShift::new(hash),
         ArcShift::new(quantization_metric),
-        ArcShift::new(DistanceMetric::Cosine),
+        ArcShift::new(distance_metric),
         ArcShift::new(storage_type),
         vcs,
-        num_layers,
+        hnsw_params,
         cache,
         index_manager,
         vec_raw_manager,
-        (-1.0, 1.0),
+        values_range,
+        sample_threshold,
+        is_configured,
     ));
 
     ctx.ain_env
@@ -185,7 +188,7 @@ pub fn run_upload_in_transaction(
             .vectors_collected
             .fetch_add(sample_points.len(), Ordering::SeqCst);
 
-        if collected_count < ctx.config.indexing.threshold {
+        if collected_count < dense_index.sample_threshold {
             for (_, values) in &sample_points {
                 for value in values {
                     let value = *value;
@@ -264,7 +267,7 @@ pub fn run_upload_in_transaction(
 
             let mut vectors = dense_index.vectors.write().unwrap();
             vectors.extend(sample_points);
-            if vectors.len() < ctx.config.indexing.threshold {
+            if vectors.len() < dense_index.sample_threshold {
                 return Ok(());
             }
 
@@ -433,11 +436,11 @@ pub fn run_upload(
 
     if index_before_insertion {
         index_embeddings(
+            &ctx.config,
             dense_index.clone(),
             ctx.config.upload_process_batch_size,
             serialization_table.clone(),
             lazy_item_versions_table.clone(),
-            ctx.config.hnsw.neighbors_count,
         )?;
     }
 
@@ -512,11 +515,11 @@ pub fn run_upload(
 
     if count_unindexed >= ctx.config.upload_threshold {
         index_embeddings(
+            &ctx.config,
             dense_index.clone(),
             ctx.config.upload_process_batch_size,
             serialization_table.clone(),
             lazy_item_versions_table,
-            ctx.config.hnsw.neighbors_count,
         )?;
     }
 
@@ -550,12 +553,16 @@ pub async fn ann_vector_query(
         hash_vec: vec_hash.clone(),
     };
 
+    let hnsw_params = dense_index.hnsw_params.clone();
+    let hnsw_params_guard = hnsw_params.read().unwrap();
+
     let results = ann_search(
+        &ctx.config,
         dense_index.clone(),
         vec_emb,
         dense_index.get_root_vec(),
-        HNSWLevel(dense_index.hnsw_params.clone().get().num_layers),
-        ctx.config.hnsw.neighbors_count,
+        HNSWLevel(hnsw_params_guard.num_layers),
+        &*hnsw_params_guard,
     )?;
     let output = finalize_ann_results(dense_index, results, &query)?;
     Ok(output)
@@ -581,12 +588,14 @@ pub async fn batch_ann_vector_query(
                 hash_vec: vec_hash.clone(),
             };
 
+            let hnsw_params = dense_index.hnsw_params.read().unwrap();
             let results = ann_search(
+                &ctx.config,
                 dense_index.clone(),
                 vec_emb,
                 dense_index.get_root_vec(),
-                HNSWLevel(dense_index.hnsw_params.clone().get().num_layers),
-                ctx.config.hnsw.neighbors_count,
+                HNSWLevel(hnsw_params.num_layers),
+                &hnsw_params,
             )?;
             let output = finalize_ann_results(dense_index.clone(), results, &query)?;
             Ok::<_, WaCustomError>(output)

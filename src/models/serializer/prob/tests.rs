@@ -63,19 +63,20 @@ impl EqualityTest for ProbNode {
     }
 }
 
-impl EqualityTest for Box<[AtomicPtr<(SharedNode, MetricResult)>]> {
+impl EqualityTest for Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]> {
     fn assert_eq(&self, other: &Self, tester: &mut EqualityTester) {
         assert_eq!(self.len(), other.len());
         for i in 0..self.len() {
             let self_el = unsafe { self[i].load(Ordering::Relaxed).as_ref().cloned() };
             let other_el = unsafe { other[i].load(Ordering::Relaxed).as_ref().cloned() };
 
-            let Some((self_node, self_dist)) = self_el else {
+            let Some((self_id, self_node, self_dist)) = self_el else {
                 assert!(other_el.is_none());
                 continue;
             };
-            let (other_node, other_dist) = other_el.unwrap();
+            let (other_id, other_node, other_dist) = other_el.unwrap();
             assert_eq!(self_dist, other_dist);
+            assert_eq!(self_id, other_id);
             self_node.assert_eq(&other_node, tester);
         }
     }
@@ -268,7 +269,7 @@ fn test_prob_node_serialization_with_neighbors() {
 
         let lazy_item = ProbLazyItem::new(neighbor_node, root_version_id, root_version_number);
         let dist = MetricResult::CosineSimilarity(CosineSimilarity((i as f32) / 5.0));
-        node.add_neighbor(lazy_item, dist);
+        node.add_neighbor(i, lazy_item, dist);
     }
 
     let offset = node.serialize(&bufmans, root_version_id, cursor).unwrap();

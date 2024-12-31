@@ -50,27 +50,27 @@ pub(crate) async fn create_collection(
 }
 
 /// creates a dense_index for a collection
-pub(crate) async fn create_dense_index(
-    ctx: Arc<AppContext>,
-    collection: &Collection,
-    size: usize,
-    lower_bound: Option<f32>,
-    upper_bound: Option<f32>,
-    num_layers: u8,
-    _auto_config: bool,
-) -> Result<Arc<DenseIndex>, CollectionsError> {
-    // Call init_vector_store using web::block
-    let result = init_dense_index_for_collection(
-        ctx,
-        collection,
-        size,
-        lower_bound,
-        upper_bound,
-        num_layers,
-    )
-    .await;
-    result.map_err(|e| CollectionsError::FailedToCreateCollection(e.to_string()))
-}
+// pub(crate) async fn create_dense_index(
+//     ctx: Arc<AppContext>,
+//     collection: &Collection,
+//     size: usize,
+//     lower_bound: Option<f32>,
+//     upper_bound: Option<f32>,
+//     num_layers: u8,
+//     _auto_config: bool,
+// ) -> Result<Arc<DenseIndex>, CollectionsError> {
+//     // Call init_vector_store using web::block
+//     let result = init_dense_index_for_collection(
+//         ctx,
+//         collection,
+//         size,
+//         lower_bound,
+//         upper_bound,
+//         num_layers,
+//     )
+//     .await;
+//     result.map_err(|e| CollectionsError::FailedToCreateCollection(e.to_string()))
+// }
 
 /// creates an inverted index for a collection
 pub(crate) async fn create_inverted_index(
