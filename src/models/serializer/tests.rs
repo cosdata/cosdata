@@ -30,6 +30,7 @@ fn setup_test(
     let bufmans = Arc::new(BufferManagerFactory::new(
         dir.as_ref().into(),
         |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+        1.0,
     ));
     let cache = get_cache(bufmans.clone());
     let bufman = bufmans.get(root_version).unwrap();
@@ -417,6 +418,7 @@ fn test_lazy_item_with_versions_serialization() {
     let bufmans = Arc::new(BufferManagerFactory::new(
         temp_dir.as_ref().into(),
         |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+        1.0,
     ));
     let cache = get_cache(bufmans.clone());
 
@@ -761,6 +763,7 @@ fn test_lazy_item_with_versions_serialization_and_validation() {
     let bufmans = Arc::new(BufferManagerFactory::new(
         temp_dir.as_ref().into(),
         |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+        1.0,
     ));
     let cache = get_cache(bufmans.clone());
     let bufman = bufmans.get(v0_hash).unwrap();
@@ -808,6 +811,7 @@ fn test_lazy_item_with_versions_multiple_serialization() {
     let bufmans = Arc::new(BufferManagerFactory::new(
         temp_dir.as_ref().into(),
         |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+        1.0,
     ));
     let cache = get_cache(bufmans.clone());
     let bufman = bufmans.get(v0_hash).unwrap();

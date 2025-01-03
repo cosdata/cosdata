@@ -523,17 +523,12 @@ impl DenseIndexTransaction {
 
     pub fn pre_commit(self) -> Result<(), WaCustomError> {
         // sending a signal without incrementing the batch count will stop the serialization
-        println!("debug 1");
         self.serialization_signal.send(()).unwrap();
-        println!("debug 2");
         self.serializer_thread_handle.join().unwrap()?;
-        println!("debug 3");
         drop(self.raw_embedding_channel);
-        println!("debug 4");
         self.raw_embedding_serializer_thread_handle
             .join()
             .unwrap()?;
-        println!("debug 5");
         Ok(())
     }
 }
@@ -704,7 +699,7 @@ impl CollectionsMap {
     ///
     /// In doing so, the root vec for all collections' dense indexes are loaded into
     /// memory, which also ends up warming the cache (NodeRegistry)
-    fn load(env: Arc<Environment>) -> Result<Self, WaCustomError> {
+    fn load(env: Arc<Environment>, config: &Config) -> Result<Self, WaCustomError> {
         let collections_map =
             Self::new(env.clone()).map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
@@ -726,7 +721,7 @@ impl CollectionsMap {
 
             // if collection has dense index load it from the lmdb
             if coll.dense_vector.enabled {
-                let dense_index = collections_map.load_dense_index(&coll, root_path)?;
+                let dense_index = collections_map.load_dense_index(&coll, root_path, config)?;
                 collections_map
                     .inner
                     .insert(coll.name.clone(), Arc::new(dense_index));
@@ -748,16 +743,19 @@ impl CollectionsMap {
         &self,
         coll: &Collection,
         root_path: &Path,
+        config: &Config,
     ) -> Result<DenseIndex, WaCustomError> {
         let collection_path: Arc<Path> = root_path.join(&coll.name).into();
 
         let index_manager = Arc::new(BufferManagerFactory::new(
             collection_path.clone(),
             |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+            config.flush_eagerness_factor,
         ));
         let vec_raw_manager = Arc::new(BufferManagerFactory::new(
             collection_path.clone(),
             |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
+            config.flush_eagerness_factor,
         ));
         let prop_file = Arc::new(RwLock::new(
             OpenOptions::new()
@@ -941,7 +939,7 @@ pub struct AppEnv {
     pub persist: Arc<Environment>,
 }
 
-pub fn get_app_env() -> Result<Arc<AppEnv>, WaCustomError> {
+pub fn get_app_env(config: &Config) -> Result<Arc<AppEnv>, WaCustomError> {
     let path = Path::new("./_mdb"); // TODO: prefix the customer & database name
 
     // Ensure the directory exists
@@ -955,7 +953,7 @@ pub fn get_app_env() -> Result<Arc<AppEnv>, WaCustomError> {
 
     let env_arc = Arc::new(env);
 
-    let collections_map = CollectionsMap::load(env_arc.clone())
+    let collections_map = CollectionsMap::load(env_arc.clone(), config)
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
     Ok(Arc::new(AppEnv {

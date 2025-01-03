@@ -169,6 +169,7 @@ impl InvertedIndexSparseAnnBasic {
         let bufmans = Arc::new(BufferManagerFactory::new(
             Path::new(".").into(),
             |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+            1.0,
         ));
         let cache = Arc::new(NodeRegistry::new(1000, bufmans));
         InvertedIndexSparseAnnBasic {
@@ -342,6 +343,7 @@ impl InvertedIndexSparseAnnBasicTSHashmap {
         let bufmans = Arc::new(BufferManagerFactory::new(
             Path::new(".").into(),
             |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+            1.0,
         ));
         let cache = Arc::new(NodeRegistry::new(1000, bufmans));
         InvertedIndexSparseAnnBasicTSHashmap {
@@ -509,6 +511,7 @@ impl InvertedIndexSparseAnnBasicDashMap {
         let bufmans = Arc::new(BufferManagerFactory::new(
             Path::new(".").into(),
             |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+            1.0,
         ));
         let cache = Arc::new(NodeRegistry::new(1000, bufmans));
         InvertedIndexSparseAnnBasicDashMap {

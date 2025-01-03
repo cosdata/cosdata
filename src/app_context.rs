@@ -9,27 +9,6 @@ use crate::models::versioning::Hash;
 use crate::WaCustomError;
 use rayon::ThreadPool;
 
-#[allow(dead_code)]
-fn init_index_manager() -> BufferManagerFactory<Hash> {
-    BufferManagerFactory::new(Path::new(".").into(), |root, ver| {
-        root.join(format!("{}.index", **ver))
-    })
-}
-
-#[allow(dead_code)]
-fn init_node_registry(index_manager: Arc<BufferManagerFactory<Hash>>) -> NodeRegistry {
-    // @TODO: May be the value can be taken from config
-    let cuckoo_filter_capacity = 1000;
-    NodeRegistry::new(cuckoo_filter_capacity, index_manager)
-}
-
-#[allow(dead_code)]
-fn init_vec_raw_manager() -> BufferManagerFactory<Hash> {
-    BufferManagerFactory::new(Path::new(".").into(), |root, ver| {
-        root.join(format!("{}.vec_raw", **ver))
-    })
-}
-
 #[allow(unused)]
 pub struct AppContext {
     pub config: Config,
@@ -39,7 +18,7 @@ pub struct AppContext {
 
 impl AppContext {
     pub fn new(config: Config) -> Result<Self, WaCustomError> {
-        let ain_env = get_app_env()?;
+        let ain_env = get_app_env(&config)?;
         let threadpool = rayon::ThreadPoolBuilder::new()
             .num_threads(config.thread_pool.pool_size)
             .build()

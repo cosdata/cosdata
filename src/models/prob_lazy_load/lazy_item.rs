@@ -149,7 +149,6 @@ impl ProbLazyItem<ProbNode> {
             match &*self.state.load(Ordering::Relaxed) {
                 ProbLazyItemState::Ready(state) => Ok(&state.data),
                 ProbLazyItemState::Pending(file_index) => {
-                    // println!("...");
                     (&*(cache.get_object(file_index.clone())?)).try_get_data(cache)
                 }
             }

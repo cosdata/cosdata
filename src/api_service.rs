@@ -65,10 +65,12 @@ pub async fn init_dense_index_for_collection(
     let index_manager = Arc::new(BufferManagerFactory::new(
         collection_path.clone(),
         |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+        ctx.config.flush_eagerness_factor,
     ));
     let vec_raw_manager = Arc::new(BufferManagerFactory::new(
         collection_path.clone(),
         |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
+        ctx.config.flush_eagerness_factor,
     ));
     // TODO: May be the value can be taken from config
     let cache = Arc::new(ProbCache::new(

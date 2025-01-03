@@ -1,5 +1,6 @@
 upload_threshold = 100
 upload_process_batch_size = 1000
+flush_eagerness_factor = 0.01
 
 [server]
 host = "127.0.0.1"
