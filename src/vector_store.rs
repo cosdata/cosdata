@@ -10,7 +10,6 @@ use crate::models::dot_product::dot_product_f32;
 use crate::models::embedding_persist::*;
 use crate::models::file_persist::*;
 use crate::models::fixedset::PerformantFixedSet;
-use crate::models::lazy_load::*;
 use crate::models::prob_lazy_load::lazy_item::ProbLazyItem;
 use crate::models::prob_node::ProbNode;
 use crate::models::prob_node::SharedNode;
@@ -116,7 +115,7 @@ pub fn ann_search(
     } else {
         hnsw_params.neighbors_count
     });
-    skipm.insert(vector_emb.hash_vec.0);
+    skipm.insert(vector_emb.hash_vec.0 as u32);
 
     let cur_node = unsafe { &*cur_entry }.try_get_data(&dense_index.cache)?;
 
@@ -673,7 +672,7 @@ pub fn index_embedding(
     } else {
         hnsw_params.neighbors_count
     });
-    skipm.insert(vector_emb.hash_vec.0);
+    skipm.insert(vector_emb.hash_vec.0 as u32);
 
     let cur_node = unsafe { &*ProbLazyItem::get_latest_version(cur_entry, &dense_index.cache)?.0 }
         .try_get_data(&dense_index.cache)?;
@@ -859,8 +858,12 @@ fn create_node_edges(
         )?;
         let new_neighbor = unsafe { &*new_lazy_neighbor }.try_get_data(&dense_index.cache)?;
 
-        node.add_neighbor(new_neighbor.get_id().0, new_lazy_neighbor.clone(), dist);
-        new_neighbor.add_neighbor(node.get_id().0, lazy_node.clone(), dist);
+        node.add_neighbor(
+            new_neighbor.get_id().0 as u32,
+            new_lazy_neighbor.clone(),
+            dist,
+        );
+        new_neighbor.add_neighbor(node.get_id().0 as u32, lazy_node.clone(), dist);
     }
 
     serialization_table.insert(lazy_node, ());
@@ -999,29 +1002,6 @@ fn traverse_find_nearest(
         nn.truncate(500);
     }
     Ok(nn)
-}
-
-pub fn create_index_in_collection(dense_index: Arc<DenseIndex>) -> Result<(), WaCustomError> {
-    let mut quantization_metric_arc = dense_index.quantization_metric.clone();
-    let quantization_metric = quantization_metric_arc.get();
-
-    let hash = unsafe { &*dense_index.get_root_vec() }.get_current_version();
-
-    let root = create_root_node(
-        quantization_metric,
-        *dense_index.storage_type.clone().get(),
-        dense_index.dim,
-        dense_index.prop_file.clone(),
-        hash,
-        dense_index.index_manager.clone(),
-        *dense_index.values_range.read().unwrap(),
-        &dense_index.hnsw_params.read().unwrap(),
-    )?;
-
-    // The whole index is empty now
-    dense_index.set_root_vec(root);
-
-    Ok(())
 }
 
 // fn delete_node_update_neighbours(

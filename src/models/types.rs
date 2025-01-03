@@ -568,7 +568,7 @@ pub struct DenseIndex {
     pub vec_raw_manager: Arc<BufferManagerFactory<Hash>>,
     pub is_configured: Arc<AtomicBool>,
     pub values_range: Arc<RwLock<(f32, f32)>>,
-    pub vectors: Arc<RwLock<Vec<(u32, Vec<f32>)>>>,
+    pub vectors: Arc<RwLock<Vec<(u64, Vec<f32>)>>>,
     pub sampling_data: Arc<SamplingData>,
     pub vectors_collected: Arc<AtomicUsize>,
     pub sample_threshold: usize,

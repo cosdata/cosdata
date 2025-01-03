@@ -578,7 +578,7 @@ pub async fn batch_ann_vector_query(
     queries
         .into_par_iter()
         .map(|query| {
-            let vec_hash = VectorId(u32::MAX - 1);
+            let vec_hash = VectorId(u64::MAX - 1);
             let vector_list = dense_index.quantization_metric.quantize(
                 &query,
                 *dense_index.storage_type.clone().get(),

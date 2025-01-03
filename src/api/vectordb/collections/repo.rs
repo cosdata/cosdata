@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    api_service::{init_dense_index_for_collection, init_inverted_index_for_collection},
+    api_service::init_inverted_index_for_collection,
     app_context::AppContext,
     indexes::inverted_index::InvertedIndex,
     models::{collection::Collection, types::DenseIndex},
@@ -73,6 +73,7 @@ pub(crate) async fn create_collection(
 // }
 
 /// creates an inverted index for a collection
+#[allow(unused)]
 pub(crate) async fn create_inverted_index(
     ctx: Arc<AppContext>,
     collection: &Collection,

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     config_loader::Config,
-    models::types::{DistanceMetric, HNSWHyperParams, QuantizationMetric},
+    models::types::{DistanceMetric, HNSWHyperParams},
     quantization::StorageType,
 };
 

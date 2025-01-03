@@ -16,6 +16,8 @@ pub type SharedNode = *mut ProbLazyItem<ProbNode>;
 pub struct ProbNode {
     pub hnsw_level: HNSWLevel,
     pub prop: Arc<NodeProp>,
+    // (neighbor_id, neighbor_node, distance)
+    // even though `VectorId` is an u64 we don't need the full precision here.
     neighbors: Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]>,
     parent: AtomicPtr<ProbLazyItem<ProbNode>>,
     child: AtomicPtr<ProbLazyItem<ProbNode>>,
