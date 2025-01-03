@@ -60,7 +60,7 @@ pub fn retrieve_current_version(lmdb: &MetaDb) -> Result<Hash, WaCustomError> {
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct DenseIndexData {
     pub name: String,
-    pub num_layers: u8,
+    pub hnsw_params: HNSWHyperParams,
     pub levels_prob: Arc<Vec<(f64, i32)>>,
     pub dim: usize,
     pub file_index: FileIndex,
@@ -87,7 +87,7 @@ impl TryFrom<Arc<DenseIndex>> for DenseIndexData {
         };
         let dense_index_data = Self {
             name: dense_index.database_name.clone(),
-            num_layers: dense_index.hnsw_params.clone().num_layers,
+            hnsw_params: dense_index.hnsw_params.read().unwrap().clone(),
             levels_prob: dense_index.levels_prob.clone(),
             dim: dense_index.dim,
             file_index: offset,

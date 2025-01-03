@@ -7,6 +7,7 @@ use std::{path::Path, sync::RwLock};
 use std::sync::Arc;
 
 use crate::models::cuckoo_filter_tree::CuckooFilterTreeNode;
+use crate::models::versioning::Hash;
 use crate::models::{
     buffered_io::BufferManagerFactory,
     cache_loader::NodeRegistry,
@@ -167,7 +168,8 @@ impl InvertedIndexSparseAnnBasic {
     pub fn new() -> Self {
         let bufmans = Arc::new(BufferManagerFactory::new(
             Path::new(".").into(),
-            |root, ver| root.join(format!("{}.index", **ver)),
+            |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+            1.0,
         ));
         let cache = Arc::new(NodeRegistry::new(1000, bufmans));
         InvertedIndexSparseAnnBasic {
@@ -340,7 +342,8 @@ impl InvertedIndexSparseAnnBasicTSHashmap {
     pub fn new() -> Self {
         let bufmans = Arc::new(BufferManagerFactory::new(
             Path::new(".").into(),
-            |root, ver| root.join(format!("{}.index", **ver)),
+            |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+            1.0,
         ));
         let cache = Arc::new(NodeRegistry::new(1000, bufmans));
         InvertedIndexSparseAnnBasicTSHashmap {
@@ -507,7 +510,8 @@ impl InvertedIndexSparseAnnBasicDashMap {
     pub fn new() -> Self {
         let bufmans = Arc::new(BufferManagerFactory::new(
             Path::new(".").into(),
-            |root, ver| root.join(format!("{}.index", **ver)),
+            |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+            1.0,
         ));
         let cache = Arc::new(NodeRegistry::new(1000, bufmans));
         InvertedIndexSparseAnnBasicDashMap {

@@ -9,6 +9,7 @@ use crate::models::lazy_load::IncrementalSerializableGrowableData;
 use crate::models::lazy_load::LazyItem;
 use crate::models::lazy_load::LazyItemArray;
 use crate::models::types::SparseVector;
+use crate::models::versioning::Hash;
 use arcshift::ArcShift;
 
 // TODO: Add more powers for larger jumps
@@ -148,7 +149,8 @@ impl InvertedIndexSparseAnnNewDS {
     pub fn new() -> Self {
         let bufmans = Arc::new(BufferManagerFactory::new(
             Path::new(".").into(),
-            |root, ver| root.join(format!("{}.index", **ver)),
+            |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+            1.0,
         ));
         let cache = Arc::new(NodeRegistry::new(1000, bufmans));
         InvertedIndexSparseAnnNewDS {

@@ -412,6 +412,35 @@ fn scalar_u6_count_ones(data: &[u8]) -> u64 {
         .sum()
 }
 
+#[target_feature(enable = "avx2", enable = "fma")]
+pub unsafe fn dot_product_f32_simd(a: &[f32], b: &[f32]) -> f32 {
+    assert_eq!(a.len(), b.len(), "Vectors must have equal length");
+
+    let n = a.len();
+    let mut sum = _mm256_setzero_ps();
+
+    let chunks = n / 8;
+    for i in 0..chunks {
+        let offset = i * 8;
+        let va = _mm256_loadu_ps(a[offset..].as_ptr());
+        let vb = _mm256_loadu_ps(b[offset..].as_ptr());
+        sum = _mm256_fmadd_ps(va, vb, sum);
+    }
+
+    let temp = _mm256_hadd_ps(sum, sum);
+    let temp = _mm256_hadd_ps(temp, temp);
+    let sum_low = _mm256_castps256_ps128(temp);
+    let sum_high = _mm256_extractf128_ps(temp, 1);
+    let final_sum = _mm_add_ps(sum_low, sum_high);
+
+    let mut result = _mm_cvtss_f32(final_sum);
+    for i in (chunks * 8)..n {
+        result += a[i] * b[i];
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

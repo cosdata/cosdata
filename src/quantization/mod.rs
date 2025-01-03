@@ -10,6 +10,7 @@ pub trait Quantization: std::fmt::Debug + Send + Sync {
         &self,
         vector: &[f32],
         storage_type: StorageType,
+        range: (f32, f32),
     ) -> Result<Storage, QuantizationError>;
 
     fn train(&mut self, vectors: &[&[f32]]) -> Result<(), QuantizationError>;

@@ -50,7 +50,7 @@ fn reconstruct_tree(
 impl CustomSerialize for CuckooFilterTreeNode {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
@@ -59,7 +59,7 @@ impl CustomSerialize for CuckooFilterTreeNode {
         push_nodes_to_queue(Some(self), &mut queue);
         let number_of_nodes = queue.len();
 
-        let bufman = bufmans.get(&version)?;
+        let bufman = bufmans.get(version)?;
         let start_offset = bufman.cursor_position(cursor)? as u32;
 
         // Serialize the number of nodes in the queue
@@ -95,7 +95,7 @@ impl CustomSerialize for CuckooFilterTreeNode {
     }
 
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         file_index: FileIndex,
         cache: Arc<NodeRegistry>,
         max_loads: u16,
@@ -108,7 +108,7 @@ impl CustomSerialize for CuckooFilterTreeNode {
                 version_id,
                 ..
             } => {
-                let bufman = bufmans.get(&version_id)?;
+                let bufman = bufmans.get(version_id)?;
 
                 let cursor = bufman.open_cursor()?;
                 bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;

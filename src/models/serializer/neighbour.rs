@@ -17,11 +17,11 @@ use std::{
 impl CustomSerialize for Neighbour {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
-        let bufman = bufmans.get(&version)?;
+        let bufman = bufmans.get(version)?;
         let offset = bufman.cursor_position(cursor)? as u32;
 
         // Serialize the node position placeholder
@@ -41,7 +41,7 @@ impl CustomSerialize for Neighbour {
         Ok(offset)
     }
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         file_index: FileIndex,
         cache: Arc<NodeRegistry>,
         max_loads: u16,
@@ -58,7 +58,7 @@ impl CustomSerialize for Neighbour {
                 version_id,
                 version_number,
             } => {
-                let bufman = bufmans.get(&version_id)?;
+                let bufman = bufmans.get(version_id)?;
                 let cursor = bufman.open_cursor()?;
                 bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
                 // Deserialize the node position

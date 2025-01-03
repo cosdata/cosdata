@@ -7,8 +7,10 @@ use super::meta_persist::{
     delete_dense_index, lmdb_init_collections_db, lmdb_init_db, load_collections,
     load_dense_index_data, persist_dense_index, retrieve_current_version,
 };
-use super::prob_node::{SharedNode, SharedNodeInner};
+use super::prob_lazy_load::lazy_item::ProbLazyItem;
+use super::prob_node::{ProbNode, SharedNode};
 use super::versioning::VersionControl;
+use crate::config_loader::Config;
 use crate::distance::cosine::CosineSimilarity;
 use crate::distance::DistanceError;
 use crate::distance::{
@@ -33,7 +35,7 @@ use siphasher::sip::SipHasher24;
 use std::collections::HashSet;
 use std::hash::{DefaultHasher, Hash as StdHash, Hasher};
 use std::path::Path;
-use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, RwLock};
 use std::{fmt, ptr};
 use std::{fs::*, thread};
@@ -194,10 +196,11 @@ impl Quantization for QuantizationMetric {
         &self,
         vector: &[f32],
         storage_type: StorageType,
+        range: (f32, f32),
     ) -> Result<Storage, QuantizationError> {
         match self {
-            Self::Scalar => ScalarQuantization.quantize(vector, storage_type),
-            Self::Product(product) => product.quantize(vector, storage_type),
+            Self::Scalar => ScalarQuantization.quantize(vector, storage_type, range),
+            Self::Product(product) => product.quantize(vector, storage_type, range),
         }
     }
 
@@ -370,24 +373,25 @@ impl MetaDb {
     }
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HNSWHyperParams {
-    pub m: usize,
-    pub ef_construction: usize,
-    pub ef_search: usize,
     pub num_layers: u8,
+    pub ef_construction: u32,
+    pub ef_search: u32,
     pub max_cache_size: usize,
+    pub level_0_neighbors_count: usize,
+    pub neighbors_count: usize,
 }
 
-impl Default for HNSWHyperParams {
-    fn default() -> Self {
+impl HNSWHyperParams {
+    pub fn default_from_config(config: &Config) -> Self {
         Self {
-            m: 16,
-            ef_construction: 100,
-            ef_search: 15,
-            num_layers: 5,
-            max_cache_size: 1000,
+            ef_construction: config.hnsw.default_ef_construction,
+            ef_search: config.hnsw.default_ef_search,
+            num_layers: config.hnsw.default_num_layer,
+            max_cache_size: config.hnsw.default_max_cache_size,
+            level_0_neighbors_count: config.hnsw.default_level_0_neighbors_count,
+            neighbors_count: config.hnsw.default_neighbors_count,
         }
     }
 }
@@ -441,8 +445,8 @@ impl DenseIndexTransaction {
                     let list = serialization_table.to_list();
                     for (node, _) in list {
                         serialization_table.delete(&node);
-                        let version = node.get_current_version();
-                        let offset = write_node_to_file(&node, &dense_index.index_manager)?;
+                        let version = unsafe { &*node }.get_current_version();
+                        let offset = write_node_to_file(node, &dense_index.index_manager)?;
                         dense_index.cache.insert_lazy_object(version, offset, node);
                     }
                     batches_processed += 1;
@@ -455,7 +459,7 @@ impl DenseIndexTransaction {
         let (raw_embedding_channel, rx) = mpsc::channel();
 
         let raw_embedding_serializer_thread_handle = {
-            let bufman = dense_index.vec_raw_manager.get(&id)?;
+            let bufman = dense_index.vec_raw_manager.get(id)?;
 
             thread::spawn(move || {
                 let mut offsets = Vec::new();
@@ -529,10 +533,25 @@ impl DenseIndexTransaction {
     }
 }
 
+#[derive(Default)]
+pub struct SamplingData {
+    pub above_05: AtomicUsize,
+    pub above_04: AtomicUsize,
+    pub above_03: AtomicUsize,
+    pub above_02: AtomicUsize,
+    pub above_01: AtomicUsize,
+
+    pub below_05: AtomicUsize,
+    pub below_04: AtomicUsize,
+    pub below_03: AtomicUsize,
+    pub below_02: AtomicUsize,
+    pub below_01: AtomicUsize,
+}
+
 #[derive(Clone)]
 pub struct DenseIndex {
     pub database_name: String,
-    pub root_vec: Arc<AtomicPtr<SharedNodeInner>>,
+    pub root_vec: Arc<AtomicPtr<ProbLazyItem<ProbNode>>>,
     pub levels_prob: Arc<Vec<(f64, i32)>>,
     pub dim: usize,
     pub prop_file: Arc<RwLock<File>>,
@@ -543,10 +562,16 @@ pub struct DenseIndex {
     pub distance_metric: ArcShift<DistanceMetric>,
     pub storage_type: ArcShift<StorageType>,
     pub vcs: Arc<VersionControl>,
-    pub hnsw_params: ArcShift<HNSWHyperParams>,
+    pub hnsw_params: Arc<RwLock<HNSWHyperParams>>,
     pub cache: Arc<ProbCache>,
-    pub index_manager: Arc<BufferManagerFactory>,
-    pub vec_raw_manager: Arc<BufferManagerFactory>,
+    pub index_manager: Arc<BufferManagerFactory<Hash>>,
+    pub vec_raw_manager: Arc<BufferManagerFactory<Hash>>,
+    pub is_configured: Arc<AtomicBool>,
+    pub values_range: Arc<RwLock<(f32, f32)>>,
+    pub vectors: Arc<RwLock<Vec<(u64, Vec<f32>)>>>,
+    pub sampling_data: Arc<SamplingData>,
+    pub vectors_collected: Arc<AtomicUsize>,
+    pub sample_threshold: usize,
 }
 
 unsafe impl Send for DenseIndex {}
@@ -565,14 +590,17 @@ impl DenseIndex {
         distance_metric: ArcShift<DistanceMetric>,
         storage_type: ArcShift<StorageType>,
         vcs: Arc<VersionControl>,
-        num_layers: u8,
+        hnsw_params: HNSWHyperParams,
         cache: Arc<ProbCache>,
-        index_manager: Arc<BufferManagerFactory>,
-        vec_raw_manager: Arc<BufferManagerFactory>,
+        index_manager: Arc<BufferManagerFactory<Hash>>,
+        vec_raw_manager: Arc<BufferManagerFactory<Hash>>,
+        values_range: (f32, f32),
+        sample_threshold: usize,
+        is_configured: bool,
     ) -> Self {
         DenseIndex {
             database_name,
-            root_vec: Arc::new(AtomicPtr::new(root_vec.as_ptr())),
+            root_vec: Arc::new(AtomicPtr::new(root_vec)),
             levels_prob,
             dim,
             prop_file,
@@ -583,13 +611,16 @@ impl DenseIndex {
             distance_metric,
             storage_type,
             vcs,
-            hnsw_params: ArcShift::new(HNSWHyperParams {
-                num_layers,
-                ..Default::default()
-            }),
+            hnsw_params: Arc::new(RwLock::new(hnsw_params)),
             cache,
             index_manager,
             vec_raw_manager,
+            is_configured: Arc::new(AtomicBool::new(is_configured)),
+            values_range: Arc::new(RwLock::new(values_range)),
+            vectors: Arc::new(RwLock::new(Vec::new())),
+            sampling_data: Arc::new(SamplingData::default()),
+            vectors_collected: Arc::new(AtomicUsize::new(0)),
+            sample_threshold,
         }
     }
 
@@ -606,18 +637,18 @@ impl DenseIndex {
     }
 
     pub fn set_root_vec(&self, root_vec: SharedNode) {
-        self.root_vec.store(root_vec.as_ptr(), Ordering::SeqCst);
+        self.root_vec.store(root_vec, Ordering::SeqCst);
     }
 
     pub fn get_root_vec(&self) -> SharedNode {
-        SharedNode::from_ptr(self.root_vec.load(Ordering::SeqCst))
+        self.root_vec.load(Ordering::SeqCst)
     }
 
     /// Returns FileIndex (offset) corresponding to the root
     /// node. Returns None if the it's not set or the root node is an
     /// invalid LazyItem
     pub fn root_vec_offset(&self) -> Option<FileIndex> {
-        self.get_root_vec().get_file_index()
+        unsafe { &*self.get_root_vec() }.get_file_index()
     }
 }
 
@@ -668,7 +699,7 @@ impl CollectionsMap {
     ///
     /// In doing so, the root vec for all collections' dense indexes are loaded into
     /// memory, which also ends up warming the cache (NodeRegistry)
-    fn load(env: Arc<Environment>) -> Result<Self, WaCustomError> {
+    fn load(env: Arc<Environment>, config: &Config) -> Result<Self, WaCustomError> {
         let collections_map =
             Self::new(env.clone()).map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
@@ -690,7 +721,7 @@ impl CollectionsMap {
 
             // if collection has dense index load it from the lmdb
             if coll.dense_vector.enabled {
-                let dense_index = collections_map.load_dense_index(&coll, root_path)?;
+                let dense_index = collections_map.load_dense_index(&coll, root_path, config)?;
                 collections_map
                     .inner
                     .insert(coll.name.clone(), Arc::new(dense_index));
@@ -712,16 +743,19 @@ impl CollectionsMap {
         &self,
         coll: &Collection,
         root_path: &Path,
+        config: &Config,
     ) -> Result<DenseIndex, WaCustomError> {
         let collection_path: Arc<Path> = root_path.join(&coll.name).into();
 
         let index_manager = Arc::new(BufferManagerFactory::new(
             collection_path.clone(),
-            |root, ver| root.join(format!("{}.index", **ver)),
+            |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+            config.flush_eagerness_factor,
         ));
         let vec_raw_manager = Arc::new(BufferManagerFactory::new(
             collection_path.clone(),
-            |root, ver| root.join(format!("{}.vec_raw", **ver)),
+            |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
+            config.flush_eagerness_factor,
         ));
         let prop_file = Arc::new(RwLock::new(
             OpenOptions::new()
@@ -771,10 +805,14 @@ impl CollectionsMap {
             ArcShift::new(dense_index_data.distance_metric),
             ArcShift::new(dense_index_data.storage_type),
             vcs,
-            dense_index_data.num_layers,
+            dense_index_data.hnsw_params,
             cache,
             index_manager,
             vec_raw_manager,
+            // TODO: persist
+            (-1.0, 1.0),
+            0,
+            true,
         );
 
         Ok(dense_index)
@@ -901,7 +939,7 @@ pub struct AppEnv {
     pub persist: Arc<Environment>,
 }
 
-pub fn get_app_env() -> Result<Arc<AppEnv>, WaCustomError> {
+pub fn get_app_env(config: &Config) -> Result<Arc<AppEnv>, WaCustomError> {
     let path = Path::new("./_mdb"); // TODO: prefix the customer & database name
 
     // Ensure the directory exists
@@ -915,7 +953,7 @@ pub fn get_app_env() -> Result<Arc<AppEnv>, WaCustomError> {
 
     let env_arc = Arc::new(env);
 
-    let collections_map = CollectionsMap::load(env_arc.clone())
+    let collections_map = CollectionsMap::load(env_arc.clone(), config)
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
     Ok(Arc::new(AppEnv {

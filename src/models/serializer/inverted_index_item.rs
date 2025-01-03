@@ -26,11 +26,11 @@ where
 {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
-        let bufman = bufmans.get(&version)?;
+        let bufman = bufmans.get(version)?;
         let start_pos = bufman.cursor_position(cursor)? as u32;
         bufman.write_u32_with_cursor(cursor, self.dim_index)?;
         bufman.write_u8_with_cursor(cursor, if self.implicit { 1 } else { 0 })?;
@@ -48,7 +48,7 @@ where
     }
 
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         file_index: FileIndex,
         cache: Arc<NodeRegistry>,
         max_loads: u16,
@@ -65,7 +65,7 @@ where
                 version_number,
                 version_id,
             } => {
-                let bufman = bufmans.get(&version_id)?;
+                let bufman = bufmans.get(version_id)?;
                 let cursor = bufman.open_cursor()?;
                 bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
                 let dim_index = bufman.read_u32_with_cursor(cursor)?;

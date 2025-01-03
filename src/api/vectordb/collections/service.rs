@@ -20,22 +20,6 @@ pub(crate) async fn create_collection(
 ) -> Result<CreateCollectionDtoResponse, CollectionsError> {
     let collection = &repo::create_collection(ctx.clone(), create_collection_dto).await?;
 
-    if collection.dense_vector.enabled {
-        let _ = repo::create_dense_index(
-            ctx.clone(),
-            collection,
-            collection.dense_vector.dimension as usize,
-            None,
-            None,
-            5,
-            true,
-        )
-        .await?;
-    }
-    if collection.sparse_vector.enabled {
-        let _ = repo::create_inverted_index(ctx, collection).await?;
-    }
-
     Ok(CreateCollectionDtoResponse {
         id: collection.name.clone(),
         name: collection.name.clone(),
