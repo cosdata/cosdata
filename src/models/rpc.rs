@@ -41,7 +41,7 @@ pub struct BatchVectorANN {
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct FetchNeighbors {
     pub vector_db_name: String,
-    pub vector_id: u32,
+    pub vector_id: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -72,11 +72,11 @@ pub enum RPCResponseBody {
         insert_stats: Option<Statistics>,
     },
     RespVectorKNN {
-        knn: Vec<(u32, MetricResult)>,
+        knn: Vec<(u64, MetricResult)>,
     },
     RespFetchNeighbors {
         vector: Vector,
-        neighbors: Vec<(u32, MetricResult)>,
+        neighbors: Vec<(u64, MetricResult)>,
     },
     #[serde(untagged)]
     RespCreateVectorDb {
@@ -91,7 +91,7 @@ pub enum RPCResponseBody {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Vector {
-    pub id: u32,
+    pub id: u64,
     pub values: Vec<f32>,
 }
 

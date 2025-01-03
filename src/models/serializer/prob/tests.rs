@@ -126,7 +126,7 @@ fn get_cache(
     Arc::new(ProbCache::new(1000, bufmans, prop_file))
 }
 
-fn create_prob_node(id: u32, prop_file: &RwLock<File>) -> ProbNode {
+fn create_prob_node(id: u64, prop_file: &RwLock<File>) -> ProbNode {
     let id = VectorId(id);
     let value = Arc::new(Storage::UnsignedByte {
         mag: 10,

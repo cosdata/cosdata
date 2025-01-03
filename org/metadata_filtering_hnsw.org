@@ -1,0 +1,149 @@
+
+#+TITLE: Metadata Filtering for HNSW Dense Vectors - Detailed Design Specification
+#+AUTHOR: Nithin Mani
+#+DATE: 2025-01-01
+
+* Overview
+
+This document describes the design for implementing metadata-based filtering capabilities in the CosData vector database, specifically for HNSW dense vectors. The core innovation lies in extending vector dimensions during quantization to encode metadata information, enabling efficient filtering while maintaining the effectiveness of similarity search.
+
+* Index Structure
+
+** Base Vector Representation
+
+All vectors in the system, whether used for pure similarity search or metadata filtering, must maintain the same dimensionality for HNSW graph construction and search. To achieve this, the base vectors (e.g., 768d) are extended with phantom dimensions for each metadata field, but these dimensions are not assigned the high-weight values (1024) used in metadata filtering. These phantom dimensions ensure dimensional consistency across all vector copies while not affecting similarity calculations for non-filtered searches.
+
+** Metadata Dimension Encoding
+
+The encoding of metadata values into vector dimensions follows a carefully designed scheme that balances accuracy, efficiency, and storage requirements. Each metadata field requires a specific number of additional dimensions based on its cardinality (number of possible values).
+
+*** Dimension Allocation
+
+For each metadata field, the number of required dimensions is calculated by rounding up the field's cardinality to the nearest power of 2. This power-of-2 allocation ensures efficient binary encoding of values. For example:
+
+- A field representing months (12 possible values) requires 16 dimensions (2^4)
+- A field for days of week (7 values) requires 8 dimensions (2^3)
+- A binary field (2 values) requires just 1 dimension (2^1)
+- A field with 100 possible values requires 128 dimensions (2^7)
+
+*** Quantization Values
+
+These metadata dimensions use a fundamentally different quantization scheme compared to the original vector dimensions:
+
+- Original vector dimensions typically use small quantization values (0-255 for uint8)
+- Metadata dimensions use much larger values (1024) during quantization
+- This large value creates a strong signal during dot product calculations
+- The high weight ensures metadata filtering takes precedence over similarity in the original dimensions
+
+Example: Consider a vector with 768 original dimensions extended with metadata fields for:
+- Month (16 dimensions)
+- Day of week (8 dimensions)
+- Binary category (1 dimension)
+
+The final vector would have 793 dimensions (768 + 16 + 8 + 1), with the metadata dimensions using the 1024 quantization value to encode their respective field values.
+
+This encoding scheme ensures that:
+1. Each possible metadata value has a unique binary representation
+2. The high quantization values make metadata filters definitive in search results
+3. The power-of-2 dimension allocation prevents value overlap
+4. Storage overhead is optimized by using the minimum required dimensions for each field's cardinality
+
+** Metadata Filtering Index
+
+The unified index structure contains multiple copies of each vector, where each copy is optimized for different metadata filtering scenarios. While these appear logically separate, they are physically stored within a single HNSW graph structure sharing a common root node. The key aspects are:
+
+1. Base Vector Copy: Contains phantom dimensions but no high-weight values
+2. Individual Field Copies: For each metadata field, vectors are copied and extended with high-weight values (1024) in the appropriate phantom dimensions
+3. Combined Field Copies: For AND query support, vectors are copied with high-weight values for multiple field combinations
+
+* Vector Extension and Indexing Process
+
+The indexing process requires multiple passes for each vector:
+
+1. First Pass: Index the base vector with phantom dimensions (no 1024 weights)
+2. Subsequent Passes: For each metadata field that needs filtering:
+  - Create a copy of the vector
+  - Set appropriate high-weight values (1024) in the phantom dimensions based on the field's value
+  - Index this copy
+3. Additional Passes: For each required field combination (AND support):
+  - Create a copy with high-weight values for all relevant fields
+  - Index this combination copy
+
+All these passes contribute to building the unified HNSW graph structure. The phantom dimensions ensure consistent vector dimensionality across all copies, while the high-weight values enable effective filtering during queries.
+
+* Query Vector Encoding
+
+The effectiveness of metadata filtering relies on a carefully designed query vector encoding scheme that uses +1/-1 values to ensure precise matching. This encoding scheme is fundamental to supporting both equality and inequality filters.
+
+** Equality Filter Encoding
+
+When searching for vectors with a specific metadata value, the system employs a binary encoding strategy across the dimensions allocated for that field. For example, when filtering for value 1 in a field, the query vector would have:
+- A positive value (+1) in the position corresponding to bit 0
+- A negative value (-1) in the position corresponding to bit 1
+- Similar negative values in all other bit positions for that field
+
+This encoding ensures accurate discrimination between different values. For instance, when searching for value 1, a vector with value 3 (binary 11) will not match because the negative query value at position 1 will create a repelling force in the dot product calculation, effectively eliminating false matches.
+
+** Inequality Filter Encoding
+
+For inequality filters (field != x), the system inverts the encoding used in equality filters. Taking the same example of filtering for "not equal to 1":
+- The positive and negative values from the equality encoding are inverted
+- Position 0 becomes -1
+- Position 1 becomes +1
+- Other positions retain appropriate values to maintain filtering accuracy
+
+During dot product calculations, these inverted values create attractive forces for all values except the one being excluded, effectively implementing the inequality constraint.
+
+The high-weight values (1024) used in the indexed vectors, combined with the +1/-1 encoding in query vectors, create substantial differences in dot product results between matching and non-matching vectors. This ensures reliable filtering even in the presence of approximate nearest neighbor search.
+
+* Query Processing
+
+** Pure Similarity Search
+
+When no metadata filtering is needed, queries use vectors with phantom dimensions (no high weights), effectively matching the base vector copies in the index.
+
+** Metadata Filtering Queries
+
+For metadata-filtered searches, the query vector is constructed with appropriate +1/-1 values in the phantom dimensions:
+- +1 for matching the desired value's position
+- -1 for other positions to prevent false matches
+
+The system automatically routes the query to the appropriate vector copies based on the filtering criteria:
+- Single field filters use the corresponding field-specific copies
+- AND conditions use the pre-computed combination copies
+- OR conditions require multiple searches using different copies, with results merged via map-reduce
+
+* Performance Implications
+
+The unified index structure with phantom dimensions has several performance characteristics:
+
+Storage Impact:
+- Linear increase with number of metadata fields
+- Additional increase for field combinations (AND support)
+- All vectors maintain consistent dimensionality due to phantom dimensions
+
+Memory Usage:
+- Efficient memory utilization through unified index structure
+- Overhead from phantom dimensions in all vector copies
+- Memory requirements scale with number of supported metadata combinations
+
+CPU Requirements:
+- Multiple indexing passes for each vector
+- Increased dimension count affects similarity calculations
+- Query routing overhead based on filtering criteria
+
+* Implementation Phases
+
+1. Implement phantom dimension extension for base vectors
+2. Develop indexing pipeline for multiple passes
+3. Create unified index structure
+4. Implement metadata-aware query processing
+5. Add support for field combinations
+6. Optimize performance and resource usage
+
+* Future Considerations
+
+- Optimize phantom dimension handling
+- Smart selection of field combinations based on query patterns
+- Compression techniques for redundant vector copies
+- Dynamic generation of field combinations

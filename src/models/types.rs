@@ -111,7 +111,7 @@ pub enum PropState {
     rkyv::Serialize,
     rkyv::Deserialize,
 )]
-pub struct VectorId(pub u32);
+pub struct VectorId(pub u64);
 
 impl VectorId {
     pub fn get_hash(&self) -> u64 {
