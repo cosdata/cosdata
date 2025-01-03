@@ -420,6 +420,17 @@ def generate_vectors(txn_count, batch_count, batch_size, dimensions, perturbatio
     np.random.shuffle(vectors)
     return vectors
 
+def batch_ann_search(vector_db_name, vectors):
+    url = f"{base_url}/batch-search"
+    data = {"vector_db_name": vector_db_name, "vectors": vectors}
+    response = requests.post(
+        url, headers=generate_headers(), data=json.dumps(data), verify=False
+    )
+    if response.status_code != 200:
+        print(f"Error response: {response.text}")
+        raise Exception(f"Failed to search vector: {response.status_code}")
+    result = response.json()
+    return result
 
 def search(vectors, vector_db_name, query):
     ann_response = ann_vector(query["id"], vector_db_name, query["values"])
@@ -618,6 +629,12 @@ if __name__ == "__main__":
    total_vectors = len(vectors_corrected)
    print(f"Total vectors read from parquet files: {total_vectors}")
 
+   # Select 2000 vectors for RPS testing (excluding match test vectors)
+   match_test_ids = {test_vec['query_id'] for test_vec in test_vectors}
+   available_vectors = [vec for vec in vectors_corrected if vec['id'] not in match_test_ids]
+   rps_test_vectors = np.random.choice(available_vectors, 100_000, replace=False)
+   print(f"Selected {len(rps_test_vectors)} separate vectors for RPS testing")
+
    # Initialize tracking set for vector IDs
    processed_vector_ids = set()
    total_vectors_inserted = 0
@@ -790,4 +807,44 @@ if __name__ == "__main__":
        print(f"Average search time per query: {search_time/total_queries:.2f} seconds")
    else:
        print("No valid queries completed")
+   
+   # RPS Testing with separate test set
+   print("\nStarting RPS (Requests Per Second) testing...")
+   
+   # Start RPS test
+   print(f"Using {len(rps_test_vectors)} different test vectors for RPS testing")
+   start_time_rps = time.time()
+   
+   results = []
+   with ThreadPoolExecutor(max_workers=32) as executor:
+       futures = []
+       for i in range(0, len(rps_test_vectors), 100):
+           batch = [vector["values"] for vector in rps_test_vectors[i:i+100]]
+           futures.append(executor.submit(batch_ann_search, vector_db_name, batch))
+   
+       # Collect all results
+       for future in as_completed(futures):
+           try:
+               future.result()
+               results.append(True)
+           except Exception as e:
+               print(f"Error in RPS test: {e}")
+               results.append(False)
+   
+   end_time_rps = time.time()
+   actual_duration = end_time_rps - start_time_rps
+   
+   # Count successes and failures from results
+   successful_requests = sum(results)
+   failed_requests = len(results) - successful_requests
+   total_requests = len(results)
+   rps = successful_requests / actual_duration
+   
+   print("\nRPS Test Results:")
+   print(f"Total Requests: {total_requests}")
+   print(f"Successful Requests: {successful_requests}")
+   print(f"Failed Requests: {failed_requests}")
+   print(f"Test Duration: {actual_duration:.2f} seconds")
+   print(f"Requests Per Second (RPS): {rps:.2f}")
+   print(f"Success Rate: {(successful_requests/total_requests*100):.2f}%")
 
