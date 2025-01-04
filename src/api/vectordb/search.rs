@@ -20,7 +20,14 @@ pub(crate) async fn search(
         }
     };
 
-    let result = match ann_vector_query(ctx.into_inner(), vec_store.clone(), body.vector).await {
+    let result = match ann_vector_query(
+        ctx.into_inner(),
+        vec_store.clone(),
+        body.vector,
+        body.nn_count,
+    )
+    .await
+    {
         Ok(result) => result,
         Err(err) => return HttpResponse::InternalServerError().body(err.to_string()),
     };
@@ -45,11 +52,17 @@ pub(crate) async fn batch_search(
         }
     };
 
-    let results =
-        match batch_ann_vector_query(ctx.into_inner(), vec_store.clone(), body.vectors).await {
-            Ok(result) => result,
-            Err(err) => return HttpResponse::InternalServerError().body(err.to_string()),
-        };
+    let results = match batch_ann_vector_query(
+        ctx.into_inner(),
+        vec_store.clone(),
+        body.vectors,
+        body.nn_count,
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(err) => return HttpResponse::InternalServerError().body(err.to_string()),
+    };
 
     let response_data: Vec<_> = results
         .into_iter()

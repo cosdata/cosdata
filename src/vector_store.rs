@@ -172,8 +172,9 @@ pub fn finalize_ann_results(
     dense_index: Arc<DenseIndex>,
     results: Vec<(SharedNode, MetricResult)>,
     query: &[f32],
+    k: Option<usize>,
 ) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
-    let filtered = remove_duplicates_and_filter(results);
+    let filtered = remove_duplicates_and_filter(results, k);
     let mut results = Vec::new();
 
     for (id, _) in filtered {
@@ -189,7 +190,9 @@ pub fn finalize_ann_results(
             .partial_cmp(&a.get_value())
             .unwrap_or(std::cmp::Ordering::Greater)
     });
-    results.truncate(5);
+    if let Some(k) = k {
+        results.truncate(k);
+    }
     Ok(results)
 }
 

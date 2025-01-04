@@ -486,6 +486,7 @@ pub fn add_option_vecs(
 
 pub fn remove_duplicates_and_filter(
     vec: Vec<(SharedNode, MetricResult)>,
+    k: Option<usize>,
 ) -> Vec<(VectorId, MetricResult)> {
     let mut seen = HashSet::new();
     let mut collected = vec
@@ -507,7 +508,9 @@ pub fn remove_duplicates_and_filter(
             .partial_cmp(&a.get_value())
             .unwrap_or(Ordering::Equal)
     });
-    collected.truncate(50);
+    if let Some(k) = k {
+        collected.truncate(5 * k);
+    }
     collected
 }
 
