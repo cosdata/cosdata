@@ -26,7 +26,6 @@ key_file = "/etc/ssl/private/cosdata-ssl.key"
 shortlist_size = 10
 
 [indexing]
-threshold = 100
 clamp_margin_percent = 1.0 # 1%
 mode = "sequential"   # Options: "sequential" or "batch"
 # batch_size = 32  # only required with "batch" indexing mode
