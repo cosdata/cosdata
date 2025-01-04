@@ -290,7 +290,7 @@ def ann_vector_old(idd, vector_db_name, vector):
 
 def ann_vector(idd, vector_db_name, vector):
     url = f"{base_url}/search"
-    data = {"vector_db_name": vector_db_name, "vector": vector}
+    data = {"vector_db_name": vector_db_name, "vector": vector, "nn_count": 5}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
@@ -422,7 +422,7 @@ def generate_vectors(txn_count, batch_count, batch_size, dimensions, perturbatio
 
 def batch_ann_search(vector_db_name, vectors):
     url = f"{base_url}/batch-search"
-    data = {"vector_db_name": vector_db_name, "vectors": vectors}
+    data = {"vector_db_name": vector_db_name, "vectors": vectors, "nn_count": 5}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )

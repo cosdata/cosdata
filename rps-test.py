@@ -164,7 +164,7 @@ def upsert_vector(vector_db_name, vectors):
 
 def batch_ann_search(vector_db_name, vectors):
     url = f"{base_url}/batch-search"
-    data = {"vector_db_name": vector_db_name, "vectors": vectors}
+    data = {"vector_db_name": vector_db_name, "vectors": vectors, "nn_count": 5}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
