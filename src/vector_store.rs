@@ -1002,7 +1002,7 @@ fn traverse_find_nearest(
         nn.truncate(5);
     } else {
         // ANN search
-        nn.truncate(500);
+        nn.truncate(100);
     }
     Ok(nn)
 }
