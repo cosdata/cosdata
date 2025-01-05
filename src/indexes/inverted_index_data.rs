@@ -28,6 +28,12 @@ impl TryFrom<Arc<InvertedIndex>> for InvertedIndexData {
             auto_create_index: inverted_index.auto_create_index,
             metadata_schema: inverted_index.metadata_schema.clone(),
             max_vectors: inverted_index.max_vectors,
+            // TODO add a FileIndex value to root prop
+            // to persist the root of the inverted index
+            // root: inverted_index
+            //     .root
+            //     .serialize()
+            //     .expect("failed to serialize"),
         };
         Ok(inverted_index_data)
     }
