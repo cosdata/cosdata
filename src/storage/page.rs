@@ -6,8 +6,13 @@ pub struct Pagepool<const LEN: usize> {
 
 impl<const LEN: usize> Pagepool<LEN> {
     pub fn push(&mut self, data: u32) {
+        // If the pool is empty it creates a new Page and pushes the data to it.
+        if self.inner.len() == 0 {
+            let mut page = Page::<LEN>::new();
+            page.push(data);
+        }
         // If all the current list of chunks are full then create a new one
-        if self.current == self.inner.len() - 1 {
+        else if self.current == self.inner.len() - 1 {
             let mut page = Page::<LEN>::new();
             page.push(data);
         }
