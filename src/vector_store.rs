@@ -20,7 +20,6 @@ use crate::storage::Storage;
 use lmdb::{Transaction, WriteFlags};
 use rand::Rng;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
-use smallvec::SmallVec;
 use std::array::TryFromSliceError;
 use std::fs::File;
 use std::io::SeekFrom;
@@ -130,7 +129,6 @@ pub fn ann_search(
         false,
         true,
         hnsw_params.ef_search,
-        hnsw_params.ef_construction,
     )?;
 
     let mut z = if z.is_empty() {
@@ -690,7 +688,6 @@ pub fn index_embedding(
         cur_level,
         true,
         true,
-        hnsw_params.ef_search,
         hnsw_params.ef_construction,
     )?;
 
@@ -884,16 +881,10 @@ fn traverse_find_nearest(
     cur_level: HNSWLevel,
     is_indexing: bool,
     shortlist: bool,
-    ef_search: u32,
-    ef_construction: u32,
+    ef: u32,
 ) -> Result<Vec<(SharedNode, MetricResult)>, WaCustomError> {
     *nodes_visited += 1;
-    let mut tasks: SmallVec<[Vec<(SharedNode, MetricResult)>; 32]> = SmallVec::new();
-    let ef = if is_indexing {
-        ef_construction
-    } else {
-        ef_search
-    };
+    let mut tasks: Vec<Vec<(SharedNode, MetricResult)>> = Vec::new();
 
     let (latest_version_lazy_node, _latest_version) =
         ProbLazyItem::get_latest_version(vtm, &dense_index.cache)?;
@@ -943,8 +934,7 @@ fn traverse_find_nearest(
                     cur_level,
                     is_indexing,
                     shortlist,
-                    ef_search,
-                    ef_construction,
+                    ef,
                 )?;
                 z.push((neighbor_node, dist));
                 tasks.push(z);
@@ -984,8 +974,7 @@ fn traverse_find_nearest(
                     cur_level,
                     is_indexing,
                     shortlist,
-                    ef_search,
-                    ef_construction,
+                    ef,
                 )?;
                 z.push((neighbor_lazy_item, dist));
                 tasks.push(z);
@@ -999,7 +988,7 @@ fn traverse_find_nearest(
     nn.sort_unstable_by(|a, b| b.1.get_value().partial_cmp(&a.1.get_value()).unwrap());
 
     if is_indexing {
-        nn.truncate(5);
+        nn.truncate(20);
     } else {
         // ANN search
         nn.truncate(100);

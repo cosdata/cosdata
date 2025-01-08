@@ -14,7 +14,7 @@ impl PerformantFixedSet {
     pub fn insert(&mut self, value: u32) {
         let mask = self.buckets.len() as u32 - 1;
         let bucket = (value >> 6) & mask;
-        let bit_pos = value & mask;
+        let bit_pos = value & 0x3f;
         self.buckets[bucket as usize] |= 1u64 << bit_pos;
     }
 
@@ -22,7 +22,7 @@ impl PerformantFixedSet {
     pub fn is_member(&self, value: u32) -> bool {
         let mask = self.buckets.len() as u32 - 1;
         let bucket = (value >> 6) & mask;
-        let bit_pos = value & mask;
+        let bit_pos = value & 0x3f;
         (self.buckets[bucket as usize] & (1u64 << bit_pos)) != 0
     }
 }

@@ -23,7 +23,7 @@ cert_file = "/etc/ssl/certs/cosdata-ssl.crt"
 key_file = "/etc/ssl/private/cosdata-ssl.key"
 
 [search]
-shortlist_size = 10
+shortlist_size = 32
 
 [indexing]
 clamp_margin_percent = 1.0 # 1%
