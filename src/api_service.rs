@@ -541,6 +541,7 @@ pub async fn ann_vector_query(
     ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
     query: Vec<f32>,
+    k: Option<usize>,
 ) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
     let dense_index = dense_index.clone();
     let vec_hash = VectorId(u64::MAX - 1);
@@ -566,7 +567,7 @@ pub async fn ann_vector_query(
         HNSWLevel(hnsw_params_guard.num_layers),
         &*hnsw_params_guard,
     )?;
-    let output = finalize_ann_results(dense_index, results, &query)?;
+    let output = finalize_ann_results(dense_index, results, &query, k)?;
     Ok(output)
 }
 
@@ -574,6 +575,7 @@ pub async fn batch_ann_vector_query(
     ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
     queries: Vec<Vec<f32>>,
+    k: Option<usize>,
 ) -> Result<Vec<Vec<(VectorId, MetricResult)>>, WaCustomError> {
     queries
         .into_par_iter()
@@ -599,7 +601,7 @@ pub async fn batch_ann_vector_query(
                 HNSWLevel(hnsw_params.num_layers),
                 &hnsw_params,
             )?;
-            let output = finalize_ann_results(dense_index.clone(), results, &query)?;
+            let output = finalize_ann_results(dense_index.clone(), results, &query, k)?;
             Ok::<_, WaCustomError>(output)
         })
         .collect()

@@ -27,7 +27,7 @@ pub struct VectorANN {
     pub vector_db_name: String,
     pub vector: Vec<f32>,
     pub filter: Option<Filter>,
-    pub nn_count: Option<i32>,
+    pub nn_count: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -35,7 +35,7 @@ pub struct BatchVectorANN {
     pub vector_db_name: String,
     pub vectors: Vec<Vec<f32>>,
     pub filter: Option<Filter>,
-    pub nn_count: Option<i32>,
+    pub nn_count: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
