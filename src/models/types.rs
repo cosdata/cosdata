@@ -570,7 +570,7 @@ pub struct DenseIndex {
     pub vec_raw_manager: Arc<BufferManagerFactory<Hash>>,
     pub is_configured: Arc<AtomicBool>,
     pub values_range: Arc<RwLock<(f32, f32)>>,
-    pub vectors: Arc<RwLock<Vec<(u64, Vec<f32>)>>>,
+    pub vectors: Arc<RwLock<Vec<(VectorId, Vec<f32>)>>>,
     pub sampling_data: Arc<SamplingData>,
     pub vectors_collected: Arc<AtomicUsize>,
     pub sample_threshold: usize,
@@ -733,7 +733,8 @@ impl CollectionsMap {
 
             // if collection has inverted index load it from the lmdb
             if coll.sparse_vector.enabled {
-                let inverted_index = collections_map.load_inverted_index(&coll, root_path)?;
+                let inverted_index =
+                    collections_map.load_inverted_index(&coll, root_path, config)?;
                 collections_map
                     .inner_inverted_index
                     .insert(coll.name.clone(), Arc::new(inverted_index));
@@ -834,17 +835,20 @@ impl CollectionsMap {
         &self,
         coll: &Collection,
         root_path: &Path,
+        config: &Config,
     ) -> Result<InvertedIndex, WaCustomError> {
         let collection_path: Arc<Path> = root_path.join(&coll.name).into();
         let index_path = collection_path.join("sparse_inverted_index");
 
         let index_manager = Arc::new(BufferManagerFactory::new(
             index_path.clone().into(),
-            |root, ver| root.join(format!("{}.index", **ver)),
+            |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+            config.flush_eagerness_factor,
         ));
         let vec_raw_manager = Arc::new(BufferManagerFactory::new(
             index_path.clone().into(),
-            |root, ver| root.join(format!("{}.vec_raw", **ver)),
+            |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
+            config.flush_eagerness_factor,
         ));
 
         let db = Arc::new(

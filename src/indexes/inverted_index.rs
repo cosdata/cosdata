@@ -28,8 +28,8 @@ pub struct InvertedIndex {
     pub current_version: ArcShift<Hash>,
     pub current_open_transaction: ArcShift<Option<Hash>>,
     pub vcs: Arc<VersionControl>,
-    pub vec_raw_manager: Arc<BufferManagerFactory>,
-    pub index_manager: Arc<BufferManagerFactory>,
+    pub vec_raw_manager: Arc<BufferManagerFactory<Hash>>,
+    pub index_manager: Arc<BufferManagerFactory<Hash>>,
 }
 
 impl InvertedIndex {
@@ -42,8 +42,8 @@ impl InvertedIndex {
         lmdb: MetaDb,
         current_version: ArcShift<Hash>,
         vcs: Arc<VersionControl>,
-        vec_raw_manager: Arc<BufferManagerFactory>,
-        index_manager: Arc<BufferManagerFactory>,
+        vec_raw_manager: Arc<BufferManagerFactory<Hash>>,
+        index_manager: Arc<BufferManagerFactory<Hash>>,
     ) -> Self {
         let root = ArcShift::new(InvertedIndexSparseAnnNodeBasicTSHashmap::new(0, false));
         let cache = Arc::new(NodeRegistry::new(1000, index_manager.clone()));

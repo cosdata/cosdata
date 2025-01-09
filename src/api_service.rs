@@ -74,10 +74,11 @@ pub async fn init_dense_index_for_collection(
         |root, ver: &Hash| root.join(format!("{}.index", **ver)),
         ctx.config.flush_eagerness_factor,
     ));
-    let vec_raw_manager = Arc::new(BufferManagerFactory::new(index_path.into(), |root, ver: &Hash| {
-        root.join(format!("{}.vec_raw", **ver))
+    let vec_raw_manager = Arc::new(BufferManagerFactory::new(
+        index_path.into(),
+        |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
         ctx.config.flush_eagerness_factor,
-    }));
+    ));
 
     // TODO: May be the value can be taken from config
     let cache = Arc::new(ProbCache::new(
@@ -157,17 +158,20 @@ pub async fn init_inverted_index_for_collection(
     // index_manager manages persisting index data on disk
     let vec_raw_manager = Arc::new(BufferManagerFactory::new(
         index_path.clone().into(),
-        |root, ver| root.join(format!("{}.vec_raw", **ver)),
+        |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
+        ctx.config.flush_eagerness_factor,
     ));
 
-    let index_manager = Arc::new(BufferManagerFactory::new(index_path.into(), |root, ver| {
-        root.join(format!("{}.index", **ver))
-    }));
+    let index_manager = Arc::new(BufferManagerFactory::new(
+        index_path.into(),
+        |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+        ctx.config.flush_eagerness_factor,
+    ));
 
     // TODO FIX THE FOLLOWING ISSUE
     // Has to call index.manager.get() here
     // to create the index file on disk upon index creation
-    let _ = index_manager.get(&hash);
+    let _ = index_manager.get(hash);
     index_manager.flush_all()?;
 
     let index = Arc::new(InvertedIndex::new(
@@ -436,7 +440,7 @@ pub fn run_upload_sparse_vector(
     update_current_version(&inverted_index.lmdb, current_version)?;
 
     // Insert vectors
-    let bufman = inverted_index.vec_raw_manager.get(&current_version)?;
+    let bufman = inverted_index.vec_raw_manager.get(current_version)?;
 
     vecs.into_par_iter()
         .map(|(id, vec)| {
