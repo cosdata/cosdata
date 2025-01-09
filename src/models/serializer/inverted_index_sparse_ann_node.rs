@@ -20,7 +20,7 @@ use std::sync::Arc;
 impl CustomSerialize for InvertedIndexSparseAnnNode {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
@@ -30,7 +30,7 @@ impl CustomSerialize for InvertedIndexSparseAnnNode {
     }
 
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         file_index: FileIndex,
         cache: Arc<NodeRegistry>,
         max_loads: u16,
@@ -46,7 +46,7 @@ impl CustomSerialize for InvertedIndexSparseAnnNode {
 impl CustomSerialize for InvertedIndexSparseAnnNodeBasic {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
@@ -56,7 +56,7 @@ impl CustomSerialize for InvertedIndexSparseAnnNodeBasic {
     }
 
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         file_index: FileIndex,
         cache: Arc<NodeRegistry>,
         max_loads: u16,
@@ -72,7 +72,7 @@ impl CustomSerialize for InvertedIndexSparseAnnNodeBasic {
 impl CustomSerialize for InvertedIndexSparseAnnNodeBasicTSHashmap {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
@@ -82,7 +82,7 @@ impl CustomSerialize for InvertedIndexSparseAnnNodeBasicTSHashmap {
     }
 
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         file_index: FileIndex,
         cache: Arc<NodeRegistry>,
         max_loads: u16,
@@ -98,7 +98,7 @@ impl CustomSerialize for InvertedIndexSparseAnnNodeBasicTSHashmap {
 impl CustomSerialize for InvertedIndexNewDSNode {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
@@ -108,7 +108,7 @@ impl CustomSerialize for InvertedIndexNewDSNode {
     }
 
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         file_index: FileIndex,
         cache: Arc<NodeRegistry>,
         max_loads: u16,
@@ -124,7 +124,7 @@ impl CustomSerialize for InvertedIndexNewDSNode {
 impl CustomSerialize for InvertedIndexSparseAnnNodeBasicDashMap {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
@@ -134,7 +134,7 @@ impl CustomSerialize for InvertedIndexSparseAnnNodeBasicDashMap {
     }
 
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         file_index: FileIndex,
         cache: Arc<NodeRegistry>,
         max_loads: u16,

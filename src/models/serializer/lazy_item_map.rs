@@ -19,14 +19,14 @@ where
 {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
         if self.is_empty() {
             return Ok(u32::MAX);
         };
-        let bufman = bufmans.get(&version)?;
+        let bufman = bufmans.get(version)?;
         let start_offset = bufman.cursor_position(cursor)? as u32;
         let mut items_arc = self.items.clone();
         let items: Vec<_> = items_arc
@@ -85,7 +85,7 @@ where
     }
 
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         file_index: FileIndex,
         cache: Arc<NodeRegistry>,
         max_loads: u16,
@@ -101,7 +101,7 @@ where
                 if offset == u32::MAX {
                     return Ok(LazyItemMap::new());
                 }
-                let bufman = bufmans.get(&version_id)?;
+                let bufman = bufmans.get(version_id)?;
                 let cursor = bufman.open_cursor()?;
                 bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
                 let mut items = Vec::new();
@@ -167,11 +167,11 @@ where
 impl CustomSerialize for IdentityMapKey {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
-        let bufman = bufmans.get(&version)?;
+        let bufman = bufmans.get(version)?;
         let start = bufman.cursor_position(cursor)? as u32;
         match self {
             Self::String(str) => {
@@ -187,7 +187,7 @@ impl CustomSerialize for IdentityMapKey {
         Ok(start)
     }
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         file_index: FileIndex,
         _cache: Arc<NodeRegistry>,
         _max_loads: u16,
@@ -202,7 +202,7 @@ impl CustomSerialize for IdentityMapKey {
                 version_id,
                 ..
             } => {
-                let bufman = bufmans.get(&version_id)?;
+                let bufman = bufmans.get(version_id)?;
                 let cursor = bufman.open_cursor()?;
                 bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
                 let num = bufman.read_u32_with_cursor(cursor)?;

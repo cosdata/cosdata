@@ -7,22 +7,20 @@ use std::{
 };
 
 use super::{
-    prob_lazy_load::{
-        lazy_item::{ProbLazyItem, ProbLazyItemInner},
-        lazy_item_array::ProbLazyItemArray,
-    },
+    prob_lazy_load::{lazy_item::ProbLazyItem, lazy_item_array::ProbLazyItemArray},
     types::{HNSWLevel, MetricResult, NodeProp, VectorId},
 };
 
-pub type SharedNode = ProbLazyItem<ProbNode>;
-pub type SharedNodeInner = ProbLazyItemInner<ProbNode>;
+pub type SharedNode = *mut ProbLazyItem<ProbNode>;
 
 pub struct ProbNode {
     pub hnsw_level: HNSWLevel,
     pub prop: Arc<NodeProp>,
-    neighbors: Box<[AtomicPtr<(SharedNode, MetricResult)>]>,
-    parent: AtomicPtr<SharedNodeInner>,
-    child: AtomicPtr<SharedNodeInner>,
+    // (neighbor_id, neighbor_node, distance)
+    // even though `VectorId` is an u64 we don't need the full precision here.
+    neighbors: Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]>,
+    parent: AtomicPtr<ProbLazyItem<ProbNode>>,
+    child: AtomicPtr<ProbLazyItem<ProbNode>>,
     pub versions: ProbLazyItemArray<ProbNode, 4>,
 }
 
@@ -33,8 +31,8 @@ impl ProbNode {
     pub fn new(
         hnsw_level: HNSWLevel,
         prop: Arc<NodeProp>,
-        parent: Option<SharedNode>,
-        child: Option<SharedNode>,
+        parent: SharedNode,
+        child: SharedNode,
         neighbors_count: usize,
     ) -> Self {
         let mut neighbors = Vec::with_capacity(neighbors_count);
@@ -47,10 +45,8 @@ impl ProbNode {
             hnsw_level,
             prop,
             neighbors: neighbors.into_boxed_slice(),
-            parent: AtomicPtr::new(
-                parent.map_or_else(|| ptr::null_mut(), |parent| parent.as_ptr()),
-            ),
-            child: AtomicPtr::new(child.map_or_else(|| ptr::null_mut(), |child| child.as_ptr())),
+            parent: AtomicPtr::new(parent),
+            child: AtomicPtr::new(child),
             versions: ProbLazyItemArray::new(),
         }
     }
@@ -58,18 +54,16 @@ impl ProbNode {
     pub fn new_with_neighbors(
         hnsw_level: HNSWLevel,
         prop: Arc<NodeProp>,
-        neighbors: Box<[AtomicPtr<(SharedNode, MetricResult)>]>,
-        parent: Option<SharedNode>,
-        child: Option<SharedNode>,
+        neighbors: Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]>,
+        parent: SharedNode,
+        child: SharedNode,
     ) -> Self {
         Self {
             hnsw_level,
             prop,
             neighbors,
-            parent: AtomicPtr::new(
-                parent.map_or_else(|| ptr::null_mut(), |parent| parent.as_ptr()),
-            ),
-            child: AtomicPtr::new(child.map_or_else(|| ptr::null_mut(), |child| child.as_ptr())),
+            parent: AtomicPtr::new(parent),
+            child: AtomicPtr::new(child),
             versions: ProbLazyItemArray::new(),
         }
     }
@@ -77,105 +71,71 @@ impl ProbNode {
     pub fn new_with_neighbors_and_versions(
         hnsw_level: HNSWLevel,
         prop: Arc<NodeProp>,
-        neighbors: Box<[AtomicPtr<(SharedNode, MetricResult)>]>,
-        parent: Option<SharedNode>,
-        child: Option<SharedNode>,
+        neighbors: Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]>,
+        parent: SharedNode,
+        child: SharedNode,
         versions: ProbLazyItemArray<ProbNode, 4>,
     ) -> Self {
         Self {
             hnsw_level,
             prop,
             neighbors,
-            parent: AtomicPtr::new(
-                parent.map_or_else(|| ptr::null_mut(), |parent| parent.as_ptr()),
-            ),
-            child: AtomicPtr::new(child.map_or_else(|| ptr::null_mut(), |child| child.as_ptr())),
+            parent: AtomicPtr::new(parent),
+            child: AtomicPtr::new(child),
             versions,
         }
     }
 
-    pub fn get_parent(&self) -> Option<SharedNode> {
-        let ptr = self.parent.load(Ordering::Acquire);
-        if ptr.is_null() {
-            None
-        } else {
-            Some(SharedNode::from_ptr(ptr))
-        }
+    pub fn get_parent(&self) -> SharedNode {
+        self.parent.load(Ordering::Acquire)
     }
 
     pub fn set_parent(&self, parent: SharedNode) {
-        self.parent.store(parent.as_ptr(), Ordering::Release);
+        self.parent.store(parent, Ordering::Release);
     }
 
-    pub fn get_child(&self) -> Option<SharedNode> {
-        let ptr = self.child.load(Ordering::Acquire);
-        if ptr.is_null() {
-            None
-        } else {
-            Some(SharedNode::from_ptr(ptr))
-        }
+    pub fn get_child(&self) -> SharedNode {
+        self.child.load(Ordering::Acquire)
     }
 
     pub fn set_child(&self, child: SharedNode) {
-        self.child.store(child.as_ptr(), Ordering::Release);
+        self.child.store(child, Ordering::Release);
     }
 
     pub fn get_id(&self) -> &VectorId {
         &self.prop.id
     }
 
-    pub fn add_neighbor(
-        &self,
-        neighbor_node: SharedNode,
-        neighbor_id: &VectorId,
-        dist: MetricResult,
-    ) {
-        let initial_idx = ((self.get_id().get_hash() ^ neighbor_id.get_hash())
-            % self.neighbors.len() as u64) as usize;
-        let neighbor = Box::new((neighbor_node, dist));
-        let neighbor_ptr = Box::into_raw(neighbor);
-
-        let mut current_idx = initial_idx;
+    pub fn add_neighbor(&self, neighbor_id: u32, neighbor_node: SharedNode, dist: MetricResult) {
+        let mut neighbor_dist = dist.get_value();
+        let neighbor = Box::new((neighbor_id, neighbor_node, dist));
+        let mut neighbor_ptr = Box::into_raw(neighbor);
         let mut inserted = false;
 
-        // Try half of indices, starting from initial_idx, with wrap around
-        for _ in 0..(self.neighbors.len() / 2) {
-            let result = self.neighbors[current_idx].fetch_update(
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-                |current_neighbor| {
-                    if current_neighbor.is_null() {
-                        Some(neighbor_ptr)
-                    } else {
-                        unsafe {
-                            if dist.get_value() > (*current_neighbor).1.get_value() {
-                                Some(neighbor_ptr)
-                            } else {
-                                None
-                            }
+        for neighbor in &self.neighbors {
+            let result =
+                neighbor.fetch_update(Ordering::Release, Ordering::Acquire, |current_neighbor| {
+                    if let Some((_, _, current_neighbor_similarity)) =
+                        unsafe { current_neighbor.as_ref() }
+                    {
+                        if neighbor_dist < current_neighbor_similarity.get_value() {
+                            return None;
                         }
                     }
-                },
-            );
+                    Some(neighbor_ptr)
+                });
 
-            match result {
-                Ok(prev_neighbor) => {
-                    unsafe {
-                        if !prev_neighbor.is_null() {
-                            drop(Box::from_raw(prev_neighbor));
-                        }
-                    }
+            if let Ok(prev_neighbor_ptr) = result {
+                if let Some((_, _, prev_neighbor_dist)) = unsafe { prev_neighbor_ptr.as_ref() } {
+                    neighbor_dist = prev_neighbor_dist.get_value();
+                    neighbor_ptr = prev_neighbor_ptr;
+                } else {
                     inserted = true;
                     break;
-                }
-                Err(_) => {
-                    // Try next index with wraparound
-                    current_idx = (current_idx + 1) % self.neighbors.len();
                 }
             }
         }
 
-        // If we couldn't insert after trying all positions, clean up
         if !inserted {
             unsafe {
                 drop(Box::from_raw(neighbor_ptr));
@@ -190,12 +150,12 @@ impl ProbNode {
                 neighbor
                     .load(Ordering::Relaxed)
                     .as_ref()
-                    .map(|neighbor| neighbor.0.clone())
+                    .map(|neighbor| neighbor.1.clone())
             })
             .collect()
     }
 
-    pub fn clone_neighbors(&self) -> Box<[AtomicPtr<(SharedNode, MetricResult)>]> {
+    pub fn clone_neighbors(&self) -> Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]> {
         self.neighbors
             .iter()
             .map(|neighbor| unsafe {
@@ -208,7 +168,7 @@ impl ProbNode {
             .into_boxed_slice()
     }
 
-    pub fn get_neighbors_raw(&self) -> &Box<[AtomicPtr<(SharedNode, MetricResult)>]> {
+    pub fn get_neighbors_raw(&self) -> &Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]> {
         &self.neighbors
     }
 }

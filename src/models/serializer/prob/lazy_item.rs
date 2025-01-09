@@ -4,7 +4,7 @@ use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
     cache_loader::ProbCache,
     lazy_load::FileIndex,
-    prob_lazy_load::lazy_item::ProbLazyItemState,
+    prob_lazy_load::lazy_item::{ProbLazyItemState, ReadyState},
     prob_node::SharedNode,
     types::FileOffset,
     versioning::Hash,
@@ -15,21 +15,22 @@ use super::{ProbSerialize, UpdateSerialized};
 impl ProbSerialize for SharedNode {
     fn serialize(
         &self,
-        bufmans: &BufferManagerFactory,
+        bufmans: &BufferManagerFactory<Hash>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
-        match self.unsafe_get_state() {
-            ProbLazyItemState::Pending { file_index } => Ok(file_index.get_offset().unwrap().0),
-            ProbLazyItemState::Ready {
+        let lazy_item = unsafe { &**self };
+        match lazy_item.unsafe_get_state() {
+            ProbLazyItemState::Pending(file_index) => Ok(file_index.get_offset().unwrap().0),
+            ProbLazyItemState::Ready(ReadyState {
                 data,
                 file_offset,
                 persist_flag,
                 version_id,
                 version_number,
                 ..
-            } => {
-                let bufman = bufmans.get(version_id)?;
+            }) => {
+                let bufman = bufmans.get(*version_id)?;
 
                 let offset = if let Some(file_offset) = file_offset.get() {
                     if !persist_flag.swap(false, Ordering::SeqCst) {
@@ -83,7 +84,7 @@ impl ProbSerialize for SharedNode {
     }
 
     fn deserialize(
-        _bufmans: &BufferManagerFactory,
+        _bufmans: &BufferManagerFactory<Hash>,
         file_index: FileIndex,
         cache: &ProbCache,
         max_loads: u16,

@@ -10,7 +10,7 @@ use super::common::WaCustomError;
 pub struct DenseVectorOptions {
     pub enabled: bool,
     pub auto_create_index: bool,
-    pub dimension: i32,
+    pub dimension: usize,
 }
 
 #[derive(Deserialize, Clone, Serialize, Debug)]

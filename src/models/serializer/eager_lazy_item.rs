@@ -17,11 +17,11 @@ where
 {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
-        let bufman = bufmans.get(&version)?;
+        let bufman = bufmans.get(version)?;
         let start = bufman.cursor_position(cursor)?;
         bufman.write_u32_with_cursor(cursor, 0)?;
         bufman.write_u32_with_cursor(cursor, 0)?;
@@ -40,7 +40,7 @@ where
     }
 
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         file_index: FileIndex,
         cache: Arc<NodeRegistry>,
         max_loads: u16,
@@ -60,7 +60,7 @@ where
                 version_number,
                 version_id,
             } => {
-                let bufman = bufmans.get(&version_id)?;
+                let bufman = bufmans.get(version_id)?;
                 let cursor = bufman.open_cursor()?;
                 bufman.seek_with_cursor(cursor, SeekFrom::Start(offset.0 as u64))?;
                 let eager_data_offset = bufman.read_u32_with_cursor(cursor)?;

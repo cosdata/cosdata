@@ -5,6 +5,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib3
 import random
+
 # Suppress only the single InsecureRequestWarning from urllib3 needed for this script
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -152,7 +153,6 @@ def abort_transaction(collection_name, transaction_id):
     response = requests.post(url, headers=generate_headers(), verify=False)
     return response.json()
 
-
 # Function to upsert vectors
 def upsert_vector(vector_db_name, vectors):
     url = f"{base_url}/upsert"
@@ -162,20 +162,9 @@ def upsert_vector(vector_db_name, vectors):
     )
     return response.json()
 
-
-# Function to search vector
-def ann_vector_old(idd, vector_db_name, vector):
-    url = f"{base_url}/search"
-    data = {"vector_db_name": vector_db_name, "vector": vector}
-    response = requests.post(
-        url, headers=generate_headers(), data=json.dumps(data), verify=False
-    )
-    return (idd, response.json())
-
-
-def ann_vector(idd, vector_db_name, vector):
-    url = f"{base_url}/search"
-    data = {"vector_db_name": vector_db_name, "vector": vector, "nn_count": 5}
+def batch_ann_search(vector_db_name, vectors):
+    url = f"{base_url}/batch-search"
+    data = {"vector_db_name": vector_db_name, "vectors": vectors, "nn_count": 5}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
@@ -183,21 +172,7 @@ def ann_vector(idd, vector_db_name, vector):
         print(f"Error response: {response.text}")
         raise Exception(f"Failed to search vector: {response.status_code}")
     result = response.json()
-
-    # Handle empty results gracefully
-    if not result.get("RespVectorKNN", {}).get("knn"):
-        return (idd, {"RespVectorKNN": {"knn": []}})
-    return (idd, result)
-
-
-# Function to fetch vector
-def fetch_vector(vector_db_name, vector_id):
-    url = f"{base_url}/fetch"
-    data = {"vector_db_name": vector_db_name, "vector_id": vector_id}
-    response = requests.post(
-        url, headers=generate_headers(), data=json.dumps(data), verify=False
-    )
-    return response.json()
+    return result
 
 
 # Function to generate a random vector with given constraints
@@ -261,51 +236,6 @@ def generate_perturbation(base_vector, idd, perturbation_degree, dimensions):
     # if np.random.rand() < 0.01:  # 1 in 100 probability
     #     shortlisted_vectors.append(perturbed_vector)
 
-
-def process_base_vector_batch(
-    req_ct, base_idx, vector_db_name, transaction_id, dimensions, perturbation_degree
-):
-    try:
-        # Generate one base vector
-        base_vector = generate_random_vector_with_id(
-            req_ct * 10000 + base_idx * 100, dimensions
-        )
-
-        # Create batch containing base vector and its perturbations
-        batch_vectors = [base_vector]  # Start with base vector
-
-        # Generate 99 perturbations for this base vector
-        for i in range(99):
-            perturbed_vector = generate_perturbation(
-                base_vector,
-                req_ct * 10000
-                + base_idx * 100
-                + i
-                + 1,  # Unique ID for each perturbation
-                perturbation_degree,
-                dimensions,
-            )
-            batch_vectors.append(perturbed_vector)
-
-        # Submit this base vector and its perturbations as one batch
-        upsert_in_transaction(vector_db_name, transaction_id, batch_vectors)
-        print(
-            f"Upsert complete for base vector {base_idx} and its {len(batch_vectors)-1} perturbations"
-        )
-
-        return (base_idx, generate_perturbation(
-                base_vector,
-                req_ct * 10000
-                + base_idx * 100
-                + i
-                + 1,  # Unique ID for each perturbation
-                perturbation_degree,
-                dimensions,
-            ), batch_vectors)
-    except Exception as e:
-        print(f"Error processing base vector {base_idx}: {e}")
-        raise
-
 def cosine_similarity(vec1, vec2):
     # Convert inputs to numpy arrays
     vec1 = np.asarray(vec1)
@@ -342,24 +272,8 @@ def bruteforce_search(vectors, query, k=5):
     return similarities[:k]
 
 
-def generate_vectors(req_ct, batch_count, batch_size, dimensions, perturbation_degree):
-    vectors = []
-    
-    for base_idx in range(batch_count):
-        base_vector = generate_random_vector_with_id(
-            (req_ct * batch_count * batch_size) + (base_idx * batch_size), dimensions
-        )
-
-        vectors.append(base_vector)
-
-        for i in range(batch_size - 1):
-            perturbed_vector = generate_perturbation(
-                base_vector,
-                (req_ct * batch_count * batch_size) + (base_idx * batch_size + i + 1),  # Unique ID for each perturbation
-                perturbation_degree,
-                dimensions,
-            )
-            vectors.append(perturbed_vector)
+def generate_vectors(txn_count, batch_count, batch_size, dimensions, perturbation_degree, id_offset=0):
+    vectors = [generate_random_vector_with_id(id + id_offset, dimensions) for id in range(txn_count * batch_count * batch_size)]
     
     # Shuffle the vectors
     np.random.shuffle(vectors)
@@ -376,9 +290,14 @@ if __name__ == "__main__":
     dimensions = 1024
     max_val = 1.0
     min_val = -1.0
-    perturbation_degree = 0.95  # Degree of perturbation
-    batch_size = 100
-    batch_count = 1000
+    perturbation_degree = 0.25  # Degree of perturbation
+    # ~500k vectors
+    batch_size = 256
+    batch_count = 977
+    txn_count = 2
+    # 100k query vectors
+    query_batch_count = 500
+    query_batch_size = 200
 
     # first login to get the auth jwt token
     login_response = login()
@@ -392,11 +311,11 @@ if __name__ == "__main__":
     print("Create Collection(DB) Response:", create_collection_response)
     # create_explicit_index(vector_db_name)
 
+    vectors = generate_vectors(txn_count, batch_count, batch_size, dimensions, perturbation_degree)
+            
     start_time = time.time()
 
-    shortlisted_vectors = []
-
-    for req_ct in range(1):
+    for req_ct in range(txn_count):
         transaction_id = None
         try:
             # Create a new transaction
@@ -404,29 +323,22 @@ if __name__ == "__main__":
             transaction_id = transaction_response["transaction_id"]
             print(f"Created transaction: {transaction_id}")
             
-            vectors = generate_vectors(req_ct, batch_count, batch_size, dimensions, perturbation_degree)
 
             # Process vectors concurrently
-            with ThreadPoolExecutor(max_workers=32) as executor:
+            with ThreadPoolExecutor(max_workers=64) as executor:
                 futures = []
                 for base_idx in range(batch_count):
+                    req_start = req_ct * batch_count * batch_size
+                    batch_start = req_start + base_idx * batch_size
+                    batch = vectors[batch_start:batch_start+batch_size]
                     futures.append(
                         executor.submit(
                             upsert_in_transaction,
                             vector_db_name,
                             transaction_id,
-                            vectors[base_idx*batch_size:(base_idx*batch_size)+batch_size]
+                            batch
                         )
                     )
-                    if random.random() < 0.9:
-                        continue
-                    
-                    shortlisted_vectors.append(generate_perturbation(
-                        vectors[base_idx*batch_size],
-                        base_idx,
-                        perturbation_degree,
-                        dimensions,
-                    ))
 
                 # Collect results
                 for future in as_completed(futures):
@@ -439,6 +351,7 @@ if __name__ == "__main__":
             commit_response = commit_transaction(vector_db_name, transaction_id)
             print(f"Committed transaction {transaction_id}: {commit_response}")
             transaction_id = None
+            # time.sleep(10)
 
         except Exception as e:
             print(f"Error in transaction: {e}")
@@ -449,60 +362,39 @@ if __name__ == "__main__":
                 except Exception as abort_error:
                     print(f"Error aborting transaction: {abort_error}")
 
-        # End time
+    # End time
     end_time = time.time()
-    # Search vector concurrently using perturbed vectors
-    best_matches_server = []
-    best_matches_bruteforce = []
-    with ThreadPoolExecutor(max_workers=32) as executor:
-        futures = []
-        for query in shortlisted_vectors:
-            futures.append(
-                executor.submit(search, vectors, vector_db_name, query)
-            )
-
-        for i, future in enumerate(as_completed(futures)):
-            try:
-                ((idr, ann_response), (bruteforce_results)) = future.result()
-                if (
-                    "RespVectorKNN" in ann_response
-                    and "knn" in ann_response["RespVectorKNN"]
-                ):
-                    print(f"ANN Vector Response:")
-                    print("  Server:")
-                    for j, match in enumerate(ann_response["RespVectorKNN"]["knn"][:5]):
-                        id = match[0]
-                        cs = match[1]["CosineSimilarity"]
-                        print(f"    {j + 1}: {id} ({cs})")
-                    best_matches_server.append(
-                        ann_response["RespVectorKNN"]["knn"][0][1]["CosineSimilarity"]
-                    )  # Collect the second item in the knn list
-
-                    print("  Brute force:")
-                    for j, result in enumerate(bruteforce_results):
-                        cs = result[1]
-                        id = result[0]
-                        print(f"    {j + 1}: {id} ({cs})")
-                    best_matches_bruteforce.append(bruteforce_results[0][1])
-
-
-            except Exception as e:
-                print(f"Error in ANN vector {i + 1}: {e}")
-
-    if best_matches_server:
-        best_match_server_average = sum(best_matches_server) / len(
-            best_matches_server
-        )
-        best_match_bruteforce_average = sum(best_matches_bruteforce) / len(
-            best_matches_bruteforce
-        )
-        print(f"\n\nBest Match Server Average: {best_match_server_average}")
-        print(f"Best Match Brute force Average: {best_match_bruteforce_average}")
-    else:
-        print("No valid matches found.")
-
+    
     # Calculate elapsed time
     elapsed_time = end_time - start_time
 
     # Print elapsed time
+    print(f"Elapsed time: {elapsed_time} seconds")
+
+    query_vectors = random.sample(vectors, query_batch_count * query_batch_size)
+
+    for i in range(len(query_vectors)):
+        query_vectors[i] = perturb_vector(query_vectors[i], perturbation_degree)["values"]
+
+    start_time = time.time()
+    
+    with ThreadPoolExecutor(max_workers=32) as executor:
+        futures = []
+        for batch_idx in range(query_batch_count):
+            batch = query_vectors[batch_idx*query_batch_size:batch_idx*query_batch_size+query_batch_size]
+            futures.append(
+                executor.submit(batch_ann_search, vector_db_name, batch)
+            )
+
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception as e:
+                print(f"Error in search: {e}")
+
+    end_time = time.time()
+
+    elapsed_time = end_time - start_time
+
+    print("RPS:", len(query_vectors) / elapsed_time)
     print(f"Elapsed time: {elapsed_time} seconds")

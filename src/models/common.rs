@@ -486,12 +486,13 @@ pub fn add_option_vecs(
 
 pub fn remove_duplicates_and_filter(
     vec: Vec<(SharedNode, MetricResult)>,
+    k: Option<usize>,
 ) -> Vec<(VectorId, MetricResult)> {
     let mut seen = HashSet::new();
     let mut collected = vec
         .into_iter()
         .filter_map(|(lazy_item, similarity)| {
-            let id = lazy_item.get_lazy_data()?.get_id().clone();
+            let id = unsafe { &*lazy_item }.get_lazy_data()?.get_id().clone();
             if !seen.insert(id.clone()) {
                 return None;
             }
@@ -507,7 +508,9 @@ pub fn remove_duplicates_and_filter(
             .partial_cmp(&a.get_value())
             .unwrap_or(Ordering::Equal)
     });
-    collected.truncate(100);
+    if let Some(k) = k {
+        collected.truncate(5 * k);
+    }
     collected
 }
 

@@ -21,7 +21,7 @@ pub(crate) async fn fetch(
             return HttpResponse::InternalServerError().body("Vector store not found");
         }
     };
-    let fvid = VectorId(body.vector_id as u64);
+    let fvid = VectorId(body.vector_id);
 
     let result = fetch_vector_neighbors(vec_store.clone(), fvid).await;
 

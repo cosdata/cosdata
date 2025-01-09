@@ -1,6 +1,7 @@
 use std::{
     collections::HashSet,
     io::{self, SeekFrom},
+    ptr,
 };
 
 use crate::models::{
@@ -18,11 +19,11 @@ use super::{ProbSerialize, UpdateSerialized};
 impl ProbSerialize for ProbNode {
     fn serialize(
         &self,
-        bufmans: &BufferManagerFactory,
+        bufmans: &BufferManagerFactory<Hash>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
-        let bufman = bufmans.get(&version)?;
+        let bufman = bufmans.get(version)?;
         let start_offset = bufman.cursor_position(cursor)?;
 
         // Serialize basic fields
@@ -36,10 +37,12 @@ impl ProbSerialize for ProbNode {
         // 10 bytes for parent offset + 10 bytes for child offset + 4 bytes for neighbors offset + 4 bytes for versions
         bufman.write_with_cursor(cursor, &[u8::MAX; 28])?;
 
+        let parent_ptr = self.get_parent();
+
         // Serialize parent if present
-        let parent_file_index = if let Some(parent) = self.get_parent() {
+        let parent_file_index = if let Some(parent) = unsafe { parent_ptr.as_ref() } {
             Some((
-                parent.serialize(bufmans, version, cursor)?,
+                parent_ptr.serialize(bufmans, version, cursor)?,
                 parent.get_current_version(),
                 parent.get_current_version_number(),
             ))
@@ -47,10 +50,12 @@ impl ProbSerialize for ProbNode {
             None
         };
 
+        let child_ptr = self.get_child();
+
         // Serialize child if present
-        let child_file_index = if let Some(child) = self.get_child() {
+        let child_file_index = if let Some(child) = unsafe { child_ptr.as_ref() } {
             Some((
-                child.serialize(bufmans, version, cursor)?,
+                child_ptr.serialize(bufmans, version, cursor)?,
                 child.get_current_version(),
                 child.get_current_version_number(),
             ))
@@ -91,7 +96,7 @@ impl ProbSerialize for ProbNode {
     }
 
     fn deserialize(
-        bufmans: &BufferManagerFactory,
+        bufmans: &BufferManagerFactory<Hash>,
         file_index: FileIndex,
         cache: &ProbCache,
         max_loads: u16,
@@ -108,7 +113,7 @@ impl ProbSerialize for ProbNode {
                 version_number,
                 offset: FileOffset(offset),
             } => {
-                let bufman = bufmans.get(&version_id)?;
+                let bufman = bufmans.get(version_id)?;
                 let cursor = bufman.open_cursor()?;
                 bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
                 // Read basic fields
@@ -131,7 +136,7 @@ impl ProbSerialize for ProbNode {
                 bufman.close_cursor(cursor)?;
                 // Deserialize parent
                 let parent = if parent_offset != u32::MAX {
-                    Some(SharedNode::deserialize(
+                    SharedNode::deserialize(
                         bufmans,
                         FileIndex::Valid {
                             offset: FileOffset(parent_offset),
@@ -141,13 +146,13 @@ impl ProbSerialize for ProbNode {
                         cache,
                         max_loads,
                         skipm,
-                    )?)
+                    )?
                 } else {
-                    None
+                    ptr::null_mut()
                 };
                 // Deserialize child
                 let child = if child_offset != u32::MAX {
-                    Some(SharedNode::deserialize(
+                    SharedNode::deserialize(
                         bufmans,
                         FileIndex::Valid {
                             offset: FileOffset(child_offset),
@@ -157,9 +162,9 @@ impl ProbSerialize for ProbNode {
                         cache,
                         max_loads,
                         skipm,
-                    )?)
+                    )?
                 } else {
-                    None
+                    ptr::null_mut()
                 };
 
                 let neighbors_file_index = FileIndex::Valid {
@@ -201,7 +206,7 @@ impl ProbSerialize for ProbNode {
 impl UpdateSerialized for ProbNode {
     fn update_serialized(
         &self,
-        bufmans: &BufferManagerFactory,
+        bufmans: &BufferManagerFactory<Hash>,
         file_index: FileIndex,
     ) -> Result<u32, BufIoError> {
         match file_index {
@@ -215,7 +220,7 @@ impl UpdateSerialized for ProbNode {
                 version_number,
                 offset: FileOffset(offset),
             } => {
-                let bufman = bufmans.get(&version_id)?;
+                let bufman = bufmans.get(version_id)?;
                 let cursor = bufman.open_cursor()?;
                 bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64 + 29))?;
                 let neighbors_offset = bufman.read_u32_with_cursor(cursor)?;

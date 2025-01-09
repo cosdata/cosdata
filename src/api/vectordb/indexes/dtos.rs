@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    models::types::{DistanceMetric, HNSWHyperParams, QuantizationMetric},
+    config_loader::Config,
+    models::types::{DistanceMetric, HNSWHyperParams},
     quantization::StorageType,
 };
 
@@ -16,45 +17,37 @@ pub enum DataType {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Quantization {
-    Scalar,
-    Product,
+pub struct ValuesRange {
+    pub min: f32,
+    pub max: f32,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct HNSWHyperParamsDTo {
-    #[serde(default = "default_m")]
-    m: usize, // Maximum number of connections per element in the graph
-    #[serde(default = "default_ef_construction")]
-    ef_construction: usize, // Size of the dynamic candidate list during index construction
-    #[serde(default = "default_ef_search")]
-    ef_search: usize, // Size of the dynamic candidate list during search
-    #[serde(default = "default_num_layers")]
-    num_layers: u8, // Number of layers in the hierarchical graph
-    max_cache_size: usize, // Maximum number of elements in the cache
-}
-
-fn default_m() -> usize {
-    16
-}
-
-fn default_ef_construction() -> usize {
-    100
-}
-
-fn default_ef_search() -> usize {
-    50
-}
-
-fn default_num_layers() -> u8 {
-    5
+#[serde(rename_all = "lowercase", tag = "type", content = "properties")]
+pub enum QuantizationDto {
+    Auto {
+        sample_threshold: usize,
+    },
+    Scalar {
+        data_type: DataType,
+        range: ValuesRange,
+    },
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase", tag = "index_type", content = "params")]
-pub enum IndexParamsDTo {
-    Hnsw(HNSWHyperParamsDTo),
+pub struct HNSWHyperParamsDto {
+    ef_construction: Option<u32>, // Size of the dynamic candidate list during index construction
+    ef_search: Option<u32>,       // Size of the dynamic candidate list during search
+    num_layers: Option<u8>,       // Number of layers in the hierarchical graph
+    max_cache_size: Option<usize>, // Maximum number of elements in the cache
+    level_0_neighbors_count: Option<usize>,
+    neighbors_count: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase", tag = "type", content = "properties")]
+pub enum IndexParamsDto {
+    Hnsw(HNSWHyperParamsDto),
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -62,21 +55,39 @@ pub(crate) struct CreateIndexDto {
     pub collection_name: String,
     pub name: String,
     pub distance_metric_type: DistanceMetric,
-    pub quantization: Quantization,
-    pub data_type: DataType,
-    #[serde(flatten)]
-    pub index_params: IndexParamsDTo,
+    pub quantization: QuantizationDto,
+    pub index: IndexParamsDto,
 }
 
-impl From<HNSWHyperParamsDTo> for HNSWHyperParams {
-    fn from(params: HNSWHyperParamsDTo) -> Self {
-        Self {
-            m: params.m,
-            ef_construction: params.ef_construction,
-            ef_search: params.ef_search,
-            num_layers: params.num_layers,
-            max_cache_size: params.max_cache_size,
+impl HNSWHyperParamsDto {
+    pub fn into_params(self, config: &Config) -> HNSWHyperParams {
+        let mut default = HNSWHyperParams::default_from_config(config);
+
+        if let Some(ef_construction) = self.ef_construction {
+            default.ef_construction = ef_construction;
         }
+
+        if let Some(ef_search) = self.ef_search {
+            default.ef_search = ef_search;
+        }
+
+        if let Some(num_layers) = self.num_layers {
+            default.num_layers = num_layers;
+        }
+
+        if let Some(max_cache_size) = self.max_cache_size {
+            default.max_cache_size = max_cache_size;
+        }
+
+        if let Some(level_0_neighbors_count) = self.level_0_neighbors_count {
+            default.level_0_neighbors_count = level_0_neighbors_count;
+        }
+
+        if let Some(neighbors_count) = self.neighbors_count {
+            default.neighbors_count = neighbors_count;
+        }
+
+        default
     }
 }
 
@@ -88,15 +99,6 @@ impl From<DataType> for StorageType {
             DataType::Octal => StorageType::SubByte(3),
             DataType::U8 => StorageType::UnsignedByte,
             DataType::F16 => StorageType::HalfPrecisionFP,
-        }
-    }
-}
-
-impl From<Quantization> for QuantizationMetric {
-    fn from(quantization: Quantization) -> Self {
-        match quantization {
-            Quantization::Scalar => Self::Scalar,
-            Quantization::Product => Self::Product(Default::default()),
         }
     }
 }

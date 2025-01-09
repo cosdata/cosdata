@@ -3,7 +3,7 @@ use super::common::TSHashTable;
 use super::file_persist::read_prop_from_file;
 use super::lazy_load::{FileIndex, LazyItem, LazyItemVec, VectorData};
 use super::lru_cache::LRUCache;
-use super::prob_lazy_load::lazy_item::{ProbLazyItem, ProbLazyItemState};
+use super::prob_lazy_load::lazy_item::{ProbLazyItem, ProbLazyItemState, ReadyState};
 use super::prob_node::{ProbNode, SharedNode};
 use super::serializer::prob::ProbSerialize;
 use super::serializer::CustomSerialize;
@@ -80,11 +80,11 @@ define_cache_items! {
 pub struct NodeRegistry {
     cuckoo_filter: RwLock<CuckooFilter<u64>>,
     registry: LRUCache<u64, CacheItem>,
-    bufmans: Arc<BufferManagerFactory>,
+    bufmans: Arc<BufferManagerFactory<Hash>>,
 }
 
 impl NodeRegistry {
-    pub fn new(cuckoo_filter_capacity: usize, bufmans: Arc<BufferManagerFactory>) -> Self {
+    pub fn new(cuckoo_filter_capacity: usize, bufmans: Arc<BufferManagerFactory<Hash>>) -> Self {
         let cuckoo_filter = CuckooFilter::new(cuckoo_filter_capacity);
         let registry = LRUCache::with_prob_eviction(1000, 0.03125);
         NodeRegistry {
@@ -94,7 +94,7 @@ impl NodeRegistry {
         }
     }
 
-    pub fn get_bufmans(&self) -> Arc<BufferManagerFactory> {
+    pub fn get_bufmans(&self) -> Arc<BufferManagerFactory<Hash>> {
         self.bufmans.clone()
     }
 
@@ -107,7 +107,7 @@ impl NodeRegistry {
     ) -> Result<LazyItem<T>, BufIoError>
     where
         F: Fn(
-            Arc<BufferManagerFactory>,
+            Arc<BufferManagerFactory<Hash>>,
             FileIndex,
             Arc<Self>,
             u16,
@@ -245,7 +245,7 @@ pub struct ProbCache {
     cuckoo_filter: RwLock<CuckooFilter<u64>>,
     registry: LRUCache<u64, SharedNode>,
     props_registry: DashMap<u64, Weak<NodeProp>>,
-    bufmans: Arc<BufferManagerFactory>,
+    bufmans: Arc<BufferManagerFactory<Hash>>,
     prop_file: Arc<RwLock<File>>,
     loading_items: TSHashTable<u64, Arc<Mutex<bool>>>,
     // A global lock to prevent deadlocks during batch loading of cache entries when `max_loads > 1`.
@@ -262,16 +262,11 @@ pub struct ProbCache {
 impl ProbCache {
     pub fn new(
         cuckoo_filter_capacity: usize,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         prop_file: Arc<RwLock<File>>,
     ) -> Self {
         let cuckoo_filter = CuckooFilter::new(cuckoo_filter_capacity);
-        let mut registry = LRUCache::with_prob_eviction(1_000_000, 0.03125);
-        // registry.set_evict_hook(Some(|item: &SharedNode| {
-        //     let file_index = item.get_file_index().unwrap();
-        //     let new_state = Arc::new(ProbLazyItemState::Pending { file_index });
-        //     item.set_state(new_state);
-        // }));
+        let registry = LRUCache::with_prob_eviction(1_000_000, 0.03125);
         let props_registry = DashMap::new();
 
         Self {
@@ -313,7 +308,7 @@ impl ProbCache {
         let combined_index = (offset as u64) << 32 | (*version as u64);
         let mut cuckoo_filter = self.cuckoo_filter.write().unwrap();
         cuckoo_filter.insert(&combined_index);
-        if let Some(node) = item.get_lazy_data() {
+        if let Some(node) = unsafe { &*item }.get_lazy_data() {
             let prop_key = Self::get_prop_key(node.prop.location.0, node.prop.location.1);
             self.props_registry
                 .insert(prop_key, Arc::downgrade(&node.prop));
@@ -387,13 +382,13 @@ impl ProbCache {
         };
 
         let data = ProbNode::deserialize(&self.bufmans, file_index, self, max_loads - 1, skipm)?;
-        let state = ProbLazyItemState::Ready {
+        let state = ProbLazyItemState::Ready(ReadyState {
             data,
             file_offset: Cell::new(Some(offset)),
             persist_flag: AtomicBool::new(false),
             version_id,
             version_number,
-        };
+        });
 
         let item = ProbLazyItem::new_from_state(state);
 

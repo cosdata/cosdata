@@ -57,6 +57,11 @@ fn dot_product_quaternary_scalar(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], res: u8) 
     dot_product as f32
 }
 
+fn dot_product_f32_scalar(a: &[f32], b: &[f32]) -> f32 {
+    assert_eq!(a.len(), b.len(), "Vectors must have equal length");
+    a.iter().zip(b.iter()).map(|(&x, &y)| x * y).sum()
+}
+
 fn dot_product_octal_scalar(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], res: u8) -> f32 {
     debug_assert_eq!(x_vec.len(), 3);
     debug_assert_eq!(y_vec.len(), 3);
@@ -137,6 +142,19 @@ pub fn dot_product_octal(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], res: u8) -> f32 {
         }
     }
     dot_product_octal_scalar(x_vec, y_vec, res)
+}
+
+pub fn dot_product_f32(x_vec: &[f32], y_vec: &[f32]) -> f32 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx")
+            && is_x86_feature_detected!("avx2")
+            && is_x86_feature_detected!("fma")
+        {
+            return unsafe { x86_64::dot_product_f32_simd(x_vec, y_vec) };
+        }
+    }
+    dot_product_f32_scalar(x_vec, y_vec)
 }
 
 #[allow(dead_code)]

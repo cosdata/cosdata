@@ -19,7 +19,7 @@ where
 {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
@@ -27,7 +27,7 @@ where
             self.serialized_offset.clone().update(Some(u32::MAX));
             return Ok(u32::MAX);
         };
-        let bufman = bufmans.get(&version)?;
+        let bufman = bufmans.get(version)?;
         let mut items_arc = self.items.clone();
         let items: Vec<_> = items_arc.get().iter().cloned().collect();
         let total_items = items.len();
@@ -88,7 +88,7 @@ where
     }
 
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         file_index: FileIndex,
         cache: Arc<NodeRegistry>,
         max_loads: u16,
@@ -104,7 +104,7 @@ where
                 if offset == u32::MAX {
                     return Ok(EagerLazyItemSet::new());
                 }
-                let bufman = bufmans.get(&version_id)?;
+                let bufman = bufmans.get(version_id)?;
                 let cursor = bufman.open_cursor()?;
                 bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
                 let mut items = Vec::new();
