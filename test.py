@@ -5,6 +5,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib3
 import random
+
 # Suppress only the single InsecureRequestWarning from urllib3 needed for this script
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -18,15 +19,15 @@ def generate_headers():
     return {"Authorization": f"Bearer {token}", "Content-type": "application/json"}
 
 
-# Function to login with credentials
-def login():
-    url = f"{host}/auth/login"
-    data = {"username": "admin", "password": "admin", "pretty_print": False}
+def create_session():
+    url = f"{host}/auth/create-session"
+    data = {"username": "admin", "password": "admin"}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
+    session = response.json()
     global token
-    token = response.text
+    token = session["access_token"]
     return token
 
 
@@ -380,9 +381,8 @@ if __name__ == "__main__":
     batch_size = 100
     batch_count = 1000
 
-    # first login to get the auth jwt token
-    login_response = login()
-    print("Login Response:", login_response)
+    session_response = create_session()
+    print("Session Response:", session_response)
 
     create_collection_response = create_db(
         name=vector_db_name,

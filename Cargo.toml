@@ -54,6 +54,9 @@ jsonwebtoken = "9.3.0"
 rand_chacha = "0.3.1"
 cuckoofilter = "0.5.0"
 rustc-hash = "2.0.0"
+ring = "0.17.8"
+base64 = "0.22.1"
+rpassword = "7.3.1"
 
 [dev-dependencies]
 criterion = "0.5.1"

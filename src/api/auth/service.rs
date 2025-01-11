@@ -1,51 +1,57 @@
-use chrono::{Duration, Utc};
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, TokenData, Validation};
+use std::sync::Arc;
+
+use crate::{
+    app_context::AppContext,
+    models::{
+        crypto::{self, SingleSHA256Hash},
+        types::SessionDetails,
+    },
+};
 
 use super::{
-    dtos::{Claims, LoginCredentials},
+    dtos::{CreateSessionDTO, Session},
     error::AuthError,
 };
 
-pub(crate) async fn login(credentials: LoginCredentials) -> Result<String, AuthError> {
-    const USERNAME: &str = "admin";
-    const PASSWORD: &str = "admin";
+const TOKEN_LIFETIME: u64 = 900; // 15 minutes
 
-    if credentials.username == USERNAME && credentials.password == PASSWORD {
-        encode_jwt(&credentials.username)
-    } else {
-        Err(AuthError::WrongCredentials)
+pub(crate) async fn create_session(
+    create_session_dto: CreateSessionDTO,
+    ctx: Arc<AppContext>,
+) -> Result<Session, AuthError> {
+    let user = ctx
+        .ain_env
+        .users_map
+        .get_user(&create_session_dto.username)
+        .ok_or_else(|| AuthError::WrongCredentials)?;
+    let password_hash = SingleSHA256Hash::from_str(&create_session_dto.password);
+    let password_double_hash = password_hash.hash_again();
+    // check if passwords match, in constant time to prevents timing attacks
+    if !password_double_hash.verify_eq(&user.password_hash) {
+        return Err(AuthError::WrongCredentials)?;
     }
-}
 
-pub fn encode_jwt(username: &str) -> Result<String, AuthError> {
-    let secret: String = "randomStringTypicallyFromEnv".to_string();
-    let now = Utc::now();
-    let expire = Duration::hours(24);
-    let exp = now + expire;
-    let iat = now;
+    let (access_token, timestamp) = crypto::create_session(
+        &create_session_dto.username,
+        &ctx.ain_env.server_key,
+        &password_hash,
+    );
 
-    let claim = Claims {
-        iat: iat.timestamp(),
-        exp: exp.timestamp(),
-        username: username.to_string(),
-    };
+    let created_at = timestamp;
+    let expires_at = timestamp + TOKEN_LIFETIME;
 
-    encode(
-        &Header::default(),
-        &claim,
-        &EncodingKey::from_secret(secret.as_ref()),
-    )
-    .map_err(|_| AuthError::FailedToEncodeToken)
-}
+    ctx.ain_env.active_sessions.insert(
+        access_token.clone(),
+        SessionDetails {
+            created_at,
+            expires_at,
+            user,
+        },
+    );
 
-pub fn decode_jwt(jwt_token: &str) -> Result<TokenData<Claims>, AuthError> {
-    let secret = "randomStringTypicallyFromEnv".to_string();
-
-    let result: Result<TokenData<Claims>, AuthError> = decode(
-        &jwt_token,
-        &DecodingKey::from_secret(secret.as_ref()),
-        &Validation::default(),
-    )
-    .map_err(|_| AuthError::InvalidToken);
-    result
+    Ok(Session {
+        access_token,
+        created_at,
+        expires_at,
+    })
 }

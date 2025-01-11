@@ -59,7 +59,9 @@ pub async fn run_actix_server() -> std::io::Result<()> {
             .service(auth_module())
             .service(
                 web::scope("/vectordb")
-                    .wrap(AuthenticationMiddleware)
+                    .wrap(AuthenticationMiddleware(
+                        data.ain_env.active_sessions.clone(),
+                    ))
                     // vectors module must be registered before collections module
                     // as its scope path is more specific than collections module
                     .service(vectors_module())
