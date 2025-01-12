@@ -1,6 +1,7 @@
 use super::buffered_io::BufferManagerFactory;
 use super::cache_loader::ProbCache;
 use super::collection::Collection;
+use super::crypto::{DoubleSHA256Hash, SingleSHA256Hash};
 use super::embedding_persist::{write_embedding, EmbeddingOffset};
 use super::file_persist::write_node_to_file;
 use super::meta_persist::{
@@ -31,7 +32,8 @@ use crate::quantization::{
 use crate::storage::Storage;
 use arcshift::ArcShift;
 use dashmap::DashMap;
-use lmdb::{Database, DatabaseFlags, Environment, Transaction, WriteFlags};
+use lmdb::{Cursor, Database, DatabaseFlags, Environment, Transaction, WriteFlags};
+use rpassword::prompt_password;
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher24;
 use std::collections::HashSet;
@@ -1032,13 +1034,140 @@ impl CollectionsMap {
     }
 }
 
-// type UserDataCache = DashMap<String, (String, i32, i32, std::time::SystemTime, Vec<String>)>;
+pub struct UsersMap {
+    env: Arc<Environment>,
+    users_db: Database,
+    // (username, user details)
+    map: DashMap<String, User>,
+}
+
+impl UsersMap {
+    pub fn new(env: Arc<Environment>) -> lmdb::Result<Self> {
+        let users_db = env.create_db(Some("users"), DatabaseFlags::empty())?;
+        let txn = env.begin_ro_txn()?;
+        let mut cursor = txn.open_ro_cursor(users_db)?;
+        let map = DashMap::new();
+
+        for (username, user_bytes) in cursor.iter() {
+            let username = String::from_utf8(username.to_vec()).unwrap();
+            let user = User::deserialize(user_bytes).unwrap();
+            map.insert(username, user);
+        }
+
+        drop(cursor);
+        txn.abort();
+
+        Ok(Self { env, users_db, map })
+    }
+
+    pub fn add_user(&self, username: String, password_hash: DoubleSHA256Hash) -> lmdb::Result<()> {
+        let user = User {
+            username: username.clone(),
+            password_hash,
+        };
+        let user_bytes = user.serialize();
+        let username_bytes = username.as_bytes();
+
+        let mut txn = self.env.begin_rw_txn()?;
+        txn.put(
+            self.users_db,
+            &username_bytes,
+            &user_bytes,
+            WriteFlags::empty(),
+        )?;
+        txn.commit()?;
+
+        self.map.insert(username, user);
+
+        Ok(())
+    }
+
+    pub fn get_user(&self, username: &str) -> Option<User> {
+        self.map.get(username).map(|user| user.value().clone())
+    }
+}
+
+#[derive(Clone)]
+pub struct User {
+    pub username: String,
+    pub password_hash: DoubleSHA256Hash,
+}
+
+impl User {
+    fn serialize(&self) -> Vec<u8> {
+        let username_bytes = self.username.as_bytes();
+        let mut buf = Vec::with_capacity(32 + username_bytes.len());
+        buf.extend_from_slice(&self.password_hash.0);
+        buf.extend_from_slice(username_bytes);
+        buf
+    }
+
+    fn deserialize(buf: &[u8]) -> Result<Self, String> {
+        if buf.len() < 32 {
+            return Err("Input must be at least 32 bytes".to_string());
+        }
+        let mut password_hash = [0u8; 32];
+        password_hash.copy_from_slice(buf);
+        let username_bytes = buf[32..].to_vec();
+        let username = String::from_utf8(username_bytes).map_err(|err| err.to_string())?;
+        Ok(Self {
+            username,
+            password_hash: DoubleSHA256Hash(password_hash),
+        })
+    }
+}
+
+pub struct SessionDetails {
+    pub created_at: u64,
+    pub expires_at: u64,
+    pub user: User,
+}
+
 // Define the AppEnv struct
 pub struct AppEnv {
-    // #[allow(dead_code)]
-    // pub user_data_cache: UserDataCache,
     pub collections_map: CollectionsMap,
+    pub users_map: UsersMap,
     pub persist: Arc<Environment>,
+    // Single hash, must not be persisted to disk, only the double hash must be
+    // written to disk
+    pub server_key: SingleSHA256Hash,
+    pub active_sessions: Arc<DashMap<String, SessionDetails>>,
+}
+
+fn get_server_key(env: Arc<Environment>) -> lmdb::Result<SingleSHA256Hash> {
+    let db = env.create_db(Some("security_metadata"), DatabaseFlags::empty())?;
+    let mut txn = env.begin_rw_txn()?;
+    let server_key_from_lmdb = match txn.get(db, &"server_key") {
+        Ok(key) => Some(DoubleSHA256Hash(key.try_into().unwrap())),
+        Err(lmdb::Error::NotFound) => None,
+        Err(err) => return Err(err),
+    };
+    let server_key_hash = if let Some(server_key_from_lmdb) = server_key_from_lmdb {
+        txn.abort();
+        let entered_server_key =
+            prompt_password("Enter server key: ").expect("Unable to read master key");
+        let entered_server_key_hash = SingleSHA256Hash::from_str(&entered_server_key);
+        let entered_server_key_double_hash = entered_server_key_hash.hash_again();
+        if !server_key_from_lmdb.verify_eq(&entered_server_key_double_hash) {
+            eprintln!("Invalid master key!");
+            std::process::exit(1);
+        }
+        entered_server_key_hash
+    } else {
+        let entered_server_key =
+            prompt_password("Create a server key: ").expect("Unable to read server key");
+        let entered_server_key_hash = SingleSHA256Hash::from_str(&entered_server_key);
+        let entered_server_key_double_hash = entered_server_key_hash.hash_again();
+        txn.put(
+            db,
+            &"server_key",
+            &entered_server_key_double_hash.0,
+            WriteFlags::empty(),
+        )?;
+        txn.commit()?;
+        entered_server_key_hash
+    };
+    Ok(server_key_hash)
 }
 
 pub fn get_app_env(config: &Config) -> Result<Arc<AppEnv>, WaCustomError> {
@@ -1055,14 +1184,29 @@ pub fn get_app_env(config: &Config) -> Result<Arc<AppEnv>, WaCustomError> {
 
     let env_arc = Arc::new(env);
 
+    let server_key = get_server_key(env_arc.clone())
+        .map_err(|err| WaCustomError::DatabaseError(err.to_string()))?;
+
     let collections_map = CollectionsMap::load(env_arc.clone(), config)
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
+    let users_map = UsersMap::new(env_arc.clone())
+        .map_err(|err| WaCustomError::DatabaseError(err.to_string()))?;
+
+    // Fake user, for testing APIs
+    let username = "admin".to_string();
+    let password = "admin";
+    let password_hash = DoubleSHA256Hash::from_str(password);
+    users_map
+        .add_user(username, password_hash)
+        .map_err(|err| WaCustomError::DatabaseError(err.to_string()))?;
+
     Ok(Arc::new(AppEnv {
-        // #[allow(dead_code)]
-        // user_data_cache: DashMap::new(),
         collections_map,
+        users_map,
         persist: env_arc,
+        server_key,
+        active_sessions: Arc::new(DashMap::new()),
     }))
 }
 

@@ -94,14 +94,15 @@ def generate_headers():
     return {"Authorization": f"Bearer {token}", "Content-type": "application/json"}
 
 
-def login():
-    url = f"{host}/auth/login"
-    data = {"username": "admin", "password": "admin", "pretty_print": False}
+def create_session():
+    url = f"{host}/auth/create-session"
+    data = {"username": "admin", "password": "admin"}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
+    session = response.json()
     global token
-    token = response.text
+    token = session["access_token"]
     return token
 
 
@@ -781,8 +782,8 @@ if __name__ == "__main__":
     brute_force_results = load_or_generate_brute_force_results(dataset_name)
     print(f"Loaded {len(brute_force_results)} pre-computed brute force results")
 
-    login_response = login()
-    print("Login Response:", login_response)
+    session_response = create_session()
+    print("Session Response:", session_response)
 
     create_collection_response = create_db(
         name=vector_db_name,
