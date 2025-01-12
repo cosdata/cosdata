@@ -5,18 +5,45 @@ pub struct Pagepool<const LEN: usize> {
 }
 
 impl<const LEN: usize> Pagepool<LEN> {
+    // pub fn push(&mut self, data: u32) {
+    //     // If the pool is empty it creates a new Page and pushes the data to it.
+    //     if self.inner.len() == 0 {
+    //         let mut page = Page::<LEN>::new();
+    //         page.push(data);
+    //     }
+    //     // If all the current list of chunks are full then create a new one
+    //     else if self.current == self.inner.len() - 1 {
+    //         let mut page = Page::<LEN>::new();
+    //         page.push(data);
+    //     }
+    //     // If the current chunk is full then go the next chunk
+    //     else if self.inner[self.current].is_full() {
+    //         self.current += 1;
+    //         self.inner[self.current].push(data);
+    //     }
+    //     // Otherwise push the data to the current chunk
+    //     else {
+    //         self.inner[self.current].push(data);
+    //     }
+    // }
+
     pub fn push(&mut self, data: u32) {
-        // If all the current list of chunks are full then create a new one
-        if self.current == self.inner.len() - 1 {
+        // If the pool is empty, create the first page and push the data.
+        if self.inner.is_empty() {
             let mut page = Page::<LEN>::new();
             page.push(data);
+            self.inner.push(page);
+            self.current = 0; // Set current to the first page
         }
-        // If the current chunk is full then go the next chunk
+        // If the current page is full, move to the next one
         else if self.inner[self.current].is_full() {
-            self.current += 1;
-            self.inner[self.current].push(data);
+            // Create a new page and push the data
+            let mut page = Page::<LEN>::new();
+            page.push(data);
+            self.inner.push(page); // Add the new page to the pool
+            self.current += 1; // Move to the new page
         }
-        // Otherwise push the data to the current chunk
+        // Otherwise, push the data to the current page
         else {
             self.inner[self.current].push(data);
         }

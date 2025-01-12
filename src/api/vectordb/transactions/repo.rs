@@ -2,17 +2,14 @@ use std::ptr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use self::vectors::dtos::UpsertDto;
+use self::vectors::dtos::{CreateDenseVectorDto, UpsertDto};
 
 use super::{dtos::CreateTransactionResponseDto, error::TransactionError};
 use crate::models::meta_persist::update_current_version;
 use crate::models::types::DenseIndexTransaction;
 use crate::models::versioning::Hash;
 use crate::{
-    api::vectordb::vectors::{
-        self,
-        dtos::{CreateVectorDto, CreateVectorResponseDto},
-    },
+    api::vectordb::vectors::{self, dtos::CreateVectorResponseDto},
     app_context::AppContext,
 };
 use chrono::Utc;
@@ -98,7 +95,7 @@ pub(crate) async fn create_vector_in_transaction(
     ctx: Arc<AppContext>,
     collection_id: &str,
     transaction_id: Hash,
-    create_vector_dto: CreateVectorDto,
+    create_vector_dto: CreateDenseVectorDto,
 ) -> Result<CreateVectorResponseDto, TransactionError> {
     let vec_store = ctx
         .ain_env

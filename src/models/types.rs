@@ -17,6 +17,8 @@ use crate::distance::{
     cosine::CosineDistance, dotproduct::DotProductDistance, euclidean::EuclideanDistance,
     hamming::HammingDistance, DistanceFunction,
 };
+use crate::indexes::inverted_index::InvertedIndex;
+use crate::indexes::inverted_index_data::InvertedIndexData;
 use crate::macros::key;
 use crate::models::common::*;
 use crate::models::identity_collections::*;
@@ -568,7 +570,7 @@ pub struct DenseIndex {
     pub vec_raw_manager: Arc<BufferManagerFactory<Hash>>,
     pub is_configured: Arc<AtomicBool>,
     pub values_range: Arc<RwLock<(f32, f32)>>,
-    pub vectors: Arc<RwLock<Vec<(u64, Vec<f32>)>>>,
+    pub vectors: Arc<RwLock<Vec<(VectorId, Vec<f32>)>>>,
     pub sampling_data: Arc<SamplingData>,
     pub vectors_collected: Arc<AtomicUsize>,
     pub sample_threshold: usize,
@@ -669,6 +671,7 @@ pub struct RawVectorEmbedding {
 pub struct CollectionsMap {
     /// holds an in-memory map of all dense indexes for all collections
     inner: DashMap<String, Arc<DenseIndex>>,
+    inner_inverted_index: DashMap<String, Arc<InvertedIndex>>,
     inner_collections: DashMap<String, Arc<Collection>>,
     lmdb_env: Arc<Environment>,
     // made it public temporarily
@@ -686,6 +689,7 @@ impl CollectionsMap {
         let inverted_index_db = lmdb_init_db(&env, "inverted_indexes")?;
         let res = Self {
             inner: DashMap::new(),
+            inner_inverted_index: DashMap::new(),
             inner_collections: DashMap::new(),
             lmdb_env: env,
             lmdb_collections_db: collections_db,
@@ -729,7 +733,11 @@ impl CollectionsMap {
 
             // if collection has inverted index load it from the lmdb
             if coll.sparse_vector.enabled {
-                println!("inverted index should be loaded here!")
+                let inverted_index =
+                    collections_map.load_inverted_index(&coll, root_path, config)?;
+                collections_map
+                    .inner_inverted_index
+                    .insert(coll.name.clone(), Arc::new(inverted_index));
             }
         }
         Ok(collections_map)
@@ -746,14 +754,15 @@ impl CollectionsMap {
         config: &Config,
     ) -> Result<DenseIndex, WaCustomError> {
         let collection_path: Arc<Path> = root_path.join(&coll.name).into();
+        let index_path = collection_path.join("dense_hnsw");
 
         let index_manager = Arc::new(BufferManagerFactory::new(
-            collection_path.clone(),
+            index_path.clone().into(),
             |root, ver: &Hash| root.join(format!("{}.index", **ver)),
             config.flush_eagerness_factor,
         ));
         let vec_raw_manager = Arc::new(BufferManagerFactory::new(
-            collection_path.clone(),
+            index_path.clone().into(),
             |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
             config.flush_eagerness_factor,
         ));
@@ -762,7 +771,7 @@ impl CollectionsMap {
                 .create(true)
                 .read(true)
                 .append(true)
-                .open(collection_path.join("prop.data"))
+                .open(index_path.join("prop.data"))
                 .unwrap(),
         ));
         // TODO: May be the value can be taken from config
@@ -818,13 +827,87 @@ impl CollectionsMap {
         Ok(dense_index)
     }
 
-    #[allow(dead_code)]
+    /// loads and initiates the inverted index of a collection from lmdb
+    ///
+    /// In doing so, the root vec for all collections'  inverted indexes are loaded into
+    /// memory, which also ends up warming the cache (NodeRegistry)
+    fn load_inverted_index(
+        &self,
+        coll: &Collection,
+        root_path: &Path,
+        config: &Config,
+    ) -> Result<InvertedIndex, WaCustomError> {
+        let collection_path: Arc<Path> = root_path.join(&coll.name).into();
+        let index_path = collection_path.join("sparse_inverted_index");
+
+        let index_manager = Arc::new(BufferManagerFactory::new(
+            index_path.clone().into(),
+            |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+            config.flush_eagerness_factor,
+        ));
+        let vec_raw_manager = Arc::new(BufferManagerFactory::new(
+            index_path.clone().into(),
+            |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
+            config.flush_eagerness_factor,
+        ));
+
+        let db = Arc::new(
+            self.lmdb_env
+                .create_db(Some(&coll.name), DatabaseFlags::empty())
+                .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?,
+        );
+
+        let inverted_index_data =
+            InvertedIndexData::load(&self.lmdb_env, self.lmdb_dense_index_db, &coll.get_key())
+                .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+        let vcs = Arc::new(VersionControl::from_existing(
+            self.lmdb_env.clone(),
+            db.clone(),
+        ));
+        let lmdb = MetaDb {
+            env: self.lmdb_env.clone(),
+            db,
+        };
+        let current_version = retrieve_current_version(&lmdb)?;
+        let inverted_index = InvertedIndex::new(
+            coll.name.clone(),
+            inverted_index_data.description,
+            inverted_index_data.auto_create_index,
+            inverted_index_data.metadata_schema,
+            inverted_index_data.max_vectors,
+            lmdb,
+            ArcShift::new(current_version),
+            vcs,
+            vec_raw_manager,
+            index_manager,
+        );
+
+        Ok(inverted_index)
+    }
+
     pub fn insert(&self, name: &str, dense_index: Arc<DenseIndex>) -> Result<(), WaCustomError> {
         self.inner.insert(name.to_owned(), dense_index.clone());
         persist_dense_index(
             &self.lmdb_env,
             self.lmdb_dense_index_db.clone(),
             dense_index.clone(),
+        )
+    }
+
+    // TODO MERGE insert AND insert_inverted_index INTO ONE GENERIC METHOD
+    // OVER INDEXES
+    pub fn insert_inverted_index(
+        &self,
+        name: &str,
+        index: Arc<InvertedIndex>,
+    ) -> Result<(), WaCustomError> {
+        self.inner_inverted_index
+            .insert(name.to_owned(), index.clone());
+        InvertedIndexData::persist(
+            &self.lmdb_env,
+            self.lmdb_dense_index_db.clone(),
+            index.clone(),
         )
     }
 
@@ -852,6 +935,25 @@ impl CollectionsMap {
     #[allow(dead_code)]
     pub fn get(&self, name: &str) -> Option<Arc<DenseIndex>> {
         self.inner.get(name).map(|index| index.clone())
+    }
+
+    /// Returns the `InvertedIndex` by collection's name
+    ///
+    /// If not found, None is returned
+    ///
+    /// Note that it tried to look up the InvertedIndex in the DashMap
+    /// only and doesn't check LMDB. This is because of the assumption
+    /// that at startup, all InvertedIndexes will be loaded from LMDB
+    /// into the in-memory DashMap and when a new InvertedIndex is
+    /// added, it will be written to the DashMap as well.
+    ///
+    /// @TODO: As a future improvement, we can fallback to checking if
+    /// the InvertedIndex exists in LMDB and caching it. But it's not
+    /// required for the current use case.
+    pub fn get_inverted_index(&self, name: &str) -> Option<Arc<InvertedIndex>> {
+        self.inner_inverted_index
+            .get(name)
+            .map(|index| index.clone())
     }
 
     /// Returns the `Collection` by collection's name

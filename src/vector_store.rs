@@ -3,6 +3,8 @@ use crate::config_loader::Config;
 use crate::config_loader::VectorsIndexingMode;
 use crate::distance::cosine::CosineSimilarity;
 use crate::distance::DistanceFunction;
+use crate::indexes::inverted_index::InvertedIndex;
+use crate::indexes::inverted_index_types::RawSparseVectorEmbedding;
 use crate::macros::key;
 use crate::models::buffered_io::*;
 use crate::models::common::*;
@@ -308,6 +310,86 @@ pub fn get_embedding_by_id(
 //     dense_index.storage_type.update_shared(storage_type);
 // }
 
+/// Inserts a sparse embedding into a buffer and updates the inverted index.
+///
+/// This function inserts a given sparse vector embedding into a buffer managed by
+/// the `BufferManager`, while also updating an associated inverted index to reflect
+/// the new embedding. The operation is versioned with a `current_version` to ensure
+/// consistency across data insertions.
+///
+/// # Arguments
+///
+/// * `bufman` - A reference-counted (`Arc`) `BufferManager` that manages the buffer
+///   where the sparse embedding will be inserted. The `BufferManager` handles memory
+///   management and access to the underlying buffer.
+/// * `dense_index` - A reference-counted (`Arc`) `InvertedIndex` that is updated
+///   to reflect the insertion of the new sparse embedding. The `InvertedIndex`
+///   allows for fast lookups and indexing of the embeddings.
+/// * `emb` - A reference to the `RawSparseVectorEmbedding` that is to be inserted.
+///   The embedding is assumed to be in a raw, sparse vector format, and it will be
+///   added to both the buffer and the index.
+/// * `current_version` - A `Hash` representing the current version of the data. This
+///   is used to ensure versioning consistency when inserting the embedding into the
+///   buffer and the inverted index.
+///
+/// # Returns
+///
+/// This function returns a `Result`:
+/// - `Ok(())`: If the insertion of the embedding into the buffer and update of the
+///   inverted index is successful, it returns `Ok` with an empty tuple.
+/// - `Err(WaCustomError)`: If the operation fails, it returns a `WaCustomError` detailing
+///   the error encountered, which could be caused by issues with the buffer, the index,
+///   or version mismatch.
+///
+/// # Errors
+///
+/// - Returns a `WaCustomError` if any of the following occur:
+///   - An error with writing the embedding to the buffer.
+///   - A failure in updating the inverted index.
+///   - A version conflict or inconsistency with the provided `current_version`.
+pub fn insert_sparse_embedding(
+    bufman: Arc<BufferManager>,
+    inverted_index: Arc<InvertedIndex>,
+    emb: &RawSparseVectorEmbedding,
+    current_version: Hash,
+) -> Result<(), WaCustomError> {
+    let env = inverted_index.lmdb.env.clone();
+    let db = inverted_index.lmdb.db.clone();
+
+    let mut txn = env
+        .begin_rw_txn()
+        .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
+
+    // TODO (mohamed.eliwa) make `write_sparse_embedding` function generic over embedding
+    // writing the embedding on disk
+    let offset = write_sparse_embedding(bufman, emb)?;
+
+    // generating embedding key
+    let offset = EmbeddingOffset {
+        version: current_version,
+        offset,
+    };
+    let offset_serialized = offset.serialize();
+    let embedding_key = key!(e:emb.hash_vec);
+
+    // What is the difference between the following insertion and
+    // the insertion that happens in `write_sparse_embedding`
+    // aren't both of them persisted on the disk at the end?
+    // the `write_sparse_embedding` function writes the embedding itself on the disk and returns the offset of the embedding,
+    // while here we store the embedding key and its offset in the lmdb
+    // so we can read the actual embedding later from the disk easily with one disk seek using the stored offset
+    //
+    // storing (key_embedding, offset_serialized) pair in in-memory database
+    txn.put(*db, &embedding_key, &offset_serialized, WriteFlags::empty())
+        .map_err(|e| WaCustomError::DatabaseError(format!("Failed to put data: {}", e)))?;
+
+    txn.commit().map_err(|e| {
+        WaCustomError::DatabaseError(format!("Failed to commit transaction: {}", e))
+    })?;
+
+    Ok(())
+}
+
 pub fn insert_embedding(
     bufman: Arc<BufferManager>,
     dense_index: Arc<DenseIndex>,
@@ -575,15 +657,15 @@ pub fn index_embeddings_in_transaction(
     version: Hash,
     version_number: u16,
     transaction: &DenseIndexTransaction,
-    vecs: Vec<(u64, Vec<f32>)>,
+    vecs: Vec<(VectorId, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
     let quantization = &*dense_index.quantization_metric;
     let hnsw_params = dense_index.hnsw_params.clone();
     let hnsw_params_guard = hnsw_params.read().unwrap();
-    let index = |vecs: Vec<(u64, Vec<f32>)>| {
+    let index = |vecs: Vec<(VectorId, Vec<f32>)>| {
         for (id, values) in vecs {
             let raw_emb = RawVectorEmbedding {
-                hash_vec: VectorId(id),
+                hash_vec: id,
                 raw_vec: Arc::new(values),
             };
             transaction.post_raw_embedding(raw_emb.clone());
@@ -650,6 +732,27 @@ pub fn index_embeddings_in_transaction(
     }
 
     Ok(())
+}
+
+#[allow(unused)]
+pub fn index_sparse_embedding(
+    inverted_index: Arc<InvertedIndex>,
+    parent: Option<SharedNode>,
+    vector_emb: QuantizedVectorEmbedding,
+    version: Hash,
+    version_number: u16,
+    serialization_table: Arc<TSHashTable<SharedNode, ()>>,
+    lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16), SharedNode>>,
+    neighbors_count: usize,
+) -> Result<(), WaCustomError> {
+    // let fvec = vector_emb.quantized_vec.clone();
+    // let mut skipm = FxHashSet::default();
+    // skipm.insert(vector_emb.hash_vec.clone());
+
+    // TODO (mohamed.eliwa) implement this function
+    Err(WaCustomError::DatabaseError(
+        "index_sparse_embedding is not yet implemented".into(),
+    ))
 }
 
 pub fn index_embedding(

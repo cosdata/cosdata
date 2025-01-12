@@ -1,5 +1,6 @@
 use crate::app_context::AppContext;
 use crate::indexes::inverted_index::InvertedIndex;
+use crate::indexes::inverted_index_types::{RawSparseVectorEmbedding, SparsePair};
 use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::cache_loader::ProbCache;
 use crate::models::collection::Collection;
@@ -38,6 +39,9 @@ pub async fn init_dense_index_for_collection(
 ) -> Result<Arc<DenseIndex>, WaCustomError> {
     let collection_name = &collection.name;
     let collection_path: Arc<Path> = collection.get_path();
+    let index_path = collection_path.join("dense_hnsw");
+    // ensuring that the index has a separate directory created inside the collection directory
+    fs::create_dir_all(&index_path).map_err(|e| WaCustomError::FsError(e.to_string()))?;
 
     let values_range = values_range.unwrap_or((-1.0, 1.0));
 
@@ -53,25 +57,29 @@ pub async fn init_dense_index_for_collection(
 
     // Note that setting .write(true).append(true) has the same effect
     // as setting only .append(true)
+    //
+    // what is the prop file exactly?
+    // a file that stores the quantized version of raw vec
     let prop_file = Arc::new(RwLock::new(
         fs::OpenOptions::new()
             .create(true)
             .read(true)
             .append(true)
-            .open(collection_path.join("prop.data"))
+            .open(index_path.join("prop.data"))
             .map_err(|e| WaCustomError::FsError(e.to_string()))?,
     ));
 
     let index_manager = Arc::new(BufferManagerFactory::new(
-        collection_path.clone(),
+        index_path.clone().into(),
         |root, ver: &Hash| root.join(format!("{}.index", **ver)),
         ctx.config.flush_eagerness_factor,
     ));
     let vec_raw_manager = Arc::new(BufferManagerFactory::new(
-        collection_path.clone(),
+        index_path.into(),
         |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
         ctx.config.flush_eagerness_factor,
     ));
+
     // TODO: May be the value can be taken from config
     let cache = Arc::new(ProbCache::new(
         1000,
@@ -132,6 +140,8 @@ pub async fn init_inverted_index_for_collection(
 ) -> Result<Arc<InvertedIndex>, WaCustomError> {
     let collection_name = &collection.name;
     let collection_path: Arc<Path> = collection.get_path();
+    let index_path = collection_path.join("sparse_inverted_index");
+    fs::create_dir_all(&index_path).map_err(|e| WaCustomError::FsError(e.to_string()))?;
 
     let env = ctx.ain_env.persist.clone();
 
@@ -142,35 +152,46 @@ pub async fn init_inverted_index_for_collection(
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
     let vcs = Arc::new(vcs);
+    //
+    // what is the difference between vec_raw_manager and index_manager?
+    // vec_raw_manager manages persisting raw embeddings/vectors on disk
+    // index_manager manages persisting index data on disk
+    let vec_raw_manager = Arc::new(BufferManagerFactory::new(
+        index_path.clone().into(),
+        |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
+        ctx.config.flush_eagerness_factor,
+    ));
 
-    // Note that setting .write(true).append(true) has the same effect
-    // as setting only .append(true)
-    let prop_file = Arc::new(
-        fs::OpenOptions::new()
-            .create(true)
-            .read(true)
-            .append(true)
-            .open(collection_path.join("prop.data"))
-            .map_err(|e| WaCustomError::FsError(e.to_string()))?,
-    );
+    let index_manager = Arc::new(BufferManagerFactory::new(
+        index_path.into(),
+        |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+        ctx.config.flush_eagerness_factor,
+    ));
 
-    let index = InvertedIndex::new(
+    // TODO FIX THE FOLLOWING ISSUE
+    // Has to call index.manager.get() here
+    // to create the index file on disk upon index creation
+    let _ = index_manager.get(hash);
+    index_manager.flush_all()?;
+
+    let index = Arc::new(InvertedIndex::new(
         collection_name.clone(),
         collection.description.clone(),
         collection.sparse_vector.auto_create_index,
         collection.metadata_schema.clone(),
         collection.config.max_vectors,
-        collection.config.replication_factor,
-        prop_file,
         lmdb,
         ArcShift::new(hash),
-        Arc::new(QuantizationMetric::Scalar),
-        Arc::new(DistanceMetric::DotProduct),
-        StorageType::UnsignedByte,
         vcs,
-    );
+        vec_raw_manager,
+        index_manager,
+    ));
+
+    ctx.ain_env
+        .collections_map
+        .insert_inverted_index(&collection_name, index.clone())?;
     update_current_version(&index.lmdb, hash)?;
-    Ok(Arc::new(index))
+    Ok(index)
 }
 
 /// uploads a vector embedding within a transaction
@@ -178,7 +199,7 @@ pub fn run_upload_in_transaction(
     ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
     transaction: &DenseIndexTransaction,
-    mut sample_points: Vec<(u64, Vec<f32>)>,
+    mut sample_points: Vec<(VectorId, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
     let version = transaction.id;
     let version_number = transaction.version_number;
@@ -395,11 +416,68 @@ pub fn run_upload_in_transaction(
     Ok(())
 }
 
+/// uploads a sparse vector for inverted index
+pub fn run_upload_sparse_vector(
+    ctx: Arc<AppContext>,
+    inverted_index: Arc<InvertedIndex>,
+    vecs: Vec<(VectorId, Vec<SparsePair>)>,
+) -> Result<(), WaCustomError> {
+    // Adding next version
+    //
+    // does mean we are creating a new version with each vector?
+    // no, but a new version with each transaction
+    //
+    // each version == a new file on the disk?
+    // yes
+    //
+    // means we are storing each embedding in a new file (or list embeddings that come in one transaction)?
+    // the list of embedding that come in one transaction are stored in a new file
+    let (current_version, _) = inverted_index
+        .vcs
+        .add_next_version("main")
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+    inverted_index.set_current_version(current_version);
+    update_current_version(&inverted_index.lmdb, current_version)?;
+
+    // Insert vectors
+    let bufman = inverted_index.vec_raw_manager.get(current_version)?;
+
+    vecs.into_par_iter()
+        .map(|(id, vec)| {
+            vec.iter().for_each(|vec| {
+                // TODO (Question)
+                // should InvertedIndexSparseAnnNodeBasic::insert params change
+                // to accept vector_id as  u64 ??
+                inverted_index.insert(vec.0, vec.1, id.0 as u32);
+            });
+
+            let vec_emb = RawSparseVectorEmbedding {
+                raw_vec: Arc::new(vec),
+                hash_vec: id,
+            };
+
+            // write embeddings to disk
+            insert_sparse_embedding(
+                bufman.clone(),
+                inverted_index.clone(),
+                &vec_emb,
+                current_version,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    bufman.flush()?;
+
+    inverted_index.vec_raw_manager.flush_all()?;
+    inverted_index.index_manager.flush_all()?;
+
+    Ok(())
+}
+
 /// uploads a vector embedding
 pub fn run_upload(
     ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
-    vecs: Vec<(u64, Vec<f32>)>,
+    vecs: Vec<(VectorId, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
     let env = dense_index.lmdb.env.clone();
     let db = dense_index.lmdb.db.clone();
@@ -480,10 +558,9 @@ pub fn run_upload(
 
     vecs.into_par_iter()
         .map(|(id, vec)| {
-            let hash_vec = VectorId(id);
             let vec_emb = RawVectorEmbedding {
                 raw_vec: Arc::new(vec),
-                hash_vec,
+                hash_vec: id,
             };
 
             insert_embedding(

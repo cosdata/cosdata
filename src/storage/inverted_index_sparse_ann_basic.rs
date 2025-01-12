@@ -39,7 +39,7 @@ pub fn largest_power_of_4_below(n: u32) -> (usize, u32) {
 
 /// Calculates the path from `current_dim_index` to `target_dim_index`.
 /// Decomposes the difference into powers of 4 and returns the indices.
-fn calculate_path(target_dim_index: u32, current_dim_index: u32) -> Vec<usize> {
+pub fn calculate_path(target_dim_index: u32, current_dim_index: u32) -> Vec<usize> {
     let mut path = Vec::new();
     let mut remaining = target_dim_index - current_dim_index;
 
@@ -253,7 +253,7 @@ impl InvertedIndexSparseAnnNodeBasicTSHashmap {
 
     /// Finds or creates the node where the data should be inserted.
     /// Traverses the tree iteratively and returns a reference to the node.
-    fn find_or_create_node(
+    pub fn find_or_create_node(
         node: ArcShift<InvertedIndexSparseAnnNodeBasicTSHashmap>,
         path: &[usize],
         cache: Arc<NodeRegistry>,
@@ -301,9 +301,10 @@ impl InvertedIndexSparseAnnNodeBasicTSHashmap {
             vecof_vec_id.push(vector_id);
             Some(vecof_vec_id)
         });
-
+        println!("vector_id -> {vector_id}");
         let mut tree = node.cuckoo_filter_tree.clone();
         Arc::make_mut(&mut tree).add_item(vector_id as u64, value);
+        println!("vector_id_2 -> {vector_id}");
     }
 
     /// Retrieves a value from the index at the specified dimension index.

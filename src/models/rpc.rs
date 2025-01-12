@@ -1,4 +1,4 @@
-use super::types::MetricResult;
+use super::types::{MetricResult, VectorId};
 use crate::models::user::{AddUserResp, AuthResp, Statistics};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -91,7 +91,7 @@ pub enum RPCResponseBody {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Vector {
-    pub id: u64,
+    pub id: VectorId,
     pub values: Vec<f32>,
 }
 
