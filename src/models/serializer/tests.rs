@@ -6,6 +6,7 @@ use crate::models::types::*;
 use crate::models::versioning::BranchId;
 use crate::models::versioning::VersionHash;
 use crate::models::versioning::{Version, VersionControl};
+use crate::storage::page::Pagepool;
 use crate::storage::Storage;
 use half::f16;
 use lmdb::DatabaseFlags;
@@ -1075,4 +1076,81 @@ fn test_eager_lazy_item_multiple_serialization() {
     let deserialized: EagerLazyItemSet<MergedNode, f32> = cache.load_item(file_index).unwrap();
 
     assert_eq!(set.len(), deserialized.len());
+}
+
+#[test]
+fn test_page_serialization() {
+    let mut page_pool = Pagepool::<10>::default();
+    let mut skipm: HashSet<u64> = HashSet::new();
+
+    for i in 0..10 * 10_u32 {
+        page_pool.push(i);
+    }
+
+    let root_version_id = Hash::from(0);
+    let root_version_number = 0;
+
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(0.into());
+    let offset = page_pool
+        .serialize(bufmans.clone(), root_version_id, cursor)
+        .unwrap();
+
+    bufman.close_cursor(cursor).unwrap();
+
+    let deserialized = Pagepool::<10>::deserialize(
+        bufmans.clone(),
+        FileIndex::Valid {
+            offset: FileOffset(offset),
+            version_id: root_version_id,
+            version_number: root_version_number,
+        },
+        cache.clone(),
+        0_u16,
+        &mut skipm,
+    )
+    .unwrap();
+
+    assert_eq!(page_pool, deserialized);
+}
+
+#[test]
+fn test_page_incremental_serialization() {
+    let mut page_pool = Pagepool::<10>::default();
+    let mut skipm: HashSet<u64> = HashSet::new();
+
+    for i in 0..10 * 10_u32 {
+        page_pool.push(i);
+    }
+
+    let root_version_id = Hash::from(0);
+    let root_version_number = 0;
+
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(0.into());
+    let _offset = page_pool
+        .serialize(bufmans.clone(), root_version_id, cursor)
+        .unwrap();
+
+    for i in 0..10 * 10_u32 {
+        page_pool.push(i);
+    }
+
+    let offset = page_pool
+        .serialize(bufmans.clone(), root_version_id, cursor)
+        .unwrap();
+    bufman.close_cursor(cursor).unwrap();
+
+    let deserialized = Pagepool::<10>::deserialize(
+        bufmans.clone(),
+        FileIndex::Valid {
+            offset: FileOffset(offset),
+            version_id: root_version_id,
+            version_number: root_version_number,
+        },
+        cache.clone(),
+        0_u16,
+        &mut skipm,
+    )
+    .unwrap();
+
+    assert_eq!(page_pool, deserialized);
 }

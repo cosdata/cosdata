@@ -1,56 +1,21 @@
-use crate::models::serializer::CustomSerialize;
-use crate::models::types::FileOffset;
-use std::io::SeekFrom;
+use std::cell::Cell;
 
 #[derive(Clone, Default, Debug, PartialEq)]
 pub struct Pagepool<const LEN: usize> {
-    inner: Vec<Page<LEN>>,
-    current: usize,
+    pub inner: Vec<Page<LEN>>,
 }
 
 impl<const LEN: usize> Pagepool<LEN> {
-    // pub fn push(&mut self, data: u32) {
-    //     // If the pool is empty it creates a new Page and pushes the data to it.
-    //     if self.inner.len() == 0 {
-    //         let mut page = Page::<LEN>::new();
-    //         page.push(data);
-    //     }
-    //     // If all the current list of chunks are full then create a new one
-    //     else if self.current == self.inner.len() - 1 {
-    //         let mut page = Page::<LEN>::new();
-    //         page.push(data);
-    //     }
-    //     // If the current chunk is full then go the next chunk
-    //     else if self.inner[self.current].is_full() {
-    //         self.current += 1;
-    //         self.inner[self.current].push(data);
-    //     }
-    //     // Otherwise push the data to the current chunk
-    //     else {
-    //         self.inner[self.current].push(data);
-    //     }
-    // }
-
     pub fn push(&mut self, data: u32) {
-        // If all the current list of chunks are full then create a new one
-        if self.inner.is_empty() || self.current == self.inner.len() - 1 {
-            let mut page = Page::<LEN>::new();
-            page.push(data);
-            self.inner.push(page);
-            self.current = 0; // Set current to the first page
+        if let Some(last) = self.inner.last_mut() {
+            if !last.is_full() {
+                last.push(data);
+                return;
+            }
         }
-        // If the current page is full, move to the next one
-        else if self.inner[self.current].is_full() {
-            // Create a new page and push the data
-            let mut page = Page::<LEN>::new();
-            page.push(data);
-            self.inner.push(page); // Add the new page to the pool
-            self.current += 1; // Move to the new page
-        }
-        // Otherwise, push the data to the current page
-        else {
-            self.inner[self.current].push(data);
-        }
+        let mut page = Page::<LEN>::new();
+        page.push(data);
+        self.inner.push(page);
     }
 
     pub fn push_chunk(&mut self, chunk: [u32; LEN]) {
@@ -73,8 +38,8 @@ impl<const LEN: usize> std::ops::Deref for Pagepool<LEN> {
 #[derive(Clone, PartialEq, Debug)]
 pub struct Page<const LEN: usize> {
     pub data: [u32; LEN],
-    current: usize,
-    is_serialized: bool,
+    pub len: usize,
+    pub serialized_at: Cell<Option<u32>>,
 }
 
 impl<const LEN: usize> std::ops::Deref for Page<LEN> {
@@ -86,29 +51,29 @@ impl<const LEN: usize> std::ops::Deref for Page<LEN> {
 }
 
 impl<const LEN: usize> Page<LEN> {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             data: [u32::MAX; LEN],
-            is_serialized: false,
-            current: 0,
+            len: 0,
+            serialized_at: Cell::new(None),
         }
     }
 
-    fn push(&mut self, data: u32) {
-        self.current += 1;
-        self.data[self.current] = data;
+    pub fn push(&mut self, data: u32) {
+        self.data[self.len] = data;
+        self.len += 1;
     }
 
     fn from_data(data: [u32; LEN]) -> Self {
         Self {
             data,
-            is_serialized: false,
-            current: 0,
+            len: 0,
+            serialized_at: Cell::new(None),
         }
     }
 
     fn is_full(&self) -> bool {
-        self.current == LEN - 1
+        self.len == LEN
     }
 }
 
@@ -118,229 +83,79 @@ impl<const LEN: usize> AsRef<[u32; LEN]> for Page<LEN> {
     }
 }
 
-impl<const LEN: usize> CustomSerialize for Pagepool<LEN> {
-    fn serialize(
-        &self,
-        bufmans: std::sync::Arc<crate::models::buffered_io::BufferManagerFactory>,
-        version: crate::models::versioning::Hash,
-        cursor: u64,
-    ) -> Result<u32, crate::models::buffered_io::BufIoError> {
-        let bufman = bufmans.get(&version)?;
+// #[cfg(test)]
+// mod page_tests {
+//     use super::*;
 
-        // Move the cursor to the end of the file and start writing from there
-        bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
+//     use std::collections::HashSet;
 
-        let start_offset = bufman.cursor_position(cursor)? as u32;
-        let total_items = self.inner.len();
+//     use crate::models::{
+//         buffered_io::{BufferManager, BufferManagerFactory},
+//         cache_loader::NodeRegistry,
+//         lazy_load::FileIndex,
+//         serializer::CustomSerialize,
+//         types::FileOffset,
+//         versioning::Hash,
+//     };
+//     use std::sync::Arc;
 
-        bufman.write_u32_with_cursor(cursor, total_items as u32)?;
+//     use tempfile::{tempdir, TempDir};
 
-        for (pos, item) in self.inner.iter().enumerate() {
-            Page::<LEN>::serialize(item, bufmans.clone(), version, cursor)?;
+//     fn setup_test() -> (
+//         Arc<BufferManagerFactory>,
+//         Arc<BufferManager>,
+//         u64,
+//         TempDir,
+//         Arc<NodeRegistry>,
+//     ) {
+//         let root_version_id = Hash::from(0);
 
-            if pos == total_items - 1 {
-                bufman.write_u32_with_cursor(cursor, u32::MAX)?;
-            } else {
-                // Move the cursor to the end of the file and get the position of the file
-                // and write that in the current position
-                let current = bufman.cursor_position(cursor)?;
-                bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
-                let next_chunk_start = bufman.cursor_position(cursor)?;
+//         let dir = tempdir().unwrap();
+//         let bufmans = Arc::new(BufferManagerFactory::new(
+//             dir.as_ref().into(),
+//             |root, ver| root.join(format!("{}.index", **ver)),
+//         ));
 
-                // Move the cursor back to the current position
-                bufman.seek_with_cursor(cursor, SeekFrom::Start(current))?;
-                bufman.write_u32_with_cursor(cursor, next_chunk_start as u32)?;
-            }
-        }
+//         let cache = Arc::new(NodeRegistry::new(1000, bufmans.clone()));
+//         let bufman = bufmans.get(&root_version_id).unwrap();
+//         let cursor = bufman.open_cursor().unwrap();
+//         (bufmans, bufman, cursor, dir, cache)
+//     }
 
-        Ok(start_offset)
-    }
+//     #[test]
+//     fn test_serialize_deserialize_page() {
+//         let mut page_pool = Pagepool::<10>::default();
+//         let mut skipm: HashSet<u64> = HashSet::new();
 
-    fn deserialize(
-        bufmans: std::sync::Arc<crate::models::buffered_io::BufferManagerFactory>,
-        file_index: crate::models::lazy_load::FileIndex,
-        cache: std::sync::Arc<crate::models::cache_loader::NodeRegistry>,
-        max_loads: u16,
-        skipm: &mut std::collections::HashSet<u64>,
-    ) -> Result<Self, crate::models::buffered_io::BufIoError> {
-        match file_index {
-            crate::models::lazy_load::FileIndex::Valid {
-                offset: FileOffset(offset),
-                version_id,
-                version_number,
-            } => {
-                let bufman = bufmans.get(&version_id)?;
-                let cursor = bufman.open_cursor()?;
+//         for i in 0..10 * 10_u32 {
+//             page_pool.push(i);
+//         }
 
-                bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
+//         let root_version_id = Hash::from(0);
+//         let root_version_number = 0;
 
-                let total_length = bufman.read_u32_with_cursor(cursor)? as usize;
+//         let (bufmgr_factory, bufmg, cursor, temp_dir, cache) = setup_test();
+//         let offset = page_pool.serialize(bufmgr_factory.clone(), root_version_id, cursor);
 
-                let mut page_pool = Pagepool::<LEN>::default();
-                for _ in 0..total_length {
-                    let current_offset = bufman.cursor_position(cursor)?;
+//         assert!(offset.is_ok());
 
-                    let file_index = crate::models::lazy_load::FileIndex::Valid {
-                        offset: FileOffset(current_offset as u32),
-                        version_id,
-                        version_number,
-                    };
+//         let offset = offset.unwrap();
+//         bufmg.close_cursor(cursor).unwrap();
 
-                    let page = Page::<LEN>::deserialize(
-                        bufmans.clone(),
-                        file_index,
-                        cache.clone(),
-                        max_loads,
-                        skipm,
-                    )?;
+//         let deser = Pagepool::<10>::deserialize(
+//             bufmgr_factory.clone(),
+//             FileIndex::Valid {
+//                 offset: FileOffset(offset),
+//                 version_id: root_version_id,
+//                 version_number: root_version_number,
+//             },
+//             cache.clone(),
+//             0_u16,
+//             &mut skipm,
+//         );
+//         assert!(deser.is_ok());
+//         let deser = deser.unwrap();
 
-                    page_pool.push_chunk(page.data);
-
-                    let next_chunk = bufman.read_u32_with_cursor(cursor)?;
-
-                    if next_chunk == u32::MAX {
-                        break;
-                    }
-
-                    bufman.seek_with_cursor(cursor, SeekFrom::Start(next_chunk as u64))?;
-                }
-
-                bufman.close_cursor(cursor)?;
-                Ok(page_pool)
-            }
-            crate::models::lazy_load::FileIndex::Invalid => Ok(Pagepool::default()),
-        }
-    }
-}
-
-impl<const LEN: usize> CustomSerialize for Page<LEN> {
-    fn deserialize(
-        bufmans: std::sync::Arc<crate::models::buffered_io::BufferManagerFactory>,
-        file_index: crate::models::lazy_load::FileIndex,
-        _cache: std::sync::Arc<crate::models::cache_loader::NodeRegistry>,
-        _max_loads: u16,
-        _skipm: &mut std::collections::HashSet<u64>,
-    ) -> Result<Self, crate::models::buffered_io::BufIoError> {
-        match file_index {
-            crate::models::lazy_load::FileIndex::Valid {
-                offset: FileOffset(offset),
-                version_id,
-                ..
-            } => {
-                let bufman = bufmans.get(&version_id)?;
-                let cursor = bufman.open_cursor()?;
-                bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
-
-                let mut items = Page::<LEN>::new();
-
-                for _ in 0..LEN {
-                    items.push(bufman.read_u32_with_cursor(cursor)?)
-                }
-
-                items.is_serialized = true;
-
-                Ok(items)
-            }
-
-            crate::models::lazy_load::FileIndex::Invalid => Ok(Page::<LEN>::new()),
-        }
-    }
-
-    fn serialize(
-        &self,
-        bufmans: std::sync::Arc<crate::models::buffered_io::BufferManagerFactory>,
-        version: crate::models::versioning::Hash,
-        cursor: u64,
-    ) -> Result<u32, crate::models::buffered_io::BufIoError> {
-        let bufman = bufmans.get(&version)?;
-        let start_offset = bufman.cursor_position(cursor)? as u32;
-
-        // If the chunk is already serialised then do an early return
-        if self.is_serialized {
-            return Ok(start_offset);
-        }
-
-        for item in self.data {
-            bufman.write_u32_with_cursor(cursor, item)?;
-        }
-
-        Ok(start_offset)
-    }
-}
-
-#[cfg(test)]
-mod page_tests {
-    use super::*;
-
-    use std::collections::HashSet;
-
-    use crate::models::{
-        buffered_io::{BufferManager, BufferManagerFactory},
-        cache_loader::NodeRegistry,
-        lazy_load::FileIndex,
-        serializer::CustomSerialize,
-        types::FileOffset,
-        versioning::Hash,
-    };
-    use std::sync::Arc;
-
-    use tempfile::{tempdir, TempDir};
-
-    fn setup_test() -> (
-        Arc<BufferManagerFactory>,
-        Arc<BufferManager>,
-        u64,
-        TempDir,
-        Arc<NodeRegistry>,
-    ) {
-        let root_version_id = Hash::from(0);
-
-        let dir = tempdir().unwrap();
-        let bufmans = Arc::new(BufferManagerFactory::new(
-            dir.as_ref().into(),
-            |root, ver| root.join(format!("{}.index", **ver)),
-        ));
-
-        let cache = Arc::new(NodeRegistry::new(1000, bufmans.clone()));
-        let bufman = bufmans.get(&root_version_id).unwrap();
-        let cursor = bufman.open_cursor().unwrap();
-        (bufmans, bufman, cursor, dir, cache)
-    }
-
-    #[test]
-    fn test_serialize_deserialize_page() {
-        let mut page_pool = Pagepool::<10>::default();
-        let mut skipm: HashSet<u64> = HashSet::new();
-
-        for i in 0..10 * 10_u32 {
-            page_pool.push(i);
-        }
-
-        let root_version_id = Hash::from(0);
-        let root_version_number = 0;
-
-        let (bufmgr_factory, bufmg, cursor, temp_dir, cache) = setup_test();
-        let offset = page_pool.serialize(bufmgr_factory.clone(), root_version_id, cursor);
-
-        assert!(offset.is_ok());
-
-        let offset = offset.unwrap();
-        bufmg.close_cursor(cursor).unwrap();
-
-        let deser = Pagepool::<10>::deserialize(
-            bufmgr_factory.clone(),
-            FileIndex::Valid {
-                offset: FileOffset(offset),
-                version_id: root_version_id,
-                version_number: root_version_number,
-            },
-            cache.clone(),
-            0_u16,
-            &mut skipm,
-        );
-        assert!(deser.is_ok());
-        let deser = deser.unwrap();
-
-        assert_eq!(page_pool, deser);
-    }
-}
+//         assert_eq!(page_pool, deser);
+//     }
+// }
