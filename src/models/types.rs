@@ -1149,7 +1149,7 @@ fn get_server_key(env: Arc<Environment>) -> lmdb::Result<SingleSHA256Hash> {
         let entered_server_key_hash = SingleSHA256Hash::from_str(&entered_server_key);
         let entered_server_key_double_hash = entered_server_key_hash.hash_again();
         if !server_key_from_lmdb.verify_eq(&entered_server_key_double_hash) {
-            eprintln!("Invalid master key!");
+            eprintln!("Invalid server key!");
             std::process::exit(1);
         }
         entered_server_key_hash
