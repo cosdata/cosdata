@@ -1107,7 +1107,7 @@ impl User {
             return Err("Input must be at least 32 bytes".to_string());
         }
         let mut password_hash = [0u8; 32];
-        password_hash.copy_from_slice(buf);
+        password_hash.copy_from_slice(&buf[..32]);
         let username_bytes = buf[32..].to_vec();
         let username = String::from_utf8(username_bytes).map_err(|err| err.to_string())?;
         Ok(Self {
@@ -1149,7 +1149,7 @@ fn get_server_key(env: Arc<Environment>) -> lmdb::Result<SingleSHA256Hash> {
         let entered_server_key_hash = SingleSHA256Hash::from_str(&entered_server_key);
         let entered_server_key_double_hash = entered_server_key_hash.hash_again();
         if !server_key_from_lmdb.verify_eq(&entered_server_key_double_hash) {
-            eprintln!("Invalid master key!");
+            eprintln!("Invalid server key!");
             std::process::exit(1);
         }
         entered_server_key_hash
