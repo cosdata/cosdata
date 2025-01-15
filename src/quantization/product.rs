@@ -14,12 +14,14 @@ pub struct Centroid {
     pub centroids: Vec<u16>,
 }
 
+#[allow(unused_variables)]
 impl Quantization for ProductQuantization {
     // Implementation here
     fn quantize(
         &self,
         vector: &[f32],
         storage_type: StorageType,
+        range: (f32, f32),
     ) -> Result<Storage, QuantizationError> {
         // TODO: Implement product quantization logic here
         unimplemented!("Product quantization is not implemented yet");

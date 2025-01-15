@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     app_context::AppContext,
+    indexes::inverted_index::InvertedIndex,
     models::{collection::Collection, types::DenseIndex},
 };
 
@@ -19,22 +20,6 @@ pub(crate) async fn create_collection(
     create_collection_dto: CreateCollectionDto,
 ) -> Result<CreateCollectionDtoResponse, CollectionsError> {
     let collection = &repo::create_collection(ctx.clone(), create_collection_dto).await?;
-
-    if collection.dense_vector.enabled {
-        let _ = repo::create_dense_index(
-            ctx.clone(),
-            collection,
-            collection.dense_vector.dimension as usize,
-            None,
-            None,
-            5,
-            true
-        )
-        .await?;
-    }
-    if collection.sparse_vector.enabled {
-        let _ = repo::create_inverted_index(ctx, collection).await?;
-    }
 
     Ok(CreateCollectionDtoResponse {
         id: collection.name.clone(),
@@ -70,6 +55,17 @@ pub(crate) async fn get_dense_index_by_id(
     collection_id: &str,
 ) -> Result<Arc<DenseIndex>, CollectionsError> {
     let index = repo::get_dense_index_by_name(ctx, collection_id).await?;
+    Ok(index)
+}
+
+/// gets inverted index by collection id
+///
+/// currently collection_id = collection.name
+pub(crate) async fn get_inverted_index_by_id(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+) -> Result<Arc<InvertedIndex>, CollectionsError> {
+    let index = repo::get_inverted_index_by_name(ctx, collection_id).await?;
     Ok(index)
 }
 

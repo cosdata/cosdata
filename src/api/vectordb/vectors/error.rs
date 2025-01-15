@@ -6,6 +6,7 @@ use std::fmt::Display;
 
 use crate::WaCustomError;
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) enum VectorsError {
     NotFound,

@@ -1,29 +1,26 @@
 name: CI
-
-on:
-  workflow_dispatch:
+'on':
+  workflow_dispatch: null
   pull_request:
-    types: [opened, synchronize]
+    types:
+      - opened
+      - synchronize
     paths-ignore:
-      - "**/*.md"
-      - "**/*.yml"
-      - "!.github/workflows/check.yml"
+      - '**/*.md'
+      - '**/*.yml'
+      - '!.github/workflows/check.yml'
   push:
     branches:
-      - "*"
+      - '*'
     paths-ignore:
-      - "**/*.md"
-      - "**/*.yml"
-      - "!.github/workflows/ci.yml"
-
+      - '**/*.md'
+      - '**/*.yml'
+      - '!.github/workflows/ci.yml'
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: ${{ github.ref_name != 'main' }}
-
+  group: '${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}'
+  cancel-in-progress: '${{ github.ref_name != ''main'' }}'
 env:
   CARGO_INCREMENTAL: 0
-  # RUSTFLAGS: "-D warnings"
-
 jobs:
   check:
     name: Check
@@ -32,10 +29,9 @@ jobs:
       - uses: taiki-e/checkout-action@v1
       - uses: Boshen/setup-rust@main
         with:
-          save-cache: ${{ github.ref_name == 'main' }}
+          save-cache: '${{ github.ref_name == ''main'' }}'
           cache-key: warm
       - run: cargo check
-
   typos:
     name: Spell Check
     runs-on: ubuntu-latest
@@ -44,7 +40,6 @@ jobs:
       - uses: crate-ci/typos@v1.23.5
         with:
           files: .
-
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -52,6 +47,43 @@ jobs:
       - uses: taiki-e/checkout-action@v1
       - uses: Boshen/setup-rust@main
         with:
-          save-cache: ${{ github.ref_name == 'main' }}
+          save-cache: '${{ github.ref_name == ''main'' }}'
           cache-key: warm
       - run: cargo test
+  clippy-check:
+    name: Clippy Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: taiki-e/checkout-action@v1
+      - uses: Boshen/setup-rust@main
+        with:
+          components: clippy
+          save-cache: '${{ github.ref_name == ''main'' }}'
+          cache-key: warm
+      - uses: taiki-e/install-action@cargo-hack
+      - run: cargo hack check --all-features --locked
+      - run: cargo hack check --no-default-features --locked
+      - run: cargo hack check --each-feature --no-dev-deps 
+  format:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: taiki-e/checkout-action@v1
+      - uses: Boshen/setup-rust@main
+        with:
+          components: rustfmt
+          save-cache: '${{ github.ref_name == ''main'' }}'
+          cache-key: warm
+      - id: fmt
+        run: cargo fmt --all
+        continue-on-error: true
+      - if: steps.fmt.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.setFailed(`
+            Formatting check failed!
+
+            Please run this command before committing:
+            cargo fmt --all
+            `)

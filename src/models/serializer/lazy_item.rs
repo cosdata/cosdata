@@ -22,7 +22,7 @@ use std::{
 };
 
 fn update_map<T>(
-    bufmans: Arc<BufferManagerFactory>,
+    bufmans: Arc<BufferManagerFactory<Hash>>,
     version: Hash,
     cursor: u64,
     offset: u32,
@@ -31,12 +31,8 @@ fn update_map<T>(
 where
     T: Clone + CustomSerialize + Cacheable + 'static,
 {
-    let bufman = bufmans.get(&version)?;
+    let bufman = bufmans.get(version)?;
     let offset = if offset == u32::MAX {
-        if map.is_empty() {
-            return Ok(u32::MAX);
-        }
-
         // Serialize a new map
         bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
         map.serialize(bufmans, version, cursor)?
@@ -169,12 +165,12 @@ where
 fn lazy_item_serialize_impl<T: Cacheable + CustomSerialize>(
     node: Arc<T>,
     versions: &LazyItemVec<T>,
-    bufmans: Arc<BufferManagerFactory>,
+    bufmans: Arc<BufferManagerFactory<Hash>>,
     version: Hash,
     cursor: u64,
     serialized_flag: bool,
 ) -> Result<u32, BufIoError> {
-    let bufman = bufmans.get(&version)?;
+    let bufman = bufmans.get(version)?;
     let node_placeholder = bufman.cursor_position(cursor)?;
     if serialized_flag {
         let _node_offset = bufman.read_u32_with_cursor(cursor)?;
@@ -205,7 +201,7 @@ fn lazy_item_serialize_impl<T: Cacheable + CustomSerialize>(
 }
 
 fn lazy_item_deserialize_impl<T: Cacheable + CustomSerialize + Clone>(
-    bufmans: Arc<BufferManagerFactory>,
+    bufmans: Arc<BufferManagerFactory<Hash>>,
     file_index: FileIndex,
     cache: Arc<NodeRegistry>,
     max_loads: u16,
@@ -225,7 +221,7 @@ fn lazy_item_deserialize_impl<T: Cacheable + CustomSerialize + Clone>(
             if offset.0 == u32::MAX {
                 return Ok(LazyItem::Invalid);
             }
-            let bufman = bufmans.get(&version_id)?;
+            let bufman = bufmans.get(version_id)?;
             let cursor = bufman.open_cursor()?;
             bufman.seek_with_cursor(cursor, SeekFrom::Start(offset.0 as u64))?;
             let node_offset = bufman.read_u32_with_cursor(cursor)?;
@@ -270,7 +266,7 @@ fn lazy_item_deserialize_impl<T: Cacheable + CustomSerialize + Clone>(
 impl<T: Cacheable + CustomSerialize> CustomSerialize for LazyItem<T> {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
@@ -284,7 +280,7 @@ impl<T: Cacheable + CustomSerialize> CustomSerialize for LazyItem<T> {
                 ..
             } => {
                 let mut data_arc = data.clone();
-                let bufman = bufmans.get(version_id)?;
+                let bufman = bufmans.get(*version_id)?;
                 if let Some(existing_file_index) = file_index.clone().get().clone() {
                     if let FileIndex::Valid {
                         offset: FileOffset(offset),
@@ -314,8 +310,8 @@ impl<T: Cacheable + CustomSerialize> CustomSerialize for LazyItem<T> {
                                     bufman.close_cursor(cursor)?;
                                 }
                             }
-                            return Ok(offset);
                         }
+                        return Ok(offset);
                     }
                 }
 
@@ -364,7 +360,7 @@ impl<T: Cacheable + CustomSerialize> CustomSerialize for LazyItem<T> {
     }
 
     fn deserialize(
-        _reader: Arc<BufferManagerFactory>,
+        _reader: Arc<BufferManagerFactory<Hash>>,
         file_index: FileIndex,
         cache: Arc<NodeRegistry>,
         max_loads: u16,
@@ -377,7 +373,7 @@ impl<T: Cacheable + CustomSerialize> CustomSerialize for LazyItem<T> {
 impl CustomSerialize for LazyItemRef<MergedNode> {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
@@ -388,7 +384,7 @@ impl CustomSerialize for LazyItemRef<MergedNode> {
     }
 
     fn deserialize(
-        reader: Arc<BufferManagerFactory>,
+        reader: Arc<BufferManagerFactory<Hash>>,
         file_index: FileIndex,
         cache: Arc<NodeRegistry>,
         max_loads: u16,

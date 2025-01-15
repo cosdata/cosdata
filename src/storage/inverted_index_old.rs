@@ -10,6 +10,7 @@ use crate::models::identity_collections::IdentityMapKey;
 use crate::models::lazy_load::{LazyItem, LazyItemArray};
 use crate::models::serializer::CustomSerialize;
 use crate::models::types::SparseVector;
+use crate::models::versioning::Hash;
 
 // TODO: Add more powers for larger jumps
 // TODO: Or switch to dynamic calculation of power of max power of 4
@@ -147,7 +148,7 @@ where
     /// # Safety:
     /// The function does not modify the structure but accesses internal state.
     /// It is meant only for debugging and testing purposes
-    pub fn print_tree(&mut self, depth: usize, prev_dim_index: u32, cache: Arc<NodeRegistry>) {}
+    pub fn print_tree(&mut self, _depth: usize, _prev_dim_index: u32, _cache: Arc<NodeRegistry>) {}
     // pub fn print_tree(&mut self, depth: usize, prev_dim_index: u32, cache: Arc<NodeRegistry>) {
     //     let indent = "  ".repeat(depth);
     //     let dim_index = prev_dim_index + self.dim_index;
@@ -201,7 +202,8 @@ where
     pub fn new() -> Self {
         let bufmans = Arc::new(BufferManagerFactory::new(
             Path::new(".").into(),
-            |root, ver| root.join(format!("{}.index", **ver)),
+            |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+            1.0,
         ));
         let cache = Arc::new(NodeRegistry::new(1000, bufmans));
         InvertedIndex {
@@ -364,6 +366,7 @@ mod test {
     }
 
     /// Converts a vector to a HashMap of non-zero elements.
+    #[allow(dead_code)]
     fn vector_to_hashmap(vec: &[f32]) -> HashMap<usize, f32> {
         vec.iter()
             .enumerate()
@@ -408,7 +411,8 @@ mod test {
             let root_clone2 = root.clone();
             let bufmans = Arc::new(BufferManagerFactory::new(
                 Path::new(".").into(),
-                |root, ver| root.join(format!("{}.index", **ver)),
+                |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+                1.0,
             ));
             let cache = Arc::new(NodeRegistry::new(1000, bufmans));
             let cache1 = cache.clone();

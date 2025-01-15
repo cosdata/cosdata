@@ -13,14 +13,14 @@ use lmdb::Environment;
 use std::sync::Arc;
 use tempfile::{tempdir, TempDir};
 
-fn get_cache(bufmans: Arc<BufferManagerFactory>) -> Arc<NodeRegistry> {
+fn get_cache(bufmans: Arc<BufferManagerFactory<Hash>>) -> Arc<NodeRegistry> {
     Arc::new(NodeRegistry::new(1000, bufmans))
 }
 
 fn setup_test(
-    root_version: &Hash,
+    root_version: Hash,
 ) -> (
-    Arc<BufferManagerFactory>,
+    Arc<BufferManagerFactory<Hash>>,
     Arc<NodeRegistry>,
     Arc<BufferManager>,
     u64,
@@ -29,7 +29,8 @@ fn setup_test(
     let dir = tempdir().unwrap();
     let bufmans = Arc::new(BufferManagerFactory::new(
         dir.as_ref().into(),
-        |root, ver| root.join(format!("{}.index", **ver)),
+        |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+        1.0,
     ));
     let cache = get_cache(bufmans.clone());
     let bufman = bufmans.get(root_version).unwrap();
@@ -44,7 +45,7 @@ fn test_lazy_item_serialization() {
     let root_version_id = Hash::from(0);
     let lazy_item = LazyItemRef::new(root_version_id, root_version_number, node);
 
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version_id);
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_id);
 
     let offset = lazy_item
         .serialize(bufmans.clone(), root_version_id, cursor)
@@ -100,7 +101,7 @@ fn test_eager_lazy_item_serialization() {
         ),
     );
 
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version_id);
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_id);
 
     let offset = item.serialize(bufmans, root_version_id, cursor).unwrap();
     bufman.close_cursor(cursor).unwrap();
@@ -150,7 +151,7 @@ fn test_lazy_item_set_serialization() {
         MergedNode::new(HNSWLevel(2)),
     ));
 
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version_id);
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_id);
 
     let offset = lazy_items
         .serialize(bufmans, root_version_id, cursor)
@@ -206,7 +207,7 @@ fn test_eager_lazy_item_set_serialization() {
         LazyItem::from_data(2.into(), 2, MergedNode::new(HNSWLevel(2))),
     ));
 
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version_id);
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_id);
 
     let offset = lazy_items
         .serialize(bufmans, root_version_id, cursor)
@@ -261,7 +262,7 @@ fn test_merged_node_acyclic_serialization() {
     let root_version_id = Hash::from(0);
     let node = MergedNode::new(HNSWLevel(2));
 
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version_id);
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_id);
 
     let offset = node.serialize(bufmans, root_version_id, cursor).unwrap();
     let file_index = FileIndex::Valid {
@@ -295,7 +296,7 @@ fn test_merged_node_with_neighbors_serialization() {
         MetricResult::CosineSimilarity(CosineSimilarity(0.9)),
     );
 
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version_id);
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_id);
 
     let offset = node.serialize(bufmans, root_version_id, cursor).unwrap();
     let file_index = FileIndex::Valid {
@@ -358,7 +359,7 @@ fn test_merged_node_with_parent_child_serialization() {
     node.set_parent(parent);
     node.set_child(child);
 
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version_id);
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_id);
 
     let offset = node.serialize(bufmans, root_version_id, cursor).unwrap();
     let file_index = FileIndex::Valid {
@@ -416,7 +417,8 @@ fn test_lazy_item_with_versions_serialization() {
     let vcs = VersionControl::new(env, db).unwrap().0;
     let bufmans = Arc::new(BufferManagerFactory::new(
         temp_dir.as_ref().into(),
-        |root, ver| root.join(format!("{}.index", **ver)),
+        |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+        1.0,
     ));
     let cache = get_cache(bufmans.clone());
 
@@ -431,7 +433,7 @@ fn test_lazy_item_with_versions_serialization() {
     let node_v2 = LazyItem::new(v2_hash, 2, MergedNode::new(HNSWLevel(2)));
     node_v0.add_version(cache.clone(), node_v2);
 
-    let bufman = bufmans.get(&v0_hash).unwrap();
+    let bufman = bufmans.get(v0_hash).unwrap();
     let cursor = bufman.open_cursor().unwrap();
 
     let offset = node_v0.serialize(bufmans, v0_hash, cursor).unwrap();
@@ -480,7 +482,7 @@ fn test_lazy_item_cyclic_serialization() {
 
     let lazy_ref = LazyItemRef::from_lazy(node0.clone());
 
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version);
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version);
 
     let offset = lazy_ref.serialize(bufmans, root_version, cursor).unwrap();
     let file_index = FileIndex::Valid {
@@ -549,7 +551,7 @@ fn test_lazy_item_complex_cyclic_serialization() {
 
     let lazy_ref = LazyItemRef::from_lazy(lazy1);
 
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version_id);
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_id);
 
     let offset = lazy_ref
         .serialize(bufmans, root_version_id, cursor)
@@ -615,7 +617,7 @@ fn test_lazy_item_set_linked_chunk_serialization() {
         ));
     }
 
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version_id);
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_id);
 
     let offset = lazy_items
         .serialize(bufmans, root_version_id, cursor)
@@ -669,7 +671,7 @@ fn test_eager_lazy_item_set_linked_chunk_serialization() {
         ));
     }
 
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version_id);
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_id);
 
     let offset = lazy_items
         .serialize(bufmans, root_version_id, cursor)
@@ -760,10 +762,11 @@ fn test_lazy_item_with_versions_serialization_and_validation() {
 
     let bufmans = Arc::new(BufferManagerFactory::new(
         temp_dir.as_ref().into(),
-        |root, ver| root.join(format!("{}.index", **ver)),
+        |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+        1.0,
     ));
     let cache = get_cache(bufmans.clone());
-    let bufman = bufmans.get(&v0_hash).unwrap();
+    let bufman = bufmans.get(v0_hash).unwrap();
     let cursor = bufman.open_cursor().unwrap();
 
     for i in 1..=100 {
@@ -807,10 +810,11 @@ fn test_lazy_item_with_versions_multiple_serialization() {
 
     let bufmans = Arc::new(BufferManagerFactory::new(
         temp_dir.as_ref().into(),
-        |root, ver| root.join(format!("{}.index", **ver)),
+        |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+        1.0,
     ));
     let cache = get_cache(bufmans.clone());
-    let bufman = bufmans.get(&v0_hash).unwrap();
+    let bufman = bufmans.get(v0_hash).unwrap();
     let cursor = bufman.open_cursor().unwrap();
 
     for i in 1..26 {
@@ -906,16 +910,14 @@ fn test_storage_serialization() {
             quant_vec: vec![f16::from_f32(534.324), f16::from_f32(6453.3)],
         },
     ];
-    let (bufmans, cache, bufman, cursor, _dir) = setup_test(&1.into());
+    let (bufmans, cache, bufman, cursor, _dir) = setup_test(1.into());
     bufman.close_cursor(cursor).unwrap();
 
     for (version, storage) in storages.into_iter().enumerate() {
         let version_id = Hash::from(version as u32);
-        let bufman = bufmans.get(&version_id).unwrap();
+        let bufman = bufmans.get(version_id).unwrap();
         let cursor = bufman.open_cursor().unwrap();
-        let offset = storage
-            .serialize(bufmans.clone(), version_id, cursor)
-            .unwrap();
+        let offset = SimpleSerialize::serialize(&storage, bufman.clone(), cursor).unwrap();
         let file_index = FileIndex::Valid {
             offset: FileOffset(offset),
             version_number: version as u16,
@@ -943,7 +945,7 @@ fn test_lazy_item_vec_serialization() {
         MergedNode::new(HNSWLevel(2)),
     ));
 
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version_id);
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_id);
 
     let offset = lazy_items
         .serialize(bufmans, root_version_id, cursor)
@@ -991,7 +993,7 @@ fn test_lazy_item_vec_linked_chunk_serialization() {
         ));
     }
 
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version_id);
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_id);
 
     let offset = lazy_items
         .serialize(bufmans, root_version_id, cursor)
@@ -1026,4 +1028,51 @@ fn test_lazy_item_vec_linked_chunk_serialization() {
             _ => panic!("Deserialization mismatch"),
         }
     }
+}
+
+#[test]
+fn test_eager_lazy_item_multiple_serialization() {
+    let value: u32 = rand::random();
+    let set = EagerLazyItemSet::new();
+
+    for _ in 0..0 {
+        let item = EagerLazyItem(
+            0.0f32,
+            LazyItem::new(0.into(), 0, MergedNode::new(HNSWLevel(0))),
+        );
+        set.insert(item);
+    }
+
+    let (bufmans, cache, bufman, cursor, _tempdir) = setup_test(0.into());
+
+    set.serialize(bufmans.clone(), 0.into(), cursor).unwrap();
+
+    let value_offset = bufman.cursor_position(cursor).unwrap();
+    bufman.write_u32_with_cursor(cursor, value).unwrap();
+
+    set.insert(EagerLazyItem(
+        0.0f32,
+        LazyItem::new(0.into(), 0, MergedNode::new(HNSWLevel(0))),
+    ));
+
+    let offset = set.serialize(bufmans, 0.into(), cursor).unwrap();
+
+    bufman
+        .seek_with_cursor(cursor, SeekFrom::Start(value_offset))
+        .unwrap();
+    let deserialized_value = bufman.read_u32_with_cursor(cursor).unwrap();
+
+    assert_eq!(value, deserialized_value);
+
+    bufman.close_cursor(cursor).unwrap();
+
+    let file_index = FileIndex::Valid {
+        offset: FileOffset(offset),
+        version_number: 0,
+        version_id: 0.into(),
+    };
+
+    let deserialized: EagerLazyItemSet<MergedNode, f32> = cache.load_item(file_index).unwrap();
+
+    assert_eq!(set.len(), deserialized.len());
 }

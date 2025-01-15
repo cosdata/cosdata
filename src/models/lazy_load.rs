@@ -5,8 +5,8 @@ use super::serializer::CustomSerialize;
 use super::types::{FileOffset, STM};
 use super::versioning::*;
 use arcshift::ArcShift;
-use serde::{Deserialize, Serialize};
 use core::panic;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
 use std::sync::{
@@ -14,7 +14,7 @@ use std::sync::{
     Arc,
 };
 
-fn largest_power_of_4_below(x: u16) -> u8 {
+pub fn largest_power_of_4_below(x: u16) -> u8 {
     // This function is used to calculate the largest power of 4 (4^n) such that
     // 4^n <= x, where x represents the gap between the current version and the
     // target version in our version control system.
@@ -42,7 +42,7 @@ pub trait SyncPersist {
 
 pub const CHUNK_SIZE: usize = 5;
 
-#[derive(Debug, Eq, PartialEq, Hash, Clone, Serialize, Deserialize)]
+#[derive(Debug, Eq, PartialEq, Hash, Copy, Clone, Serialize, Deserialize)]
 pub enum FileIndex {
     Valid {
         offset: FileOffset,
@@ -50,6 +50,29 @@ pub enum FileIndex {
         version_id: Hash,
     },
     Invalid,
+}
+
+impl FileIndex {
+    pub fn get_offset(&self) -> Option<FileOffset> {
+        match self {
+            Self::Invalid => None,
+            Self::Valid { offset, .. } => Some(*offset),
+        }
+    }
+
+    pub fn get_version_number(&self) -> Option<u16> {
+        match self {
+            Self::Invalid => None,
+            Self::Valid { version_number, .. } => Some(*version_number),
+        }
+    }
+
+    pub fn get_version_id(&self) -> Option<Hash> {
+        match self {
+            Self::Invalid => None,
+            Self::Valid { version_id, .. } => Some(*version_id),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -178,6 +201,7 @@ where
     T: Clone + Identifiable<Id = u64> + 'static,
     E: Clone + CustomSerialize + 'static,
 {
+    pub serialized_offset: ArcShift<Option<u32>>,
     pub items: STM<IdentitySet<EagerLazyItem<T, E>>>,
 }
 
@@ -390,8 +414,7 @@ impl<T: Clone + CustomSerialize + Cacheable + 'static> LazyItem<T> {
             let index = largest_power_of_4_below(target_diff);
 
             if data.get().is_none() {
-                let mut file_index_arc = file_index.clone();
-                let Some(file_index) = file_index_arc.get().clone() else {
+                let Some(file_index) = file_index.clone().get().clone() else {
                     unreachable!("data and file_index both cannot be None at the time!");
                 };
                 let item: LazyItem<T> = cache
@@ -442,8 +465,7 @@ impl<T: Clone + CustomSerialize + Cacheable + 'static> LazyItem<T> {
                 let mut data = data.clone();
                 let mut versions = versions.clone();
                 if data.is_none() {
-                    let mut file_index_arc = file_index.clone();
-                    let Some(file_index) = file_index_arc.get().clone() else {
+                    let Some(file_index) = file_index.clone().get().clone() else {
                         unreachable!("data and file_index both cannot be None at the time!");
                     };
                     let item: LazyItem<T> = cache
@@ -492,8 +514,7 @@ impl<T: Clone + CustomSerialize + Cacheable + 'static> LazyItem<T> {
             let mut data = data.clone();
             let mut versions = versions.clone();
             if data.is_none() {
-                let mut file_index_arc = file_index.clone();
-                let Some(file_index) = file_index_arc.get().clone() else {
+                let Some(file_index) = file_index.clone().get().clone() else {
                     unreachable!("data and file_index both cannot be None at the time!");
                 };
                 let item: LazyItem<T> = cache
@@ -831,12 +852,14 @@ where
 {
     pub fn new() -> Self {
         Self {
+            serialized_offset: ArcShift::new(None),
             items: STM::new(IdentitySet::new(), 5, false),
         }
     }
 
     pub fn from_set(set: IdentitySet<EagerLazyItem<T, E>>) -> Self {
         Self {
+            serialized_offset: ArcShift::new(None),
             items: STM::new(set, 5, false),
         }
     }
@@ -982,7 +1005,7 @@ impl<T: Clone + 'static> LazyItemMap<T> {
 impl<T: Clone + 'static> LazyItemVec<T> {
     pub fn new() -> Self {
         Self {
-            items: STM::new(Vec::new(), 1, true),
+            items: STM::new(Vec::new(), 4, true),
         }
     }
 
@@ -1286,7 +1309,8 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let bufmans = Arc::new(BufferManagerFactory::new(
             temp_dir.as_ref().into(),
-            |root, ver| root.join(format!("{}.index", **ver)),
+            |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+            1.0,
         ));
         let cache = Arc::new(NodeRegistry::new(1000, bufmans));
         let root = LazyItem::new(Hash::from(0), 0, 0.0);
@@ -1311,7 +1335,8 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let bufmans = Arc::new(BufferManagerFactory::new(
             temp_dir.as_ref().into(),
-            |root, ver| root.join(format!("{}.index", **ver)),
+            |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+            1.0,
         ));
         let cache = Arc::new(NodeRegistry::new(1000, bufmans));
         let root = LazyItem::new(Hash::from(0), 0, 0.0);

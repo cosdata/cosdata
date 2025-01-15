@@ -1,6 +1,5 @@
 use arcshift::ArcShift;
 use core::array::from_fn;
-use core::hash::Hash;
 use dashmap::DashMap;
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -9,14 +8,17 @@ use std::io::SeekFrom;
 use std::thread;
 use std::{path::Path, sync::RwLock};
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+use crate::models::cuckoo_filter_tree::CuckooFilterTreeNode;
+use crate::models::versioning::Hash;
 use crate::models::{
     buffered_io::BufferManagerFactory,
     cache_loader::NodeRegistry,
-    lazy_load::{FileIndex, LazyItem, LazyItemArray},
+    common::TSHashTable,
+    lazy_load::{LazyItem, LazyItemArray, FileIndex},
     serializer::CustomSerialize,
-    types::{FileOffset, SparseVector},
+    types::{SparseVector, FileOffset}
 };
 
 use super::page::Pagepool;
@@ -42,7 +44,7 @@ pub fn largest_power_of_4_below(n: u32) -> (usize, u32) {
 
 /// Calculates the path from `current_dim_index` to `target_dim_index`.
 /// Decomposes the difference into powers of 4 and returns the indices.
-fn calculate_path(target_dim_index: u32, current_dim_index: u32) -> Vec<usize> {
+pub fn calculate_path(target_dim_index: u32, current_dim_index: u32) -> Vec<usize> {
     let mut path = Vec::new();
     let mut remaining = target_dim_index - current_dim_index;
 
@@ -171,7 +173,8 @@ impl InvertedIndexSparseAnnBasic {
     pub fn new() -> Self {
         let bufmans = Arc::new(BufferManagerFactory::new(
             Path::new(".").into(),
-            |root, ver| root.join(format!("{}.index", **ver)),
+            |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+            1.0,
         ));
         let cache = Arc::new(NodeRegistry::new(1000, bufmans));
         InvertedIndexSparseAnnBasic {
@@ -231,6 +234,7 @@ pub struct InvertedIndexSparseAnnNodeBasicTSHashmap {
     pub implicit: bool,
     pub data: TSHashTable<u8, Pagepool<PAGE_SIZE>>,
     pub lazy_children: LazyItemArray<InvertedIndexSparseAnnNodeBasicTSHashmap, 16>,
+    pub cuckoo_filter_tree: Arc<CuckooFilterTreeNode>,
 }
 
 #[derive(Clone)]
@@ -248,12 +252,13 @@ impl InvertedIndexSparseAnnNodeBasicTSHashmap {
             implicit,
             data,
             lazy_children: LazyItemArray::new(),
+            cuckoo_filter_tree: Arc::new(CuckooFilterTreeNode::build_tree(5, 0, 0.0, 10.0)),
         }
     }
 
     /// Finds or creates the node where the data should be inserted.
     /// Traverses the tree iteratively and returns a reference to the node.
-    fn find_or_create_node(
+    pub fn find_or_create_node(
         node: ArcShift<InvertedIndexSparseAnnNodeBasicTSHashmap>,
         path: &[usize],
         cache: Arc<NodeRegistry>,
@@ -301,6 +306,10 @@ impl InvertedIndexSparseAnnNodeBasicTSHashmap {
             vecof_vec_id.push(vector_id);
             Some(vecof_vec_id)
         });
+        println!("vector_id -> {vector_id}");
+        let mut tree = node.cuckoo_filter_tree.clone();
+        Arc::make_mut(&mut tree).add_item(vector_id as u64, value);
+        println!("vector_id_2 -> {vector_id}");
     }
 
     /// Retrieves a value from the index at the specified dimension index.
@@ -339,7 +348,8 @@ impl InvertedIndexSparseAnnBasicTSHashmap {
     pub fn new() -> Self {
         let bufmans = Arc::new(BufferManagerFactory::new(
             Path::new(".").into(),
-            |root, ver| root.join(format!("{}.index", **ver)),
+            |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+            1.0,
         ));
         let cache = Arc::new(NodeRegistry::new(1000, bufmans));
         InvertedIndexSparseAnnBasicTSHashmap {
@@ -393,253 +403,6 @@ impl InvertedIndexSparseAnnBasicTSHashmap {
             }
         });
         Ok(())
-    }
-}
-
-type HashTable<K, V> = HashMap<K, V>;
-
-/// This is a custom Hashtable made to use for data variable in Node of InvertedIndex
-#[derive(Clone)]
-pub struct TSHashTable<K, V> {
-    hash_table_list: Vec<Arc<Mutex<HashTable<K, V>>>>,
-    size: i16,
-}
-
-impl<K, V> CustomSerialize for TSHashTable<K, V>
-where
-    K: CustomSerialize + Eq + Hash,
-    V: CustomSerialize,
-{
-    fn serialize(
-        &self,
-        bufmans: Arc<BufferManagerFactory>,
-        version: crate::models::versioning::Hash,
-        cursor: u64,
-    ) -> Result<u32, crate::models::buffered_io::BufIoError> {
-        let bufman = bufmans.get(&version)?;
-
-        // Move the cursor to the end of the file and start writing from there
-        bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
-
-        let start_offset = bufman.cursor_position(cursor)? as u32;
-
-        // Write the size of the list at first
-        bufman.write_u32_with_cursor(cursor, self.size as u32)?;
-
-        for i in &self.hash_table_list {
-            let item = i
-                .lock()
-                .map_err(|_| crate::models::buffered_io::BufIoError::Locking)?;
-
-            // Write the size of the hashmap
-            bufman.write_u32_with_cursor(cursor, item.len() as u32)?;
-
-            for (key, value) in item.iter() {
-                key.serialize(bufmans.clone(), version, cursor)?;
-                value.serialize(bufmans.clone(), version, cursor)?;
-            }
-        }
-        Ok(start_offset)
-    }
-
-    fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
-        file_index: crate::models::lazy_load::FileIndex,
-        cache: Arc<NodeRegistry>,
-        max_loads: u16,
-        skipm: &mut std::collections::HashSet<u64>,
-    ) -> Result<Self, crate::models::buffered_io::BufIoError> {
-        match file_index {
-            crate::models::lazy_load::FileIndex::Valid {
-                offset: FileOffset(offset),
-                version_id,
-                version_number,
-            } => {
-                let bufman = bufmans.get(&version_id)?;
-                let cursor = bufman.open_cursor()?;
-
-                bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
-
-                // Read the length of the vec
-                let len = bufman.read_u32_with_cursor(cursor)?;
-
-                let mut vec = Vec::<HashTable<K, V>>::with_capacity(len as usize);
-
-                for _ in 0..len as usize {
-                    let table_len = bufman.read_u32_with_cursor(cursor)? as usize;
-
-                    let mut hash_table = HashTable::<K, V>::with_capacity(table_len);
-                    for _ in 0..table_len {
-                        let current_offset = bufman.cursor_position(cursor)?;
-
-                        let file_index = FileIndex::Valid {
-                            offset: FileOffset(current_offset as u32),
-                            version_id,
-                            version_number,
-                        };
-
-                        let key = K::deserialize(
-                            bufmans.clone(),
-                            file_index.clone(),
-                            cache.clone(),
-                            max_loads,
-                            skipm,
-                        )?;
-
-                        let value = V::deserialize(
-                            bufmans.clone(),
-                            file_index,
-                            cache.clone(),
-                            max_loads,
-                            skipm,
-                        )?;
-
-                        hash_table.insert(key, value);
-                    }
-
-                    vec.push(hash_table);
-                }
-
-                bufman.close_cursor(cursor)?;
-
-                Ok(Self {
-                    hash_table_list: vec
-                        .into_iter()
-                        .map(|item| Arc::new(Mutex::new(item)))
-                        .collect(),
-                    size: len as i16,
-                })
-            }
-
-            FileIndex::Invalid => Err(crate::models::buffered_io::BufIoError::Locking),
-        }
-    }
-}
-
-impl<K: Eq + Hash, V> TSHashTable<K, V> {
-    pub fn new(size: i16) -> Self {
-        let hash_table_list = (0..size)
-            .map(|_| Arc::new(Mutex::new(HashMap::new())))
-            .collect();
-        TSHashTable {
-            hash_table_list,
-            size,
-        }
-    }
-    pub fn hash_key(&self, k: &K) -> usize {
-        let mut hasher = DefaultHasher::new();
-        k.hash(&mut hasher);
-        (hasher.finish() as usize) % (self.size as usize)
-    }
-
-    pub fn insert(&self, k: K, v: V) {
-        let index = self.hash_key(&k);
-        let mut ht = self.hash_table_list[index].lock().unwrap();
-        ht.insert(k, v);
-    }
-
-    pub fn delete(&self, k: &K) {
-        let index = self.hash_key(k);
-        let mut ht = self.hash_table_list[index].lock().unwrap();
-        ht.remove(k);
-    }
-
-    pub fn lookup(&self, k: &K) -> Option<V>
-    where
-        V: Clone,
-    {
-        let index = self.hash_key(k);
-        let ht = self.hash_table_list[index].lock().unwrap();
-        ht.get(k).cloned()
-    }
-
-    pub fn mutate<F>(&self, k: K, f: F)
-    where
-        F: FnOnce(Option<V>) -> Option<V>,
-        V: Clone,
-    {
-        let index = self.hash_key(&k);
-        let mut ht = self.hash_table_list[index].lock().unwrap();
-        let v = ht.remove(&k);
-        let new_v = f(v);
-        if let Some(new_v) = new_v {
-            ht.insert(k, new_v);
-        }
-    }
-
-    pub fn get_or_create<F>(&self, k: K, f: F) -> V
-    where
-        F: FnOnce() -> V,
-        V: Clone,
-    {
-        let index = self.hash_key(&k);
-        let mut ht = self.hash_table_list[index].lock().unwrap();
-        match ht.get(&k) {
-            Some(v) => v.clone(),
-            None => {
-                let new_v = f();
-                ht.insert(k, new_v.clone());
-                new_v
-            }
-        }
-    }
-
-    pub fn map_m<F>(&self, f: F)
-    where
-        F: Fn(&K, &V) + Send + Sync + 'static,
-        K: Send + Sync + 'static,
-        V: Send + Sync + 'static,
-    {
-        let f = Arc::new(f);
-        let handles: Vec<_> = self
-            .hash_table_list
-            .iter()
-            .map(|ht| {
-                let ht = Arc::clone(ht);
-                let f = f.clone();
-                thread::spawn(move || {
-                    let ht = ht.lock().unwrap();
-                    for (k, v) in ht.iter() {
-                        f(k, v);
-                    }
-                })
-            })
-            .collect();
-
-        for handle in handles {
-            handle.join().unwrap();
-        }
-    }
-
-    pub fn to_list(&self) -> Vec<(K, V)>
-    where
-        K: Clone,
-        V: Clone,
-    {
-        self.hash_table_list
-            .iter()
-            .flat_map(|ht| {
-                let ht = ht.lock().unwrap();
-                ht.iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect::<Vec<_>>()
-            })
-            .collect()
-    }
-
-    pub fn from_list(size: i16, kv: Vec<(K, V)>) -> Self {
-        let tsh = Self::new(size);
-        for (k, v) in kv {
-            tsh.insert(k, v);
-        }
-        tsh
-    }
-
-    pub fn purge_all(&self) {
-        for ht in &self.hash_table_list {
-            let mut ht = ht.lock().unwrap();
-            *ht = HashMap::new();
-        }
     }
 }
 
@@ -753,7 +516,8 @@ impl InvertedIndexSparseAnnBasicDashMap {
     pub fn new() -> Self {
         let bufmans = Arc::new(BufferManagerFactory::new(
             Path::new(".").into(),
-            |root, ver| root.join(format!("{}.index", **ver)),
+            |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+            1.0,
         ));
         let cache = Arc::new(NodeRegistry::new(1000, bufmans));
         InvertedIndexSparseAnnBasicDashMap {

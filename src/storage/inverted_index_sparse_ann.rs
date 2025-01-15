@@ -9,6 +9,7 @@ use crate::models::{
     cache_loader::NodeRegistry,
     lazy_load::{LazyItem, LazyItemArray, LazyItemVec},
     types::SparseVector,
+    versioning::Hash,
 };
 
 // TODO: Add more powers for larger jumps
@@ -153,7 +154,8 @@ impl InvertedIndexSparseAnn {
     pub fn new() -> Self {
         let bufmans = Arc::new(BufferManagerFactory::new(
             Path::new(".").into(),
-            |root, ver| root.join(format!("{}.index", **ver)),
+            |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+            1.0,
         ));
         let cache = Arc::new(NodeRegistry::new(1000, bufmans));
         InvertedIndexSparseAnn {

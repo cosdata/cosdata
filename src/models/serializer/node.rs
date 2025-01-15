@@ -16,11 +16,11 @@ use std::{
 impl CustomSerialize for MergedNode {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
-        let bufman = bufmans.get(&version)?;
+        let bufman = bufmans.get(version)?;
         let start_offset = bufman.cursor_position(cursor)? as u32;
 
         // Serialize basic fields
@@ -31,8 +31,8 @@ impl CustomSerialize for MergedNode {
         let prop_state = prop.get();
         match &*prop_state {
             PropState::Ready(node_prop) => {
-                bufman.write_u32_with_cursor(cursor, node_prop.location.0.0)?;
-                bufman.write_u32_with_cursor(cursor, node_prop.location.1.0)?;
+                bufman.write_u32_with_cursor(cursor, node_prop.location.0 .0)?;
+                bufman.write_u32_with_cursor(cursor, node_prop.location.1 .0)?;
             }
             PropState::Pending((FileOffset(offset), BytesToRead(length))) => {
                 bufman.write_u32_with_cursor(cursor, *offset)?;
@@ -121,7 +121,7 @@ impl CustomSerialize for MergedNode {
     }
 
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         file_index: FileIndex,
         cache: Arc<NodeRegistry>,
         max_loads: u16,
@@ -138,7 +138,7 @@ impl CustomSerialize for MergedNode {
                 version_number,
                 version_id,
             } => {
-                let bufman = bufmans.get(&version_id)?;
+                let bufman = bufmans.get(version_id)?;
                 let cursor = bufman.open_cursor()?;
                 bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
                 // Read basic fields

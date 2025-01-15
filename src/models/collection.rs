@@ -1,32 +1,32 @@
 use lmdb::{Database, Environment, Transaction, WriteFlags};
 use serde::{Deserialize, Serialize};
-use serde_cbor::{from_slice, to_vec};
+use serde_cbor::to_vec;
 use siphasher::sip::SipHasher24;
 use std::{fs, hash::Hasher, path::Path, sync::Arc};
 
 use super::common::WaCustomError;
 
 #[derive(Deserialize, Clone, Serialize, Debug)]
-pub(crate) struct DenseVectorOptions {
+pub struct DenseVectorOptions {
     pub enabled: bool,
     pub auto_create_index: bool,
-    pub dimension: i32,
+    pub dimension: usize,
 }
 
 #[derive(Deserialize, Clone, Serialize, Debug)]
-pub(crate) struct SparseVectorOptions {
+pub struct SparseVectorOptions {
     pub enabled: bool,
     pub auto_create_index: bool,
 }
 
 #[derive(Deserialize, Clone, Serialize, Debug)]
-pub(crate) struct CollectionConfig {
+pub struct CollectionConfig {
     pub max_vectors: Option<i32>,
     pub replication_factor: Option<i32>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
-pub(crate) struct Collection {
+pub struct Collection {
     pub name: String,
     pub description: Option<String>,
     pub dense_vector: DenseVectorOptions,
@@ -85,11 +85,13 @@ impl Collection {
     }
 
     /// serializes the collection
+    #[allow(dead_code)]
     pub fn serialize(&self) -> Result<Vec<u8>, WaCustomError> {
         to_vec(self).map_err(|e| WaCustomError::SerializationError(e.to_string()))
     }
 
     /// perists the collection instance on disk (lmdb -> collections database)
+    #[allow(dead_code)]
     pub fn persist(&self, env: &Environment, db: Database) -> Result<(), WaCustomError> {
         let key = self.get_key();
         let value = self.serialize()?;
@@ -107,6 +109,7 @@ impl Collection {
     }
 
     /// deletes a collection instance from the disk (lmdb -> collections database)
+    #[allow(dead_code)]
     pub fn delete(&self, env: &Environment, db: Database) -> Result<(), WaCustomError> {
         let key = self.get_key();
 

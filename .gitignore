@@ -17,3 +17,5 @@ _mdb
 *.vec_raw
 venv
 /collections/
+.idea/
+/datasets

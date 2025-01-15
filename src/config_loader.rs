@@ -8,8 +8,12 @@ pub struct Config {
     #[serde(default)]
     pub thread_pool: ThreadPool,
     pub server: Server,
+    pub hnsw: Hnsw,
+    pub indexing: Indexing,
+    pub search: Search,
     pub upload_threshold: u32,
     pub upload_process_batch_size: usize,
+    pub flush_eagerness_factor: f32,
 }
 
 #[derive(Deserialize, Clone)]
@@ -139,6 +143,35 @@ impl Server {
     pub fn listen_address(&self) -> HostPort {
         HostPort(&self.host, &self.port)
     }
+}
+
+#[derive(Deserialize, Clone)]
+pub struct Hnsw {
+    pub default_neighbors_count: usize,
+    pub default_level_0_neighbors_count: usize,
+    pub default_ef_construction: u32,
+    pub default_ef_search: u32,
+    pub default_num_layer: u8,
+    pub default_max_cache_size: usize,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(tag = "mode", rename_all = "lowercase")]
+pub enum VectorsIndexingMode {
+    Sequential,
+    Batch { batch_size: usize },
+}
+
+#[derive(Deserialize, Clone)]
+pub struct Indexing {
+    pub clamp_margin_percent: f32,
+    #[serde(flatten)]
+    pub mode: VectorsIndexingMode,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct Search {
+    pub shortlist_size: usize,
 }
 
 pub fn load_config() -> Config {

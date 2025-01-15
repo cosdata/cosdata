@@ -37,10 +37,13 @@ fn simp_quant(v: &[f32]) -> Result<Vec<u8>, String> {
         ));
     }
 
-    let res: Vec<u8> = v.iter().map(|&x| {
-        let y = if has_negative { x + 1.0 } else { x };
-        (y * 255.0).round() as u8
-    }).collect();
+    let res: Vec<u8> = v
+        .iter()
+        .map(|&x| {
+            let y = if has_negative { x + 1.0 } else { x };
+            (y * 255.0).round() as u8
+        })
+        .collect();
     Ok(res)
 }
 
@@ -60,9 +63,9 @@ fn cos_sim_octal(a: &[u8], b: &[u8]) -> f32 {
         for i in 0..2 {
             let m = 0b1111 << (4 * (1 - i));
             let (ap, bp) = ((ai & m) >> (4 * (1 - i)), (bi & m) >> (4 * (1 - i)));
-            dp += (ap as u64 * bp as u64);
-            na += (ap as u64 * ap as u64);
-            nb += (bp as u64 * bp as u64);
+            dp += ap as u64 * bp as u64;
+            na += ap as u64 * ap as u64;
+            nb += bp as u64 * bp as u64;
         }
     }
     dp as f32 / ((na * nb) as f32).sqrt()
@@ -71,9 +74,9 @@ fn cos_sim_octal(a: &[u8], b: &[u8]) -> f32 {
 fn cos_sim_u8(a: &[u8], b: &[u8]) -> f32 {
     let (mut d, mut na, mut nb) = (0u64, 0u64, 0u64);
     for (&ai, &bi) in a.iter().zip(b.iter()) {
-        d += (ai as u64 * bi as u64);
-        na += (ai as u64 * ai as u64);
-        nb += (bi as u64 * bi as u64);
+        d += ai as u64 * bi as u64;
+        na += ai as u64 * ai as u64;
+        nb += bi as u64 * bi as u64;
     }
     d as f32 / ((na * nb) as f32).sqrt()
 }

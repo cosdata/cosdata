@@ -1,10 +1,11 @@
+use crate::models::common::WaCustomError;
 use actix_web::{
     http::{header::ContentType, StatusCode},
     HttpResponse, ResponseError,
 };
-use crate::models::common::WaCustomError;
 use std::fmt::Display;
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum CollectionsError {
     NotFound,

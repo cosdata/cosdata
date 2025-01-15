@@ -56,7 +56,7 @@ pub fn dot_product_a(src: &[(f32, f32)]) -> f32 {
 
 pub fn dot_product_b(src: &[(f32, f32)], dst: &mut [f32]) {
     for (dst_sample, src_sample) in dst.iter_mut().zip(src.iter()) {
-        *dst_sample = (src_sample.0 * src_sample.1);
+        *dst_sample = src_sample.0 * src_sample.1;
     }
 }
 
@@ -91,10 +91,10 @@ fn generate_random_vectors(count: usize, len: usize) -> Vec<Vec<u8>> {
 fn bench_dot_product(c: &mut Criterion) {
     let sizes = [1000, 1500, 2000];
     let vector_count = 100;
-    let vector_length = 1024; // Make sure this is a multiple of your SIMD width
+    let _vector_length = 1024; // Make sure this is a multiple of your SIMD width
 
     for size in sizes.iter() {
-        let (src, mut dst_a) = generate_random_data(*size);
+        let (src, dst_a) = generate_random_data(*size);
         let mut dst_b = dst_a.clone();
         let src_u8 = generate_random_data_u8(*size);
         // Generate random vectors outside the benchmark loop

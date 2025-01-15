@@ -14,8 +14,7 @@ pub(crate) async fn create_index(
         create_index_dto.name,
         create_index_dto.distance_metric_type,
         create_index_dto.quantization,
-        create_index_dto.data_type,
-        create_index_dto.index_params,
+        create_index_dto.index,
     )
     .await
 }

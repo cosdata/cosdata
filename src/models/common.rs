@@ -1,18 +1,17 @@
 use super::buffered_io::BufIoError;
 use super::lazy_load::LazyItem;
-use super::rpc::VectorIdValue;
+use super::prob_node::SharedNode;
 use super::types::{MergedNode, MetricResult, VectorId};
 use crate::distance::DistanceError;
-use crate::models::rpc::Vector;
-use crate::models::types::PropState;
 use crate::models::types::VectorQt;
 use crate::quantization::QuantizationError;
 use sha2::{Digest, Sha256};
+use std::cmp::Ordering;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashSet;
-use std::fmt;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::{fmt, thread};
 
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
@@ -20,6 +19,7 @@ use std::arch::x86_64::*;
 #[cfg(target_arch = "x86_64")]
 use super::dot_product::x86_64::dot_product_u8_avx2;
 
+#[allow(dead_code)]
 #[cfg(target_arch = "x86_64")]
 pub fn dot_product_u8_avx2_fma(a: &[u8], b: &[u8]) -> u64 {
     assert_eq!(a.len(), b.len());
@@ -64,11 +64,13 @@ pub fn dot_product_u8_avx2_fma(a: &[u8], b: &[u8]) -> u64 {
     dot_product
 }
 
+#[allow(dead_code)]
 pub struct CosResult {
     pub dotprod: i32,
     pub premag_a: i32,
     pub premag_b: i32,
 }
+#[allow(dead_code)]
 pub fn dot_product_u8_xxx(src: &[(u8, u8)], dst: &mut [u64]) {
     let dst_known_bounds = &mut dst[0..src.len()];
     let size = 8;
@@ -92,6 +94,7 @@ pub fn dot_product_u8_xxx(src: &[(u8, u8)], dst: &mut [u64]) {
         i += 1;
     }
 }
+#[allow(dead_code)]
 pub fn dot_product_f32_xxx(src: &[(f32, f32)], dst: &mut [f32]) {
     let dst_known_bounds = &mut dst[0..src.len()];
     let size = 4;
@@ -112,6 +115,7 @@ pub fn dot_product_f32_xxx(src: &[(f32, f32)], dst: &mut [f32]) {
     }
 }
 
+#[allow(dead_code)]
 pub fn dot_product_f32_chunk(src: &[(f32, f32)], _dst: &mut [f32]) -> f32 {
     let mut d: f32 = 0.0;
     let size = 4;
@@ -133,6 +137,7 @@ pub fn dot_product_f32_chunk(src: &[(f32, f32)], _dst: &mut [f32]) -> f32 {
 
     d
 }
+#[allow(dead_code)]
 pub fn dot_product_u8_chunk(src: &[(u8, u8)]) -> u64 {
     let mut d: u64 = 0;
     let size = 8;
@@ -158,6 +163,7 @@ pub fn dot_product_u8_chunk(src: &[(u8, u8)]) -> u64 {
 
     d
 }
+#[allow(dead_code)]
 pub fn dot_product_a(src: &[(f32, f32)], dst: &mut [f32]) -> f32 {
     let mut d: f32 = 0.0;
     for (_dst_sample, src_sample) in dst.iter_mut().zip(src.iter()) {
@@ -166,28 +172,34 @@ pub fn dot_product_a(src: &[(f32, f32)], dst: &mut [f32]) -> f32 {
     d
 }
 
+#[allow(dead_code)]
 pub fn dot_product_b(src: &[(f32, f32)], dst: &mut [f32]) {
     for (dst_sample, src_sample) in dst.iter_mut().zip(src.iter()) {
         *dst_sample = src_sample.0 * src_sample.1;
     }
 }
 
+#[allow(dead_code)]
 pub fn dot_product_u8(src: &[(u8, u8)]) -> u64 {
     src.iter().map(|&(a, b)| (a as u64) * (b as u64)).sum()
 }
 
+#[allow(dead_code)]
 fn dot_product(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b.iter()).map(|(&x, &y)| x * y).sum()
 }
 
+#[allow(dead_code)]
 fn magnitude(vec: &[f32]) -> f32 {
     vec.iter().map(|&x| x * x).sum::<f32>().sqrt()
 }
 
+#[allow(dead_code)]
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     dot_product(a, b) / (magnitude(a) * magnitude(b))
 }
 
+#[allow(dead_code)]
 pub fn get_magnitude_plus_quantized_vec111(quant_vec: Vec<Vec<u32>>, _size: usize) -> Vec<u32> {
     let mut result = Vec::with_capacity(quant_vec.len());
 
@@ -199,6 +211,7 @@ pub fn get_magnitude_plus_quantized_vec111(quant_vec: Vec<Vec<u32>>, _size: usiz
     result
 }
 
+#[allow(dead_code)]
 pub fn get_magnitude_plus_quantized_vec(quant_vec: &[Vec<u32>], _size: usize) -> Vec<usize> {
     let mut result = Vec::with_capacity(quant_vec.len());
 
@@ -212,6 +225,7 @@ pub fn get_magnitude_plus_quantized_vec(quant_vec: &[Vec<u32>], _size: usize) ->
     result
 }
 
+#[allow(dead_code)]
 #[cfg(target_arch = "x86_64")]
 pub fn cosine_similarity_scalar_u8(x: &VectorQt, y: &VectorQt) -> f32 {
     if let (
@@ -231,6 +245,7 @@ pub fn cosine_similarity_scalar_u8(x: &VectorQt, y: &VectorQt) -> f32 {
         panic!("cosine_similarity_scalar_u8 called with non-UnsignedByte VectorQt")
     }
 }
+#[allow(dead_code)]
 pub fn cosine_coalesce(x: &VectorQt, y: &VectorQt, length: usize) -> f32 {
     if let (
         VectorQt::SubByte {
@@ -266,6 +281,7 @@ pub fn cosine_coalesce(x: &VectorQt, y: &VectorQt, length: usize) -> f32 {
         panic!("cosine_coalesce called with non-SubByte VectorQt")
     }
 }
+#[allow(dead_code)]
 #[cfg(target_arch = "x86_64")]
 pub fn cosine_similarity_qt(
     x: &VectorQt,
@@ -429,6 +445,7 @@ impl From<BufIoError> for WaCustomError {
     }
 }
 
+#[allow(dead_code)]
 pub fn hash_float_vec(vec: Vec<f32>) -> Vec<u8> {
     // Create a new hasher instance
     let mut hasher = Sha256::new();
@@ -451,6 +468,7 @@ pub fn get_max_insert_level(x: f64, levels: Arc<Vec<(f64, i32)>>) -> i32 {
     }
 }
 
+#[allow(dead_code)]
 pub fn add_option_vecs(
     a: &Option<Vec<(LazyItem<MergedNode>, MetricResult)>>,
     b: &Option<Vec<(LazyItem<MergedNode>, MetricResult)>>,
@@ -466,71 +484,34 @@ pub fn add_option_vecs(
     }
 }
 
-// Function to convert VectorIdValue to VectorId
-pub fn convert_value(id_value: VectorIdValue) -> VectorId {
-    match id_value {
-        VectorIdValue::StringValue(s) => VectorId::Str(s),
-        VectorIdValue::IntValue(i) => VectorId::Int(i),
-    }
-}
-
-// Function to convert VectorId to VectorIdValue
-fn convert_id(id: VectorId) -> VectorIdValue {
-    match id {
-        VectorId::Str(s) => VectorIdValue::StringValue(s),
-        VectorId::Int(i) => VectorIdValue::IntValue(i),
-    }
-}
-
-// Function to convert the Option<Vec<(VectorId, _)>> to Option<Vec<(VectorIdValue, _)>>
-pub fn convert_search_results(
-    vec: Vec<(VectorId, MetricResult)>,
-) -> Vec<(VectorIdValue, MetricResult)> {
-    vec.into_iter()
-        .map(|(id, value)| (convert_id(id), value))
-        .collect()
-}
-
-// Function to convert Vec<Vector> to Vec<(VectorIdValue, Vec<f32>)>
-pub fn convert_vectors(vectors: Vec<Vector>) -> Vec<(VectorIdValue, Vec<f32>)> {
-    vectors
-        .into_iter()
-        .map(|vector| (vector.id.clone(), vector.values))
-        .collect()
-}
-
 pub fn remove_duplicates_and_filter(
-    vec: Vec<(LazyItem<MergedNode>, MetricResult)>,
+    vec: Vec<(SharedNode, MetricResult)>,
+    k: Option<usize>,
 ) -> Vec<(VectorId, MetricResult)> {
     let mut seen = HashSet::new();
-    vec.into_iter()
+    let mut collected = vec
+        .into_iter()
         .filter_map(|(lazy_item, similarity)| {
-            if let LazyItem::Valid { mut data, .. } = lazy_item {
-                if let Some(data) = data.get() {
-                    let mut prop_arc = data.prop.clone();
-                    if let PropState::Ready(node_prop) = prop_arc.get() {
-                        let id = &node_prop.id;
-                        if let VectorId::Int(s) = id {
-                            if *s == -1 {
-                                return None;
-                            }
-                        }
-                        if seen.insert(id.clone()) {
-                            Some((id.clone(), similarity))
-                        } else {
-                            None
-                        }
-                    } else {
-                        None // PropState is Pending
-                    }
-                } else {
-                    None // data is None
-                }
-            } else {
-                None // LazyItem is Invalid
+            let id = unsafe { &*lazy_item }.get_lazy_data()?.get_id().clone();
+            if !seen.insert(id.clone()) {
+                return None;
             }
+            if id.0 == u64::MAX {
+                return None;
+            }
+            Some((id, similarity))
         })
-        .collect()
+        .collect::<Vec<_>>();
+
+    collected.sort_unstable_by(|(_, a), (_, b)| {
+        b.get_value()
+            .partial_cmp(&a.get_value())
+            .unwrap_or(Ordering::Equal)
+    });
+    if let Some(k) = k {
+        collected.truncate(5 * k);
+    }
+    collected
 }
 
 pub fn generate_tuples(x: f64, num_levels: u8) -> Vec<(f64, i32)> {
@@ -543,6 +524,7 @@ pub fn generate_tuples(x: f64, num_levels: u8) -> Vec<(f64, i32)> {
     result
 }
 
+#[allow(dead_code)]
 pub fn calculate_hash<T: Hash>(t: &T) -> u64 {
     let mut hasher = DefaultHasher::new();
     t.hash(&mut hasher);
@@ -550,34 +532,17 @@ pub fn calculate_hash<T: Hash>(t: &T) -> u64 {
 }
 
 // Extract VectorId values for hashing purposes
+#[allow(dead_code)]
 pub fn extract_ids(neighbors: &[(VectorId, f32)]) -> Vec<VectorId> {
     neighbors.iter().map(|(id, _)| id.clone()).collect()
 }
 
-// Optional: Implement From trait for more idiomatic conversion
-
-impl From<VectorId> for VectorIdValue {
-    fn from(vector_id: VectorId) -> Self {
-        match vector_id {
-            VectorId::Str(s) => VectorIdValue::StringValue(s),
-            VectorId::Int(i) => VectorIdValue::IntValue(i),
-        }
-    }
-}
-
-impl From<VectorIdValue> for VectorId {
-    fn from(vector_id_value: VectorIdValue) -> Self {
-        match vector_id_value {
-            VectorIdValue::StringValue(s) => VectorId::Str(s),
-            VectorIdValue::IntValue(i) => VectorId::Int(i),
-        }
-    }
-}
-
+#[allow(dead_code)]
 pub fn cat_maybes<T>(iter: impl Iterator<Item = Option<T>>) -> Vec<T> {
     iter.flat_map(|maybe| maybe).collect()
 }
 
+#[allow(dead_code)]
 pub fn tapered_total_hops(hops: u8, cur_level: u8, max_level: u8) -> u8 {
     //div by 2
     if cur_level > max_level >> 1 {
@@ -592,6 +557,7 @@ pub fn tapered_total_hops(hops: u8, cur_level: u8, max_level: u8) -> u8 {
     }
 }
 //typically skips is 1 while near
+#[allow(dead_code)]
 pub fn tapered_skips(skips: i8, cur_distance: i8, max_distance: i8) -> i8 {
     // Calculate the distance ratio (0.0 to 1.0)
     let distance_ratio = cur_distance as f32 / max_distance as f32;
@@ -605,6 +571,146 @@ pub fn tapered_skips(skips: i8, cur_distance: i8, max_distance: i8) -> i8 {
     }
 }
 
+#[allow(dead_code)]
 pub fn tuple_to_string(tuple: (u32, u32)) -> String {
     format!("{}_{}", tuple.0, tuple.1)
+}
+
+type HashTable<K, V> = HashMap<K, V>;
+
+/// This is a custom Hashtable made to use for data variable in Node of InvertedIndex
+#[derive(Clone)]
+pub struct TSHashTable<K, V> {
+    hash_table_list: Vec<Arc<Mutex<HashTable<K, V>>>>,
+    size: i16,
+}
+
+unsafe impl<K, V> Send for TSHashTable<K, V> {}
+unsafe impl<K, V> Sync for TSHashTable<K, V> {}
+
+impl<K: Eq + Hash, V> TSHashTable<K, V> {
+    pub fn new(size: i16) -> Self {
+        let hash_table_list = (0..size)
+            .map(|_| Arc::new(Mutex::new(HashMap::new())))
+            .collect();
+        TSHashTable {
+            hash_table_list,
+            size,
+        }
+    }
+    pub fn hash_key(&self, k: &K) -> usize {
+        let mut hasher = DefaultHasher::new();
+        k.hash(&mut hasher);
+        (hasher.finish() as usize) % (self.size as usize)
+    }
+
+    pub fn insert(&self, k: K, v: V) {
+        let index = self.hash_key(&k);
+        let mut ht = self.hash_table_list[index].lock().unwrap();
+        ht.insert(k, v);
+    }
+
+    pub fn delete(&self, k: &K) {
+        let index = self.hash_key(k);
+        let mut ht = self.hash_table_list[index].lock().unwrap();
+        ht.remove(k);
+    }
+
+    pub fn lookup(&self, k: &K) -> Option<V>
+    where
+        V: Clone,
+    {
+        let index = self.hash_key(k);
+        let ht = self.hash_table_list[index].lock().unwrap();
+        ht.get(k).cloned()
+    }
+
+    pub fn mutate<F>(&self, k: K, f: F)
+    where
+        F: FnOnce(Option<V>) -> Option<V>,
+        V: Clone,
+    {
+        let index = self.hash_key(&k);
+        let mut ht = self.hash_table_list[index].lock().unwrap();
+        let v = ht.remove(&k);
+        let new_v = f(v);
+        if let Some(new_v) = new_v {
+            ht.insert(k, new_v);
+        }
+    }
+
+    pub fn get_or_create<F>(&self, k: K, f: F) -> V
+    where
+        F: FnOnce() -> V,
+        V: Clone,
+    {
+        let index = self.hash_key(&k);
+        let mut ht = self.hash_table_list[index].lock().unwrap();
+        match ht.get(&k) {
+            Some(v) => v.clone(),
+            None => {
+                let new_v = f();
+                ht.insert(k, new_v.clone());
+                new_v
+            }
+        }
+    }
+
+    pub fn map_m<F>(&self, f: F)
+    where
+        F: Fn(&K, &V) + Send + Sync + 'static,
+        K: Send + Sync + 'static,
+        V: Send + Sync + 'static,
+    {
+        let f = Arc::new(f);
+        let handles: Vec<_> = self
+            .hash_table_list
+            .iter()
+            .map(|ht| {
+                let ht = Arc::clone(ht);
+                let f = f.clone();
+                thread::spawn(move || {
+                    let ht = ht.lock().unwrap();
+                    for (k, v) in ht.iter() {
+                        f(k, v);
+                    }
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+    }
+
+    pub fn to_list(&self) -> Vec<(K, V)>
+    where
+        K: Clone,
+        V: Clone,
+    {
+        self.hash_table_list
+            .iter()
+            .flat_map(|ht| {
+                let ht = ht.lock().unwrap();
+                ht.iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    pub fn from_list(size: i16, kv: Vec<(K, V)>) -> Self {
+        let tsh = Self::new(size);
+        for (k, v) in kv {
+            tsh.insert(k, v);
+        }
+        tsh
+    }
+
+    pub fn purge_all(&self) {
+        for ht in &self.hash_table_list {
+            let mut ht = ht.lock().unwrap();
+            *ht = HashMap::new();
+        }
+    }
 }

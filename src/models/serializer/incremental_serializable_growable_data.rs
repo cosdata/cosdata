@@ -15,11 +15,11 @@ use std::{io::SeekFrom, sync::Arc};
 impl CustomSerialize for IncrementalSerializableGrowableData {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
-        let bufman = bufmans.get(&version)?;
+        let bufman = bufmans.get(version)?;
         let start_offset = bufman.cursor_position(cursor)? as u32;
 
         // Store (data, version) pairs in a vector for serialization
@@ -77,7 +77,7 @@ impl CustomSerialize for IncrementalSerializableGrowableData {
     }
 
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         file_index: FileIndex,
         _cache: Arc<NodeRegistry>,
         _max_loads: u16,
@@ -90,7 +90,7 @@ impl CustomSerialize for IncrementalSerializableGrowableData {
                 version_id,
                 ..
             } => {
-                let bufman = bufmans.get(&version_id)?;
+                let bufman = bufmans.get(version_id)?;
                 let cursor = bufman.open_cursor()?;
                 bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
                 let items: LazyItemVec<STM<VectorData>> = LazyItemVec::new();
@@ -123,10 +123,11 @@ impl CustomSerialize for IncrementalSerializableGrowableData {
     }
 }
 
+#[allow(unused_variables)]
 impl CustomSerialize for STM<VectorData> {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
@@ -136,7 +137,7 @@ impl CustomSerialize for STM<VectorData> {
     }
 
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         file_index: FileIndex,
         cache: Arc<NodeRegistry>,
         max_loads: u16,

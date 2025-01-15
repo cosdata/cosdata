@@ -1,10 +1,12 @@
+use arcshift::ArcShift;
+
 use super::CustomSerialize;
 use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
     cache_loader::{Cacheable, NodeRegistry},
     identity_collections::{Identifiable, IdentitySet},
     lazy_load::{EagerLazyItem, EagerLazyItemSet, FileIndex, CHUNK_SIZE},
-    types::FileOffset,
+    types::{FileOffset, STM},
     versioning::Hash,
 };
 use std::collections::HashSet;
@@ -17,19 +19,34 @@ where
 {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
         if self.is_empty() {
+            self.serialized_offset.clone().update(Some(u32::MAX));
             return Ok(u32::MAX);
         };
-        let bufman = bufmans.get(&version)?;
-        let start_offset = bufman.cursor_position(cursor)? as u32;
+        let bufman = bufmans.get(version)?;
         let mut items_arc = self.items.clone();
-        let items: Vec<_> = items_arc.get().iter().map(Clone::clone).collect();
+        let items: Vec<_> = items_arc.get().iter().cloned().collect();
         let total_items = items.len();
+        let first_serialize = if let Some(offset) = *self.serialized_offset.clone().get() {
+            if offset == u32::MAX {
+                bufman.seek_with_cursor(cursor, SeekFrom::End(0))? as u32;
+                true
+            } else {
+                bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
+                false
+            }
+        } else {
+            true
+        };
+        let start_offset = bufman.cursor_position(cursor)? as u32;
 
+        if first_serialize {
+            self.serialized_offset.clone().update(Some(start_offset));
+        }
         for chunk_start in (0..total_items).step_by(CHUNK_SIZE) {
             let chunk_end = std::cmp::min(chunk_start + CHUNK_SIZE, total_items);
             let is_last_chunk = chunk_end == total_items;
@@ -45,6 +62,9 @@ where
 
             // Serialize items and update placeholders
             for i in chunk_start..chunk_end {
+                if !first_serialize {
+                    bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
+                }
                 let item_offset = items[i].serialize(bufmans.clone(), version, cursor)?;
                 let placeholder_pos = placeholder_start as u64 + ((i - chunk_start) as u64 * 4);
                 let current_pos = bufman.cursor_position(cursor)?;
@@ -63,11 +83,12 @@ where
             }
             bufman.seek_with_cursor(cursor, SeekFrom::Start(next_chunk_start as u64))?;
         }
+
         Ok(start_offset)
     }
 
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         file_index: FileIndex,
         cache: Arc<NodeRegistry>,
         max_loads: u16,
@@ -83,7 +104,7 @@ where
                 if offset == u32::MAX {
                     return Ok(EagerLazyItemSet::new());
                 }
-                let bufman = bufmans.get(&version_id)?;
+                let bufman = bufmans.get(version_id)?;
                 let cursor = bufman.open_cursor()?;
                 bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
                 let mut items = Vec::new();
@@ -122,9 +143,10 @@ where
                         break;
                     }
                 }
-                Ok(EagerLazyItemSet::from_set(IdentitySet::from_iter(
-                    items.into_iter(),
-                )))
+                Ok(EagerLazyItemSet {
+                    serialized_offset: ArcShift::new(Some(offset)),
+                    items: STM::new(IdentitySet::from_iter(items.into_iter()), 5, false),
+                })
             }
         }
     }

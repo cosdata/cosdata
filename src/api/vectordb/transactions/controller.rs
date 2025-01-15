@@ -1,9 +1,8 @@
 use actix_web::{web, HttpResponse};
 
 use crate::{
-    api::vectordb::vectors::dtos::{CreateVectorDto, UpsertDto},
+    api::vectordb::vectors::dtos::{CreateDenseVectorDto, UpsertDto},
     app_context::AppContext,
-    models::rpc::VectorIdValue,
 };
 
 use super::{error::TransactionError, service};
@@ -29,7 +28,7 @@ pub(crate) async fn commit_transaction(
 
 pub(crate) async fn create_vector_in_transaction(
     params: web::Path<(String, u32)>,
-    web::Json(create_vector_dto): web::Json<CreateVectorDto>,
+    web::Json(create_vector_dto): web::Json<CreateDenseVectorDto>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse, TransactionError> {
     let (collection_id, transaction_id) = params.into_inner();
@@ -54,7 +53,7 @@ pub(crate) async fn abort_transaction(
 }
 
 pub(crate) async fn delete_vector_by_id(
-    path: web::Path<(String, u32, String)>,
+    path: web::Path<(String, u32, u32)>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse, TransactionError> {
     let (collection_id, transaction_id, vector_id) = path.into_inner();
@@ -62,7 +61,7 @@ pub(crate) async fn delete_vector_by_id(
         ctx.into_inner(),
         &collection_id,
         transaction_id.into(),
-        VectorIdValue::StringValue(vector_id),
+        vector_id,
     )
     .await?;
     Ok(HttpResponse::NoContent().finish())
