@@ -1107,7 +1107,7 @@ impl User {
             return Err("Input must be at least 32 bytes".to_string());
         }
         let mut password_hash = [0u8; 32];
-        password_hash.copy_from_slice(buf);
+        password_hash.copy_from_slice(&buf[..32]);
         let username_bytes = buf[32..].to_vec();
         let username = String::from_utf8(username_bytes).map_err(|err| err.to_string())?;
         Ok(Self {
