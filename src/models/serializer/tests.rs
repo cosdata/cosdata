@@ -1,5 +1,6 @@
 use crate::distance::cosine::CosineSimilarity;
 use crate::models::buffered_io::BufferManager;
+use crate::models::common::TSHashTable;
 use crate::models::lazy_load::*;
 use crate::models::serializer::*;
 use crate::models::types::*;
@@ -11,6 +12,7 @@ use crate::storage::Storage;
 use half::f16;
 use lmdb::DatabaseFlags;
 use lmdb::Environment;
+use rand::Rng;
 use std::sync::Arc;
 use tempfile::{tempdir, TempDir};
 
@@ -1078,14 +1080,28 @@ fn test_eager_lazy_item_multiple_serialization() {
     assert_eq!(set.len(), deserialized.len());
 }
 
+fn get_random_pagepool<const LEN: usize>(rng: &mut impl Rng) -> Pagepool<LEN> {
+    let mut pool = Pagepool::default();
+    let count = rng.gen_range(20..50);
+    add_random_items_to_pagepool(rng, &mut pool, count);
+    pool
+}
+
+fn add_random_items_to_pagepool<const LEN: usize>(
+    rng: &mut impl Rng,
+    pool: &mut Pagepool<LEN>,
+    count: usize,
+) {
+    for _ in 0..count {
+        pool.push(rng.gen_range(0..u32::MAX));
+    }
+}
+
 #[test]
 fn test_page_serialization() {
-    let mut page_pool = Pagepool::<10>::default();
+    let mut rng = rand::thread_rng();
+    let page_pool = get_random_pagepool(&mut rng);
     let mut skipm: HashSet<u64> = HashSet::new();
-
-    for i in 0..10 * 10_u32 {
-        page_pool.push(i);
-    }
 
     let root_version_id = Hash::from(0);
     let root_version_number = 0;
@@ -1115,12 +1131,9 @@ fn test_page_serialization() {
 
 #[test]
 fn test_page_incremental_serialization() {
-    let mut page_pool = Pagepool::<10>::default();
+    let mut rng = rand::thread_rng();
+    let mut page_pool = get_random_pagepool(&mut rng);
     let mut skipm: HashSet<u64> = HashSet::new();
-
-    for i in 0..10 * 10_u32 {
-        page_pool.push(i);
-    }
 
     let root_version_id = Hash::from(0);
     let root_version_number = 0;
@@ -1130,9 +1143,7 @@ fn test_page_incremental_serialization() {
         .serialize(bufmans.clone(), root_version_id, cursor)
         .unwrap();
 
-    for i in 0..10 * 10_u32 {
-        page_pool.push(i);
-    }
+    add_random_items_to_pagepool(&mut rng, &mut page_pool, 100);
 
     let offset = page_pool
         .serialize(bufmans.clone(), root_version_id, cursor)
