@@ -1165,3 +1165,147 @@ fn test_page_incremental_serialization() {
 
     assert_eq!(page_pool, deserialized);
 }
+
+#[test]
+fn test_tshashtable_serialization() {
+    let mut rng = rand::thread_rng();
+    let table = TSHashTable::<u8, Pagepool<10>>::new(16);
+    let mut skipm: HashSet<u64> = HashSet::new();
+
+    // only even keys
+    for i in (0..32).map(|x| x * 2) {
+        table.insert(i, get_random_pagepool(&mut rng));
+    }
+
+    let root_version_id = Hash::from(0);
+    let root_version_number = 0;
+
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(0.into());
+    let offset = table
+        .serialize(bufmans.clone(), root_version_id, cursor)
+        .unwrap();
+    bufman.close_cursor(cursor).unwrap();
+
+    let deserialized = TSHashTable::deserialize(
+        bufmans.clone(),
+        FileIndex::Valid {
+            offset: FileOffset(offset),
+            version_id: root_version_id,
+            version_number: root_version_number,
+        },
+        cache.clone(),
+        0_u16,
+        &mut skipm,
+    )
+    .unwrap();
+
+    let mut table_list = table.to_list();
+    let mut deserialized_list = deserialized.to_list();
+
+    table_list.sort_by_key(|(k, _)| *k);
+    deserialized_list.sort_by_key(|(k, _)| *k);
+
+    assert_eq!(table_list, deserialized_list);
+}
+
+#[test]
+fn test_tshashtable_incremental_serialization_updated_values() {
+    let mut rng = rand::thread_rng();
+    let table = TSHashTable::<u8, Pagepool<10>>::new(16);
+    let mut skipm: HashSet<u64> = HashSet::new();
+
+    // only even keys
+    for i in (0..32).map(|x| x * 2) {
+        table.insert(i, get_random_pagepool(&mut rng));
+    }
+
+    let root_version_id = Hash::from(0);
+    let root_version_number = 0;
+
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(0.into());
+    let _offset = table
+        .serialize(bufmans.clone(), root_version_id, cursor)
+        .unwrap();
+
+    for i in (0..32).map(|x| x * 2) {
+        table.mutate(i, |pool| {
+            let mut pool = pool.unwrap();
+            add_random_items_to_pagepool(&mut rng, &mut pool, 100);
+            Some(pool)
+        });
+    }
+    let offset = table
+        .serialize(bufmans.clone(), root_version_id, cursor)
+        .unwrap();
+    bufman.close_cursor(cursor).unwrap();
+
+    let deserialized = TSHashTable::deserialize(
+        bufmans.clone(),
+        FileIndex::Valid {
+            offset: FileOffset(offset),
+            version_id: root_version_id,
+            version_number: root_version_number,
+        },
+        cache.clone(),
+        0_u16,
+        &mut skipm,
+    )
+    .unwrap();
+
+    let mut table_list = table.to_list();
+    let mut deserialized_list = deserialized.to_list();
+
+    table_list.sort_by_key(|(k, _)| *k);
+    deserialized_list.sort_by_key(|(k, _)| *k);
+
+    assert_eq!(table_list, deserialized_list);
+}
+
+#[test]
+fn test_tshashtable_incremental_serialization_new_entries() {
+    let mut rng = rand::thread_rng();
+    let table = TSHashTable::<u8, Pagepool<10>>::new(16);
+    let mut skipm: HashSet<u64> = HashSet::new();
+
+    // only even keys
+    for i in (0..32).map(|x| x * 2) {
+        table.insert(i, get_random_pagepool(&mut rng));
+    }
+
+    let root_version_id = Hash::from(0);
+    let root_version_number = 0;
+
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(0.into());
+    let _offset = table
+        .serialize(bufmans.clone(), root_version_id, cursor)
+        .unwrap();
+
+    for i in (0..32).map(|x| (x * 2) + 1) {
+        table.insert(i, get_random_pagepool(&mut rng));
+    }
+    let offset = table
+        .serialize(bufmans.clone(), root_version_id, cursor)
+        .unwrap();
+    bufman.close_cursor(cursor).unwrap();
+
+    let deserialized = TSHashTable::deserialize(
+        bufmans.clone(),
+        FileIndex::Valid {
+            offset: FileOffset(offset),
+            version_id: root_version_id,
+            version_number: root_version_number,
+        },
+        cache.clone(),
+        0_u16,
+        &mut skipm,
+    )
+    .unwrap();
+
+    let mut table_list = table.to_list();
+    let mut deserialized_list = deserialized.to_list();
+
+    table_list.sort_by_key(|(k, _)| *k);
+    deserialized_list.sort_by_key(|(k, _)| *k);
+
+    assert_eq!(table_list, deserialized_list);
+}
