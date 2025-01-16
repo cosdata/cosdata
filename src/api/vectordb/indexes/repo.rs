@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    api_service::init_dense_index_for_collection,
+    api_service::{init_dense_index_for_collection, init_inverted_index_for_collection},
     app_context::AppContext,
     models::types::{DistanceMetric, QuantizationMetric},
     quantization::StorageType,
@@ -42,21 +42,29 @@ pub(crate) async fn create_index(
                 true,
             ),
         };
-    let IndexParamsDto::Hnsw(hnsw_params_dto) = index_params;
-    let hnsw_params = hnsw_params_dto.into_params(&ctx.config);
-    init_dense_index_for_collection(
-        ctx,
-        &collection,
-        range,
-        hnsw_params,
-        quantization_metric,
-        distance_metric,
-        storage_type,
-        sample_threshold,
-        is_configured,
-    )
-    .await
-    .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;
+    match index_params {
+        IndexParamsDto::Hnsw(hnsw_params_dto) => {
+            let hnsw_params = hnsw_params_dto.into_params(&ctx.config);
+            init_dense_index_for_collection(
+                ctx,
+                &collection,
+                range,
+                hnsw_params,
+                quantization_metric,
+                distance_metric,
+                storage_type,
+                sample_threshold,
+                is_configured,
+            )
+            .await
+            .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;
+        }
+        IndexParamsDto::InvertedIndex(_inverted_index_params_dot) => {
+            init_inverted_index_for_collection(ctx, &collection)
+                .await
+                .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;
+        }
+    };
 
     Ok(())
 }
