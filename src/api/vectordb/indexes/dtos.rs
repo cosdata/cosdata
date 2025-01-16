@@ -48,7 +48,7 @@ pub struct HNSWHyperParamsDto {
 pub struct InvertedIndexParamsDto {}
 
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase", tag = "type", content = "properties")]
+#[serde(rename_all = "snake_case", tag = "type", content = "properties")]
 pub enum IndexParamsDto {
     Hnsw(HNSWHyperParamsDto),
     InvertedIndex(InvertedIndexParamsDto),
