@@ -13,10 +13,8 @@ The base URL for API endpoints related to authentication is: =https://host:port/
 
 ** Authentication
 All requests require Bearer token authentication obtained through the login endpoint.
-
 *** Login Endpoint
-Obtain authentication token for subsequent requests.
-
+Obtain session token for subsequent requests.
 - Method: POST
 - Path: =/auth/login=
 - Request Body:
@@ -26,40 +24,33 @@ Obtain authentication token for subsequent requests.
   "password": "admin"
 }
 #+END_SRC
-
-- Response: JWT token as a JSON object.
+- Response: Session details in JSON format
 #+BEGIN_SRC json
 {
-  "access_token": "eyJhbGciOiJIUzI1...",
+  "access_token": "session_token_123...",
   "created_at": 1718353239,
   "expires_at": 1718353299
 }
 #+END_SRC
-
 **** Authentication Notes
-- Token lifetime is 900 seconds (15 minutes)
+- Session lifetime is 900 seconds (15 minutes)
 - Passwords are double-hashed using SHA256 for security
-- Token must be renewed before expiration
+- Sessions must be renewed before expiration
+- Server maintains an active sessions map for validation
 
 *** Using Authentication
-For all subsequent requests, include the Bearer token in the Authorization header:
+For all subsequent requests, include the session token in the Authorization header:
 #+BEGIN_SRC text
-Authorization: Bearer eyJhbGciOiJIUzI1...
+Authorization: Bearer session_token_123...
 Content-Type: application/json
 #+END_SRC
 
-**** Claims Structure
-The JWT token contains the following claims:
-#+BEGIN_SRC json
-{
-    "exp": 1718353299,
-    "iat": 1718353239,
-    "username": "admin"
-}
-#+END_SRC
-- =exp=: Expiry time of the token (Unix timestamp)
-- =iat=: Issued at time of the token (Unix timestamp)
-- =username=: Username associated with the token
+**** Session Details
+The server maintains the following session information:
+- Created timestamp (Unix timestamp)
+- Expiry timestamp (Unix timestamp)
+- Associated username
+- Session state
 
 * Collections API
 
@@ -170,7 +161,7 @@ Initiates a new transaction context.
 #+BEGIN_SRC json
 {
   "transaction_id": 123,
-  "created_at": "2025-01-15T12:00:00Z"
+  "created_at": 1718353239
 }
 #+END_SRC
 
@@ -415,7 +406,7 @@ Manage search indices for vector collections.
 
 *** Basic Vector Search
 - Method: POST
-- Path: =/vectordb/search=
+- Path: =/search=
 - Request Body:
 #+BEGIN_SRC json
 {
@@ -443,7 +434,7 @@ Manage search indices for vector collections.
 
 *** Batch Search
 - Method: POST
-- Path: =/vectordb/batch-search=
+- Path: =/batch-search=
 - Request Body:
 #+BEGIN_SRC json
 {
@@ -491,10 +482,8 @@ Manage search indices for vector collections.
 
 ** Error Response Format
 All API errors follow a consistent format:
-#+BEGIN_SRC json
-{
-  "message": "Error description"
-}
+#+BEGIN_SRC text
+Error description
 #+END_SRC
 
 Note that error responses have a `Content-Type: text/html` header.
@@ -518,6 +507,28 @@ Note that error responses have a `Content-Type: text/html` header.
 | FAILED_TO_EXTRACT_TOKEN_FROM_REQUEST | 500 | Failed to extract token from request | Contact support          |
 | FAILED_TO_CREATE_INDEX | 400 | Failed to create index | Check index properties |
 | NOT_FOUND             | 400         | Resource not found        | Check the resource name |
+#+CAPTION: Authentication Error Types
+#+NAME: auth-errors
+| Error                     | Description                                            |
+|---------------------------+--------------------------------------------------------|
+| WrongCredentials         | Username or password incorrect                         |
+| FailedToEncodeToken       | Failed to generate an jwt auth token                     |
+| InvalidToken             | Invalid auth token                                      |
+| FailedToExtractTokenFromRequest| Failed to extract token from request                |
+#+CAPTION: Transaction Error Types
+#+NAME: transaction-errors
+| Error                        | Description                                        |
+|------------------------------+----------------------------------------------------|
+| NotFound                     | Transaction not found                              |
+| CollectionNotFound           | Collection not found                               |
+| OnGoingTransaction           | There is an ongoing transaction                     |
+| FailedToGetAppEnv            | Failed to get the application environment         |
+| FailedToCreateTransaction    | Failed to create transaction                        |
+| FailedToCommitTransaction    | Failed to commit transaction                        |
+| FailedToCreateVector         | Failed to create vector in transaction             |
+| FailedToDeleteVector         | Failed to delete vector in transaction              |
+| NotImplemented               | This functionality is not implemented              |
+
 
 * Implementation and Best Practices
 
@@ -561,6 +572,7 @@ Note that error responses have a `Content-Type: text/html` header.
 
 *** Search Optimization
 - Use appropriate k values
+- Include relevant metadata
 - Choose proper similarity metrics
 - Consider index parameters
 
@@ -576,10 +588,10 @@ def login():
     headers = {'Content-Type': 'application/json'}
     data = {'username': 'admin', 'password': 'admin'}
     response = requests.post(url, headers=headers, data=json.dumps(data))
-    return response.json()['access_token']
+    return response.json()
 
 def create_collection(token):
-    url = "https://host:port/vectordb/collections"
+    url = f"{BASE_URL_VECTORDB}/collections"
     headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
     data = {
             "name": "testdb",
@@ -637,6 +649,70 @@ except Exception as e:
     raise e
 #+END_SRC
 
+** Sparse Vector Creation and Search
+#+BEGIN_SRC python
+import requests
+import json
+
+def login():
+    url = "https://host:port/auth/login"
+    headers = {'Content-Type': 'application/json'}
+    data = {'username': 'admin', 'password': 'admin'}
+    response = requests.post(url, headers=headers, data=json.dumps(data))
+    return response.json()
+
+def create_collection(token):
+    url = f"https://host:port/vectordb/collections"
+    headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+    data = {
+            "name": "testdb",
+            "description": "Test collection for vector database",
+            "dense_vector": {
+                "enabled": False
+                },
+            "sparse_vector": {
+                "enabled": True
+            },
+            "metadata_schema": None,
+            "config": {
+                    "max_vectors": None,
+                    "replication_factor": None
+                }
+            }
+    response = requests.post(url, headers=headers, data=json.dumps(data))
+    return response.json()
+
+def create_sparse_vector(token, collection_name, id, indices, values):
+    url = f"https://host:port/vectordb/collections/{collection_name}/vectors"
+    headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+    data = {
+        "sparse": {
+            "id": id,
+            "indices": indices,
+            "values": values
+        }
+    }
+    response = requests.post(url, headers=headers, data=json.dumps(data))
+    return response.json()
+
+def search_vector(token, name, vector, nn_count):
+    url = "https://host:port/vectordb/search"
+    headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+    data = {"name": name, "vector": vector, "nn_count": nn_count}
+    response = requests.post(url, headers=headers, data=json.dumps(data))
+    return response.json()
+
+
+token = login()
+create_collection_response = create_collection(token)
+create_sparse_vector(token, "testdb", 1, [1, 3, 5], [0.1, 0.2, 0.3])
+search_vector = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+search_response = search_vector(token, "testdb", search_vector, 5)
+results = search_response["knn"]
+for item in results:
+    print(f"Vector {item['id']}: {item['score']}")
+#+END_SRC
+
 ** Search Workflow
 #+BEGIN_SRC python
 import requests
@@ -647,7 +723,7 @@ def login():
     headers = {'Content-Type': 'application/json'}
     data = {'username': 'admin', 'password': 'admin'}
     response = requests.post(url, headers=headers, data=json.dumps(data))
-    return response.json()['access_token']
+    return response.json()
 
 def search_vector(token, name, vector, nn_count):
     url = "https://host:port/vectordb/search"
@@ -656,13 +732,13 @@ def search_vector(token, name, vector, nn_count):
     response = requests.post(url, headers=headers, data=json.dumps(data))
     return response.json()
 
-token = login()
+response = login()
+token = response['access_token']
 search_vector = [0.1, 0.2]
 search_response = search_vector(token, "testdb", search_vector, 5)
 results = search_response["knn"]
 for item in results:
     print(f"Vector {item['id']}: {item['score']}")
-
 #+END_SRC
 
 * API Version and Compatibility
