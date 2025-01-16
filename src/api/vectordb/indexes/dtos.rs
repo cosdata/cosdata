@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer};
 
 use crate::{
     config_loader::Config,
@@ -6,7 +6,33 @@ use crate::{
     quantization::StorageType,
 };
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Default)]
+pub enum SparseIndexQuantization {
+    #[default]
+    B64,
+    B128,
+    B256,
+}
+
+impl<'de> Deserialize<'de> for SparseIndexQuantization {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value: u64 = Deserialize::deserialize(deserializer)?;
+        match value {
+            64 => Ok(Self::B64),
+            128 => Ok(Self::B128),
+            256 => Ok(Self::B256),
+            _ => Err(serde::de::Error::custom(format!(
+                "Invalid value for quantization: {}. Expected 64, 128, or 256.",
+                value
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DataType {
     Binary,
@@ -16,15 +42,15 @@ pub enum DataType {
     F16,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize)]
 pub struct ValuesRange {
     pub min: f32,
     pub max: f32,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "lowercase", tag = "type", content = "properties")]
-pub enum QuantizationDto {
+pub enum DenseIndexQuantizationDto {
     Auto {
         sample_threshold: usize,
     },
@@ -34,7 +60,7 @@ pub enum QuantizationDto {
     },
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize)]
 pub struct HNSWHyperParamsDto {
     ef_construction: Option<u32>, // Size of the dynamic candidate list during index construction
     ef_search: Option<u32>,       // Size of the dynamic candidate list during search
@@ -44,23 +70,27 @@ pub struct HNSWHyperParamsDto {
     neighbors_count: Option<usize>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct InvertedIndexParamsDto {}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case", tag = "type", content = "properties")]
-pub enum IndexParamsDto {
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase", tag = "type", content = "properties")]
+pub enum DenseIndexParamsDto {
     Hnsw(HNSWHyperParamsDto),
-    InvertedIndex(InvertedIndexParamsDto),
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub(crate) struct CreateIndexDto {
+#[derive(Debug, Deserialize)]
+pub(crate) struct CreateDenseIndexDto {
     pub collection_name: String,
     pub name: String,
     pub distance_metric_type: DistanceMetric,
-    pub quantization: QuantizationDto,
-    pub index: IndexParamsDto,
+    pub quantization: DenseIndexQuantizationDto,
+    pub index: DenseIndexParamsDto,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct CreateSparseIndexDto {
+    pub collection_name: String,
+    pub name: String,
+    #[serde(default)]
+    pub quantization: SparseIndexQuantization,
 }
 
 impl HNSWHyperParamsDto {
