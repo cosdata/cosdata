@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::models::types::VectorId;
 
@@ -11,5 +11,14 @@ pub struct RawSparseVectorEmbedding {
     pub hash_vec: VectorId,
 }
 
-#[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize, PartialEq, Serialize)]
+#[derive(
+    Debug,
+    Clone,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+    PartialEq,
+    Serialize,
+    Deserialize,
+)]
 pub struct SparsePair(pub u32, pub f32);

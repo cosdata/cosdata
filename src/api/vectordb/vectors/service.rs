@@ -40,13 +40,16 @@ pub(crate) async fn update_vector_by_id(
 }
 
 pub(crate) async fn find_similar_vectors(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
     find_similar_vectors: FindSimilarVectorsDto,
 ) -> Result<FindSimilarVectorsResponseDto, VectorsError> {
-    let similar_vectors = repo::find_similar_vectors(find_similar_vectors).await?;
-
-    Ok(FindSimilarVectorsResponseDto {
-        results: similar_vectors,
-    })
+    match find_similar_vectors {
+        FindSimilarVectorsDto::Dense(dto) => repo::find_similar_dense_vectors(dto).await,
+        FindSimilarVectorsDto::Sparse(dto) => {
+            repo::find_similar_sparse_vectors(ctx, collection_id, dto).await
+        }
+    }
 }
 
 pub(crate) async fn delete_vector_by_id(

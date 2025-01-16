@@ -1,11 +1,12 @@
+use serde::Serialize;
+
 use super::inverted_index_sparse_ann_basic::{
     InvertedIndexSparseAnnBasic, InvertedIndexSparseAnnBasicDashMap,
     InvertedIndexSparseAnnNodeBasic, InvertedIndexSparseAnnNodeBasicDashMap,
     InvertedIndexSparseAnnNodeBasicTSHashmap,
 };
-use crate::storage::{
-    inverted_index_sparse_ann_basic::InvertedIndexSparseAnnBasicTSHashmap, page::Pagepool,
-};
+use crate::indexes::inverted_index::InvertedIndex;
+use crate::storage::page::Pagepool;
 
 use crate::models::types::{SparseQueryVector, SparseQueryVectorDimensionType, SparseVector};
 use std::collections::{HashMap, HashSet};
@@ -13,7 +14,7 @@ use std::{cmp::Ordering, collections::BinaryHeap};
 
 const K: usize = 5;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SparseAnnResult {
     pub vector_id: u32,
     pub similarity: u32,
@@ -45,10 +46,7 @@ impl SparseAnnQueryBasic {
 
     // Creates a sparse query vector with dimension types based on the posting list length.
     // This is used to optimize sparse ANN search using a cuckoo filter and two-stage search.
-    fn create_sparse_query_vector(
-        &self,
-        index: &InvertedIndexSparseAnnBasicTSHashmap,
-    ) -> SparseQueryVector {
+    fn create_sparse_query_vector(&self, index: &InvertedIndex) -> SparseQueryVector {
         let mut posting_list_lengths: Vec<(u32, usize)> = Vec::new();
         for (dim_index, _) in &self.query_vector.entries {
             if let Some(node) = index.find_node(*dim_index) {
@@ -165,10 +163,7 @@ impl SparseAnnQueryBasic {
         results
     }
 
-    pub fn sequential_search_tshashmap(
-        &self,
-        index: &InvertedIndexSparseAnnBasicTSHashmap,
-    ) -> Vec<SparseAnnResult> {
+    pub fn sequential_search_tshashmap(&self, index: &InvertedIndex) -> Vec<SparseAnnResult> {
         let sparse_query_vector = self.create_sparse_query_vector(index);
         let mut dot_products: HashMap<u32, u32> = HashMap::new();
 
