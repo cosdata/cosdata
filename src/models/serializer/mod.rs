@@ -14,8 +14,10 @@ mod lazy_item_vec;
 mod metric_distance;
 mod neighbour;
 mod node;
+mod page;
 pub mod prob;
 mod storage;
+mod tshashtable;
 
 #[cfg(test)]
 mod tests;

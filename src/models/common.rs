@@ -581,15 +581,15 @@ type HashTable<K, V> = HashMap<K, V>;
 /// This is a custom Hashtable made to use for data variable in Node of InvertedIndex
 #[derive(Clone)]
 pub struct TSHashTable<K, V> {
-    hash_table_list: Vec<Arc<Mutex<HashTable<K, V>>>>,
-    size: i16,
+    pub hash_table_list: Vec<Arc<Mutex<HashTable<K, V>>>>,
+    pub size: u8,
 }
 
 unsafe impl<K, V> Send for TSHashTable<K, V> {}
 unsafe impl<K, V> Sync for TSHashTable<K, V> {}
 
 impl<K: Eq + Hash, V> TSHashTable<K, V> {
-    pub fn new(size: i16) -> Self {
+    pub fn new(size: u8) -> Self {
         let hash_table_list = (0..size)
             .map(|_| Arc::new(Mutex::new(HashMap::new())))
             .collect();
@@ -598,6 +598,7 @@ impl<K: Eq + Hash, V> TSHashTable<K, V> {
             size,
         }
     }
+
     pub fn hash_key(&self, k: &K) -> usize {
         let mut hasher = DefaultHasher::new();
         k.hash(&mut hasher);
@@ -656,6 +657,15 @@ impl<K: Eq + Hash, V> TSHashTable<K, V> {
         }
     }
 
+    pub fn with_value<F, R>(&self, k: &K, f: F) -> Option<R>
+    where
+        F: Fn(&V) -> R,
+    {
+        let index = self.hash_key(k);
+        let ht = self.hash_table_list[index].lock().unwrap();
+        ht.get(k).map(f)
+    }
+
     pub fn map_m<F>(&self, f: F)
     where
         F: Fn(&K, &V) + Send + Sync + 'static,
@@ -699,7 +709,7 @@ impl<K: Eq + Hash, V> TSHashTable<K, V> {
             .collect()
     }
 
-    pub fn from_list(size: i16, kv: Vec<(K, V)>) -> Self {
+    pub fn from_list(size: u8, kv: Vec<(K, V)>) -> Self {
         let tsh = Self::new(size);
         for (k, v) in kv {
             tsh.insert(k, v);

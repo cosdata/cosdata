@@ -1,15 +1,18 @@
 use crate::distance::cosine::CosineSimilarity;
 use crate::models::buffered_io::BufferManager;
+use crate::models::common::TSHashTable;
 use crate::models::lazy_load::*;
 use crate::models::serializer::*;
 use crate::models::types::*;
 use crate::models::versioning::BranchId;
 use crate::models::versioning::VersionHash;
 use crate::models::versioning::{Version, VersionControl};
+use crate::storage::page::Pagepool;
 use crate::storage::Storage;
 use half::f16;
 use lmdb::DatabaseFlags;
 use lmdb::Environment;
+use rand::Rng;
 use std::sync::Arc;
 use tempfile::{tempdir, TempDir};
 
@@ -1075,4 +1078,234 @@ fn test_eager_lazy_item_multiple_serialization() {
     let deserialized: EagerLazyItemSet<MergedNode, f32> = cache.load_item(file_index).unwrap();
 
     assert_eq!(set.len(), deserialized.len());
+}
+
+fn get_random_pagepool<const LEN: usize>(rng: &mut impl Rng) -> Pagepool<LEN> {
+    let mut pool = Pagepool::default();
+    let count = rng.gen_range(20..50);
+    add_random_items_to_pagepool(rng, &mut pool, count);
+    pool
+}
+
+fn add_random_items_to_pagepool<const LEN: usize>(
+    rng: &mut impl Rng,
+    pool: &mut Pagepool<LEN>,
+    count: usize,
+) {
+    for _ in 0..count {
+        pool.push(rng.gen_range(0..u32::MAX));
+    }
+}
+
+#[test]
+fn test_page_serialization() {
+    let mut rng = rand::thread_rng();
+    let page_pool = get_random_pagepool(&mut rng);
+    let mut skipm: HashSet<u64> = HashSet::new();
+
+    let root_version_id = Hash::from(0);
+    let root_version_number = 0;
+
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(0.into());
+    let offset = page_pool
+        .serialize(bufmans.clone(), root_version_id, cursor)
+        .unwrap();
+
+    bufman.close_cursor(cursor).unwrap();
+
+    let deserialized = Pagepool::<10>::deserialize(
+        bufmans.clone(),
+        FileIndex::Valid {
+            offset: FileOffset(offset),
+            version_id: root_version_id,
+            version_number: root_version_number,
+        },
+        cache.clone(),
+        0_u16,
+        &mut skipm,
+    )
+    .unwrap();
+
+    assert_eq!(page_pool, deserialized);
+}
+
+#[test]
+fn test_page_incremental_serialization() {
+    let mut rng = rand::thread_rng();
+    let mut page_pool = get_random_pagepool(&mut rng);
+    let mut skipm: HashSet<u64> = HashSet::new();
+
+    let root_version_id = Hash::from(0);
+    let root_version_number = 0;
+
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(0.into());
+    let _offset = page_pool
+        .serialize(bufmans.clone(), root_version_id, cursor)
+        .unwrap();
+
+    add_random_items_to_pagepool(&mut rng, &mut page_pool, 100);
+
+    let offset = page_pool
+        .serialize(bufmans.clone(), root_version_id, cursor)
+        .unwrap();
+    bufman.close_cursor(cursor).unwrap();
+
+    let deserialized = Pagepool::<10>::deserialize(
+        bufmans.clone(),
+        FileIndex::Valid {
+            offset: FileOffset(offset),
+            version_id: root_version_id,
+            version_number: root_version_number,
+        },
+        cache.clone(),
+        0_u16,
+        &mut skipm,
+    )
+    .unwrap();
+
+    assert_eq!(page_pool, deserialized);
+}
+
+#[test]
+fn test_tshashtable_serialization() {
+    let mut rng = rand::thread_rng();
+    let table = TSHashTable::<u8, Pagepool<10>>::new(16);
+    let mut skipm: HashSet<u64> = HashSet::new();
+
+    // only even keys
+    for i in (0..32).map(|x| x * 2) {
+        table.insert(i, get_random_pagepool(&mut rng));
+    }
+
+    let root_version_id = Hash::from(0);
+    let root_version_number = 0;
+
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(0.into());
+    let offset = table
+        .serialize(bufmans.clone(), root_version_id, cursor)
+        .unwrap();
+    bufman.close_cursor(cursor).unwrap();
+
+    let deserialized = TSHashTable::deserialize(
+        bufmans.clone(),
+        FileIndex::Valid {
+            offset: FileOffset(offset),
+            version_id: root_version_id,
+            version_number: root_version_number,
+        },
+        cache.clone(),
+        0_u16,
+        &mut skipm,
+    )
+    .unwrap();
+
+    let mut table_list = table.to_list();
+    let mut deserialized_list = deserialized.to_list();
+
+    table_list.sort_by_key(|(k, _)| *k);
+    deserialized_list.sort_by_key(|(k, _)| *k);
+
+    assert_eq!(table_list, deserialized_list);
+}
+
+#[test]
+fn test_tshashtable_incremental_serialization_updated_values() {
+    let mut rng = rand::thread_rng();
+    let table = TSHashTable::<u8, Pagepool<10>>::new(16);
+    let mut skipm: HashSet<u64> = HashSet::new();
+
+    // only even keys
+    for i in (0..32).map(|x| x * 2) {
+        table.insert(i, get_random_pagepool(&mut rng));
+    }
+
+    let root_version_id = Hash::from(0);
+    let root_version_number = 0;
+
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(0.into());
+    let _offset = table
+        .serialize(bufmans.clone(), root_version_id, cursor)
+        .unwrap();
+
+    for i in (0..32).map(|x| x * 2) {
+        table.mutate(i, |pool| {
+            let mut pool = pool.unwrap();
+            add_random_items_to_pagepool(&mut rng, &mut pool, 100);
+            Some(pool)
+        });
+    }
+    let offset = table
+        .serialize(bufmans.clone(), root_version_id, cursor)
+        .unwrap();
+    bufman.close_cursor(cursor).unwrap();
+
+    let deserialized = TSHashTable::deserialize(
+        bufmans.clone(),
+        FileIndex::Valid {
+            offset: FileOffset(offset),
+            version_id: root_version_id,
+            version_number: root_version_number,
+        },
+        cache.clone(),
+        0_u16,
+        &mut skipm,
+    )
+    .unwrap();
+
+    let mut table_list = table.to_list();
+    let mut deserialized_list = deserialized.to_list();
+
+    table_list.sort_by_key(|(k, _)| *k);
+    deserialized_list.sort_by_key(|(k, _)| *k);
+
+    assert_eq!(table_list, deserialized_list);
+}
+
+#[test]
+fn test_tshashtable_incremental_serialization_new_entries() {
+    let mut rng = rand::thread_rng();
+    let table = TSHashTable::<u8, Pagepool<10>>::new(16);
+    let mut skipm: HashSet<u64> = HashSet::new();
+
+    // only even keys
+    for i in (0..32).map(|x| x * 2) {
+        table.insert(i, get_random_pagepool(&mut rng));
+    }
+
+    let root_version_id = Hash::from(0);
+    let root_version_number = 0;
+
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(0.into());
+    let _offset = table
+        .serialize(bufmans.clone(), root_version_id, cursor)
+        .unwrap();
+
+    for i in (0..32).map(|x| (x * 2) + 1) {
+        table.insert(i, get_random_pagepool(&mut rng));
+    }
+    let offset = table
+        .serialize(bufmans.clone(), root_version_id, cursor)
+        .unwrap();
+    bufman.close_cursor(cursor).unwrap();
+
+    let deserialized = TSHashTable::deserialize(
+        bufmans.clone(),
+        FileIndex::Valid {
+            offset: FileOffset(offset),
+            version_id: root_version_id,
+            version_number: root_version_number,
+        },
+        cache.clone(),
+        0_u16,
+        &mut skipm,
+    )
+    .unwrap();
+
+    let mut table_list = table.to_list();
+    let mut deserialized_list = deserialized.to_list();
+
+    table_list.sort_by_key(|(k, _)| *k);
+    deserialized_list.sort_by_key(|(k, _)| *k);
+
+    assert_eq!(table_list, deserialized_list);
 }
