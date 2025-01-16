@@ -64,10 +64,10 @@ pub async fn run_actix_server() -> std::io::Result<()> {
                     ))
                     // vectors module must be registered before collections module
                     // as its scope path is more specific than collections module
+                    .service(indexes_module())
                     .service(vectors_module())
                     .service(transactions_module())
                     .service(collections_module())
-                    .service(indexes_module())
                     .service(web::resource("/upsert").route(web::post().to(api::vectordb::upsert)))
                     .service(web::resource("/search").route(web::post().to(api::vectordb::search)))
                     .service(

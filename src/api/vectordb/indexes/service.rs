@@ -9,12 +9,13 @@ use super::{
 };
 
 pub(crate) async fn create_dense_index(
+    collection_id: String,
     create_index_dto: CreateDenseIndexDto,
     ctx: Arc<AppContext>,
 ) -> Result<(), IndexesError> {
     repo::create_dense_index(
         ctx,
-        create_index_dto.collection_name,
+        collection_id,
         create_index_dto.name,
         create_index_dto.distance_metric_type,
         create_index_dto.quantization,
@@ -24,12 +25,13 @@ pub(crate) async fn create_dense_index(
 }
 
 pub(crate) async fn create_sparse_index(
+    collection_id: String,
     create_index_dto: CreateSparseIndexDto,
     ctx: Arc<AppContext>,
 ) -> Result<(), IndexesError> {
     repo::create_sparse_index(
         ctx,
-        create_index_dto.collection_name,
+        collection_id,
         create_index_dto.name,
         create_index_dto.quantization,
     )

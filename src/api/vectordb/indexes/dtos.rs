@@ -78,7 +78,6 @@ pub enum DenseIndexParamsDto {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct CreateDenseIndexDto {
-    pub collection_name: String,
     pub name: String,
     pub distance_metric_type: DistanceMetric,
     pub quantization: DenseIndexQuantizationDto,
@@ -87,7 +86,6 @@ pub(crate) struct CreateDenseIndexDto {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct CreateSparseIndexDto {
-    pub collection_name: String,
     pub name: String,
     #[serde(default)]
     pub quantization: SparseIndexQuantization,
