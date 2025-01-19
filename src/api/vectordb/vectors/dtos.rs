@@ -8,7 +8,7 @@ use serde::{
 
 use crate::{
     indexes::inverted_index_types::SparsePair,
-    models::{rpc::Vector, types::VectorId},
+    models::{rpc::DenseVector, types::VectorId},
 };
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -152,5 +152,5 @@ pub(crate) enum FindSimilarVectorsResponseDto {
 
 #[derive(Deserialize)]
 pub(crate) struct UpsertDto {
-    pub vectors: Vec<Vector>,
+    pub vectors: Vec<DenseVector>,
 }

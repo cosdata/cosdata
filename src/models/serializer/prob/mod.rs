@@ -1,3 +1,4 @@
+mod inverted_index;
 mod lazy_item;
 mod lazy_item_array;
 mod neighbors;

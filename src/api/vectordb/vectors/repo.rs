@@ -1,5 +1,8 @@
 use std::sync::{atomic::Ordering, Arc};
 
+use crate::api_service::run_upload_sparse_vectors_in_transaction;
+use crate::indexes::inverted_index::InvertedIndexTransaction;
+use crate::models::rpc::DenseVector;
 use crate::{models::types::SparseVector, storage::sparse_ann_query_basic::SparseAnnQueryBasic};
 
 use crate::{
@@ -14,7 +17,7 @@ use super::{
     dtos::{
         CreateDenseVectorDto, CreateSparseVectorDto, CreateVectorResponseDto,
         FindSimilarDenseVectorsDto, FindSimilarSparseVectorsDto, FindSimilarVectorsResponseDto,
-        SimilarVector, UpdateVectorDto, UpdateVectorResponseDto, UpsertDto,
+        SimilarVector, UpdateVectorDto, UpdateVectorResponseDto,
     },
     error::VectorsError,
 };
@@ -30,7 +33,11 @@ pub(crate) async fn create_sparse_vector(
         .await
         .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
 
-    if inverted_index.current_open_transaction.is_some() {
+    if !inverted_index
+        .current_open_transaction
+        .load(Ordering::SeqCst)
+        .is_null()
+    {
         return Err(VectorsError::FailedToCreateVector(
             "there is an ongoing transaction!".into(),
         ));
@@ -209,7 +216,8 @@ pub(crate) async fn find_similar_sparse_vectors(
             .collect(),
     };
 
-    let query = SparseAnnQueryBasic::new(sparse_vec).sequential_search_tshashmap(&inverted_index);
+    let query = SparseAnnQueryBasic::new(sparse_vec)
+        .sequential_search_tshashmap(&inverted_index, inverted_index.root.quantization);
 
     Ok(FindSimilarVectorsResponseDto::Sparse(query))
 }
@@ -230,11 +238,11 @@ pub(crate) async fn delete_vector_by_id(
     Ok(())
 }
 
-pub(crate) async fn upsert_in_transaction(
+pub(crate) async fn upsert_dense_vectors_in_transaction(
     ctx: Arc<AppContext>,
     collection_id: &str,
     transaction: &DenseIndexTransaction,
-    upsert_dto: UpsertDto,
+    vectors: Vec<DenseVector>,
 ) -> Result<(), VectorsError> {
     let dense_index = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
         .await
@@ -244,8 +252,32 @@ pub(crate) async fn upsert_in_transaction(
         ctx.clone(),
         dense_index,
         transaction,
-        upsert_dto
-            .vectors
+        vectors
+            .into_iter()
+            .map(|vec| (vec.id, vec.values))
+            .collect(),
+    )
+    .map_err(VectorsError::WaCustom)?;
+
+    Ok(())
+}
+
+pub(crate) async fn upsert_sparse_vectors_in_transaction(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    transaction: &InvertedIndexTransaction,
+    vectors: Vec<CreateSparseVectorDto>,
+) -> Result<(), VectorsError> {
+    let inverted_index = ctx
+        .ain_env
+        .collections_map
+        .get_inverted_index(collection_id)
+        .ok_or(VectorsError::NotFound)?;
+
+    run_upload_sparse_vectors_in_transaction(
+        inverted_index,
+        transaction,
+        vectors
             .into_iter()
             .map(|vec| (vec.id, vec.values))
             .collect(),

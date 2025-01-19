@@ -43,10 +43,10 @@ pub struct Page<const LEN: usize> {
 }
 
 impl<const LEN: usize> std::ops::Deref for Page<LEN> {
-    type Target = [u32; LEN];
+    type Target = [u32];
 
     fn deref(&self) -> &Self::Target {
-        &self.data
+        &self.data[..self.len]
     }
 }
 

@@ -71,7 +71,7 @@ define_cache_items! {
     InvertedIndexSparseAnnNode = InvertedIndexSparseAnnNode,
     InvertedIndexSparseAnnNodeBasic = InvertedIndexSparseAnnNodeBasic,
     InvertedIndexSparseAnn = InvertedIndexSparseAnn,
-    InvertedIndexSparseAnnNodeBasicTSHashmap = InvertedIndexSparseAnnNodeBasicTSHashmap,
+    // InvertedIndexSparseAnnNodeBasicTSHashmap = InvertedIndexSparseAnnNodeBasicTSHashmap,
     InvertedIndexSparseAnnNodeBasicDashMap = InvertedIndexSparseAnnNodeBasicDashMap,
     InvertedIndexNewDSNode = InvertedIndexNewDSNode,
     VectorData = STM<VectorData>,
@@ -241,9 +241,45 @@ impl NodeRegistry {
     // }
 }
 
+macro_rules! define_prob_cache_items {
+    ($($variant:ident = $type:ty),+ $(,)?) => {
+        #[derive(Clone)]
+        pub enum ProbCacheItem {
+            $($variant(*mut ProbLazyItem<$type>)),+
+        }
+
+
+        pub trait ProbCacheable: 'static + Sized {
+            fn from_cache_item(cache_item: ProbCacheItem) -> Option<*mut ProbLazyItem<Self>>;
+            fn into_cache_item(item: *mut ProbLazyItem<Self>) -> ProbCacheItem;
+        }
+
+        $(
+            impl ProbCacheable for $type {
+                fn from_cache_item(cache_item: ProbCacheItem) -> Option<*mut ProbLazyItem<Self>> {
+                    if let ProbCacheItem::$variant(item) = cache_item {
+                        Some(item)
+                    } else {
+                        None
+                    }
+                }
+
+                fn into_cache_item(item: *mut ProbLazyItem<Self>) -> ProbCacheItem {
+                    ProbCacheItem::$variant(item)
+                }
+            }
+        )+
+    };
+}
+
+define_prob_cache_items! {
+    ProbNode = ProbNode,
+    InvertedIndex = InvertedIndexSparseAnnNodeBasicTSHashmap
+}
+
 pub struct ProbCache {
     cuckoo_filter: RwLock<CuckooFilter<u64>>,
-    registry: LRUCache<u64, SharedNode>,
+    registry: LRUCache<u64, ProbCacheItem>,
     props_registry: DashMap<u64, Weak<NodeProp>>,
     bufmans: Arc<BufferManagerFactory<Hash>>,
     prop_file: Arc<RwLock<File>>,
@@ -313,15 +349,16 @@ impl ProbCache {
             self.props_registry
                 .insert(prop_key, Arc::downgrade(&node.prop));
         }
-        self.registry.insert(combined_index, item);
+        self.registry
+            .insert(combined_index, ProbNode::into_cache_item(item));
     }
 
-    pub fn get_lazy_object(
+    pub fn get_lazy_object<T: ProbSerialize + ProbCacheable>(
         &self,
         file_index: FileIndex,
         max_loads: u16,
         skipm: &mut HashSet<u64>,
-    ) -> Result<SharedNode, BufIoError> {
+    ) -> Result<*mut ProbLazyItem<T>, BufIoError> {
         let combined_index = Self::combine_index(&file_index);
 
         {
@@ -330,7 +367,9 @@ impl ProbCache {
             // Initial check with Cuckoo filter
             if cuckoo_filter.contains(&combined_index) {
                 if let Some(item) = self.registry.get(&combined_index) {
-                    return Ok(item);
+                    if let Some(item) = T::from_cache_item(item) {
+                        return Ok(item);
+                    }
                 }
             }
         }
@@ -352,7 +391,9 @@ impl ProbCache {
                 // Initial check with Cuckoo filter
                 if cuckoo_filter.contains(&combined_index) {
                     if let Some(item) = self.registry.get(&combined_index) {
-                        return Ok(item);
+                        if let Some(item) = T::from_cache_item(item) {
+                            return Ok(item);
+                        }
                     }
                 }
             }
@@ -381,7 +422,7 @@ impl ProbCache {
             (FileOffset(0), 0, 0.into())
         };
 
-        let data = ProbNode::deserialize(&self.bufmans, file_index, self, max_loads - 1, skipm)?;
+        let data = T::deserialize(&self.bufmans, file_index, self, max_loads - 1, skipm)?;
         let state = ProbLazyItemState::Ready(ReadyState {
             data,
             file_offset: Cell::new(Some(offset)),
@@ -394,7 +435,8 @@ impl ProbCache {
 
         {
             self.cuckoo_filter.write().unwrap().insert(&combined_index);
-            self.registry.insert(combined_index.clone(), item.clone());
+            self.registry
+                .insert(combined_index.clone(), T::into_cache_item(item.clone()));
         }
 
         *load_complete = true;
@@ -417,7 +459,10 @@ impl ProbCache {
     //
     // After determining the appropriate `max_loads`, the function proceeds by calling `get_lazy_object`, which handles
     // the actual loading process, and retrieves the lazy-loaded data.
-    pub fn get_object(&self, file_index: FileIndex) -> Result<SharedNode, BufIoError> {
+    pub fn get_object<T: ProbSerialize + ProbCacheable>(
+        &self,
+        file_index: FileIndex,
+    ) -> Result<*mut ProbLazyItem<T>, BufIoError> {
         let (_lock, max_loads) = match self.batch_load_lock.try_lock() {
             Ok(lock) => (Some(lock), 1000),
             Err(TryLockError::Poisoned(poison_err)) => panic!("lock error: {}", poison_err),

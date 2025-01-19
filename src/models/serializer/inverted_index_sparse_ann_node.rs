@@ -76,9 +76,7 @@ impl CustomSerialize for InvertedIndexSparseAnnNodeBasicTSHashmap {
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
-        //todo! Implement serialize
-
-        Ok(0u32)
+        todo!()
     }
 
     fn deserialize(
@@ -88,9 +86,7 @@ impl CustomSerialize for InvertedIndexSparseAnnNodeBasicTSHashmap {
         max_loads: u16,
         skipm: &mut HashSet<u64>,
     ) -> Result<Self, BufIoError> {
-        //todo! Implement deserialize
-
-        Ok(InvertedIndexSparseAnnNodeBasicTSHashmap::new(0, false))
+        todo!()
     }
 }
 

@@ -55,4 +55,22 @@ impl<T, const N: usize> ProbLazyItemArray<T, N> {
     pub fn is_empty(&self) -> bool {
         self.items[0].load(Ordering::SeqCst).is_null()
     }
+
+    pub fn get_or_insert<F>(&self, idx: usize, mut f: F) -> *mut ProbLazyItem<T>
+    where
+        F: FnMut() -> *mut ProbLazyItem<T>,
+    {
+        let mut return_value = ptr::null_mut();
+        let _ = self.items[idx].fetch_update(Ordering::SeqCst, Ordering::SeqCst, |existing| {
+            if existing.is_null() {
+                let value = f();
+                return_value = value;
+                Some(value)
+            } else {
+                return_value = existing;
+                None
+            }
+        });
+        return_value
+    }
 }

@@ -579,7 +579,7 @@ pub fn tuple_to_string(tuple: (u32, u32)) -> String {
 type HashTable<K, V> = HashMap<K, V>;
 
 /// This is a custom Hashtable made to use for data variable in Node of InvertedIndex
-#[derive(Clone)]
+// #[derive(Clone)]
 pub struct TSHashTable<K, V> {
     pub hash_table_list: Vec<Arc<Mutex<HashTable<K, V>>>>,
     pub size: u8,

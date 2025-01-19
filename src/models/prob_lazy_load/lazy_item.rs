@@ -5,9 +5,10 @@ use std::{
 
 use crate::models::{
     buffered_io::BufIoError,
-    cache_loader::ProbCache,
+    cache_loader::{ProbCache, ProbCacheable},
     lazy_load::{largest_power_of_4_below, FileIndex, SyncPersist},
     prob_node::ProbNode,
+    serializer::prob::ProbSerialize,
     types::FileOffset,
     versioning::Hash,
 };
@@ -143,8 +144,8 @@ impl<T> ProbLazyItem<T> {
     }
 }
 
-impl ProbLazyItem<ProbNode> {
-    pub fn try_get_data<'a>(&self, cache: &ProbCache) -> Result<&'a ProbNode, BufIoError> {
+impl<T: ProbSerialize + ProbCacheable> ProbLazyItem<T> {
+    pub fn try_get_data<'a>(&self, cache: &ProbCache) -> Result<&'a T, BufIoError> {
         unsafe {
             match &*self.state.load(Ordering::Relaxed) {
                 ProbLazyItemState::Ready(state) => Ok(&state.data),
@@ -154,7 +155,9 @@ impl ProbLazyItem<ProbNode> {
             }
         }
     }
+}
 
+impl ProbLazyItem<ProbNode> {
     pub fn add_version(
         this: *mut Self,
         version: *mut Self,
