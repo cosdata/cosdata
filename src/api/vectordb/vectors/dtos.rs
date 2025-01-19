@@ -1,5 +1,6 @@
 use std::fmt;
 
+use crate::storage::sparse_ann_query_basic::SparseAnnResult;
 use serde::{
     de::{self, Visitor},
     Deserialize, Deserializer, Serialize,
@@ -118,10 +119,23 @@ pub(crate) struct UpdateVectorResponseDto {
     // pub created_at: String
 }
 
-#[derive(Deserialize)]
-pub(crate) struct FindSimilarVectorsDto {
+#[derive(Deserialize, Debug)]
+pub(crate) struct FindSimilarDenseVectorsDto {
     pub vector: Vec<f32>,
     pub k: VectorId,
+}
+
+#[derive(Deserialize, Debug)]
+pub(crate) struct FindSimilarSparseVectorsDto {
+    pub values: Vec<SparsePair>,
+    pub id: VectorId,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum FindSimilarVectorsDto {
+    Dense(FindSimilarDenseVectorsDto),
+    Sparse(FindSimilarSparseVectorsDto),
 }
 
 #[derive(Serialize)]
@@ -131,8 +145,9 @@ pub(crate) struct SimilarVector {
 }
 
 #[derive(Serialize)]
-pub(crate) struct FindSimilarVectorsResponseDto {
-    pub results: Vec<SimilarVector>,
+pub(crate) enum FindSimilarVectorsResponseDto {
+    Dense(Vec<SimilarVector>),
+    Sparse(Vec<SparseAnnResult>),
 }
 
 #[derive(Deserialize)]

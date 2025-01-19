@@ -1,5 +1,7 @@
 use std::sync::{atomic::Ordering, Arc};
 
+use crate::{models::types::SparseVector, storage::sparse_ann_query_basic::SparseAnnQueryBasic};
+
 use crate::{
     api::vectordb::collections,
     api_service::{run_upload, run_upload_in_transaction, run_upload_sparse_vector},
@@ -11,7 +13,8 @@ use crate::{
 use super::{
     dtos::{
         CreateDenseVectorDto, CreateSparseVectorDto, CreateVectorResponseDto,
-        FindSimilarVectorsDto, SimilarVector, UpdateVectorDto, UpdateVectorResponseDto, UpsertDto,
+        FindSimilarDenseVectorsDto, FindSimilarSparseVectorsDto, FindSimilarVectorsResponseDto,
+        SimilarVector, UpdateVectorDto, UpdateVectorResponseDto, UpsertDto,
     },
     error::VectorsError,
 };
@@ -166,18 +169,49 @@ pub(crate) async fn update_vector(
     })
 }
 
-pub(crate) async fn find_similar_vectors(
-    find_similar_vectors: FindSimilarVectorsDto,
-) -> Result<Vec<SimilarVector>, VectorsError> {
+pub(crate) async fn find_similar_dense_vectors(
+    find_similar_vectors: FindSimilarDenseVectorsDto,
+) -> Result<FindSimilarVectorsResponseDto, VectorsError> {
     if find_similar_vectors.vector.len() == 0 {
         return Err(VectorsError::FailedToFindSimilarVectors(
             "Vector shouldn't be empty".to_string(),
         ));
     }
-    Ok(vec![SimilarVector {
+    Ok(FindSimilarVectorsResponseDto::Dense(vec![SimilarVector {
         id: find_similar_vectors.k,
         score: find_similar_vectors.vector[0],
-    }])
+    }]))
+}
+
+pub(crate) async fn find_similar_sparse_vectors(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    find_similar_vectors: FindSimilarSparseVectorsDto,
+) -> Result<FindSimilarVectorsResponseDto, VectorsError> {
+    if find_similar_vectors.values.len() == 0 {
+        return Err(VectorsError::FailedToFindSimilarVectors(
+            "Vector shouldn't be empty".to_string(),
+        ));
+    }
+
+    // get inverted index for a collection
+    let inverted_index = collections::service::get_inverted_index_by_id(ctx.clone(), collection_id)
+        .await
+        .map_err(|e| VectorsError::FailedToUpdateVector(e.to_string()))?;
+
+    // create a query to get similar sparse vectors
+    let sparse_vec = SparseVector {
+        vector_id: find_similar_vectors.id.0 as u32,
+        entries: find_similar_vectors
+            .values
+            .iter()
+            .map(|pair| return (pair.0, pair.1))
+            .collect(),
+    };
+
+    let query = SparseAnnQueryBasic::new(sparse_vec).sequential_search_tshashmap(&inverted_index);
+
+    Ok(FindSimilarVectorsResponseDto::Sparse(query))
 }
 
 pub(crate) async fn delete_vector_by_id(
