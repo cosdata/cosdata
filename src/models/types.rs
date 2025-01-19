@@ -883,6 +883,7 @@ impl CollectionsMap {
             vcs,
             vec_raw_manager,
             index_manager,
+            inverted_index_data.quantization,
         );
 
         Ok(inverted_index)

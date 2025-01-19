@@ -1,5 +1,5 @@
 use crate::app_context::AppContext;
-use crate::indexes::inverted_index::InvertedIndex;
+use crate::indexes::inverted_index::{InvertedIndex, InvertedIndexTransaction};
 use crate::indexes::inverted_index_types::{RawSparseVectorEmbedding, SparsePair};
 use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::cache_loader::ProbCache;
@@ -137,6 +137,7 @@ pub async fn init_dense_index_for_collection(
 pub async fn init_inverted_index_for_collection(
     ctx: Arc<AppContext>,
     collection: &Collection,
+    quantization: u8,
 ) -> Result<Arc<InvertedIndex>, WaCustomError> {
     let collection_name = &collection.name;
     let collection_path: Arc<Path> = collection.get_path();
@@ -185,6 +186,7 @@ pub async fn init_inverted_index_for_collection(
         vcs,
         vec_raw_manager,
         index_manager,
+        quantization,
     ));
 
     ctx.ain_env
@@ -442,7 +444,7 @@ pub fn run_upload_sparse_vector(
     // Insert vectors
     let bufman = inverted_index.vec_raw_manager.get(current_version)?;
 
-    vecs.into_par_iter()
+    vecs.into_iter()
         .map(|(id, vec)| {
             vec.iter().for_each(|vec| {
                 // TODO (Question)
@@ -451,24 +453,45 @@ pub fn run_upload_sparse_vector(
                 inverted_index.insert(vec.0, vec.1, id.0 as u32);
             });
 
-            let vec_emb = RawSparseVectorEmbedding {
-                raw_vec: Arc::new(vec),
-                hash_vec: id,
-            };
+            // let vec_emb = RawSparseVectorEmbedding {
+            //     raw_vec: Arc::new(vec),
+            //     hash_vec: id,
+            // };
 
-            // write embeddings to disk
-            insert_sparse_embedding(
-                bufman.clone(),
-                inverted_index.clone(),
-                &vec_emb,
-                current_version,
-            )
+            // // write embeddings to disk
+            // insert_sparse_embedding(
+            //     bufman.clone(),
+            //     inverted_index.clone(),
+            //     &vec_emb,
+            //     current_version,
+            // )
+            Ok::<_, WaCustomError>(())
         })
         .collect::<Result<Vec<_>, _>>()?;
     bufman.flush()?;
 
     inverted_index.vec_raw_manager.flush_all()?;
     inverted_index.index_manager.flush_all()?;
+
+    Ok(())
+}
+
+/// uploads a vector embedding within a transaction
+pub fn run_upload_sparse_vectors_in_transaction(
+    inverted_index: Arc<InvertedIndex>,
+    transaction: &InvertedIndexTransaction,
+    sample_points: Vec<(VectorId, Vec<SparsePair>)>,
+) -> Result<(), WaCustomError> {
+    sample_points.into_iter().for_each(|(id, vec)| {
+        vec.iter().for_each(|vec| {
+            inverted_index.insert(vec.0, vec.1, id.0 as u32);
+        });
+        let vec_emb = RawSparseVectorEmbedding {
+            raw_vec: Arc::new(vec),
+            hash_vec: id,
+        };
+        transaction.post_raw_embedding(vec_emb);
+    });
 
     Ok(())
 }

@@ -2,7 +2,7 @@ use crate::{
     api_service::fetch_vector_neighbors,
     app_context::AppContext,
     models::{
-        rpc::{FetchNeighbors, RPCResponseBody, Vector},
+        rpc::{DenseVector, FetchNeighbors, RPCResponseBody},
         types::VectorId,
     },
 };
@@ -31,7 +31,7 @@ pub(crate) async fn fetch(
             res_item.as_ref().map(|(vect, neig)| {
                 let response_data = RPCResponseBody::RespFetchNeighbors {
                     neighbors: neig.iter().map(|(vid, x)| (vid.0, x.clone())).collect(),
-                    vector: Vector {
+                    vector: DenseVector {
                         id: vect.clone(),
                         values: vec![],
                     },

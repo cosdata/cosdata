@@ -19,7 +19,7 @@ base_url = f"{host}/vectordb"
 
 
 def load_brute_force_results(dataset_name):
-    csv_path = f"{dataset_name}-brute_force_results.csv"
+    csv_path = f"datasets/{dataset_name}/brute-force-results.csv"
 
     try:
         print("Attempting to load pre-computed brute force results...")
@@ -32,7 +32,7 @@ def load_brute_force_results(dataset_name):
 
 def generate_brute_force_results(dataset_name, vector_list):
     """Load brute force results from CSV, or generate them if file doesn't exist"""
-    csv_path = f"{dataset_name}-brute_force_results.csv"
+    csv_path = f"datasets/{dataset_name}/brute-force-results.csv"
 
     vectors_corrected = vector_list
     total_vectors = len(vectors_corrected)
@@ -48,7 +48,7 @@ def generate_brute_force_results(dataset_name, vector_list):
 
     for i, query in enumerate(test_vectors):
         if i % 10 == 0:
-            print(f"Processing query vector {i+1}/100, ID: {query['id']}")
+            print(f"Processing query vector {i + 1}/100, ID: {query['id']}")
 
         similarities = []
         for vector in vectors_corrected:
@@ -128,7 +128,6 @@ def create_db(name, description=None, dimension=1024):
 
 def create_explicit_index(name):
     data = {
-        "collection_name": name,  # Name of the collection
         "name": name,  # Name of the index
         "distance_metric_type": "cosine",  # Type of distance metric (e.g., cosine, euclidean)
         "quantization": {
@@ -141,9 +140,7 @@ def create_explicit_index(name):
             #     },
             # },
             "type": "auto",
-            "properties": {
-                "sample_threshold": 100
-            }
+            "properties": {"sample_threshold": 100},
         },
         "index": {
             "type": "hnsw",
@@ -158,7 +155,7 @@ def create_explicit_index(name):
         },
     }
     response = requests.post(
-        f"{base_url}/indexes",
+        f"{base_url}/collections/{name}/indexes/dense",
         headers=generate_headers(),
         data=json.dumps(data),
         verify=False,
@@ -169,7 +166,10 @@ def create_explicit_index(name):
 
 def create_transaction(collection_name):
     url = f"{base_url}/collections/{collection_name}/transactions"
-    response = requests.post(url, headers=generate_headers(), verify=False)
+    data = {"index_type": "dense"}
+    response = requests.post(
+        url, data=json.dumps(data), headers=generate_headers(), verify=False
+    )
     return response.json()
 
 
@@ -177,7 +177,7 @@ def upsert_in_transaction(collection_name, transaction_id, vectors):
     url = (
         f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/upsert"
     )
-    data = {"vectors": vectors}
+    data = {"index_type": "dense", "vectors": vectors}
     print(f"Request URL: {url}")
     print(f"Request Vectors Count: {len(vectors)}")
     response = requests.post(
@@ -196,7 +196,10 @@ def commit_transaction(collection_name, transaction_id):
     url = (
         f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/commit"
     )
-    response = requests.post(url, headers=generate_headers(), verify=False)
+    data = {"index_type": "dense"}
+    response = requests.post(
+        url, data=json.dumps(data), headers=generate_headers(), verify=False
+    )
     if response.status_code not in [200, 204]:
         print(f"Error response: {response.text}")
         raise Exception(f"Failed to commit transaction: {response.status_code}")
@@ -207,7 +210,10 @@ def abort_transaction(collection_name, transaction_id):
     url = (
         f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/abort"
     )
-    response = requests.post(url, headers=generate_headers(), verify=False)
+    data = {"index_type": "dense"}
+    response = requests.post(
+        url, data=json.dumps(data), headers=generate_headers(), verify=False
+    )
     return response.json()
 
 
@@ -371,12 +377,12 @@ def read_dataset_from_parquet(dataset_name):
     metadata = datasets[dataset_name]
     dfs = []
 
-    path = f"{dataset_name}/test0.parquet"
+    path = f"datasets/{dataset_name}/test0.parquet"
 
     while os.path.exists(path):
         dfs.append(pd.read_parquet(path))
         count = len(dfs)
-        path = f"{dataset_name}/test{count}.parquet"
+        path = f"datasets/{dataset_name}/test{count}.parquet"
 
     df = pd.concat(dfs, ignore_index=True)
 
@@ -485,7 +491,7 @@ def process_parquet_files(
     vectors_in_current_transaction = 0
 
     def get_next_file_path(count):
-        return f"{dataset_name}/test{count}.parquet"
+        return f"datasets/{dataset_name}/test{count}.parquet"
 
     start_time = time.time()
 
@@ -555,7 +561,7 @@ def process_parquet_files(
                 total_vectors_inserted += vectors_inserted
 
                 print(f"\nProcessing file: {current_path}")
-                print(f"File {file_count-1} statistics:")
+                print(f"File {file_count - 1} statistics:")
                 print(f"Vectors inserted: {vectors_inserted}")
                 print(
                     f"Matches test vectors collected: {len(matches_test_vectors)}/{matches_sample_size}"
@@ -596,7 +602,7 @@ def process_parquet_files(
     print(f"Total time: {total_time:.2f} seconds")
     print(f"Total insertion time: {total_insertion_time:.2f} seconds")
     print(
-        f"Average insertion time per vector: {(total_insertion_time/total_vectors_inserted)*1000:.2f} ms"
+        f"Average insertion time per vector: {(total_insertion_time / total_vectors_inserted) * 1000:.2f} ms"
     )
     print(f"Final matches test vectors collected: {len(matches_test_vectors)}")
     print(f"Final RPS test vectors collected: {len(rps_test_vectors)}")
@@ -764,7 +770,7 @@ def run_rps_tests(rps_test_vectors, vector_db_name, batch_size=100):
     print(f"Failed Requests: {failed_requests}")
     print(f"Test Duration: {actual_duration:.2f} seconds")
     print(f"Requests Per Second (RPS): {rps:.2f}")
-    print(f"Success Rate: {(successful_requests/total_requests*100):.2f}%")
+    print(f"Success Rate: {(successful_requests / total_requests * 100):.2f}%")
 
 
 if __name__ == "__main__":

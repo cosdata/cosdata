@@ -2,11 +2,15 @@ use arcshift::ArcShift;
 use core::array::from_fn;
 use dashmap::DashMap;
 use rayon::prelude::*;
+use std::fs::OpenOptions;
 use std::{path::Path, sync::RwLock};
 
 use std::sync::Arc;
 
-use crate::models::cuckoo_filter_tree::CuckooFilterTreeNode;
+use crate::models::cache_loader::ProbCache;
+use crate::models::fixedset::PerformantFixedSet;
+use crate::models::prob_lazy_load::lazy_item::ProbLazyItem;
+use crate::models::prob_lazy_load::lazy_item_array::ProbLazyItemArray;
 use crate::models::versioning::Hash;
 use crate::models::{
     buffered_io::BufferManagerFactory,
@@ -223,170 +227,271 @@ impl InvertedIndexSparseAnnBasic {
     }
 }
 
-#[derive(Clone)]
+fn get_permutations(num: u8) -> Vec<u8> {
+    let mut result = vec![num];
+    let mut one_positions = Vec::new();
+    let mut n = num;
+    let mut pos = 0;
+
+    // Find positions of 1s
+    while n > 0 {
+        if n & 1 == 1 {
+            one_positions.push(pos);
+        }
+        n >>= 1;
+        pos += 1;
+    }
+
+    // For each 1 bit, create new numbers by flipping it to 0
+    for &pos in &one_positions {
+        let mask = !(1 << pos);
+        let len = result.len();
+        for i in 0..len {
+            let new_num = result[i] & mask;
+            if new_num > 0 {
+                // Only add if not zero
+                result.push(new_num);
+            }
+        }
+    }
+
+    result.dedup();
+    result.sort_unstable();
+    result
+}
+
 pub struct InvertedIndexSparseAnnNodeBasicTSHashmap {
     pub dim_index: u32,
     pub implicit: bool,
     pub data: TSHashTable<u8, Pagepool<PAGE_SIZE>>,
-    pub lazy_children: LazyItemArray<InvertedIndexSparseAnnNodeBasicTSHashmap, 16>,
-    pub cuckoo_filter_tree: Arc<CuckooFilterTreeNode>,
+    // len = quantization (16, 32, 64)
+    pub exclusive_key_fixed_sets: Vec<RwLock<PerformantFixedSet>>,
+    pub lazy_children: ProbLazyItemArray<InvertedIndexSparseAnnNodeBasicTSHashmap, 16>,
+    // len = number of bits used to store quantized value (4, 5, 6)
+    pub bit_fixed_sets: Vec<RwLock<PerformantFixedSet>>,
+    pub quantization: u8,
 }
 
 #[derive(Clone)]
 pub struct InvertedIndexSparseAnnBasicTSHashmap {
-    pub root: ArcShift<InvertedIndexSparseAnnNodeBasicTSHashmap>,
-    pub cache: Arc<NodeRegistry>,
+    pub root: Arc<InvertedIndexSparseAnnNodeBasicTSHashmap>,
+    pub cache: Arc<ProbCache>,
 }
 
-impl InvertedIndexSparseAnnNodeBasicTSHashmap {
-    pub fn new(dim_index: u32, implicit: bool) -> Self {
-        let data = TSHashTable::new(16);
+unsafe impl Send for InvertedIndexSparseAnnNodeBasicTSHashmap {}
+unsafe impl Sync for InvertedIndexSparseAnnNodeBasicTSHashmap {}
+unsafe impl Send for InvertedIndexSparseAnnBasicTSHashmap {}
+unsafe impl Sync for InvertedIndexSparseAnnBasicTSHashmap {}
 
-        InvertedIndexSparseAnnNodeBasicTSHashmap {
+impl InvertedIndexSparseAnnNodeBasicTSHashmap {
+    pub fn new(
+        dim_index: u32,
+        implicit: bool,
+        // 16, 32, 64
+        quantization: u8,
+    ) -> Self {
+        let data = TSHashTable::new(16);
+        let fixed_set_size = 8;
+
+        let mut exclusive_key_fixed_sets = Vec::with_capacity(quantization as usize);
+
+        for _ in 0..quantization {
+            exclusive_key_fixed_sets.push(RwLock::new(PerformantFixedSet::new(fixed_set_size)));
+        }
+
+        let mut bit_fixed_sets = Vec::with_capacity(quantization.trailing_zeros() as usize);
+
+        for _ in 0..quantization.trailing_zeros() {
+            bit_fixed_sets.push(RwLock::new(PerformantFixedSet::new(
+                (quantization >> 1) as usize * fixed_set_size,
+            )));
+        }
+
+        Self {
             dim_index,
             implicit,
             data,
-            lazy_children: LazyItemArray::new(),
-            cuckoo_filter_tree: Arc::new(CuckooFilterTreeNode::build_tree(5, 0, 0.0, 10.0)),
+            exclusive_key_fixed_sets,
+            lazy_children: ProbLazyItemArray::new(),
+            bit_fixed_sets,
+            quantization,
         }
     }
 
     /// Finds or creates the node where the data should be inserted.
     /// Traverses the tree iteratively and returns a reference to the node.
-    pub fn find_or_create_node(
-        node: ArcShift<InvertedIndexSparseAnnNodeBasicTSHashmap>,
-        path: &[usize],
-        cache: Arc<NodeRegistry>,
-    ) -> ArcShift<InvertedIndexSparseAnnNodeBasicTSHashmap> {
-        let mut current_node = node;
+    pub fn find_or_create_node(&self, path: &[usize], cache: &ProbCache) -> &Self {
+        let mut current_node = self;
         for &child_index in path {
             let new_dim_index = current_node.dim_index + POWERS_OF_4[child_index];
-            let new_child = LazyItem::new(
-                0.into(),
-                0u16,
-                InvertedIndexSparseAnnNodeBasicTSHashmap::new(new_dim_index, true),
-            );
-            loop {
-                if let Some(child) = current_node
-                    .lazy_children
-                    .checked_insert(child_index, new_child.clone())
-                {
-                    let res: Arc<InvertedIndexSparseAnnNodeBasicTSHashmap> =
-                        child.get_data(cache.clone());
-                    current_node = ArcShift::new((*res).clone());
-                    break;
-                }
+            if let Some(child) = current_node.lazy_children.get(child_index) {
+                let res = unsafe { &*child }.try_get_data(cache).unwrap();
+                current_node = res;
+                continue;
             }
+            let new_child = current_node.lazy_children.get_or_insert(child_index, || {
+                ProbLazyItem::new(
+                    Self::new(new_dim_index, true, self.quantization),
+                    0.into(),
+                    0,
+                )
+            });
+            let res = unsafe { &*new_child }.try_get_data(cache).unwrap();
+            current_node = res;
         }
 
         current_node
     }
 
-    pub fn quantize(value: f32) -> u8 {
-        ((value * 63.0).clamp(0.0, 63.0) as u8).min(63)
+    pub fn quantize(&self, value: f32) -> u8 {
+        let max_val = self.quantization as f32 - 1.0;
+        ((value * max_val).clamp(0.0, max_val) as u8).min(self.quantization - 1)
     }
 
     /// Inserts a value into the index at the specified dimension index.
     /// Finds the quantized value and pushes the vec_Id in array at index = quantized_value
-    pub fn insert(
-        node: ArcShift<InvertedIndexSparseAnnNodeBasicTSHashmap>,
-        value: f32,
-        vector_id: u32,
-    ) {
-        let quantized_value = Self::quantize(value);
-        let data = node.data.clone();
-        data.get_or_create(quantized_value, || Pagepool::default());
-        data.mutate(quantized_value, |x| {
+    pub fn insert(&self, value: f32, vector_id: u32) {
+        let quantized_value = self.quantize(value);
+        self.data
+            .get_or_create(quantized_value, || Pagepool::default());
+        self.data.mutate(quantized_value, |x| {
             let mut vecof_vec_id = x.unwrap();
             vecof_vec_id.push(vector_id);
             Some(vecof_vec_id)
         });
-        println!("vector_id -> {vector_id}");
-        let mut tree = node.cuckoo_filter_tree.clone();
-        Arc::make_mut(&mut tree).add_item(vector_id as u64, value);
-        println!("vector_id_2 -> {vector_id}");
-    }
-
-    /// Retrieves a value from the index at the specified dimension index.
-    /// Calculates the path and delegates to `get_value`.
-    pub fn get(&self, dim_index: u32, vector_id: u32, cache: Arc<NodeRegistry>) -> Option<u8> {
-        let path = calculate_path(dim_index, self.dim_index);
-        self.get_value(&path, vector_id, cache)
-    }
-
-    /// Retrieves a value from the index following the specified path.
-    /// Recursively traverses child nodes or searches the data vector.
-    fn get_value(&self, path: &[usize], vector_id: u32, cache: Arc<NodeRegistry>) -> Option<u8> {
-        match path.get(0) {
-            Some(child_index) => self
-                .lazy_children
-                .get(*child_index)
-                .map(|data| {
-                    data.get_data(cache.clone())
-                        .get_value(&path[1..], vector_id, cache)
-                })
-                .flatten(),
-            None => {
-                let res = self.data.to_list();
-                for (x, y) in res {
-                    if y.contains(vector_id) {
-                        return Some(x);
-                    }
-                }
-                None
+        self.exclusive_key_fixed_sets[quantized_value as usize]
+            .write()
+            .unwrap()
+            .insert(vector_id);
+        // println!("vector_id -> {vector_id}");
+        for i in 0..4 {
+            if (quantized_value & (1u8 << i)) != 0 {
+                self.bit_fixed_sets[i].write().unwrap().insert(vector_id);
             }
         }
+        // println!("vector_id_2 -> {vector_id}");
     }
+
+    pub fn search_fixed_sets(&self, vector_id: u32) -> Option<u8> {
+        let mut index = 0u8;
+        for i in 0..4 {
+            if self.bit_fixed_sets[i].read().unwrap().is_member(vector_id) {
+                index |= 1 << i;
+            }
+        }
+
+        if index == 0 {
+            None
+        } else {
+            Some(index)
+        }
+    }
+
+    pub fn find_key_of_id(&self, vector_id: u32) -> Option<u8> {
+        let index = self.search_fixed_sets(vector_id)?;
+        let found = self.exclusive_key_fixed_sets[index as usize]
+            .read()
+            .unwrap()
+            .is_member(vector_id);
+        if found {
+            return Some(index);
+        }
+        let alternate_keys = get_permutations(index);
+        for i in alternate_keys {
+            let found = self.exclusive_key_fixed_sets[i as usize]
+                .read()
+                .unwrap()
+                .is_member(vector_id);
+            if found {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    // /// Retrieves a value from the index at the specified dimension index.
+    // /// Calculates the path and delegates to `get_value`.
+    // pub fn get(&self, dim_index: u32, vector_id: u32, cache: Arc<NodeRegistry>) -> Option<u8> {
+    //     let path = calculate_path(dim_index, self.dim_index);
+    //     self.get_value(&path, vector_id, cache)
+    // }
+
+    // /// Retrieves a value from the index following the specified path.
+    // /// Recursively traverses child nodes or searches the data vector.
+    // fn get_value(&self, path: &[usize], vector_id: u32, cache: Arc<NodeRegistry>) -> Option<u8> {
+    //     match path.get(0) {
+    //         Some(child_index) => self
+    //             .lazy_children
+    //             .get(*child_index)
+    //             .map(|data| {
+    //                 data.get_data(cache.clone())
+    //                     .get_value(&path[1..], vector_id, cache)
+    //             })
+    //             .flatten(),
+    //         None => {
+    //             let res = self.data.to_list();
+    //             for (x, y) in res {
+    //                 if y.contains(vector_id) {
+    //                     return Some(x);
+    //                 }
+    //             }
+    //             None
+    //         }
+    //     }
+    // }
 }
 
 impl InvertedIndexSparseAnnBasicTSHashmap {
-    pub fn new() -> Self {
+    pub fn new(quantization: u8) -> Self {
         let bufmans = Arc::new(BufferManagerFactory::new(
             Path::new(".").into(),
             |root, ver: &Hash| root.join(format!("{}.index", **ver)),
             1.0,
         ));
-        let cache = Arc::new(NodeRegistry::new(1000, bufmans));
+        let prop_file = Arc::new(RwLock::new(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .open("prop.data")
+                .unwrap(),
+        ));
+        let cache = Arc::new(ProbCache::new(1000, bufmans, prop_file));
         InvertedIndexSparseAnnBasicTSHashmap {
-            root: ArcShift::new(InvertedIndexSparseAnnNodeBasicTSHashmap::new(0, false)),
+            root: Arc::new(InvertedIndexSparseAnnNodeBasicTSHashmap::new(
+                0,
+                false,
+                quantization,
+            )),
             cache,
         }
     }
 
     /// Finds the node at a given dimension
     /// Traverses the tree iteratively and returns a reference to the node.
-    pub fn find_node(
-        &self,
-        dim_index: u32,
-    ) -> Option<ArcShift<InvertedIndexSparseAnnNodeBasicTSHashmap>> {
-        let mut current_node = self.root.clone();
+    pub fn find_node(&self, dim_index: u32) -> Option<&InvertedIndexSparseAnnNodeBasicTSHashmap> {
+        let mut current_node = &*self.root;
         let path = calculate_path(dim_index, self.root.dim_index);
         for child_index in path {
             let child = current_node.lazy_children.get(child_index)?;
-            let node_res = child.get_data(self.cache.clone());
-            current_node = ArcShift::new((*node_res).clone());
+            let node_res = unsafe { &*child }.try_get_data(&self.cache).unwrap();
+            current_node = node_res;
         }
 
         Some(current_node)
     }
 
-    //Fetches quantized u8 value for a dim_index and vector_Id present at respective node in index
-    pub fn get(&self, dim_index: u32, vector_id: u32) -> Option<u8> {
-        self.root
-            .shared_get()
-            .get(dim_index, vector_id, self.cache.clone())
-    }
+    // //Fetches quantized u8 value for a dim_index and vector_Id present at respective node in index
+    // pub fn get(&self, dim_index: u32, vector_id: u32) -> Option<u8> {
+    //     self.root.get(dim_index, vector_id, self.cache.clone())
+    // }
 
     //Inserts vec_id, quantized value u8 at particular node based on path
     pub fn insert(&self, dim_index: u32, value: f32, vector_id: u32) {
         let path = calculate_path(dim_index, self.root.dim_index);
-        let node = InvertedIndexSparseAnnNodeBasicTSHashmap::find_or_create_node(
-            self.root.clone(),
-            &path,
-            self.cache.clone(),
-        );
+        let node = self.root.find_or_create_node(&path, &self.cache);
         //value will be quantized while being inserted into the Node.
-        InvertedIndexSparseAnnNodeBasicTSHashmap::insert(node, value, vector_id)
+        node.insert(value, vector_id)
     }
 
     /// Adds a sparse vector to the index.

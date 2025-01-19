@@ -65,7 +65,7 @@ pub(crate) async fn create_sparse_index(
     ctx: Arc<AppContext>,
     collection_name: String,
     _name: String,
-    _quantization: SparseIndexQuantization,
+    quantization: SparseIndexQuantization,
 ) -> Result<(), IndexesError> {
     let collection = ctx
         .ain_env
@@ -73,7 +73,7 @@ pub(crate) async fn create_sparse_index(
         .get_collection(&collection_name)
         .ok_or(IndexesError::CollectionNotFound)?;
 
-    init_inverted_index_for_collection(ctx, &collection)
+    init_inverted_index_for_collection(ctx, &collection, quantization.into_u8())
         .await
         .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;
 

@@ -6,12 +6,20 @@ use crate::{
     quantization::StorageType,
 };
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IndexType {
+    Dense,
+    Sparse,
+}
+
 #[derive(Debug, Default)]
 pub enum SparseIndexQuantization {
     #[default]
+    B16,
+    B32,
     B64,
     B128,
-    B256,
 }
 
 impl<'de> Deserialize<'de> for SparseIndexQuantization {
@@ -21,13 +29,25 @@ impl<'de> Deserialize<'de> for SparseIndexQuantization {
     {
         let value: u64 = Deserialize::deserialize(deserializer)?;
         match value {
+            16 => Ok(Self::B16),
+            32 => Ok(Self::B32),
             64 => Ok(Self::B64),
             128 => Ok(Self::B128),
-            256 => Ok(Self::B256),
             _ => Err(serde::de::Error::custom(format!(
-                "Invalid value for quantization: {}. Expected 64, 128, or 256.",
+                "Invalid value for quantization: {}. Expected 16, 32, 64 or 128.",
                 value
             ))),
+        }
+    }
+}
+
+impl SparseIndexQuantization {
+    pub fn into_u8(self) -> u8 {
+        match self {
+            Self::B16 => 16,
+            Self::B32 => 32,
+            Self::B64 => 64,
+            Self::B128 => 128,
         }
     }
 }

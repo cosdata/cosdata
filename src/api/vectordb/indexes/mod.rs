@@ -2,7 +2,7 @@ use actix_web::{web, Scope};
 use controller::{create_dense_index, create_sparse_index};
 
 mod controller;
-mod dtos;
+pub(crate) mod dtos;
 mod error;
 mod repo;
 mod service;

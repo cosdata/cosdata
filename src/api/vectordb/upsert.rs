@@ -1,11 +1,11 @@
 use std::sync::atomic::Ordering;
 
-use actix_web::{web, HttpResponse};
+use actix_web::{web, Error, HttpResponse};
 
 use crate::{
-    api_service::run_upload,
+    api_service::{run_upload, run_upload_sparse_vector},
     app_context::AppContext,
-    models::rpc::{RPCResponseBody, UpsertVectors},
+    models::rpc::{RPCResponseBody, UpsertSparseVectors, UpsertVectors},
 };
 
 // Route: `/vectordb/upsert`

@@ -34,13 +34,14 @@ import numpy as np
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib3
+import random
 
 # Suppress only the single InsecureRequestWarning from urllib3 needed for this script
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Define your dynamic variables
 token = None
-host = "https://127.0.0.1:8443"
+host = "http://127.0.0.1:8443"
 base_url = f"{host}/vectordb"
 
 
@@ -49,116 +50,193 @@ def generate_headers():
 
 
 # Function to login with credentials
-def login():
-    url = f"{host}/auth/login"
-    data = {"username": "admin", "password": "admin", "pretty_print": False}
+def create_session():
+    url = f"{host}/auth/create-session"
+    data = {"username": "admin", "password": "admin"}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
+    session = response.json()
     global token
-    token = response.text
+    token = session["access_token"]
     return token
 
 
-# Function to create sparse vectors in an inverted index
-def create_sparse_vector(vector_db_name, records):
-    url = f"{base_url}/collections/{vector_db_name}/vectors"
+def create_db(name, description=None, dimension=1024):
+    url = f"{base_url}/collections"
     data = {
-        "dense": records,
+        "name": name,
+        "description": description,
+        "dense_vector": {
+            "enabled": False,
+            "auto_create_index": False,
+            "dimension": dimension,
+        },
+        "sparse_vector": {"enabled": True, "auto_create_index": False},
+        "metadata_schema": None,
+        "config": {"max_vectors": None, "replication_factor": None},
     }
-    response = requests.post(url, headers=generate_headers(), data=json.dumps(data), verify=False)
+    response = requests.post(
+        url, headers=generate_headers(), data=json.dumps(data), verify=False
+    )
     return response.json()
 
-# Function to query sparse vectors inverted index
-# def query_sparse_index(vector_db_name, sparse_query, limit):
-#     url = f"{base_url}/query_sparse_index"
-#     data = {
-#         "vector_db_name": vector_db_name,
-#         "sparse_query": sparse_query,
-#         "limit": limit
-#     }
-#     response = requests.post(url, headers=generate_headers(), data=json.dumps(data), verify=False)
-#     return response.json()
 
-# Updated function to generate multiple random sparse vectors
-def generate_random_sparse_vectors(num_records, max_index, min_nonzero, max_nonzero):
-    records = []
-    for i in range(num_records):
-        num_nonzero = np.random.randint(min_nonzero, max_nonzero + 1)
-        indices = sorted(np.random.choice(max_index, num_nonzero, replace=False))
-        values = np.random.uniform(0, 1, num_nonzero).tolist()
-        record = {
-            'id': f'vec{i}',
-                'indices': list(map(int, indices)),
-                'values': values
-        }
-        records.append(record)
-    return records
-
-# Function to perturb a sparse vector
-def perturb_sparse_vector(vector, perturbation_degree, max_index):
-    indices = set(vector['indices'])
-    values = vector['values']
-    
-    # Perturb existing values
-    perturbed_values = [max(0, min(1, v + np.random.uniform(-perturbation_degree, perturbation_degree))) for v in values]
-    
-    # Add or remove some indices
-    num_changes = np.random.randint(0, 3)
-    for _ in range(num_changes):
-        if np.random.random() < 0.5 and len(indices) > 1:
-            # Remove an index
-            remove_idx = np.random.choice(len(indices))
-            indices.remove(list(indices)[remove_idx])
-            del perturbed_values[remove_idx]
-        else:
-            # Add a new index
-            new_index = np.random.randint(0, max_index)
-            if new_index not in indices:
-                indices.add(new_index)
-                perturbed_values.append(np.random.uniform(0, 1))
-    
-    return {
-        'id': vector['id'],
-            'indices': sorted(list(indices)),
-            'values': perturbed_values
+def create_explicit_index(name):
+    data = {
+        "name": name,  # Name of the index
+        "quantization": 16,
     }
+    response = requests.post(
+        f"{base_url}/collections/{name}/indexes/sparse",
+        headers=generate_headers(),
+        data=json.dumps(data),
+        verify=False,
+    )
+
+    return response.json()
+
+
+# Function to create sparse vectors in an inverted index
+def create_sparse_vector(vector_db_name, vector):
+    url = f"{base_url}/collections/{vector_db_name}/vectors"
+    data = {"sparse": vector}
+    response = requests.post(
+        url, headers=generate_headers(), data=json.dumps(data), verify=False
+    )
+    return response.json()
+
+
+def upsert_in_transaction(vector_db_name, transaction_id, vectors):
+    url = (
+        f"{base_url}/collections/{vector_db_name}/transactions/{transaction_id}/upsert"
+    )
+    data = {"index_type": "sparse", "vectors": vectors}
+    print(f"Request URL: {url}")
+    print(f"Request Vectors Count: {len(vectors)}")
+    response = requests.post(
+        url, headers=generate_headers(), data=json.dumps(data), verify=False
+    )
+    print(f"Response Status: {response.status_code}")
+    if response.status_code not in [200, 204]:
+        raise Exception(f"Failed to create vector: {response.status_code}")
+
+
+def search_sparse_vector(vector_db_name, vector):
+    url = f"{base_url}/collections/{vector_db_name}/vectors/search"
+    data = {"sparse": vector}
+    response = requests.post(
+        url, headers=generate_headers(), data=json.dumps(data), verify=False
+    )
+    return response.json()
+
+
+def generate_random_sparse_vector(id, dimension, non_zero_dims):
+    return {
+        "id": id,
+        "indices": random.sample(range(dimension), non_zero_dims),
+        "values": np.random.uniform(0.1, 1.0, non_zero_dims).tolist(),
+    }
+
+
+def create_transaction(collection_name):
+    url = f"{base_url}/collections/{collection_name}/transactions"
+    data = {"index_type": "sparse"}
+    response = requests.post(
+        url, headers=generate_headers(), data=json.dumps(data), verify=False
+    )
+    return response.json()
+
+
+def commit_transaction(collection_name, transaction_id):
+    url = (
+        f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/commit"
+    )
+    data = {"index_type": "sparse"}
+    response = requests.post(
+        url, data=json.dumps(data), headers=generate_headers(), verify=False
+    )
+    if response.status_code not in [200, 204]:
+        print(f"Error response: {response.text}")
+        raise Exception(f"Failed to commit transaction: {response.status_code}")
+    return response.json() if response.text else None
+
+
+def abort_transaction(collection_name, transaction_id):
+    url = (
+        f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/abort"
+    )
+    data = {"index_type": "sparse"}
+    response = requests.post(
+        url, data=json.dumps(data), headers=generate_headers(), verify=False
+    )
+    return response.json()
+
 
 if __name__ == "__main__":
     vector_db_name = "sparse_testdb"
     max_index = 1000
-    num_vectors = 100
-    min_nonzero = 5
-    max_nonzero = 15
+    num_vectors = 100_000
     perturbation_degree = 0.25
+    non_zero_dims = 100
+    dimension = 20_000
+    batch_size = 100
 
-    # first login to get the auth jwt token
-    login_response = login()
-    print("Login Response:", login_response)
+    # first login to get the access token
+    session_response = create_session()
+    print("Session Response:", session_response)
+    create_collection_response = create_db(
+        name=vector_db_name,
+    )
+    print("Create Collection(DB) Response:", create_collection_response)
+    create_explicit_index(vector_db_name)
 
-    # Generate random sparse vectors
-    records = generate_random_sparse_vectors(num_vectors, max_index, min_nonzero, max_nonzero)
+    print("Generating vectors")
+    vectors = [
+        generate_random_sparse_vector(id, dimension, non_zero_dims)
+        for id in range(num_vectors)
+    ]
+    print("Creating transaction")
+    transaction_id = create_transaction(vector_db_name)["transaction_id"]
+    print("Inserting vectors")
+    start = time.time()
+    with ThreadPoolExecutor(max_workers=32) as executor:
+        futures = []
+        for batch_start in range(0, num_vectors, batch_size):
+            batch = vectors[batch_start : batch_start + batch_size]
+            futures.append(
+                executor.submit(
+                    upsert_in_transaction, vector_db_name, transaction_id, batch
+                )
+            )
+        for i, future in enumerate(as_completed(futures)):
+            try:
+                future.result()
+                print(f"Request {i + 1} completed successfully")
+            except Exception as e:
+                print(f"Request {i + 1} failed: {e}")
+    print("Committing transaction")
+    commit_transaction(vector_db_name, transaction_id)
+    end = time.time()
+    insertion_time = end - start
 
-    # Create sparse index
-    # create_response = create_sparse_index(vector_db_name, records)
-    create_response = create_sparse_vector(vector_db_name, records[0])
-    print("Create Sparse Vector Response:", create_response)
-
-    # Generate a query vector (perturbed version of a random vector)
-    query_base = records[np.random.randint(0, num_vectors)]
-    query_vector = perturb_sparse_vector(query_base, perturbation_degree, max_index)
-
-    # # Query sparse index
-    # query_response = query_sparse_index(
-    #     vector_db_name,
-    #     query_vector['sparse_values'],
-    #     limit=10
-    # )
-    # print("Query Sparse Index Response:", query_response)
-
-    # You can add more testing, concurrent operations, or performance measurements here
-
-# Example of how the records being inserted would look
-sample_records = generate_random_sparse_vectors(3, max_index, min_nonzero, max_nonzero)
-print("\nExample of records being inserted:")
-print(json.dumps(sample_records, indent=2))
+    print(f"Insertion time: {insertion_time} seconds")
+    search_vector = random.choice(vectors)
+    query = {
+        "id": num_vectors,
+        "values": [
+            [ind, search_vector["values"][i]]
+            for i, ind in enumerate(search_vector["indices"])
+        ],
+    }
+    print("Searching vector:", search_vector["id"])
+    start = time.time()
+    search_res = search_sparse_vector(vector_db_name, query)
+    end = time.time()
+    search_time = end - start
+    print(f"Search time: {search_time} seconds")
+    print(f"Search response:")
+    for i, result in enumerate(search_res["Sparse"]):
+        id = result["vector_id"]
+        sim = result["similarity"]
+        print(f"{i + 1}. {id} ({sim})")

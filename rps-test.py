@@ -50,6 +50,7 @@ def create_db(name, description=None, dimension=1024):
     )
     return response.json()
 
+
 def create_explicit_index(name):
     data = {
         "collection_name": name,
@@ -61,11 +62,17 @@ def create_explicit_index(name):
         "params": {
             "num_layers": 5,
             "max_cache_size": 1000,
-        }
+        },
     }
-    response = requests.post(f"{base_url}/indexes", headers=generate_headers(), data=json.dumps(data), verify=False)
+    response = requests.post(
+        f"{base_url}/collections/{name}/indexes/dense",
+        headers=generate_headers(),
+        data=json.dumps(data),
+        verify=False,
+    )
 
     return response.json()
+
 
 # Function to create database (collection)
 def create_db_old(vector_db_name, dimensions, max_val, min_val):
@@ -92,7 +99,10 @@ def find_collection(id):
 
 def create_transaction(collection_name):
     url = f"{base_url}/collections/{collection_name}/transactions"
-    response = requests.post(url, headers=generate_headers(), verify=False)
+    data = {"index_type": "dense"}
+    response = requests.post(
+        url, data=json.dumps(data), headers=generate_headers(), verify=False
+    )
     return response.json()
 
 
@@ -115,7 +125,7 @@ def upsert_in_transaction(collection_name, transaction_id, vectors):
     url = (
         f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/upsert"
     )
-    data = {"vectors": vectors}
+    data = {"index_type": "dense", "vectors": vectors}
     print(f"Request URL: {url}")
     print(f"Request Vectors Count: {len(vectors)}")
     response = requests.post(
@@ -128,7 +138,7 @@ def upsert_in_transaction(collection_name, transaction_id, vectors):
 
 def upsert_vectors_in_transaction(collection_name, transaction_id, vectors):
     url = f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/vectors"
-    data = {"vectors": vectors}
+    data = {"index_type": "dense", "vectors": vectors}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
@@ -139,7 +149,10 @@ def commit_transaction(collection_name, transaction_id):
     url = (
         f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/commit"
     )
-    response = requests.post(url, headers=generate_headers(), verify=False)
+    data = {"index_type": "dense"}
+    response = requests.post(
+        url, data=json.dumps(data), headers=generate_headers(), verify=False
+    )
     if response.status_code not in [200, 204]:
         print(f"Error response: {response.text}")
         raise Exception(f"Failed to commit transaction: {response.status_code}")
@@ -150,8 +163,12 @@ def abort_transaction(collection_name, transaction_id):
     url = (
         f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/abort"
     )
-    response = requests.post(url, headers=generate_headers(), verify=False)
+    data = {"index_type": "dense"}
+    response = requests.post(
+        url, data=json.dumps(data), headers=generate_headers(), verify=False
+    )
     return response.json()
+
 
 # Function to upsert vectors
 def upsert_vector(vector_db_name, vectors):
@@ -161,6 +178,7 @@ def upsert_vector(vector_db_name, vectors):
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
     return response.json()
+
 
 def batch_ann_search(vector_db_name, vectors):
     url = f"{base_url}/batch-search"
@@ -236,30 +254,32 @@ def generate_perturbation(base_vector, idd, perturbation_degree, dimensions):
     # if np.random.rand() < 0.01:  # 1 in 100 probability
     #     shortlisted_vectors.append(perturbed_vector)
 
+
 def cosine_similarity(vec1, vec2):
     # Convert inputs to numpy arrays
     vec1 = np.asarray(vec1)
     vec2 = np.asarray(vec2)
-    
+
     # Check if vectors have the same length
     if vec1.shape != vec2.shape:
         raise ValueError("Vectors must have the same length")
-    
+
     # Calculate magnitudes
     magnitude1 = np.linalg.norm(vec1)
     magnitude2 = np.linalg.norm(vec2)
-    
+
     # Check for zero vectors
     if magnitude1 == 0 or magnitude2 == 0:
         raise ValueError("Cannot compute cosine similarity for zero vectors")
-    
+
     # Calculate dot product
     dot_product = np.dot(vec1, vec2)
-    
+
     # Calculate cosine similarity
     cosine_sim = dot_product / (magnitude1 * magnitude2)
-    
+
     return cosine_sim
+
 
 def bruteforce_search(vectors, query, k=5):
     similarities = []
@@ -272,17 +292,24 @@ def bruteforce_search(vectors, query, k=5):
     return similarities[:k]
 
 
-def generate_vectors(txn_count, batch_count, batch_size, dimensions, perturbation_degree, id_offset=0):
-    vectors = [generate_random_vector_with_id(id + id_offset, dimensions) for id in range(txn_count * batch_count * batch_size)]
-    
+def generate_vectors(
+    txn_count, batch_count, batch_size, dimensions, perturbation_degree, id_offset=0
+):
+    vectors = [
+        generate_random_vector_with_id(id + id_offset, dimensions)
+        for id in range(txn_count * batch_count * batch_size)
+    ]
+
     # Shuffle the vectors
     np.random.shuffle(vectors)
     return vectors
+
 
 def search(vectors, vector_db_name, query):
     ann_response = ann_vector(query["id"], vector_db_name, query["values"])
     bruteforce_result = bruteforce_search(vectors, query, 5)
     return (ann_response, bruteforce_result)
+
 
 if __name__ == "__main__":
     # Create database
@@ -310,8 +337,10 @@ if __name__ == "__main__":
     print("Create Collection(DB) Response:", create_collection_response)
     # create_explicit_index(vector_db_name)
 
-    vectors = generate_vectors(txn_count, batch_count, batch_size, dimensions, perturbation_degree)
-            
+    vectors = generate_vectors(
+        txn_count, batch_count, batch_size, dimensions, perturbation_degree
+    )
+
     start_time = time.time()
 
     for req_ct in range(txn_count):
@@ -321,7 +350,6 @@ if __name__ == "__main__":
             transaction_response = create_transaction(vector_db_name)
             transaction_id = transaction_response["transaction_id"]
             print(f"Created transaction: {transaction_id}")
-            
 
             # Process vectors concurrently
             with ThreadPoolExecutor(max_workers=64) as executor:
@@ -329,13 +357,10 @@ if __name__ == "__main__":
                 for base_idx in range(batch_count):
                     req_start = req_ct * batch_count * batch_size
                     batch_start = req_start + base_idx * batch_size
-                    batch = vectors[batch_start:batch_start+batch_size]
+                    batch = vectors[batch_start : batch_start + batch_size]
                     futures.append(
                         executor.submit(
-                            upsert_in_transaction,
-                            vector_db_name,
-                            transaction_id,
-                            batch
+                            upsert_in_transaction, vector_db_name, transaction_id, batch
                         )
                     )
 
@@ -363,7 +388,7 @@ if __name__ == "__main__":
 
     # End time
     end_time = time.time()
-    
+
     # Calculate elapsed time
     elapsed_time = end_time - start_time
 
@@ -373,17 +398,20 @@ if __name__ == "__main__":
     query_vectors = random.sample(vectors, query_batch_count * query_batch_size)
 
     for i in range(len(query_vectors)):
-        query_vectors[i] = perturb_vector(query_vectors[i], perturbation_degree)["values"]
+        query_vectors[i] = perturb_vector(query_vectors[i], perturbation_degree)[
+            "values"
+        ]
 
     start_time = time.time()
-    
+
     with ThreadPoolExecutor(max_workers=32) as executor:
         futures = []
         for batch_idx in range(query_batch_count):
-            batch = query_vectors[batch_idx*query_batch_size:batch_idx*query_batch_size+query_batch_size]
-            futures.append(
-                executor.submit(batch_ann_search, vector_db_name, batch)
-            )
+            batch = query_vectors[
+                batch_idx * query_batch_size : batch_idx * query_batch_size
+                + query_batch_size
+            ]
+            futures.append(executor.submit(batch_ann_search, vector_db_name, batch))
 
         for future in as_completed(futures):
             try:

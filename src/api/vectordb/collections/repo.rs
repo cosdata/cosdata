@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use crate::{
-    api_service::init_inverted_index_for_collection,
     app_context::AppContext,
     indexes::inverted_index::InvertedIndex,
     models::{collection::Collection, types::DenseIndex},
@@ -71,16 +70,6 @@ pub(crate) async fn create_collection(
 //     .await;
 //     result.map_err(|e| CollectionsError::FailedToCreateCollection(e.to_string()))
 // }
-
-/// creates an inverted index for a collection
-#[allow(unused)]
-pub(crate) async fn create_inverted_index(
-    ctx: Arc<AppContext>,
-    collection: &Collection,
-) -> Result<Arc<InvertedIndex>, CollectionsError> {
-    let result = init_inverted_index_for_collection(ctx, collection).await;
-    result.map_err(|e| CollectionsError::FailedToCreateCollection(e.to_string()))
-}
 
 /// gets a list of collections
 /// TODO results should be filtered based on search params,
