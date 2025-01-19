@@ -163,7 +163,7 @@ def abort_transaction(collection_name, transaction_id):
     url = (
         f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/abort"
     )
-    data = {"index_type": "desnse"}
+    data = {"index_type": "dense"}
     response = requests.post(
         url, data=json.dumps(data), headers=generate_headers(), verify=False
     )
