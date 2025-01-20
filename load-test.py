@@ -10,7 +10,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Define your dynamic variables
 token = None
-host = "https://127.0.0.1:8443"
+host = "http://127.0.0.1:8443"
 base_url = f"{host}/vectordb"
 
 
@@ -52,19 +52,23 @@ def create_db(name, description=None, dimension=1024):
 
 def create_explicit_index(name):
     data = {
-        "collection_name": name,
         "name": name,
         "distance_metric_type": "cosine",
-        "quantization": "scalar",
-        "data_type": "u8",
-        "index_type": "hnsw",
-        "params": {
-            "num_layers": 5,
-            "max_cache_size": 1000,
+        "quantization": {"type": "auto", "properties": {"sample_threshold": 100}},
+        "index": {
+            "type": "hnsw",
+            "properties": {
+                "num_layers": 7,
+                "max_cache_size": 1000,
+                "ef_construction": 512,
+                "ef_search": 256,
+                "neighbors_count": 32,
+                "layer_0_neighbors_count": 64,
+            },
         },
     }
     response = requests.post(
-        f"{base_url}/indexes",
+        f"{base_url}/collections/{name}/indexes/dense",
         headers=generate_headers(),
         data=json.dumps(data),
         verify=False,

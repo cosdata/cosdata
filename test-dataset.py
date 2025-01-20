@@ -691,9 +691,13 @@ def run_matching_tests(test_vectors, vector_db_name, brute_force_results):
     total_recall = 0
     total_queries = 0
 
-    for i, test_vec in enumerate(brute_force_results):
+    for i, query_vec in enumerate(test_vectors):
         try:
-            query_vec = next(v for v in test_vectors if v["id"] == test_vec["query_id"])
+            test_vec = next(
+                test_vec
+                for test_vec in brute_force_results
+                if query_vec["id"] == test_vec["query_id"]
+            )
             idr, ann_response = ann_vector(
                 query_vec["id"], vector_db_name, query_vec["values"]
             )
