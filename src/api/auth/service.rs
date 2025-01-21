@@ -13,7 +13,7 @@ use super::{
     error::AuthError,
 };
 
-const TOKEN_LIFETIME: u64 = 900; // 15 minutes
+const TOKEN_LIFETIME: u64 = 3600; // 1 hour
 
 pub(crate) async fn create_session(
     create_session_dto: CreateSessionDTO,

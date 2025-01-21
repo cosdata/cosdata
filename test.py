@@ -53,15 +53,19 @@ def create_db(name, description=None, dimension=1024):
 
 def create_explicit_index(name):
     data = {
-        "collection_name": name,
-        "name": name,
-        "distance_metric_type": "cosine",
-        "quantization": "scalar",
-        "data_type": "u8",
-        "index_type": "hnsw",
-        "params": {
-            "num_layers": 5,
-            "max_cache_size": 1000,
+        "name": name,  # Name of the index
+        "distance_metric_type": "cosine",  # Type of distance metric (e.g., cosine, euclidean)
+        "quantization": {"type": "auto", "properties": {"sample_threshold": 100}},
+        "index": {
+            "type": "hnsw",
+            "properties": {
+                "num_layers": 7,
+                "max_cache_size": 1000,
+                "ef_construction": 512,
+                "ef_search": 256,
+                "neighbors_count": 32,
+                "layer_0_neighbors_count": 64,
+            },
         },
     }
     response = requests.post(
