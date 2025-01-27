@@ -3,7 +3,7 @@ use crate::storage::Storage;
 use half::f16;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Serialize, PartialOrd)]
 pub struct EuclideanDistance(pub f32);
 
 impl DistanceFunction for EuclideanDistance {

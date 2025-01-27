@@ -7,6 +7,7 @@ use std::{
 };
 
 use super::{
+    cache_loader::ProbCache,
     prob_lazy_load::{lazy_item::ProbLazyItem, lazy_item_array::ProbLazyItemArray},
     types::{HNSWLevel, MetricResult, NodeProp, VectorId},
 };
@@ -106,29 +107,45 @@ impl ProbNode {
         &self.prop.id
     }
 
-    pub fn add_neighbor(&self, neighbor_id: u32, neighbor_node: SharedNode, dist: MetricResult) {
+    pub fn add_neighbor(
+        &self,
+        neighbor_id: u32,
+        neighbor_node: SharedNode,
+        dist: MetricResult,
+        cache: &ProbCache,
+    ) -> bool {
         let mut neighbor_dist = dist.get_value();
-        let neighbor = Box::new((neighbor_id, neighbor_node, dist));
+        let neighbor = Box::new((neighbor_id, neighbor_node.clone(), dist));
         let mut neighbor_ptr = Box::into_raw(neighbor);
+        // true if the current neighbor stored in `neighbor_ptr` have a link with current node, so we know if we need to free it or not
         let mut inserted = false;
+        // true if the initial neighbor was inserted, to return
+        let mut initial_neighbor_inserted = false;
+        let mut node_to_remove_backlink = None;
 
         for neighbor in &self.neighbors {
             let result =
                 neighbor.fetch_update(Ordering::Release, Ordering::Acquire, |current_neighbor| {
-                    if let Some((_, _, current_neighbor_similarity)) =
+                    if let Some((_curr_id, curr_node, curr_dist)) =
                         unsafe { current_neighbor.as_ref() }
                     {
-                        if neighbor_dist < current_neighbor_similarity.get_value() {
+                        // If new neighbor is farther, continue searching
+                        if neighbor_dist < curr_dist.get_value() {
                             return None;
                         }
+                        // If new neighbor is closer, mark the previous neighbor for backlink removal
+                        node_to_remove_backlink = Some(curr_node.clone());
                     }
+                    // Either slot is empty or new neighbor is closer - attempt insertion
                     Some(neighbor_ptr)
                 });
 
             if let Ok(prev_neighbor_ptr) = result {
-                if let Some((_, _, prev_neighbor_dist)) = unsafe { prev_neighbor_ptr.as_ref() } {
-                    neighbor_dist = prev_neighbor_dist.get_value();
+                initial_neighbor_inserted = true;
+                if let Some((_, _, prev_dist)) = unsafe { prev_neighbor_ptr.as_ref() } {
+                    neighbor_dist = prev_dist.get_value();
                     neighbor_ptr = prev_neighbor_ptr;
+                    inserted = false;
                 } else {
                     inserted = true;
                     break;
@@ -137,8 +154,40 @@ impl ProbNode {
         }
 
         if !inserted {
+            if let Some(node) = node_to_remove_backlink {
+                if let Ok(n) = unsafe { &*node }.try_get_data(cache) {
+                    n.remove_neighbor(self.get_id().0 as u32);
+                }
+            }
             unsafe {
                 drop(Box::from_raw(neighbor_ptr));
+            }
+        }
+
+        initial_neighbor_inserted
+    }
+
+    // pub fn neighbor_present_at_idx(&self, idx: usize) -> bool {
+    //     !self.neighbors[idx].load(Ordering::Acquire).is_null()
+    // }
+
+    pub fn remove_neighbor(&self, id: u32) {
+        for neighbor in &self.neighbors {
+            let res = neighbor.fetch_update(Ordering::Release, Ordering::Acquire, |nbr| {
+                if let Some((nbr_id, _, _)) = unsafe { nbr.as_ref() } {
+                    if nbr_id == &id {
+                        return Some(ptr::null_mut());
+                    }
+                }
+                None
+            });
+
+            if let Ok(nbr) = res {
+                // cant be null, did the null check in fetch_update
+                unsafe {
+                    drop(Box::from_raw(nbr));
+                }
+                break;
             }
         }
     }

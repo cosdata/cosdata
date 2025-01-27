@@ -270,7 +270,7 @@ fn test_prob_node_serialization_with_neighbors() {
 
         let lazy_item = ProbLazyItem::new(neighbor_node, root_version_id, root_version_number);
         let dist = MetricResult::CosineSimilarity(CosineSimilarity((i as f32) / 5.0));
-        node.add_neighbor(i as u32, lazy_item, dist);
+        node.add_neighbor(i as u32, lazy_item, dist, &cache);
     }
 
     let offset = node.serialize(&bufmans, root_version_id, cursor).unwrap();

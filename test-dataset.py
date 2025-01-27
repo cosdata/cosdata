@@ -133,7 +133,7 @@ def create_explicit_index(name):
         "quantization": {
             # "type": "scalar",
             # "properties": {
-            #     "data_type": "binary",
+            #     "data_type": "f32",
             #     "range": {
             #         "min": -1.0,
             #         "max": 1.0,
@@ -147,10 +147,10 @@ def create_explicit_index(name):
             "properties": {
                 "num_layers": 7,
                 "max_cache_size": 1000,
-                "ef_construction": 512,
-                "ef_search": 256,
-                "neighbors_count": 32,
-                "layer_0_neighbors_count": 64,
+                "ef_construction": 64,
+                "ef_search": 128,
+                "neighbors_count": 16,
+                "layer_0_neighbors_count": 32,
             },
         },
     }
@@ -189,7 +189,9 @@ def upsert_in_transaction(collection_name, transaction_id, vectors):
     )
     print(f"Response Status: {response.status_code}")
     if response.status_code not in [200, 204]:
-        raise Exception(f"Failed to create vector: {response.status_code}")
+        raise Exception(
+            f"Failed to create vector: {response.status_code} ({response.text})"
+        )
 
 
 def commit_transaction(collection_name, transaction_id):
@@ -328,6 +330,7 @@ datasets = {
         "id": "id",
         "embeddings": "emb",
         "size": 100_000,
+        "dimension": 768,
     },
     "million-text-embeddings": {
         "id": None,
@@ -350,6 +353,12 @@ datasets = {
         "embeddings": "openai",
         "size": 1_000_000,
         "dimension": 1536,
+    },
+    "glove-100": {
+        "id": "id",
+        "embeddings": "embeddings",
+        "size": 1_200_000,
+        "dimension": 100,
     },
 }
 

@@ -36,4 +36,8 @@ pub enum Storage {
         mag: f32,
         quant_vec: Vec<f16>,
     },
+    FullPrecisionFP {
+        mag: f32,
+        vec: Vec<f32>,
+    },
 }

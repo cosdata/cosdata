@@ -21,6 +21,7 @@ pub enum StorageType {
     UnsignedByte,
     SubByte(u8),
     HalfPrecisionFP,
+    FullPrecisionFP,
 }
 
 #[derive(Debug)]

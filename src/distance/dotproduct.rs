@@ -5,7 +5,7 @@ use crate::models::dot_product::{
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Serialize, PartialOrd)]
 pub struct DotProductDistance(pub f32);
 
 impl DistanceFunction for DotProductDistance {

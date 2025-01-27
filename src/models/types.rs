@@ -43,6 +43,7 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, RwLock};
 use std::{fmt, ptr};
 use std::{fs::*, thread};
+use tracing::Instrument;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct HNSWLevel(pub u8);
@@ -134,13 +135,21 @@ pub struct MergedNode {
     pub child: LazyItemRef<MergedNode>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, PartialOrd)]
 pub enum MetricResult {
     CosineSimilarity(CosineSimilarity),
     CosineDistance(CosineDistance),
     EuclideanDistance(EuclideanDistance),
     HammingDistance(HammingDistance),
     DotProductDistance(DotProductDistance),
+}
+
+impl Eq for MetricResult {}
+
+impl Ord for MetricResult {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.partial_cmp(other).unwrap_or(std::cmp::Ordering::Equal)
+    }
 }
 
 impl MetricResult {
