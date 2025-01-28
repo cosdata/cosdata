@@ -952,8 +952,8 @@ fn create_node_edges(
     max_edges: usize,
 ) -> Result<(), WaCustomError> {
     let mut successful_edges = 0;
-    let mut successful_indices = Vec::new();
 
+    // neighbors are ordered by closest to farthest
     for (neighbor, dist) in neighbors {
         if successful_edges >= max_edges {
             break;
@@ -969,25 +969,19 @@ fn create_node_edges(
         )?;
         let new_neighbor = unsafe { &*new_lazy_neighbor }.try_get_data(&dense_index.cache)?;
 
-        if node.add_neighbor(
-            new_neighbor.get_id().0 as u32,
-            new_lazy_neighbor.clone(),
-            dist.clone(),
-            &dense_index.cache,
-        ) {
-            successful_edges += 1;
-            successful_indices.push((new_lazy_neighbor.clone(), dist));
+        if new_neighbor.add_neighbor(node.get_id().0 as u32, lazy_node, dist, &dense_index.cache) {
+            let added = node.add_neighbor(
+                new_neighbor.get_id().0 as u32,
+                new_lazy_neighbor,
+                dist,
+                &dense_index.cache,
+            );
+            if added {
+                successful_edges += 1;
+            } else {
+                new_neighbor.remove_neighbor(node.get_id().0 as u32);
+            }
         }
-    }
-
-    for (lazy_neighbor, dist) in successful_indices {
-        let new_neighbor = unsafe { &*lazy_neighbor }.try_get_data(&dense_index.cache)?;
-        new_neighbor.add_neighbor(
-            node.get_id().0 as u32,
-            lazy_node.clone(),
-            dist,
-            &dense_index.cache,
-        );
     }
 
     serialization_table.insert(lazy_node, ());

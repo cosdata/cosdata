@@ -167,9 +167,11 @@ impl ProbNode {
         initial_neighbor_inserted
     }
 
-    // pub fn neighbor_present_at_idx(&self, idx: usize) -> bool {
-    //     !self.neighbors[idx].load(Ordering::Acquire).is_null()
-    // }
+    pub fn all_neighbor_slots_filled(&self) -> bool {
+        self.neighbors
+            .iter()
+            .all(|ptr| !ptr.load(Ordering::Relaxed).is_null())
+    }
 
     pub fn remove_neighbor(&self, id: u32) {
         for neighbor in &self.neighbors {
@@ -199,7 +201,7 @@ impl ProbNode {
                 neighbor
                     .load(Ordering::Relaxed)
                     .as_ref()
-                    .map(|neighbor| neighbor.1.clone())
+                    .map(|neighbor| neighbor.1)
             })
             .collect()
     }
