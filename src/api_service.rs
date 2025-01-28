@@ -102,7 +102,7 @@ pub async fn init_dense_index_for_collection(
     // ---------------------------
     // -- TODO level entry ratio
     // ---------------------------
-    let factor_levels = 10.0;
+    let factor_levels = 4.0;
     let lp = Arc::new(generate_tuples(factor_levels, hnsw_params.num_layers));
 
     let dense_index = Arc::new(DenseIndex::new(
