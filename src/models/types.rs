@@ -455,12 +455,11 @@ impl DenseIndexTransaction {
                     if batches_processed >= batch_count.load(Ordering::SeqCst) {
                         break;
                     }
-                    let list = serialization_table.to_list();
+                    let list = serialization_table.purge_all();
                     for (node, _) in list {
                         let version = unsafe { &*node }.get_current_version();
                         let offset = write_node_to_file(node, &dense_index.index_manager)?;
                         dense_index.cache.insert_lazy_object(version, offset, node);
-                        serialization_table.delete(&node);
                     }
                     batches_processed += 1;
                 }

@@ -43,7 +43,7 @@ impl ProbSerialize for ProbNode {
         // Serialize parent if present
         let parent_file_index = if let Some(parent) = unsafe { parent_ptr.as_ref() } {
             Some((
-                parent_ptr.serialize(bufmans, version, cursor, false)?,
+                parent_ptr.serialize(bufmans, version, cursor, direct)?,
                 parent.get_current_version(),
                 parent.get_current_version_number(),
             ))
@@ -56,7 +56,7 @@ impl ProbSerialize for ProbNode {
         // Serialize child if present
         let child_file_index = if let Some(child) = unsafe { child_ptr.as_ref() } {
             Some((
-                child_ptr.serialize(bufmans, version, cursor, false)?,
+                child_ptr.serialize(bufmans, version, cursor, direct)?,
                 child.get_current_version(),
                 child.get_current_version_number(),
             ))

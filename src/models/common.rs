@@ -1,4 +1,5 @@
 use super::buffered_io::BufIoError;
+use super::cache_loader::ProbCache;
 use super::lazy_load::LazyItem;
 use super::prob_node::SharedNode;
 use super::types::{MergedNode, MetricResult, VectorId};
@@ -487,12 +488,17 @@ pub fn add_option_vecs(
 pub fn remove_duplicates_and_filter(
     vec: Vec<(SharedNode, MetricResult)>,
     k: Option<usize>,
+    cache: &ProbCache,
 ) -> Vec<(VectorId, MetricResult)> {
     let mut seen = HashSet::new();
     let mut collected = vec
         .into_iter()
         .filter_map(|(lazy_item, similarity)| {
-            let id = unsafe { &*lazy_item }.get_lazy_data()?.get_id().clone();
+            let id = unsafe { &*lazy_item }
+                .try_get_data(cache)
+                .unwrap()
+                .get_id()
+                .clone();
             if !seen.insert(id.clone()) {
                 return None;
             }
@@ -717,10 +723,13 @@ impl<K: Eq + Hash, V> TSHashTable<K, V> {
         tsh
     }
 
-    pub fn purge_all(&self) {
+    pub fn purge_all(&self) -> Vec<(K, V)> {
+        let mut list = Vec::new();
         for ht in &self.hash_table_list {
             let mut ht = ht.lock().unwrap();
-            *ht = HashMap::new();
+            let map = std::mem::replace(&mut *ht, HashMap::new());
+            list.extend(map.into_iter());
         }
+        list
     }
 }

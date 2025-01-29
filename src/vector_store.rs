@@ -173,7 +173,7 @@ pub fn finalize_ann_results(
     query: &[f32],
     k: Option<usize>,
 ) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
-    let filtered = remove_duplicates_and_filter(results, k);
+    let filtered = remove_duplicates_and_filter(results, k, &dense_index.cache);
     let mut results = Vec::new();
 
     for (id, _) in filtered {
@@ -977,10 +977,11 @@ fn create_node_edges(
             );
             if added {
                 successful_edges += 1;
-                serialization_table.insert(neighbor, ());
             } else {
                 new_neighbor.remove_neighbor(node.get_id().0 as u32);
             }
+            serialization_table.insert(neighbor, ());
+            serialization_table.insert(new_lazy_neighbor, ());
         }
     }
 
