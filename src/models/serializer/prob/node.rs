@@ -22,6 +22,7 @@ impl ProbSerialize for ProbNode {
         bufmans: &BufferManagerFactory<Hash>,
         version: Hash,
         cursor: u64,
+        direct: bool,
     ) -> Result<u32, BufIoError> {
         let bufman = bufmans.get(version)?;
         let start_offset = bufman.cursor_position(cursor)?;
@@ -42,7 +43,7 @@ impl ProbSerialize for ProbNode {
         // Serialize parent if present
         let parent_file_index = if let Some(parent) = unsafe { parent_ptr.as_ref() } {
             Some((
-                parent_ptr.serialize(bufmans, version, cursor)?,
+                parent_ptr.serialize(bufmans, version, cursor, false)?,
                 parent.get_current_version(),
                 parent.get_current_version_number(),
             ))
@@ -55,7 +56,7 @@ impl ProbSerialize for ProbNode {
         // Serialize child if present
         let child_file_index = if let Some(child) = unsafe { child_ptr.as_ref() } {
             Some((
-                child_ptr.serialize(bufmans, version, cursor)?,
+                child_ptr.serialize(bufmans, version, cursor, false)?,
                 child.get_current_version(),
                 child.get_current_version_number(),
             ))
@@ -66,9 +67,9 @@ impl ProbSerialize for ProbNode {
         // Serialize neighbors
         let neighbors_offset = self
             .get_neighbors_raw()
-            .serialize(bufmans, version, cursor)?;
+            .serialize(bufmans, version, cursor, direct)?;
 
-        let versions_offset = self.versions.serialize(bufmans, version, cursor)?;
+        let versions_offset = self.versions.serialize(bufmans, version, cursor, direct)?;
 
         let end_offset = bufman.cursor_position(cursor)?;
 

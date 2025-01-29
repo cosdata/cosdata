@@ -959,7 +959,6 @@ fn create_node_edges(
             break;
         }
 
-        serialization_table.insert(neighbor.clone(), ());
         let new_lazy_neighbor = get_or_create_version(
             dense_index.clone(),
             lazy_item_versions_table.clone(),
@@ -978,6 +977,7 @@ fn create_node_edges(
             );
             if added {
                 successful_edges += 1;
+                serialization_table.insert(neighbor, ());
             } else {
                 new_neighbor.remove_neighbor(node.get_id().0 as u32);
             }
@@ -985,6 +985,7 @@ fn create_node_edges(
     }
 
     serialization_table.insert(lazy_node, ());
+
     Ok(())
 }
 

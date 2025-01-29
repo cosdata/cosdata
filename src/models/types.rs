@@ -43,7 +43,6 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, RwLock};
 use std::{fmt, ptr};
 use std::{fs::*, thread};
-use tracing::Instrument;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct HNSWLevel(pub u8);
@@ -452,15 +451,16 @@ impl DenseIndexTransaction {
 
                 loop {
                     rx.recv().unwrap();
+
                     if batches_processed >= batch_count.load(Ordering::SeqCst) {
                         break;
                     }
                     let list = serialization_table.to_list();
                     for (node, _) in list {
-                        serialization_table.delete(&node);
                         let version = unsafe { &*node }.get_current_version();
                         let offset = write_node_to_file(node, &dense_index.index_manager)?;
                         dense_index.cache.insert_lazy_object(version, offset, node);
+                        serialization_table.delete(&node);
                     }
                     batches_processed += 1;
                 }

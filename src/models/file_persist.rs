@@ -49,7 +49,7 @@ pub fn write_node_to_file(
     let cursor = bufman.open_cursor()?;
 
     lazy_item_ref.set_persistence(true);
-    let offset = lazy_item.serialize(bufmans, version, cursor)?;
+    let offset = lazy_item.serialize(bufmans, version, cursor, true)?;
 
     bufman.close_cursor(cursor)?;
 
