@@ -23,6 +23,7 @@ use lmdb::{Transaction, WriteFlags};
 use rand::Rng;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use std::array::TryFromSliceError;
+use std::collections::BinaryHeap;
 use std::fs::File;
 use std::io::SeekFrom;
 use std::ptr;
@@ -127,9 +128,7 @@ pub fn ann_search(
         &fvec,
         &mut 0,
         &mut skipm,
-        cur_level,
         false,
-        true,
         hnsw_params.ef_search,
     )?;
 
@@ -174,7 +173,7 @@ pub fn finalize_ann_results(
     query: &[f32],
     k: Option<usize>,
 ) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
-    let filtered = remove_duplicates_and_filter(results, k);
+    let filtered = remove_duplicates_and_filter(results, k, &dense_index.cache);
     let mut results = Vec::new();
 
     for (id, _) in filtered {
@@ -788,8 +787,6 @@ pub fn index_embedding(
         &fvec,
         &mut 0,
         &mut skipm,
-        cur_level,
-        true,
         true,
         hnsw_params.ef_construction,
     )?;
@@ -878,6 +875,11 @@ pub fn index_embedding(
             version_number,
             serialization_table,
             lazy_item_versions_table,
+            if cur_level.0 == 0 {
+                hnsw_params.level_0_neighbors_count
+            } else {
+                hnsw_params.neighbors_count
+            },
         )?;
     }
 
@@ -947,10 +949,15 @@ fn create_node_edges(
     version_number: u16,
     serialization_table: Arc<TSHashTable<SharedNode, ()>>,
     lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16, u8), SharedNode>>,
+    max_edges: usize,
 ) -> Result<(), WaCustomError> {
-    // Handle regular neighbors
+    let mut successful_edges = 0;
+
+    // neighbors are ordered by closest to farthest
     for (neighbor, dist) in neighbors {
-        serialization_table.insert(neighbor.clone(), ());
+        if successful_edges >= max_edges {
+            break;
+        }
 
         let new_lazy_neighbor = get_or_create_version(
             dense_index.clone(),
@@ -961,12 +968,21 @@ fn create_node_edges(
         )?;
         let new_neighbor = unsafe { &*new_lazy_neighbor }.try_get_data(&dense_index.cache)?;
 
-        node.add_neighbor(
-            new_neighbor.get_id().0 as u32,
-            new_lazy_neighbor.clone(),
-            dist,
-        );
-        new_neighbor.add_neighbor(node.get_id().0 as u32, lazy_node.clone(), dist);
+        if new_neighbor.add_neighbor(node.get_id().0 as u32, lazy_node, dist, &dense_index.cache) {
+            let added = node.add_neighbor(
+                new_neighbor.get_id().0 as u32,
+                new_lazy_neighbor,
+                dist,
+                &dense_index.cache,
+            );
+            if added {
+                successful_edges += 1;
+            } else {
+                new_neighbor.remove_neighbor(node.get_id().0 as u32);
+            }
+            serialization_table.insert(neighbor, ());
+            serialization_table.insert(new_lazy_neighbor, ());
+        }
     }
 
     serialization_table.insert(lazy_node, ());
@@ -977,126 +993,69 @@ fn create_node_edges(
 fn traverse_find_nearest(
     config: &Config,
     dense_index: &DenseIndex,
-    vtm: SharedNode,
+    start_node: SharedNode,
     fvec: &Storage,
     nodes_visited: &mut u32,
     skipm: &mut PerformantFixedSet,
-    cur_level: HNSWLevel,
     is_indexing: bool,
-    shortlist: bool,
     ef: u32,
 ) -> Result<Vec<(SharedNode, MetricResult)>, WaCustomError> {
-    *nodes_visited += 1;
-    let mut tasks: Vec<Vec<(SharedNode, MetricResult)>> = Vec::new();
+    let mut candidate_queue = BinaryHeap::new();
+    let mut results = BinaryHeap::new();
 
-    let (latest_version_lazy_node, _latest_version) =
-        ProbLazyItem::get_latest_version(vtm, &dense_index.cache)?;
+    let (start_version, _) = ProbLazyItem::get_latest_version(start_node, &dense_index.cache)?;
+    let start_data = unsafe { &*start_version }.try_get_data(&dense_index.cache)?;
+    let start_dist = dense_index
+        .distance_metric
+        .calculate(&fvec, &start_data.prop.value)?;
+    let start_id = start_data.get_id().0 as u32;
+    skipm.insert(start_id);
+    candidate_queue.push((start_dist, start_node));
 
-    let node = unsafe { &*latest_version_lazy_node }.try_get_data(&dense_index.cache)?;
-    if shortlist {
-        let mut neighbors = Vec::new();
+    while let Some((dist, current_node)) = candidate_queue.pop() {
+        if *nodes_visited >= ef {
+            break;
+        }
+        *nodes_visited += 1;
+        results.push((dist, current_node));
 
-        for neighbor in node.get_neighbors_raw() {
-            let (neighbor_id, neighbor_lazy_item) = unsafe {
-                if let Some((neighbor_id, neighbor, _)) = neighbor.load(Ordering::Relaxed).as_ref()
-                {
-                    (*neighbor_id, *neighbor)
+        let (current_version, _) =
+            ProbLazyItem::get_latest_version(current_node, &dense_index.cache)?;
+        let node = unsafe { &*current_version }.try_get_data(&dense_index.cache)?;
+
+        for neighbor in node
+            .get_neighbors_raw()
+            .iter()
+            .take(config.search.shortlist_size)
+        {
+            let (neighbor_id, neighbor_node) = unsafe {
+                if let Some((id, node, _)) = neighbor.load(Ordering::Relaxed).as_ref() {
+                    (*id, *node)
                 } else {
                     continue;
                 }
             };
 
-            if skipm.is_member(neighbor_id) {
-                continue;
-            }
-            skipm.insert(neighbor_id);
-
-            let neighbor_node = unsafe { &*neighbor_lazy_item }.try_get_data(&dense_index.cache)?;
-            let dist = dense_index
-                .distance_metric
-                .calculate(&fvec, &neighbor_node.prop.value)?;
-
-            neighbors.push((neighbor_lazy_item, dist));
-        }
-
-        neighbors.sort_unstable_by(|(_, a), (_, b)| {
-            b.get_value()
-                .partial_cmp(&a.get_value())
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        for (neighbor_idx, (neighbor_node, dist)) in neighbors.into_iter().enumerate() {
-            if *nodes_visited < ef && neighbor_idx < config.search.shortlist_size {
-                let mut z = traverse_find_nearest(
-                    config,
-                    dense_index,
-                    neighbor_node,
-                    fvec,
-                    nodes_visited,
-                    skipm,
-                    cur_level,
-                    is_indexing,
-                    shortlist,
-                    ef,
-                )?;
-                z.push((neighbor_node, dist));
-                tasks.push(z);
-            } else {
-                tasks.push(vec![(neighbor_node, dist)]);
-            }
-        }
-    } else {
-        for neighbor in node.get_neighbors_raw() {
-            let (neighbor_id, neighbor_lazy_item) = unsafe {
-                if let Some((neighbor_id, neighbor, _)) = neighbor.load(Ordering::Relaxed).as_ref()
-                {
-                    (*neighbor_id, *neighbor)
-                } else {
-                    continue;
-                }
-            };
-
-            if skipm.is_member(neighbor_id) {
-                continue;
-            }
-            skipm.insert(neighbor_id);
-
-            let neighbor = unsafe { &*neighbor_lazy_item }.try_get_data(&dense_index.cache)?;
-            let dist = dense_index
-                .distance_metric
-                .calculate(&fvec, &neighbor.prop.value)?;
-
-            if *nodes_visited < ef {
-                let mut z = traverse_find_nearest(
-                    config,
-                    dense_index,
-                    neighbor_lazy_item,
-                    fvec,
-                    nodes_visited,
-                    skipm,
-                    cur_level,
-                    is_indexing,
-                    shortlist,
-                    ef,
-                )?;
-                z.push((neighbor_lazy_item, dist));
-                tasks.push(z);
-            } else {
-                tasks.push(vec![(neighbor_lazy_item, dist)]);
+            if !skipm.is_member(neighbor_id) {
+                let neighbor_data = unsafe { &*neighbor_node }.try_get_data(&dense_index.cache)?;
+                let dist = dense_index
+                    .distance_metric
+                    .calculate(&fvec, &neighbor_data.prop.value)?;
+                skipm.insert(neighbor_id);
+                candidate_queue.push((dist, neighbor_node));
             }
         }
     }
 
-    let mut nn: Vec<_> = tasks.into_iter().flatten().collect();
-    nn.sort_unstable_by(|a, b| b.1.get_value().partial_cmp(&a.1.get_value()).unwrap());
+    let results = results
+        .into_sorted_vec() // Convert BinaryHeap to a sorted Vec
+        .into_iter() // Iterate over the sorted Vec
+        .rev() // Reverse the order (to get descending order)
+        .map(|(dist, node)| (node.clone(), dist)) // Map to the desired tuple format
+        .take(if is_indexing { 500 } else { 100 }) // Limit the number of results
+        .collect::<Vec<_>>(); // Collect into a Vec
 
-    if is_indexing {
-        nn.truncate(20);
-    } else {
-        // ANN search
-        nn.truncate(100);
-    }
-    Ok(nn)
+    Ok(results)
 }
 
 // fn delete_node_update_neighbours(

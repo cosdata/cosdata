@@ -109,6 +109,8 @@ pub(crate) async fn commit_dense_index_transaction(
         return Err(TransactionError::NotFound);
     }
 
+    let version_number = current_open_transaction.version_number as u32;
+
     current_open_transaction
         .pre_commit()
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
@@ -117,6 +119,10 @@ pub(crate) async fn commit_dense_index_transaction(
         .current_version
         .clone()
         .update(current_transaction_id);
+    vec_store
+        .vcs
+        .set_branch_version("main", version_number.into())
+        .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
     vec_store
         .current_open_transaction
         .store(ptr::null_mut(), Ordering::SeqCst);
@@ -153,6 +159,8 @@ pub(crate) async fn commit_sparse_index_transaction(
         return Err(TransactionError::NotFound);
     }
 
+    let version_number = current_open_transaction.version_number as u32;
+
     current_open_transaction
         .pre_commit()
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
@@ -161,6 +169,10 @@ pub(crate) async fn commit_sparse_index_transaction(
         .current_version
         .clone()
         .update(current_transaction_id);
+    vec_store
+        .vcs
+        .set_branch_version("main", version_number.into())
+        .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
     vec_store
         .current_open_transaction
         .store(ptr::null_mut(), Ordering::SeqCst);

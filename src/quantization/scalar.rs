@@ -37,8 +37,15 @@ impl Quantization for ScalarQuantization {
             }
             StorageType::HalfPrecisionFP => {
                 let quant_vec = vector.iter().map(|&x| f16::from_f32(x)).collect();
-                let mag = vector.iter().map(|&x| x * x).sum();
+                let mag = vector.iter().map(|&x| x * x).sum::<f32>().sqrt();
                 Ok(Storage::HalfPrecisionFP { mag, quant_vec })
+            }
+            StorageType::FullPrecisionFP => {
+                let mag = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
+                Ok(Storage::FullPrecisionFP {
+                    mag,
+                    vec: vector.to_vec(),
+                })
             }
         }
     }

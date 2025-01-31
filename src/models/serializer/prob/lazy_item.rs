@@ -18,6 +18,7 @@ impl ProbSerialize for SharedNode {
         bufmans: &BufferManagerFactory<Hash>,
         version: Hash,
         cursor: u64,
+        direct: bool,
     ) -> Result<u32, BufIoError> {
         let lazy_item = unsafe { &**self };
         match lazy_item.unsafe_get_state() {
@@ -66,10 +67,10 @@ impl ProbSerialize for SharedNode {
 
                     let offset = bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
 
-                    file_offset.set(Some(FileOffset(u32::try_from(offset).unwrap())));
+                    file_offset.set(Some(FileOffset(offset as u32)));
                     persist_flag.store(false, Ordering::SeqCst);
 
-                    data.serialize(bufmans, *version_id, cursor)?;
+                    data.serialize(bufmans, *version_id, cursor, direct)?;
 
                     if version_id != &version {
                         bufman.close_cursor(cursor)?;

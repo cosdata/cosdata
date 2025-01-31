@@ -189,7 +189,7 @@ fn test_lazy_item_serialization() {
     let lazy_item = ProbLazyItem::new(node, root_version_id, root_version_number);
 
     let offset = lazy_item
-        .serialize(&bufmans, root_version_id, cursor)
+        .serialize(&bufmans, root_version_id, cursor, true)
         .unwrap();
     bufman.close_cursor(cursor).unwrap();
 
@@ -213,7 +213,9 @@ fn test_prob_node_acyclic_serialization() {
 
     let node = create_prob_node(0, &prop_file);
 
-    let offset = node.serialize(&bufmans, root_version_id, cursor).unwrap();
+    let offset = node
+        .serialize(&bufmans, root_version_id, cursor, true)
+        .unwrap();
     let file_index = FileIndex::Valid {
         offset: FileOffset(offset),
         version_number: 0,
@@ -242,7 +244,9 @@ fn test_prob_lazy_item_array_serialization() {
         array.push(lazy_item);
     }
 
-    let offset = array.serialize(&bufmans, root_version_id, cursor).unwrap();
+    let offset = array
+        .serialize(&bufmans, root_version_id, cursor, true)
+        .unwrap();
     let file_index = FileIndex::Valid {
         offset: FileOffset(offset),
         version_number: 0,
@@ -270,10 +274,12 @@ fn test_prob_node_serialization_with_neighbors() {
 
         let lazy_item = ProbLazyItem::new(neighbor_node, root_version_id, root_version_number);
         let dist = MetricResult::CosineSimilarity(CosineSimilarity((i as f32) / 5.0));
-        node.add_neighbor(i as u32, lazy_item, dist);
+        node.add_neighbor(i as u32, lazy_item, dist, &cache);
     }
 
-    let offset = node.serialize(&bufmans, root_version_id, cursor).unwrap();
+    let offset = node
+        .serialize(&bufmans, root_version_id, cursor, true)
+        .unwrap();
     let file_index = FileIndex::Valid {
         offset: FileOffset(offset),
         version_number: 0,
@@ -310,7 +316,9 @@ fn test_prob_lazy_item_cyclic_serialization() {
         .unwrap()
         .set_child(lazy0.clone());
 
-    let offset = lazy0.serialize(&bufmans, root_version_id, cursor).unwrap();
+    let offset = lazy0
+        .serialize(&bufmans, root_version_id, cursor, true)
+        .unwrap();
     let file_index = FileIndex::Valid {
         offset: FileOffset(offset),
         version_number: 0,
@@ -393,7 +401,7 @@ fn test_prob_lazy_item_with_versions_serialization_and_validation() {
 
     validate_lazy_item_versions(&cache, unsafe { &*root }, 0);
 
-    let offset = root.serialize(&bufmans, v0_hash, cursor).unwrap();
+    let offset = root.serialize(&bufmans, v0_hash, cursor, true).unwrap();
     let file_index = FileIndex::Valid {
         offset: FileOffset(offset),
         version_number: 0,

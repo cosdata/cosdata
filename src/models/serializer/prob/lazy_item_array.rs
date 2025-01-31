@@ -21,6 +21,7 @@ impl<const N: usize> ProbSerialize for ProbLazyItemArray<ProbNode, N> {
         bufmans: &BufferManagerFactory<Hash>,
         version: Hash,
         cursor: u64,
+        direct: bool,
     ) -> Result<u32, BufIoError> {
         let bufman = bufmans.get(version)?;
         let start_offset = bufman.cursor_position(cursor)?;
@@ -32,7 +33,7 @@ impl<const N: usize> ProbSerialize for ProbLazyItemArray<ProbNode, N> {
             };
             bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
 
-            let offset = item_ptr.serialize(bufmans, version, cursor)?;
+            let offset = item_ptr.serialize(bufmans, version, cursor, direct)?;
             let placeholder_pos = start_offset + (i as u64 * 10);
 
             let item = unsafe { &*item_ptr };
@@ -137,7 +138,7 @@ impl<const N: usize> UpdateSerialized for ProbLazyItemArray<ProbNode, N> {
                         break;
                     };
                     bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
-                    let offset = item_ptr.serialize(bufmans, version_id, cursor)?;
+                    let offset = item_ptr.serialize(bufmans, version_id, cursor, true)?;
                     let placeholder_pos = placeholder_start + (j as u64 * 10);
 
                     let item = unsafe { &*item_ptr };
@@ -147,7 +148,6 @@ impl<const N: usize> UpdateSerialized for ProbLazyItemArray<ProbNode, N> {
                     bufman.write_u16_with_cursor(cursor, item.get_current_version_number())?;
                     bufman.write_u32_with_cursor(cursor, *item.get_current_version())?;
                 }
-                bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
 
                 Ok(offset)
             }

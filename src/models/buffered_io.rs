@@ -42,15 +42,17 @@ struct BufferRegion {
     buffer: RwLock<[u8; BUFFER_SIZE]>,
     dirty: AtomicBool,
     end: AtomicUsize,
+    file: Arc<RwLock<File>>,
 }
 
 impl BufferRegion {
-    fn new(start: u64) -> Self {
+    fn new(start: u64, file: Arc<RwLock<File>>) -> Self {
         BufferRegion {
             start,
             buffer: RwLock::new([0; BUFFER_SIZE]),
             dirty: AtomicBool::new(false),
             end: AtomicUsize::new(0),
+            file,
         }
     }
 
@@ -72,6 +74,17 @@ impl BufferRegion {
         self.dirty.load(Ordering::SeqCst)
             && self.end.load(Ordering::SeqCst) >= FLUSH_THRESHOLD
             && rng.gen_range(0.0..1.0) < eagerness
+    }
+
+    fn flush(&self) -> Result<(), BufIoError> {
+        let mut file = self.file.write().map_err(|_| BufIoError::Locking)?;
+        file.seek(SeekFrom::Start(self.start))
+            .map_err(BufIoError::Io)?;
+        let buffer = self.buffer.read().map_err(|_| BufIoError::Locking)?;
+        let end = self.end.load(Ordering::SeqCst);
+        file.write_all(&buffer[..end]).map_err(BufIoError::Io)?;
+        self.dirty.store(false, Ordering::SeqCst);
+        Ok(())
     }
 }
 
@@ -151,14 +164,18 @@ impl BufferManager {
         let file_size = file.seek(SeekFrom::End(0))?;
         file.seek(SeekFrom::Start(0))?;
         let regions = LRUCache::with_prob_eviction(10000, 0.03125);
-        Ok(BufferManager {
+        let mut this = BufferManager {
             file: Arc::new(RwLock::new(file)),
             regions,
             cursors: RwLock::new(HashMap::new()),
             next_cursor_id: AtomicU64::new(0),
             file_size: RwLock::new(file_size),
             flush_eagerness,
-        })
+        };
+        this.regions.set_evict_hook(Some(|region| {
+            region.flush().unwrap();
+        }));
+        Ok(this)
     }
 
     pub fn open_cursor(&self) -> Result<u64, BufIoError> {
@@ -184,7 +201,7 @@ impl BufferManager {
     fn get_or_create_region(&self, position: u64) -> Result<Arc<BufferRegion>, BufIoError> {
         let start = position - (position % BUFFER_SIZE as u64);
         let cached_region = self.regions.get_or_insert::<BufIoError>(start, || {
-            let mut region = BufferRegion::new(start);
+            let mut region = BufferRegion::new(start, self.file.clone());
             let mut file = self.file.write().map_err(|_| BufIoError::Locking)?;
             file.seek(SeekFrom::Start(start)).map_err(BufIoError::Io)?;
             let buffer = region.buffer.get_mut().map_err(|_| BufIoError::Locking)?;
@@ -195,20 +212,10 @@ impl BufferManager {
         cached_region.map(|r| r.inner())
     }
 
-    fn flush_region(&self, region: &BufferRegion) -> Result<(), BufIoError> {
-        let mut file = self.file.write().map_err(|_| BufIoError::Locking)?;
-        file.seek(SeekFrom::Start(region.start))
-            .map_err(BufIoError::Io)?;
-        let buffer = region.buffer.read().map_err(|_| BufIoError::Locking)?;
-        let end = region.end.load(Ordering::SeqCst);
-        file.write_all(&buffer[..end]).map_err(BufIoError::Io)?;
-        region.dirty.store(false, Ordering::SeqCst);
-        Ok(())
-    }
 
     fn flush_region_if_needed(&self, region: &BufferRegion) -> Result<(), BufIoError> {
         if region.should_eager_flush(self.flush_eagerness) {
-            self.flush_region(region)?;
+            region.flush()?;
         }
         Ok(())
     }
@@ -452,7 +459,7 @@ impl BufferManager {
     pub fn flush(&self) -> Result<(), BufIoError> {
         for region in self.regions.values() {
             if region.should_final_flush() {
-                self.flush_region(&region)?;
+                region.flush()?;
             }
         }
         self.file

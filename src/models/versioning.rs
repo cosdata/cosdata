@@ -355,6 +355,23 @@ impl VersionControl {
         Ok(Some(branch_info))
     }
 
+    pub fn set_branch_version(&self, branch_name: &str, version: Version) -> lmdb::Result<()> {
+        let branch_id = BranchId::new(branch_name);
+        let branch_key = key!(b:branch_id);
+
+        let mut txn = self.env.begin_rw_txn()?;
+
+        let bytes = txn.get(*self.db, &branch_key)?;
+
+        let mut branch_info = BranchInfo::deserialize(bytes).unwrap();
+        branch_info.current_version = version;
+        let bytes = branch_info.serialize();
+
+        txn.put(*self.db, &branch_key, &bytes, WriteFlags::empty())?;
+        txn.commit()?;
+        Ok(())
+    }
+
     pub fn get_version_hash(
         &self,
         hash: &Hash,

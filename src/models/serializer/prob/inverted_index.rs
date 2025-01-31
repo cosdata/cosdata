@@ -12,12 +12,14 @@ use crate::{
 
 use super::ProbSerialize;
 
+#[allow(unused)]
 impl ProbSerialize for InvertedIndexSparseAnnNodeBasicTSHashmap {
     fn serialize(
         &self,
         bufmans: &BufferManagerFactory<Hash>,
         version: Hash,
         cursor: u64,
+        direct: bool,
     ) -> Result<u32, BufIoError> {
         todo!()
     }

@@ -53,6 +53,15 @@ impl SimpleSerialize for Storage {
                     bufman.write_with_cursor(cursor, &el.to_le_bytes())?;
                 }
             }
+            Self::FullPrecisionFP { mag, vec } => {
+                bufman.write_u8_with_cursor(cursor, 3)?;
+                bufman.write_f32_with_cursor(cursor, *mag)?;
+                bufman.write_u32_with_cursor(cursor, vec.len() as u32)?;
+
+                for el in vec {
+                    bufman.write_f32_with_cursor(cursor, *el)?;
+                }
+            }
         }
 
         Ok(start)
@@ -115,6 +124,18 @@ impl SimpleSerialize for Storage {
                 }
 
                 Self::HalfPrecisionFP { mag, quant_vec }
+            }
+            3 => {
+                let mag = bufman.read_f32_with_cursor(cursor)?;
+                let len = bufman.read_u32_with_cursor(cursor)? as usize;
+                let mut vec = Vec::with_capacity(len);
+
+                for _ in 0..len {
+                    let el = bufman.read_f32_with_cursor(cursor)?;
+                    vec.push(el);
+                }
+
+                Self::FullPrecisionFP { mag, vec }
             }
             _ => {
                 return Err(

@@ -23,6 +23,7 @@ pub trait ProbSerialize: Sized {
         bufmans: &BufferManagerFactory<Hash>,
         version: Hash,
         cursor: u64,
+        direct: bool,
     ) -> Result<u32, BufIoError>;
 
     fn deserialize(
@@ -48,6 +49,7 @@ impl<T: SimpleSerialize> ProbSerialize for T {
         bufmans: &BufferManagerFactory<Hash>,
         version: Hash,
         cursor: u64,
+        _direct: bool,
     ) -> Result<u32, BufIoError> {
         let bufman = bufmans.get(version)?;
         SimpleSerialize::serialize(self, bufman, cursor)

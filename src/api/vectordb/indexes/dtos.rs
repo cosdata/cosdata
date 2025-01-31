@@ -60,6 +60,7 @@ pub enum DataType {
     Octal,
     U8,
     F16,
+    F32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -151,6 +152,7 @@ impl From<DataType> for StorageType {
             DataType::Octal => StorageType::SubByte(3),
             DataType::U8 => StorageType::UnsignedByte,
             DataType::F16 => StorageType::HalfPrecisionFP,
+            DataType::F32 => StorageType::FullPrecisionFP,
         }
     }
 }

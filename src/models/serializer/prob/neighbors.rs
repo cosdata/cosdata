@@ -22,6 +22,7 @@ impl ProbSerialize for Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]> {
         bufmans: &BufferManagerFactory<Hash>,
         version: Hash,
         cursor: u64,
+        direct: bool,
     ) -> Result<u32, BufIoError> {
         let bufman = bufmans.get(version)?;
 
@@ -30,34 +31,36 @@ impl ProbSerialize for Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]> {
         // (4 bytes for id + 10 bytes for node offset + 4 bytes for distance offset) * neighbors count
         bufman.write_with_cursor(cursor, &vec![u8::MAX; 18 * self.len()])?;
 
-        let placeholder_start = start_offset + 4;
+        if direct {
+            let placeholder_start = start_offset + 4;
 
-        for (i, neighbor) in self.iter().enumerate() {
-            let (node_id, node_ptr, dist) = unsafe {
-                if let Some(neighbor) = neighbor.load(Ordering::SeqCst).as_ref() {
-                    neighbor.clone()
-                } else {
-                    continue;
-                }
-            };
+            for (i, neighbor) in self.iter().enumerate() {
+                let (node_id, node_ptr, dist) = unsafe {
+                    if let Some(neighbor) = neighbor.load(Ordering::SeqCst).as_ref() {
+                        neighbor.clone()
+                    } else {
+                        continue;
+                    }
+                };
 
-            let placeholder_pos = placeholder_start + (i as u64 * 18);
+                let placeholder_pos = placeholder_start + (i as u64 * 18);
 
-            let node_offset = node_ptr.serialize(bufmans, version, cursor)?;
-            let dist_offset = dist.serialize(bufmans, version, cursor)?;
-            let end_offset = bufman.cursor_position(cursor)?;
+                let node_offset = node_ptr.serialize(bufmans, version, cursor, false)?;
+                let dist_offset = dist.serialize(bufmans, version, cursor, false)?;
+                let end_offset = bufman.cursor_position(cursor)?;
 
-            bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_pos))?;
+                bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_pos))?;
 
-            let node = unsafe { &*node_ptr };
+                let node = unsafe { &*node_ptr };
 
-            bufman.write_u32_with_cursor(cursor, node_id)?;
-            bufman.write_u32_with_cursor(cursor, node_offset)?;
-            bufman.write_u16_with_cursor(cursor, node.get_current_version_number())?;
-            bufman.write_u32_with_cursor(cursor, *node.get_current_version())?;
-            bufman.write_u32_with_cursor(cursor, dist_offset)?;
+                bufman.write_u32_with_cursor(cursor, node_id)?;
+                bufman.write_u32_with_cursor(cursor, node_offset)?;
+                bufman.write_u16_with_cursor(cursor, node.get_current_version_number())?;
+                bufman.write_u32_with_cursor(cursor, *node.get_current_version())?;
+                bufman.write_u32_with_cursor(cursor, dist_offset)?;
 
-            bufman.seek_with_cursor(cursor, SeekFrom::Start(end_offset))?;
+                bufman.seek_with_cursor(cursor, SeekFrom::Start(end_offset))?;
+            }
         }
 
         Ok(start_offset as u32)
@@ -176,8 +179,8 @@ impl UpdateSerialized for Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]> {
 
                     let placeholder_pos = placeholder_offset + (i as u64 * 18);
 
-                    let node_offset = node_ptr.serialize(bufmans, version_id, cursor)?;
-                    let dist_offset = dist.serialize(bufmans, version_id, cursor)?;
+                    let node_offset = node_ptr.serialize(bufmans, version_id, cursor, false)?;
+                    let dist_offset = dist.serialize(bufmans, version_id, cursor, false)?;
                     let end_offset = bufman.cursor_position(cursor)?;
 
                     bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_pos))?;
