@@ -22,7 +22,7 @@ pub struct ProbNode {
     neighbors: Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]>,
     parent: AtomicPtr<ProbLazyItem<ProbNode>>,
     child: AtomicPtr<ProbLazyItem<ProbNode>>,
-    pub versions: ProbLazyItemArray<ProbNode, 4>,
+    pub versions: ProbLazyItemArray<ProbNode, 8>,
 }
 
 unsafe impl Send for ProbNode {}
@@ -75,7 +75,7 @@ impl ProbNode {
         neighbors: Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]>,
         parent: SharedNode,
         child: SharedNode,
-        versions: ProbLazyItemArray<ProbNode, 4>,
+        versions: ProbLazyItemArray<ProbNode, 8>,
     ) -> Self {
         Self {
             hnsw_level,
@@ -221,6 +221,11 @@ impl ProbNode {
 
     pub fn get_neighbors_raw(&self) -> &Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]> {
         &self.neighbors
+    }
+
+    /// See [`crate::models::serializer::prob::node`] for how its calculated
+    pub fn get_serialized_size(neighbors_len: usize) -> usize {
+        neighbors_len * 19 + 111
     }
 }
 

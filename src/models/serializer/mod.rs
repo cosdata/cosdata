@@ -49,9 +49,9 @@ pub trait CustomSerialize: Sized {
 }
 
 trait SimpleSerialize: Sized {
-    fn serialize(&self, bufman: Arc<BufferManager>, cursor: u64) -> Result<u32, BufIoError>;
+    fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError>;
 
-    fn deserialize(bufman: Arc<BufferManager>, offset: FileOffset) -> Result<Self, BufIoError>;
+    fn deserialize(bufman: &BufferManager, offset: FileOffset) -> Result<Self, BufIoError>;
 }
 
 impl<T: SimpleSerialize> CustomSerialize for T {
@@ -62,7 +62,7 @@ impl<T: SimpleSerialize> CustomSerialize for T {
         cursor: u64,
     ) -> Result<u32, BufIoError> {
         let bufman = bufmans.get(version)?;
-        SimpleSerialize::serialize(self, bufman, cursor)
+        SimpleSerialize::serialize(self, &bufman, cursor)
     }
 
     fn deserialize(
@@ -77,7 +77,7 @@ impl<T: SimpleSerialize> CustomSerialize for T {
                 offset, version_id, ..
             } => {
                 let bufman = bufmans.get(version_id)?;
-                SimpleSerialize::deserialize(bufman, offset)
+                SimpleSerialize::deserialize(&bufman, offset)
             }
             FileIndex::Invalid => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -89,14 +89,14 @@ impl<T: SimpleSerialize> CustomSerialize for T {
 }
 
 impl SimpleSerialize for f32 {
-    fn serialize(&self, bufman: Arc<BufferManager>, cursor: u64) -> Result<u32, BufIoError> {
+    fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
         let offset = bufman.cursor_position(cursor)? as u32;
         bufman.write_f32_with_cursor(cursor, *self)?;
         Ok(offset)
     }
 
     fn deserialize(
-        bufman: Arc<BufferManager>,
+        bufman: &BufferManager,
         FileOffset(offset): FileOffset,
     ) -> Result<Self, BufIoError>
     where
@@ -111,14 +111,14 @@ impl SimpleSerialize for f32 {
 }
 
 impl SimpleSerialize for u32 {
-    fn serialize(&self, bufman: Arc<BufferManager>, cursor: u64) -> Result<u32, BufIoError> {
+    fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
         let offset = bufman.cursor_position(cursor)? as u32;
         bufman.write_u32_with_cursor(cursor, *self)?;
         Ok(offset)
     }
 
     fn deserialize(
-        bufman: Arc<BufferManager>,
+        bufman: &BufferManager,
         FileOffset(offset): FileOffset,
     ) -> Result<Self, BufIoError>
     where

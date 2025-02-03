@@ -63,7 +63,7 @@ def create_explicit_index(name):
                 "ef_construction": 512,
                 "ef_search": 256,
                 "neighbors_count": 32,
-                "layer_0_neighbors_count": 64,
+                "level_0_neighbors_count": 64,
             },
         },
     }

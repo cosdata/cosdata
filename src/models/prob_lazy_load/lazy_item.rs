@@ -46,13 +46,14 @@ impl<T> ProbLazyItemState<T> {
 }
 
 pub struct ProbLazyItem<T> {
-    state: AtomicPtr<ProbLazyItemState<T>>,
+    state_: AtomicPtr<ProbLazyItemState<T>>,
+    pub is_level_0: bool,
 }
 
 impl<T> ProbLazyItem<T> {
-    pub fn new(data: T, version_id: Hash, version_number: u16) -> *mut Self {
+    pub fn new(data: T, version_id: Hash, version_number: u16, is_level_0: bool) -> *mut Self {
         Box::into_raw(Box::new(Self {
-            state: AtomicPtr::new(Box::into_raw(Box::new(ProbLazyItemState::Ready(
+            state_: AtomicPtr::new(Box::into_raw(Box::new(ProbLazyItemState::Ready(
                 ReadyState {
                     data,
                     file_offset: Cell::new(None),
@@ -61,26 +62,29 @@ impl<T> ProbLazyItem<T> {
                     version_number,
                 },
             )))),
+            is_level_0,
         }))
     }
 
-    pub fn new_from_state(state: ProbLazyItemState<T>) -> *mut Self {
+    pub fn new_from_state(state: ProbLazyItemState<T>, is_level_0: bool) -> *mut Self {
         Box::into_raw(Box::new(Self {
-            state: AtomicPtr::new(Box::into_raw(Box::new(state))),
+            state_: AtomicPtr::new(Box::into_raw(Box::new(state))),
+            is_level_0,
         }))
     }
 
-    pub fn new_pending(file_index: FileIndex) -> *mut Self {
+    pub fn new_pending(file_index: FileIndex, is_level_0: bool) -> *mut Self {
         Box::into_raw(Box::new(Self {
-            state: AtomicPtr::new(Box::into_raw(Box::new(ProbLazyItemState::Pending(
+            state_: AtomicPtr::new(Box::into_raw(Box::new(ProbLazyItemState::Pending(
                 file_index,
             )))),
+            is_level_0,
         }))
     }
 
     pub fn unsafe_get_state(&self) -> &ProbLazyItemState<T> {
         // SAFETY: caller must make sure the state is not dropped by some other thread
-        unsafe { &*self.state.load(Ordering::Acquire) }
+        unsafe { &*self.state_.load(Ordering::Acquire) }
     }
 
     pub fn set_state(&self, new_state: ProbLazyItemState<T>) {
@@ -96,7 +100,7 @@ impl<T> ProbLazyItem<T> {
     pub fn is_ready(&self) -> bool {
         unsafe {
             matches!(
-                &*self.state.load(Ordering::Acquire),
+                &*self.state_.load(Ordering::Acquire),
                 ProbLazyItemState::Ready(_)
             )
         }
@@ -105,7 +109,7 @@ impl<T> ProbLazyItem<T> {
     pub fn is_pending(&self) -> bool {
         unsafe {
             matches!(
-                &*self.state.load(Ordering::Acquire),
+                &*self.state_.load(Ordering::Acquire),
                 ProbLazyItemState::Pending(_)
             )
         }
@@ -113,7 +117,7 @@ impl<T> ProbLazyItem<T> {
 
     pub fn get_lazy_data<'a>(&self) -> Option<&'a T> {
         unsafe {
-            match &*self.state.load(Ordering::Acquire) {
+            match &*self.state_.load(Ordering::Acquire) {
                 ProbLazyItemState::Pending(_) => None,
                 ProbLazyItemState::Ready(state) => Some(&state.data),
             }
@@ -122,7 +126,7 @@ impl<T> ProbLazyItem<T> {
 
     pub fn get_file_index(&self) -> Option<FileIndex> {
         unsafe {
-            match &*self.state.load(Ordering::Acquire) {
+            match &*self.state_.load(Ordering::Acquire) {
                 ProbLazyItemState::Pending(file_index) => Some(file_index.clone()),
                 ProbLazyItemState::Ready(state) => {
                     state.file_offset.get().map(|offset| FileIndex::Valid {
@@ -137,7 +141,7 @@ impl<T> ProbLazyItem<T> {
 
     pub fn set_file_offset(&self, new_file_offset: FileOffset) {
         unsafe {
-            if let ProbLazyItemState::Ready(state) = &*self.state.load(Ordering::Acquire) {
+            if let ProbLazyItemState::Ready(state) = &*self.state_.load(Ordering::Acquire) {
                 state.file_offset.set(Some(new_file_offset));
             }
         }
@@ -147,10 +151,10 @@ impl<T> ProbLazyItem<T> {
 impl<T: ProbSerialize + ProbCacheable> ProbLazyItem<T> {
     pub fn try_get_data<'a>(&self, cache: &ProbCache) -> Result<&'a T, BufIoError> {
         unsafe {
-            match &*self.state.load(Ordering::Relaxed) {
+            match &*self.state_.load(Ordering::Relaxed) {
                 ProbLazyItemState::Ready(state) => Ok(&state.data),
                 ProbLazyItemState::Pending(file_index) => {
-                    (&*(cache.get_object(file_index.clone())?)).try_get_data(cache)
+                    (&*(cache.get_object(file_index.clone(), self.is_level_0)?)).try_get_data(cache)
                 }
             }
         }
@@ -216,9 +220,9 @@ impl ProbLazyItem<ProbNode> {
         Self::get_latest_version_inner(this, versions, cache)
     }
 
-    fn get_latest_version_inner(
+    fn get_latest_version_inner<const LEN: usize>(
         this: *mut Self,
-        versions: &ProbLazyItemArray<ProbNode, 4>,
+        versions: &ProbLazyItemArray<ProbNode, LEN>,
         cache: &ProbCache,
     ) -> Result<(*mut Self, u16), BufIoError> {
         if let Some(last) = versions.last() {
@@ -270,7 +274,7 @@ impl ProbLazyItem<ProbNode> {
 impl<T> SyncPersist for ProbLazyItem<T> {
     fn set_persistence(&self, flag: bool) {
         unsafe {
-            if let ProbLazyItemState::Ready(state) = &*self.state.load(Ordering::Acquire) {
+            if let ProbLazyItemState::Ready(state) = &*self.state_.load(Ordering::Acquire) {
                 state.persist_flag.store(flag, Ordering::SeqCst);
             }
         }
@@ -278,7 +282,7 @@ impl<T> SyncPersist for ProbLazyItem<T> {
 
     fn needs_persistence(&self) -> bool {
         unsafe {
-            if let ProbLazyItemState::Ready(state) = &*self.state.load(Ordering::Acquire) {
+            if let ProbLazyItemState::Ready(state) = &*self.state_.load(Ordering::Acquire) {
                 state.persist_flag.load(Ordering::SeqCst)
             } else {
                 false
@@ -287,11 +291,11 @@ impl<T> SyncPersist for ProbLazyItem<T> {
     }
 
     fn get_current_version(&self) -> Hash {
-        unsafe { (*self.state.load(Ordering::Acquire)).get_version_id() }
+        unsafe { (*self.state_.load(Ordering::Acquire)).get_version_id() }
     }
 
     fn get_current_version_number(&self) -> u16 {
-        unsafe { (*self.state.load(Ordering::Acquire)).get_version_number() }
+        unsafe { (*self.state_.load(Ordering::Acquire)).get_version_number() }
     }
 }
 

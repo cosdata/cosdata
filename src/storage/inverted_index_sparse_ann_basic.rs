@@ -174,6 +174,7 @@ impl InvertedIndexSparseAnnBasic {
             Path::new(".").into(),
             |root, ver: &Hash| root.join(format!("{}.index", **ver)),
             1.0,
+            8192,
         ));
         let cache = Arc::new(NodeRegistry::new(1000, bufmans));
         InvertedIndexSparseAnnBasic {
@@ -334,6 +335,7 @@ impl InvertedIndexSparseAnnNodeBasicTSHashmap {
                     Self::new(new_dim_index, true, self.quantization),
                     0.into(),
                     0,
+                    false,
                 )
             });
             let res = unsafe { &*new_child }.try_get_data(cache).unwrap();
@@ -447,6 +449,7 @@ impl InvertedIndexSparseAnnBasicTSHashmap {
             Path::new(".").into(),
             |root, ver: &Hash| root.join(format!("{}.index", **ver)),
             1.0,
+            8192,
         ));
         let prop_file = Arc::new(RwLock::new(
             OpenOptions::new()
@@ -456,7 +459,7 @@ impl InvertedIndexSparseAnnBasicTSHashmap {
                 .open("prop.data")
                 .unwrap(),
         ));
-        let cache = Arc::new(ProbCache::new(1000, bufmans, prop_file));
+        let cache = Arc::new(ProbCache::new(1000, bufmans.clone(), bufmans, prop_file));
         InvertedIndexSparseAnnBasicTSHashmap {
             root: Arc::new(InvertedIndexSparseAnnNodeBasicTSHashmap::new(
                 0,
@@ -618,6 +621,7 @@ impl InvertedIndexSparseAnnBasicDashMap {
             Path::new(".").into(),
             |root, ver: &Hash| root.join(format!("{}.index", **ver)),
             1.0,
+            8192,
         ));
         let cache = Arc::new(NodeRegistry::new(1000, bufmans));
         InvertedIndexSparseAnnBasicDashMap {

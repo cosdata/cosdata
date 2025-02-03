@@ -150,7 +150,7 @@ def create_explicit_index(name):
                 "ef_construction": 64,
                 "ef_search": 128,
                 "neighbors_count": 16,
-                "layer_0_neighbors_count": 32,
+                "level_0_neighbors_count": 32,
             },
         },
     }
@@ -160,6 +160,11 @@ def create_explicit_index(name):
         data=json.dumps(data),
         verify=False,
     )
+
+    if response.status_code not in [200, 204]:
+        raise Exception(
+            f"Failed to create index: {response.status_code} ({response.text})"
+        )
 
     return response.json()
 

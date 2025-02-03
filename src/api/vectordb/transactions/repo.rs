@@ -121,7 +121,7 @@ pub(crate) async fn commit_dense_index_transaction(
         .update(current_transaction_id);
     vec_store
         .vcs
-        .set_branch_version("main", version_number.into())
+        .set_branch_version("main", version_number.into(), current_transaction_id)
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
     vec_store
         .current_open_transaction
@@ -171,7 +171,7 @@ pub(crate) async fn commit_sparse_index_transaction(
         .update(current_transaction_id);
     vec_store
         .vcs
-        .set_branch_version("main", version_number.into())
+        .set_branch_version("main", version_number.into(), current_transaction_id)
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
     vec_store
         .current_open_transaction

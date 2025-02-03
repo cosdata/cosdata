@@ -1,7 +1,4 @@
-use std::{
-    io::{self, SeekFrom},
-    sync::Arc,
-};
+use std::io::{self, SeekFrom};
 
 use half::f16;
 
@@ -16,7 +13,7 @@ use crate::{
 use super::SimpleSerialize;
 
 impl SimpleSerialize for Storage {
-    fn serialize(&self, bufman: Arc<BufferManager>, cursor: u64) -> Result<u32, BufIoError> {
+    fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
         let start = bufman.cursor_position(cursor)? as u32;
 
         match self {
@@ -68,7 +65,7 @@ impl SimpleSerialize for Storage {
     }
 
     fn deserialize(
-        bufman: Arc<BufferManager>,
+        bufman: &BufferManager,
         FileOffset(offset): FileOffset,
     ) -> Result<Self, BufIoError> {
         let cursor = bufman.open_cursor()?;

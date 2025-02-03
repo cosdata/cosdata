@@ -1,6 +1,7 @@
 use crate::app_context::AppContext;
 use crate::indexes::inverted_index::{InvertedIndex, InvertedIndexTransaction};
 use crate::indexes::inverted_index_types::{RawSparseVectorEmbedding, SparsePair};
+use crate::macros::key;
 use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::cache_loader::ProbCache;
 use crate::models::collection::Collection;
@@ -8,6 +9,7 @@ use crate::models::common::*;
 use crate::models::embedding_persist::EmbeddingOffset;
 use crate::models::file_persist::write_node_to_file;
 use crate::models::meta_persist::update_current_version;
+use crate::models::prob_node::ProbNode;
 use crate::models::types::*;
 use crate::models::user::Statistics;
 use crate::models::versioning::{Hash, VersionControl};
@@ -73,17 +75,27 @@ pub async fn init_dense_index_for_collection(
         index_path.clone().into(),
         |root, ver: &Hash| root.join(format!("{}.index", **ver)),
         ctx.config.flush_eagerness_factor,
+        ProbNode::get_serialized_size(hnsw_params.neighbors_count) * 1000,
+    ));
+
+    let level_0_index_manager = Arc::new(BufferManagerFactory::new(
+        index_path.clone().into(),
+        |root, ver: &Hash| root.join(format!("{}_0.index", **ver)),
+        ctx.config.flush_eagerness_factor,
+        ProbNode::get_serialized_size(hnsw_params.level_0_neighbors_count) * 1000,
     ));
     let vec_raw_manager = Arc::new(BufferManagerFactory::new(
         index_path.into(),
         |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
         ctx.config.flush_eagerness_factor,
+        8192,
     ));
 
     // TODO: May be the value can be taken from config
     let cache = Arc::new(ProbCache::new(
         1000,
         index_manager.clone(),
+        level_0_index_manager.clone(),
         prop_file.clone(),
     ));
 
@@ -93,7 +105,8 @@ pub async fn init_dense_index_for_collection(
         collection.dense_vector.dimension,
         prop_file.clone(),
         hash,
-        index_manager.clone(),
+        &index_manager,
+        &level_0_index_manager,
         values_range,
         &hnsw_params,
     )?;
@@ -120,6 +133,7 @@ pub async fn init_dense_index_for_collection(
         hnsw_params,
         cache,
         index_manager,
+        level_0_index_manager,
         vec_raw_manager,
         values_range,
         sample_threshold,
@@ -161,12 +175,14 @@ pub async fn init_inverted_index_for_collection(
         index_path.clone().into(),
         |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
         ctx.config.flush_eagerness_factor,
+        8192,
     ));
 
     let index_manager = Arc::new(BufferManagerFactory::new(
         index_path.into(),
         |root, ver: &Hash| root.join(format!("{}.index", **ver)),
         ctx.config.flush_eagerness_factor,
+        8192,
     ));
 
     // TODO FIX THE FOLLOWING ISSUE
@@ -565,9 +581,10 @@ pub fn run_upload(
     let mut txn = env
         .begin_rw_txn()
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+    let next_embedding_offset_key = key!(m:next_embedding_offset);
     txn.put(
         *db,
-        &"next_embedding_offset",
+        &next_embedding_offset_key,
         &new_offset_serialized,
         WriteFlags::empty(),
     )
@@ -628,7 +645,11 @@ pub fn run_upload(
     let list = Arc::into_inner(serialization_table).unwrap().to_list();
 
     for (node, _) in list {
-        write_node_to_file(node, &dense_index.index_manager)?;
+        write_node_to_file(
+            node,
+            &dense_index.index_manager,
+            &dense_index.level_0_index_manager,
+        )?;
     }
 
     dense_index.vec_raw_manager.flush_all()?;

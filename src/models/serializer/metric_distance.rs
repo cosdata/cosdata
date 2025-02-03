@@ -10,15 +10,13 @@ use crate::{
         types::{FileOffset, MetricResult},
     },
 };
-use std::{
-    io::{self, SeekFrom},
-    sync::Arc,
-};
+use std::io::{self, SeekFrom};
 
 use super::SimpleSerialize;
 
+// @SERIALIZED_SIZE: 1 byte for the tag + 4 bytes for the value = 5 bytes
 impl SimpleSerialize for MetricResult {
-    fn serialize(&self, bufman: Arc<BufferManager>, cursor: u64) -> Result<u32, BufIoError> {
+    fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
         let (variant, value) = match self {
             Self::CosineSimilarity(value) => (0, value.0),
             Self::CosineDistance(value) => (1, value.0),
@@ -33,7 +31,7 @@ impl SimpleSerialize for MetricResult {
     }
 
     fn deserialize(
-        bufman: Arc<BufferManager>,
+        bufman: &BufferManager,
         FileOffset(offset): FileOffset,
     ) -> Result<Self, BufIoError>
     where
@@ -52,7 +50,7 @@ impl SimpleSerialize for MetricResult {
             _ => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    "Invalid MetricResult variant",
+                    format!("Invalid MetricResult variant: {}", variant),
                 )
                 .into());
             }

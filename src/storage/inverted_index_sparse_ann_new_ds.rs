@@ -151,6 +151,7 @@ impl InvertedIndexSparseAnnNewDS {
             Path::new(".").into(),
             |root, ver: &Hash| root.join(format!("{}.index", **ver)),
             1.0,
+            8192,
         ));
         let cache = Arc::new(NodeRegistry::new(1000, bufmans));
         InvertedIndexSparseAnnNewDS {

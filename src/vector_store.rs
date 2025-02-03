@@ -37,7 +37,8 @@ pub fn create_root_node(
     dim: usize,
     prop_file: Arc<RwLock<File>>,
     hash: Hash,
-    index_manager: Arc<BufferManagerFactory<Hash>>,
+    index_manager: &BufferManagerFactory<Hash>,
+    level_0_index_manager: &BufferManagerFactory<Hash>,
     values_range: (f32, f32),
     hnsw_params: &HNSWHyperParams,
 ) -> Result<SharedNode, WaCustomError> {
@@ -73,9 +74,11 @@ pub fn create_root_node(
         ),
         hash,
         0,
+        true,
     );
 
     let mut nodes = Vec::new();
+    nodes.push(root);
 
     for l in 1..=hnsw_params.num_layers {
         let current_node = ProbNode::new(
@@ -86,7 +89,7 @@ pub fn create_root_node(
             hnsw_params.neighbors_count,
         );
 
-        let lazy_node = ProbLazyItem::new(current_node, hash, 0);
+        let lazy_node = ProbLazyItem::new(current_node, hash, 0, false);
 
         if let Some(prev_node) = unsafe { &*root }.get_lazy_data() {
             prev_node.set_parent(lazy_node.clone());
@@ -97,7 +100,7 @@ pub fn create_root_node(
     }
 
     for item in nodes {
-        write_node_to_file(item, &index_manager)?;
+        write_node_to_file(item, index_manager, level_0_index_manager)?;
     }
 
     Ok(root)
@@ -425,10 +428,11 @@ pub fn insert_embedding(
 
     txn.put(*db, &embedding_key, &offset_serialized, WriteFlags::empty())
         .map_err(|e| WaCustomError::DatabaseError(format!("Failed to put data: {}", e)))?;
+    let count_unindexed_key = key!(m:count_unindexed);
 
     txn.put(
         *db,
-        &"count_unindexed",
+        &count_unindexed_key,
         &(count_unindexed + 1).to_le_bytes(),
         WriteFlags::empty(),
     )
@@ -583,10 +587,13 @@ pub fn index_embeddings(
             offset: next_offset,
         };
         let next_embedding_offset_serialized = next_embedding_offset.serialize();
+        let next_embedding_offset_key = key!(m:next_embedding_offset);
+        let count_indexed_key = key!(m:count_indexed);
+        let count_unindexed_key = key!(m:count_unindexed);
 
         txn.put(
             *db,
-            &"next_embedding_offset",
+            &next_embedding_offset_key,
             &next_embedding_offset_serialized,
             WriteFlags::empty(),
         )
@@ -596,7 +603,7 @@ pub fn index_embeddings(
 
         txn.put(
             *db,
-            &"count_indexed",
+            &count_indexed_key,
             &count_indexed.to_le_bytes(),
             WriteFlags::empty(),
         )
@@ -606,7 +613,7 @@ pub fn index_embeddings(
 
         txn.put(
             *db,
-            &"count_unindexed",
+            &count_unindexed_key,
             &count_unindexed.to_le_bytes(),
             WriteFlags::empty(),
         )
@@ -835,6 +842,7 @@ pub fn index_embedding(
             } else {
                 hnsw_params.neighbors_count
             },
+            cur_level,
         );
 
         let node = unsafe { &*lazy_node }.get_lazy_data().unwrap();
@@ -880,6 +888,7 @@ pub fn index_embedding(
             } else {
                 hnsw_params.neighbors_count
             },
+            cur_level,
         )?;
     }
 
@@ -894,9 +903,10 @@ fn create_node(
     parent: SharedNode,
     child: SharedNode,
     neighbors_count: usize,
+    current_level: HNSWLevel,
 ) -> SharedNode {
     let node = ProbNode::new(hnsw_level, prop, parent, child, neighbors_count);
-    ProbLazyItem::new(node, version_id, version_number)
+    ProbLazyItem::new(node, version_id, version_number, current_level.0 == 0)
 }
 
 fn get_or_create_version(
@@ -905,6 +915,7 @@ fn get_or_create_version(
     lazy_item: SharedNode,
     version: Hash,
     version_number: u16,
+    current_level: HNSWLevel,
 ) -> Result<SharedNode, WaCustomError> {
     let node = unsafe { &*lazy_item }.try_get_data(&dense_index.cache)?;
 
@@ -926,7 +937,8 @@ fn get_or_create_version(
                 node.get_child(),
             );
 
-            let version = ProbLazyItem::new(new_node, version, version_number);
+            let version =
+                ProbLazyItem::new(new_node, version, version_number, current_level.0 == 0);
 
             ProbLazyItem::add_version(lazy_item, version, &dense_index.cache)
                 .expect("Failed to add version")
@@ -950,6 +962,7 @@ fn create_node_edges(
     serialization_table: Arc<TSHashTable<SharedNode, ()>>,
     lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16, u8), SharedNode>>,
     max_edges: usize,
+    current_level: HNSWLevel,
 ) -> Result<(), WaCustomError> {
     let mut successful_edges = 0;
 
@@ -965,6 +978,7 @@ fn create_node_edges(
             neighbor,
             version,
             version_number,
+            current_level,
         )?;
         let new_neighbor = unsafe { &*new_lazy_neighbor }.try_get_data(&dense_index.cache)?;
 

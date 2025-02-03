@@ -282,6 +282,7 @@ pub struct ProbCache {
     registry: LRUCache<u64, ProbCacheItem>,
     props_registry: DashMap<u64, Weak<NodeProp>>,
     bufmans: Arc<BufferManagerFactory<Hash>>,
+    level_0_bufmans: Arc<BufferManagerFactory<Hash>>,
     prop_file: Arc<RwLock<File>>,
     loading_items: TSHashTable<u64, Arc<Mutex<bool>>>,
     // A global lock to prevent deadlocks during batch loading of cache entries when `max_loads > 1`.
@@ -299,6 +300,7 @@ impl ProbCache {
     pub fn new(
         cuckoo_filter_capacity: usize,
         bufmans: Arc<BufferManagerFactory<Hash>>,
+        level_0_bufmans: Arc<BufferManagerFactory<Hash>>,
         prop_file: Arc<RwLock<File>>,
     ) -> Self {
         let cuckoo_filter = CuckooFilter::new(cuckoo_filter_capacity);
@@ -310,6 +312,7 @@ impl ProbCache {
             registry,
             props_registry,
             bufmans,
+            level_0_bufmans,
             prop_file,
             loading_items: TSHashTable::new(16),
             batch_load_lock: Mutex::new(()),
@@ -353,13 +356,58 @@ impl ProbCache {
             .insert(combined_index, ProbNode::into_cache_item(item));
     }
 
+    pub fn force_load_single_object<T: ProbSerialize + ProbCacheable>(
+        &self,
+        file_index: FileIndex,
+        is_level_0: bool,
+    ) -> Result<*mut ProbLazyItem<T>, BufIoError> {
+        let combined_index = Self::combine_index(&file_index, is_level_0);
+        let mut skipm = HashSet::new();
+        skipm.insert(combined_index);
+        let data = T::deserialize(
+            &self.bufmans,
+            &self.level_0_bufmans,
+            file_index,
+            self,
+            0,
+            &mut skipm,
+            is_level_0,
+        )?;
+        let (offset, version_number, version_id) = match file_index {
+            FileIndex::Valid {
+                offset,
+                version_number,
+                version_id,
+            } => (offset, version_number, version_id),
+            FileIndex::Invalid => unreachable!(),
+        };
+        let state = ProbLazyItemState::Ready(ReadyState {
+            data,
+            file_offset: Cell::new(Some(offset)),
+            persist_flag: AtomicBool::new(false),
+            version_id,
+            version_number,
+        });
+
+        let item = ProbLazyItem::new_from_state(state, is_level_0);
+
+        {
+            self.cuckoo_filter.write().unwrap().insert(&combined_index);
+            self.registry
+                .insert(combined_index.clone(), T::into_cache_item(item.clone()));
+        }
+
+        Ok(item)
+    }
+
     pub fn get_lazy_object<T: ProbSerialize + ProbCacheable>(
         &self,
         file_index: FileIndex,
         max_loads: u16,
         skipm: &mut HashSet<u64>,
+        is_level_0: bool,
     ) -> Result<*mut ProbLazyItem<T>, BufIoError> {
-        let combined_index = Self::combine_index(&file_index);
+        let combined_index = Self::combine_index(&file_index, is_level_0);
 
         {
             let cuckoo_filter = self.cuckoo_filter.read().unwrap();
@@ -375,7 +423,7 @@ impl ProbCache {
         }
 
         if max_loads == 0 || !skipm.insert(combined_index) {
-            return Ok(ProbLazyItem::new_pending(file_index));
+            return Ok(ProbLazyItem::new_pending(file_index, is_level_0));
         }
 
         let mut mutex = self
@@ -422,7 +470,15 @@ impl ProbCache {
             (FileOffset(0), 0, 0.into())
         };
 
-        let data = T::deserialize(&self.bufmans, file_index, self, max_loads - 1, skipm)?;
+        let data = T::deserialize(
+            &self.bufmans,
+            &self.level_0_bufmans,
+            file_index,
+            self,
+            max_loads - 1,
+            skipm,
+            is_level_0,
+        )?;
         let state = ProbLazyItemState::Ready(ReadyState {
             data,
             file_offset: Cell::new(Some(offset)),
@@ -431,7 +487,7 @@ impl ProbCache {
             version_number,
         });
 
-        let item = ProbLazyItem::new_from_state(state);
+        let item = ProbLazyItem::new_from_state(state, is_level_0);
 
         {
             self.cuckoo_filter.write().unwrap().insert(&combined_index);
@@ -443,6 +499,45 @@ impl ProbCache {
         self.loading_items.delete(&combined_index);
 
         Ok(item)
+    }
+
+    pub fn load_region(
+        &self,
+        region_start: u32,
+        version_number: u16,
+        version_id: Hash,
+        node_size: u32,
+        is_level_0: bool,
+    ) -> Result<Vec<SharedNode>, BufIoError> {
+        let bufman = if is_level_0 {
+            self.level_0_bufmans.get(version_id)?
+        } else {
+            self.bufmans.get(version_id)?
+        };
+        let file_size = bufman.file_size();
+        if region_start as u64 > file_size {
+            return Ok(Vec::new());
+        }
+        println!(
+            "Loading region: {}, version: {}, is_level_0: {}",
+            region_start, version_number, is_level_0
+        );
+        let cap = ((file_size - region_start as u64) / node_size as u64).min(1000) as usize;
+        let mut nodes = Vec::with_capacity(cap);
+        for i in 0..1000 {
+            let offset = FileOffset(i * node_size + region_start);
+            if offset.0 as u64 >= file_size {
+                break;
+            }
+            let file_index = FileIndex::Valid {
+                offset,
+                version_number,
+                version_id,
+            };
+            let node = self.force_load_single_object(file_index, is_level_0)?;
+            nodes.push(node);
+        }
+        Ok(nodes)
     }
 
     // Retrieves an object from the cache, attempting to batch load if possible, based on the state of the batch load lock.
@@ -462,20 +557,22 @@ impl ProbCache {
     pub fn get_object<T: ProbSerialize + ProbCacheable>(
         &self,
         file_index: FileIndex,
+        is_level_0: bool,
     ) -> Result<*mut ProbLazyItem<T>, BufIoError> {
         let (_lock, max_loads) = match self.batch_load_lock.try_lock() {
             Ok(lock) => (Some(lock), 1000),
             Err(TryLockError::Poisoned(poison_err)) => panic!("lock error: {}", poison_err),
             Err(TryLockError::WouldBlock) => (None, 1),
         };
-        self.get_lazy_object(file_index, max_loads, &mut HashSet::new())
+        self.get_lazy_object(file_index, max_loads, &mut HashSet::new(), is_level_0)
     }
 
-    pub fn combine_index(file_index: &FileIndex) -> u64 {
+    pub fn combine_index(file_index: &FileIndex, is_level_0: bool) -> u64 {
+        let level_bit = if is_level_0 { 1u64 << 63 } else { 0 };
         match file_index {
             FileIndex::Valid {
                 offset, version_id, ..
-            } => ((offset.0 as u64) << 32) | (**version_id as u64),
+            } => ((offset.0 as u64) << 32) | (**version_id as u64) | level_bit,
             FileIndex::Invalid => u64::MAX, // Use max u64 value for Invalid
         }
     }
@@ -487,7 +584,11 @@ impl ProbCache {
         (file_offset as u64) << 32 | (length as u64)
     }
 
-    pub fn load_item<T: ProbSerialize>(&self, file_index: FileIndex) -> Result<T, BufIoError> {
+    pub fn load_item<T: ProbSerialize>(
+        &self,
+        file_index: FileIndex,
+        is_level_0: bool,
+    ) -> Result<T, BufIoError> {
         let mut skipm: HashSet<u64> = HashSet::new();
 
         if file_index == FileIndex::Invalid {
@@ -498,6 +599,14 @@ impl ProbCache {
             .into());
         };
 
-        T::deserialize(&self.bufmans, file_index, self, 1000, &mut skipm)
+        T::deserialize(
+            &self.bufmans,
+            &self.level_0_bufmans,
+            file_index,
+            self,
+            1000,
+            &mut skipm,
+            is_level_0,
+        )
     }
 }

@@ -34,6 +34,7 @@ fn setup_test(
         dir.as_ref().into(),
         |root, ver: &Hash| root.join(format!("{}.index", **ver)),
         1.0,
+        8192,
     ));
     let cache = get_cache(bufmans.clone());
     let bufman = bufmans.get(root_version).unwrap();
@@ -422,6 +423,7 @@ fn test_lazy_item_with_versions_serialization() {
         temp_dir.as_ref().into(),
         |root, ver: &Hash| root.join(format!("{}.index", **ver)),
         1.0,
+        8192,
     ));
     let cache = get_cache(bufmans.clone());
 
@@ -767,6 +769,7 @@ fn test_lazy_item_with_versions_serialization_and_validation() {
         temp_dir.as_ref().into(),
         |root, ver: &Hash| root.join(format!("{}.index", **ver)),
         1.0,
+        8192,
     ));
     let cache = get_cache(bufmans.clone());
     let bufman = bufmans.get(v0_hash).unwrap();
@@ -815,6 +818,7 @@ fn test_lazy_item_with_versions_multiple_serialization() {
         temp_dir.as_ref().into(),
         |root, ver: &Hash| root.join(format!("{}.index", **ver)),
         1.0,
+        8192,
     ));
     let cache = get_cache(bufmans.clone());
     let bufman = bufmans.get(v0_hash).unwrap();
@@ -920,7 +924,7 @@ fn test_storage_serialization() {
         let version_id = Hash::from(version as u32);
         let bufman = bufmans.get(version_id).unwrap();
         let cursor = bufman.open_cursor().unwrap();
-        let offset = SimpleSerialize::serialize(&storage, bufman.clone(), cursor).unwrap();
+        let offset = SimpleSerialize::serialize(&storage, &bufman, cursor).unwrap();
         let file_index = FileIndex::Valid {
             offset: FileOffset(offset),
             version_number: version as u16,
