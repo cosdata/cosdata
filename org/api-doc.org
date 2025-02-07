@@ -1,6 +1,6 @@
 #+TITLE: Vector Database REST API Specification
 #+AUTHOR: Nithin
-#+DATE: 2025-01-15
+#+DATE: 2025-02-03
 
 * Overview
 This document describes the complete REST API specification for the vector database service, supporting high-dimensional vector storage, retrieval, and similarity search with transactional guarantees.
@@ -139,6 +139,108 @@ Permanently removes a collection and all its vectors.
     "description": "Test collection for vector database"
   }
   #+END_SRC
+
+* Index Management
+** Index Operations
+Manage search indices for vector collections.
+
+** Create Index
+- Method: POST
+- Path: ~/indexes~
+- Request Body:
+  #+BEGIN_SRC json
+  {
+    "collection_name": "testdb",
+    "name": "testdb_index",
+    "distance_metric_type": "cosine",
+      "quantization": {
+      "type": "auto",
+      "properties": {
+          "sample_threshold": 100
+          }
+      },
+    "index": {
+      "type": "hnsw",
+      "properties": {
+        "ef_construction": 512,
+        "ef_search": 256,
+        "num_layers": 7,
+        "max_cache_size": 1000,
+        "layer_0_neighbors_count": 64,
+        "neighbors_count": 32
+      }
+    }
+  }
+  #+END_SRC
+
+  #+BEGIN_SRC json
+  {
+    "collection_name": "testdb",
+    "name": "testdb_index",
+    "distance_metric_type": "cosine",
+      "quantization": {
+      "type": "scalar",
+      "properties": {
+          "data_type": "binary", // Use 'binary' for compressed storage of binary-like vector data
+          "range": {
+              "min": -1.0,
+              "max": 1.0
+              }
+          }
+      },
+    "index": {
+      "type": "hnsw",
+      "properties": {
+        "ef_construction": 512,
+        "ef_search": 256,
+        "num_layers": 7,
+        "max_cache_size": 1000,
+        "layer_0_neighbors_count": 64,
+        "neighbors_count": 32
+      }
+    }
+  }
+  #+END_SRC
+
+** Index Configuration
+*** Distance Metrics
+- cosine
+- euclidean
+- dotproduct
+- hamming
+
+*** Quantization Options
+   #+CAPTION: Quantization Types
+   #+NAME: quantization-types
+   | Type       | Description                        |
+   |------------+------------------------------------|
+   | auto       | Automatically determine the quantization based on the data. This is suitable when you don't know the distribution of the vectors or don't have specific precision or memory requirements. The system will pick a suitable quantization type based on a sample of the input vector data provided during index creation.  |
+   | scalar     | Use scalar quantization. This is suitable when you have specific precision and storage requirements, you can explicitly set the vector data type using `data_type`, and the range for quantization using `range`.  |
+
+   #+CAPTION: Scalar Quantization Properties
+   #+NAME: quantization-properties
+   | Property        | Type    | Description                                            |
+   |------------+------------------------------------|
+    | data_type  | string  | Vector data type (binary, f16, u8, f32) |
+    | data_type  | string  |  ~binary~: Use for compressed storage of binary-like vector data     |
+    | data_type  | string  |  ~f16~: Use for smaller storage space with less precision    |
+    | data_type  | string  | ~u8~: Use for storing unsigned 8-bit integers     |
+    | data_type  | string  | ~f32~: Use for highest precision storage     |
+   | range      | object |  Minimum and maximum values of the range for quantization  |
+   | range.min  | float   |  Minimum value of the range for quantization              |
+   | range.max  | float   |  Maximum value of the range for quantization              |
+
+*** HNSW Parameters
+   #+CAPTION: HNSW Configuration Parameters
+   #+NAME: hnsw-params
+   | Parameter                | Type    | Description                                    |
+   |-------------------------+---------+------------------------------------------------|
+   | ef_construction         | integer | Candidate list size during construction, defaults to `hnsw.default_ef_construction` from `config.toml`        |
+   | ef_search               | integer | Candidate list size during search, defaults to `hnsw.default_ef_search` from `config.toml`              |
+   | num_layers              | integer | Number of layers in graph, defaults to `hnsw.default_num_layer` from `config.toml`                      |
+   | max_cache_size          | integer | Maximum elements in cache, defaults to `hnsw.default_max_cache_size` from `config.toml`                      |
+   | layer_0_neighbors_count | integer | Number of neighbors in base layer, defaults to `hnsw.default_level_0_neighbors_count` from `config.toml`              |
+   | neighbors_count         | integer | Number of neighbors in upper layers, defaults to `hnsw.default_neighbors_count` from `config.toml`            |
 
 * Transaction API
 ** Transaction Overview
@@ -316,75 +418,6 @@ The API supports both dense and sparse vector operations:
 - Path: ~/collections/{collection_id}/vectors/{vector_id}~
 - Response: 204 No Content
 
-* Index Management
-** Index Operations
-Manage search indices for vector collections.
-
-** Create Index
-- Method: POST
-- Path: ~/indexes~
-- Request Body:
-  #+BEGIN_SRC json
-  {
-    "collection_name": "testdb",
-    "name": "testdb_index",
-    "distance_metric_type": "cosine",
-      "quantization": {
-      "type": "auto",
-      "properties": {
-          "sample_threshold": 1000
-          }
-      },
-    "index": {
-      "type": "hnsw",
-      "properties": {
-        "ef_construction": 100,
-        "ef_search": 50,
-        "num_layers": 5,
-        "max_cache_size": 1000,
-        "level_0_neighbors_count": 32,
-        "neighbors_count": 16
-      }
-    }
-  }
-  #+END_SRC
-
-** Index Configuration
-*** Distance Metrics
-- cosine
-- euclidean
-- dotproduct
-- hamming
-
-*** Quantization Options
-   #+CAPTION: Quantization Types
-   #+NAME: quantization-types
-   | Type       | Description                        |
-   |------------+------------------------------------|
-   | auto       | Automatically determine the quantization based on the data |
-   | scalar     | Use scalar quantization |
-
-   #+CAPTION: Scalar Quantization Properties
-   #+NAME: quantization-properties
-   | Property        | Type    | Description                                            |
-   |------------+------------------------------------|
-   | data_type  | string  | Vector data type (u8, binary, octal, quaternay, f16)       |
-   | range      | object |  Minimum and maximum values of the range for quantization  |
-   | range.min  | float   |  Minimum value of the range for quantization              |
-   | range.max  | float   |  Maximum value of the range for quantization              |
-
-*** HNSW Parameters
-   #+CAPTION: HNSW Configuration Parameters
-   #+NAME: hnsw-params
-   | Parameter                | Type    | Description                                    |
-   |-------------------------+---------+------------------------------------------------|
-   | ef_construction         | integer | Candidate list size during construction, defaults to `hnsw.default_ef_construction` from `config.toml`        |
-   | ef_search               | integer | Candidate list size during search, defaults to `hnsw.default_ef_search` from `config.toml`              |
-   | num_layers              | integer | Number of layers in graph, defaults to `hnsw.default_num_layer` from `config.toml`                      |
-   | max_cache_size          | integer | Maximum elements in cache, defaults to `hnsw.default_max_cache_size` from `config.toml`                      |
-   | level_0_neighbors_count | integer | Number of neighbors in base layer, defaults to `hnsw.default_level_0_neighbors_count` from `config.toml`              |
-   | neighbors_count         | integer | Number of neighbors in upper layers, defaults to `hnsw.default_neighbors_count` from `config.toml`            |
-
 * Search API
 ** Vector Search Operations
 *** Basic Vector Search
@@ -487,7 +520,6 @@ Note that error responses have a ~Content-Type: text/html~ header.
    | FAILED_TO_CREATE_INDEX | 400 | Failed to create index | Check index properties |
    | NOT_FOUND             | 400         | Resource not found        | Check the resource name |
 
-
 * Implementation and Best Practices
 ** Server Configuration
 - The server can run in either HTTP or HTTPS mode as defined by `server.mode` in the `config.toml`. The valid values are `Http` and `Https`.
@@ -511,7 +543,6 @@ Note that error responses have a ~Content-Type: text/html~ header.
    - VectorsIndexingMode options:
       - sequential: Vectors are indexed sequentially
       - batch: Vectors are indexed in batches with specified batch size from `indexing.mode: batch.batch_size`
-
 
 ** Implementation Details
 - Uses MVCC (Multi-Version Concurrency Control)
@@ -568,6 +599,34 @@ Note that error responses have a ~Content-Type: text/html~ header.
       response = requests.post(url, headers=headers, data=json.dumps(data))
       return response.json()
 
+  def create_index(token, collection_name):
+        url = f"{BASE_URL_VECTORDB}/indexes"
+        headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+        data = {
+                  "collection_name": collection_name,
+                    "name": f"{collection_name}_index",
+                    "distance_metric_type": "cosine",
+                    "quantization": {
+                          "type": "auto",
+                          "properties": {
+                                "sample_threshold": 100
+                                }
+                            },
+                    "index": {
+                            "type": "hnsw",
+                            "properties": {
+                                "ef_construction": 512,
+                                "ef_search": 256,
+                                "num_layers": 7,
+                                "max_cache_size": 1000,
+                                "layer_0_neighbors_count": 64,
+                                "neighbors_count": 32
+                                }
+                            }
+              }
+        response = requests.post(url, headers=headers, data=json.dumps(data))
+        return response.json()
+
   def create_transaction(token, collection_name):
       url = f"{BASE_URL_VECTORDB}/collections/{collection_name}/transactions"
       headers = {'Authorization': f'Bearer {token}'}
@@ -596,6 +655,7 @@ Note that error responses have a ~Content-Type: text/html~ header.
 
   token = login()
   create_collection_response = create_collection(token)
+  create_index_response = create_index(token, "testdb")
   transaction_response = create_transaction(token, "testdb")
   transaction_id = transaction_response["transaction_id"]
   vectors = [{"id": i, "values": [0.1 * i, 0.2 * i]} for i in range(100)]
