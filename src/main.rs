@@ -8,6 +8,7 @@ pub mod grpc;
 pub mod indexes;
 pub mod macros;
 mod models;
+mod metadata;
 pub mod quantization;
 pub mod storage;
 mod vector_store;

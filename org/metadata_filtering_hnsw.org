@@ -175,7 +175,7 @@ CPU Requirements:
 * High level tasks
 
 - [ ] Create a spec for metadata schema
-- [ ] Implement core functionality for dimension allocation
+- [X] Implement core functionality for dimension allocation
   + Given the metadata schema find out how many phantom dimensions are required for metadata filtering
   + Create a vec of those many dimensions
   + Create phantom dimensions vec copy with,
@@ -194,7 +194,7 @@ CPU Requirements:
     + Create vector
     + Update vector
     + upsert
-- [ ] Implement query vector encoding core functionality as per the doc
+- [X] Implement query vector encoding core functionality as per the doc
   + Given the metadata filters and metadata_schema for the collection, extend the query vectors with +1/-1 values in the phantom dimensions.
     + We can start with individual fields and then add support for field combinations in a later phase.
 - [ ] Implement metadata-aware query processing
