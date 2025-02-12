@@ -461,7 +461,7 @@ impl InvertedIndexSparseAnnBasicTSHashmap {
                 .open("prop.data")
                 .unwrap(),
         ));
-        let cache = Arc::new(ProbCache::new(1000, bufmans.clone(), bufmans, prop_file));
+        let cache = Arc::new(ProbCache::new(bufmans.clone(), bufmans, prop_file));
         InvertedIndexSparseAnnBasicTSHashmap {
             root: Arc::new(InvertedIndexSparseAnnNodeBasicTSHashmap::new(
                 0,

@@ -277,7 +277,6 @@ define_prob_cache_items! {
 }
 
 pub struct ProbCache {
-    cuckoo_filter: RwLock<CuckooFilter<u64>>,
     registry: LRUCache<u64, ProbCacheItem>,
     props_registry: DashMap<u64, Weak<NodeProp>>,
     bufmans: Arc<BufferManagerFactory<Hash>>,
@@ -300,17 +299,14 @@ unsafe impl Sync for ProbCache {}
 
 impl ProbCache {
     pub fn new(
-        cuckoo_filter_capacity: usize,
         bufmans: Arc<BufferManagerFactory<Hash>>,
         level_0_bufmans: Arc<BufferManagerFactory<Hash>>,
         prop_file: Arc<RwLock<File>>,
     ) -> Self {
-        let cuckoo_filter = CuckooFilter::new(cuckoo_filter_capacity);
         let registry = LRUCache::with_prob_eviction(100_000_000, 0.03125);
         let props_registry = DashMap::new();
 
         Self {
-            cuckoo_filter: RwLock::new(cuckoo_filter),
             registry,
             props_registry,
             bufmans,
@@ -347,8 +343,6 @@ impl ProbCache {
 
     pub fn insert_lazy_object(&self, version: Hash, offset: u32, item: SharedNode) {
         let combined_index = (offset as u64) << 32 | (*version as u64);
-        let mut cuckoo_filter = self.cuckoo_filter.write().unwrap();
-        cuckoo_filter.insert(&combined_index);
         if let Some(node) = unsafe { &*item }.get_lazy_data() {
             let prop_key = Self::get_prop_key(node.prop.location.0, node.prop.location.1);
             self.props_registry
@@ -394,11 +388,8 @@ impl ProbCache {
 
         let item = ProbLazyItem::new_from_state(state, is_level_0);
 
-        {
-            self.cuckoo_filter.write().unwrap().insert(&combined_index);
-            self.registry
-                .insert(combined_index.clone(), T::into_cache_item(item.clone()));
-        }
+        self.registry
+            .insert(combined_index.clone(), T::into_cache_item(item.clone()));
 
         Ok(item)
     }
@@ -412,16 +403,9 @@ impl ProbCache {
     ) -> Result<*mut ProbLazyItem<T>, BufIoError> {
         let combined_index = Self::combine_index(&file_index, is_level_0);
 
-        {
-            let cuckoo_filter = self.cuckoo_filter.read().unwrap();
-
-            // Initial check with Cuckoo filter
-            if cuckoo_filter.contains(&combined_index) {
-                if let Some(item) = self.registry.get(&combined_index) {
-                    if let Some(item) = T::from_cache_item(item) {
-                        return Ok(item);
-                    }
-                }
+        if let Some(item) = self.registry.get(&combined_index) {
+            if let Some(item) = T::from_cache_item(item) {
+                return Ok(item);
             }
         }
 
@@ -436,16 +420,9 @@ impl ProbCache {
 
         loop {
             // check again
-            {
-                let cuckoo_filter = self.cuckoo_filter.read().unwrap();
-
-                // Initial check with Cuckoo filter
-                if cuckoo_filter.contains(&combined_index) {
-                    if let Some(item) = self.registry.get(&combined_index) {
-                        if let Some(item) = T::from_cache_item(item) {
-                            return Ok(item);
-                        }
-                    }
+            if let Some(item) = self.registry.get(&combined_index) {
+                if let Some(item) = T::from_cache_item(item) {
+                    return Ok(item);
                 }
             }
 
@@ -493,11 +470,8 @@ impl ProbCache {
 
         let item = ProbLazyItem::new_from_state(state, is_level_0);
 
-        {
-            self.cuckoo_filter.write().unwrap().insert(&combined_index);
-            self.registry
-                .insert(combined_index.clone(), T::into_cache_item(item.clone()));
-        }
+        self.registry
+            .insert(combined_index.clone(), T::into_cache_item(item.clone()));
 
         *load_complete = true;
         self.loading_items.delete(&combined_index);

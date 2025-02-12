@@ -91,7 +91,6 @@ pub async fn init_dense_index_for_collection(
 
     // TODO: May be the value can be taken from config
     let cache = Arc::new(ProbCache::new(
-        1000,
         index_manager.clone(),
         level_0_index_manager.clone(),
         prop_file.clone(),

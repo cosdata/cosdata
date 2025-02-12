@@ -123,7 +123,7 @@ fn get_cache(
     bufmans: Arc<BufferManagerFactory<Hash>>,
     prop_file: Arc<RwLock<File>>,
 ) -> Arc<ProbCache> {
-    Arc::new(ProbCache::new(1000, bufmans.clone(), bufmans, prop_file))
+    Arc::new(ProbCache::new(bufmans.clone(), bufmans, prop_file))
 }
 
 fn create_prob_node(id: u64, prop_file: &RwLock<File>) -> ProbNode {

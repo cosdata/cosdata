@@ -75,7 +75,6 @@ impl InvertedIndex {
                 .unwrap(),
         ));
         let prob_cache = Arc::new(ProbCache::new(
-            1000,
             index_manager.clone(),
             index_manager.clone(),
             prop_file,

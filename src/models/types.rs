@@ -801,9 +801,7 @@ impl CollectionsMap {
             config.flush_eagerness_factor,
             8192,
         ));
-        // TODO: May be the value can be taken from config
         let cache = Arc::new(ProbCache::new(
-            1000,
             index_manager.clone(),
             level_0_index_manager.clone(),
             prop_file.clone(),
@@ -826,7 +824,7 @@ impl CollectionsMap {
         };
 
         let root_node_region_offset = root_offset.0 - (root_offset.0 % bufman_size as u32);
-
+        let load_start = Instant::now();
         let region = cache.load_region(
             root_node_region_offset,
             root_version_number,
@@ -908,6 +906,9 @@ impl CollectionsMap {
                 },
             )
             .collect::<Result<Vec<_>, BufIoError>>()?;
+
+        let load_time = load_start.elapsed();
+        println!("Loaded regions in: {:?}", load_time);
 
         let lmdb = MetaDb {
             env: self.lmdb_env.clone(),
