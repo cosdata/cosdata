@@ -25,7 +25,6 @@ pub trait ProbSerialize: Sized {
         level_0_bufmans: &BufferManagerFactory<Hash>,
         version: Hash,
         cursor: u64,
-        direct: bool,
         is_level_0: bool,
     ) -> Result<u32, BufIoError>;
 
@@ -59,7 +58,6 @@ impl<T: SimpleSerialize> ProbSerialize for T {
         level_0_bufmans: &BufferManagerFactory<Hash>,
         version: Hash,
         cursor: u64,
-        _direct: bool,
         is_level_0: bool,
     ) -> Result<u32, BufIoError> {
         let bufman = if is_level_0 {

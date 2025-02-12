@@ -11,41 +11,13 @@ use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::sync::Arc;
 
-// pub fn read_node_from_file(
-//     file_index: FileIndex,
-//     cache: Arc<NodeRegistry>,
-// ) -> Result<MergedNode, BufIoError> {
-//     // Deserialize the MergedNode using the FileIndex
-//     let node: MergedNode = cache.load_item(file_index.clone())?;
-
-//     // Pretty print the node
-//     match file_index {
-//         FileIndex::Valid {
-//             offset, version_id, ..
-//         } => {
-//             println!(
-//                 "Read MergedNode from offset: {}, version: {}",
-//                 offset.0, *version_id
-//             );
-//         }
-//         FileIndex::Invalid => {
-//             println!("Attempted to read MergedNode with an invalid FileIndex");
-//         }
-//     }
-
-//     // You might want to add more detailed printing here, depending on what information
-//     // you want to see about the node
-//     // println!("{:#?}", node);
-
-//     Ok(node)
-// }
 pub fn write_node_to_file(
     lazy_item: SharedNode,
     bufmans: &BufferManagerFactory<Hash>,
     level_0_bufmans: &BufferManagerFactory<Hash>,
+    version: Hash,
 ) -> Result<u32, WaCustomError> {
     let lazy_item_ref = unsafe { &*lazy_item };
-    let version = lazy_item_ref.get_current_version();
     let is_level_0 = lazy_item_ref.is_level_0;
     let bufman = if is_level_0 {
         level_0_bufmans.get(version)?
@@ -55,25 +27,12 @@ pub fn write_node_to_file(
     let cursor = bufman.open_cursor()?;
 
     lazy_item_ref.set_persistence(true);
-    let offset =
-        lazy_item.serialize(bufmans, level_0_bufmans, version, cursor, true, is_level_0)?;
+    let offset = lazy_item.serialize(bufmans, level_0_bufmans, version, cursor, is_level_0)?;
 
     bufman.close_cursor(cursor)?;
 
     Ok(offset)
 }
-// #[allow(dead_code)]
-// pub fn load_vector_id_lsmdb(
-//     _level: HNSWLevel,
-//     _vector_id: VectorId,
-// ) -> Option<ProbLazyItem<MergedNode>> {
-//     None
-// }
-
-// #[allow(dead_code)]
-// pub fn load_neighbor_persist_ref(_level: HNSWLevel, _node_file_ref: u32) -> Option<MergedNode> {
-//     None
-// }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct NodePropSerialize<'a> {

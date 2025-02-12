@@ -1,4 +1,4 @@
-use std::io::{self, SeekFrom};
+use std::io;
 
 use half::f16;
 
@@ -18,11 +18,11 @@ impl SimpleSerialize for Storage {
 
         match self {
             Self::UnsignedByte { mag, quant_vec } => {
-                bufman.write_u8_with_cursor(cursor, 0)?;
-                bufman.write_u32_with_cursor(cursor, *mag)?;
-                bufman.write_u32_with_cursor(cursor, quant_vec.len() as u32)?;
+                bufman.update_u8_with_cursor(cursor, 0)?;
+                bufman.update_u32_with_cursor(cursor, *mag)?;
+                bufman.update_u32_with_cursor(cursor, quant_vec.len() as u32)?;
                 for el in quant_vec {
-                    bufman.write_u8_with_cursor(cursor, *el)?;
+                    bufman.update_u8_with_cursor(cursor, *el)?;
                 }
             }
             Self::SubByte {
@@ -30,33 +30,33 @@ impl SimpleSerialize for Storage {
                 quant_vec,
                 resolution,
             } => {
-                bufman.write_u8_with_cursor(cursor, 1)?;
-                bufman.write_u8_with_cursor(cursor, *resolution)?;
-                bufman.write_f32_with_cursor(cursor, *mag)?;
-                bufman.write_u32_with_cursor(cursor, quant_vec.len() as u32)?;
+                bufman.update_u8_with_cursor(cursor, 1)?;
+                bufman.update_u8_with_cursor(cursor, *resolution)?;
+                bufman.update_f32_with_cursor(cursor, *mag)?;
+                bufman.update_u32_with_cursor(cursor, quant_vec.len() as u32)?;
                 for vec in quant_vec {
-                    bufman.write_u32_with_cursor(cursor, vec.len() as u32)?;
+                    bufman.update_u32_with_cursor(cursor, vec.len() as u32)?;
                     for el in vec {
-                        bufman.write_u8_with_cursor(cursor, *el)?;
+                        bufman.update_u8_with_cursor(cursor, *el)?;
                     }
                 }
             }
             Self::HalfPrecisionFP { mag, quant_vec } => {
-                bufman.write_u8_with_cursor(cursor, 2)?;
-                bufman.write_f32_with_cursor(cursor, *mag)?;
-                bufman.write_u32_with_cursor(cursor, quant_vec.len() as u32)?;
+                bufman.update_u8_with_cursor(cursor, 2)?;
+                bufman.update_f32_with_cursor(cursor, *mag)?;
+                bufman.update_u32_with_cursor(cursor, quant_vec.len() as u32)?;
 
                 for el in quant_vec {
-                    bufman.write_with_cursor(cursor, &el.to_le_bytes())?;
+                    bufman.update_with_cursor(cursor, &el.to_le_bytes())?;
                 }
             }
             Self::FullPrecisionFP { mag, vec } => {
-                bufman.write_u8_with_cursor(cursor, 3)?;
-                bufman.write_f32_with_cursor(cursor, *mag)?;
-                bufman.write_u32_with_cursor(cursor, vec.len() as u32)?;
+                bufman.update_u8_with_cursor(cursor, 3)?;
+                bufman.update_f32_with_cursor(cursor, *mag)?;
+                bufman.update_u32_with_cursor(cursor, vec.len() as u32)?;
 
                 for el in vec {
-                    bufman.write_f32_with_cursor(cursor, *el)?;
+                    bufman.update_f32_with_cursor(cursor, *el)?;
                 }
             }
         }
@@ -69,7 +69,7 @@ impl SimpleSerialize for Storage {
         FileOffset(offset): FileOffset,
     ) -> Result<Self, BufIoError> {
         let cursor = bufman.open_cursor()?;
-        bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
+        bufman.seek_with_cursor(cursor, offset as u64)?;
 
         let variant_index = bufman.read_u8_with_cursor(cursor)?;
 

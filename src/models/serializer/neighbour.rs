@@ -9,10 +9,7 @@ use crate::models::{
     types::Neighbour,
 };
 use std::collections::HashSet;
-use std::{
-    io::{self, SeekFrom},
-    sync::Arc,
-};
+use std::{io, sync::Arc};
 
 impl CustomSerialize for Neighbour {
     fn serialize(
@@ -26,17 +23,17 @@ impl CustomSerialize for Neighbour {
 
         // Serialize the node position placeholder
         let node_placeholder = bufman.cursor_position(cursor)?;
-        bufman.write_u32_with_cursor(cursor, 0)?;
+        bufman.update_u32_with_cursor(cursor, 0)?;
 
         // Serialize the cosine similarity
-        bufman.write_f32_with_cursor(cursor, self.cosine_similarity.0)?;
+        bufman.update_f32_with_cursor(cursor, self.cosine_similarity.0)?;
         let node_pos = self.node.serialize(bufmans, version, cursor)?;
 
         let end_pos = bufman.cursor_position(cursor)?;
-        bufman.seek_with_cursor(cursor, SeekFrom::Start(node_placeholder))?;
+        bufman.seek_with_cursor(cursor, node_placeholder)?;
         // Serialize actual node position
-        bufman.write_u32_with_cursor(cursor, node_pos)?;
-        bufman.seek_with_cursor(cursor, SeekFrom::Start(end_pos))?;
+        bufman.update_u32_with_cursor(cursor, node_pos)?;
+        bufman.seek_with_cursor(cursor, end_pos)?;
 
         Ok(offset)
     }
@@ -60,7 +57,7 @@ impl CustomSerialize for Neighbour {
             } => {
                 let bufman = bufmans.get(version_id)?;
                 let cursor = bufman.open_cursor()?;
-                bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
+                bufman.seek_with_cursor(cursor, offset as u64)?;
                 // Deserialize the node position
                 let node_pos = bufman.read_u32_with_cursor(cursor)?;
                 // Deserialize the cosine similarity

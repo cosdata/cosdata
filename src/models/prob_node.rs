@@ -2,7 +2,7 @@ use std::{
     ptr,
     sync::{
         atomic::{AtomicPtr, Ordering},
-        Arc,
+        Arc, Mutex,
     },
 };
 
@@ -18,11 +18,13 @@ pub struct ProbNode {
     pub hnsw_level: HNSWLevel,
     pub prop: Arc<NodeProp>,
     // (neighbor_id, neighbor_node, distance)
-    // even though `VectorId` is an u64 we don't need the full precision here.
+    // even though `VectorId` is an u64 we don't need the full range here.
     neighbors: Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]>,
     parent: AtomicPtr<ProbLazyItem<ProbNode>>,
     child: AtomicPtr<ProbLazyItem<ProbNode>>,
     pub versions: ProbLazyItemArray<ProbNode, 8>,
+    lowest_index: Mutex<(u8, f32)>,
+    pub root_version: SharedNode,
 }
 
 unsafe impl Send for ProbNode {}
@@ -49,34 +51,37 @@ impl ProbNode {
             parent: AtomicPtr::new(parent),
             child: AtomicPtr::new(child),
             versions: ProbLazyItemArray::new(),
+            lowest_index: Mutex::new((0, -1.0)),
+            root_version: ptr::null_mut(),
         }
     }
 
-    pub fn new_with_neighbors(
-        hnsw_level: HNSWLevel,
-        prop: Arc<NodeProp>,
-        neighbors: Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]>,
-        parent: SharedNode,
-        child: SharedNode,
-    ) -> Self {
-        Self {
-            hnsw_level,
-            prop,
-            neighbors,
-            parent: AtomicPtr::new(parent),
-            child: AtomicPtr::new(child),
-            versions: ProbLazyItemArray::new(),
-        }
-    }
-
-    pub fn new_with_neighbors_and_versions(
+    pub fn new_with_neighbors_and_versions_and_root_version(
         hnsw_level: HNSWLevel,
         prop: Arc<NodeProp>,
         neighbors: Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]>,
         parent: SharedNode,
         child: SharedNode,
         versions: ProbLazyItemArray<ProbNode, 8>,
+        root_version: SharedNode,
     ) -> Self {
+        let mut lowest_idx = 0;
+        let mut lowest_sim = 2.0;
+
+        for (idx, neighbor) in neighbors.iter().enumerate() {
+            let neighbor = unsafe { neighbor.load(Ordering::Relaxed).as_ref() };
+            let Some((_, _, sim)) = neighbor else {
+                lowest_idx = idx;
+                lowest_sim = -1.0;
+                break;
+            };
+            let sim = sim.get_value();
+            if sim < lowest_sim {
+                lowest_idx = idx;
+                lowest_sim = sim;
+            }
+        }
+
         Self {
             hnsw_level,
             prop,
@@ -84,6 +89,8 @@ impl ProbNode {
             parent: AtomicPtr::new(parent),
             child: AtomicPtr::new(child),
             versions,
+            lowest_index: Mutex::new((lowest_idx as u8, lowest_sim)),
+            root_version,
         }
     }
 
@@ -113,67 +120,78 @@ impl ProbNode {
         neighbor_node: SharedNode,
         dist: MetricResult,
         cache: &ProbCache,
-    ) -> bool {
-        let mut neighbor_dist = dist.get_value();
-        let neighbor = Box::new((neighbor_id, neighbor_node.clone(), dist));
-        let mut neighbor_ptr = Box::into_raw(neighbor);
-        // true if the current neighbor stored in `neighbor_ptr` have a link with current node, so we know if we need to free it or not
-        let mut inserted = false;
-        // true if the initial neighbor was inserted, to return
-        let mut initial_neighbor_inserted = false;
-        let mut node_to_remove_backlink = None;
+    ) -> Option<u8> {
+        // First find an empty slot or the slot with lowest similarity
+        let mut lowest_idx_guard = self.lowest_index.lock().unwrap();
+        let (lowest_idx, lowest_sim) = *lowest_idx_guard;
 
-        for neighbor in &self.neighbors {
-            let result =
-                neighbor.fetch_update(Ordering::Release, Ordering::Acquire, |current_neighbor| {
-                    if let Some((_curr_id, curr_node, curr_dist)) =
-                        unsafe { current_neighbor.as_ref() }
-                    {
-                        // If new neighbor is farther, continue searching
-                        if neighbor_dist < curr_dist.get_value() {
-                            return None;
-                        }
-                        // If new neighbor is closer, mark the previous neighbor for backlink removal
-                        node_to_remove_backlink = Some(curr_node.clone());
+        // If we didn't find an empty slot and new neighbor isn't better, return
+        if dist.get_value() <= lowest_sim {
+            return None;
+        }
+
+        // Create new neighbor and attempt atomic update
+        let new_neighbor = Box::new((neighbor_id, neighbor_node.clone(), dist));
+        let new_ptr = Box::into_raw(new_neighbor);
+
+        let result = self.neighbors[lowest_idx as usize].fetch_update(
+            Ordering::Release,
+            Ordering::Acquire,
+            |current| match unsafe { current.as_ref() } {
+                None => Some(new_ptr),
+                Some((_, _, curr_dist)) if dist.get_value() > curr_dist.get_value() => {
+                    Some(new_ptr)
+                }
+                _ => None,
+            },
+        );
+
+        let ret = match result {
+            Ok(old_ptr) => {
+                // Successful update
+                unsafe {
+                    if let Some((_, node, _)) = old_ptr.as_ref() {
+                        (**node)
+                            .try_get_data(cache)
+                            .unwrap()
+                            .remove_neighbor_by_id(self.get_id().0 as u32);
+                        drop(Box::from_raw(old_ptr));
                     }
-                    // Either slot is empty or new neighbor is closer - attempt insertion
-                    Some(neighbor_ptr)
-                });
-
-            if let Ok(prev_neighbor_ptr) = result {
-                initial_neighbor_inserted = true;
-                if let Some((_, _, prev_dist)) = unsafe { prev_neighbor_ptr.as_ref() } {
-                    neighbor_dist = prev_dist.get_value();
-                    neighbor_ptr = prev_neighbor_ptr;
-                    inserted = false;
-                } else {
-                    inserted = true;
-                    break;
                 }
+                Some(lowest_idx)
+            }
+            Err(_) => {
+                // Update failed, clean up new neighbor
+                unsafe {
+                    drop(Box::from_raw(new_ptr));
+                }
+                None
+            }
+        };
+
+        let mut new_lowest_idx = 0;
+        let mut new_lowest_sim = 2.0;
+
+        for (idx, nbr) in self.neighbors.iter().enumerate() {
+            let nbr = unsafe { nbr.load(Ordering::Relaxed).as_ref() };
+            let Some((_, _, nbr_sim)) = nbr else {
+                new_lowest_sim = -1.0;
+                new_lowest_idx = idx;
+                break;
+            };
+            let nbr_sim = nbr_sim.get_value();
+            if nbr_sim < new_lowest_sim {
+                new_lowest_sim = nbr_sim;
+                new_lowest_idx = idx;
             }
         }
 
-        if !inserted {
-            if let Some(node) = node_to_remove_backlink {
-                if let Ok(n) = unsafe { &*node }.try_get_data(cache) {
-                    n.remove_neighbor(self.get_id().0 as u32);
-                }
-            }
-            unsafe {
-                drop(Box::from_raw(neighbor_ptr));
-            }
-        }
+        *lowest_idx_guard = (new_lowest_idx as u8, new_lowest_sim);
 
-        initial_neighbor_inserted
+        ret
     }
 
-    pub fn all_neighbor_slots_filled(&self) -> bool {
-        self.neighbors
-            .iter()
-            .all(|ptr| !ptr.load(Ordering::Relaxed).is_null())
-    }
-
-    pub fn remove_neighbor(&self, id: u32) {
+    pub fn remove_neighbor_by_id(&self, id: u32) {
         for neighbor in &self.neighbors {
             let res = neighbor.fetch_update(Ordering::Release, Ordering::Acquire, |nbr| {
                 if let Some((nbr_id, _, _)) = unsafe { nbr.as_ref() } {
@@ -192,6 +210,21 @@ impl ProbNode {
                 break;
             }
         }
+    }
+
+    pub fn remove_neighbor(&self, index: u8, id: u32) {
+        let _ = self.neighbors[index as usize].fetch_update(
+            Ordering::Release,
+            Ordering::Acquire,
+            |nbr| {
+                if let Some((nbr_id, _, _)) = unsafe { nbr.as_ref() } {
+                    if nbr_id == &id {
+                        return Some(ptr::null_mut());
+                    }
+                }
+                None
+            },
+        );
     }
 
     pub fn get_neighbors(&self) -> Vec<SharedNode> {
@@ -225,7 +258,7 @@ impl ProbNode {
 
     /// See [`crate::models::serializer::prob::node`] for how its calculated
     pub fn get_serialized_size(neighbors_len: usize) -> usize {
-        neighbors_len * 19 + 111
+        neighbors_len * 19 + 121
     }
 }
 

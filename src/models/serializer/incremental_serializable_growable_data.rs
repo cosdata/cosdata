@@ -10,7 +10,7 @@ use crate::models::{
     versioning::Hash,
 };
 use std::collections::HashSet;
-use std::{io::SeekFrom, sync::Arc};
+use std::sync::Arc;
 
 impl CustomSerialize for IncrementalSerializableGrowableData {
     fn serialize(
@@ -42,7 +42,7 @@ impl CustomSerialize for IncrementalSerializableGrowableData {
 
         // Serialize number of items in the vector
         // Each item is an array of 64 u32s
-        bufman.write_u32_with_cursor(cursor, total_items as u32)?;
+        bufman.update_u32_with_cursor(cursor, total_items as u32)?;
 
         // Serialize individual items
         // First store version, then the array of 64 u32s
@@ -50,20 +50,17 @@ impl CustomSerialize for IncrementalSerializableGrowableData {
             let item_start_offset = bufman.cursor_position(cursor)? as u32;
             if item.is_serialized() {
                 // If the array is already serialized, move the cursor forward by 6 + (64 * 4) bytes (6 bytes for version_id and version_number and 64 * 4 bytes for items) and serialize the next array
-                bufman.seek_with_cursor(
-                    cursor,
-                    SeekFrom::Start(item_start_offset as u64 + 64 * 4 + 6),
-                )?;
+                bufman.seek_with_cursor(cursor, item_start_offset as u64 + 64 * 4 + 6)?;
                 continue;
             }
 
             // Serialize the version
-            bufman.write_u32_with_cursor(cursor, *version_id)?;
-            bufman.write_u16_with_cursor(cursor, version_number)?;
+            bufman.update_u32_with_cursor(cursor, *version_id)?;
+            bufman.update_u16_with_cursor(cursor, version_number)?;
 
             // Serialize the array
             for i in 0..64 {
-                bufman.write_u32_with_cursor(
+                bufman.update_u32_with_cursor(
                     cursor,
                     match item.get(i) {
                         Some(val) => val,
@@ -92,7 +89,7 @@ impl CustomSerialize for IncrementalSerializableGrowableData {
             } => {
                 let bufman = bufmans.get(version_id)?;
                 let cursor = bufman.open_cursor()?;
-                bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
+                bufman.seek_with_cursor(cursor, offset as u64)?;
                 let items: LazyItemVec<STM<VectorData>> = LazyItemVec::new();
 
                 // Deserialize the number of items in the vector

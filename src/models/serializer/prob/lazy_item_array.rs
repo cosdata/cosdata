@@ -1,12 +1,9 @@
-use std::{
-    collections::HashSet,
-    io::{self, SeekFrom},
-};
+use std::{collections::HashSet, io};
 
 use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
     cache_loader::ProbCache,
-    lazy_load::{FileIndex, SyncPersist},
+    lazy_load::FileIndex,
     prob_lazy_load::lazy_item_array::ProbLazyItemArray,
     prob_node::{ProbNode, SharedNode},
     types::FileOffset,
@@ -28,7 +25,6 @@ impl<const N: usize> ProbSerialize for ProbLazyItemArray<ProbNode, N> {
         level_0_bufmans: &BufferManagerFactory<Hash>,
         version: Hash,
         cursor: u64,
-        direct: bool,
         is_level_0: bool,
     ) -> Result<u32, BufIoError> {
         let bufman = if is_level_0 {
@@ -37,28 +33,27 @@ impl<const N: usize> ProbSerialize for ProbLazyItemArray<ProbNode, N> {
             bufmans.get(version)?
         };
         let start_offset = bufman.cursor_position(cursor)?;
+        bufman.update_with_cursor(cursor, &vec![u8::MAX; 10 * N])?;
+        bufman.seek_with_cursor(cursor, start_offset)?;
 
         for i in 0..N {
             let Some(item_ptr) = self.get(i) else {
                 break;
             };
 
-            let offset = item_ptr.serialize(
-                bufmans,
-                level_0_bufmans,
-                version,
-                cursor,
-                direct,
-                is_level_0,
-            )?;
-            let placeholder_pos = start_offset + (i as u64 * 10);
-
             let item = unsafe { &*item_ptr };
+            let (offset, version_number, version_id) = match item.get_file_index() {
+                FileIndex::Valid {
+                    offset,
+                    version_number,
+                    version_id,
+                } => (offset.0, version_number, version_id),
+                _ => unreachable!(),
+            };
 
-            bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_pos))?;
-            bufman.write_u32_with_cursor(cursor, offset)?;
-            bufman.write_u16_with_cursor(cursor, item.get_current_version_number())?;
-            bufman.write_u32_with_cursor(cursor, *item.get_current_version())?;
+            bufman.update_u32_with_cursor(cursor, offset)?;
+            bufman.update_u16_with_cursor(cursor, version_number)?;
+            bufman.update_u32_with_cursor(cursor, *version_id)?;
         }
 
         Ok(start_offset as u32)
@@ -95,10 +90,7 @@ impl<const N: usize> ProbSerialize for ProbLazyItemArray<ProbNode, N> {
                 let array = Self::new();
 
                 for i in 0..N {
-                    bufman.seek_with_cursor(
-                        cursor,
-                        SeekFrom::Start(placeholder_offset + (i as u64 * 10)),
-                    )?;
+                    bufman.seek_with_cursor(cursor, placeholder_offset + (i as u64 * 10))?;
                     let offset = bufman.read_u32_with_cursor(cursor)?;
                     if offset == u32::MAX {
                         break;

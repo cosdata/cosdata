@@ -44,7 +44,6 @@ pub(crate) async fn create_sparse_vector(
     }
 
     run_upload_sparse_vector(
-        ctx,
         inverted_index,
         vec![(
             create_vector_dto.id.clone(),

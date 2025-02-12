@@ -20,7 +20,6 @@ impl ProbSerialize for InvertedIndexSparseAnnNodeBasicTSHashmap {
         level_0_bufmans: &BufferManagerFactory<Hash>,
         version: Hash,
         cursor: u64,
-        direct: bool,
         is_level_0: bool,
     ) -> Result<u32, BufIoError> {
         todo!()

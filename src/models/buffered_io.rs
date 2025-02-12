@@ -11,7 +11,6 @@ use std::sync::{Arc, RwLock};
 
 use super::lru_cache::LRUCache;
 
-
 #[derive(Debug)]
 pub enum BufIoError {
     Io(io::Error),
@@ -98,14 +97,12 @@ impl Drop for BufferRegion {
 
 struct Cursor {
     position: u64,
-    is_eof: bool,
 }
 
 impl Cursor {
     fn new() -> Self {
         Cursor {
             position: 0,
-            is_eof: false,
         }
     }
 }
@@ -118,7 +115,7 @@ pub struct BufferManagerFactory<K> {
     buffer_size: usize,
 }
 
-impl<K: Hash + Eq> BufferManagerFactory<K> {
+impl<K: Hash + Eq + Clone> BufferManagerFactory<K> {
     pub fn new(
         root_path: Arc<Path>,
         path_function: fn(&Path, &K) -> PathBuf,
@@ -135,26 +132,25 @@ impl<K: Hash + Eq> BufferManagerFactory<K> {
     }
 
     pub fn get(&self, key: K) -> Result<Arc<BufferManager>, BufIoError> {
-        if let Some(bufman) = self.bufmans.get(&key) {
-            return Ok(bufman.clone());
-        }
+        self.bufmans
+            .entry(key.clone())
+            .or_try_insert_with(|| {
+                let path = (self.path_function)(&self.root_path, &key);
 
-        let path = (self.path_function)(&self.root_path, &key);
+                let file = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .open(&path)?;
+                let bufman = Arc::new(BufferManager::new(
+                    file,
+                    self.flush_eagerness,
+                    self.buffer_size,
+                )?);
 
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(&path)?;
-        let bufman = Arc::new(BufferManager::new(
-            file,
-            self.flush_eagerness,
-            self.buffer_size,
-        )?);
-
-        self.bufmans.insert(key, bufman.clone());
-
-        Ok(bufman)
+                Ok(bufman)
+            })
+            .map(|bufman_ref| bufman_ref.value().clone())
     }
 
     pub fn flush_all(&self) -> Result<(), BufIoError> {
@@ -190,7 +186,9 @@ impl BufferManager {
             buffer_size,
         };
         this.regions.set_evict_hook(Some(|region| {
-            region.flush().unwrap();
+            if region.should_final_flush() {
+                region.flush().unwrap();
+            }
         }));
         Ok(this)
     }
@@ -307,101 +305,61 @@ impl BufferManager {
         Ok(total_read)
     }
 
-    pub fn write_f32_with_cursor(&self, cursor_id: u64, value: f32) -> Result<usize, BufIoError> {
+    pub fn update_f32_with_cursor(&self, cursor_id: u64, value: f32) -> Result<u64, BufIoError> {
         let buffer = value.to_le_bytes();
-        self.write_with_cursor(cursor_id, &buffer)
+        self.write_with_cursor(cursor_id, &buffer, false)
     }
 
-    pub fn write_u32_with_cursor(&self, cursor_id: u64, value: u32) -> Result<usize, BufIoError> {
+    pub fn update_u32_with_cursor(&self, cursor_id: u64, value: u32) -> Result<u64, BufIoError> {
         let buffer = value.to_le_bytes();
-        self.write_with_cursor(cursor_id, &buffer)
+        self.write_with_cursor(cursor_id, &buffer, false)
     }
 
-    pub fn write_u16_with_cursor(&self, cursor_id: u64, value: u16) -> Result<usize, BufIoError> {
+    pub fn update_u16_with_cursor(&self, cursor_id: u64, value: u16) -> Result<u64, BufIoError> {
         let buffer = value.to_le_bytes();
-        self.write_with_cursor(cursor_id, &buffer)
+        self.write_with_cursor(cursor_id, &buffer, false)
     }
 
-    pub fn write_u8_with_cursor(&self, cursor_id: u64, value: u8) -> Result<usize, BufIoError> {
+    pub fn update_u8_with_cursor(&self, cursor_id: u64, value: u8) -> Result<u64, BufIoError> {
         let buffer = value.to_le_bytes();
-        self.write_with_cursor(cursor_id, &buffer)
+        self.write_with_cursor(cursor_id, &buffer, false)
     }
 
-    pub fn write_with_cursor(&self, cursor_id: u64, buf: &[u8]) -> Result<usize, BufIoError> {
-        let cursor_info = {
+    pub fn update_with_cursor(&self, cursor_id: u64, buf: &[u8]) -> Result<u64, BufIoError> {
+        self.write_with_cursor(cursor_id, buf, false)
+    }
+
+    fn write_with_cursor(
+        &self,
+        cursor_id: u64,
+        buf: &[u8],
+        append: bool,
+    ) -> Result<u64, BufIoError> {
+        let curr_pos = {
             let cursors = self.cursors.read().map_err(|_| BufIoError::Locking)?;
             let cursor = cursors
                 .get(&cursor_id)
                 .ok_or_else(|| BufIoError::InvalidCursor(cursor_id))?;
-            (cursor.position, cursor.is_eof)
+            cursor.position
         };
 
         let input_size = buf.len();
 
-        let mut curr_pos = cursor_info.0;
-        let cursor_is_at_eof = cursor_info.1;
-        let will_cross_eof = cursor_is_at_eof || {
-            let file_size = self.file_size.read().map_err(|_| BufIoError::Locking)?;
-            curr_pos + input_size as u64 >= *file_size
-        };
-
-        let mut total_written = 0;
-        if will_cross_eof {
-            // This means we're either appending to a file or the
-            // input buffer size is large enough to go beyond
-            // EOF. Some synchronization is required here because
-            // threads will call seek and then write in two separate
-            // calls. Hence it needs to be ensured that multiple
-            // threads are not updating the `file_size` field at the
-            // same time. Additionally, we also need to handle the
-            // case where `file_size` changes between
-            // `seek_with_cursor` and `write_with_cursor` calls for
-            // the same cursor. This is done as follows:
-            //
-            // 1. take a write lock on file_size
-            // 2. if the cursor is at EOF, check that cursor position
-            //    = file size, if not sync it
-            // 3. start writing in a while loop
-            // 4. After the loop, write fize_size = curr_position
-            // 5. Release the lock
-            // 6. Update the cursor
-
-            let mut file_size = self.file_size.write().map_err(|_| BufIoError::Locking)?;
-
-            if cursor_is_at_eof && curr_pos < *file_size {
-                curr_pos = *file_size;
-            }
-
-            while total_written < input_size {
-                let region = self.get_or_create_region(curr_pos)?;
-                {
-                    // @NOTE: Here we need a separate scope because the
-                    // `buffer` guard on the next line needs to be dropped
-                    // before `flush_region_if_needed` can be called.
-                    let mut buffer = region.buffer.write().map_err(|_| BufIoError::Locking)?;
-                    let buffer_pos = (curr_pos - region.start) as usize;
-                    let available = self.buffer_size - buffer_pos;
-                    let to_write = (input_size - total_written).min(available);
-                    buffer[buffer_pos..buffer_pos + to_write]
-                        .copy_from_slice(&buf[total_written..total_written + to_write]);
-                    region.end.store(
-                        (buffer_pos + to_write).max(region.end.load(Ordering::SeqCst)),
-                        Ordering::SeqCst,
-                    );
-                    region.dirty.store(true, Ordering::SeqCst);
-                    total_written += to_write;
-                    curr_pos += to_write as u64;
-                }
-                self.flush_region_if_needed(&region)?;
-            }
-            *file_size = curr_pos;
+        // Take write lock early to cover the entire write operation that might affect file size
+        let mut file_size_guard = self.file_size.write().map_err(|_| BufIoError::Locking)?;
+        let will_cross_eof = append || curr_pos + input_size as u64 >= *file_size_guard;
+        let mut curr_pos = if append {
+            curr_pos.max(*file_size_guard)
         } else {
+            curr_pos
+        };
+        let start_pos = curr_pos;
+
+        if will_cross_eof {
+            let mut total_written = 0;
             while total_written < input_size {
                 let region = self.get_or_create_region(curr_pos)?;
                 {
-                    // @NOTE: Here we need a separate scope because the
-                    // `buffer` guard on the next line needs to be dropped
-                    // before `flush_region_if_needed` can be called.
                     let mut buffer = region.buffer.write().map_err(|_| BufIoError::Locking)?;
                     let buffer_pos = (curr_pos - region.start) as usize;
                     let available = self.buffer_size - buffer_pos;
@@ -418,14 +376,36 @@ impl BufferManager {
                 }
                 self.flush_region_if_needed(&region)?;
             }
-
-            // In case this thread has written past the end of file,
-            // then update the file_size
-            let mut file_size = self.file_size.write().map_err(|_| BufIoError::Locking)?;
-            if curr_pos > *file_size {
-                *file_size = curr_pos;
+            // Update file size using max to prevent shrinking
+            *file_size_guard = (*file_size_guard).max(curr_pos);
+        } else {
+            // Normal write within existing file bounds
+            let mut total_written = 0;
+            while total_written < input_size {
+                let region = self.get_or_create_region(curr_pos)?;
+                {
+                    let mut buffer = region.buffer.write().map_err(|_| BufIoError::Locking)?;
+                    let buffer_pos = (curr_pos - region.start) as usize;
+                    let available = self.buffer_size - buffer_pos;
+                    let to_write = (input_size - total_written).min(available);
+                    buffer[buffer_pos..buffer_pos + to_write]
+                        .copy_from_slice(&buf[total_written..total_written + to_write]);
+                    region.end.store(
+                        (buffer_pos + to_write).max(region.end.load(Ordering::SeqCst)),
+                        Ordering::SeqCst,
+                    );
+                    region.dirty.store(true, Ordering::SeqCst);
+                    total_written += to_write;
+                    curr_pos += to_write as u64;
+                }
+                self.flush_region_if_needed(&region)?;
             }
+            // Even for normal writes, we need to check if we accidentally crossed EOF
+            *file_size_guard = (*file_size_guard).max(curr_pos);
         }
+
+        // Drop file_size_guard before updating cursor
+        drop(file_size_guard);
 
         let mut cursors = self.cursors.write().map_err(|_| BufIoError::Locking)?;
         let cursor = cursors
@@ -433,7 +413,11 @@ impl BufferManager {
             .ok_or_else(|| BufIoError::InvalidCursor(cursor_id))?;
         cursor.position = curr_pos;
 
-        Ok(total_written)
+        Ok(start_pos)
+    }
+
+    pub fn write_to_end_of_file(&self, cursor_id: u64, buf: &[u8]) -> Result<u64, BufIoError> {
+        self.write_with_cursor(cursor_id, buf, true)
     }
 
     // @DOUBT: How to ensure that the read/write_with_cursor functions
@@ -444,32 +428,14 @@ impl BufferManager {
     // acquire a write lock on the the value i.e. RWLock<Cursor> while
     // reading/writing is going on.
 
-    pub fn seek_with_cursor(&self, cursor_id: u64, pos: SeekFrom) -> Result<u64, BufIoError> {
+    pub fn seek_with_cursor(&self, cursor_id: u64, pos: u64) -> Result<(), BufIoError> {
         let mut cursors = self.cursors.write().map_err(|_| BufIoError::Locking)?;
         let cursor = cursors
             .get_mut(&cursor_id)
             .ok_or_else(|| BufIoError::InvalidCursor(cursor_id))?;
 
-        let new_position = {
-            // @NOTE: We don't need a write lock here as we're setting
-            // the `is_eof` flag on the cursor. The
-            // `write_with_cursor` method checks whether this flag is
-            // set for the cursor and in that case, updates the
-            // current position if required after taking a write lock.
-            let file_size = self.file_size.read().map_err(|_| BufIoError::Locking)?;
-            let new_pos = match pos {
-                SeekFrom::Start(abs) => abs,
-                SeekFrom::End(rel) => (*file_size as i64 + rel) as u64,
-                SeekFrom::Current(rel) => (cursor.position as i64 + rel) as u64,
-            };
-            // Set `is_eof` flag for cursor if the new position is at
-            // or ahead of EOF
-            cursor.is_eof = new_pos >= *file_size;
-            new_pos
-        };
-
-        cursor.position = new_position;
-        Ok(new_position)
+        cursor.position = pos;
+        Ok(())
     }
 
     pub fn flush(&self) -> Result<(), BufIoError> {
@@ -515,16 +481,13 @@ mod tests {
         let cursor2 = bufman.open_cursor().unwrap();
 
         // Thread 1: Read from the beginning of file
-        bufman
-            .seek_with_cursor(cursor1, SeekFrom::Start(0))
-            .unwrap();
+        bufman.seek_with_cursor(cursor1, 0).unwrap();
         let value1 = bufman.read_u32_with_cursor(cursor1).unwrap();
         assert_eq!(456_u32, value1);
 
         // Thread 2: Write to the end of file
-        bufman.seek_with_cursor(cursor2, SeekFrom::End(0)).unwrap();
         bufman
-            .write_with_cursor(cursor2, &789_u32.to_le_bytes())
+            .write_with_cursor(cursor2, &789_u32.to_le_bytes(), true)
             .unwrap();
 
         // Thread 1: Continue reading
@@ -533,7 +496,7 @@ mod tests {
 
         // Thread 2: Again write to end of file
         bufman
-            .write_with_cursor(cursor2, &12345_u32.to_le_bytes())
+            .write_with_cursor(cursor2, &12345_u32.to_le_bytes(), true)
             .unwrap();
 
         // Thread 1: Continue reading
@@ -585,9 +548,7 @@ mod tests {
         let bufman = BufferManager::new(file, 1.0, BUFFER_SIZE).unwrap();
 
         let cursor1 = bufman.open_cursor().unwrap();
-        bufman
-            .seek_with_cursor(cursor1, SeekFrom::Start(8190))
-            .unwrap();
+        bufman.seek_with_cursor(cursor1, 8190).unwrap();
         let value1 = bufman.read_u32_with_cursor(cursor1).unwrap();
         assert_eq!(1678_u32, value1);
 
@@ -612,7 +573,7 @@ mod tests {
             let bm = bufman.clone();
             thread::spawn(move || {
                 let cid = bm.open_cursor().unwrap();
-                bm.seek_with_cursor(cid, SeekFrom::Start(100)).unwrap();
+                bm.seek_with_cursor(cid, 100).unwrap();
                 let v = bm.read_u16_with_cursor(cid).unwrap();
                 assert_eq!(500_u16, v);
                 bm.close_cursor(cid).unwrap();
@@ -624,8 +585,7 @@ mod tests {
             let bm = bufman.clone();
             thread::spawn(move || {
                 let cid = bm.open_cursor().unwrap();
-                bm.seek_with_cursor(cid, SeekFrom::Start(file_offset(3, 147)))
-                    .unwrap();
+                bm.seek_with_cursor(cid, file_offset(3, 147)).unwrap();
                 let v = bm.read_u32_with_cursor(cid).unwrap();
                 assert_eq!(1000_u32, v);
                 bm.close_cursor(cid).unwrap();
@@ -657,7 +617,7 @@ mod tests {
             let bm = bufman.clone();
             thread::spawn(move || {
                 let cid = bm.open_cursor().unwrap();
-                bm.seek_with_cursor(cid, SeekFrom::Start(0)).unwrap();
+                bm.seek_with_cursor(cid, 0).unwrap();
                 let v = bm.read_u16_with_cursor(cid).unwrap();
                 assert_eq!(500_u16, v);
                 bm.close_cursor(cid).unwrap();
@@ -670,7 +630,7 @@ mod tests {
             let bm = bufman.clone();
             thread::spawn(move || {
                 let cid = bm.open_cursor().unwrap();
-                bm.seek_with_cursor(cid, SeekFrom::Start(0)).unwrap();
+                bm.seek_with_cursor(cid, 0).unwrap();
                 let v1 = bm.read_u16_with_cursor(cid).unwrap();
                 assert_eq!(500_u16, v1);
                 let v2 = bm.read_u32_with_cursor(cid).unwrap();
@@ -685,7 +645,7 @@ mod tests {
             let bm = bufman.clone();
             thread::spawn(move || {
                 let cid = bm.open_cursor().unwrap();
-                bm.seek_with_cursor(cid, SeekFrom::Start(6)).unwrap();
+                bm.seek_with_cursor(cid, 6).unwrap();
                 let v = bm.read_u32_with_cursor(cid).unwrap();
                 assert_eq!(145_u32, v);
                 bm.close_cursor(cid).unwrap();
@@ -716,7 +676,7 @@ mod tests {
             let bm = bufman.clone();
             thread::spawn(move || {
                 let cid = bm.open_cursor().unwrap();
-                bm.seek_with_cursor(cid, SeekFrom::Start(pos1)).unwrap();
+                bm.seek_with_cursor(cid, pos1).unwrap();
                 let v = bm.read_u32_with_cursor(cid).unwrap();
                 assert_eq!(1000_u32, v);
                 bm.close_cursor(cid).unwrap();
@@ -728,7 +688,7 @@ mod tests {
             let bm = bufman.clone();
             thread::spawn(move || {
                 let cid = bm.open_cursor().unwrap();
-                bm.seek_with_cursor(cid, SeekFrom::Start(pos2)).unwrap();
+                bm.seek_with_cursor(cid, pos2).unwrap();
                 let v = bm.read_u32_with_cursor(cid).unwrap();
                 assert_eq!(2000_u32, v);
                 bm.close_cursor(cid).unwrap();
@@ -745,17 +705,13 @@ mod tests {
         let bufman = BufferManager::new(file, 1.0, BUFFER_SIZE).unwrap();
 
         let cursor = bufman.open_cursor().unwrap();
-        bufman
-            .seek_with_cursor(cursor, SeekFrom::Start(8190))
-            .unwrap();
+        bufman.seek_with_cursor(cursor, 8190).unwrap();
         let res = bufman
-            .write_with_cursor(cursor, &100000_u32.to_le_bytes())
+            .write_with_cursor(cursor, &100000_u32.to_le_bytes(), false)
             .unwrap();
-        assert_eq!(4, res);
+        assert_eq!(8190, res);
 
-        bufman
-            .seek_with_cursor(cursor, SeekFrom::Start(8190))
-            .unwrap();
+        bufman.seek_with_cursor(cursor, 8190).unwrap();
         let x = bufman.read_u32_with_cursor(cursor).unwrap();
         assert_eq!(100000, x);
 
@@ -774,16 +730,16 @@ mod tests {
         let bufman = BufferManager::new(file, 1.0, BUFFER_SIZE).unwrap();
 
         let cursor = bufman.open_cursor().unwrap();
-        bufman.seek_with_cursor(cursor, SeekFrom::Start(7)).unwrap();
+        bufman.seek_with_cursor(cursor, 7).unwrap();
         let txt = String::from("Hello, World");
         let data = txt.as_bytes();
-        let res = bufman.write_with_cursor(cursor, &data).unwrap();
-        assert_eq!(data.len(), res);
+        let res = bufman.write_with_cursor(cursor, &data, false).unwrap();
+        assert_eq!(res, 7);
 
         // Verify that `bufman.file_size` has correctly increased
         assert_eq!(19_u64, *bufman.file_size.read().unwrap());
 
-        bufman.seek_with_cursor(cursor, SeekFrom::Start(7)).unwrap();
+        bufman.seek_with_cursor(cursor, 7).unwrap();
         let mut output = [0u8; 12];
         bufman.read_with_cursor(cursor, &mut output).unwrap();
         assert_eq!(b"Hello, World", &output);
@@ -798,23 +754,21 @@ mod tests {
         // Assert that the bytes at the position we will be writing
         // to (in 2 separate threads) is initially 0
         let cursor = bufman.open_cursor().unwrap();
-        bufman
-            .seek_with_cursor(cursor, SeekFrom::Start(10))
-            .unwrap();
+        bufman.seek_with_cursor(cursor, 10).unwrap();
         assert_eq!(0, bufman.read_u32_with_cursor(cursor).unwrap());
 
-        bufman
-            .seek_with_cursor(cursor, SeekFrom::Start(file_offset(2, 45)))
-            .unwrap();
+        bufman.seek_with_cursor(cursor, file_offset(2, 45)).unwrap();
         assert_eq!(0, bufman.read_u32_with_cursor(cursor).unwrap());
 
         let t1 = {
             let bm = bufman.clone();
             thread::spawn(move || {
                 let cid = bm.open_cursor().unwrap();
-                bm.seek_with_cursor(cid, SeekFrom::Start(10)).unwrap();
-                let res = bm.write_with_cursor(cid, &123_u32.to_le_bytes()).unwrap();
-                assert_eq!(4, res);
+                bm.seek_with_cursor(cid, 10).unwrap();
+                let res = bm
+                    .write_with_cursor(cid, &123_u32.to_le_bytes(), false)
+                    .unwrap();
+                assert_eq!(10, res);
                 bm.close_cursor(cid).unwrap();
             })
         };
@@ -823,10 +777,12 @@ mod tests {
             let bm = bufman.clone();
             thread::spawn(move || {
                 let cid = bm.open_cursor().unwrap();
-                bm.seek_with_cursor(cid, SeekFrom::Start(file_offset(2, 45)))
+                let pos = file_offset(2, 45);
+                bm.seek_with_cursor(cid, pos).unwrap();
+                let res = bm
+                    .write_with_cursor(cid, &456_u32.to_le_bytes(), false)
                     .unwrap();
-                let res = bm.write_with_cursor(cid, &456_u32.to_le_bytes()).unwrap();
-                assert_eq!(4, res);
+                assert_eq!(pos, res);
                 bm.close_cursor(cid).unwrap();
             })
         };
@@ -835,13 +791,9 @@ mod tests {
         t2.join().unwrap();
 
         // Read the bytes that were just written and verify the values
-        bufman
-            .seek_with_cursor(cursor, SeekFrom::Start(10))
-            .unwrap();
+        bufman.seek_with_cursor(cursor, 10).unwrap();
         assert_eq!(123, bufman.read_u32_with_cursor(cursor).unwrap());
-        bufman
-            .seek_with_cursor(cursor, SeekFrom::Start(file_offset(2, 45)))
-            .unwrap();
+        bufman.seek_with_cursor(cursor, file_offset(2, 45)).unwrap();
         assert_eq!(456, bufman.read_u32_with_cursor(cursor).unwrap());
 
         // Verify that `bufman.file_size` remains the same
@@ -862,9 +814,8 @@ mod tests {
             let bm = bufman.clone();
             thread::spawn(move || {
                 let cid = bm.open_cursor().unwrap();
-                bm.seek_with_cursor(cid, SeekFrom::End(0)).unwrap();
-                let res = bm.write_with_cursor(cid, &8_u16.to_le_bytes()).unwrap();
-                assert_eq!(2, res);
+                bm.write_with_cursor(cid, &8_u16.to_le_bytes(), true)
+                    .unwrap();
                 bm.close_cursor(cid).unwrap();
             })
         };
@@ -873,9 +824,8 @@ mod tests {
             let bm = bufman.clone();
             thread::spawn(move || {
                 let cid = bm.open_cursor().unwrap();
-                bm.seek_with_cursor(cid, SeekFrom::End(0)).unwrap();
-                let res = bm.write_with_cursor(cid, &9_u16.to_le_bytes()).unwrap();
-                assert_eq!(2, res);
+                bm.write_with_cursor(cid, &9_u16.to_le_bytes(), true)
+                    .unwrap();
                 bm.close_cursor(cid).unwrap();
             })
         };
@@ -884,9 +834,7 @@ mod tests {
         t2.join().unwrap();
 
         let cursor = bufman.open_cursor().unwrap();
-        bufman
-            .seek_with_cursor(cursor, SeekFrom::Start(45))
-            .unwrap();
+        bufman.seek_with_cursor(cursor, 45).unwrap();
         let x = bufman.read_u16_with_cursor(cursor).unwrap();
         let y = bufman.read_u16_with_cursor(cursor).unwrap();
 
@@ -922,9 +870,11 @@ mod tests {
             let bm = bufman.clone();
             thread::spawn(move || {
                 let cid = bm.open_cursor().unwrap();
-                bm.seek_with_cursor(cid, SeekFrom::Start(pos1)).unwrap();
-                let res = bm.write_with_cursor(cid, &42_u16.to_le_bytes()).unwrap();
-                assert_eq!(2, res);
+                bm.seek_with_cursor(cid, pos1).unwrap();
+                let res = bm
+                    .write_with_cursor(cid, &42_u16.to_le_bytes(), false)
+                    .unwrap();
+                assert_eq!(pos1, res);
                 bm.close_cursor(cid).unwrap();
             })
         };
@@ -934,9 +884,11 @@ mod tests {
             let bm = bufman.clone();
             thread::spawn(move || {
                 let cid = bm.open_cursor().unwrap();
-                bm.seek_with_cursor(cid, SeekFrom::Start(pos2)).unwrap();
-                let res = bm.write_with_cursor(cid, &2024_u32.to_le_bytes()).unwrap();
-                assert_eq!(4, res);
+                bm.seek_with_cursor(cid, pos2).unwrap();
+                let res = bm
+                    .write_with_cursor(cid, &2024_u32.to_le_bytes(), false)
+                    .unwrap();
+                assert_eq!(pos2, res);
                 bm.close_cursor(cid).unwrap();
             })
         };
@@ -946,15 +898,11 @@ mod tests {
 
         let cursor = bufman.open_cursor().unwrap();
 
-        bufman
-            .seek_with_cursor(cursor, SeekFrom::Start(pos1))
-            .unwrap();
+        bufman.seek_with_cursor(cursor, pos1).unwrap();
         let x = bufman.read_u16_with_cursor(cursor).unwrap();
         assert_eq!(42, x);
 
-        bufman
-            .seek_with_cursor(cursor, SeekFrom::Start(pos2))
-            .unwrap();
+        bufman.seek_with_cursor(cursor, pos2).unwrap();
         let y = bufman.read_u32_with_cursor(cursor).unwrap();
         assert_eq!(2024, y);
 
@@ -980,9 +928,8 @@ mod tests {
             let bm = bufman.clone();
             thread::spawn(move || {
                 let cid = bm.open_cursor().unwrap();
-                bm.seek_with_cursor(cid, SeekFrom::End(0)).unwrap();
-                let res = bm.write_with_cursor(cid, &42_u16.to_le_bytes()).unwrap();
-                assert_eq!(2, res);
+                bm.write_with_cursor(cid, &42_u16.to_le_bytes(), true)
+                    .unwrap();
                 bm.close_cursor(cid).unwrap();
             })
         };
@@ -994,9 +941,11 @@ mod tests {
             thread::spawn(move || {
                 let cid = bm.open_cursor().unwrap();
                 let some_pos = (BUFFER_SIZE * 2 + 5) as u64;
-                bm.seek_with_cursor(cid, SeekFrom::Start(some_pos)).unwrap();
-                let res = bm.write_with_cursor(cid, &2024_u32.to_le_bytes()).unwrap();
-                assert_eq!(4, res);
+                bm.seek_with_cursor(cid, some_pos).unwrap();
+                let res = bm
+                    .write_with_cursor(cid, &2024_u32.to_le_bytes(), false)
+                    .unwrap();
+                assert_eq!(some_pos, res);
                 bm.close_cursor(cid).unwrap();
             })
         };
@@ -1006,12 +955,14 @@ mod tests {
 
         let cursor = bufman.open_cursor().unwrap();
 
-        bufman.seek_with_cursor(cursor, SeekFrom::End(-2)).unwrap();
+        bufman
+            .seek_with_cursor(cursor, bufman.file_size() - 2)
+            .unwrap();
         let x = bufman.read_u16_with_cursor(cursor).unwrap();
         assert_eq!(42, x);
 
         bufman
-            .seek_with_cursor(cursor, SeekFrom::Start((BUFFER_SIZE * 2 + 5) as u64))
+            .seek_with_cursor(cursor, (BUFFER_SIZE * 2 + 5) as u64)
             .unwrap();
         let y = bufman.read_u32_with_cursor(cursor).unwrap();
         assert_eq!(2024, y);
@@ -1039,9 +990,11 @@ mod tests {
             let bm = bufman.clone();
             thread::spawn(move || {
                 let cid = bm.open_cursor().unwrap();
-                bm.seek_with_cursor(cid, SeekFrom::Start(pos1)).unwrap();
-                let res = bm.write_with_cursor(cid, &123_u32.to_le_bytes()).unwrap();
-                assert_eq!(4, res);
+                bm.seek_with_cursor(cid, pos1).unwrap();
+                let res = bm
+                    .write_with_cursor(cid, &123_u32.to_le_bytes(), false)
+                    .unwrap();
+                assert_eq!(pos1, res);
                 bm.close_cursor(cid).unwrap();
             })
         };
@@ -1050,9 +1003,11 @@ mod tests {
             let bm = bufman.clone();
             thread::spawn(move || {
                 let cid = bm.open_cursor().unwrap();
-                bm.seek_with_cursor(cid, SeekFrom::Start(pos2)).unwrap();
-                let res = bm.write_with_cursor(cid, &456_u32.to_le_bytes()).unwrap();
-                assert_eq!(4, res);
+                bm.seek_with_cursor(cid, pos2).unwrap();
+                let res = bm
+                    .write_with_cursor(cid, &456_u32.to_le_bytes(), false)
+                    .unwrap();
+                assert_eq!(pos2, res);
                 bm.close_cursor(cid).unwrap();
             })
         };
@@ -1062,15 +1017,11 @@ mod tests {
 
         let cursor = bufman.open_cursor().unwrap();
 
-        bufman
-            .seek_with_cursor(cursor, SeekFrom::Start(pos1))
-            .unwrap();
+        bufman.seek_with_cursor(cursor, pos1).unwrap();
         let x = bufman.read_u32_with_cursor(cursor).unwrap();
         assert_eq!(123, x);
 
-        bufman
-            .seek_with_cursor(cursor, SeekFrom::Start(pos2))
-            .unwrap();
+        bufman.seek_with_cursor(cursor, pos2).unwrap();
         let y = bufman.read_u32_with_cursor(cursor).unwrap();
         assert_eq!(456, y);
 
@@ -1101,7 +1052,7 @@ mod tests {
             let bm = bufman.clone();
             thread::spawn(move || {
                 let cid = bm.open_cursor().unwrap();
-                bm.seek_with_cursor(cid, SeekFrom::Start(pos1)).unwrap();
+                bm.seek_with_cursor(cid, pos1).unwrap();
                 let v = bm.read_u32_with_cursor(cid).unwrap();
                 assert_eq!(1000_u32, v);
                 bm.close_cursor(cid).unwrap();
@@ -1112,9 +1063,11 @@ mod tests {
             let bm = bufman.clone();
             thread::spawn(move || {
                 let cid = bm.open_cursor().unwrap();
-                bm.seek_with_cursor(cid, SeekFrom::Start(pos2)).unwrap();
-                let res = bm.write_with_cursor(cid, &456_u16.to_le_bytes()).unwrap();
-                assert_eq!(2, res);
+                bm.seek_with_cursor(cid, pos2).unwrap();
+                let res = bm
+                    .write_with_cursor(cid, &456_u16.to_le_bytes(), false)
+                    .unwrap();
+                assert_eq!(pos2, res);
                 bm.close_cursor(cid).unwrap();
             })
         };
@@ -1124,9 +1077,7 @@ mod tests {
 
         let cursor = bufman.open_cursor().unwrap();
 
-        bufman
-            .seek_with_cursor(cursor, SeekFrom::Start(pos2))
-            .unwrap();
+        bufman.seek_with_cursor(cursor, pos2).unwrap();
         let y = bufman.read_u16_with_cursor(cursor).unwrap();
         assert_eq!(456, y);
 
@@ -1143,116 +1094,26 @@ mod tests {
         let bufman = BufferManager::new(file, 1.0, BUFFER_SIZE).unwrap();
         let cursor = bufman.open_cursor().unwrap();
 
-        // Test SeekFrom::Start cases
-        let pos = bufman.seek_with_cursor(cursor, SeekFrom::Start(0)).unwrap();
-        assert_eq!(0, pos);
+        // Test cases
+        bufman.seek_with_cursor(cursor, 0).unwrap();
         {
             let cursors = bufman.cursors.read().unwrap();
             let c = cursors.get(&cursor).unwrap();
             assert_eq!(0, c.position);
-            assert!(!c.is_eof);
         }
 
-        let pos = bufman
-            .seek_with_cursor(cursor, SeekFrom::Start(478))
-            .unwrap();
-        assert_eq!(478, pos);
+        bufman.seek_with_cursor(cursor, 478).unwrap();
         {
             let cursors = bufman.cursors.read().unwrap();
             let c = cursors.get(&cursor).unwrap();
             assert_eq!(478, c.position);
-            assert!(!c.is_eof);
         }
 
-        let pos = bufman
-            .seek_with_cursor(cursor, SeekFrom::Start(filesize as u64))
-            .unwrap();
-        assert_eq!(filesize as u64, pos);
+        bufman.seek_with_cursor(cursor, filesize as u64).unwrap();
         {
             let cursors = bufman.cursors.read().unwrap();
             let c = cursors.get(&cursor).unwrap();
             assert_eq!(filesize as u64, c.position);
-            assert!(c.is_eof);
-        }
-
-        // Test SeekFrom::End cases
-        let pos = bufman.seek_with_cursor(cursor, SeekFrom::End(0)).unwrap();
-        assert_eq!(filesize as u64, pos);
-        {
-            let cursors = bufman.cursors.read().unwrap();
-            let c = cursors.get(&cursor).unwrap();
-            assert_eq!(filesize as u64, c.position);
-            assert!(c.is_eof);
-        }
-
-        let pos = bufman.seek_with_cursor(cursor, SeekFrom::End(20)).unwrap();
-        assert_eq!(filesize as u64 + 20, pos);
-        {
-            let cursors = bufman.cursors.read().unwrap();
-            let c = cursors.get(&cursor).unwrap();
-            assert_eq!(filesize as u64 + 20, c.position);
-            assert!(c.is_eof);
-        }
-
-        let pos = bufman
-            .seek_with_cursor(cursor, SeekFrom::End(-115))
-            .unwrap();
-        assert_eq!(filesize as u64 - 115, pos);
-        {
-            let cursors = bufman.cursors.read().unwrap();
-            let c = cursors.get(&cursor).unwrap();
-            assert_eq!(filesize as u64 - 115, c.position);
-            assert!(!c.is_eof);
-        }
-
-        // Test SeekFrom::Current cases
-        let curr_pos = pos;
-        let pos = bufman
-            .seek_with_cursor(cursor, SeekFrom::Current(0))
-            .unwrap();
-        assert_eq!(curr_pos as u64, pos);
-        {
-            let cursors = bufman.cursors.read().unwrap();
-            let c = cursors.get(&cursor).unwrap();
-            assert_eq!(curr_pos as u64, c.position);
-            assert!(!c.is_eof);
-        }
-
-        let curr_pos = pos;
-        let pos = bufman
-            .seek_with_cursor(cursor, SeekFrom::Current(-100))
-            .unwrap();
-        assert_eq!(curr_pos as u64 - 100, pos);
-        {
-            let cursors = bufman.cursors.read().unwrap();
-            let c = cursors.get(&cursor).unwrap();
-            assert_eq!(curr_pos as u64 - 100, c.position);
-            assert!(!c.is_eof);
-        }
-
-        let curr_pos = pos;
-        let pos = bufman
-            .seek_with_cursor(cursor, SeekFrom::Current(100))
-            .unwrap();
-        assert_eq!(curr_pos as u64 + 100, pos);
-        {
-            let cursors = bufman.cursors.read().unwrap();
-            let c = cursors.get(&cursor).unwrap();
-            assert_eq!(curr_pos as u64 + 100, c.position);
-            assert!(!c.is_eof);
-        }
-
-        let curr_pos = pos;
-        let delta = filesize as i64 - curr_pos as i64;
-        let pos = bufman
-            .seek_with_cursor(cursor, SeekFrom::Current(delta))
-            .unwrap();
-        assert_eq!(filesize as u64, pos);
-        {
-            let cursors = bufman.cursors.read().unwrap();
-            let c = cursors.get(&cursor).unwrap();
-            assert_eq!(filesize as u64, c.position);
-            assert!(c.is_eof);
         }
 
         bufman.close_cursor(cursor).unwrap();
@@ -1290,7 +1151,9 @@ mod tests {
         let written_data = (0..(100 * 1024 * 1024))
             .map(|_| rng.gen())
             .collect::<Vec<_>>();
-        bufman.write_with_cursor(cursor, &written_data).unwrap();
+        bufman
+            .write_with_cursor(cursor, &written_data, true)
+            .unwrap();
         bufman.flush().unwrap();
 
         let mut read_data = vec![0; 100 * 1024 * 1024];
@@ -1351,8 +1214,7 @@ mod tests {
     }
 
     // Prop test for `write_with_cursor` to check that the return
-    // value (total bytes written) is exactly equal to the size of the
-    // output buffer
+    // value (write offset) is `EOF - buffer_size` (0 in this case)
     #[quickcheck]
     fn prop_write_with_cursor(size: u16) -> bool {
         let bufsize = size as usize;
@@ -1360,9 +1222,11 @@ mod tests {
         let bufman = BufferManager::new(file, 1.0, BUFFER_SIZE).unwrap();
         let mut buffer = vec![0; bufsize];
         let cursor = bufman.open_cursor().unwrap();
-        let bytes_written = bufman.write_with_cursor(cursor, &mut buffer[..]).unwrap();
+        let written_at = bufman
+            .write_with_cursor(cursor, &mut buffer[..], true)
+            .unwrap();
         bufman.close_cursor(cursor).unwrap();
-        bytes_written == bufsize
+        written_at == 0
     }
 
     // Prop test for `write_with_cursor` to check that all regions
@@ -1377,7 +1241,7 @@ mod tests {
         let mut input_buffer = vec![1; bufsize];
         let cursor = bufman.open_cursor().unwrap();
         bufman
-            .write_with_cursor(cursor, &mut input_buffer[..])
+            .write_with_cursor(cursor, &mut input_buffer[..], true)
             .unwrap();
         bufman.close_cursor(cursor).unwrap();
 
@@ -1395,7 +1259,7 @@ mod tests {
     // For seek_with_cursor, we just verify that it doesn't crash with
     // u16 type for filesize and position.
 
-    fn check_seek_with_cursor_doesnt_crash(filesize: u16, pos: SeekFrom) -> bool {
+    fn check_seek_with_cursor_doesnt_crash(filesize: u16, pos: u64) -> bool {
         let file = create_tmp_file_of_size(filesize).unwrap();
         let bufman = BufferManager::new(file, 1.0, BUFFER_SIZE).unwrap();
         let cursor = bufman.open_cursor().unwrap();
@@ -1406,16 +1270,6 @@ mod tests {
 
     #[quickcheck]
     fn prop_seek_with_cursor_from_start(filesize: u16, pos: u16) -> bool {
-        check_seek_with_cursor_doesnt_crash(filesize, SeekFrom::Start(pos as u64))
-    }
-
-    #[quickcheck]
-    fn prop_seek_with_cursor_from_end(filesize: u16, pos: i16) -> bool {
-        check_seek_with_cursor_doesnt_crash(filesize, SeekFrom::End(pos as i64))
-    }
-
-    #[quickcheck]
-    fn prop_seek_with_cursor_from_current(filesize: u16, pos: i16) -> bool {
-        check_seek_with_cursor_doesnt_crash(filesize, SeekFrom::Current(pos as i64))
+        check_seek_with_cursor_doesnt_crash(filesize, pos as u64)
     }
 }

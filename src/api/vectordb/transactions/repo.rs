@@ -112,7 +112,7 @@ pub(crate) async fn commit_dense_index_transaction(
     let version_number = current_open_transaction.version_number as u32;
 
     current_open_transaction
-        .pre_commit()
+        .pre_commit(vec_store.clone())
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
 
     vec_store
@@ -248,7 +248,7 @@ pub(crate) async fn abort_dense_index_transaction(
     }
 
     current_open_transaction
-        .pre_commit()
+        .pre_commit(vec_store.clone())
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
 
     vec_store

@@ -1055,7 +1055,7 @@ fn test_eager_lazy_item_multiple_serialization() {
     set.serialize(bufmans.clone(), 0.into(), cursor).unwrap();
 
     let value_offset = bufman.cursor_position(cursor).unwrap();
-    bufman.write_u32_with_cursor(cursor, value).unwrap();
+    bufman.update_u32_with_cursor(cursor, value).unwrap();
 
     set.insert(EagerLazyItem(
         0.0f32,
@@ -1064,9 +1064,7 @@ fn test_eager_lazy_item_multiple_serialization() {
 
     let offset = set.serialize(bufmans, 0.into(), cursor).unwrap();
 
-    bufman
-        .seek_with_cursor(cursor, SeekFrom::Start(value_offset))
-        .unwrap();
+    bufman.seek_with_cursor(cursor, value_offset).unwrap();
     let deserialized_value = bufman.read_u32_with_cursor(cursor).unwrap();
 
     assert_eq!(value, deserialized_value);

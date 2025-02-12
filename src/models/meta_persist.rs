@@ -78,11 +78,7 @@ pub struct DenseIndexData {
 impl TryFrom<Arc<DenseIndex>> for DenseIndexData {
     type Error = WaCustomError;
     fn try_from(dense_index: Arc<DenseIndex>) -> Result<Self, Self::Error> {
-        let offset = dense_index
-            .root_vec_offset()
-            .ok_or(WaCustomError::NodeError(
-                "FileIndex must be set for root node".to_owned(),
-            ))?;
+        let offset = dense_index.root_vec_offset();
         if let FileIndex::Invalid = offset {
             return Err(WaCustomError::NodeError(
                 "FileIndex must be valid for root node".to_owned(),

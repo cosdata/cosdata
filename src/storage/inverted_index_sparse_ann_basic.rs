@@ -11,6 +11,7 @@ use crate::models::cache_loader::ProbCache;
 use crate::models::fixedset::PerformantFixedSet;
 use crate::models::prob_lazy_load::lazy_item::ProbLazyItem;
 use crate::models::prob_lazy_load::lazy_item_array::ProbLazyItemArray;
+use crate::models::types::FileOffset;
 use crate::models::versioning::Hash;
 use crate::models::{
     buffered_io::BufferManagerFactory,
@@ -336,6 +337,7 @@ impl InvertedIndexSparseAnnNodeBasicTSHashmap {
                     0.into(),
                     0,
                     false,
+                    FileOffset(0),
                 )
             });
             let res = unsafe { &*new_child }.try_get_data(cache).unwrap();

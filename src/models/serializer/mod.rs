@@ -28,7 +28,7 @@ use super::lazy_load::FileIndex;
 use super::types::FileOffset;
 use super::versioning::Hash;
 use std::collections::HashSet;
-use std::io::{self, SeekFrom};
+use std::io;
 use std::sync::Arc;
 
 pub trait CustomSerialize: Sized {
@@ -91,7 +91,7 @@ impl<T: SimpleSerialize> CustomSerialize for T {
 impl SimpleSerialize for f32 {
     fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
         let offset = bufman.cursor_position(cursor)? as u32;
-        bufman.write_f32_with_cursor(cursor, *self)?;
+        bufman.update_f32_with_cursor(cursor, *self)?;
         Ok(offset)
     }
 
@@ -103,7 +103,7 @@ impl SimpleSerialize for f32 {
         Self: Sized,
     {
         let cursor = bufman.open_cursor()?;
-        bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
+        bufman.seek_with_cursor(cursor, offset as u64)?;
         let res = bufman.read_f32_with_cursor(cursor)?;
         bufman.close_cursor(cursor)?;
         Ok(res)
@@ -113,7 +113,7 @@ impl SimpleSerialize for f32 {
 impl SimpleSerialize for u32 {
     fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
         let offset = bufman.cursor_position(cursor)? as u32;
-        bufman.write_u32_with_cursor(cursor, *self)?;
+        bufman.update_u32_with_cursor(cursor, *self)?;
         Ok(offset)
     }
 
@@ -125,7 +125,7 @@ impl SimpleSerialize for u32 {
         Self: Sized,
     {
         let cursor = bufman.open_cursor()?;
-        bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
+        bufman.seek_with_cursor(cursor, offset as u64)?;
         let res = bufman.read_u32_with_cursor(cursor)?;
         bufman.close_cursor(cursor)?;
         Ok(res)

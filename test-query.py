@@ -1,8 +1,15 @@
+# import requests
+# import json
+# import numpy as np
 import pandas as pd
 
+# import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib3
 import os
+# import math
+# import random
+# from test_dataset import load_or_generate_brute_force_results, datasets, prompt_and_get_dataset_metadata, run_matching_tests, read_dataset_from_parquet
 
 import importlib.util
 
@@ -63,7 +70,14 @@ if __name__ == "__main__":
     session_response = test_dataset.create_session()
     print("Session Response:", session_response)
 
+    # matches_test_vectors = []
+
     test_vec_ids = {test_vec["query_id"] for test_vec in brute_force_results}
+    # test_vec_ids = {149}
     vectors = read_dataset_from_parquet(dataset_name, test_vec_ids)
+
+    # for vector in vectors:
+    #     if (vector["id"] in test_vec_ids):
+    #         vectors.append(vector)
 
     test_dataset.run_matching_tests(vectors, vector_db_name, brute_force_results)

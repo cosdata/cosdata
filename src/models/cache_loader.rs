@@ -23,7 +23,6 @@ use crate::storage::Storage;
 use arcshift::ArcShift;
 use dashmap::DashMap;
 use probabilistic_collections::cuckoo::CuckooFilter;
-use std::cell::Cell;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io;
@@ -296,6 +295,9 @@ pub struct ProbCache {
     batch_load_lock: Mutex<()>,
 }
 
+unsafe impl Send for ProbCache {}
+unsafe impl Sync for ProbCache {}
+
 impl ProbCache {
     pub fn new(
         cuckoo_filter_capacity: usize,
@@ -304,7 +306,7 @@ impl ProbCache {
         prop_file: Arc<RwLock<File>>,
     ) -> Self {
         let cuckoo_filter = CuckooFilter::new(cuckoo_filter_capacity);
-        let registry = LRUCache::with_prob_eviction(1_000_000, 0.03125);
+        let registry = LRUCache::with_prob_eviction(100_000_000, 0.03125);
         let props_registry = DashMap::new();
 
         Self {
@@ -373,7 +375,7 @@ impl ProbCache {
             &mut skipm,
             is_level_0,
         )?;
-        let (offset, version_number, version_id) = match file_index {
+        let (file_offset, version_number, version_id) = match file_index {
             FileIndex::Valid {
                 offset,
                 version_number,
@@ -383,7 +385,8 @@ impl ProbCache {
         };
         let state = ProbLazyItemState::Ready(ReadyState {
             data,
-            file_offset: Cell::new(Some(offset)),
+            file_offset,
+            is_serialized: AtomicBool::new(true),
             persist_flag: AtomicBool::new(false),
             version_id,
             version_number,
@@ -459,7 +462,7 @@ impl ProbCache {
             break;
         }
 
-        let (offset, version_number, version_id) = if let FileIndex::Valid {
+        let (file_offset, version_number, version_id) = if let FileIndex::Valid {
             offset,
             version_number,
             version_id,
@@ -481,7 +484,8 @@ impl ProbCache {
         )?;
         let state = ProbLazyItemState::Ready(ReadyState {
             data,
-            file_offset: Cell::new(Some(offset)),
+            file_offset,
+            is_serialized: AtomicBool::new(true),
             persist_flag: AtomicBool::new(false),
             version_id,
             version_number,

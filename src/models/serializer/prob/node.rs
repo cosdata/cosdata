@@ -1,14 +1,9 @@
-use std::{
-    collections::HashSet,
-    io::{self, SeekFrom},
-    ptr,
-    sync::atomic::AtomicPtr,
-};
+use std::{collections::HashSet, io, ptr, sync::atomic::AtomicPtr};
 
 use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
     cache_loader::ProbCache,
-    lazy_load::{FileIndex, SyncPersist},
+    lazy_load::FileIndex,
     prob_lazy_load::lazy_item_array::ProbLazyItemArray,
     prob_node::{ProbNode, SharedNode},
     types::{BytesToRead, FileOffset, HNSWLevel, MetricResult},
@@ -25,11 +20,12 @@ use super::{ProbSerialize, UpdateSerialized};
 //   Links:
 //     10 bytes for parent offset & version +           | 10
 //     10 bytes for child offset & version +            | 20
-//     2 bytes for neighbors length +                   | 22
-//     neighbors length * 19 bytes for neighbor link +  | nb * 19 + 22
-//     8 * 10 bytes for version link                    | nb * 19 + 102
+//     10 bytes for root version offset & version +     | 30
+//     2 bytes for neighbors length +                   | 32
+//     neighbors length * 19 bytes for neighbor link +  | nb * 19 + 32
+//     8 * 10 bytes for version link                    | nb * 19 + 112
 //
-//   Total = nb * 19 + 111 (where `nb` is the neighbors count)
+//   Total = nb * 19 + 121 (where `nb` is the neighbors count)
 impl ProbSerialize for ProbNode {
     fn serialize(
         &self,
@@ -37,11 +33,10 @@ impl ProbSerialize for ProbNode {
         level_0_bufmans: &BufferManagerFactory<Hash>,
         version: Hash,
         cursor: u64,
-        direct: bool,
         _is_level_0: bool,
     ) -> Result<u32, BufIoError> {
         let is_level_0 = self.hnsw_level.0 == 0;
-        assert_eq!(_is_level_0, is_level_0);
+        debug_assert_eq!(_is_level_0, is_level_0);
         let bufman = if is_level_0 {
             level_0_bufmans.get(version)?
         } else {
@@ -52,111 +47,92 @@ impl ProbSerialize for ProbNode {
         let neighbors = self.get_neighbors_raw();
         let size = Self::get_serialized_size(neighbors.len()) as u64;
 
-        assert_eq!(start_offset % size, 0, "offset: {}", start_offset);
+        debug_assert_eq!(start_offset % size, 0, "offset: {}", start_offset);
 
         // Serialize basic fields
-        bufman.write_u8_with_cursor(cursor, self.hnsw_level.0)?;
+        bufman.update_u8_with_cursor(cursor, self.hnsw_level.0)?;
 
         // Serialize prop
         let (FileOffset(offset), BytesToRead(length)) = &self.prop.location;
-        bufman.write_u32_with_cursor(cursor, *offset)?;
-        bufman.write_u32_with_cursor(cursor, *length)?;
-
-        bufman.write_with_cursor(cursor, &vec![u8::MAX; neighbors.len() * 19 + 102])?;
+        bufman.update_u32_with_cursor(cursor, *offset)?;
+        bufman.update_u32_with_cursor(cursor, *length)?;
 
         let parent_ptr = self.get_parent();
 
-        // Serialize parent if present
+        // Get parent file index
         let parent_file_index = if let Some(parent) = unsafe { parent_ptr.as_ref() } {
-            let (bufman, cursor, new) = if is_level_0 {
-                let parent_version = parent.get_current_version();
-                let bufman = bufmans.get(parent_version)?;
-                let cursor = bufman.open_cursor()?;
-                (bufman, cursor, true)
-            } else {
-                (bufman.clone(), cursor, false)
+            let file_index = match parent.get_file_index() {
+                FileIndex::Valid {
+                    offset,
+                    version_number,
+                    version_id,
+                } => (offset.0, version_number, version_id),
+                _ => unreachable!(),
             };
-            let parent_offset =
-                parent_ptr.serialize(bufmans, level_0_bufmans, version, cursor, direct, false)?;
-            if new {
-                bufman.close_cursor(cursor)?;
-            }
-            Some((
-                parent_offset,
-                parent.get_current_version(),
-                parent.get_current_version_number(),
-            ))
+            Some(file_index)
         } else {
             None
         };
 
         let child_ptr = self.get_child();
 
-        // Serialize child if present
+        // Get child file index
         let child_file_index = if let Some(child) = unsafe { child_ptr.as_ref() } {
-            let (bufman, cursor, new) = if self.hnsw_level.0 == 1 {
-                let child_version = child.get_current_version();
-                let bufman = level_0_bufmans.get(child_version)?;
-                let cursor = bufman.open_cursor()?;
-                (bufman, cursor, true)
-            } else {
-                (bufman.clone(), cursor, false)
+            let file_index = match child.get_file_index() {
+                FileIndex::Valid {
+                    offset,
+                    version_number,
+                    version_id,
+                } => (offset.0, version_number, version_id),
+                _ => unreachable!(),
             };
-            let child_offset = child_ptr.serialize(
-                bufmans,
-                level_0_bufmans,
-                version,
-                cursor,
-                direct,
-                self.hnsw_level.0 == 1,
-            )?;
-            if new {
-                bufman.close_cursor(cursor)?;
-            }
-            Some((
-                child_offset,
-                child.get_current_version(),
-                child.get_current_version_number(),
-            ))
+            Some(file_index)
         } else {
             None
         };
 
-        if let Some((offset, version_id, version_number)) = parent_file_index {
-            bufman.seek_with_cursor(cursor, SeekFrom::Start(start_offset + 9))?;
-            bufman.write_u32_with_cursor(cursor, offset)?;
-            bufman.write_u16_with_cursor(cursor, version_number)?;
-            bufman.write_u32_with_cursor(cursor, *version_id)?;
+        if let Some((offset, version_number, version_id)) = parent_file_index {
+            bufman.update_u32_with_cursor(cursor, offset)?;
+            bufman.update_u16_with_cursor(cursor, version_number)?;
+            bufman.update_u32_with_cursor(cursor, *version_id)?;
+        } else {
+            bufman.update_with_cursor(cursor, &[u8::MAX; 10])?;
         }
 
-        if let Some((offset, version_id, version_number)) = child_file_index {
-            bufman.seek_with_cursor(cursor, SeekFrom::Start(start_offset + 19))?;
-            bufman.write_u32_with_cursor(cursor, offset)?;
-            bufman.write_u16_with_cursor(cursor, version_number)?;
-            bufman.write_u32_with_cursor(cursor, *version_id)?;
+        if let Some((offset, version_number, version_id)) = child_file_index {
+            bufman.update_u32_with_cursor(cursor, offset)?;
+            bufman.update_u16_with_cursor(cursor, version_number)?;
+            bufman.update_u32_with_cursor(cursor, *version_id)?;
+        } else {
+            bufman.update_with_cursor(cursor, &[u8::MAX; 10])?;
         }
 
-        bufman.seek_with_cursor(cursor, SeekFrom::Start(start_offset + 29))?;
-        neighbors.serialize(
-            bufmans,
-            level_0_bufmans,
-            version,
-            cursor,
-            direct,
-            is_level_0,
-        )?;
-        bufman.seek_with_cursor(
-            cursor,
-            SeekFrom::Start(start_offset + 31 + neighbors.len() as u64 * 19),
-        )?;
-        self.versions.serialize(
-            bufmans,
-            level_0_bufmans,
-            version,
-            cursor,
-            direct,
-            is_level_0,
-        )?;
+        if let Some(root) = unsafe { self.root_version.as_ref() } {
+            let (offset, version_number, version_id) = match root.get_file_index() {
+                FileIndex::Valid {
+                    offset,
+                    version_number,
+                    version_id,
+                } => (offset.0, version_number, version_id),
+                _ => unimplemented!(),
+            };
+            bufman.update_u32_with_cursor(cursor, offset)?;
+            bufman.update_u16_with_cursor(cursor, version_number)?;
+            bufman.update_u32_with_cursor(cursor, *version_id)?;
+        } else {
+            bufman.update_with_cursor(cursor, &[u8::MAX; 10])?;
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            let current = bufman.cursor_position(cursor)?;
+
+            assert_eq!(current, start_offset + 39);
+        }
+
+        neighbors.serialize(bufmans, level_0_bufmans, version, cursor, is_level_0)?;
+        self.versions
+            .serialize(bufmans, level_0_bufmans, version, cursor, is_level_0)?;
 
         Ok(start_offset as u32)
     }
@@ -187,13 +163,13 @@ impl ProbSerialize for ProbNode {
                     bufmans.get(version_id)?
                 };
                 let cursor = bufman.open_cursor()?;
-                bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
+                bufman.seek_with_cursor(cursor, offset as u64)?;
                 // Read basic fields
                 let hnsw_level = HNSWLevel(bufman.read_u8_with_cursor(cursor)?);
                 if is_level_0 {
-                    assert_eq!(hnsw_level.0, 0);
+                    debug_assert_eq!(hnsw_level.0, 0);
                 } else {
-                    assert_ne!(hnsw_level.0, 0);
+                    debug_assert_ne!(hnsw_level.0, 0);
                 }
                 // Read prop
                 let prop_offset = FileOffset(bufman.read_u32_with_cursor(cursor)?);
@@ -207,6 +183,10 @@ impl ProbSerialize for ProbNode {
                 let child_offset = bufman.read_u32_with_cursor(cursor)?;
                 let child_version_number = bufman.read_u16_with_cursor(cursor)?;
                 let child_version_id = Hash::from(bufman.read_u32_with_cursor(cursor)?);
+
+                let root_version_offset = bufman.read_u32_with_cursor(cursor)?;
+                let root_version_version_number = bufman.read_u16_with_cursor(cursor)?;
+                let root_version_version_id = Hash::from(bufman.read_u32_with_cursor(cursor)?);
                 bufman.close_cursor(cursor)?;
                 // Deserialize parent
                 let parent = if parent_offset != u32::MAX {
@@ -244,9 +224,27 @@ impl ProbSerialize for ProbNode {
                 } else {
                     ptr::null_mut()
                 };
+                // Deserialize root_version
+                let root_version = if root_version_offset != u32::MAX {
+                    SharedNode::deserialize(
+                        bufmans,
+                        level_0_bufmans,
+                        FileIndex::Valid {
+                            offset: FileOffset(root_version_offset),
+                            version_number: root_version_version_number,
+                            version_id: root_version_version_id,
+                        },
+                        cache,
+                        max_loads,
+                        skipm,
+                        hnsw_level.0 == 1,
+                    )?
+                } else {
+                    ptr::null_mut()
+                };
 
                 let neighbors_file_index = FileIndex::Valid {
-                    offset: FileOffset(offset + 29),
+                    offset: FileOffset(offset + 39),
                     version_number,
                     version_id,
                 };
@@ -263,7 +261,7 @@ impl ProbSerialize for ProbNode {
                     )?;
 
                 let versions_file_index = FileIndex::Valid {
-                    offset: FileOffset(offset + 31 + neighbors.len() as u32 * 19),
+                    offset: FileOffset(offset + 41 + neighbors.len() as u32 * 19),
                     version_number,
                     version_id,
                 };
@@ -278,8 +276,14 @@ impl ProbSerialize for ProbNode {
                     is_level_0,
                 )?;
 
-                Ok(Self::new_with_neighbors_and_versions(
-                    hnsw_level, prop, neighbors, parent, child, versions,
+                Ok(Self::new_with_neighbors_and_versions_and_root_version(
+                    hnsw_level,
+                    prop,
+                    neighbors,
+                    parent,
+                    child,
+                    versions,
+                    root_version,
                 ))
             }
         }
@@ -297,27 +301,24 @@ impl UpdateSerialized for ProbNode {
         _is_level_0: bool,
     ) -> Result<u32, BufIoError> {
         let is_level_0 = self.hnsw_level.0 == 0;
-        assert_eq!(_is_level_0, is_level_0);
+        debug_assert_eq!(_is_level_0, is_level_0);
+        let size = Self::get_serialized_size(self.get_neighbors_raw().len()) as u32;
+        debug_assert_eq!(offset % size, 0);
         let bufman = if is_level_0 {
             level_0_bufmans.get(version)?
         } else {
             bufmans.get(version)?
         };
-        bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64 + 29))?;
+        bufman.seek_with_cursor(cursor, offset as u64 + 39)?;
         self.get_neighbors_raw().serialize(
             bufmans,
             level_0_bufmans,
             version,
             cursor,
-            true,
             is_level_0,
         )?;
-        bufman.seek_with_cursor(
-            cursor,
-            SeekFrom::Start(offset as u64 + 31 + self.get_neighbors_raw().len() as u64 * 19),
-        )?;
         self.versions
-            .serialize(bufmans, level_0_bufmans, version, cursor, true, is_level_0)?;
+            .serialize(bufmans, level_0_bufmans, version, cursor, is_level_0)?;
 
         Ok(offset)
     }

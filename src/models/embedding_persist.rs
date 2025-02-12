@@ -1,4 +1,4 @@
-use std::{io::SeekFrom, sync::Arc};
+use std::sync::Arc;
 
 use crate::indexes::inverted_index_types::RawSparseVectorEmbedding;
 
@@ -47,9 +47,11 @@ pub fn write_embedding(
     let len = serialized.len() as u32;
     let cursor = bufman.open_cursor()?;
 
-    let start = bufman.seek_with_cursor(cursor, SeekFrom::End(0))? as u32;
-    bufman.write_u32_with_cursor(cursor, len)?;
-    bufman.write_with_cursor(cursor, &serialized)?;
+    let mut buf = Vec::with_capacity(4 + serialized.len());
+    buf.extend(len.to_le_bytes());
+    buf.extend(serialized.into_iter());
+
+    let start = bufman.write_to_end_of_file(cursor, &buf)? as u32;
 
     bufman.close_cursor(cursor)?;
 
@@ -95,9 +97,11 @@ pub fn write_sparse_embedding(
     let len = serialized.len() as u32;
     let cursor = bufman.open_cursor()?;
 
-    let start = bufman.seek_with_cursor(cursor, SeekFrom::End(0))? as u32;
-    bufman.write_u32_with_cursor(cursor, len)?;
-    bufman.write_with_cursor(cursor, &serialized)?;
+    let mut buf = Vec::with_capacity(4 + serialized.len());
+    buf.extend(len.to_le_bytes());
+    buf.extend(serialized.into_iter());
+
+    let start = bufman.write_to_end_of_file(cursor, &buf)? as u32;
 
     bufman.close_cursor(cursor)?;
 
@@ -143,7 +147,7 @@ pub fn read_sparse_embedding(
     let cursor = bufman.open_cursor()?;
 
     bufman
-        .seek_with_cursor(cursor, SeekFrom::Start(offset as u64))
+        .seek_with_cursor(cursor, offset as u64)
         .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?;
 
     let len = bufman
@@ -180,7 +184,7 @@ pub fn read_embedding(
     let cursor = bufman.open_cursor()?;
 
     bufman
-        .seek_with_cursor(cursor, SeekFrom::Start(offset as u64))
+        .seek_with_cursor(cursor, offset as u64)
         .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?;
 
     let len = bufman

@@ -10,7 +10,7 @@ use crate::{
         types::{FileOffset, MetricResult},
     },
 };
-use std::io::{self, SeekFrom};
+use std::io;
 
 use super::SimpleSerialize;
 
@@ -25,8 +25,8 @@ impl SimpleSerialize for MetricResult {
             Self::DotProductDistance(value) => (4, value.0),
         };
         let start = bufman.cursor_position(cursor)? as u32;
-        bufman.write_u8_with_cursor(cursor, variant)?;
-        bufman.write_f32_with_cursor(cursor, value)?;
+        bufman.update_u8_with_cursor(cursor, variant)?;
+        bufman.update_f32_with_cursor(cursor, value)?;
         Ok(start)
     }
 
@@ -38,7 +38,7 @@ impl SimpleSerialize for MetricResult {
         Self: Sized,
     {
         let cursor = bufman.open_cursor()?;
-        bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
+        bufman.seek_with_cursor(cursor, offset as u64)?;
         let variant = bufman.read_u8_with_cursor(cursor)?;
         let value = bufman.read_f32_with_cursor(cursor)?;
         let metric = match variant {
