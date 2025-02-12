@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     api::vectordb::vectors::dtos::{
-        CreateDenseVectorDto, CreateSparseVectorDto, CreateVectorResponseDto, UpsertDto,
+        CreateDenseVectorDto, CreateSparseVectorDto, CreateVectorResponseDto,
     },
     app_context::AppContext,
     models::{rpc::DenseVector, versioning::Hash},

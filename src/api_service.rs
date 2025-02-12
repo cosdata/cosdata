@@ -1,13 +1,14 @@
 use crate::app_context::AppContext;
 use crate::indexes::inverted_index::{InvertedIndex, InvertedIndexTransaction};
 use crate::indexes::inverted_index_types::{RawSparseVectorEmbedding, SparsePair};
+use crate::macros::key;
 use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::cache_loader::ProbCache;
 use crate::models::collection::Collection;
 use crate::models::common::*;
 use crate::models::embedding_persist::EmbeddingOffset;
-use crate::models::file_persist::write_node_to_file;
 use crate::models::meta_persist::update_current_version;
+use crate::models::prob_node::ProbNode;
 use crate::models::types::*;
 use crate::models::user::Statistics;
 use crate::models::versioning::{Hash, VersionControl};
@@ -19,7 +20,6 @@ use lmdb::WriteFlags;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use std::array::TryFromSliceError;
 use std::fs;
-use std::io::SeekFrom;
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
@@ -73,17 +73,26 @@ pub async fn init_dense_index_for_collection(
         index_path.clone().into(),
         |root, ver: &Hash| root.join(format!("{}.index", **ver)),
         ctx.config.flush_eagerness_factor,
+        ProbNode::get_serialized_size(hnsw_params.neighbors_count) * 1000,
+    ));
+
+    let level_0_index_manager = Arc::new(BufferManagerFactory::new(
+        index_path.clone().into(),
+        |root, ver: &Hash| root.join(format!("{}_0.index", **ver)),
+        ctx.config.flush_eagerness_factor,
+        ProbNode::get_serialized_size(hnsw_params.level_0_neighbors_count) * 1000,
     ));
     let vec_raw_manager = Arc::new(BufferManagerFactory::new(
         index_path.into(),
         |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
         ctx.config.flush_eagerness_factor,
+        8192,
     ));
 
     // TODO: May be the value can be taken from config
     let cache = Arc::new(ProbCache::new(
-        1000,
         index_manager.clone(),
+        level_0_index_manager.clone(),
         prop_file.clone(),
     ));
 
@@ -93,12 +102,14 @@ pub async fn init_dense_index_for_collection(
         collection.dense_vector.dimension,
         prop_file.clone(),
         hash,
-        index_manager.clone(),
+        &index_manager,
+        &level_0_index_manager,
         values_range,
         &hnsw_params,
     )?;
 
     index_manager.flush_all()?;
+    update_current_version(&lmdb, hash)?;
     // ---------------------------
     // -- TODO level entry ratio
     // ---------------------------
@@ -120,6 +131,7 @@ pub async fn init_dense_index_for_collection(
         hnsw_params,
         cache,
         index_manager,
+        level_0_index_manager,
         vec_raw_manager,
         values_range,
         sample_threshold,
@@ -161,12 +173,14 @@ pub async fn init_inverted_index_for_collection(
         index_path.clone().into(),
         |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
         ctx.config.flush_eagerness_factor,
+        8192,
     ));
 
     let index_manager = Arc::new(BufferManagerFactory::new(
         index_path.into(),
         |root, ver: &Hash| root.join(format!("{}.index", **ver)),
         ctx.config.flush_eagerness_factor,
+        8192,
     ));
 
     // TODO FIX THE FOLLOWING ISSUE
@@ -385,7 +399,6 @@ pub fn run_upload_in_transaction(
             }
         }
     }
-    transaction.increment_batch_count();
 
     if is_first_batch {
         sample_points
@@ -413,14 +426,11 @@ pub fn run_upload_in_transaction(
         )?;
     }
 
-    transaction.start_serialization_round();
-
     Ok(())
 }
 
 /// uploads a sparse vector for inverted index
 pub fn run_upload_sparse_vector(
-    ctx: Arc<AppContext>,
     inverted_index: Arc<InvertedIndex>,
     vecs: Vec<(VectorId, Vec<SparsePair>)>,
 ) -> Result<(), WaCustomError> {
@@ -522,7 +532,7 @@ pub fn run_upload(
 
             let prev_bufman = dense_index.vec_raw_manager.get(prev_version)?;
             let cursor = prev_bufman.open_cursor()?;
-            let prev_file_len = prev_bufman.seek_with_cursor(cursor, SeekFrom::End(0))? as u32;
+            let prev_file_len = prev_bufman.file_size() as u32;
             prev_bufman.close_cursor(cursor)?;
 
             prev_file_len > embedding_offset.offset
@@ -534,16 +544,33 @@ pub fn run_upload(
     };
 
     txn.abort();
-    let serialization_table = Arc::new(TSHashTable::new(16));
     let lazy_item_versions_table = Arc::new(TSHashTable::new(16));
+
+    let (node_size, level_0_node_size) = {
+        let hnsw_params = dense_index.hnsw_params.read().unwrap();
+        let node_size = ProbNode::get_serialized_size(hnsw_params.neighbors_count);
+        let level_0_node_size = ProbNode::get_serialized_size(hnsw_params.level_0_neighbors_count);
+        (node_size as u32, level_0_node_size as u32)
+    };
+    let mut offset = 0;
+    let mut level_0_offset = 0;
 
     if index_before_insertion {
         index_embeddings(
             &ctx.config,
             dense_index.clone(),
             ctx.config.upload_process_batch_size,
-            serialization_table.clone(),
             lazy_item_versions_table.clone(),
+            || {
+                let ret = offset;
+                offset += node_size;
+                ret
+            },
+            || {
+                let ret = level_0_offset;
+                level_0_offset += level_0_node_size;
+                ret
+            },
         )?;
     }
 
@@ -565,9 +592,10 @@ pub fn run_upload(
     let mut txn = env
         .begin_rw_txn()
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+    let next_embedding_offset_key = key!(m:next_embedding_offset);
     txn.put(
         *db,
-        &"next_embedding_offset",
+        &next_embedding_offset_key,
         &new_offset_serialized,
         WriteFlags::empty(),
     )
@@ -614,25 +642,42 @@ pub fn run_upload(
         })?;
 
     txn.abort();
+    let mut offset = 0;
+    let mut level_0_offset = 0;
 
     if count_unindexed >= ctx.config.upload_threshold {
         index_embeddings(
             &ctx.config,
             dense_index.clone(),
             ctx.config.upload_process_batch_size,
-            serialization_table.clone(),
             lazy_item_versions_table,
+            || {
+                let ret = offset;
+                offset += node_size;
+                ret
+            },
+            || {
+                let ret = level_0_offset;
+                level_0_offset += level_0_node_size;
+                ret
+            },
         )?;
     }
 
-    let list = Arc::into_inner(serialization_table).unwrap().to_list();
-
-    for (node, _) in list {
-        write_node_to_file(node, &dense_index.index_manager)?;
-    }
+    // for list in nodes_lists {
+    //     for node in list.into_inner().unwrap() {
+    //         write_node_to_file(
+    //             node as *const _ as *mut _,
+    //             &dense_index.index_manager,
+    //             &dense_index.level_0_index_manager,
+    //             current_version,
+    //         )?;
+    //     }
+    // }
 
     dense_index.vec_raw_manager.flush_all()?;
     dense_index.index_manager.flush_all()?;
+    dense_index.level_0_index_manager.flush_all()?;
 
     Ok(())
 }

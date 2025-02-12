@@ -12,7 +12,10 @@ use crate::models::dot_product::dot_product_f32;
 use crate::models::embedding_persist::*;
 use crate::models::file_persist::*;
 use crate::models::fixedset::PerformantFixedSet;
+use crate::models::lazy_load::FileIndex;
+use crate::models::lazy_load::SyncPersist;
 use crate::models::prob_lazy_load::lazy_item::ProbLazyItem;
+use crate::models::prob_lazy_load::lazy_item_array::ProbLazyItemArray;
 use crate::models::prob_node::ProbNode;
 use crate::models::prob_node::SharedNode;
 use crate::models::types::*;
@@ -25,7 +28,6 @@ use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterato
 use std::array::TryFromSliceError;
 use std::collections::BinaryHeap;
 use std::fs::File;
-use std::io::SeekFrom;
 use std::ptr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -37,7 +39,8 @@ pub fn create_root_node(
     dim: usize,
     prop_file: Arc<RwLock<File>>,
     hash: Hash,
-    index_manager: Arc<BufferManagerFactory<Hash>>,
+    index_manager: &BufferManagerFactory<Hash>,
+    level_0_index_manager: &BufferManagerFactory<Hash>,
     values_range: (f32, f32),
     hnsw_params: &HNSWHyperParams,
 ) -> Result<SharedNode, WaCustomError> {
@@ -73,9 +76,15 @@ pub fn create_root_node(
         ),
         hash,
         0,
+        true,
+        FileOffset(0),
     );
 
     let mut nodes = Vec::new();
+    nodes.push(root);
+
+    let mut offset = 0;
+    let node_size = ProbNode::get_serialized_size(hnsw_params.neighbors_count) as u32;
 
     for l in 1..=hnsw_params.num_layers {
         let current_node = ProbNode::new(
@@ -86,7 +95,8 @@ pub fn create_root_node(
             hnsw_params.neighbors_count,
         );
 
-        let lazy_node = ProbLazyItem::new(current_node, hash, 0);
+        let lazy_node = ProbLazyItem::new(current_node, hash, 0, false, FileOffset(offset));
+        offset += node_size;
 
         if let Some(prev_node) = unsafe { &*root }.get_lazy_data() {
             prev_node.set_parent(lazy_node.clone());
@@ -97,7 +107,7 @@ pub fn create_root_node(
     }
 
     for item in nodes {
-        write_node_to_file(item, &index_manager)?;
+        write_node_to_file(item, index_manager, level_0_index_manager, hash)?;
     }
 
     Ok(root)
@@ -346,6 +356,7 @@ pub fn get_embedding_by_id(
 ///   - An error with writing the embedding to the buffer.
 ///   - A failure in updating the inverted index.
 ///   - A version conflict or inconsistency with the provided `current_version`.
+#[allow(unused)]
 pub fn insert_sparse_embedding(
     bufman: Arc<BufferManager>,
     inverted_index: Arc<InvertedIndex>,
@@ -425,10 +436,11 @@ pub fn insert_embedding(
 
     txn.put(*db, &embedding_key, &offset_serialized, WriteFlags::empty())
         .map_err(|e| WaCustomError::DatabaseError(format!("Failed to put data: {}", e)))?;
+    let count_unindexed_key = key!(m:count_unindexed);
 
     txn.put(
         *db,
-        &"count_unindexed",
+        &count_unindexed_key,
         &(count_unindexed + 1).to_le_bytes(),
         WriteFlags::empty(),
     )
@@ -447,8 +459,9 @@ pub fn index_embeddings(
     config: &Config,
     dense_index: Arc<DenseIndex>,
     upload_process_batch_size: usize,
-    serialization_table: Arc<TSHashTable<SharedNode, ()>>,
     lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16, u8), SharedNode>>,
+    mut offset_fn: impl FnMut() -> u32,
+    mut level_0_offset_fn: impl FnMut() -> u32,
 ) -> Result<(), WaCustomError> {
     let env = dense_index.lmdb.env.clone();
     let db = dense_index.lmdb.db.clone();
@@ -561,10 +574,11 @@ pub fn index_embeddings(
                     current_level,
                     version,
                     version_number,
-                    serialization_table.clone(),
                     lazy_item_versions_table.clone(),
                     &hnsw_params_guard,
                     2,
+                    &mut offset_fn,
+                    &mut level_0_offset_fn,
                 )
                 .expect("index_embedding failed");
             })
@@ -583,10 +597,13 @@ pub fn index_embeddings(
             offset: next_offset,
         };
         let next_embedding_offset_serialized = next_embedding_offset.serialize();
+        let next_embedding_offset_key = key!(m:next_embedding_offset);
+        let count_indexed_key = key!(m:count_indexed);
+        let count_unindexed_key = key!(m:count_unindexed);
 
         txn.put(
             *db,
-            &"next_embedding_offset",
+            &next_embedding_offset_key,
             &next_embedding_offset_serialized,
             WriteFlags::empty(),
         )
@@ -596,7 +613,7 @@ pub fn index_embeddings(
 
         txn.put(
             *db,
-            &"count_indexed",
+            &count_indexed_key,
             &count_indexed.to_le_bytes(),
             WriteFlags::empty(),
         )
@@ -606,7 +623,7 @@ pub fn index_embeddings(
 
         txn.put(
             *db,
-            &"count_unindexed",
+            &count_unindexed_key,
             &count_unindexed.to_le_bytes(),
             WriteFlags::empty(),
         )
@@ -625,8 +642,7 @@ pub fn index_embeddings(
 
     let mut i = embedding_offset.offset;
     let cursor = bufman.open_cursor()?;
-    let file_len = bufman.seek_with_cursor(cursor, SeekFrom::End(0))? as u32;
-    bufman.seek_with_cursor(cursor, SeekFrom::Start(0))?;
+    let file_len = bufman.file_size() as u32;
 
     let mut embeddings = Vec::new();
 
@@ -709,10 +725,11 @@ pub fn index_embeddings_in_transaction(
                 highest_level,
                 version,
                 version_number,
-                transaction.serialization_table.clone(),
                 transaction.lazy_item_versions_table.clone(),
                 &*hnsw_params_guard,
                 max_level as u8, // Pass max_level to let index_embedding control node creation
+                &mut || transaction.get_new_node_offset(),
+                &mut || transaction.get_new_level_0_node_offset(),
             )?;
         }
         Ok::<_, WaCustomError>(())
@@ -764,10 +781,11 @@ pub fn index_embedding(
     cur_level: HNSWLevel,
     version: Hash,
     version_number: u16,
-    serialization_table: Arc<TSHashTable<SharedNode, ()>>,
     lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16, u8), SharedNode>>,
     hnsw_params: &HNSWHyperParams,
     max_level: u8,
+    offset_fn: &mut impl FnMut() -> u32,
+    level_0_offset_fn: &mut impl FnMut() -> u32,
 ) -> Result<(), WaCustomError> {
     let fvec = vector_emb.quantized_vec.clone();
     let mut skipm = PerformantFixedSet::new(if cur_level.0 == 0 {
@@ -815,13 +833,24 @@ pub fn index_embedding(
                 HNSWLevel(cur_level.0 - 1),
                 version,
                 version_number,
-                serialization_table.clone(),
                 lazy_item_versions_table.clone(),
                 hnsw_params,
                 max_level,
+                offset_fn,
+                level_0_offset_fn,
             )?;
         }
     } else {
+        let (neighbors_count, is_level_0, offset) = if cur_level.0 == 0 {
+            (
+                hnsw_params.level_0_neighbors_count,
+                true,
+                level_0_offset_fn(),
+            )
+        } else {
+            (hnsw_params.neighbors_count, false, offset_fn())
+        };
+
         // Create node and edges at max_level and below
         let lazy_node = create_node(
             version,
@@ -830,11 +859,9 @@ pub fn index_embedding(
             prop.clone(),
             parent,
             ptr::null_mut(),
-            if cur_level.0 == 0 {
-                hnsw_params.level_0_neighbors_count
-            } else {
-                hnsw_params.neighbors_count
-            },
+            neighbors_count,
+            is_level_0,
+            offset,
         );
 
         let node = unsafe { &*lazy_node }.get_lazy_data().unwrap();
@@ -859,12 +886,19 @@ pub fn index_embedding(
                 HNSWLevel(cur_level.0 - 1),
                 version,
                 version_number,
-                serialization_table.clone(),
                 lazy_item_versions_table.clone(),
                 hnsw_params,
                 max_level,
+                offset_fn,
+                level_0_offset_fn,
             )?;
         }
+
+        let (is_level_0, offset_fn): (bool, &mut dyn FnMut() -> u32) = if cur_level.0 == 0 {
+            (true, level_0_offset_fn)
+        } else {
+            (false, offset_fn)
+        };
 
         create_node_edges(
             dense_index.clone(),
@@ -873,13 +907,14 @@ pub fn index_embedding(
             z,
             version,
             version_number,
-            serialization_table,
             lazy_item_versions_table,
             if cur_level.0 == 0 {
                 hnsw_params.level_0_neighbors_count
             } else {
                 hnsw_params.neighbors_count
             },
+            is_level_0,
+            offset_fn,
         )?;
     }
 
@@ -894,44 +929,73 @@ fn create_node(
     parent: SharedNode,
     child: SharedNode,
     neighbors_count: usize,
+    is_level_0: bool,
+    offset: u32,
 ) -> SharedNode {
     let node = ProbNode::new(hnsw_level, prop, parent, child, neighbors_count);
-    ProbLazyItem::new(node, version_id, version_number)
+    ProbLazyItem::new(
+        node,
+        version_id,
+        version_number,
+        is_level_0,
+        FileOffset(offset),
+    )
 }
 
 fn get_or_create_version(
     dense_index: Arc<DenseIndex>,
     lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16, u8), SharedNode>>,
     lazy_item: SharedNode,
-    version: Hash,
+    version_id: Hash,
     version_number: u16,
-) -> Result<SharedNode, WaCustomError> {
+    is_level_0: bool,
+    offset_fn: &mut dyn FnMut() -> u32,
+) -> Result<(SharedNode, bool), WaCustomError> {
     let node = unsafe { &*lazy_item }.try_get_data(&dense_index.cache)?;
 
-    let new_version = lazy_item_versions_table.get_or_create(
+    let new_version = lazy_item_versions_table.get_or_create_with_flag(
         (node.get_id().clone(), version_number, node.hnsw_level.0),
         || {
+            let root_version = ProbLazyItem::get_root_version(lazy_item, &dense_index.cache)
+                .expect("Couldn't get root version");
+
             if let Some(version) =
-                ProbLazyItem::get_version(lazy_item, version_number, &dense_index.cache)
+                ProbLazyItem::get_version(root_version, version_number, &dense_index.cache)
                     .expect("Deserialization failed")
             {
                 return version;
             }
 
-            let new_node = ProbNode::new_with_neighbors(
+            let new_node = ProbNode::new_with_neighbors_and_versions_and_root_version(
                 node.hnsw_level,
                 node.prop.clone(),
                 node.clone_neighbors(),
                 node.get_parent(),
                 node.get_child(),
+                ProbLazyItemArray::new(),
+                root_version,
             );
 
-            let version = ProbLazyItem::new(new_node, version, version_number);
+            let version = ProbLazyItem::new(
+                new_node,
+                version_id,
+                version_number,
+                is_level_0,
+                FileOffset(offset_fn()),
+            );
 
-            ProbLazyItem::add_version(lazy_item, version, &dense_index.cache)
+            let updated_node = ProbLazyItem::add_version(root_version, version, &dense_index.cache)
                 .expect("Failed to add version")
                 .map_err(|_| "Failed to add version")
                 .unwrap();
+
+            write_node_to_file(
+                updated_node,
+                &dense_index.index_manager,
+                &dense_index.level_0_index_manager,
+                unsafe { &*updated_node }.get_current_version(),
+            )
+            .unwrap();
 
             version
         },
@@ -947,45 +1011,120 @@ fn create_node_edges(
     neighbors: Vec<(SharedNode, MetricResult)>,
     version: Hash,
     version_number: u16,
-    serialization_table: Arc<TSHashTable<SharedNode, ()>>,
     lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16, u8), SharedNode>>,
     max_edges: usize,
+    is_level_0: bool,
+    offset_fn: &mut dyn FnMut() -> u32,
 ) -> Result<(), WaCustomError> {
     let mut successful_edges = 0;
+    let mut neighbors_to_update = Vec::new();
 
-    // neighbors are ordered by closest to farthest
+    lazy_item_versions_table.insert(
+        (node.get_id().clone(), version_number, node.hnsw_level.0),
+        lazy_node,
+    );
+
+    // First loop: Handle neighbor connections and collect updates
     for (neighbor, dist) in neighbors {
         if successful_edges >= max_edges {
             break;
         }
 
-        let new_lazy_neighbor = get_or_create_version(
+        let (new_lazy_neighbor, found_in_map) = get_or_create_version(
             dense_index.clone(),
             lazy_item_versions_table.clone(),
             neighbor,
             version,
             version_number,
+            is_level_0,
+            offset_fn,
         )?;
-        let new_neighbor = unsafe { &*new_lazy_neighbor }.try_get_data(&dense_index.cache)?;
 
-        if new_neighbor.add_neighbor(node.get_id().0 as u32, lazy_node, dist, &dense_index.cache) {
-            let added = node.add_neighbor(
-                new_neighbor.get_id().0 as u32,
-                new_lazy_neighbor,
+        let new_neighbor = unsafe { &*new_lazy_neighbor }.try_get_data(&dense_index.cache)?;
+        let neighbor_inserted_idx = node.add_neighbor(
+            new_neighbor.get_id().0 as u32,
+            new_lazy_neighbor,
+            dist,
+            &dense_index.cache,
+        );
+
+        let neighbour_update_info = if let Some(neighbor_inserted_idx) = neighbor_inserted_idx {
+            let node_inserted_idx = new_neighbor.add_neighbor(
+                node.get_id().0 as u32,
+                lazy_node,
                 dist,
                 &dense_index.cache,
             );
-            if added {
+            if let Some(idx) = node_inserted_idx {
                 successful_edges += 1;
+                Some((idx, dist))
             } else {
-                new_neighbor.remove_neighbor(node.get_id().0 as u32);
+                node.remove_neighbor(neighbor_inserted_idx, new_neighbor.get_id().0 as u32);
+                None
             }
-            serialization_table.insert(neighbor, ());
-            serialization_table.insert(new_lazy_neighbor, ());
+        } else {
+            None
+        };
+
+        if !found_in_map {
+            write_node_to_file(
+                new_lazy_neighbor.clone(),
+                &dense_index.index_manager,
+                &dense_index.level_0_index_manager,
+                version,
+            )?;
+        } else if let Some((idx, dist)) = neighbour_update_info {
+            neighbors_to_update.push((new_lazy_neighbor, idx, dist));
         }
     }
 
-    serialization_table.insert(lazy_node, ());
+    // Second loop: Batch process file operations for updated neighbors
+    if !neighbors_to_update.is_empty() {
+        let bufman = if is_level_0 {
+            dense_index.level_0_index_manager.get(version)?
+        } else {
+            dense_index.index_manager.get(version)?
+        };
+        let cursor = bufman.open_cursor()?;
+        let mut current_node_link = Vec::with_capacity(14);
+        current_node_link.extend((node.get_id().0 as u32).to_le_bytes());
+
+        let node = unsafe { &*lazy_node };
+
+        let (node_offset, node_version_number, node_version_id) = match node.get_file_index() {
+            FileIndex::Valid {
+                offset,
+                version_number,
+                version_id,
+            } => (offset.0, version_number, version_id),
+            _ => unreachable!(),
+        };
+        current_node_link.extend(node_offset.to_le_bytes());
+        current_node_link.extend(node_version_number.to_le_bytes());
+        current_node_link.extend(node_version_id.to_le_bytes());
+
+        for (neighbor, neighbor_idx, dist) in neighbors_to_update {
+            let offset = unsafe { &*neighbor }.get_file_index().get_offset().unwrap();
+            let mut current_node_link_with_dist = Vec::with_capacity(19);
+            current_node_link_with_dist.clone_from(&current_node_link);
+            let (tag, value) = dist.get_tag_and_value();
+            current_node_link_with_dist.push(tag);
+            current_node_link_with_dist.extend(value.to_le_bytes());
+
+            let neighbor_offset = (offset.0 + 41) + neighbor_idx as u32 * 19;
+            bufman.seek_with_cursor(cursor, neighbor_offset as u64)?;
+            bufman.update_with_cursor(cursor, &current_node_link_with_dist)?;
+        }
+
+        bufman.close_cursor(cursor)?;
+    }
+
+    write_node_to_file(
+        lazy_node,
+        &dense_index.index_manager,
+        &dense_index.level_0_index_manager,
+        version,
+    )?;
 
     Ok(())
 }
@@ -1052,7 +1191,7 @@ fn traverse_find_nearest(
         .into_iter() // Iterate over the sorted Vec
         .rev() // Reverse the order (to get descending order)
         .map(|(dist, node)| (node.clone(), dist)) // Map to the desired tuple format
-        .take(if is_indexing { 500 } else { 100 }) // Limit the number of results
+        .take(if is_indexing { 64 } else { 100 }) // Limit the number of results
         .collect::<Vec<_>>(); // Collect into a Vec
 
     Ok(results)

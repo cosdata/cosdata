@@ -148,9 +148,9 @@ def create_explicit_index(name):
                 "num_layers": 10,
                 "max_cache_size": 1000,
                 "ef_construction": 64,
-                "ef_search": 128,
+                "ef_search": 64,
                 "neighbors_count": 16,
-                "layer_0_neighbors_count": 32,
+                "level_0_neighbors_count": 32,
             },
         },
     }
@@ -160,6 +160,11 @@ def create_explicit_index(name):
         data=json.dumps(data),
         verify=False,
     )
+
+    if response.status_code not in [200, 204]:
+        raise Exception(
+            f"Failed to create index: {response.status_code} ({response.text})"
+        )
 
     return response.json()
 
@@ -634,7 +639,7 @@ def process_vectors_batch(
     try:
         total_batches = (total_vectors + batch_size - 1) // batch_size
 
-        with ThreadPoolExecutor(max_workers=24) as executor:
+        with ThreadPoolExecutor(max_workers=8) as executor:
             futures = []
 
             for batch_idx in range(total_batches):

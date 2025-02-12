@@ -1,4 +1,4 @@
-use std::{collections::HashSet, io::SeekFrom, sync::Arc};
+use std::{collections::HashSet, sync::Arc};
 
 use crate::{
     models::{
@@ -28,36 +28,39 @@ impl<const LEN: usize> CustomSerialize for Pagepool<LEN> {
 
         // Move the cursor to the end of the file and start writing from there
         let start_offset = if let Some(offset) = self.inner[0].serialized_at.get() {
-            bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
+            bufman.seek_with_cursor(cursor, offset as u64)?;
             offset
         } else {
-            let offset = bufman.seek_with_cursor(cursor, SeekFrom::End(0))? as u32;
-            self.inner[0].serialized_at.set(Some(offset));
-            offset
+            let offset = bufman.file_size();
+            bufman.seek_with_cursor(cursor, offset)?;
+            self.inner[0].serialized_at.set(Some(offset as u32));
+            offset as u32
         };
 
-        bufman.write_u32_with_cursor(cursor, u32::MAX)?;
+        bufman.update_u32_with_cursor(cursor, u32::MAX)?;
         self.inner[0].serialize(bufmans.clone(), version, cursor)?;
 
         let mut prev_offset = start_offset;
 
         for item in self.inner.iter().skip(1) {
             let offset = if let Some(offset) = item.serialized_at.get() {
-                bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
+                bufman.seek_with_cursor(cursor, offset as u64)?;
                 offset
             } else {
-                let offset = bufman.seek_with_cursor(cursor, SeekFrom::End(0))? as u32;
+                let offset = bufman.file_size();
+                bufman.seek_with_cursor(cursor, offset)?;
+                let offset = offset as u32;
                 item.serialized_at.set(Some(offset));
                 offset
             };
-            bufman.write_u32_with_cursor(cursor, u32::MAX)?;
+            bufman.update_u32_with_cursor(cursor, u32::MAX)?;
             item.serialize(bufmans.clone(), version, cursor)?;
 
             let current_offset = bufman.cursor_position(cursor)?;
 
-            bufman.seek_with_cursor(cursor, SeekFrom::Start(prev_offset as u64))?;
-            bufman.write_u32_with_cursor(cursor, offset)?;
-            bufman.seek_with_cursor(cursor, SeekFrom::Start(current_offset))?;
+            bufman.seek_with_cursor(cursor, prev_offset as u64)?;
+            bufman.update_u32_with_cursor(cursor, offset)?;
+            bufman.seek_with_cursor(cursor, current_offset)?;
 
             prev_offset = offset;
         }
@@ -84,7 +87,7 @@ impl<const LEN: usize> CustomSerialize for Pagepool<LEN> {
                 let bufman = bufmans.get(version_id)?;
                 let cursor = bufman.open_cursor()?;
 
-                bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
+                bufman.seek_with_cursor(cursor, offset as u64)?;
 
                 let mut page_pool = Pagepool::<LEN>::default();
                 let mut current_chunk_offset = offset;
@@ -108,7 +111,7 @@ impl<const LEN: usize> CustomSerialize for Pagepool<LEN> {
                     if next_chunk_offset == u32::MAX {
                         break;
                     }
-                    bufman.seek_with_cursor(cursor, SeekFrom::Start(next_chunk_offset as u64))?;
+                    bufman.seek_with_cursor(cursor, next_chunk_offset as u64)?;
                     current_chunk_offset = next_chunk_offset;
                 }
 
@@ -130,9 +133,9 @@ impl<const LEN: usize> CustomSerialize for Page<LEN> {
         let bufman = bufmans.get(version)?;
         let start_offset = bufman.cursor_position(cursor)? as u32;
 
-        bufman.write_u32_with_cursor(cursor, self.len as u32)?;
+        bufman.update_u32_with_cursor(cursor, self.len as u32)?;
         for item in self.data {
-            bufman.write_u32_with_cursor(cursor, item)?;
+            bufman.update_u32_with_cursor(cursor, item)?;
         }
 
         Ok(start_offset)
@@ -153,7 +156,7 @@ impl<const LEN: usize> CustomSerialize for Page<LEN> {
             } => {
                 let bufman = bufmans.get(version_id)?;
                 let cursor = bufman.open_cursor()?;
-                bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
+                bufman.seek_with_cursor(cursor, offset as u64)?;
                 let len = bufman.read_u32_with_cursor(cursor)?;
 
                 let mut items = Self::new();

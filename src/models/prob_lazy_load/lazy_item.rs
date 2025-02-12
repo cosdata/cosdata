@@ -1,7 +1,4 @@
-use std::{
-    cell::Cell,
-    sync::atomic::{AtomicBool, AtomicPtr, Ordering},
-};
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
 use crate::models::{
     buffered_io::BufIoError,
@@ -17,7 +14,8 @@ use super::lazy_item_array::ProbLazyItemArray;
 
 pub struct ReadyState<T> {
     pub data: T,
-    pub file_offset: Cell<Option<FileOffset>>,
+    pub file_offset: FileOffset,
+    pub is_serialized: AtomicBool,
     pub persist_flag: AtomicBool,
     pub version_id: Hash,
     pub version_number: u16,
@@ -47,34 +45,45 @@ impl<T> ProbLazyItemState<T> {
 
 pub struct ProbLazyItem<T> {
     state: AtomicPtr<ProbLazyItemState<T>>,
+    pub is_level_0: bool,
 }
 
 impl<T> ProbLazyItem<T> {
-    pub fn new(data: T, version_id: Hash, version_number: u16) -> *mut Self {
+    pub fn new(
+        data: T,
+        version_id: Hash,
+        version_number: u16,
+        is_level_0: bool,
+        file_offset: FileOffset,
+    ) -> *mut Self {
         Box::into_raw(Box::new(Self {
             state: AtomicPtr::new(Box::into_raw(Box::new(ProbLazyItemState::Ready(
                 ReadyState {
                     data,
-                    file_offset: Cell::new(None),
+                    file_offset,
+                    is_serialized: AtomicBool::new(false),
                     persist_flag: AtomicBool::new(true),
                     version_id,
                     version_number,
                 },
             )))),
+            is_level_0,
         }))
     }
 
-    pub fn new_from_state(state: ProbLazyItemState<T>) -> *mut Self {
+    pub fn new_from_state(state: ProbLazyItemState<T>, is_level_0: bool) -> *mut Self {
         Box::into_raw(Box::new(Self {
             state: AtomicPtr::new(Box::into_raw(Box::new(state))),
+            is_level_0,
         }))
     }
 
-    pub fn new_pending(file_index: FileIndex) -> *mut Self {
+    pub fn new_pending(file_index: FileIndex, is_level_0: bool) -> *mut Self {
         Box::into_raw(Box::new(Self {
             state: AtomicPtr::new(Box::into_raw(Box::new(ProbLazyItemState::Pending(
                 file_index,
             )))),
+            is_level_0,
         }))
     }
 
@@ -120,25 +129,15 @@ impl<T> ProbLazyItem<T> {
         }
     }
 
-    pub fn get_file_index(&self) -> Option<FileIndex> {
+    pub fn get_file_index(&self) -> FileIndex {
         unsafe {
             match &*self.state.load(Ordering::Acquire) {
-                ProbLazyItemState::Pending(file_index) => Some(file_index.clone()),
-                ProbLazyItemState::Ready(state) => {
-                    state.file_offset.get().map(|offset| FileIndex::Valid {
-                        offset,
-                        version_number: state.version_number,
-                        version_id: state.version_id,
-                    })
-                }
-            }
-        }
-    }
-
-    pub fn set_file_offset(&self, new_file_offset: FileOffset) {
-        unsafe {
-            if let ProbLazyItemState::Ready(state) = &*self.state.load(Ordering::Acquire) {
-                state.file_offset.set(Some(new_file_offset));
+                ProbLazyItemState::Pending(file_index) => file_index.clone(),
+                ProbLazyItemState::Ready(state) => FileIndex::Valid {
+                    offset: state.file_offset,
+                    version_number: state.version_number,
+                    version_id: state.version_id,
+                },
             }
         }
     }
@@ -150,7 +149,7 @@ impl<T: ProbSerialize + ProbCacheable> ProbLazyItem<T> {
             match &*self.state.load(Ordering::Relaxed) {
                 ProbLazyItemState::Ready(state) => Ok(&state.data),
                 ProbLazyItemState::Pending(file_index) => {
-                    (&*(cache.get_object(file_index.clone())?)).try_get_data(cache)
+                    (&*(cache.get_object(file_index.clone(), self.is_level_0)?)).try_get_data(cache)
                 }
             }
         }
@@ -191,19 +190,18 @@ impl ProbLazyItem<ProbNode> {
         let versions = &data.versions;
 
         if let Some(existing_version) = versions.get(index as usize) {
-            return Self::add_version_inner(
+            Self::add_version_inner(
                 existing_version,
                 version,
                 self_relative_version_number + (1 << (2 * index)),
                 target_relative_version_number,
                 cache,
-            );
+            )
         } else {
             debug_assert_eq!(versions.len(), index as usize);
             versions.push(version.clone());
+            Ok(Ok(this))
         }
-
-        Ok(Ok(version))
     }
 
     pub fn get_latest_version(
@@ -216,9 +214,9 @@ impl ProbLazyItem<ProbNode> {
         Self::get_latest_version_inner(this, versions, cache)
     }
 
-    fn get_latest_version_inner(
+    fn get_latest_version_inner<const LEN: usize>(
         this: *mut Self,
-        versions: &ProbLazyItemArray<ProbNode, 4>,
+        versions: &ProbLazyItemArray<ProbNode, LEN>,
         cache: &ProbCache,
     ) -> Result<(*mut Self, u16), BufIoError> {
         if let Some(last) = versions.last() {
@@ -231,6 +229,12 @@ impl ProbLazyItem<ProbNode> {
         } else {
             Ok((this, 0))
         }
+    }
+
+    pub fn get_root_version(this: *mut Self, cache: &ProbCache) -> Result<*mut Self, BufIoError> {
+        let self_ = unsafe { &*this };
+        let root = self_.try_get_data(cache)?.root_version;
+        Ok(if root.is_null() { this } else { root })
     }
 
     pub fn get_version(

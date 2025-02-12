@@ -74,7 +74,11 @@ impl InvertedIndex {
                 .open(format!("collections/{}/prop.data", name))
                 .unwrap(),
         ));
-        let prob_cache = Arc::new(ProbCache::new(1000, index_manager.clone(), prop_file));
+        let prob_cache = Arc::new(ProbCache::new(
+            index_manager.clone(),
+            index_manager.clone(),
+            prop_file,
+        ));
 
         InvertedIndex {
             name,

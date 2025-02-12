@@ -10,15 +10,13 @@ use crate::{
         types::{FileOffset, MetricResult},
     },
 };
-use std::{
-    io::{self, SeekFrom},
-    sync::Arc,
-};
+use std::io;
 
 use super::SimpleSerialize;
 
+// @SERIALIZED_SIZE: 1 byte for the tag + 4 bytes for the value = 5 bytes
 impl SimpleSerialize for MetricResult {
-    fn serialize(&self, bufman: Arc<BufferManager>, cursor: u64) -> Result<u32, BufIoError> {
+    fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
         let (variant, value) = match self {
             Self::CosineSimilarity(value) => (0, value.0),
             Self::CosineDistance(value) => (1, value.0),
@@ -27,20 +25,20 @@ impl SimpleSerialize for MetricResult {
             Self::DotProductDistance(value) => (4, value.0),
         };
         let start = bufman.cursor_position(cursor)? as u32;
-        bufman.write_u8_with_cursor(cursor, variant)?;
-        bufman.write_f32_with_cursor(cursor, value)?;
+        bufman.update_u8_with_cursor(cursor, variant)?;
+        bufman.update_f32_with_cursor(cursor, value)?;
         Ok(start)
     }
 
     fn deserialize(
-        bufman: Arc<BufferManager>,
+        bufman: &BufferManager,
         FileOffset(offset): FileOffset,
     ) -> Result<Self, BufIoError>
     where
         Self: Sized,
     {
         let cursor = bufman.open_cursor()?;
-        bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
+        bufman.seek_with_cursor(cursor, offset as u64)?;
         let variant = bufman.read_u8_with_cursor(cursor)?;
         let value = bufman.read_f32_with_cursor(cursor)?;
         let metric = match variant {
@@ -52,7 +50,7 @@ impl SimpleSerialize for MetricResult {
             _ => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    "Invalid MetricResult variant",
+                    format!("Invalid MetricResult variant: {}", variant),
                 )
                 .into());
             }

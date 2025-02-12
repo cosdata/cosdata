@@ -17,19 +17,22 @@ impl ProbSerialize for InvertedIndexSparseAnnNodeBasicTSHashmap {
     fn serialize(
         &self,
         bufmans: &BufferManagerFactory<Hash>,
+        level_0_bufmans: &BufferManagerFactory<Hash>,
         version: Hash,
         cursor: u64,
-        direct: bool,
+        is_level_0: bool,
     ) -> Result<u32, BufIoError> {
         todo!()
     }
 
     fn deserialize(
         bufmans: &BufferManagerFactory<Hash>,
+        level_0_bufmans: &BufferManagerFactory<Hash>,
         file_index: FileIndex,
         cache: &ProbCache,
         max_loads: u16,
         skipm: &mut HashSet<u64>,
+        is_level_0: bool,
     ) -> Result<Self, BufIoError> {
         todo!()
     }

@@ -88,7 +88,8 @@ pub async fn run_actix_server() -> std::io::Result<()> {
                     ),
             )
             .app_data(data.clone())
-    });
+    })
+    .keep_alive(std::time::Duration::from_secs(10));
 
     let addr = config.server.listen_address();
     let server = match tls {

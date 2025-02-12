@@ -1,4 +1,4 @@
-use std::{collections::HashSet, io::SeekFrom, sync::Arc};
+use std::{collections::HashSet, sync::Arc};
 
 use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
@@ -26,13 +26,13 @@ where
         let start_offset = bufman.cursor_position(cursor)? as u32;
 
         // Write the size of the list at first
-        bufman.write_u8_with_cursor(cursor, self.size)?;
+        bufman.update_u8_with_cursor(cursor, self.size)?;
 
-        bufman.write_with_cursor(cursor, &[u8::MAX; 256])?;
+        bufman.update_with_cursor(cursor, &[u8::MAX; 256])?;
 
         for key in 0..64 {
             let placeholder = start_offset + 1 + (key as u32 * 4);
-            bufman.seek_with_cursor(cursor, SeekFrom::End(0))?;
+            bufman.seek_with_cursor(cursor, bufman.file_size())?;
             let Some(offset) =
                 self.with_value(&key, |v| v.serialize(bufmans.clone(), version, cursor))
             else {
@@ -40,8 +40,8 @@ where
             };
             let offset = offset?;
 
-            bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder as u64))?;
-            bufman.write_u32_with_cursor(cursor, offset)?;
+            bufman.seek_with_cursor(cursor, placeholder as u64)?;
+            bufman.update_u32_with_cursor(cursor, offset)?;
         }
 
         Ok(start_offset)
@@ -63,7 +63,7 @@ where
                 let bufman = bufmans.get(version_id)?;
                 let cursor = bufman.open_cursor()?;
 
-                bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
+                bufman.seek_with_cursor(cursor, offset as u64)?;
 
                 // Read the length of the vec
                 let size = bufman.read_u8_with_cursor(cursor)?;
@@ -72,7 +72,7 @@ where
 
                 for key in 0..64 {
                     let placeholder_offset = offset + 1 + (key as u32 * 4);
-                    bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_offset as u64))?;
+                    bufman.seek_with_cursor(cursor, placeholder_offset as u64)?;
                     let value_offset = bufman.read_u32_with_cursor(cursor)?;
                     if value_offset == u32::MAX {
                         continue;

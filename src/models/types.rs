@@ -3,7 +3,6 @@ use super::cache_loader::ProbCache;
 use super::collection::Collection;
 use super::crypto::{DoubleSHA256Hash, SingleSHA256Hash};
 use super::embedding_persist::{write_embedding, EmbeddingOffset};
-use super::file_persist::write_node_to_file;
 use super::meta_persist::{
     delete_dense_index, lmdb_init_collections_db, lmdb_init_db, load_collections,
     load_dense_index_data, persist_dense_index, retrieve_current_version,
@@ -21,6 +20,7 @@ use crate::distance::{
 use crate::indexes::inverted_index::InvertedIndex;
 use crate::indexes::inverted_index_data::InvertedIndexData;
 use crate::macros::key;
+use crate::models::buffered_io::BufIoError;
 use crate::models::common::*;
 use crate::models::identity_collections::*;
 use crate::models::lazy_load::*;
@@ -33,14 +33,15 @@ use crate::storage::Storage;
 use arcshift::ArcShift;
 use dashmap::DashMap;
 use lmdb::{Cursor, Database, DatabaseFlags, Environment, Transaction, WriteFlags};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use rpassword::prompt_password;
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher24;
-use std::collections::HashSet;
 use std::hash::{DefaultHasher, Hash as StdHash, Hasher};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, RwLock};
+use std::time::Instant;
 use std::{fmt, ptr};
 use std::{fs::*, thread};
 
@@ -160,6 +161,16 @@ impl MetricResult {
             MetricResult::EuclideanDistance(value) => value.0,
             MetricResult::HammingDistance(value) => value.0,
             MetricResult::DotProductDistance(value) => value.0,
+        }
+    }
+
+    pub fn get_tag_and_value(&self) -> (u8, f32) {
+        match self {
+            Self::CosineSimilarity(value) => (0, value.0),
+            Self::CosineDistance(value) => (1, value.0),
+            Self::EuclideanDistance(value) => (2, value.0),
+            Self::HammingDistance(value) => (3, value.0),
+            Self::DotProductDistance(value) => (4, value.0),
         }
     }
 }
@@ -411,14 +422,17 @@ impl HNSWHyperParams {
 pub struct DenseIndexTransaction {
     pub id: Hash,
     pub version_number: u16,
-    pub serialization_table: Arc<TSHashTable<SharedNode, ()>>,
     pub lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16, u8), SharedNode>>,
-    serializer_thread_handle: thread::JoinHandle<Result<(), WaCustomError>>,
     raw_embedding_serializer_thread_handle: thread::JoinHandle<Result<(), WaCustomError>>,
-    serialization_signal: mpsc::Sender<()>,
     pub raw_embedding_channel: mpsc::Sender<RawVectorEmbedding>,
-    batch_count: Arc<AtomicUsize>,
+    level_0_node_offset_counter: AtomicU32,
+    node_offset_counter: AtomicU32,
+    node_size: u32,
+    level_0_node_size: u32,
 }
+
+unsafe impl Send for DenseIndexTransaction {}
+unsafe impl Sync for DenseIndexTransaction {}
 
 impl DenseIndexTransaction {
     pub fn new(dense_index: Arc<DenseIndex>) -> Result<Self, WaCustomError> {
@@ -437,41 +451,11 @@ impl DenseIndexTransaction {
                 WaCustomError::DatabaseError(format!("Unable to get transaction hash: {}", err))
             })?;
 
-        let serialization_table = Arc::new(TSHashTable::<SharedNode, ()>::new(16));
-        let (serialization_signal, rx) = mpsc::channel();
-        let batch_count = Arc::new(AtomicUsize::new(0));
-
-        let serializer_thread_handle = {
-            let serialization_table = serialization_table.clone();
-            let batch_count = batch_count.clone();
-            let dense_index = dense_index.clone();
-
-            thread::spawn(move || {
-                let mut batches_processed = 0;
-
-                loop {
-                    rx.recv().unwrap();
-
-                    if batches_processed >= batch_count.load(Ordering::SeqCst) {
-                        break;
-                    }
-                    let list = serialization_table.purge_all();
-                    for (node, _) in list {
-                        let version = unsafe { &*node }.get_current_version();
-                        let offset = write_node_to_file(node, &dense_index.index_manager)?;
-                        dense_index.cache.insert_lazy_object(version, offset, node);
-                    }
-                    batches_processed += 1;
-                }
-                dense_index.index_manager.flush_all()?;
-                Ok(())
-            })
-        };
-
         let (raw_embedding_channel, rx) = mpsc::channel();
 
         let raw_embedding_serializer_thread_handle = {
             let bufman = dense_index.vec_raw_manager.get(id)?;
+            let dense_index = dense_index.clone();
 
             thread::spawn(move || {
                 let mut offsets = Vec::new();
@@ -503,21 +487,26 @@ impl DenseIndexTransaction {
                 txn.commit().map_err(|e| {
                     WaCustomError::DatabaseError(format!("Failed to commit transaction: {}", e))
                 })?;
+                let start = Instant::now();
                 bufman.flush()?;
+                println!("Time took to flush: {:?}", start.elapsed());
                 Ok(())
             })
         };
 
+        let hnsw_params = dense_index.hnsw_params.read().unwrap();
+
         Ok(Self {
             id,
-            serialization_table,
-            serializer_thread_handle,
             lazy_item_versions_table: Arc::new(TSHashTable::new(16)),
-            serialization_signal,
-            batch_count,
             raw_embedding_channel,
             raw_embedding_serializer_thread_handle,
             version_number: version_number as u16,
+            node_offset_counter: AtomicU32::new(0),
+            level_0_node_offset_counter: AtomicU32::new(0),
+            node_size: ProbNode::get_serialized_size(hnsw_params.neighbors_count) as u32,
+            level_0_node_size: ProbNode::get_serialized_size(hnsw_params.level_0_neighbors_count)
+                as u32,
         })
     }
 
@@ -525,23 +514,29 @@ impl DenseIndexTransaction {
         self.raw_embedding_channel.send(raw_emb).unwrap();
     }
 
-    pub fn increment_batch_count(&self) {
-        self.batch_count.fetch_add(1, Ordering::SeqCst);
-    }
-
-    pub fn start_serialization_round(&self) {
-        self.serialization_signal.send(()).unwrap();
-    }
-
-    pub fn pre_commit(self) -> Result<(), WaCustomError> {
-        // sending a signal without incrementing the batch count will stop the serialization
-        self.serialization_signal.send(()).unwrap();
-        self.serializer_thread_handle.join().unwrap()?;
+    pub fn pre_commit(self, dense_index: Arc<DenseIndex>) -> Result<(), WaCustomError> {
+        dense_index.index_manager.flush_all()?;
+        dense_index.level_0_index_manager.flush_all()?;
         drop(self.raw_embedding_channel);
+        let start = Instant::now();
         self.raw_embedding_serializer_thread_handle
             .join()
             .unwrap()?;
+        println!(
+            "Time took to wait for embedding serializer thread: {:?}",
+            start.elapsed()
+        );
         Ok(())
+    }
+
+    pub fn get_new_node_offset(&self) -> u32 {
+        self.node_offset_counter
+            .fetch_add(self.node_size, Ordering::SeqCst)
+    }
+
+    pub fn get_new_level_0_node_offset(&self) -> u32 {
+        self.level_0_node_offset_counter
+            .fetch_add(self.level_0_node_size, Ordering::SeqCst)
     }
 }
 
@@ -577,6 +572,7 @@ pub struct DenseIndex {
     pub hnsw_params: Arc<RwLock<HNSWHyperParams>>,
     pub cache: Arc<ProbCache>,
     pub index_manager: Arc<BufferManagerFactory<Hash>>,
+    pub level_0_index_manager: Arc<BufferManagerFactory<Hash>>,
     pub vec_raw_manager: Arc<BufferManagerFactory<Hash>>,
     pub is_configured: Arc<AtomicBool>,
     pub values_range: Arc<RwLock<(f32, f32)>>,
@@ -605,6 +601,7 @@ impl DenseIndex {
         hnsw_params: HNSWHyperParams,
         cache: Arc<ProbCache>,
         index_manager: Arc<BufferManagerFactory<Hash>>,
+        level_0_index_manager: Arc<BufferManagerFactory<Hash>>,
         vec_raw_manager: Arc<BufferManagerFactory<Hash>>,
         values_range: (f32, f32),
         sample_threshold: usize,
@@ -626,6 +623,7 @@ impl DenseIndex {
             hnsw_params: Arc::new(RwLock::new(hnsw_params)),
             cache,
             index_manager,
+            level_0_index_manager,
             vec_raw_manager,
             is_configured: Arc::new(AtomicBool::new(is_configured)),
             values_range: Arc::new(RwLock::new(values_range)),
@@ -659,7 +657,7 @@ impl DenseIndex {
     /// Returns FileIndex (offset) corresponding to the root
     /// node. Returns None if the it's not set or the root node is an
     /// invalid LazyItem
-    pub fn root_vec_offset(&self) -> Option<FileIndex> {
+    pub fn root_vec_offset(&self) -> FileIndex {
         unsafe { &*self.get_root_vec() }.get_file_index()
     }
 }
@@ -766,16 +764,9 @@ impl CollectionsMap {
         let collection_path: Arc<Path> = root_path.join(&coll.name).into();
         let index_path = collection_path.join("dense_hnsw");
 
-        let index_manager = Arc::new(BufferManagerFactory::new(
-            index_path.clone().into(),
-            |root, ver: &Hash| root.join(format!("{}.index", **ver)),
-            config.flush_eagerness_factor,
-        ));
-        let vec_raw_manager = Arc::new(BufferManagerFactory::new(
-            index_path.clone().into(),
-            |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
-            config.flush_eagerness_factor,
-        ));
+        let dense_index_data =
+            load_dense_index_data(&self.lmdb_env, self.lmdb_dense_index_db, &coll.get_key())
+                .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
         let prop_file = Arc::new(RwLock::new(
             OpenOptions::new()
                 .create(true)
@@ -784,10 +775,35 @@ impl CollectionsMap {
                 .open(index_path.join("prop.data"))
                 .unwrap(),
         ));
-        // TODO: May be the value can be taken from config
+
+        let node_size = ProbNode::get_serialized_size(dense_index_data.hnsw_params.neighbors_count);
+        let level_0_node_size =
+            ProbNode::get_serialized_size(dense_index_data.hnsw_params.level_0_neighbors_count);
+
+        let bufman_size = node_size * 1000;
+        let level_0_bufman_size = level_0_node_size * 1000;
+
+        let index_manager = Arc::new(BufferManagerFactory::new(
+            index_path.clone().into(),
+            |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+            config.flush_eagerness_factor,
+            bufman_size,
+        ));
+        let level_0_index_manager = Arc::new(BufferManagerFactory::new(
+            index_path.clone().into(),
+            |root, ver: &Hash| root.join(format!("{}_0.index", **ver)),
+            config.flush_eagerness_factor,
+            level_0_bufman_size,
+        ));
+        let vec_raw_manager = Arc::new(BufferManagerFactory::new(
+            index_path.clone().into(),
+            |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
+            config.flush_eagerness_factor,
+            8192,
+        ));
         let cache = Arc::new(ProbCache::new(
-            1000,
             index_manager.clone(),
+            level_0_index_manager.clone(),
             prop_file.clone(),
         ));
 
@@ -797,16 +813,103 @@ impl CollectionsMap {
                 .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?,
         );
 
-        let dense_index_data =
-            load_dense_index_data(&self.lmdb_env, self.lmdb_dense_index_db, &coll.get_key())
-                .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+        let (root_offset, root_version_number, root_version_id) = match dense_index_data.file_index
+        {
+            FileIndex::Valid {
+                offset,
+                version_number,
+                version_id,
+            } => (offset, version_number, version_id),
+            FileIndex::Invalid => unreachable!(),
+        };
 
-        let root = cache.get_lazy_object(dense_index_data.file_index, 1000, &mut HashSet::new())?;
+        let root_node_region_offset = root_offset.0 - (root_offset.0 % bufman_size as u32);
+        let load_start = Instant::now();
+        let region = cache.load_region(
+            root_node_region_offset,
+            root_version_number,
+            root_version_id,
+            node_size as u32,
+            false,
+        )?;
+
+        let root = region[(root_offset.0 - root_node_region_offset) as usize / node_size];
 
         let vcs = Arc::new(VersionControl::from_existing(
             self.lmdb_env.clone(),
             db.clone(),
         ));
+
+        let mut versions = vcs
+            .get_branch_versions("main")
+            .map_err(|err| WaCustomError::DatabaseError(err.to_string()))?;
+
+        println!(
+            "versions: {:?}",
+            versions.iter().map(|(hash, _)| **hash).collect::<Vec<_>>()
+        );
+
+        // root node region is already loaded
+        let mut num_regions_queued = 1;
+        let mut regions_to_load = Vec::new();
+
+        while !versions.is_empty() {
+            let num_regions_to_load =
+                ((config.num_regions_to_load_on_restart - num_regions_queued + versions.len() - 1)
+                    / versions.len())
+                    / 2;
+            let (version_id, version_hash) = versions.remove(0);
+            // level n
+            let bufman = index_manager.get(version_id)?;
+            for i in 0..num_regions_to_load.min((bufman.file_size() as usize) / bufman_size) {
+                let region_start = (bufman_size * i) as u32;
+                if version_id == root_version_id && region_start == root_node_region_offset {
+                    continue;
+                }
+                regions_to_load.push((
+                    region_start,
+                    *version_hash.version as u16,
+                    version_id,
+                    node_size as u32,
+                    false,
+                ));
+                num_regions_queued += 1;
+            }
+            // level 0
+            let bufman = level_0_index_manager.get(version_id)?;
+            for i in 0..num_regions_to_load.min((bufman.file_size() as usize) / level_0_bufman_size)
+            {
+                let region_start = (level_0_bufman_size * i) as u32;
+                regions_to_load.push((
+                    region_start,
+                    *version_hash.version as u16,
+                    version_id,
+                    level_0_node_size as u32,
+                    true,
+                ));
+                num_regions_queued += 1;
+            }
+        }
+
+        regions_to_load
+            .into_par_iter()
+            .map(
+                |(region_start, version_number, version_id, node_size, is_level_0)| {
+                    cache.load_region(
+                        region_start,
+                        version_number,
+                        version_id,
+                        node_size,
+                        is_level_0,
+                    )?;
+                    Ok(())
+                },
+            )
+            .collect::<Result<Vec<_>, BufIoError>>()?;
+
+        let load_time = load_start.elapsed();
+        println!("Loaded regions in: {:?}", load_time);
+
         let lmdb = MetaDb {
             env: self.lmdb_env.clone(),
             db,
@@ -827,6 +930,7 @@ impl CollectionsMap {
             dense_index_data.hnsw_params,
             cache,
             index_manager,
+            level_0_index_manager,
             vec_raw_manager,
             // TODO: persist
             (-1.0, 1.0),
@@ -854,11 +958,13 @@ impl CollectionsMap {
             index_path.clone().into(),
             |root, ver: &Hash| root.join(format!("{}.index", **ver)),
             config.flush_eagerness_factor,
+            8192,
         ));
         let vec_raw_manager = Arc::new(BufferManagerFactory::new(
             index_path.clone().into(),
             |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
             config.flush_eagerness_factor,
+            8192,
         ));
 
         let db = Arc::new(
