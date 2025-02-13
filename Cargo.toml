@@ -57,6 +57,10 @@ rustc-hash = "2.0.0"
 ring = "0.17.8"
 base64 = "0.22.1"
 rpassword = "7.3.1"
+tonic = "0.12.3"
+prost = "0.13.4"
+tower = "0.5.2"
+prost-types = "0.13.4"
 
 [dev-dependencies]
 criterion = "0.5.1"
@@ -133,3 +137,6 @@ harness = false
 [[bench]]
 name = "bruteforce_vs_ann_benchmark"
 harness = false
+
+[build-dependencies]
+tonic-build = "0.12.3"

@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use crate::config_loader::Config;
 use crate::models::types::{get_app_env, AppEnv};
-use crate::WaCustomError;
 use rayon::ThreadPool;
+use crate::models::common::WaCustomError;
 
 #[allow(unused)]
 pub struct AppContext {

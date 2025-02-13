@@ -4,7 +4,7 @@ use actix_web::{
 };
 use std::fmt::Display;
 
-use crate::WaCustomError;
+use crate::models::common::WaCustomError;
 
 #[allow(dead_code)]
 #[derive(Debug)]
