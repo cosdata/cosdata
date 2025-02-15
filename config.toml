@@ -30,3 +30,7 @@ shortlist_size = 64
 clamp_margin_percent = 1.0 # 1%
 mode = "sequential"   # Options: "sequential" or "batch"
 # batch_size = 32  # only required with "batch" indexing mode
+
+[grpc]
+host = "127.0.0.1" # Optional - if not specified uses default loopback address
+port = 50051       # Optional - if not specified will use default 50051

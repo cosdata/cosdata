@@ -395,6 +395,8 @@ pub enum WaCustomError {
     NotFound(String),
 }
 
+impl std::error::Error for WaCustomError {}
+
 impl fmt::Display for WaCustomError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
