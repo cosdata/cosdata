@@ -1,74 +1,59 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 pub struct PerformantFixedSet {
-    buckets: [u128; 59], // its a prime number
+    buckets: Vec<u64>,
 }
 
 impl PerformantFixedSet {
-    pub fn new() -> Self {
-        PerformantFixedSet { buckets: [0; 59] }
+    #[inline]
+    pub fn new(len: usize) -> Self {
+        Self {
+            buckets: vec![0; len],
+        }
     }
 
-    pub fn insert(&mut self, value: u64) {
-        let index = (value % 59) as usize;
-        // let hash = value ^ 0xA5A5A5A5;
-        let bit_position = (value % 128) as u8;
-
-        self.buckets[index] |= 1u128 << bit_position;
+    #[inline]
+    pub fn insert(&mut self, value: u32) {
+        let mask = self.buckets.len() as u32 - 1;
+        let bucket = (value >> 6) & mask;
+        let bit_pos = value & 0x3f;
+        self.buckets[bucket as usize] |= 1u64 << bit_pos;
     }
 
-    pub fn is_member(&self, value: u64) -> bool {
-        let index = (value % 59) as usize;
-        // let hash = value ^ 0xA5A5A5A5;
-        let bit_position = (value % 128) as u8;
-
-        (self.buckets[index] & (1u128 << bit_position)) != 0
+    #[inline]
+    pub fn is_member(&self, value: u32) -> bool {
+        let mask = self.buckets.len() as u32 - 1;
+        let bucket = (value >> 6) & mask;
+        let bit_pos = value & 0x3f;
+        (self.buckets[bucket as usize] & (1u64 << bit_pos)) != 0
     }
 }
 
-// pub struct PerformantFixedSet {
-//     buckets: [Vec<u32>; 128],
-// }
+pub struct AtomicFixedSet {
+    buckets: Vec<AtomicU64>,
+}
 
-// impl PerformantFixedSet {
-//     #[rustfmt::skip]
-//     pub fn new(_: u32) -> Self {
-//         PerformantFixedSet {
-//             buckets: [
-//                 Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
-//                 Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
-//                 Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
-//                 Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
-//                 Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
-//                 Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
-//                 Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
-//                 Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
-//                 Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
-//                 Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
-//                 Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
-//                 Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
-//                 Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
-//                 Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
-//                 Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
-//                 Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
-//             ],
-//         }
-//     }
+impl AtomicFixedSet {
+    #[inline]
+    pub fn new(len: usize) -> Self {
+        Self {
+            buckets: (0..len).map(|_| AtomicU64::new(0)).collect(),
+        }
+    }
 
-//     pub fn insert(&mut self, value: u32) {
-//         let index = (value & 127) as usize;
-//         match self.buckets[index].binary_search(&value) {
-//             Err(pos) => {
-//                 self.buckets[index].insert(pos, value);
-//             }
-//             Ok(_) => {}
-//         }
-//     }
+    #[inline]
+    pub fn insert(&self, value: u32) {
+        let mask = self.buckets.len() as u32 - 1;
+        let bucket = (value >> 6) & mask;
+        let bit_pos = value & 0x3f;
+        self.buckets[bucket as usize].fetch_or(1u64 << bit_pos, Ordering::Relaxed);
+    }
 
-//     pub fn is_member(&self, value: u32) -> bool {
-//         let index = (value & 127) as usize;
-//         self.buckets[index].binary_search(&value).is_ok()
-//     }
-
-//     pub fn len(&self) -> usize {
-//         self.buckets.iter().map(|bucket| bucket.len()).sum()
-//     }
-// }
+    #[inline]
+    pub fn is_member(&self, value: u32) -> bool {
+        let mask = self.buckets.len() as u32 - 1;
+        let bucket = (value >> 6) & mask;
+        let bit_pos = value & 0x3f;
+        (self.buckets[bucket as usize].load(Ordering::Relaxed) & (1u64 << bit_pos)) != 0
+    }
+}

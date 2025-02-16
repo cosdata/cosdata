@@ -4,6 +4,7 @@ import numpy as np
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib3
+import random
 
 # Suppress only the single InsecureRequestWarning from urllib3 needed for this script
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -18,15 +19,15 @@ def generate_headers():
     return {"Authorization": f"Bearer {token}", "Content-type": "application/json"}
 
 
-# Function to login with credentials
-def login():
-    url = f"{host}/auth/login"
-    data = {"username": "admin", "password": "admin", "pretty_print": False}
+def create_session():
+    url = f"{host}/auth/create-session"
+    data = {"username": "admin", "password": "admin"}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
+    session = response.json()
     global token
-    token = response.text
+    token = session["access_token"]
     return token
 
 
@@ -49,22 +50,33 @@ def create_db(name, description=None, dimension=1024):
     )
     return response.json()
 
+
 def create_explicit_index(name):
     data = {
-        "collection_name": name,
-        "name": name,
-        "distance_metric_type": "cosine",
-        "quantization": "scalar",
-        "data_type": "u8",
-        "index_type": "hnsw",
-        "params": {
-            "num_layers": 5,
-            "max_cache_size": 1000,
-        }
+        "name": name,  # Name of the index
+        "distance_metric_type": "cosine",  # Type of distance metric (e.g., cosine, euclidean)
+        "quantization": {"type": "auto", "properties": {"sample_threshold": 100}},
+        "index": {
+            "type": "hnsw",
+            "properties": {
+                "num_layers": 7,
+                "max_cache_size": 1000,
+                "ef_construction": 512,
+                "ef_search": 256,
+                "neighbors_count": 32,
+                "level_0_neighbors_count": 64,
+            },
+        },
     }
-    response = requests.post(f"{base_url}/indexes", headers=generate_headers(), data=json.dumps(data), verify=False)
+    response = requests.post(
+        f"{base_url}/collections/{name}/indexes/dense",
+        headers=generate_headers(),
+        data=json.dumps(data),
+        verify=False,
+    )
 
     return response.json()
+
 
 # Function to create database (collection)
 def create_db_old(vector_db_name, dimensions, max_val, min_val):
@@ -91,7 +103,10 @@ def find_collection(id):
 
 def create_transaction(collection_name):
     url = f"{base_url}/collections/{collection_name}/transactions"
-    response = requests.post(url, headers=generate_headers(), verify=False)
+    data = {"index_type": "dense"}
+    response = requests.post(
+        url, data=json.dumps(data), headers=generate_headers(), verify=False
+    )
     return response.json()
 
 
@@ -114,7 +129,7 @@ def upsert_in_transaction(collection_name, transaction_id, vectors):
     url = (
         f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/upsert"
     )
-    data = {"vectors": vectors}
+    data = {"index_type": "dense", "vectors": vectors}
     print(f"Request URL: {url}")
     print(f"Request Vectors Count: {len(vectors)}")
     response = requests.post(
@@ -127,7 +142,7 @@ def upsert_in_transaction(collection_name, transaction_id, vectors):
 
 def upsert_vectors_in_transaction(collection_name, transaction_id, vectors):
     url = f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/vectors"
-    data = {"vectors": vectors}
+    data = {"index_type": "dense", "vectors": vectors}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
@@ -138,7 +153,10 @@ def commit_transaction(collection_name, transaction_id):
     url = (
         f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/commit"
     )
-    response = requests.post(url, headers=generate_headers(), verify=False)
+    data = {"index_type": "dense"}
+    response = requests.post(
+        url, data=json.dumps(data), headers=generate_headers(), verify=False
+    )
     if response.status_code not in [200, 204]:
         print(f"Error response: {response.text}")
         raise Exception(f"Failed to commit transaction: {response.status_code}")
@@ -149,7 +167,10 @@ def abort_transaction(collection_name, transaction_id):
     url = (
         f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/abort"
     )
-    response = requests.post(url, headers=generate_headers(), verify=False)
+    data = {"index_type": "dense"}
+    response = requests.post(
+        url, data=json.dumps(data), headers=generate_headers(), verify=False
+    )
     return response.json()
 
 
@@ -175,7 +196,7 @@ def ann_vector_old(idd, vector_db_name, vector):
 
 def ann_vector(idd, vector_db_name, vector):
     url = f"{base_url}/search"
-    data = {"vector_db_name": vector_db_name, "vector": vector}
+    data = {"vector_db_name": vector_db_name, "vector": vector, "nn_count": 5}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
@@ -290,10 +311,12 @@ def process_base_vector_batch(
         # Submit this base vector and its perturbations as one batch
         upsert_in_transaction(vector_db_name, transaction_id, batch_vectors)
         print(
-            f"Upsert complete for base vector {base_idx} and its {len(batch_vectors)-1} perturbations"
+            f"Upsert complete for base vector {base_idx} and its {len(batch_vectors) - 1} perturbations"
         )
 
-        return (base_idx, generate_perturbation(
+        return (
+            base_idx,
+            generate_perturbation(
                 base_vector,
                 req_ct * 10000
                 + base_idx * 100
@@ -301,35 +324,39 @@ def process_base_vector_batch(
                 + 1,  # Unique ID for each perturbation
                 perturbation_degree,
                 dimensions,
-            ), batch_vectors)
+            ),
+            batch_vectors,
+        )
     except Exception as e:
         print(f"Error processing base vector {base_idx}: {e}")
         raise
+
 
 def cosine_similarity(vec1, vec2):
     # Convert inputs to numpy arrays
     vec1 = np.asarray(vec1)
     vec2 = np.asarray(vec2)
-    
+
     # Check if vectors have the same length
     if vec1.shape != vec2.shape:
         raise ValueError("Vectors must have the same length")
-    
+
     # Calculate magnitudes
     magnitude1 = np.linalg.norm(vec1)
     magnitude2 = np.linalg.norm(vec2)
-    
+
     # Check for zero vectors
     if magnitude1 == 0 or magnitude2 == 0:
         raise ValueError("Cannot compute cosine similarity for zero vectors")
-    
+
     # Calculate dot product
     dot_product = np.dot(vec1, vec2)
-    
+
     # Calculate cosine similarity
     cosine_sim = dot_product / (magnitude1 * magnitude2)
-    
+
     return cosine_sim
+
 
 def bruteforce_search(vectors, query, k=5):
     similarities = []
@@ -344,7 +371,7 @@ def bruteforce_search(vectors, query, k=5):
 
 def generate_vectors(req_ct, batch_count, batch_size, dimensions, perturbation_degree):
     vectors = []
-    
+
     for base_idx in range(batch_count):
         base_vector = generate_random_vector_with_id(
             (req_ct * batch_count * batch_size) + (base_idx * batch_size), dimensions
@@ -355,20 +382,23 @@ def generate_vectors(req_ct, batch_count, batch_size, dimensions, perturbation_d
         for i in range(batch_size - 1):
             perturbed_vector = generate_perturbation(
                 base_vector,
-                (req_ct * batch_count * batch_size) + (base_idx * batch_size + i + 1),  # Unique ID for each perturbation
+                (req_ct * batch_count * batch_size)
+                + (base_idx * batch_size + i + 1),  # Unique ID for each perturbation
                 perturbation_degree,
                 dimensions,
             )
             vectors.append(perturbed_vector)
-    
+
     # Shuffle the vectors
     np.random.shuffle(vectors)
     return vectors
+
 
 def search(vectors, vector_db_name, query):
     ann_response = ann_vector(query["id"], vector_db_name, query["values"])
     bruteforce_result = bruteforce_search(vectors, query, 5)
     return (ann_response, bruteforce_result)
+
 
 if __name__ == "__main__":
     # Create database
@@ -376,13 +406,12 @@ if __name__ == "__main__":
     dimensions = 1024
     max_val = 1.0
     min_val = -1.0
-    perturbation_degree = 0.25  # Degree of perturbation
+    perturbation_degree = 0.95  # Degree of perturbation
     batch_size = 100
-    batch_count = 100
+    batch_count = 1000
 
-    # first login to get the auth jwt token
-    login_response = login()
-    print("Login Response:", login_response)
+    session_response = create_session()
+    print("Session Response:", session_response)
 
     create_collection_response = create_db(
         name=vector_db_name,
@@ -403,8 +432,10 @@ if __name__ == "__main__":
             transaction_response = create_transaction(vector_db_name)
             transaction_id = transaction_response["transaction_id"]
             print(f"Created transaction: {transaction_id}")
-            
-            vectors = generate_vectors(req_ct, batch_count, batch_size, dimensions, perturbation_degree)
+
+            vectors = generate_vectors(
+                req_ct, batch_count, batch_size, dimensions, perturbation_degree
+            )
 
             # Process vectors concurrently
             with ThreadPoolExecutor(max_workers=32) as executor:
@@ -415,15 +446,23 @@ if __name__ == "__main__":
                             upsert_in_transaction,
                             vector_db_name,
                             transaction_id,
-                            vectors[base_idx*batch_size:(base_idx*batch_size)+batch_size]
+                            vectors[
+                                base_idx * batch_size : (base_idx * batch_size)
+                                + batch_size
+                            ],
                         )
                     )
-                    shortlisted_vectors.append(generate_perturbation(
-                        vectors[base_idx*batch_size],
-                        base_idx,
-                        perturbation_degree,
-                        dimensions,
-                    ))
+                    if random.random() < 0.9:
+                        continue
+
+                    shortlisted_vectors.append(
+                        generate_perturbation(
+                            vectors[base_idx * batch_size],
+                            base_idx,
+                            perturbation_degree,
+                            dimensions,
+                        )
+                    )
 
                 # Collect results
                 for future in as_completed(futures):
@@ -454,9 +493,7 @@ if __name__ == "__main__":
     with ThreadPoolExecutor(max_workers=32) as executor:
         futures = []
         for query in shortlisted_vectors:
-            futures.append(
-                executor.submit(search, vectors, vector_db_name, query)
-            )
+            futures.append(executor.submit(search, vectors, vector_db_name, query))
 
         for i, future in enumerate(as_completed(futures)):
             try:
@@ -482,14 +519,11 @@ if __name__ == "__main__":
                         print(f"    {j + 1}: {id} ({cs})")
                     best_matches_bruteforce.append(bruteforce_results[0][1])
 
-
             except Exception as e:
                 print(f"Error in ANN vector {i + 1}: {e}")
 
     if best_matches_server:
-        best_match_server_average = sum(best_matches_server) / len(
-            best_matches_server
-        )
+        best_match_server_average = sum(best_matches_server) / len(best_matches_server)
         best_match_bruteforce_average = sum(best_matches_bruteforce) / len(
             best_matches_bruteforce
         )

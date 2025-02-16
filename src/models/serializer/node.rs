@@ -9,34 +9,34 @@ use crate::models::{
 use arcshift::ArcShift;
 use std::collections::HashSet;
 use std::{
-    io::{self, SeekFrom},
+    io::{self},
     sync::Arc,
 };
 
 impl CustomSerialize for MergedNode {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
-        let bufman = bufmans.get(&version)?;
+        let bufman = bufmans.get(version)?;
         let start_offset = bufman.cursor_position(cursor)? as u32;
 
         // Serialize basic fields
-        bufman.write_u8_with_cursor(cursor, self.hnsw_level.0)?;
+        bufman.update_u8_with_cursor(cursor, self.hnsw_level.0)?;
 
         // Serialize prop
         let mut prop = self.prop.clone();
         let prop_state = prop.get();
         match &*prop_state {
             PropState::Ready(node_prop) => {
-                bufman.write_u32_with_cursor(cursor, node_prop.location.0 .0)?;
-                bufman.write_u32_with_cursor(cursor, node_prop.location.1 .0)?;
+                bufman.update_u32_with_cursor(cursor, node_prop.location.0 .0)?;
+                bufman.update_u32_with_cursor(cursor, node_prop.location.1 .0)?;
             }
             PropState::Pending((FileOffset(offset), BytesToRead(length))) => {
-                bufman.write_u32_with_cursor(cursor, *offset)?;
-                bufman.write_u32_with_cursor(cursor, *length)?;
+                bufman.update_u32_with_cursor(cursor, *offset)?;
+                bufman.update_u32_with_cursor(cursor, *length)?;
             }
         }
 
@@ -50,14 +50,14 @@ impl CustomSerialize for MergedNode {
         if child_present {
             indicator |= 0b00000010;
         }
-        bufman.write_u8_with_cursor(cursor, indicator)?;
+        bufman.update_u8_with_cursor(cursor, indicator)?;
 
         // Write placeholders only for present parent and child
         let parent_placeholder = if parent_present {
             let pos = bufman.cursor_position(cursor)? as u32;
-            bufman.write_u32_with_cursor(cursor, 0)?;
-            bufman.write_u16_with_cursor(cursor, 0)?;
-            bufman.write_u32_with_cursor(cursor, 0)?;
+            bufman.update_u32_with_cursor(cursor, 0)?;
+            bufman.update_u16_with_cursor(cursor, 0)?;
+            bufman.update_u32_with_cursor(cursor, 0)?;
             Some(pos)
         } else {
             None
@@ -65,9 +65,9 @@ impl CustomSerialize for MergedNode {
 
         let child_placeholder = if child_present {
             let pos = bufman.cursor_position(cursor)? as u32;
-            bufman.write_u32_with_cursor(cursor, 0)?;
-            bufman.write_u16_with_cursor(cursor, 0)?;
-            bufman.write_u32_with_cursor(cursor, 0)?;
+            bufman.update_u32_with_cursor(cursor, 0)?;
+            bufman.update_u16_with_cursor(cursor, 0)?;
+            bufman.update_u32_with_cursor(cursor, 0)?;
             Some(pos)
         } else {
             None
@@ -75,7 +75,7 @@ impl CustomSerialize for MergedNode {
 
         // Write placeholders for neighbors and versions
         let neighbors_placeholder = bufman.cursor_position(cursor)? as u32;
-        bufman.write_u32_with_cursor(cursor, u32::MAX)?;
+        bufman.update_u32_with_cursor(cursor, u32::MAX)?;
 
         // Serialize parent if present
         let parent_offset = if parent_present {
@@ -98,30 +98,30 @@ impl CustomSerialize for MergedNode {
         let end_pos = bufman.cursor_position(cursor)?;
 
         if let (Some(placeholder), Some(offset)) = (parent_placeholder, parent_offset) {
-            bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder as u64))?;
-            bufman.write_u32_with_cursor(cursor, offset)?;
-            bufman.write_u16_with_cursor(cursor, self.parent.get_current_version_number())?;
-            bufman.write_u32_with_cursor(cursor, *self.parent.get_current_version())?;
+            bufman.seek_with_cursor(cursor, placeholder as u64)?;
+            bufman.update_u32_with_cursor(cursor, offset)?;
+            bufman.update_u16_with_cursor(cursor, self.parent.get_current_version_number())?;
+            bufman.update_u32_with_cursor(cursor, *self.parent.get_current_version())?;
         }
 
         if let (Some(placeholder), Some(offset)) = (child_placeholder, child_offset) {
-            bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder as u64))?;
-            bufman.write_u32_with_cursor(cursor, offset)?;
-            bufman.write_u16_with_cursor(cursor, self.child.get_current_version_number())?;
-            bufman.write_u32_with_cursor(cursor, *self.child.get_current_version())?;
+            bufman.seek_with_cursor(cursor, placeholder as u64)?;
+            bufman.update_u32_with_cursor(cursor, offset)?;
+            bufman.update_u16_with_cursor(cursor, self.child.get_current_version_number())?;
+            bufman.update_u32_with_cursor(cursor, *self.child.get_current_version())?;
         }
 
-        bufman.seek_with_cursor(cursor, SeekFrom::Start(neighbors_placeholder as u64))?;
-        bufman.write_u32_with_cursor(cursor, neighbors_offset)?;
+        bufman.seek_with_cursor(cursor, neighbors_placeholder as u64)?;
+        bufman.update_u32_with_cursor(cursor, neighbors_offset)?;
 
         // Return to the end of the serialized data
-        bufman.seek_with_cursor(cursor, SeekFrom::Start(end_pos))?;
+        bufman.seek_with_cursor(cursor, end_pos)?;
 
         Ok(start_offset)
     }
 
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         file_index: FileIndex,
         cache: Arc<NodeRegistry>,
         max_loads: u16,
@@ -138,9 +138,9 @@ impl CustomSerialize for MergedNode {
                 version_number,
                 version_id,
             } => {
-                let bufman = bufmans.get(&version_id)?;
+                let bufman = bufmans.get(version_id)?;
                 let cursor = bufman.open_cursor()?;
-                bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
+                bufman.seek_with_cursor(cursor, offset as u64)?;
                 // Read basic fields
                 let hnsw_level = HNSWLevel(bufman.read_u8_with_cursor(cursor)?);
                 // Read prop

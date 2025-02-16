@@ -5,18 +5,24 @@ use super::error::AuthError;
 use futures_util::future::{err, ok, Ready};
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
-pub(crate) struct LoginCredentials {
+pub(crate) struct CreateSessionDTO {
     pub username: String,
     pub password: String,
-    pub pretty_print: bool,
+}
+
+#[derive(Serialize)]
+pub(crate) struct Session {
+    pub access_token: String,
+    pub created_at: u64,
+    pub expires_at: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 // a structure for holding claims data used in JWT tokens
 // resembles payload in NodeJS world
 pub struct Claims {
-    pub exp: i64,         // Expiry time of the token
-    pub iat: i64,         // Issued at time of the token
+    pub exp: u64,         // Expiry time of the token
+    pub iat: u64,         // Issued at time of the token
     pub username: String, // Email associated with the token
 }
 

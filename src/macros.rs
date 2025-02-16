@@ -18,6 +18,14 @@ macro_rules! key {
         key.extend_from_slice(&$branch_id.to_le_bytes());
         key
     }};
+    // misc/metadata
+    (m:$name:ident) => {{
+        let key = stringify!($name).as_bytes();
+        let mut prefixed_key = Vec::with_capacity(1 + key.len()); // prefix = 1 byte
+        prefixed_key.push(3);
+        prefixed_key.extend_from_slice(&key);
+        prefixed_key
+    }};
 }
 
 pub(crate) use key;

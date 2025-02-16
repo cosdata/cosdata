@@ -1,3 +1,4 @@
+use crate::macros::key;
 use crate::models::common::*;
 use crate::models::types::*;
 use crate::models::versioning::*;
@@ -20,9 +21,10 @@ pub fn update_current_version(lmdb: &MetaDb, version_hash: Hash) -> Result<(), W
         .begin_rw_txn()
         .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
 
+    let key = key!(m:current_version);
     let bytes = version_hash.to_le_bytes();
 
-    txn.put(*db, &"current_version", &bytes, WriteFlags::empty())
+    txn.put(*db, &key, &bytes, WriteFlags::empty())
         .map_err(|e| WaCustomError::DatabaseError(format!("Failed to put data: {}", e)))?;
 
     txn.commit().map_err(|e| {
@@ -39,8 +41,9 @@ pub fn retrieve_current_version(lmdb: &MetaDb) -> Result<Hash, WaCustomError> {
     let txn = env
         .begin_ro_txn()
         .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
+    let current_version_key = key!(m:current_version);
 
-    let serialized_hash = txn.get(*db, &"current_version").map_err(|e| match e {
+    let serialized_hash = txn.get(*db, &current_version_key).map_err(|e| match e {
         lmdb::Error::NotFound => {
             WaCustomError::DatabaseError("Record not found: current_version".to_string())
         }
@@ -60,7 +63,7 @@ pub fn retrieve_current_version(lmdb: &MetaDb) -> Result<Hash, WaCustomError> {
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct DenseIndexData {
     pub name: String,
-    pub num_layers: u8,
+    pub hnsw_params: HNSWHyperParams,
     pub levels_prob: Arc<Vec<(f64, i32)>>,
     pub dim: usize,
     pub file_index: FileIndex,
@@ -75,11 +78,7 @@ pub struct DenseIndexData {
 impl TryFrom<Arc<DenseIndex>> for DenseIndexData {
     type Error = WaCustomError;
     fn try_from(dense_index: Arc<DenseIndex>) -> Result<Self, Self::Error> {
-        let offset = dense_index
-            .root_vec_offset()
-            .ok_or(WaCustomError::NodeError(
-                "FileIndex must be set for root node".to_owned(),
-            ))?;
+        let offset = dense_index.root_vec_offset();
         if let FileIndex::Invalid = offset {
             return Err(WaCustomError::NodeError(
                 "FileIndex must be valid for root node".to_owned(),
@@ -87,7 +86,7 @@ impl TryFrom<Arc<DenseIndex>> for DenseIndexData {
         };
         let dense_index_data = Self {
             name: dense_index.database_name.clone(),
-            num_layers: dense_index.hnsw_params.clone().num_layers,
+            hnsw_params: dense_index.hnsw_params.read().unwrap().clone(),
             levels_prob: dense_index.levels_prob.clone(),
             dim: dense_index.dim,
             file_index: offset,

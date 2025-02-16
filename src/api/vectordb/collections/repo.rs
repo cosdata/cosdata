@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use crate::{
-    api_service::{init_dense_index_for_collection, init_inverted_index_for_collection},
     app_context::AppContext,
     indexes::inverted_index::InvertedIndex,
     models::{collection::Collection, types::DenseIndex},
@@ -50,36 +49,27 @@ pub(crate) async fn create_collection(
 }
 
 /// creates a dense_index for a collection
-pub(crate) async fn create_dense_index(
-    ctx: Arc<AppContext>,
-    collection: &Collection,
-    size: usize,
-    lower_bound: Option<f32>,
-    upper_bound: Option<f32>,
-    num_layers: u8,
-    _auto_config: bool,
-) -> Result<Arc<DenseIndex>, CollectionsError> {
-    // Call init_vector_store using web::block
-    let result = init_dense_index_for_collection(
-        ctx,
-        collection,
-        size,
-        lower_bound,
-        upper_bound,
-        num_layers,
-    )
-    .await;
-    result.map_err(|e| CollectionsError::FailedToCreateCollection(e.to_string()))
-}
-
-/// creates an inverted index for a collection
-pub(crate) async fn create_inverted_index(
-    ctx: Arc<AppContext>,
-    collection: &Collection,
-) -> Result<Arc<InvertedIndex>, CollectionsError> {
-    let result = init_inverted_index_for_collection(ctx, collection).await;
-    result.map_err(|e| CollectionsError::FailedToCreateCollection(e.to_string()))
-}
+// pub(crate) async fn create_dense_index(
+//     ctx: Arc<AppContext>,
+//     collection: &Collection,
+//     size: usize,
+//     lower_bound: Option<f32>,
+//     upper_bound: Option<f32>,
+//     num_layers: u8,
+//     _auto_config: bool,
+// ) -> Result<Arc<DenseIndex>, CollectionsError> {
+//     // Call init_vector_store using web::block
+//     let result = init_dense_index_for_collection(
+//         ctx,
+//         collection,
+//         size,
+//         lower_bound,
+//         upper_bound,
+//         num_layers,
+//     )
+//     .await;
+//     result.map_err(|e| CollectionsError::FailedToCreateCollection(e.to_string()))
+// }
 
 /// gets a list of collections
 /// TODO results should be filtered based on search params,
@@ -129,6 +119,22 @@ pub(crate) async fn get_dense_index_by_name(
         }
     };
     Ok(dense_index)
+}
+
+/// gets an inverted index for a collection by name
+pub(crate) async fn get_inverted_index_by_name(
+    ctx: Arc<AppContext>,
+    name: &str,
+) -> Result<Arc<InvertedIndex>, CollectionsError> {
+    // Try to get the dense_index from the environment
+    let index = match ctx.ain_env.collections_map.get_inverted_index(name) {
+        Some(index) => index.clone(),
+        None => {
+            // dense index not found, return an error response
+            return Err(CollectionsError::NotFound);
+        }
+    };
+    Ok(index)
 }
 
 pub(crate) async fn delete_collection_by_name(

@@ -27,7 +27,7 @@ pub(crate) async fn get_vector_by_id(
 }
 
 pub(crate) async fn update_vector_by_id(
-    path: web::Path<(String, u64)>,
+    path: web::Path<(String, VectorId)>,
     web::Json(update_vector_dto): web::Json<UpdateVectorDto>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse> {
@@ -43,9 +43,13 @@ pub(crate) async fn update_vector_by_id(
 }
 
 pub(crate) async fn find_similar_vectors(
+    ctx: web::Data<AppContext>,
+    collection_id: web::Path<String>,
     web::Json(find_similar_vectors): web::Json<FindSimilarVectorsDto>,
 ) -> Result<HttpResponse> {
-    let similar_vectors = service::find_similar_vectors(find_similar_vectors).await?;
+    let similar_vectors =
+        service::find_similar_vectors(ctx.into_inner(), &collection_id, find_similar_vectors)
+            .await?;
     Ok(HttpResponse::Ok().json(similar_vectors))
 }
 

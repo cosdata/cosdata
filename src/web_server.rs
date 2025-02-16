@@ -59,15 +59,21 @@ pub async fn run_actix_server() -> std::io::Result<()> {
             .service(auth_module())
             .service(
                 web::scope("/vectordb")
-                    .wrap(AuthenticationMiddleware)
+                    .wrap(AuthenticationMiddleware(
+                        data.ain_env.active_sessions.clone(),
+                    ))
                     // vectors module must be registered before collections module
                     // as its scope path is more specific than collections module
+                    .service(indexes_module())
                     .service(vectors_module())
                     .service(transactions_module())
                     .service(collections_module())
-                    .service(indexes_module())
                     .service(web::resource("/upsert").route(web::post().to(api::vectordb::upsert)))
                     .service(web::resource("/search").route(web::post().to(api::vectordb::search)))
+                    .service(
+                        web::resource("/batch-search")
+                            .route(web::post().to(api::vectordb::batch_search)),
+                    )
                     .service(web::resource("/fetch").route(web::post().to(api::vectordb::fetch)))
                     .service(
                         web::scope("{database_name}/transactions")
@@ -82,7 +88,8 @@ pub async fn run_actix_server() -> std::io::Result<()> {
                     ),
             )
             .app_data(data.clone())
-    });
+    })
+    .keep_alive(std::time::Duration::from_secs(10));
 
     let addr = config.server.listen_address();
     let server = match tls {

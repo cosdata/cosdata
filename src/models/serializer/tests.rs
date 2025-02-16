@@ -1,26 +1,29 @@
 use crate::distance::cosine::CosineSimilarity;
 use crate::models::buffered_io::BufferManager;
+use crate::models::common::TSHashTable;
 use crate::models::lazy_load::*;
 use crate::models::serializer::*;
 use crate::models::types::*;
 use crate::models::versioning::BranchId;
 use crate::models::versioning::VersionHash;
 use crate::models::versioning::{Version, VersionControl};
+use crate::storage::page::Pagepool;
 use crate::storage::Storage;
 use half::f16;
 use lmdb::DatabaseFlags;
 use lmdb::Environment;
+use rand::Rng;
 use std::sync::Arc;
 use tempfile::{tempdir, TempDir};
 
-fn get_cache(bufmans: Arc<BufferManagerFactory>) -> Arc<NodeRegistry> {
+fn get_cache(bufmans: Arc<BufferManagerFactory<Hash>>) -> Arc<NodeRegistry> {
     Arc::new(NodeRegistry::new(1000, bufmans))
 }
 
 fn setup_test(
-    root_version: &Hash,
+    root_version: Hash,
 ) -> (
-    Arc<BufferManagerFactory>,
+    Arc<BufferManagerFactory<Hash>>,
     Arc<NodeRegistry>,
     Arc<BufferManager>,
     u64,
@@ -29,7 +32,9 @@ fn setup_test(
     let dir = tempdir().unwrap();
     let bufmans = Arc::new(BufferManagerFactory::new(
         dir.as_ref().into(),
-        |root, ver| root.join(format!("{}.index", **ver)),
+        |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+        1.0,
+        8192,
     ));
     let cache = get_cache(bufmans.clone());
     let bufman = bufmans.get(root_version).unwrap();
@@ -44,7 +49,7 @@ fn test_lazy_item_serialization() {
     let root_version_id = Hash::from(0);
     let lazy_item = LazyItemRef::new(root_version_id, root_version_number, node);
 
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version_id);
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_id);
 
     let offset = lazy_item
         .serialize(bufmans.clone(), root_version_id, cursor)
@@ -100,7 +105,7 @@ fn test_eager_lazy_item_serialization() {
         ),
     );
 
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version_id);
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_id);
 
     let offset = item.serialize(bufmans, root_version_id, cursor).unwrap();
     bufman.close_cursor(cursor).unwrap();
@@ -150,7 +155,7 @@ fn test_lazy_item_set_serialization() {
         MergedNode::new(HNSWLevel(2)),
     ));
 
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version_id);
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_id);
 
     let offset = lazy_items
         .serialize(bufmans, root_version_id, cursor)
@@ -206,7 +211,7 @@ fn test_eager_lazy_item_set_serialization() {
         LazyItem::from_data(2.into(), 2, MergedNode::new(HNSWLevel(2))),
     ));
 
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version_id);
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_id);
 
     let offset = lazy_items
         .serialize(bufmans, root_version_id, cursor)
@@ -261,7 +266,7 @@ fn test_merged_node_acyclic_serialization() {
     let root_version_id = Hash::from(0);
     let node = MergedNode::new(HNSWLevel(2));
 
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version_id);
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_id);
 
     let offset = node.serialize(bufmans, root_version_id, cursor).unwrap();
     let file_index = FileIndex::Valid {
@@ -295,7 +300,7 @@ fn test_merged_node_with_neighbors_serialization() {
         MetricResult::CosineSimilarity(CosineSimilarity(0.9)),
     );
 
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version_id);
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_id);
 
     let offset = node.serialize(bufmans, root_version_id, cursor).unwrap();
     let file_index = FileIndex::Valid {
@@ -358,7 +363,7 @@ fn test_merged_node_with_parent_child_serialization() {
     node.set_parent(parent);
     node.set_child(child);
 
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version_id);
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_id);
 
     let offset = node.serialize(bufmans, root_version_id, cursor).unwrap();
     let file_index = FileIndex::Valid {
@@ -416,7 +421,9 @@ fn test_lazy_item_with_versions_serialization() {
     let vcs = VersionControl::new(env, db).unwrap().0;
     let bufmans = Arc::new(BufferManagerFactory::new(
         temp_dir.as_ref().into(),
-        |root, ver| root.join(format!("{}.index", **ver)),
+        |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+        1.0,
+        8192,
     ));
     let cache = get_cache(bufmans.clone());
 
@@ -431,7 +438,7 @@ fn test_lazy_item_with_versions_serialization() {
     let node_v2 = LazyItem::new(v2_hash, 2, MergedNode::new(HNSWLevel(2)));
     node_v0.add_version(cache.clone(), node_v2);
 
-    let bufman = bufmans.get(&v0_hash).unwrap();
+    let bufman = bufmans.get(v0_hash).unwrap();
     let cursor = bufman.open_cursor().unwrap();
 
     let offset = node_v0.serialize(bufmans, v0_hash, cursor).unwrap();
@@ -480,7 +487,7 @@ fn test_lazy_item_cyclic_serialization() {
 
     let lazy_ref = LazyItemRef::from_lazy(node0.clone());
 
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version);
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version);
 
     let offset = lazy_ref.serialize(bufmans, root_version, cursor).unwrap();
     let file_index = FileIndex::Valid {
@@ -549,7 +556,7 @@ fn test_lazy_item_complex_cyclic_serialization() {
 
     let lazy_ref = LazyItemRef::from_lazy(lazy1);
 
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version_id);
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_id);
 
     let offset = lazy_ref
         .serialize(bufmans, root_version_id, cursor)
@@ -615,7 +622,7 @@ fn test_lazy_item_set_linked_chunk_serialization() {
         ));
     }
 
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version_id);
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_id);
 
     let offset = lazy_items
         .serialize(bufmans, root_version_id, cursor)
@@ -669,7 +676,7 @@ fn test_eager_lazy_item_set_linked_chunk_serialization() {
         ));
     }
 
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version_id);
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_id);
 
     let offset = lazy_items
         .serialize(bufmans, root_version_id, cursor)
@@ -760,10 +767,12 @@ fn test_lazy_item_with_versions_serialization_and_validation() {
 
     let bufmans = Arc::new(BufferManagerFactory::new(
         temp_dir.as_ref().into(),
-        |root, ver| root.join(format!("{}.index", **ver)),
+        |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+        1.0,
+        8192,
     ));
     let cache = get_cache(bufmans.clone());
-    let bufman = bufmans.get(&v0_hash).unwrap();
+    let bufman = bufmans.get(v0_hash).unwrap();
     let cursor = bufman.open_cursor().unwrap();
 
     for i in 1..=100 {
@@ -807,10 +816,12 @@ fn test_lazy_item_with_versions_multiple_serialization() {
 
     let bufmans = Arc::new(BufferManagerFactory::new(
         temp_dir.as_ref().into(),
-        |root, ver| root.join(format!("{}.index", **ver)),
+        |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+        1.0,
+        8192,
     ));
     let cache = get_cache(bufmans.clone());
-    let bufman = bufmans.get(&v0_hash).unwrap();
+    let bufman = bufmans.get(v0_hash).unwrap();
     let cursor = bufman.open_cursor().unwrap();
 
     for i in 1..26 {
@@ -906,14 +917,14 @@ fn test_storage_serialization() {
             quant_vec: vec![f16::from_f32(534.324), f16::from_f32(6453.3)],
         },
     ];
-    let (bufmans, cache, bufman, cursor, _dir) = setup_test(&1.into());
+    let (bufmans, cache, bufman, cursor, _dir) = setup_test(1.into());
     bufman.close_cursor(cursor).unwrap();
 
     for (version, storage) in storages.into_iter().enumerate() {
         let version_id = Hash::from(version as u32);
-        let bufman = bufmans.get(&version_id).unwrap();
+        let bufman = bufmans.get(version_id).unwrap();
         let cursor = bufman.open_cursor().unwrap();
-        let offset = SimpleSerialize::serialize(&storage, bufman.clone(), cursor).unwrap();
+        let offset = SimpleSerialize::serialize(&storage, &bufman, cursor).unwrap();
         let file_index = FileIndex::Valid {
             offset: FileOffset(offset),
             version_number: version as u16,
@@ -941,7 +952,7 @@ fn test_lazy_item_vec_serialization() {
         MergedNode::new(HNSWLevel(2)),
     ));
 
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version_id);
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_id);
 
     let offset = lazy_items
         .serialize(bufmans, root_version_id, cursor)
@@ -989,7 +1000,7 @@ fn test_lazy_item_vec_linked_chunk_serialization() {
         ));
     }
 
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(&root_version_id);
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_id);
 
     let offset = lazy_items
         .serialize(bufmans, root_version_id, cursor)
@@ -1039,12 +1050,12 @@ fn test_eager_lazy_item_multiple_serialization() {
         set.insert(item);
     }
 
-    let (bufmans, cache, bufman, cursor, _tempdir) = setup_test(&0.into());
+    let (bufmans, cache, bufman, cursor, _tempdir) = setup_test(0.into());
 
     set.serialize(bufmans.clone(), 0.into(), cursor).unwrap();
 
     let value_offset = bufman.cursor_position(cursor).unwrap();
-    bufman.write_u32_with_cursor(cursor, value).unwrap();
+    bufman.update_u32_with_cursor(cursor, value).unwrap();
 
     set.insert(EagerLazyItem(
         0.0f32,
@@ -1053,9 +1064,7 @@ fn test_eager_lazy_item_multiple_serialization() {
 
     let offset = set.serialize(bufmans, 0.into(), cursor).unwrap();
 
-    bufman
-        .seek_with_cursor(cursor, SeekFrom::Start(value_offset))
-        .unwrap();
+    bufman.seek_with_cursor(cursor, value_offset).unwrap();
     let deserialized_value = bufman.read_u32_with_cursor(cursor).unwrap();
 
     assert_eq!(value, deserialized_value);
@@ -1071,4 +1080,234 @@ fn test_eager_lazy_item_multiple_serialization() {
     let deserialized: EagerLazyItemSet<MergedNode, f32> = cache.load_item(file_index).unwrap();
 
     assert_eq!(set.len(), deserialized.len());
+}
+
+fn get_random_pagepool<const LEN: usize>(rng: &mut impl Rng) -> Pagepool<LEN> {
+    let mut pool = Pagepool::default();
+    let count = rng.gen_range(20..50);
+    add_random_items_to_pagepool(rng, &mut pool, count);
+    pool
+}
+
+fn add_random_items_to_pagepool<const LEN: usize>(
+    rng: &mut impl Rng,
+    pool: &mut Pagepool<LEN>,
+    count: usize,
+) {
+    for _ in 0..count {
+        pool.push(rng.gen_range(0..u32::MAX));
+    }
+}
+
+#[test]
+fn test_page_serialization() {
+    let mut rng = rand::thread_rng();
+    let page_pool = get_random_pagepool(&mut rng);
+    let mut skipm: HashSet<u64> = HashSet::new();
+
+    let root_version_id = Hash::from(0);
+    let root_version_number = 0;
+
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(0.into());
+    let offset = page_pool
+        .serialize(bufmans.clone(), root_version_id, cursor)
+        .unwrap();
+
+    bufman.close_cursor(cursor).unwrap();
+
+    let deserialized = Pagepool::<10>::deserialize(
+        bufmans.clone(),
+        FileIndex::Valid {
+            offset: FileOffset(offset),
+            version_id: root_version_id,
+            version_number: root_version_number,
+        },
+        cache.clone(),
+        0_u16,
+        &mut skipm,
+    )
+    .unwrap();
+
+    assert_eq!(page_pool, deserialized);
+}
+
+#[test]
+fn test_page_incremental_serialization() {
+    let mut rng = rand::thread_rng();
+    let mut page_pool = get_random_pagepool(&mut rng);
+    let mut skipm: HashSet<u64> = HashSet::new();
+
+    let root_version_id = Hash::from(0);
+    let root_version_number = 0;
+
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(0.into());
+    let _offset = page_pool
+        .serialize(bufmans.clone(), root_version_id, cursor)
+        .unwrap();
+
+    add_random_items_to_pagepool(&mut rng, &mut page_pool, 100);
+
+    let offset = page_pool
+        .serialize(bufmans.clone(), root_version_id, cursor)
+        .unwrap();
+    bufman.close_cursor(cursor).unwrap();
+
+    let deserialized = Pagepool::<10>::deserialize(
+        bufmans.clone(),
+        FileIndex::Valid {
+            offset: FileOffset(offset),
+            version_id: root_version_id,
+            version_number: root_version_number,
+        },
+        cache.clone(),
+        0_u16,
+        &mut skipm,
+    )
+    .unwrap();
+
+    assert_eq!(page_pool, deserialized);
+}
+
+#[test]
+fn test_tshashtable_serialization() {
+    let mut rng = rand::thread_rng();
+    let table = TSHashTable::<u8, Pagepool<10>>::new(16);
+    let mut skipm: HashSet<u64> = HashSet::new();
+
+    // only even keys
+    for i in (0..32).map(|x| x * 2) {
+        table.insert(i, get_random_pagepool(&mut rng));
+    }
+
+    let root_version_id = Hash::from(0);
+    let root_version_number = 0;
+
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(0.into());
+    let offset = table
+        .serialize(bufmans.clone(), root_version_id, cursor)
+        .unwrap();
+    bufman.close_cursor(cursor).unwrap();
+
+    let deserialized = TSHashTable::deserialize(
+        bufmans.clone(),
+        FileIndex::Valid {
+            offset: FileOffset(offset),
+            version_id: root_version_id,
+            version_number: root_version_number,
+        },
+        cache.clone(),
+        0_u16,
+        &mut skipm,
+    )
+    .unwrap();
+
+    let mut table_list = table.to_list();
+    let mut deserialized_list = deserialized.to_list();
+
+    table_list.sort_by_key(|(k, _)| *k);
+    deserialized_list.sort_by_key(|(k, _)| *k);
+
+    assert_eq!(table_list, deserialized_list);
+}
+
+#[test]
+fn test_tshashtable_incremental_serialization_updated_values() {
+    let mut rng = rand::thread_rng();
+    let table = TSHashTable::<u8, Pagepool<10>>::new(16);
+    let mut skipm: HashSet<u64> = HashSet::new();
+
+    // only even keys
+    for i in (0..32).map(|x| x * 2) {
+        table.insert(i, get_random_pagepool(&mut rng));
+    }
+
+    let root_version_id = Hash::from(0);
+    let root_version_number = 0;
+
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(0.into());
+    let _offset = table
+        .serialize(bufmans.clone(), root_version_id, cursor)
+        .unwrap();
+
+    for i in (0..32).map(|x| x * 2) {
+        table.mutate(i, |pool| {
+            let mut pool = pool.unwrap();
+            add_random_items_to_pagepool(&mut rng, &mut pool, 100);
+            Some(pool)
+        });
+    }
+    let offset = table
+        .serialize(bufmans.clone(), root_version_id, cursor)
+        .unwrap();
+    bufman.close_cursor(cursor).unwrap();
+
+    let deserialized = TSHashTable::deserialize(
+        bufmans.clone(),
+        FileIndex::Valid {
+            offset: FileOffset(offset),
+            version_id: root_version_id,
+            version_number: root_version_number,
+        },
+        cache.clone(),
+        0_u16,
+        &mut skipm,
+    )
+    .unwrap();
+
+    let mut table_list = table.to_list();
+    let mut deserialized_list = deserialized.to_list();
+
+    table_list.sort_by_key(|(k, _)| *k);
+    deserialized_list.sort_by_key(|(k, _)| *k);
+
+    assert_eq!(table_list, deserialized_list);
+}
+
+#[test]
+fn test_tshashtable_incremental_serialization_new_entries() {
+    let mut rng = rand::thread_rng();
+    let table = TSHashTable::<u8, Pagepool<10>>::new(16);
+    let mut skipm: HashSet<u64> = HashSet::new();
+
+    // only even keys
+    for i in (0..32).map(|x| x * 2) {
+        table.insert(i, get_random_pagepool(&mut rng));
+    }
+
+    let root_version_id = Hash::from(0);
+    let root_version_number = 0;
+
+    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(0.into());
+    let _offset = table
+        .serialize(bufmans.clone(), root_version_id, cursor)
+        .unwrap();
+
+    for i in (0..32).map(|x| (x * 2) + 1) {
+        table.insert(i, get_random_pagepool(&mut rng));
+    }
+    let offset = table
+        .serialize(bufmans.clone(), root_version_id, cursor)
+        .unwrap();
+    bufman.close_cursor(cursor).unwrap();
+
+    let deserialized = TSHashTable::deserialize(
+        bufmans.clone(),
+        FileIndex::Valid {
+            offset: FileOffset(offset),
+            version_id: root_version_id,
+            version_number: root_version_number,
+        },
+        cache.clone(),
+        0_u16,
+        &mut skipm,
+    )
+    .unwrap();
+
+    let mut table_list = table.to_list();
+    let mut deserialized_list = deserialized.to_list();
+
+    table_list.sort_by_key(|(k, _)| *k);
+    deserialized_list.sort_by_key(|(k, _)| *k);
+
+    assert_eq!(table_list, deserialized_list);
 }

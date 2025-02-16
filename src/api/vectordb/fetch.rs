@@ -2,7 +2,7 @@ use crate::{
     api_service::fetch_vector_neighbors,
     app_context::AppContext,
     models::{
-        rpc::{FetchNeighbors, RPCResponseBody, Vector},
+        rpc::{DenseVector, FetchNeighbors, RPCResponseBody},
         types::VectorId,
     },
 };
@@ -21,7 +21,7 @@ pub(crate) async fn fetch(
             return HttpResponse::InternalServerError().body("Vector store not found");
         }
     };
-    let fvid = VectorId(body.vector_id as u64);
+    let fvid = VectorId(body.vector_id);
 
     let result = fetch_vector_neighbors(vec_store.clone(), fvid).await;
 
@@ -29,11 +29,10 @@ pub(crate) async fn fetch(
         .iter()
         .map(|res_item| {
             res_item.as_ref().map(|(vect, neig)| {
-                let nvid = vect.0;
                 let response_data = RPCResponseBody::RespFetchNeighbors {
                     neighbors: neig.iter().map(|(vid, x)| (vid.0, x.clone())).collect(),
-                    vector: Vector {
-                        id: nvid,
+                    vector: DenseVector {
+                        id: vect.clone(),
                         values: vec![],
                     },
                 };

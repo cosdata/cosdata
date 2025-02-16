@@ -21,10 +21,30 @@ The encoding of metadata values into vector dimensions follows a carefully desig
 
 For each metadata field, the number of required dimensions is calculated by rounding up the field's cardinality to the nearest power of 2. This power-of-2 allocation ensures efficient binary encoding of values. For example:
 
-- A field representing months (12 possible values) requires 16 dimensions (2^4)
-- A field for days of week (7 values) requires 8 dimensions (2^3)
-- A binary field (2 values) requires just 1 dimension (2^1)
-- A field with 100 possible values requires 128 dimensions (2^7)
+- A field representing months (12 possible values) requires 4 dimensions (equivalent to 2^4 = 16 binary bits)
+- A field for days of week (7 values) requires 3 dimensions (equivalent to 2^3 binary bits)
+- A binary field (2 values) requires just 1 dimension (equivalent to 2^1 binary bits)
+- A field with 100 possible values requires 7 dimensions (equivalent to 2^7 binary bits)
+
+*** Metadata schema
+At the time of creating a collection, the user needs to specify the "metadata schema" which will contain information such as,
+
+- all the metadata fields that need filtering
+- set of unique values for each metadata field (which will give us the cardinality). We will implicitly sort these unique values e.g. lexicographically so that we can (implicitly) map them to numeric values that can be represented using binary bits.
+- which AND/OR queries need to be supported so that we can create replica vectors only for those combinations
+
+The metadata schema will be stored in lmdb.
+
+Refer to the "Create collection" [[api-doc.org][API doc]], where an example of "metadata_schema" in request body is included.
+
+When the client/user sends an insert request with a metadata value that's not defined in the schema, then an error response will be returned.
+
+*** Updating dimensions / cardinality of fields
+The unique set of values supported for a metadata will be declared in the metadata schema specified in the ~create collection~ API call. However, it may happen that the user wants to add a new value to an existing field.
+
+This will cause the cardinality to change but because we're roundingup the field's cardinality to the nearest power of two, there may be some room for the new value(s) without having to change the dimensions allocated for the field. If there's no room, then we'll have to reindex the collection i.e. create all logical indexes for different metadata filtering scenario (Ref: [[*Metadata Filtering Index]] section below to know more about logical indexes).
+
+In case a new metadata field itself needs to be added, then the number of phantom dimensions itself changes, hence the collection will have to be reindexed.
 
 *** Quantization Values
 
@@ -36,11 +56,13 @@ These metadata dimensions use a fundamentally different quantization scheme comp
 - The high weight ensures metadata filtering takes precedence over similarity in the original dimensions
 
 Example: Consider a vector with 768 original dimensions extended with metadata fields for:
-- Month (16 dimensions)
-- Day of week (8 dimensions)
+- Month (4 dimensions)
+- Day of week (3 dimensions)
 - Binary category (1 dimension)
 
-The final vector would have 793 dimensions (768 + 16 + 8 + 1), with the metadata dimensions using the 1024 quantization value to encode their respective field values.
+The final vector would have 776 dimensions (768 + 4 + 3 + 1), with the metadata dimensions using the 1024 quantization value to encode their respective field values.
+
+The order in which the phantom dimensions will be added to the original vector will be implicit. Example: We may sort the metadata fields specified in the ~metadata_schema~ in lexicographically. This user/client doesn't need to know about this. If the metadata fields change, then the collection needs to be reindexed anyway.
 
 This encoding scheme ensures that:
 1. Each possible metadata value has a unique binary representation
@@ -53,21 +75,22 @@ This encoding scheme ensures that:
 The unified index structure contains multiple copies of each vector, where each copy is optimized for different metadata filtering scenarios. While these appear logically separate, they are physically stored within a single HNSW graph structure sharing a common root node. The key aspects are:
 
 1. Base Vector Copy: Contains phantom dimensions but no high-weight values
-2. Individual Field Copies: For each metadata field, vectors are copied and extended with high-weight values (1024) in the appropriate phantom dimensions
-3. Combined Field Copies: For AND query support, vectors are copied with high-weight values for multiple field combinations
+2. Combined Field Copies: For AND query support, vectors are copied with high-weight values for multiple field combinations. The field combinations that need to be supported will be specified in the ~metadata_schema~ at the time of collection creation
+3. All fields combined copy: For OR query support, a single copy with high-weight values for all the fields is sufficient. This way, we avoid create copies for individual fields. If the ~metadata_schema~ includes ~AND~ query support for all fields, then this copy will be created anyway (point 2 above).
 
 * Vector Extension and Indexing Process
 
 The indexing process requires multiple passes for each vector:
 
 1. First Pass: Index the base vector with phantom dimensions (no 1024 weights)
-2. Subsequent Passes: For each metadata field that needs filtering:
+2. Subsequent Passes: For each required metadata field combination (~AND~ query support):
   - Create a copy of the vector
-  - Set appropriate high-weight values (1024) in the phantom dimensions based on the field's value
+  - Set appropriate high-weight values (1024) in the phantom dimensions for all relevant fields
   - Index this copy
-3. Additional Passes: For each required field combination (AND support):
-  - Create a copy with high-weight values for all relevant fields
+3. Additional Pass (Optional): For all fields combination (~OR~ query support):
+  - Create a copy with high-weight values for all fields
   - Index this combination copy
+  - This step is optional because if the ~metadata_schema~ requires ~AND~ field support for all the fields, then this copy would have already been created in step 2.
 
 All these passes contribute to building the unified HNSW graph structure. The phantom dimensions ensure consistent vector dimensionality across all copies, while the high-weight values enable effective filtering during queries.
 
@@ -109,9 +132,9 @@ For metadata-filtered searches, the query vector is constructed with appropriate
 - -1 for other positions to prevent false matches
 
 The system automatically routes the query to the appropriate vector copies based on the filtering criteria:
-- Single field filters use the corresponding field-specific copies
+- Single field filters use the all-fields copy
+- OR conditions require multiple searches using all-fields copy, with results merged via map-reduce
 - AND conditions use the pre-computed combination copies
-- OR conditions require multiple searches using different copies, with results merged via map-reduce
 
 * Performance Implications
 
@@ -134,12 +157,13 @@ CPU Requirements:
 
 * Implementation Phases
 
-1. Implement phantom dimension extension for base vectors
-2. Develop indexing pipeline for multiple passes
-3. Create unified index structure
-4. Implement metadata-aware query processing
-5. Add support for field combinations
-6. Optimize performance and resource usage
+1. Create spec for the ~metadata_schema~ field in ~Create collection~ API request body
+2. Implement phantom dimension extension for base vectors
+3. Develop indexing pipeline for multiple passes
+4. Create unified index structure
+5. Implement metadata-aware query processing
+6. Add support for field combinations
+7. Optimize performance and resource usage
 
 * Future Considerations
 
@@ -147,3 +171,37 @@ CPU Requirements:
 - Smart selection of field combinations based on query patterns
 - Compression techniques for redundant vector copies
 - Dynamic generation of field combinations
+
+* High level tasks
+
+- [ ] Create a spec for metadata schema
+- [ ] Implement core functionality for dimension allocation
+  + Given the metadata schema find out how many phantom dimensions are required for metadata filtering
+  + Create a vec of those many dimensions
+  + Create phantom dimensions vec copy with,
+    1. no high weight values (for base copy)
+    2. high weight values for supported field combinations (for AND query support)
+    3. high weight values for all field combination (for OR query support)
+       + optional as it may be covered in (2)
+- [ ] Implement metadata-aware insertion
+  + Modify the create collection API endpoint to accept metadata_schema in above format
+  + Include metadata fields in all "insertion" code paths
+    + Validate metadata fields based on the metadata_schema for the collection
+  + Implement the indexing pipeline for multiple phases
+  + Modify all "insertion" API endpoints to accept metadata fields
+    + Create collection
+    + Create dense index
+    + Create vector
+    + Update vector
+    + upsert
+- [ ] Implement query vector encoding core functionality as per the doc
+  + Given the metadata filters and metadata_schema for the collection, extend the query vectors with +1/-1 values in the phantom dimensions.
+    + We can start with individual fields and then add support for field combinations in a later phase.
+- [ ] Implement metadata-aware query processing
+  - Integrate query vector encoding core functionality
+    - Modify ~VectorANN~ and ~BatchVectorANN~ structs to include metadata filters
+    - Validation of metadata filters
+  - Modify the "search" API endpoints to add metadata filters
+    - search
+    - batch_search
+- [ ] New APIs for updating the metadata_schema [not sure about the priority]

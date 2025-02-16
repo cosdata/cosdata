@@ -10,7 +10,6 @@ use crate::models::{
 use cuckoofilter::{CuckooFilter, ExportedCuckooFilter};
 use std::collections::HashSet;
 use std::collections::VecDeque;
-use std::io::SeekFrom;
 use std::sync::Arc;
 
 fn push_nodes_to_queue<'a>(
@@ -36,7 +35,7 @@ fn reconstruct_tree(
         return None;
     }
 
-    let mut node = queue.pop_front().unwrap();
+    let node = queue.pop_front().unwrap();
     match node {
         None => None,
         Some(mut node) => {
@@ -50,7 +49,7 @@ fn reconstruct_tree(
 impl CustomSerialize for CuckooFilterTreeNode {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
@@ -59,33 +58,33 @@ impl CustomSerialize for CuckooFilterTreeNode {
         push_nodes_to_queue(Some(self), &mut queue);
         let number_of_nodes = queue.len();
 
-        let bufman = bufmans.get(&version)?;
+        let bufman = bufmans.get(version)?;
         let start_offset = bufman.cursor_position(cursor)? as u32;
 
         // Serialize the number of nodes in the queue
         // Null nodes are also included in the count
-        bufman.write_u32_with_cursor(cursor, number_of_nodes as u32)?;
+        bufman.update_u32_with_cursor(cursor, number_of_nodes as u32)?;
 
         // Serialize each node in the queue
         for node in queue {
             match node {
                 None => {
                     // Serialize a u32::MAX to indicate a null node
-                    bufman.write_u32_with_cursor(cursor, u32::MAX)?;
+                    bufman.update_u32_with_cursor(cursor, u32::MAX)?;
                 }
                 Some(node) => {
                     // Serialize the node
                     // Write node metadata
-                    bufman.write_u32_with_cursor(cursor, node.index as u32)?;
-                    bufman.write_f32_with_cursor(cursor, node.range_min)?;
-                    bufman.write_f32_with_cursor(cursor, node.range_max)?;
+                    bufman.update_u32_with_cursor(cursor, node.index as u32)?;
+                    bufman.update_f32_with_cursor(cursor, node.range_min)?;
+                    bufman.update_f32_with_cursor(cursor, node.range_max)?;
 
                     // Serialize the Cuckoo filter by first converting it to a struct ExportedCuckooFilter
                     // We first serialize the length of the byte array, then the byte array itself
                     let exported_cuckoo_filter = node.filter.export();
-                    bufman.write_u32_with_cursor(cursor, exported_cuckoo_filter.length as u32)?;
+                    bufman.update_u32_with_cursor(cursor, exported_cuckoo_filter.length as u32)?;
                     for value in exported_cuckoo_filter.values {
-                        bufman.write_u8_with_cursor(cursor, value)?;
+                        bufman.update_u8_with_cursor(cursor, value)?;
                     }
                 }
             }
@@ -95,11 +94,11 @@ impl CustomSerialize for CuckooFilterTreeNode {
     }
 
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         file_index: FileIndex,
-        cache: Arc<NodeRegistry>,
-        max_loads: u16,
-        skipm: &mut HashSet<u64>,
+        _cache: Arc<NodeRegistry>,
+        _max_loads: u16,
+        _skipm: &mut HashSet<u64>,
     ) -> Result<Self, BufIoError> {
         match file_index {
             FileIndex::Invalid => Ok(CuckooFilterTreeNode::new(0, 0.0, 0.0)),
@@ -108,10 +107,10 @@ impl CustomSerialize for CuckooFilterTreeNode {
                 version_id,
                 ..
             } => {
-                let bufman = bufmans.get(&version_id)?;
+                let bufman = bufmans.get(version_id)?;
 
                 let cursor = bufman.open_cursor()?;
-                bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
+                bufman.seek_with_cursor(cursor, offset as u64)?;
 
                 // Read the number of nodes and create a queue of that size
                 let number_of_nodes = bufman.read_u32_with_cursor(cursor)?;

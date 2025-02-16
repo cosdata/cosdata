@@ -10,7 +10,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Define your dynamic variables
 token = None
-host = "https://127.0.0.1:8443"
+host = "http://127.0.0.1:8443"
 base_url = f"{host}/vectordb"
 
 
@@ -18,15 +18,15 @@ def generate_headers():
     return {"Authorization": f"Bearer {token}", "Content-type": "application/json"}
 
 
-# Function to login with credentials
-def login():
-    url = f"{host}/auth/login"
-    data = {"username": "admin", "password": "admin", "pretty_print": False}
+def create_session():
+    url = f"{host}/auth/create-session"
+    data = {"username": "admin", "password": "admin"}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
+    session = response.json()
     global token
-    token = response.text
+    token = session["access_token"]
     return token
 
 
@@ -49,22 +49,33 @@ def create_db(name, description=None, dimension=1024):
     )
     return response.json()
 
+
 def create_explicit_index(name):
     data = {
-        "collection_name": name,
         "name": name,
         "distance_metric_type": "cosine",
-        "quantization": "scalar",
-        "data_type": "u8",
-        "index_type": "hnsw",
-        "params": {
-            "num_layers": 5,
-            "max_cache_size": 1000,
-        }
+        "quantization": {"type": "auto", "properties": {"sample_threshold": 100}},
+        "index": {
+            "type": "hnsw",
+            "properties": {
+                "num_layers": 7,
+                "max_cache_size": 1000,
+                "ef_construction": 512,
+                "ef_search": 256,
+                "neighbors_count": 32,
+                "level_0_neighbors_count": 64,
+            },
+        },
     }
-    response = requests.post(f"{base_url}/indexes", headers=generate_headers(), data=json.dumps(data), verify=False)
+    response = requests.post(
+        f"{base_url}/collections/{name}/indexes/dense",
+        headers=generate_headers(),
+        data=json.dumps(data),
+        verify=False,
+    )
 
     return response.json()
+
 
 # Function to create database (collection)
 def create_db_old(vector_db_name, dimensions, max_val, min_val):
@@ -175,7 +186,7 @@ def ann_vector_old(idd, vector_db_name, vector):
 
 def ann_vector(idd, vector_db_name, vector):
     url = f"{base_url}/search"
-    data = {"vector_db_name": vector_db_name, "vector": vector}
+    data = {"vector_db_name": vector_db_name, "vector": vector, "nn_count": 5}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
@@ -290,10 +301,12 @@ def process_base_vector_batch(
         # Submit this base vector and its perturbations as one batch
         upsert_in_transaction(vector_db_name, transaction_id, batch_vectors)
         print(
-            f"Upsert complete for base vector {base_idx} and its {len(batch_vectors)-1} perturbations"
+            f"Upsert complete for base vector {base_idx} and its {len(batch_vectors) - 1} perturbations"
         )
 
-        return (base_idx, generate_perturbation(
+        return (
+            base_idx,
+            generate_perturbation(
                 base_vector,
                 req_ct * 10000
                 + base_idx * 100
@@ -301,35 +314,39 @@ def process_base_vector_batch(
                 + 1,  # Unique ID for each perturbation
                 perturbation_degree,
                 dimensions,
-            ), batch_vectors)
+            ),
+            batch_vectors,
+        )
     except Exception as e:
         print(f"Error processing base vector {base_idx}: {e}")
         raise
+
 
 def cosine_similarity(vec1, vec2):
     # Convert inputs to numpy arrays
     vec1 = np.asarray(vec1)
     vec2 = np.asarray(vec2)
-    
+
     # Check if vectors have the same length
     if vec1.shape != vec2.shape:
         raise ValueError("Vectors must have the same length")
-    
+
     # Calculate magnitudes
     magnitude1 = np.linalg.norm(vec1)
     magnitude2 = np.linalg.norm(vec2)
-    
+
     # Check for zero vectors
     if magnitude1 == 0 or magnitude2 == 0:
         raise ValueError("Cannot compute cosine similarity for zero vectors")
-    
+
     # Calculate dot product
     dot_product = np.dot(vec1, vec2)
-    
+
     # Calculate cosine similarity
     cosine_sim = dot_product / (magnitude1 * magnitude2)
-    
+
     return cosine_sim
+
 
 def bruteforce_search(vectors, query, k=5):
     similarities = []
@@ -342,17 +359,24 @@ def bruteforce_search(vectors, query, k=5):
     return similarities[:k]
 
 
-def generate_vectors(txn_count, batch_count, batch_size, dimensions, perturbation_degree):
-    vectors = [generate_random_vector_with_id(id, dimensions) for id in range(txn_count * batch_count * batch_size)]
-    
+def generate_vectors(
+    txn_count, batch_count, batch_size, dimensions, perturbation_degree
+):
+    vectors = [
+        generate_random_vector_with_id(id, dimensions)
+        for id in range(txn_count * batch_count * batch_size)
+    ]
+
     # Shuffle the vectors
     np.random.shuffle(vectors)
     return vectors
+
 
 def search(vectors, vector_db_name, query):
     ann_response = ann_vector(query["id"], vector_db_name, query["values"])
     bruteforce_result = bruteforce_search(vectors, query, 5)
     return (ann_response, bruteforce_result)
+
 
 if __name__ == "__main__":
     # Create database
@@ -365,9 +389,8 @@ if __name__ == "__main__":
     batch_count = 977
     txn_count = 2
 
-    # first login to get the auth jwt token
-    login_response = login()
-    print("Login Response:", login_response)
+    session_response = create_session()
+    print("Session Response:", session_response)
 
     create_collection_response = create_db(
         name=vector_db_name,
@@ -377,8 +400,10 @@ if __name__ == "__main__":
     print("Create Collection(DB) Response:", create_collection_response)
     # create_explicit_index(vector_db_name)
 
-    vectors = generate_vectors(txn_count, batch_count, batch_size, dimensions, perturbation_degree)
-            
+    vectors = generate_vectors(
+        txn_count, batch_count, batch_size, dimensions, perturbation_degree
+    )
+
     start_time = time.time()
 
     for req_ct in range(txn_count):
@@ -388,7 +413,6 @@ if __name__ == "__main__":
             transaction_response = create_transaction(vector_db_name)
             transaction_id = transaction_response["transaction_id"]
             print(f"Created transaction: {transaction_id}")
-            
 
             # Process vectors concurrently
             with ThreadPoolExecutor(max_workers=64) as executor:
@@ -402,7 +426,7 @@ if __name__ == "__main__":
                             upsert_in_transaction,
                             vector_db_name,
                             transaction_id,
-                            vectors[batch_start:batch_start+batch_size]
+                            vectors[batch_start : batch_start + batch_size],
                         )
                     )
 
@@ -430,7 +454,7 @@ if __name__ == "__main__":
 
     # End time
     end_time = time.time()
-    
+
     # Calculate elapsed time
     elapsed_time = end_time - start_time
 

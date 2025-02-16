@@ -1,4 +1,5 @@
 use super::buffered_io::BufIoError;
+use super::cache_loader::ProbCache;
 use super::lazy_load::LazyItem;
 use super::prob_node::SharedNode;
 use super::types::{MergedNode, MetricResult, VectorId};
@@ -394,6 +395,8 @@ pub enum WaCustomError {
     NotFound(String),
 }
 
+impl std::error::Error for WaCustomError {}
+
 impl fmt::Display for WaCustomError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -486,12 +489,18 @@ pub fn add_option_vecs(
 
 pub fn remove_duplicates_and_filter(
     vec: Vec<(SharedNode, MetricResult)>,
+    k: Option<usize>,
+    cache: &ProbCache,
 ) -> Vec<(VectorId, MetricResult)> {
     let mut seen = HashSet::new();
     let mut collected = vec
         .into_iter()
         .filter_map(|(lazy_item, similarity)| {
-            let id = lazy_item.get_lazy_data()?.get_id().clone();
+            let id = unsafe { &*lazy_item }
+                .try_get_data(cache)
+                .unwrap()
+                .get_id()
+                .clone();
             if !seen.insert(id.clone()) {
                 return None;
             }
@@ -507,7 +516,9 @@ pub fn remove_duplicates_and_filter(
             .partial_cmp(&a.get_value())
             .unwrap_or(Ordering::Equal)
     });
-    collected.truncate(100);
+    if let Some(k) = k {
+        collected.truncate(5 * k);
+    }
     collected
 }
 
@@ -576,17 +587,17 @@ pub fn tuple_to_string(tuple: (u32, u32)) -> String {
 type HashTable<K, V> = HashMap<K, V>;
 
 /// This is a custom Hashtable made to use for data variable in Node of InvertedIndex
-#[derive(Clone)]
+// #[derive(Clone)]
 pub struct TSHashTable<K, V> {
-    hash_table_list: Vec<Arc<Mutex<HashTable<K, V>>>>,
-    size: i16,
+    pub hash_table_list: Vec<Arc<Mutex<HashTable<K, V>>>>,
+    pub size: u8,
 }
 
 unsafe impl<K, V> Send for TSHashTable<K, V> {}
 unsafe impl<K, V> Sync for TSHashTable<K, V> {}
 
 impl<K: Eq + Hash, V> TSHashTable<K, V> {
-    pub fn new(size: i16) -> Self {
+    pub fn new(size: u8) -> Self {
         let hash_table_list = (0..size)
             .map(|_| Arc::new(Mutex::new(HashMap::new())))
             .collect();
@@ -595,6 +606,7 @@ impl<K: Eq + Hash, V> TSHashTable<K, V> {
             size,
         }
     }
+
     pub fn hash_key(&self, k: &K) -> usize {
         let mut hasher = DefaultHasher::new();
         k.hash(&mut hasher);
@@ -653,6 +665,33 @@ impl<K: Eq + Hash, V> TSHashTable<K, V> {
         }
     }
 
+    // This bool represents whether the key was found in the map or not.
+    pub fn get_or_create_with_flag<F>(&self, k: K, f: F) -> (V, bool)
+    where
+        F: FnOnce() -> V,
+        V: Clone,
+    {
+        let index = self.hash_key(&k);
+        let mut ht = self.hash_table_list[index].lock().unwrap();
+        match ht.get(&k) {
+            Some(v) => (v.clone(), true),
+            None => {
+                let new_v = f();
+                ht.insert(k, new_v.clone());
+                (new_v, false)
+            }
+        }
+    }
+
+    pub fn with_value<F, R>(&self, k: &K, f: F) -> Option<R>
+    where
+        F: Fn(&V) -> R,
+    {
+        let index = self.hash_key(k);
+        let ht = self.hash_table_list[index].lock().unwrap();
+        ht.get(k).map(f)
+    }
+
     pub fn map_m<F>(&self, f: F)
     where
         F: Fn(&K, &V) + Send + Sync + 'static,
@@ -696,7 +735,7 @@ impl<K: Eq + Hash, V> TSHashTable<K, V> {
             .collect()
     }
 
-    pub fn from_list(size: i16, kv: Vec<(K, V)>) -> Self {
+    pub fn from_list(size: u8, kv: Vec<(K, V)>) -> Self {
         let tsh = Self::new(size);
         for (k, v) in kv {
             tsh.insert(k, v);
@@ -704,10 +743,13 @@ impl<K: Eq + Hash, V> TSHashTable<K, V> {
         tsh
     }
 
-    pub fn purge_all(&self) {
+    pub fn purge_all(&self) -> Vec<(K, V)> {
+        let mut list = Vec::new();
         for ht in &self.hash_table_list {
             let mut ht = ht.lock().unwrap();
-            *ht = HashMap::new();
+            let map = std::mem::replace(&mut *ht, HashMap::new());
+            list.extend(map.into_iter());
         }
+        list
     }
 }

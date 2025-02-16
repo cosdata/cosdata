@@ -3,13 +3,13 @@ use serde::{Deserialize, Serialize};
 use super::{DistanceError, DistanceFunction};
 use crate::{
     models::dot_product::{
-        dot_product_binary, dot_product_f16, dot_product_octal, dot_product_quaternary,
-        dot_product_u8,
+        dot_product_binary, dot_product_f16, dot_product_f32, dot_product_octal,
+        dot_product_quaternary, dot_product_u8,
     },
     storage::Storage,
 };
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Serialize, PartialOrd)]
 pub struct CosineDistance(pub f32);
 
 impl DistanceFunction for CosineDistance {
@@ -20,7 +20,7 @@ impl DistanceFunction for CosineDistance {
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Serialize, PartialOrd)]
 pub struct CosineSimilarity(pub f32);
 
 impl DistanceFunction for CosineSimilarity {
@@ -78,6 +78,19 @@ impl DistanceFunction for CosineSimilarity {
                 },
             ) => {
                 let dot_product = dot_product_f16(x_vec, y_vec);
+                cosine_similarity_from_dot_product(dot_product, *x_mag, *y_mag)
+            }
+            (
+                Storage::FullPrecisionFP {
+                    mag: x_mag,
+                    vec: x_vec,
+                },
+                Storage::FullPrecisionFP {
+                    mag: y_mag,
+                    vec: y_vec,
+                },
+            ) => {
+                let dot_product = dot_product_f32(x_vec, y_vec);
                 cosine_similarity_from_dot_product(dot_product, *x_mag, *y_mag)
             }
             _ => Err(DistanceError::StorageMismatch),

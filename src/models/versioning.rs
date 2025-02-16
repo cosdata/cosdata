@@ -1,5 +1,5 @@
 use crate::macros::key;
-use lmdb::{Database, Environment, RoTransaction, Transaction, WriteFlags};
+use lmdb::{Cursor, Database, Environment, RoTransaction, Transaction, WriteFlags};
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher24;
 use std::hash::Hasher;
@@ -148,17 +148,20 @@ impl VersionHash {
 
 #[derive(Debug, Clone)]
 pub struct BranchInfo {
-    branch_name: String,
-    current_version: Version,
-    parent_branch: BranchId,
-    parent_version: Version,
+    pub branch_name: String,
+    pub current_version: Version,
+    pub parent_branch: BranchId,
+    pub parent_version: Version,
+    // The least version, not the first or root version, because all the keys in LMDB are ordered,
+    // when iterating through all the versions we start from this version.
+    pub least_version: Hash,
 }
 
 impl BranchInfo {
     fn serialize(&self) -> Vec<u8> {
         let name_bytes = self.branch_name.as_bytes();
 
-        let mut result = Vec::with_capacity(16 + name_bytes.len());
+        let mut result = Vec::with_capacity(20 + name_bytes.len());
 
         // Serialize current_version
         result.extend_from_slice(&self.current_version.to_le_bytes());
@@ -169,6 +172,9 @@ impl BranchInfo {
         // Serialize parent_version
         result.extend_from_slice(&self.parent_version.to_le_bytes());
 
+        // Serialize least_version
+        result.extend_from_slice(&self.least_version.to_le_bytes());
+
         // Serialize branch_name
         result.extend_from_slice(name_bytes);
 
@@ -176,8 +182,8 @@ impl BranchInfo {
     }
 
     fn deserialize(bytes: &[u8]) -> Result<Self, &'static str> {
-        if bytes.len() < 16 {
-            return Err("Input must be at least 16 bytes");
+        if bytes.len() < 20 {
+            return Err("Input must be at least 20 bytes");
         }
 
         // Deserialize current_version
@@ -189,14 +195,18 @@ impl BranchInfo {
         // Deserialize parent_version
         let parent_version = Version(u32::from_le_bytes(bytes[12..16].try_into().unwrap()));
 
+        // Deserialize least_version
+        let least_version = Hash(u32::from_le_bytes(bytes[16..20].try_into().unwrap()));
+
         let branch_name =
-            String::from_utf8(bytes[16..].to_vec()).map_err(|_| "Invalid UTF-8 in branch name")?;
+            String::from_utf8(bytes[20..].to_vec()).map_err(|_| "Invalid UTF-8 in branch name")?;
 
         Ok(BranchInfo {
             branch_name,
             current_version,
             parent_branch,
             parent_version,
+            least_version,
         })
     }
 
@@ -206,8 +216,8 @@ impl BranchInfo {
 }
 
 pub struct VersionControl {
-    env: Arc<Environment>,
-    db: Arc<Database>,
+    pub env: Arc<Environment>,
+    pub db: Arc<Database>,
 }
 
 impl VersionControl {
@@ -221,6 +231,7 @@ impl VersionControl {
             current_version,
             parent_branch: main_branch_id,
             parent_version: Version(0),
+            least_version: hash,
         };
 
         let branch_key = key!(b:main_branch_id);
@@ -264,12 +275,15 @@ impl VersionControl {
 
         let mut branch_info: BranchInfo = BranchInfo::deserialize(bytes).unwrap();
         let new_version = Version(*branch_info.current_version + 1);
+        let version_hash = VersionHash::new(branch_id, new_version);
+        let hash = version_hash.calculate_hash();
         branch_info.current_version = new_version;
+        if hash.to_le_bytes() < branch_info.least_version.to_le_bytes() {
+            branch_info.least_version = hash;
+        }
         let bytes = branch_info.serialize();
 
         txn.put(*self.db, &branch_key, &bytes, WriteFlags::empty())?;
-        let version_hash = VersionHash::new(branch_id, new_version);
-        let hash = version_hash.calculate_hash();
 
         let version_key = key!(v:hash);
         let bytes = version_hash.serialize();
@@ -298,17 +312,24 @@ impl VersionControl {
 
         let parent_bytes = txn.get(*self.db, &parent_key)?;
         let parent_info = BranchInfo::deserialize(parent_bytes).unwrap();
-
+        let current_version = Version(0);
+        let current_version_hash = VersionHash::new(branch_id, current_version);
+        let hash = current_version_hash.calculate_hash();
         let new_branch_info = BranchInfo {
             branch_name: branch_name.to_string(),
             current_version: Version(0),
             parent_branch: parent_branch_id,
             parent_version: parent_info.current_version,
+            least_version: hash,
         };
 
         let bytes = new_branch_info.serialize();
 
+        let version_key = key!(v:hash);
+        let version_bytes = current_version_hash.serialize();
+
         txn.put(*self.db, &branch_key, &bytes, WriteFlags::empty())?;
+        txn.put(*self.db, &version_key, &version_bytes, WriteFlags::empty())?;
         txn.commit()?;
 
         Ok(())
@@ -353,6 +374,31 @@ impl VersionControl {
         txn.abort();
 
         Ok(Some(branch_info))
+    }
+
+    pub fn set_branch_version(
+        &self,
+        branch_name: &str,
+        version: Version,
+        hash: Hash,
+    ) -> lmdb::Result<()> {
+        let branch_id = BranchId::new(branch_name);
+        let branch_key = key!(b:branch_id);
+
+        let mut txn = self.env.begin_rw_txn()?;
+
+        let bytes = txn.get(*self.db, &branch_key)?;
+
+        let mut branch_info = BranchInfo::deserialize(bytes).unwrap();
+        branch_info.current_version = version;
+        if hash.to_le_bytes() < branch_info.least_version.to_le_bytes() {
+            branch_info.least_version = hash;
+        }
+        let bytes = branch_info.serialize();
+
+        txn.put(*self.db, &branch_key, &bytes, WriteFlags::empty())?;
+        txn.commit()?;
+        Ok(())
     }
 
     pub fn get_version_hash(
@@ -408,5 +454,27 @@ impl VersionControl {
 
         branch_path.reverse();
         Ok(branch_path)
+    }
+
+    pub fn get_branch_versions(&self, branch_name: &str) -> lmdb::Result<Vec<(Hash, VersionHash)>> {
+        let branch_info = self.get_branch_info(branch_name)?.unwrap();
+        let txn = self.env.begin_ro_txn()?;
+        let mut cursor = txn.open_ro_cursor(*self.db)?;
+        let mut versions = Vec::with_capacity(*branch_info.current_version as usize);
+        for (k, v) in cursor.iter_from(&key!(v:branch_info.least_version)) {
+            if k.len() != 5 {
+                break;
+            }
+
+            if k[0] != 0 {
+                break;
+            }
+
+            let hash = Hash::from(u32::from_le_bytes(k[1..].try_into().unwrap()));
+            let version_hash = VersionHash::deserialize(v).unwrap();
+            versions.push((hash, version_hash));
+        }
+        versions.sort_unstable_by_key(|(_, v)| *v.version);
+        Ok(versions)
     }
 }

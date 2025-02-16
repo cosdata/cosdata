@@ -1,44 +1,80 @@
 use std::sync::Arc;
 
 use crate::{
-    app_context::AppContext, models::types::DistanceMetric,
-    vector_store::create_index_in_collection,
+    api_service::{init_dense_index_for_collection, init_inverted_index_for_collection},
+    app_context::AppContext,
+    models::types::{DistanceMetric, QuantizationMetric},
+    quantization::StorageType,
 };
 
 use super::{
-    dtos::{DataType, IndexParamsDTo, Quantization},
+    dtos::{DenseIndexParamsDto, DenseIndexQuantizationDto, SparseIndexQuantization},
     error::IndexesError,
 };
 
-pub(crate) async fn create_index(
+pub(crate) async fn create_dense_index(
     ctx: Arc<AppContext>,
     collection_name: String,
     _name: String,
     distance_metric: DistanceMetric,
-    quantization: Quantization,
-    data_type: DataType,
-    index_params: IndexParamsDTo,
+    quantization: DenseIndexQuantizationDto,
+    index_params: DenseIndexParamsDto,
 ) -> Result<(), IndexesError> {
-    let dense_index = ctx
+    let collection = ctx
         .ain_env
         .collections_map
-        .get(&collection_name)
-        .map(|collection| collection.clone())
+        .get_collection(&collection_name)
+        .ok_or(IndexesError::CollectionNotFound)?;
+    let (quantization_metric, storage_type, range, sample_threshold, is_configured) =
+        match quantization {
+            DenseIndexQuantizationDto::Auto { sample_threshold } => (
+                QuantizationMetric::Scalar,
+                StorageType::UnsignedByte,
+                None,
+                sample_threshold,
+                false,
+            ),
+            DenseIndexQuantizationDto::Scalar { data_type, range } => (
+                QuantizationMetric::Scalar,
+                data_type.into(),
+                Some((range.min, range.max)),
+                0,
+                true,
+            ),
+        };
+    let DenseIndexParamsDto::Hnsw(hnsw_params_dto) = index_params;
+    let hnsw_params = hnsw_params_dto.into_params(&ctx.config);
+    init_dense_index_for_collection(
+        ctx,
+        &collection,
+        range,
+        hnsw_params,
+        quantization_metric,
+        distance_metric,
+        storage_type,
+        sample_threshold,
+        is_configured,
+    )
+    .await
+    .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;
+
+    Ok(())
+}
+
+pub(crate) async fn create_sparse_index(
+    ctx: Arc<AppContext>,
+    collection_name: String,
+    _name: String,
+    quantization: SparseIndexQuantization,
+) -> Result<(), IndexesError> {
+    let collection = ctx
+        .ain_env
+        .collections_map
+        .get_collection(&collection_name)
         .ok_or(IndexesError::CollectionNotFound)?;
 
-    dense_index.distance_metric.clone().update(distance_metric);
-    dense_index
-        .quantization_metric
-        .clone()
-        .update(quantization.into());
-    dense_index.storage_type.clone().update(data_type.into());
-
-    let IndexParamsDTo::Hnsw(hnsw_hyper_param_dto) = index_params;
-    let hnsw_param = hnsw_hyper_param_dto.into();
-
-    dense_index.hnsw_params.clone().update(hnsw_param);
-
-    create_index_in_collection(ctx, dense_index)
+    init_inverted_index_for_collection(ctx, &collection, quantization.into_u8())
+        .await
         .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;
 
     Ok(())

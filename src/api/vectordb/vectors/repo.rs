@@ -1,8 +1,13 @@
 use std::sync::{atomic::Ordering, Arc};
 
+use crate::api_service::run_upload_sparse_vectors_in_transaction;
+use crate::indexes::inverted_index::InvertedIndexTransaction;
+use crate::models::rpc::DenseVector;
+use crate::{models::types::SparseVector, storage::sparse_ann_query_basic::SparseAnnQueryBasic};
+
 use crate::{
     api::vectordb::collections,
-    api_service::{run_upload, run_upload_in_transaction},
+    api_service::{run_upload, run_upload_in_transaction, run_upload_sparse_vector},
     app_context::AppContext,
     models::types::{DenseIndexTransaction, VectorId},
     vector_store::get_embedding_by_id,
@@ -10,16 +15,55 @@ use crate::{
 
 use super::{
     dtos::{
-        CreateVectorDto, CreateVectorResponseDto, FindSimilarVectorsDto, SimilarVector,
-        UpdateVectorDto, UpdateVectorResponseDto, UpsertDto,
+        CreateDenseVectorDto, CreateSparseVectorDto, CreateVectorResponseDto,
+        FindSimilarDenseVectorsDto, FindSimilarSparseVectorsDto, FindSimilarVectorsResponseDto,
+        SimilarVector, UpdateVectorDto, UpdateVectorResponseDto,
     },
     error::VectorsError,
 };
 
-pub(crate) async fn create_vector(
+/// Creates a sparse vector for inverted index
+///
+pub(crate) async fn create_sparse_vector(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    create_vector_dto: CreateVectorDto,
+    create_vector_dto: CreateSparseVectorDto,
+) -> Result<CreateVectorResponseDto, VectorsError> {
+    let inverted_index = collections::service::get_inverted_index_by_id(ctx.clone(), collection_id)
+        .await
+        .map_err(|e| VectorsError::FailedToCreateVector(e.to_string()))?;
+
+    if !inverted_index
+        .current_open_transaction
+        .load(Ordering::SeqCst)
+        .is_null()
+    {
+        return Err(VectorsError::FailedToCreateVector(
+            "there is an ongoing transaction!".into(),
+        ));
+    }
+
+    run_upload_sparse_vector(
+        inverted_index,
+        vec![(
+            create_vector_dto.id.clone(),
+            create_vector_dto.values.clone(),
+        )],
+    )
+    .map_err(VectorsError::WaCustom)?;
+
+    Ok(CreateVectorResponseDto::Sparse(CreateSparseVectorDto {
+        id: create_vector_dto.id,
+        values: create_vector_dto.values,
+    }))
+}
+
+/// Creates a vector for dense index
+///
+pub(crate) async fn create_dense_vector(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    create_vector_dto: CreateDenseVectorDto,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
     let dense_index = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
         .await
@@ -45,17 +89,17 @@ pub(crate) async fn create_vector(
         )],
     )
     .map_err(VectorsError::WaCustom)?;
-    Ok(CreateVectorResponseDto {
+    Ok(CreateVectorResponseDto::Dense(CreateDenseVectorDto {
         id: create_vector_dto.id,
         values: create_vector_dto.values,
-    })
+    }))
 }
 
 pub(crate) async fn create_vector_in_transaction(
     ctx: Arc<AppContext>,
     collection_id: &str,
     transaction: &DenseIndexTransaction,
-    create_vector_dto: CreateVectorDto,
+    create_vector_dto: CreateDenseVectorDto,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
     let dense_index = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
         .await
@@ -72,10 +116,10 @@ pub(crate) async fn create_vector_in_transaction(
     )
     .map_err(VectorsError::WaCustom)?;
 
-    Ok(CreateVectorResponseDto {
+    Ok(CreateVectorResponseDto::Dense(CreateDenseVectorDto {
         id: create_vector_dto.id,
         values: create_vector_dto.values,
-    })
+    }))
 }
 
 pub(crate) async fn get_vector_by_id(
@@ -90,18 +134,18 @@ pub(crate) async fn get_vector_by_id(
     let embedding = get_embedding_by_id(vec_store, &vector_id)
         .map_err(|e| VectorsError::DatabaseError(e.to_string()))?;
 
-    let id = embedding.hash_vec.0;
+    let id = embedding.hash_vec;
 
-    Ok(CreateVectorResponseDto {
+    Ok(CreateVectorResponseDto::Dense(CreateDenseVectorDto {
         id,
         values: (*embedding.raw_vec).clone(),
-    })
+    }))
 }
 
 pub(crate) async fn update_vector(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    vector_id: u64,
+    vector_id: VectorId,
     update_vector_dto: UpdateVectorDto,
 ) -> Result<UpdateVectorResponseDto, VectorsError> {
     let dense_index = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
@@ -131,18 +175,50 @@ pub(crate) async fn update_vector(
     })
 }
 
-pub(crate) async fn find_similar_vectors(
-    find_similar_vectors: FindSimilarVectorsDto,
-) -> Result<Vec<SimilarVector>, VectorsError> {
+pub(crate) async fn find_similar_dense_vectors(
+    find_similar_vectors: FindSimilarDenseVectorsDto,
+) -> Result<FindSimilarVectorsResponseDto, VectorsError> {
     if find_similar_vectors.vector.len() == 0 {
         return Err(VectorsError::FailedToFindSimilarVectors(
             "Vector shouldn't be empty".to_string(),
         ));
     }
-    Ok(vec![SimilarVector {
+    Ok(FindSimilarVectorsResponseDto::Dense(vec![SimilarVector {
         id: find_similar_vectors.k,
         score: find_similar_vectors.vector[0],
-    }])
+    }]))
+}
+
+pub(crate) async fn find_similar_sparse_vectors(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    find_similar_vectors: FindSimilarSparseVectorsDto,
+) -> Result<FindSimilarVectorsResponseDto, VectorsError> {
+    if find_similar_vectors.values.len() == 0 {
+        return Err(VectorsError::FailedToFindSimilarVectors(
+            "Vector shouldn't be empty".to_string(),
+        ));
+    }
+
+    // get inverted index for a collection
+    let inverted_index = collections::service::get_inverted_index_by_id(ctx.clone(), collection_id)
+        .await
+        .map_err(|e| VectorsError::FailedToUpdateVector(e.to_string()))?;
+
+    // create a query to get similar sparse vectors
+    let sparse_vec = SparseVector {
+        vector_id: find_similar_vectors.id.0 as u32,
+        entries: find_similar_vectors
+            .values
+            .iter()
+            .map(|pair| return (pair.0, pair.1))
+            .collect(),
+    };
+
+    let query = SparseAnnQueryBasic::new(sparse_vec)
+        .sequential_search_tshashmap(&inverted_index, inverted_index.root.quantization);
+
+    Ok(FindSimilarVectorsResponseDto::Sparse(query))
 }
 
 pub(crate) async fn delete_vector_by_id(
@@ -161,11 +237,11 @@ pub(crate) async fn delete_vector_by_id(
     Ok(())
 }
 
-pub(crate) async fn upsert_in_transaction(
+pub(crate) async fn upsert_dense_vectors_in_transaction(
     ctx: Arc<AppContext>,
     collection_id: &str,
     transaction: &DenseIndexTransaction,
-    upsert_dto: UpsertDto,
+    vectors: Vec<DenseVector>,
 ) -> Result<(), VectorsError> {
     let dense_index = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
         .await
@@ -175,8 +251,32 @@ pub(crate) async fn upsert_in_transaction(
         ctx.clone(),
         dense_index,
         transaction,
-        upsert_dto
-            .vectors
+        vectors
+            .into_iter()
+            .map(|vec| (vec.id, vec.values))
+            .collect(),
+    )
+    .map_err(VectorsError::WaCustom)?;
+
+    Ok(())
+}
+
+pub(crate) async fn upsert_sparse_vectors_in_transaction(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    transaction: &InvertedIndexTransaction,
+    vectors: Vec<CreateSparseVectorDto>,
+) -> Result<(), VectorsError> {
+    let inverted_index = ctx
+        .ain_env
+        .collections_map
+        .get_inverted_index(collection_id)
+        .ok_or(VectorsError::NotFound)?;
+
+    run_upload_sparse_vectors_in_transaction(
+        inverted_index,
+        transaction,
+        vectors
             .into_iter()
             .map(|vec| (vec.id, vec.values))
             .collect(),

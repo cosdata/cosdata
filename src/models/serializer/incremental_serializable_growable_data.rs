@@ -10,16 +10,16 @@ use crate::models::{
     versioning::Hash,
 };
 use std::collections::HashSet;
-use std::{io::SeekFrom, sync::Arc};
+use std::sync::Arc;
 
 impl CustomSerialize for IncrementalSerializableGrowableData {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
-        let bufman = bufmans.get(&version)?;
+        let bufman = bufmans.get(version)?;
         let start_offset = bufman.cursor_position(cursor)? as u32;
 
         // Store (data, version) pairs in a vector for serialization
@@ -42,7 +42,7 @@ impl CustomSerialize for IncrementalSerializableGrowableData {
 
         // Serialize number of items in the vector
         // Each item is an array of 64 u32s
-        bufman.write_u32_with_cursor(cursor, total_items as u32)?;
+        bufman.update_u32_with_cursor(cursor, total_items as u32)?;
 
         // Serialize individual items
         // First store version, then the array of 64 u32s
@@ -50,20 +50,17 @@ impl CustomSerialize for IncrementalSerializableGrowableData {
             let item_start_offset = bufman.cursor_position(cursor)? as u32;
             if item.is_serialized() {
                 // If the array is already serialized, move the cursor forward by 6 + (64 * 4) bytes (6 bytes for version_id and version_number and 64 * 4 bytes for items) and serialize the next array
-                bufman.seek_with_cursor(
-                    cursor,
-                    SeekFrom::Start(item_start_offset as u64 + 64 * 4 + 6),
-                )?;
+                bufman.seek_with_cursor(cursor, item_start_offset as u64 + 64 * 4 + 6)?;
                 continue;
             }
 
             // Serialize the version
-            bufman.write_u32_with_cursor(cursor, *version_id)?;
-            bufman.write_u16_with_cursor(cursor, version_number)?;
+            bufman.update_u32_with_cursor(cursor, *version_id)?;
+            bufman.update_u16_with_cursor(cursor, version_number)?;
 
             // Serialize the array
             for i in 0..64 {
-                bufman.write_u32_with_cursor(
+                bufman.update_u32_with_cursor(
                     cursor,
                     match item.get(i) {
                         Some(val) => val,
@@ -77,7 +74,7 @@ impl CustomSerialize for IncrementalSerializableGrowableData {
     }
 
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         file_index: FileIndex,
         _cache: Arc<NodeRegistry>,
         _max_loads: u16,
@@ -90,9 +87,9 @@ impl CustomSerialize for IncrementalSerializableGrowableData {
                 version_id,
                 ..
             } => {
-                let bufman = bufmans.get(&version_id)?;
+                let bufman = bufmans.get(version_id)?;
                 let cursor = bufman.open_cursor()?;
-                bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
+                bufman.seek_with_cursor(cursor, offset as u64)?;
                 let items: LazyItemVec<STM<VectorData>> = LazyItemVec::new();
 
                 // Deserialize the number of items in the vector
@@ -127,7 +124,7 @@ impl CustomSerialize for IncrementalSerializableGrowableData {
 impl CustomSerialize for STM<VectorData> {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
@@ -137,7 +134,7 @@ impl CustomSerialize for STM<VectorData> {
     }
 
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         file_index: FileIndex,
         cache: Arc<NodeRegistry>,
         max_loads: u16,

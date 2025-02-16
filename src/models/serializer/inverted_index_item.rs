@@ -1,8 +1,4 @@
-use std::{
-    collections::HashSet,
-    io::{self, SeekFrom},
-    sync::Arc,
-};
+use std::{collections::HashSet, io, sync::Arc};
 
 use dashmap::DashMap;
 
@@ -26,29 +22,29 @@ where
 {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
-        let bufman = bufmans.get(&version)?;
+        let bufman = bufmans.get(version)?;
         let start_pos = bufman.cursor_position(cursor)? as u32;
-        bufman.write_u32_with_cursor(cursor, self.dim_index)?;
-        bufman.write_u8_with_cursor(cursor, if self.implicit { 1 } else { 0 })?;
+        bufman.update_u32_with_cursor(cursor, self.dim_index)?;
+        bufman.update_u8_with_cursor(cursor, if self.implicit { 1 } else { 0 })?;
         let placeholder_pos = bufman.cursor_position(cursor)?;
-        bufman.write_u32_with_cursor(cursor, u32::MAX)?;
-        bufman.write_u32_with_cursor(cursor, u32::MAX)?;
+        bufman.update_u32_with_cursor(cursor, u32::MAX)?;
+        bufman.update_u32_with_cursor(cursor, u32::MAX)?;
         let data_offset = self.data.serialize(bufmans.clone(), version, cursor)?;
         let children_offset = self.lazy_children.serialize(bufmans, version, cursor)?;
         let current_pos = bufman.cursor_position(cursor)?;
-        bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_pos))?;
-        bufman.write_u32_with_cursor(cursor, data_offset)?;
-        bufman.write_u32_with_cursor(cursor, children_offset)?;
-        bufman.seek_with_cursor(cursor, SeekFrom::Start(current_pos))?;
+        bufman.seek_with_cursor(cursor, placeholder_pos)?;
+        bufman.update_u32_with_cursor(cursor, data_offset)?;
+        bufman.update_u32_with_cursor(cursor, children_offset)?;
+        bufman.seek_with_cursor(cursor, current_pos)?;
         Ok(start_pos)
     }
 
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         file_index: FileIndex,
         cache: Arc<NodeRegistry>,
         max_loads: u16,
@@ -65,9 +61,9 @@ where
                 version_number,
                 version_id,
             } => {
-                let bufman = bufmans.get(&version_id)?;
+                let bufman = bufmans.get(version_id)?;
                 let cursor = bufman.open_cursor()?;
-                bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
+                bufman.seek_with_cursor(cursor, offset as u64)?;
                 let dim_index = bufman.read_u32_with_cursor(cursor)?;
                 let implicit = bufman.read_u8_with_cursor(cursor)? != 0;
                 let data_offset = bufman.read_u32_with_cursor(cursor)?;

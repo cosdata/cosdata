@@ -21,6 +21,7 @@ impl Quantization for ProductQuantization {
         &self,
         vector: &[f32],
         storage_type: StorageType,
+        range: (f32, f32),
     ) -> Result<Storage, QuantizationError> {
         // TODO: Implement product quantization logic here
         unimplemented!("Product quantization is not implemented yet");

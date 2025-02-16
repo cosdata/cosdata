@@ -12,7 +12,7 @@ use crate::models::{
     lazy_load::{LazyItem, CHUNK_SIZE},
 };
 use std::collections::HashSet;
-use std::{io::SeekFrom, sync::Arc};
+use std::sync::Arc;
 
 impl<T> CustomSerialize for DashMap<IdentityMapKey, LazyItem<T>>
 where
@@ -20,14 +20,14 @@ where
 {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
         if self.is_empty() {
             return Ok(u32::MAX);
         };
-        let bufman = bufmans.get(&version)?;
+        let bufman = bufmans.get(version)?;
         let start_offset = bufman.cursor_position(cursor)? as u32;
         let items: Vec<_> = self
             .iter()
@@ -42,14 +42,14 @@ where
             // Write placeholders for item offsets
             let placeholder_start = bufman.cursor_position(cursor)? as u32;
             for _ in 0..CHUNK_SIZE {
-                bufman.write_u32_with_cursor(cursor, u32::MAX)?;
-                bufman.write_u32_with_cursor(cursor, u32::MAX)?;
-                bufman.write_u16_with_cursor(cursor, u16::MAX)?;
-                bufman.write_u32_with_cursor(cursor, u32::MAX)?;
+                bufman.update_u32_with_cursor(cursor, u32::MAX)?;
+                bufman.update_u32_with_cursor(cursor, u32::MAX)?;
+                bufman.update_u16_with_cursor(cursor, u16::MAX)?;
+                bufman.update_u32_with_cursor(cursor, u32::MAX)?;
             }
             // Write placeholder for next chunk link
             let next_chunk_placeholder = bufman.cursor_position(cursor)? as u32;
-            bufman.write_u32_with_cursor(cursor, u32::MAX)?;
+            bufman.update_u32_with_cursor(cursor, u32::MAX)?;
 
             // Serialize items and update placeholders
             for i in chunk_start..chunk_end {
@@ -60,31 +60,31 @@ where
                 let current_pos = bufman.cursor_position(cursor)?;
 
                 // Write entry offset
-                bufman.seek_with_cursor(cursor, SeekFrom::Start(placeholder_pos))?;
-                bufman.write_u32_with_cursor(cursor, key_offset)?;
-                bufman.write_u32_with_cursor(cursor, item_offset)?;
-                bufman.write_u16_with_cursor(cursor, items[i].1.get_current_version_number())?;
-                bufman.write_u32_with_cursor(cursor, *items[i].1.get_current_version())?;
+                bufman.seek_with_cursor(cursor, placeholder_pos)?;
+                bufman.update_u32_with_cursor(cursor, key_offset)?;
+                bufman.update_u32_with_cursor(cursor, item_offset)?;
+                bufman.update_u16_with_cursor(cursor, items[i].1.get_current_version_number())?;
+                bufman.update_u32_with_cursor(cursor, *items[i].1.get_current_version())?;
 
                 // Return to the current position
-                bufman.seek_with_cursor(cursor, SeekFrom::Start(current_pos))?;
+                bufman.seek_with_cursor(cursor, current_pos)?;
             }
 
             // Write next chunk link
             let next_chunk_start = bufman.cursor_position(cursor)? as u32;
-            bufman.seek_with_cursor(cursor, SeekFrom::Start(next_chunk_placeholder as u64))?;
+            bufman.seek_with_cursor(cursor, next_chunk_placeholder as u64)?;
             if is_last_chunk {
-                bufman.write_u32_with_cursor(cursor, u32::MAX)?; // Last chunk
+                bufman.update_u32_with_cursor(cursor, u32::MAX)?; // Last chunk
             } else {
-                bufman.write_u32_with_cursor(cursor, next_chunk_start)?;
+                bufman.update_u32_with_cursor(cursor, next_chunk_start)?;
             }
-            bufman.seek_with_cursor(cursor, SeekFrom::Start(next_chunk_start as u64))?;
+            bufman.seek_with_cursor(cursor, next_chunk_start as u64)?;
         }
         Ok(start_offset)
     }
 
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         file_index: FileIndex,
         cache: Arc<NodeRegistry>,
         max_loads: u16,
@@ -100,17 +100,14 @@ where
                 if offset == u32::MAX {
                     return Ok(DashMap::new());
                 }
-                let bufman = bufmans.get(&version_id)?;
+                let bufman = bufmans.get(version_id)?;
                 let cursor = bufman.open_cursor()?;
-                bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
+                bufman.seek_with_cursor(cursor, offset as u64)?;
                 let mut items = Vec::new();
                 let mut current_chunk = offset;
                 loop {
                     for i in 0..CHUNK_SIZE {
-                        bufman.seek_with_cursor(
-                            cursor,
-                            SeekFrom::Start(current_chunk as u64 + (i as u64 * 14)),
-                        )?;
+                        bufman.seek_with_cursor(cursor, current_chunk as u64 + (i as u64 * 14))?;
                         let key_offset = bufman.read_u32_with_cursor(cursor)?;
                         let item_offset = bufman.read_u32_with_cursor(cursor)?;
                         let item_version_number = bufman.read_u16_with_cursor(cursor)?;
@@ -144,10 +141,8 @@ where
                         )?;
                         items.push((key, item));
                     }
-                    bufman.seek_with_cursor(
-                        cursor,
-                        SeekFrom::Start(current_chunk as u64 + CHUNK_SIZE as u64 * 14),
-                    )?;
+                    bufman
+                        .seek_with_cursor(cursor, current_chunk as u64 + CHUNK_SIZE as u64 * 14)?;
                     // Read next chunk link
                     current_chunk = bufman.read_u32_with_cursor(cursor)?;
                     if current_chunk == u32::MAX {

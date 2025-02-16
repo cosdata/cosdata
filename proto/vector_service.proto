@@ -1,0 +1,302 @@
+syntax = "proto3";
+
+package vector_service;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+// Common types
+message DenseVector {
+    uint64 id = 1;
+    repeated float values = 2;
+}
+
+message SparsePair {
+    uint32 index = 1;
+    float value = 2;
+}
+
+message SparseVector {
+    uint64 id = 1;
+    repeated SparsePair values = 2;
+}
+
+// Auth Service
+service AuthService {
+    rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+}
+
+message CreateSessionRequest {
+    string username = 1;
+    string password = 2;
+}
+
+message CreateSessionResponse {
+    string access_token = 1;
+    uint64 created_at = 2;
+    uint64 expires_at = 3;
+    Claims claims = 4;
+}
+
+message Claims {
+    uint64 exp = 1;
+    uint64 iat = 2;
+    string username = 3;
+}
+
+// Collections Service
+service CollectionsService {
+    rpc CreateCollection(CreateCollectionRequest) returns (CreateCollectionResponse);
+    rpc GetCollections(GetCollectionsRequest) returns (GetCollectionsResponse);
+    rpc GetCollection(GetCollectionRequest) returns (Collection);
+    rpc DeleteCollection(DeleteCollectionRequest) returns (google.protobuf.Empty);
+}
+
+message DenseVectorOptions {
+    uint32 dimension = 1;
+    bool enabled = 2;
+    bool auto_create_index = 3;
+}
+
+message SparseVectorOptions {
+    bool enabled = 1;
+    bool auto_create_index = 2;
+}
+
+message CollectionConfig {
+    optional uint32 max_vectors = 1;
+    optional uint32 replication_factor = 2;
+}
+
+message CreateCollectionRequest {
+    string name = 1;
+    optional string description = 2;
+    DenseVectorOptions dense_vector = 3;
+    SparseVectorOptions sparse_vector = 4;
+    optional string metadata_schema = 5;
+    CollectionConfig config = 6;
+}
+
+message CreateCollectionResponse {
+    string id = 1;
+    string name = 2;
+    optional string description = 3;
+}
+
+message GetCollectionsRequest {}
+
+message GetCollectionsResponse {
+    repeated Collection collections = 1;
+}
+
+message Collection {
+    string name = 1;
+    optional string description = 2;
+}
+
+message GetCollectionRequest {
+    string id = 1;
+}
+
+message DeleteCollectionRequest {
+    string id = 1;
+}
+
+// Indexes Service
+service IndexesService {
+    rpc CreateDenseIndex(CreateDenseIndexRequest) returns (google.protobuf.Empty);
+    rpc CreateSparseIndex(CreateSparseIndexRequest) returns (google.protobuf.Empty);
+}
+
+enum DataType {
+    BINARY = 0;
+    QUATERNARY = 1;
+    OCTAL = 2;
+    U8 = 3;
+    F16 = 4;
+    F32 = 5;
+}
+
+message ValuesRange {
+    float min = 1;
+    float max = 2;
+}
+
+message AutoQuantization {
+    uint32 sample_threshold = 1;
+}
+
+message ScalarQuantization {
+    DataType data_type = 1;
+    ValuesRange range = 2;
+}
+
+message HNSWParams {
+    optional uint32 ef_construction = 1;
+    optional uint32 ef_search = 2;
+    optional uint32 num_layers = 3;
+    optional uint64 max_cache_size = 4;
+    optional uint32 level_0_neighbors_count = 5;
+    optional uint32 neighbors_count = 6;
+}
+
+message CreateDenseIndexRequest {
+    string collection_id = 1;
+    string name = 2;
+    string distance_metric_type = 3;
+    oneof quantization {
+        AutoQuantization auto = 4;
+        ScalarQuantization scalar = 5;
+    }
+    HNSWParams hnsw_params = 6;
+}
+
+message CreateSparseIndexRequest {
+    string collection_id = 1;
+    string name = 2;
+    uint32 quantization = 3;  // 16, 32, 64, or 128
+}
+
+// Transactions Service
+service TransactionsService {
+    rpc CreateTransaction(CreateTransactionRequest) returns (CreateTransactionResponse);
+    rpc CommitTransaction(CommitTransactionRequest) returns (google.protobuf.Empty);
+    rpc AbortTransaction(AbortTransactionRequest) returns (google.protobuf.Empty);
+    rpc CreateVectorInTransaction(CreateVectorInTransactionRequest) returns (DenseVector);
+    rpc DeleteVectorInTransaction(DeleteVectorInTransactionRequest) returns (google.protobuf.Empty);
+    rpc UpsertVectors(UpsertVectorsRequest) returns (google.protobuf.Empty);
+}
+
+enum IndexType {
+    DENSE = 0;
+    SPARSE = 1;
+}
+
+message CreateTransactionRequest {
+    string collection_id = 1;
+    IndexType index_type = 2;
+}
+
+message CreateTransactionResponse {
+    string transaction_id = 1;
+    google.protobuf.Timestamp created_at = 2;
+}
+
+message CommitTransactionRequest {
+    string collection_id = 1;
+    uint32 transaction_id = 2;
+    IndexType index_type = 3;
+}
+
+message AbortTransactionRequest {
+    string collection_id = 1;
+    uint32 transaction_id = 2;
+    IndexType index_type = 3;
+}
+
+message CreateVectorInTransactionRequest {
+    string collection_id = 1;
+    uint32 transaction_id = 2;
+    DenseVector vector = 3;
+}
+
+message DeleteVectorInTransactionRequest {
+    string collection_id = 1;
+    uint32 transaction_id = 2;
+    uint32 vector_id = 3;
+}
+
+message UpsertVectorsRequest {
+    string collection_id = 1;
+    uint32 transaction_id = 2;
+    oneof vectors {
+        DenseVectorsPayload dense = 3;
+        SparseVectorsPayload sparse = 4;
+    }
+}
+
+message DenseVectorsPayload {
+    repeated DenseVector vectors = 1;
+}
+
+message SparseVectorsPayload {
+    repeated SparseVector vectors = 1;
+}
+
+// Vectors Service
+service VectorsService {
+    rpc CreateVector(CreateVectorRequest) returns (VectorResponse);
+    rpc GetVector(GetVectorRequest) returns (VectorResponse);
+    rpc UpdateVector(UpdateVectorRequest) returns (VectorResponse);
+    rpc DeleteVector(DeleteVectorRequest) returns (google.protobuf.Empty);
+    rpc FindSimilarVectors(FindSimilarVectorsRequest) returns (FindSimilarVectorsResponse);
+}
+
+message CreateVectorRequest {
+    string collection_id = 1;
+    oneof vector {
+        DenseVector dense = 2;
+        SparseVector sparse = 3;
+    }
+}
+
+message VectorResponse {
+    oneof vector {
+        DenseVector dense = 1;
+        SparseVector sparse = 2;
+    }
+}
+
+message GetVectorRequest {
+    string collection_id = 1;
+    uint64 vector_id = 2;
+}
+
+message UpdateVectorRequest {
+    string collection_id = 1;
+    uint64 vector_id = 2;
+    repeated float values = 3;
+}
+
+message DeleteVectorRequest {
+    string collection_id = 1;
+    uint64 vector_id = 2;
+}
+
+message FindSimilarVectorsRequest {
+    string collection_id = 1;
+    oneof query {
+        FindSimilarDenseVectorsQuery dense = 2;
+        FindSimilarSparseVectorsQuery sparse = 3;
+    }
+}
+
+message FindSimilarDenseVectorsQuery {
+    repeated float vector = 1;
+    uint64 k = 2;
+}
+
+message FindSimilarSparseVectorsQuery {
+    repeated SparsePair values = 1;
+    uint64 k = 2;
+}
+
+message SimilarVectorMatch {
+    uint64 id = 1;
+    float score = 2;
+}
+
+message FindSimilarVectorsResponse {
+    oneof results {
+        DenseResults dense = 1;
+        SparseResults sparse = 2;
+    }
+}
+
+message DenseResults {
+    repeated SimilarVectorMatch matches = 1;
+}
+
+message SparseResults {
+    repeated SimilarVectorMatch matches = 1;
+}

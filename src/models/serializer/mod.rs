@@ -14,8 +14,10 @@ mod lazy_item_vec;
 mod metric_distance;
 mod neighbour;
 mod node;
+mod page;
 pub mod prob;
 mod storage;
+mod tshashtable;
 
 #[cfg(test)]
 mod tests;
@@ -26,19 +28,19 @@ use super::lazy_load::FileIndex;
 use super::types::FileOffset;
 use super::versioning::Hash;
 use std::collections::HashSet;
-use std::io::{self, SeekFrom};
+use std::io;
 use std::sync::Arc;
 
 pub trait CustomSerialize: Sized {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError>;
 
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         file_index: FileIndex,
         cache: Arc<NodeRegistry>,
         max_loads: u16,
@@ -47,24 +49,24 @@ pub trait CustomSerialize: Sized {
 }
 
 trait SimpleSerialize: Sized {
-    fn serialize(&self, bufman: Arc<BufferManager>, cursor: u64) -> Result<u32, BufIoError>;
+    fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError>;
 
-    fn deserialize(bufman: Arc<BufferManager>, offset: FileOffset) -> Result<Self, BufIoError>;
+    fn deserialize(bufman: &BufferManager, offset: FileOffset) -> Result<Self, BufIoError>;
 }
 
 impl<T: SimpleSerialize> CustomSerialize for T {
     fn serialize(
         &self,
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
-        let bufman = bufmans.get(&version)?;
-        SimpleSerialize::serialize(self, bufman, cursor)
+        let bufman = bufmans.get(version)?;
+        SimpleSerialize::serialize(self, &bufman, cursor)
     }
 
     fn deserialize(
-        bufmans: Arc<BufferManagerFactory>,
+        bufmans: Arc<BufferManagerFactory<Hash>>,
         file_index: FileIndex,
         _cache: Arc<NodeRegistry>,
         _max_loads: u16,
@@ -74,8 +76,8 @@ impl<T: SimpleSerialize> CustomSerialize for T {
             FileIndex::Valid {
                 offset, version_id, ..
             } => {
-                let bufman = bufmans.get(&version_id)?;
-                SimpleSerialize::deserialize(bufman, offset)
+                let bufman = bufmans.get(version_id)?;
+                SimpleSerialize::deserialize(&bufman, offset)
             }
             FileIndex::Invalid => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -87,21 +89,21 @@ impl<T: SimpleSerialize> CustomSerialize for T {
 }
 
 impl SimpleSerialize for f32 {
-    fn serialize(&self, bufman: Arc<BufferManager>, cursor: u64) -> Result<u32, BufIoError> {
+    fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
         let offset = bufman.cursor_position(cursor)? as u32;
-        bufman.write_f32_with_cursor(cursor, *self)?;
+        bufman.update_f32_with_cursor(cursor, *self)?;
         Ok(offset)
     }
 
     fn deserialize(
-        bufman: Arc<BufferManager>,
+        bufman: &BufferManager,
         FileOffset(offset): FileOffset,
     ) -> Result<Self, BufIoError>
     where
         Self: Sized,
     {
         let cursor = bufman.open_cursor()?;
-        bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
+        bufman.seek_with_cursor(cursor, offset as u64)?;
         let res = bufman.read_f32_with_cursor(cursor)?;
         bufman.close_cursor(cursor)?;
         Ok(res)
@@ -109,21 +111,21 @@ impl SimpleSerialize for f32 {
 }
 
 impl SimpleSerialize for u32 {
-    fn serialize(&self, bufman: Arc<BufferManager>, cursor: u64) -> Result<u32, BufIoError> {
+    fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
         let offset = bufman.cursor_position(cursor)? as u32;
-        bufman.write_u32_with_cursor(cursor, *self)?;
+        bufman.update_u32_with_cursor(cursor, *self)?;
         Ok(offset)
     }
 
     fn deserialize(
-        bufman: Arc<BufferManager>,
+        bufman: &BufferManager,
         FileOffset(offset): FileOffset,
     ) -> Result<Self, BufIoError>
     where
         Self: Sized,
     {
         let cursor = bufman.open_cursor()?;
-        bufman.seek_with_cursor(cursor, SeekFrom::Start(offset as u64))?;
+        bufman.seek_with_cursor(cursor, offset as u64)?;
         let res = bufman.read_u32_with_cursor(cursor)?;
         bufman.close_cursor(cursor)?;
         Ok(res)
