@@ -12,7 +12,7 @@ use rustls::{pki_types::PrivateKeyDer, ServerConfig};
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use serde::{Deserialize, Serialize};
 use std::{fs::File, io::BufReader};
-
+use std::sync::Arc;
 use crate::api::vectordb::indexes::indexes_module;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -21,10 +21,8 @@ struct MyObj {
     number: i32,
 }
 
-#[actix_web::main]
-pub async fn run_actix_server() -> std::io::Result<()> {
-    env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
-    let config = load_config();
+pub async fn run_actix_server_with_context(ctx: Arc<AppContext>) -> std::io::Result<()> {
+    let config = &ctx.config.clone();
 
     let tls = match &config.server.mode {
         ServerMode::Https => Some(load_rustls_config(&config.server.ssl)),
@@ -41,11 +39,7 @@ pub async fn run_actix_server() -> std::io::Result<()> {
         &config.server.port,
     );
 
-    // Let it panic if there's a problem initializing the
-    // env. Without app env, the HTTP server won't be able to
-    // serve any incoming requests anyway.
-    let ctx = AppContext::new(config.clone()).expect("Failed to initialize AppContext");
-    let data = Data::new(ctx);
+    let data = Data::new(ctx.clone());
 
     let server = HttpServer::new(move || {
         App::new()
