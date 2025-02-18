@@ -1,6 +1,7 @@
 use crate::api;
 use crate::api::auth::{auth_module, authentication_middleware::AuthenticationMiddleware};
 use crate::api::vectordb::collections::collections_module;
+use crate::api::vectordb::indexes::indexes_module;
 use crate::api::vectordb::transactions::transactions_module;
 use crate::api::vectordb::vectors::vectors_module;
 use crate::app_context::AppContext;
@@ -11,9 +12,8 @@ use actix_web::{middleware, web, App, HttpServer};
 use rustls::{pki_types::PrivateKeyDer, ServerConfig};
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use serde::{Deserialize, Serialize};
-use std::{fs::File, io::BufReader};
 use std::sync::Arc;
-use crate::api::vectordb::indexes::indexes_module;
+use std::{fs::File, io::BufReader};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct MyObj {
@@ -21,7 +21,7 @@ struct MyObj {
     number: i32,
 }
 
-pub async fn run_actix_server_with_context(ctx: Arc<AppContext>) -> std::io::Result<()> {
+pub async fn run_actix_server_with_context(ctx: Data<AppContext>) -> std::io::Result<()> {
     let config = &ctx.config.clone();
 
     let tls = match &config.server.mode {
@@ -39,8 +39,6 @@ pub async fn run_actix_server_with_context(ctx: Arc<AppContext>) -> std::io::Res
         &config.server.port,
     );
 
-    let data = Data::new(ctx.clone());
-
     let server = HttpServer::new(move || {
         App::new()
             // enable logger
@@ -49,12 +47,13 @@ pub async fn run_actix_server_with_context(ctx: Arc<AppContext>) -> std::io::Res
             // so it is able to add headers to error responses
             .wrap(Cors::permissive())
             // register simple handler, handle all methods
-            .app_data(web::JsonConfig::default().limit(8_388_608)) // 8 MB
+            .app_data(web::JsonConfig::default().limit(8_388_608)) // 8 MB)
+            .app_data(ctx.clone())
             .service(auth_module())
             .service(
                 web::scope("/vectordb")
                     .wrap(AuthenticationMiddleware(
-                        data.ain_env.active_sessions.clone(),
+                        ctx.ain_env.active_sessions.clone(),
                     ))
                     // vectors module must be registered before collections module
                     // as its scope path is more specific than collections module
@@ -81,7 +80,6 @@ pub async fn run_actix_server_with_context(ctx: Arc<AppContext>) -> std::io::Res
                             ),
                     ),
             )
-            .app_data(data.clone())
     })
     .keep_alive(std::time::Duration::from_secs(10));
 
