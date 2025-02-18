@@ -1,16 +1,35 @@
 use std::cmp::{Ord, PartialOrd};
 use std::collections::HashMap;
+use std::fmt;
 
+use de::FieldValueVisitor;
+use serde::{Deserialize, Deserializer, Serialize};
+
+pub mod de;
 pub mod query_filtering;
 pub mod schema;
 
-#[derive(Debug)]
+pub use schema::MetadataSchema;
+
+#[derive(Debug, Clone)]
 pub enum Error {
     InvalidField(String),
     InvalidFieldCardinality(String),
     InvalidFieldValue(String),
     InvalidFieldValues(String),
     InvalidMetadataSchema,
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::InvalidField(msg) => write!(f, "Invalid field: {msg}"),
+            Self::InvalidFieldCardinality(msg) => write!(f, "Invalid field cardinality: {msg}"),
+            Self::InvalidFieldValue(msg) => write!(f, "Invalid field value: {msg}"),
+            Self::InvalidFieldValues(msg) => write!(f, "Invalid field values: {msg}"),
+            Self::InvalidMetadataSchema => write!(f, "Invalid metadata schema"),
+        }
+    }
 }
 
 /// Returns power of 2 that's nearest to the number, rounded up
@@ -42,7 +61,7 @@ fn decimal_to_binary_vec(num: u16, size: usize) -> Vec<u8> {
 
 type FieldName = String;
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[non_exhaustive]
 pub enum FieldValue {
     Int(i32),
@@ -55,6 +74,15 @@ impl FieldValue {
             Self::Int(_) => "int",
             Self::String(_) => "string",
         }
+    }
+}
+
+impl<'de> Deserialize<'de> for FieldValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(FieldValueVisitor)
     }
 }
 

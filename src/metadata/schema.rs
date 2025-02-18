@@ -1,6 +1,9 @@
+use serde::{Deserialize, Serialize};
+
 use super::{decimal_to_binary_vec, nearest_power_of_two, Error, FieldName, FieldValue};
 use std::collections::{HashMap, HashSet};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SupportedCondition {
     And(HashSet<String>),
     Or(HashSet<String>),
@@ -15,6 +18,7 @@ impl SupportedCondition {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetadataField {
     pub name: String,
     /// Values are associated with numeric identifiers so that they
@@ -79,6 +83,7 @@ impl MetadataField {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetadataSchema {
     pub fields: Vec<MetadataField>,
     pub conditions: Vec<SupportedCondition>,

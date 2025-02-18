@@ -192,7 +192,9 @@ pub async fn init_inverted_index_for_collection(
         collection_name.clone(),
         collection.description.clone(),
         collection.sparse_vector.auto_create_index,
-        collection.metadata_schema.clone(),
+        // @TODO(vineet): Fix the following after confirming that
+        // metadata schema is not required for inverted indexes
+        None,
         collection.config.max_vectors,
         lmdb,
         ArcShift::new(hash),

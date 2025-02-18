@@ -49,7 +49,9 @@ impl CollectionsService for CollectionsServiceImpl {
             req.description.clone(),
             dense_vector,
             sparse_vector,
-            req.metadata_schema,
+            // @TODO: metadata_schema field is yet to be supported for
+            // grpc endpoints.
+            None,
             config,
         ).map_err(Status::from)?;
 

@@ -4,6 +4,7 @@ use crate::{
     app_context::AppContext,
     indexes::inverted_index::InvertedIndex,
     models::{collection::Collection, types::DenseIndex},
+    models::common::WaCustomError,
 };
 
 use super::{
@@ -24,6 +25,16 @@ pub(crate) async fn create_collection(
 ) -> Result<Collection, CollectionsError> {
     let env = &ctx.ain_env.persist;
     let collections_db = &ctx.ain_env.collections_map.lmdb_collections_db;
+
+    let metadata_schema = match metadata_schema {
+        Some(s) => {
+            let schema = s
+                .try_into()
+                .map_err(|e| CollectionsError::WaCustomError(WaCustomError::MetadataError(e)))?;
+            Some(schema)
+        }
+        None => None,
+    };
 
     let collection = Collection::new(
         name,

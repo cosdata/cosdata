@@ -4,6 +4,8 @@ use serde_cbor::to_vec;
 use siphasher::sip::SipHasher24;
 use std::{fs, hash::Hasher, path::Path, sync::Arc};
 
+use crate::metadata::MetadataSchema;
+
 use super::common::WaCustomError;
 
 #[derive(Deserialize, Clone, Serialize, Debug)]
@@ -31,7 +33,7 @@ pub struct Collection {
     pub description: Option<String>,
     pub dense_vector: DenseVectorOptions,
     pub sparse_vector: SparseVectorOptions,
-    pub metadata_schema: Option<String>, //object (optional)
+    pub metadata_schema: Option<MetadataSchema>,
     pub config: CollectionConfig,
 }
 
@@ -41,7 +43,7 @@ impl Collection {
         description: Option<String>,
         dense_vector_options: DenseVectorOptions,
         sparse_vector_options: SparseVectorOptions,
-        metadata_schema: Option<String>,
+        metadata_schema: Option<MetadataSchema>,
         config: CollectionConfig,
     ) -> Result<Self, WaCustomError> {
         if name.is_empty() {
@@ -85,13 +87,11 @@ impl Collection {
     }
 
     /// serializes the collection
-    #[allow(dead_code)]
     pub fn serialize(&self) -> Result<Vec<u8>, WaCustomError> {
         to_vec(self).map_err(|e| WaCustomError::SerializationError(e.to_string()))
     }
 
     /// perists the collection instance on disk (lmdb -> collections database)
-    #[allow(dead_code)]
     pub fn persist(&self, env: &Environment, db: Database) -> Result<(), WaCustomError> {
         let key = self.get_key();
         let value = self.serialize()?;
