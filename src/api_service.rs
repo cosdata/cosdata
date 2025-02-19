@@ -7,7 +7,7 @@ use crate::models::cache_loader::ProbCache;
 use crate::models::collection::Collection;
 use crate::models::common::*;
 use crate::models::embedding_persist::EmbeddingOffset;
-use crate::models::meta_persist::update_current_version;
+use crate::models::meta_persist::{store_values_range, update_current_version};
 use crate::models::prob_node::ProbNode;
 use crate::models::types::*;
 use crate::models::user::Statistics;
@@ -42,8 +42,6 @@ pub async fn init_dense_index_for_collection(
     let index_path = collection_path.join("dense_hnsw");
     // ensuring that the index has a separate directory created inside the collection directory
     fs::create_dir_all(&index_path).map_err(|e| WaCustomError::FsError(e.to_string()))?;
-
-    let values_range = values_range.unwrap_or((-1.0, 1.0));
 
     let env = ctx.ain_env.persist.clone();
 
@@ -92,6 +90,12 @@ pub async fn init_dense_index_for_collection(
         level_0_index_manager.clone(),
         prop_file.clone(),
     ));
+    if let Some(values_range) = values_range {
+        store_values_range(&lmdb, values_range).map_err(|e| {
+            WaCustomError::DatabaseError(format!("Failed to store values range to LMDB: {}", e))
+        })?;
+    }
+    let values_range = values_range.unwrap_or((-1.0, 1.0));
 
     let root = create_root_node(
         &quantization_metric,
@@ -386,6 +390,9 @@ pub fn run_upload_in_transaction(
             println!("Range: {:?}", range);
             *dense_index.values_range.write().unwrap() = range;
             dense_index.is_configured.store(true, Ordering::Release);
+            store_values_range(&dense_index.lmdb, range).map_err(|e| {
+                WaCustomError::DatabaseError(format!("Failed to store values range to LMDB: {}", e))
+            })?;
             sample_points = std::mem::replace(&mut *vectors, Vec::new());
             is_first_batch = true;
         } else {

@@ -24,6 +24,7 @@ use crate::models::buffered_io::BufIoError;
 use crate::models::common::*;
 use crate::models::identity_collections::*;
 use crate::models::lazy_load::*;
+use crate::models::meta_persist::retrieve_values_range;
 use crate::models::versioning::*;
 use crate::quantization::{
     product::ProductQuantization, scalar::ScalarQuantization, Quantization, QuantizationError,
@@ -38,6 +39,7 @@ use rpassword::prompt_password;
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher24;
 use std::hash::{DefaultHasher, Hash as StdHash, Hasher};
+use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, RwLock};
@@ -912,6 +914,7 @@ impl CollectionsMap {
             db,
         };
         let current_version = retrieve_current_version(&lmdb)?;
+        let values_range = retrieve_values_range(&lmdb)?;
         let dense_index = DenseIndex::new(
             coll.name.clone(),
             root,
@@ -929,10 +932,9 @@ impl CollectionsMap {
             index_manager,
             level_0_index_manager,
             vec_raw_manager,
-            // TODO: persist
-            (-1.0, 1.0),
-            0,
-            true,
+            values_range.unwrap_or((-1.0, 1.0)),
+            dense_index_data.sample_threshold,
+            values_range.is_some(),
         );
 
         Ok(dense_index)
