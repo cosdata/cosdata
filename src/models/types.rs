@@ -861,7 +861,9 @@ impl CollectionsMap {
             let (version_id, version_hash) = versions.remove(0);
             // level n
             let bufman = index_manager.get(version_id)?;
-            for i in 0..num_regions_to_load.min((bufman.file_size() as usize) / bufman_size) {
+            for i in 0..num_regions_to_load
+                .min((bufman.file_size() as usize + bufman_size - 1) / bufman_size)
+            {
                 let region_start = (bufman_size * i) as u32;
                 if version_id == root_version_id && region_start == root_node_region_offset {
                     continue;
@@ -877,7 +879,8 @@ impl CollectionsMap {
             }
             // level 0
             let bufman = level_0_index_manager.get(version_id)?;
-            for i in 0..num_regions_to_load.min((bufman.file_size() as usize) / level_0_bufman_size)
+            for i in 0..num_regions_to_load
+                .min((bufman.file_size() as usize + level_0_bufman_size - 1) / level_0_bufman_size)
             {
                 let region_start = (level_0_bufman_size * i) as u32;
                 regions_to_load.push((
