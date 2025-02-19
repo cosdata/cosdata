@@ -519,6 +519,7 @@ impl DenseIndexTransaction {
     pub fn pre_commit(self, dense_index: Arc<DenseIndex>) -> Result<(), WaCustomError> {
         dense_index.index_manager.flush_all()?;
         dense_index.level_0_index_manager.flush_all()?;
+        dense_index.prop_file.write().unwrap().flush().unwrap();
         drop(self.raw_embedding_channel);
         let start = Instant::now();
         self.raw_embedding_serializer_thread_handle
