@@ -72,20 +72,17 @@ pub async fn init_dense_index_for_collection(
     let index_manager = Arc::new(BufferManagerFactory::new(
         index_path.clone().into(),
         |root, ver: &Hash| root.join(format!("{}.index", **ver)),
-        ctx.config.flush_eagerness_factor,
         ProbNode::get_serialized_size(hnsw_params.neighbors_count) * 1000,
     ));
 
     let level_0_index_manager = Arc::new(BufferManagerFactory::new(
         index_path.clone().into(),
         |root, ver: &Hash| root.join(format!("{}_0.index", **ver)),
-        ctx.config.flush_eagerness_factor,
         ProbNode::get_serialized_size(hnsw_params.level_0_neighbors_count) * 1000,
     ));
     let vec_raw_manager = Arc::new(BufferManagerFactory::new(
         index_path.into(),
         |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
-        ctx.config.flush_eagerness_factor,
         8192,
     ));
 
@@ -172,14 +169,12 @@ pub async fn init_inverted_index_for_collection(
     let vec_raw_manager = Arc::new(BufferManagerFactory::new(
         index_path.clone().into(),
         |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
-        ctx.config.flush_eagerness_factor,
         8192,
     ));
 
     let index_manager = Arc::new(BufferManagerFactory::new(
         index_path.into(),
         |root, ver: &Hash| root.join(format!("{}.index", **ver)),
-        ctx.config.flush_eagerness_factor,
         8192,
     ));
 

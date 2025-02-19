@@ -163,7 +163,6 @@ fn setup_test(
     let bufmans = Arc::new(BufferManagerFactory::new(
         dir.as_ref().into(),
         |root, ver: &Hash| root.join(format!("{}.index", **ver)),
-        1.0,
         ProbNode::get_serialized_size(8),
     ));
     let prop_file = Arc::new(RwLock::new(
@@ -446,7 +445,6 @@ fn test_prob_lazy_item_with_versions_serialization_and_validation() {
     let bufmans = Arc::new(BufferManagerFactory::new(
         temp_dir.as_ref().into(),
         |root, ver: &Hash| root.join(format!("{}.index", **ver)),
-        1.0,
         ProbNode::get_serialized_size(8),
     ));
     let cache = get_cache(bufmans.clone(), prop_file.clone());

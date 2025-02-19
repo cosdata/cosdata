@@ -786,19 +786,16 @@ impl CollectionsMap {
         let index_manager = Arc::new(BufferManagerFactory::new(
             index_path.clone().into(),
             |root, ver: &Hash| root.join(format!("{}.index", **ver)),
-            config.flush_eagerness_factor,
             bufman_size,
         ));
         let level_0_index_manager = Arc::new(BufferManagerFactory::new(
             index_path.clone().into(),
             |root, ver: &Hash| root.join(format!("{}_0.index", **ver)),
-            config.flush_eagerness_factor,
             level_0_bufman_size,
         ));
         let vec_raw_manager = Arc::new(BufferManagerFactory::new(
             index_path.clone().into(),
             |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
-            config.flush_eagerness_factor,
             8192,
         ));
         let cache = Arc::new(ProbCache::new(
@@ -957,13 +954,11 @@ impl CollectionsMap {
         let index_manager = Arc::new(BufferManagerFactory::new(
             index_path.clone().into(),
             |root, ver: &Hash| root.join(format!("{}.index", **ver)),
-            config.flush_eagerness_factor,
             8192,
         ));
         let vec_raw_manager = Arc::new(BufferManagerFactory::new(
             index_path.clone().into(),
             |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
-            config.flush_eagerness_factor,
             8192,
         ));
 

@@ -238,7 +238,7 @@ mod tests {
         let embedding = get_random_embedding(&mut rng);
         let tempfile = tempfile().unwrap();
 
-        let bufman = Arc::new(BufferManager::new(tempfile, 1.0, 8192).unwrap());
+        let bufman = Arc::new(BufferManager::new(tempfile, 8192).unwrap());
         let offset = write_embedding(bufman.clone(), &embedding).unwrap();
 
         let (deserialized, _) = read_embedding(bufman.clone(), offset).unwrap();
@@ -252,7 +252,7 @@ mod tests {
         let embeddings: Vec<_> = (0..20).map(|_| get_random_embedding(&mut rng)).collect();
         let tempfile = tempfile().unwrap();
 
-        let bufman = Arc::new(BufferManager::new(tempfile, 1.0, 8192).unwrap());
+        let bufman = Arc::new(BufferManager::new(tempfile, 8192).unwrap());
 
         for embedding in &embeddings {
             write_embedding(bufman.clone(), embedding).unwrap();

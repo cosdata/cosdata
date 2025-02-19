@@ -13,7 +13,6 @@ pub struct Config {
     pub search: Search,
     pub upload_threshold: u32,
     pub upload_process_batch_size: usize,
-    pub flush_eagerness_factor: f32,
     pub num_regions_to_load_on_restart: usize,
 }
 
