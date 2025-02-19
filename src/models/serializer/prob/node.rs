@@ -237,7 +237,7 @@ impl ProbSerialize for ProbNode {
                         cache,
                         max_loads,
                         skipm,
-                        hnsw_level.0 == 1,
+                        hnsw_level.0 == 0,
                     )?
                 } else {
                     ptr::null_mut()
