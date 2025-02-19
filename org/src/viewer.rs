@@ -106,7 +106,7 @@ impl VersionPtr {
         }
 
         // If same hash, just check current file
-        if self.version_hash == current_hash {
+        if self.version_hash == current_hash && current_level == target_level {
             let file_size = std::fs::metadata(current_file)
                 .map(|m| m.len())
                 .unwrap_or(0);
@@ -271,11 +271,12 @@ fn read_node(file: &mut File, current_file: &Path, current_hash: u32) -> io::Res
         parent.validate_link(current_file, current_hash, level[0], level[0] + 1);
 
     let child = VersionPtr::read(file)?;
-    let child_validation = child.validate_link(current_file, current_hash, level[0], level[0] - 1);
+    let child_validation =
+        child.validate_link(current_file, current_hash, level[0], level[0].max(1) - 1);
 
     let root_version = VersionPtr::read(file)?;
     let root_version_validation =
-        root_version.validate_link(current_file, current_hash, level[0], 0); // Root is always level 0
+        root_version.validate_link(current_file, current_hash, level[0], level[0]); // Root is always level 0
 
     let neighbors = read_neighbors(file, current_file, current_hash, neighbor_count, level[0])?;
 
