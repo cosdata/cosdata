@@ -9,6 +9,8 @@ use super::serializer::prob::ProbSerialize;
 use super::serializer::CustomSerialize;
 use super::types::*;
 use super::versioning::Hash;
+use crate::config_loader::Config;
+use crate::models::common::*;
 use crate::models::lru_cache::CachedValue;
 use crate::storage::inverted_index_old::InvertedIndexItem;
 use crate::storage::inverted_index_sparse_ann::{
@@ -26,8 +28,12 @@ use probabilistic_collections::cuckoo::CuckooFilter;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io;
+use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::TryLockError;
 use std::sync::{atomic::AtomicBool, Arc, Mutex, RwLock, Weak};
+
+use crate::models::lazy_load::SyncPersist;
 
 macro_rules! define_cache_items {
     ($($variant:ident = $type:ty),+ $(,)?) => {
@@ -274,6 +280,115 @@ macro_rules! define_prob_cache_items {
 define_prob_cache_items! {
     ProbNode = ProbNode,
     InvertedIndex = InvertedIndexSparseAnnNodeBasicTSHashmap
+}
+
+pub struct ClusterCache {
+    // Cache of entire clusters
+    cluster_registry: LRUCache<u64, Arc<Cluster>>,
+    cluster_roots: TSHashTable<u64, Arc<Cluster>>,
+    loading_items: TSHashTable<Hash, Arc<Mutex<bool>>>,
+    batch_load_lock: Mutex<()>,
+}
+
+#[derive(Clone)]
+pub struct Cluster {
+    pub id: Hash,               // Unique identifier for the cluster
+    pub root_node: SharedNode,  // Root node of this cluster's HNSW
+    pub size: Arc<AtomicUsize>, // Current size of the cluster
+    // File managers specific to this cluster
+    pub index_manager: Arc<BufferManagerFactory<Hash>>,
+    // Cache specific to this cluster
+    pub cache: Arc<ProbCache>,
+    pub items: Arc<TSHashTable<u64, ProbCacheItem>>,
+}
+
+impl Cluster {
+    pub fn new(
+        id: Hash,
+        root_node: SharedNode,
+        index_path: Arc<Path>,
+        config: &Config,
+        prop_file: Arc<RwLock<File>>,
+    ) -> Result<Self, WaCustomError> {
+        let index_manager = Arc::new(BufferManagerFactory::new(
+            index_path.clone(),
+            |root, ver: &Hash| root.join(format!("{}.chn", **ver)),
+            config.flush_eagerness_factor,
+            ProbNode::get_serialized_size(config.hnsw.default_neighbors_count) * 1000,
+        ));
+
+        let cache = Arc::new(ProbCache::new(
+            index_manager.clone(),
+            index_manager.clone(),
+            prop_file,
+        ));
+        let items = Arc::new(TSHashTable::new(8));
+
+        Ok(Self {
+            id,
+            root_node,
+            size: Arc::new(AtomicUsize::new(1)), // Start with 1 (root node)
+            index_manager,
+            cache,
+            items,
+        })
+    }
+
+    pub fn increment_size(&self) {
+        self.size.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub fn get_size(&self) -> usize {
+        self.size.load(Ordering::SeqCst)
+    }
+}
+
+pub fn create_new_cluster(
+    cluster_cache: Arc<ClusterCache>,
+    root_node: SharedNode,
+    index_path: Arc<Path>,
+    config: &Config,
+    prop_file: Arc<RwLock<File>>,
+) -> Result<Arc<Cluster>, WaCustomError> {
+    let cluster_id = unsafe { &*root_node }.get_current_version();
+
+    let index_manager = Arc::new(BufferManagerFactory::new(
+        index_path,
+        |root, ver: &Hash| root.join(format!("{}.chn", **ver)),
+        config.flush_eagerness_factor,
+        ProbNode::get_serialized_size(config.hnsw.default_neighbors_count) * 1000,
+    ));
+
+    let cache = Arc::new(ProbCache::new(
+        index_manager.clone(),
+        index_manager.clone(),
+        prop_file,
+    ));
+
+    let items = Arc::new(TSHashTable::new(16));
+
+    let cluster = Arc::new(Cluster {
+        id: cluster_id,
+        root_node,
+        size: Arc::new(AtomicUsize::new(1)),
+        index_manager,
+        cache,
+        items,
+    });
+
+    // Set the cluster reference and root flag in the root node
+    let node_id = unsafe { &*root_node }
+        .try_get_data(&cluster.cache)?
+        .prop
+        .id
+        .0;
+    cluster_cache.cluster_roots.insert(node_id, cluster.clone());
+
+    cluster_cache
+        .cluster_registry
+        .insert(*cluster_id as u64, cluster.clone());
+
+    Ok(cluster)
 }
 
 pub struct ProbCache {
