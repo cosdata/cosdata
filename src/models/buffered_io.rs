@@ -1,5 +1,4 @@
 use dashmap::DashMap;
-use rand::Rng;
 use std::collections::HashMap;
 use std::fmt;
 use std::fs::{File, OpenOptions};
@@ -40,7 +39,6 @@ struct BufferRegion {
     dirty: AtomicBool,
     end: AtomicUsize,
     file: Arc<RwLock<File>>,
-    flush_threshold: usize,
 }
 
 impl BufferRegion {
@@ -50,29 +48,12 @@ impl BufferRegion {
             buffer: RwLock::new(vec![0; buffer_size]),
             dirty: AtomicBool::new(false),
             end: AtomicUsize::new(0),
-            flush_threshold: (buffer_size as f32 * 0.7) as usize,
             file,
         }
     }
 
     fn should_final_flush(&self) -> bool {
         self.dirty.load(Ordering::SeqCst)
-    }
-
-    fn should_eager_flush(&self, eagerness: f32) -> bool {
-        // @DOUBT: Here we're checking if `end` is greater than the
-        // threshold. This makes sense for inserts where writes will
-        // be performed at the end of the file. But not in case of
-        // updates happening in between the file. So if there are only
-        // updates happening to a region, it will never be flushed
-        // with the current logic
-
-        // do NOT flush every single time, instead flush once in every `n`
-        // (eagerness = 1/n, if n = 100, eagerness = 0.01)
-        let mut rng = rand::thread_rng();
-        self.dirty.load(Ordering::SeqCst)
-            && self.end.load(Ordering::SeqCst) >= self.flush_threshold
-            && rng.gen_range(0.0..1.0) < eagerness
     }
 
     fn flush(&self) -> Result<(), BufIoError> {
@@ -101,9 +82,7 @@ struct Cursor {
 
 impl Cursor {
     fn new() -> Self {
-        Cursor {
-            position: 0,
-        }
+        Cursor { position: 0 }
     }
 }
 
@@ -111,7 +90,6 @@ pub struct BufferManagerFactory<K> {
     bufmans: Arc<DashMap<K, Arc<BufferManager>>>,
     root_path: Arc<Path>,
     path_function: fn(&Path, &K) -> PathBuf,
-    flush_eagerness: f32,
     buffer_size: usize,
 }
 
@@ -119,14 +97,12 @@ impl<K: Hash + Eq + Clone> BufferManagerFactory<K> {
     pub fn new(
         root_path: Arc<Path>,
         path_function: fn(&Path, &K) -> PathBuf,
-        flush_eagerness: f32,
         buffer_size: usize,
     ) -> Self {
         Self {
             bufmans: Arc::new(DashMap::new()),
             root_path,
             path_function,
-            flush_eagerness,
             buffer_size,
         }
     }
@@ -142,11 +118,7 @@ impl<K: Hash + Eq + Clone> BufferManagerFactory<K> {
                     .write(true)
                     .create(true)
                     .open(&path)?;
-                let bufman = Arc::new(BufferManager::new(
-                    file,
-                    self.flush_eagerness,
-                    self.buffer_size,
-                )?);
+                let bufman = Arc::new(BufferManager::new(file, self.buffer_size)?);
 
                 Ok(bufman)
             })
@@ -167,22 +139,20 @@ pub struct BufferManager {
     cursors: RwLock<HashMap<u64, Cursor>>,
     next_cursor_id: AtomicU64,
     file_size: RwLock<u64>,
-    flush_eagerness: f32,
     buffer_size: usize,
 }
 
 impl BufferManager {
-    pub fn new(mut file: File, flush_eagerness: f32, buffer_size: usize) -> io::Result<Self> {
+    pub fn new(mut file: File, buffer_size: usize) -> io::Result<Self> {
         let file_size = file.seek(SeekFrom::End(0))?;
         file.seek(SeekFrom::Start(0))?;
         let regions = LRUCache::with_prob_eviction(10000, 0.03125);
-        let mut this = BufferManager {
+        let mut this = Self {
             file: Arc::new(RwLock::new(file)),
             regions,
             cursors: RwLock::new(HashMap::new()),
             next_cursor_id: AtomicU64::new(0),
             file_size: RwLock::new(file_size),
-            flush_eagerness,
             buffer_size,
         };
         this.regions.set_evict_hook(Some(|region| {
@@ -225,13 +195,6 @@ impl BufferManager {
             Ok(Arc::new(region))
         });
         cached_region.map(|r| r.inner())
-    }
-
-    fn flush_region_if_needed(&self, region: &BufferRegion) -> Result<(), BufIoError> {
-        if region.should_eager_flush(self.flush_eagerness) {
-            region.flush()?;
-        }
-        Ok(())
     }
 
     pub fn read_f32_with_cursor(&self, cursor_id: u64) -> Result<f32, BufIoError> {
@@ -374,7 +337,6 @@ impl BufferManager {
                     total_written += to_write;
                     curr_pos += to_write as u64;
                 }
-                self.flush_region_if_needed(&region)?;
             }
             // Update file size using max to prevent shrinking
             *file_size_guard = (*file_size_guard).max(curr_pos);
@@ -398,7 +360,6 @@ impl BufferManager {
                     total_written += to_write;
                     curr_pos += to_write as u64;
                 }
-                self.flush_region_if_needed(&region)?;
             }
             // Even for normal writes, we need to check if we accidentally crossed EOF
             *file_size_guard = (*file_size_guard).max(curr_pos);
@@ -475,7 +436,7 @@ mod tests {
 
         let mut file = tempfile().unwrap();
         file.write_all(&456_u32.to_le_bytes()).unwrap();
-        let bufman = BufferManager::new(file, 1.0, BUFFER_SIZE).unwrap();
+        let bufman = BufferManager::new(file, BUFFER_SIZE).unwrap();
 
         let cursor1 = bufman.open_cursor().unwrap();
         let cursor2 = bufman.open_cursor().unwrap();
@@ -545,7 +506,7 @@ mod tests {
         file.seek(SeekFrom::Start(8190)).unwrap();
         file.write_all(&1678_u32.to_le_bytes()).unwrap();
 
-        let bufman = BufferManager::new(file, 1.0, BUFFER_SIZE).unwrap();
+        let bufman = BufferManager::new(file, BUFFER_SIZE).unwrap();
 
         let cursor1 = bufman.open_cursor().unwrap();
         bufman.seek_with_cursor(cursor1, 8190).unwrap();
@@ -567,7 +528,7 @@ mod tests {
         file.seek(SeekFrom::Start(file_offset(3, 147))).unwrap();
         file.write_all(&1000_u32.to_le_bytes()).unwrap();
 
-        let bufman = Arc::new(BufferManager::new(file, 1.0, BUFFER_SIZE).unwrap());
+        let bufman = Arc::new(BufferManager::new(file, BUFFER_SIZE).unwrap());
         let t1 = {
             // Thread 1 that reads from region 1
             let bm = bufman.clone();
@@ -611,7 +572,7 @@ mod tests {
         file.write_all(&145_u32.to_le_bytes()).unwrap();
 
         // Thread 1 will read first two bytes in region 1
-        let bufman = Arc::new(BufferManager::new(file, 1.0, BUFFER_SIZE).unwrap());
+        let bufman = Arc::new(BufferManager::new(file, BUFFER_SIZE).unwrap());
         let t1 = {
             // Thread 1 that reads from region 1
             let bm = bufman.clone();
@@ -670,7 +631,7 @@ mod tests {
         file.seek(SeekFrom::Start(pos2)).unwrap();
         file.write_all(&2000_u32.to_le_bytes()).unwrap();
 
-        let bufman = Arc::new(BufferManager::new(file, 1.0, BUFFER_SIZE).unwrap());
+        let bufman = Arc::new(BufferManager::new(file, BUFFER_SIZE).unwrap());
         let t1 = {
             // Thread 1 that reads from region 1 and 2
             let bm = bufman.clone();
@@ -702,7 +663,7 @@ mod tests {
     #[test]
     fn test_writes_across_regions() {
         let file = create_tmp_file(5, 200).unwrap();
-        let bufman = BufferManager::new(file, 1.0, BUFFER_SIZE).unwrap();
+        let bufman = BufferManager::new(file, BUFFER_SIZE).unwrap();
 
         let cursor = bufman.open_cursor().unwrap();
         bufman.seek_with_cursor(cursor, 8190).unwrap();
@@ -727,7 +688,7 @@ mod tests {
     #[test]
     fn test_writes_beyond_eof() {
         let file = create_tmp_file(0, 10).unwrap();
-        let bufman = BufferManager::new(file, 1.0, BUFFER_SIZE).unwrap();
+        let bufman = BufferManager::new(file, BUFFER_SIZE).unwrap();
 
         let cursor = bufman.open_cursor().unwrap();
         bufman.seek_with_cursor(cursor, 7).unwrap();
@@ -749,7 +710,7 @@ mod tests {
     fn test_conc_writes_different_regions() {
         let file = create_tmp_file(3, 200).unwrap();
 
-        let bufman = Arc::new(BufferManager::new(file, 1.0, BUFFER_SIZE).unwrap());
+        let bufman = Arc::new(BufferManager::new(file, BUFFER_SIZE).unwrap());
 
         // Assert that the bytes at the position we will be writing
         // to (in 2 separate threads) is initially 0
@@ -808,7 +769,7 @@ mod tests {
     fn test_conc_writes_to_end_of_file() {
         let file = create_tmp_file(0, 45).unwrap();
 
-        let bufman = Arc::new(BufferManager::new(file, 1.0, BUFFER_SIZE).unwrap());
+        let bufman = Arc::new(BufferManager::new(file, BUFFER_SIZE).unwrap());
 
         let t1 = {
             let bm = bufman.clone();
@@ -860,7 +821,7 @@ mod tests {
     #[test]
     fn test_conc_writes_to_same_region_1() {
         let file = create_tmp_file(2, 23).unwrap();
-        let bufman = Arc::new(BufferManager::new(file, 1.0, BUFFER_SIZE).unwrap());
+        let bufman = Arc::new(BufferManager::new(file, BUFFER_SIZE).unwrap());
 
         let pos1 = (BUFFER_SIZE * 2 + 12) as u64;
         let pos2 = (BUFFER_SIZE * 2 + 5) as u64;
@@ -921,7 +882,7 @@ mod tests {
     #[test]
     fn test_conc_writes_to_same_region_2() {
         let file = create_tmp_file(2, 23).unwrap();
-        let bufman = Arc::new(BufferManager::new(file, 1.0, BUFFER_SIZE).unwrap());
+        let bufman = Arc::new(BufferManager::new(file, BUFFER_SIZE).unwrap());
 
         // Thread 1 will write to the end of file
         let t1 = {
@@ -981,7 +942,7 @@ mod tests {
     #[test]
     fn test_conc_writes_across_regions() {
         let file = create_tmp_file(3, 200).unwrap();
-        let bufman = Arc::new(BufferManager::new(file, 1.0, BUFFER_SIZE).unwrap());
+        let bufman = Arc::new(BufferManager::new(file, BUFFER_SIZE).unwrap());
 
         let pos1 = file_offset(1, 8190);
         let pos2 = file_offset(2, 8190);
@@ -1046,7 +1007,7 @@ mod tests {
         file.seek(SeekFrom::Start(pos1)).unwrap();
         file.write_all(&1000_u32.to_le_bytes()).unwrap();
 
-        let bufman = Arc::new(BufferManager::new(file, 1.0, BUFFER_SIZE).unwrap());
+        let bufman = Arc::new(BufferManager::new(file, BUFFER_SIZE).unwrap());
         let t1 = {
             // Thread 1 that reads from region 1 and 2
             let bm = bufman.clone();
@@ -1091,7 +1052,7 @@ mod tests {
     fn test_seek_with_cursor() {
         let filesize = 1000 as usize;
         let file = create_tmp_file_of_size(filesize as u16).unwrap();
-        let bufman = BufferManager::new(file, 1.0, BUFFER_SIZE).unwrap();
+        let bufman = BufferManager::new(file, BUFFER_SIZE).unwrap();
         let cursor = bufman.open_cursor().unwrap();
 
         // Test cases
@@ -1130,7 +1091,7 @@ mod tests {
             .collect::<Vec<_>>();
         file.write_all(&written_data).unwrap();
 
-        let bufman = BufferManager::new(file, 1.0, BUFFER_SIZE).unwrap();
+        let bufman = BufferManager::new(file, BUFFER_SIZE).unwrap();
         let cursor = bufman.open_cursor().unwrap();
 
         let mut read_data = vec![0; 100 * 1024 * 1024];
@@ -1145,7 +1106,7 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         let file = create_tmp_file(0, 0).unwrap();
-        let bufman = BufferManager::new(file, 1.0, BUFFER_SIZE).unwrap();
+        let bufman = BufferManager::new(file, BUFFER_SIZE).unwrap();
         let cursor = bufman.open_cursor().unwrap();
 
         let written_data = (0..(100 * 1024 * 1024))
@@ -1172,7 +1133,7 @@ mod tests {
     #[quickcheck]
     fn prop_get_or_create_region_start(pos: u16) -> bool {
         let file = create_tmp_file_of_size(u16::MAX).unwrap();
-        let bufman = BufferManager::new(file, 1.0, BUFFER_SIZE).unwrap();
+        let bufman = BufferManager::new(file, BUFFER_SIZE).unwrap();
         let region = bufman.get_or_create_region(pos as u64).unwrap();
         region.start % (BUFFER_SIZE as u64) == 0
     }
@@ -1182,7 +1143,7 @@ mod tests {
     #[quickcheck]
     fn prop_get_or_create_region_buffer_size(pos: u16) -> bool {
         let file = create_tmp_file_of_size(u16::MAX).unwrap();
-        let bufman = BufferManager::new(file, 1.0, BUFFER_SIZE).unwrap();
+        let bufman = BufferManager::new(file, BUFFER_SIZE).unwrap();
         let region = bufman.get_or_create_region(pos as u64).unwrap();
         let buffer = region.buffer.read().unwrap();
         buffer.len() <= BUFFER_SIZE
@@ -1193,7 +1154,7 @@ mod tests {
     #[quickcheck]
     fn prop_get_or_create_region_end(pos: u16) -> bool {
         let file = create_tmp_file_of_size(u16::MAX).unwrap();
-        let bufman = BufferManager::new(file, 1.0, BUFFER_SIZE).unwrap();
+        let bufman = BufferManager::new(file, BUFFER_SIZE).unwrap();
         let region = bufman.get_or_create_region(pos as u64).unwrap();
         region.end.load(Ordering::SeqCst) <= BUFFER_SIZE
     }
@@ -1205,7 +1166,7 @@ mod tests {
     fn prop_read_with_cursor(size: u16) -> bool {
         let bufsize = size as usize;
         let file = create_tmp_file_of_size(u16::MAX).unwrap();
-        let bufman = BufferManager::new(file, 1.0, BUFFER_SIZE).unwrap();
+        let bufman = BufferManager::new(file, BUFFER_SIZE).unwrap();
         let mut buffer = vec![0; bufsize];
         let cursor = bufman.open_cursor().unwrap();
         let bytes_read = bufman.read_with_cursor(cursor, &mut buffer[..]).unwrap();
@@ -1219,7 +1180,7 @@ mod tests {
     fn prop_write_with_cursor(size: u16) -> bool {
         let bufsize = size as usize;
         let file = create_tmp_file_of_size(0).unwrap();
-        let bufman = BufferManager::new(file, 1.0, BUFFER_SIZE).unwrap();
+        let bufman = BufferManager::new(file, BUFFER_SIZE).unwrap();
         let mut buffer = vec![0; bufsize];
         let cursor = bufman.open_cursor().unwrap();
         let written_at = bufman
@@ -1235,7 +1196,7 @@ mod tests {
     fn prop_write_then_read(size: u16) -> bool {
         let bufsize = size as usize;
         let file = create_tmp_file_of_size(0).unwrap();
-        let bufman = BufferManager::new(file, 1.0, BUFFER_SIZE).unwrap();
+        let bufman = BufferManager::new(file, BUFFER_SIZE).unwrap();
 
         // Write to the file
         let mut input_buffer = vec![1; bufsize];
@@ -1261,7 +1222,7 @@ mod tests {
 
     fn check_seek_with_cursor_doesnt_crash(filesize: u16, pos: u64) -> bool {
         let file = create_tmp_file_of_size(filesize).unwrap();
-        let bufman = BufferManager::new(file, 1.0, BUFFER_SIZE).unwrap();
+        let bufman = BufferManager::new(file, BUFFER_SIZE).unwrap();
         let cursor = bufman.open_cursor().unwrap();
         let result = bufman.seek_with_cursor(cursor, pos);
         bufman.close_cursor(cursor).unwrap();

@@ -24,6 +24,7 @@ use crate::models::buffered_io::BufIoError;
 use crate::models::common::*;
 use crate::models::identity_collections::*;
 use crate::models::lazy_load::*;
+use crate::models::meta_persist::retrieve_values_range;
 use crate::models::versioning::*;
 use crate::quantization::{
     product::ProductQuantization, scalar::ScalarQuantization, Quantization, QuantizationError,
@@ -38,6 +39,7 @@ use rpassword::prompt_password;
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher24;
 use std::hash::{DefaultHasher, Hash as StdHash, Hasher};
+use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, RwLock};
@@ -517,6 +519,7 @@ impl DenseIndexTransaction {
     pub fn pre_commit(self, dense_index: Arc<DenseIndex>) -> Result<(), WaCustomError> {
         dense_index.index_manager.flush_all()?;
         dense_index.level_0_index_manager.flush_all()?;
+        dense_index.prop_file.write().unwrap().flush().unwrap();
         drop(self.raw_embedding_channel);
         let start = Instant::now();
         self.raw_embedding_serializer_thread_handle
@@ -786,19 +789,16 @@ impl CollectionsMap {
         let index_manager = Arc::new(BufferManagerFactory::new(
             index_path.clone().into(),
             |root, ver: &Hash| root.join(format!("{}.index", **ver)),
-            config.flush_eagerness_factor,
             bufman_size,
         ));
         let level_0_index_manager = Arc::new(BufferManagerFactory::new(
             index_path.clone().into(),
             |root, ver: &Hash| root.join(format!("{}_0.index", **ver)),
-            config.flush_eagerness_factor,
             level_0_bufman_size,
         ));
         let vec_raw_manager = Arc::new(BufferManagerFactory::new(
             index_path.clone().into(),
             |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
-            config.flush_eagerness_factor,
             8192,
         ));
         let cache = Arc::new(ProbCache::new(
@@ -861,7 +861,9 @@ impl CollectionsMap {
             let (version_id, version_hash) = versions.remove(0);
             // level n
             let bufman = index_manager.get(version_id)?;
-            for i in 0..num_regions_to_load.min((bufman.file_size() as usize) / bufman_size) {
+            for i in 0..num_regions_to_load
+                .min((bufman.file_size() as usize + bufman_size - 1) / bufman_size)
+            {
                 let region_start = (bufman_size * i) as u32;
                 if version_id == root_version_id && region_start == root_node_region_offset {
                     continue;
@@ -877,7 +879,8 @@ impl CollectionsMap {
             }
             // level 0
             let bufman = level_0_index_manager.get(version_id)?;
-            for i in 0..num_regions_to_load.min((bufman.file_size() as usize) / level_0_bufman_size)
+            for i in 0..num_regions_to_load
+                .min((bufman.file_size() as usize + level_0_bufman_size - 1) / level_0_bufman_size)
             {
                 let region_start = (level_0_bufman_size * i) as u32;
                 regions_to_load.push((
@@ -915,6 +918,7 @@ impl CollectionsMap {
             db,
         };
         let current_version = retrieve_current_version(&lmdb)?;
+        let values_range = retrieve_values_range(&lmdb)?;
         let dense_index = DenseIndex::new(
             coll.name.clone(),
             root,
@@ -932,10 +936,9 @@ impl CollectionsMap {
             index_manager,
             level_0_index_manager,
             vec_raw_manager,
-            // TODO: persist
-            (-1.0, 1.0),
-            0,
-            true,
+            values_range.unwrap_or((-1.0, 1.0)),
+            dense_index_data.sample_threshold,
+            values_range.is_some(),
         );
 
         Ok(dense_index)
@@ -957,13 +960,11 @@ impl CollectionsMap {
         let index_manager = Arc::new(BufferManagerFactory::new(
             index_path.clone().into(),
             |root, ver: &Hash| root.join(format!("{}.index", **ver)),
-            config.flush_eagerness_factor,
             8192,
         ));
         let vec_raw_manager = Arc::new(BufferManagerFactory::new(
             index_path.clone().into(),
             |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
-            config.flush_eagerness_factor,
             8192,
         ));
 

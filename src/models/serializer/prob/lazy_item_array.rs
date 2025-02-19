@@ -42,6 +42,7 @@ impl<const N: usize> ProbSerialize for ProbLazyItemArray<ProbNode, N> {
             };
 
             let item = unsafe { &*item_ptr };
+            debug_assert_eq!(item.is_level_0, is_level_0);
             let (offset, version_number, version_id) = match item.get_file_index() {
                 FileIndex::Valid {
                     offset,

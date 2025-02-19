@@ -7,7 +7,7 @@ use crate::models::cache_loader::ProbCache;
 use crate::models::collection::Collection;
 use crate::models::common::*;
 use crate::models::embedding_persist::EmbeddingOffset;
-use crate::models::meta_persist::update_current_version;
+use crate::models::meta_persist::{store_values_range, update_current_version};
 use crate::models::prob_node::ProbNode;
 use crate::models::types::*;
 use crate::models::user::Statistics;
@@ -43,8 +43,6 @@ pub async fn init_dense_index_for_collection(
     // ensuring that the index has a separate directory created inside the collection directory
     fs::create_dir_all(&index_path).map_err(|e| WaCustomError::FsError(e.to_string()))?;
 
-    let values_range = values_range.unwrap_or((-1.0, 1.0));
-
     let env = ctx.ain_env.persist.clone();
 
     let lmdb = MetaDb::from_env(env.clone(), &collection_name)
@@ -72,20 +70,17 @@ pub async fn init_dense_index_for_collection(
     let index_manager = Arc::new(BufferManagerFactory::new(
         index_path.clone().into(),
         |root, ver: &Hash| root.join(format!("{}.index", **ver)),
-        ctx.config.flush_eagerness_factor,
         ProbNode::get_serialized_size(hnsw_params.neighbors_count) * 1000,
     ));
 
     let level_0_index_manager = Arc::new(BufferManagerFactory::new(
         index_path.clone().into(),
         |root, ver: &Hash| root.join(format!("{}_0.index", **ver)),
-        ctx.config.flush_eagerness_factor,
         ProbNode::get_serialized_size(hnsw_params.level_0_neighbors_count) * 1000,
     ));
     let vec_raw_manager = Arc::new(BufferManagerFactory::new(
         index_path.into(),
         |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
-        ctx.config.flush_eagerness_factor,
         8192,
     ));
 
@@ -95,6 +90,12 @@ pub async fn init_dense_index_for_collection(
         level_0_index_manager.clone(),
         prop_file.clone(),
     ));
+    if let Some(values_range) = values_range {
+        store_values_range(&lmdb, values_range).map_err(|e| {
+            WaCustomError::DatabaseError(format!("Failed to store values range to LMDB: {}", e))
+        })?;
+    }
+    let values_range = values_range.unwrap_or((-1.0, 1.0));
 
     let root = create_root_node(
         &quantization_metric,
@@ -172,14 +173,12 @@ pub async fn init_inverted_index_for_collection(
     let vec_raw_manager = Arc::new(BufferManagerFactory::new(
         index_path.clone().into(),
         |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
-        ctx.config.flush_eagerness_factor,
         8192,
     ));
 
     let index_manager = Arc::new(BufferManagerFactory::new(
         index_path.into(),
         |root, ver: &Hash| root.join(format!("{}.index", **ver)),
-        ctx.config.flush_eagerness_factor,
         8192,
     ));
 
@@ -391,6 +390,9 @@ pub fn run_upload_in_transaction(
             println!("Range: {:?}", range);
             *dense_index.values_range.write().unwrap() = range;
             dense_index.is_configured.store(true, Ordering::Release);
+            store_values_range(&dense_index.lmdb, range).map_err(|e| {
+                WaCustomError::DatabaseError(format!("Failed to store values range to LMDB: {}", e))
+            })?;
             sample_points = std::mem::replace(&mut *vectors, Vec::new());
             is_first_batch = true;
         } else {

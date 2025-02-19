@@ -43,19 +43,21 @@ impl ProbSerialize for Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]> {
             "offset: {}",
             start
         );
-        bufman.update_u16_with_cursor(cursor, self.len() as u16)?;
+        let mut buf = Vec::with_capacity(2 + self.len() * 19);
+        buf.extend((self.len() as u16).to_le_bytes());
 
         for neighbor in self.iter() {
             let (node_id, node_ptr, dist) = unsafe {
                 if let Some(neighbor) = neighbor.load(Ordering::SeqCst).as_ref() {
                     neighbor.clone()
                 } else {
-                    bufman.update_with_cursor(cursor, &[u8::MAX; 19])?;
+                    buf.extend([u8::MAX; 19]);
                     continue;
                 }
             };
 
             let node = unsafe { &*node_ptr };
+            debug_assert_eq!(node.is_level_0, is_level_0);
 
             let (node_offset, node_version_number, node_version_id) = match node.get_file_index() {
                 FileIndex::Valid {
@@ -65,13 +67,16 @@ impl ProbSerialize for Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]> {
                 } => (offset.0, version_number, version_id),
                 _ => unreachable!(),
             };
-
-            bufman.update_u32_with_cursor(cursor, node_id)?;
-            bufman.update_u32_with_cursor(cursor, node_offset)?;
-            bufman.update_u16_with_cursor(cursor, node_version_number)?;
-            bufman.update_u32_with_cursor(cursor, *node_version_id)?;
-            crate::models::serializer::SimpleSerialize::serialize(&dist, &bufman, cursor)?;
+            buf.extend(node_id.to_le_bytes());
+            buf.extend(node_offset.to_le_bytes());
+            buf.extend(node_version_number.to_le_bytes());
+            buf.extend(node_version_id.to_le_bytes());
+            let (tag, value) = dist.get_tag_and_value();
+            buf.push(tag);
+            buf.extend(value.to_le_bytes());
         }
+
+        bufman.update_with_cursor(cursor, &buf)?;
         Ok(start as u32)
     }
 
