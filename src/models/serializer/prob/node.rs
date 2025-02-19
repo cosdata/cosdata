@@ -61,6 +61,7 @@ impl ProbSerialize for ProbNode {
 
         // Get parent file index
         let parent_file_index = if let Some(parent) = unsafe { parent_ptr.as_ref() } {
+            debug_assert!(!parent.is_level_0);
             let file_index = match parent.get_file_index() {
                 FileIndex::Valid {
                     offset,
@@ -78,6 +79,7 @@ impl ProbSerialize for ProbNode {
 
         // Get child file index
         let child_file_index = if let Some(child) = unsafe { child_ptr.as_ref() } {
+            debug_assert_eq!(child.is_level_0, self.hnsw_level.0 == 1);
             let file_index = match child.get_file_index() {
                 FileIndex::Valid {
                     offset,
@@ -108,6 +110,7 @@ impl ProbSerialize for ProbNode {
         }
 
         if let Some(root) = unsafe { self.root_version.as_ref() } {
+            debug_assert_eq!(root.is_level_0, is_level_0);
             let (offset, version_number, version_id) = match root.get_file_index() {
                 FileIndex::Valid {
                     offset,
