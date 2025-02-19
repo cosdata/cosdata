@@ -49,13 +49,15 @@ impl ProbSerialize for ProbNode {
 
         debug_assert_eq!(start_offset % size, 0, "offset: {}", start_offset);
 
+        let mut buf = Vec::with_capacity(39);
+
         // Serialize basic fields
-        bufman.update_u8_with_cursor(cursor, self.hnsw_level.0)?;
+        buf.push(self.hnsw_level.0);
 
         // Serialize prop
         let (FileOffset(offset), BytesToRead(length)) = &self.prop.location;
-        bufman.update_u32_with_cursor(cursor, *offset)?;
-        bufman.update_u32_with_cursor(cursor, *length)?;
+        buf.extend(offset.to_le_bytes());
+        buf.extend(length.to_le_bytes());
 
         let parent_ptr = self.get_parent();
 
@@ -94,19 +96,19 @@ impl ProbSerialize for ProbNode {
         };
 
         if let Some((offset, version_number, version_id)) = parent_file_index {
-            bufman.update_u32_with_cursor(cursor, offset)?;
-            bufman.update_u16_with_cursor(cursor, version_number)?;
-            bufman.update_u32_with_cursor(cursor, *version_id)?;
+            buf.extend(offset.to_le_bytes());
+            buf.extend(version_number.to_le_bytes());
+            buf.extend(version_id.to_le_bytes());
         } else {
-            bufman.update_with_cursor(cursor, &[u8::MAX; 10])?;
+            buf.extend([u8::MAX; 10]);
         }
 
         if let Some((offset, version_number, version_id)) = child_file_index {
-            bufman.update_u32_with_cursor(cursor, offset)?;
-            bufman.update_u16_with_cursor(cursor, version_number)?;
-            bufman.update_u32_with_cursor(cursor, *version_id)?;
+            buf.extend(offset.to_le_bytes());
+            buf.extend(version_number.to_le_bytes());
+            buf.extend(version_id.to_le_bytes());
         } else {
-            bufman.update_with_cursor(cursor, &[u8::MAX; 10])?;
+            buf.extend([u8::MAX; 10]);
         }
 
         if let Some(root) = unsafe { self.root_version.as_ref() } {
@@ -119,12 +121,14 @@ impl ProbSerialize for ProbNode {
                 } => (offset.0, version_number, version_id),
                 _ => unimplemented!(),
             };
-            bufman.update_u32_with_cursor(cursor, offset)?;
-            bufman.update_u16_with_cursor(cursor, version_number)?;
-            bufman.update_u32_with_cursor(cursor, *version_id)?;
+            buf.extend(offset.to_le_bytes());
+            buf.extend(version_number.to_le_bytes());
+            buf.extend(version_id.to_le_bytes());
         } else {
-            bufman.update_with_cursor(cursor, &[u8::MAX; 10])?;
+            buf.extend([u8::MAX; 10]);
         }
+
+        bufman.update_with_cursor(cursor, &buf)?;
 
         #[cfg(debug_assertions)]
         {
