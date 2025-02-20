@@ -174,8 +174,8 @@ CPU Requirements:
 
 * High level tasks
 
-- [ ] Create a spec for metadata schema
-- [ ] Implement core functionality for dimension allocation
+- [X] Create a spec for metadata schema
+- [X] Implement core functionality for dimension allocation
   + Given the metadata schema find out how many phantom dimensions are required for metadata filtering
   + Create a vec of those many dimensions
   + Create phantom dimensions vec copy with,
@@ -183,18 +183,18 @@ CPU Requirements:
     2. high weight values for supported field combinations (for AND query support)
     3. high weight values for all field combination (for OR query support)
        + optional as it may be covered in (2)
-- [ ] Implement metadata-aware insertion
-  + Modify the create collection API endpoint to accept metadata_schema in above format
-  + Include metadata fields in all "insertion" code paths
+- [-] Implement metadata-aware insertion
+  + [X] Modify the create collection API endpoint to accept metadata_schema in above format
+  + [ ] Include metadata fields in all "insertion" code paths
     + Validate metadata fields based on the metadata_schema for the collection
-  + Implement the indexing pipeline for multiple phases
-  + Modify all "insertion" API endpoints to accept metadata fields
+  + [ ] Implement the indexing pipeline for multiple phases
+  + [ ] Modify all "insertion" API endpoints to accept metadata fields
     + Create collection
     + Create dense index
     + Create vector
     + Update vector
     + upsert
-- [ ] Implement query vector encoding core functionality as per the doc
+- [X] Implement query vector encoding core functionality as per the doc
   + Given the metadata filters and metadata_schema for the collection, extend the query vectors with +1/-1 values in the phantom dimensions.
     + We can start with individual fields and then add support for field combinations in a later phase.
 - [ ] Implement metadata-aware query processing

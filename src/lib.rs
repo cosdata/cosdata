@@ -3,6 +3,7 @@ pub mod cosql;
 pub mod distance;
 pub mod indexes;
 pub mod macros;
+pub mod metadata;
 pub mod models;
 pub mod quantization;
 pub mod storage;

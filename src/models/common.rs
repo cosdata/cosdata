@@ -4,6 +4,7 @@ use super::lazy_load::LazyItem;
 use super::prob_node::SharedNode;
 use super::types::{MergedNode, MetricResult, VectorId};
 use crate::distance::DistanceError;
+use crate::metadata;
 use crate::models::types::VectorQt;
 use crate::quantization::QuantizationError;
 use sha2::{Digest, Sha256};
@@ -392,6 +393,7 @@ pub enum WaCustomError {
     DeserializationError(String),
     // put it in `Arc` to make it cloneable
     BufIo(Arc<BufIoError>),
+    MetadataError(metadata::Error),
     NotFound(String),
 }
 
@@ -418,6 +420,7 @@ impl fmt::Display for WaCustomError {
             WaCustomError::FsError(err) => write!(f, "FS error: {}", err),
             WaCustomError::DeserializationError(err) => write!(f, "Deserialization error: {}", err),
             WaCustomError::BufIo(err) => write!(f, "Buffer IO error: {}", err),
+            WaCustomError::MetadataError(err) => write!(f, "Metadata error: {}", err),
             WaCustomError::NotFound(msg) => write!(f, "{} Not Found!", msg),
         }
     }
