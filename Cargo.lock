@@ -829,12 +829,6 @@ dependencies = [
 
 [[package]]
 name = "byteorder"
-version = "0.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fc10e8cc6b2580fda3f36eb6dc5316657f812a3df879a44a66fc9f0fdbc4855"
-
-[[package]]
-name = "byteorder"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
@@ -859,16 +853,6 @@ name = "cast"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
-
-[[package]]
-name = "cbor"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e56053652b4b5c0ded5ae6183c7cd547ad2dd6bcce149658bef052a4995533bd"
-dependencies = [
- "byteorder 0.5.3",
- "rustc-serialize",
-]
 
 [[package]]
 name = "cc"
@@ -1035,8 +1019,7 @@ dependencies = [
  "base64 0.22.1",
  "bincode",
  "bs58",
- "byteorder 1.5.0",
- "cbor",
+ "byteorder",
  "chrono",
  "criterion",
  "cuckoofilter",
@@ -1189,7 +1172,7 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b810a8449931679f64cd7eef1bbd0fa315801b6d5d9cdc1ace2804d6529eee18"
 dependencies = [
- "byteorder 1.5.0",
+ "byteorder",
  "fnv",
  "rand 0.7.3",
 ]
@@ -2407,7 +2390,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8599523cc692124dcdb6da3088315de8027e410daf2e64c46a6e6e4f69a009ff"
 dependencies = [
  "bincode",
- "byteorder 1.5.0",
+ "byteorder",
  "rand 0.4.6",
  "siphasher 0.3.11",
 ]
@@ -2484,11 +2467,11 @@ dependencies = [
 
 [[package]]
 name = "ptr_meta"
-version = "0.3.0-pre1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "305e6272a833a48eecd7f05cc3b00f7bc6dce9b8955bb31ffd0481fa5947118e"
+checksum = "fe9e76f66d3f9606f44e45598d155cb13ecf09f4a28199e48daf8c8fc937ea90"
 dependencies = [
- "ptr_meta_derive 0.3.0-pre1",
+ "ptr_meta_derive 0.3.0",
 ]
 
 [[package]]
@@ -2504,9 +2487,9 @@ dependencies = [
 
 [[package]]
 name = "ptr_meta_derive"
-version = "0.3.0-pre1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb26b4ec087a56688b4dddd8c7bbed38ad1867042ba6e1314162e5b370edaaac"
+checksum = "ca414edb151b4c8d125c12566ab0d74dc9cdba36fb80eb7b848c15f495fd32d1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2552,11 +2535,11 @@ checksum = "dc33ff2d4973d518d823d61aa239014831e521c75da58e3df4840d3f47749d09"
 
 [[package]]
 name = "rancor"
-version = "0.1.0-pre8"
+version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7194da341620fb0871865b69e50d7522a8ff0ab9d0b6084067edfc1f11b1e11"
+checksum = "caf5f7161924b9d1cea0e4cabc97c372cea92b5f927fc13c6bca67157a0ad947"
 dependencies = [
- "ptr_meta 0.3.0-pre1",
+ "ptr_meta 0.3.0",
 ]
 
 [[package]]
@@ -2822,12 +2805,6 @@ name = "rustc-hash"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "583034fd73374156e66797ed8e5b0d5690409c9226b22d87cb7f19821c05d152"
-
-[[package]]
-name = "rustc-serialize"
-version = "0.3.25"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe834bc780604f4674073badbad26d7219cadfb4a2275802db12cbae17498401"
 
 [[package]]
 name = "rustc_version"

@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 import requests
 import json
 import numpy as np
@@ -11,7 +13,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Define your dynamic variables
 token = None
-host = "https://127.0.0.1:8443"
+host = "http://127.0.0.1:8443"
 base_url = f"{host}/vectordb"
 
 
@@ -419,7 +421,7 @@ if __name__ == "__main__":
         dimension=dimensions,
     )
     print("Create Collection(DB) Response:", create_collection_response)
-    # create_explicit_index(vector_db_name)
+    create_explicit_index(vector_db_name)
 
     start_time = time.time()
 
