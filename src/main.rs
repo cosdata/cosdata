@@ -4,15 +4,20 @@ mod app_context;
 pub mod config_loader;
 pub mod cosql;
 pub mod distance;
-pub mod grpc;
 pub mod indexes;
 pub mod macros;
-mod models;
 pub mod metadata;
+mod models;
 pub mod quantization;
 pub mod storage;
 mod vector_store;
 mod web_server;
+
+#[macro_use]
+mod cfg_macros;
+
+#[cfg(feature = "grpc-server")]
+pub mod grpc;
 
 use actix_web::web::Data;
 
@@ -26,7 +31,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let context = Data::new(AppContext::new(config)?);
 
     // Start gRPC server
+    #[cfg(feature = "grpc-server")]
     let grpc_context = context.clone().into_inner();
+
+    #[cfg(feature = "grpc-server")]
     actix_web::rt::spawn(async move {
         const DEFAULT_GRPC_PORT: u16 = 50051;
         if let Err(e) = grpc::server::start_grpc_server(grpc_context, DEFAULT_GRPC_PORT).await {

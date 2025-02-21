@@ -2,9 +2,12 @@ use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
 use crate::app_context::AppContext;
-use crate::models::collection::{Collection, DenseVectorOptions, SparseVectorOptions, CollectionConfig};
+use crate::models::collection::{
+    Collection, CollectionConfig, DenseVectorOptions, SparseVectorOptions,
+};
 use crate::models::common::WaCustomError;
 
+crate::cfg_grpc! {
 use super::proto::collections_service_server::CollectionsService;
 use super::proto::{
     Collection as ProtoCollection,
@@ -111,4 +114,5 @@ impl CollectionsService for CollectionsServiceImpl {
 
         Ok(Response::new(()))
     }
+}
 }
