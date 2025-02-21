@@ -33,7 +33,8 @@ pub async fn run_actix_server_with_context(ctx: Data<AppContext>) -> std::io::Re
     };
 
     log::info!(
-        "starting HTTPS server at {}://{}:{}",
+        "starting {} server at {}://{}:{}",
+        &config.server.mode.protocol().to_uppercase(),
         &config.server.mode.protocol(),
         &config.server.host,
         &config.server.port,
