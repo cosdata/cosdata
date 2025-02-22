@@ -136,6 +136,58 @@ The system automatically routes the query to the appropriate vector copies based
 - OR conditions require multiple searches using all-fields copy, with results merged via map-reduce
 - AND conditions use the pre-computed combination copies
 
+
+* Computing Cosine Similarity
+
+This section describes an optimized approach for computing cosine similarity by first checking alignment in a subset of dimensions (Metadata) before computing full similarity.
+
+The approach works by splitting the vector into two parts:
+
+    - Metadata (M): A subset of dimensions (e.g., last 10 dimensions).
+    - Values (V): The remaining dimensions (e.g., first 90 dimensions).
+
+** Step 1: Compute Cosine Similarity for Metadata (M)
+First, compute cosine similarity using only the metadata dimensions.
+
+NOTE: the pseudocode is meant only for showing the logic, need to use appropriate quantization & SIMD functions for the Value computations, the Metadata computations can be done with scalar u32.
+
+#+BEGIN_SRC rust
+fn compute_metadata_similarity(A: &[f64], B: &[f64], metadata_indices: &[usize]) -> f64 {
+    let dot_product: f64 = metadata_indices.iter().map(|&i| A[i] * B[i]).sum();
+    let norm_A = metadata_indices.iter().map(|&i| A[i] * A[i]).sum::<f64>().sqrt();
+    let norm_B = metadata_indices.iter().map(|&i| B[i] * B[i]).sum::<f64>().sqrt();
+    dot_product / (norm_A * norm_B)
+}
+#+END_SRC
+
+** Step 2: Compute Full Cosine Similarity if Needed
+Only if the metadata similarity is ~1 (consider a small epsilon for floating point rounding), compute full similarity.
+
+** Compute Dot Product for Values (V)
+#+BEGIN_SRC rust
+fn compute_dot_product(A: &[f64], B: &[f64], value_indices: &[usize]) -> f64 {
+    value_indices.iter().map(|&i| A[i] * B[i]).sum()
+}
+#+END_SRC
+
+** Compute Norms for Values (V)
+#+BEGIN_SRC rust
+fn compute_norm(A: &[f64], indices: &[usize]) -> f64 {
+    indices.iter().map(|&i| A[i] * A[i]).sum::<f64>().sqrt()
+}
+#+END_SRC
+
+** Compute Total Cosine Similarity
+#+BEGIN_SRC rust
+fn compute_full_similarity(A: &[f64], B: &[f64], metadata_indices: &[usize], value_indices: &[usize]) -> f64 {
+    let S_M = compute_dot_product(A, B, metadata_indices);
+    let S_V = compute_dot_product(A, B, value_indices);
+    let norm_A = (compute_norm(A, metadata_indices).powi(2) + compute_norm(A, value_indices).powi(2)).sqrt();
+    let norm_B = (compute_norm(B, metadata_indices).powi(2) + compute_norm(B, value_indices).powi(2)).sqrt();
+    (S_M + S_V) / (norm_A * norm_B)
+}
+#+END_SRC
+
 * Performance Implications
 
 The unified index structure with phantom dimensions has several performance characteristics:
