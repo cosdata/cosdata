@@ -4,6 +4,7 @@ use crate::api::vectordb::collections::collections_module;
 use crate::api::vectordb::indexes::indexes_module;
 use crate::api::vectordb::transactions::transactions_module;
 use crate::api::vectordb::vectors::vectors_module;
+use crate::api::vectordb::versions;
 use crate::app_context::AppContext;
 use crate::config_loader::{load_config, ServerMode, Ssl};
 use actix_cors::Cors;
