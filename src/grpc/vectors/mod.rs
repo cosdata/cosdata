@@ -1,9 +1,11 @@
+use crate::app_context::AppContext;
+use crate::indexes::inverted_index_types::SparsePair;
+use crate::models::common::WaCustomError;
+use crate::models::types::VectorId;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
-use crate::app_context::AppContext;
-use crate::models::types::VectorId;
-use crate::models::common::WaCustomError;
-use crate::indexes::inverted_index_types::SparsePair;
+
+crate::cfg_grpc! {
 use super::proto::{
     CreateVectorRequest, GetVectorRequest,
     UpdateVectorRequest, DeleteVectorRequest,
@@ -249,4 +251,5 @@ impl VectorsService for VectorsServiceImpl {
             None => Err(Status::invalid_argument("Query must be specified")),
         }
     }
+}
 }

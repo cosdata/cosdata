@@ -58,6 +58,8 @@ jobs:
           save-cache: "${{ github.ref_name == 'main' }}"
           cache-key: warm
       - run: cargo test
+      - run: cargo test --all-features
+
   clippy-check:
     name: Clippy Check
     runs-on: ubuntu-latest
