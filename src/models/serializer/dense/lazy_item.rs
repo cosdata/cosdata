@@ -2,23 +2,21 @@ use std::{collections::HashSet, sync::atomic::Ordering};
 
 use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
-    cache_loader::ProbCache,
+    cache_loader::DenseIndexCache,
     lazy_load::FileIndex,
     prob_lazy_load::lazy_item::{ProbLazyItemState, ReadyState},
     prob_node::SharedNode,
     versioning::Hash,
 };
 
-use super::{ProbSerialize, UpdateSerialized};
+use super::{DenseSerialize, DenseUpdateSerialized};
 
-impl ProbSerialize for SharedNode {
+impl DenseSerialize for SharedNode {
     fn serialize(
         &self,
         bufmans: &BufferManagerFactory<Hash>,
-        level_0_bufmans: &BufferManagerFactory<Hash>,
         version: Hash,
         cursor: u64,
-        is_level_0: bool,
     ) -> Result<u32, BufIoError> {
         let lazy_item = unsafe { &**self };
         match lazy_item.unsafe_get_state() {
@@ -31,11 +29,7 @@ impl ProbSerialize for SharedNode {
                 is_serialized,
                 ..
             }) => {
-                let bufman = if is_level_0 {
-                    level_0_bufmans.get(*version_id)?
-                } else {
-                    bufmans.get(*version_id)?
-                };
+                let bufman = bufmans.get(*version_id)?;
 
                 if is_serialized.load(Ordering::Acquire) {
                     if !persist_flag.swap(false, Ordering::Acquire) {
@@ -48,14 +42,7 @@ impl ProbSerialize for SharedNode {
                         bufman.open_cursor()?
                     };
 
-                    data.update_serialized(
-                        bufmans,
-                        level_0_bufmans,
-                        *version_id,
-                        *file_offset,
-                        cursor,
-                        is_level_0,
-                    )?;
+                    data.update_serialized(bufmans, *version_id, *file_offset, cursor)?;
 
                     if version_id != &version {
                         bufman.close_cursor(cursor)?;
@@ -72,7 +59,7 @@ impl ProbSerialize for SharedNode {
                     is_serialized.store(true, Ordering::Release);
                     persist_flag.store(false, Ordering::Release);
 
-                    data.serialize(bufmans, level_0_bufmans, *version_id, cursor, is_level_0)?;
+                    data.serialize(bufmans, *version_id, cursor)?;
 
                     if version_id != &version {
                         bufman.close_cursor(cursor)?;
@@ -86,9 +73,8 @@ impl ProbSerialize for SharedNode {
 
     fn deserialize(
         _bufmans: &BufferManagerFactory<Hash>,
-        _level_0_bufmans: &BufferManagerFactory<Hash>,
         file_index: FileIndex,
-        cache: &ProbCache,
+        cache: &DenseIndexCache,
         max_loads: u16,
         skipm: &mut HashSet<u64>,
         is_level_0: bool,

@@ -6,14 +6,14 @@ use std::{
 
 use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
-    cache_loader::ProbCache,
+    cache_loader::DenseIndexCache,
     lazy_load::FileIndex,
     prob_node::SharedNode,
     types::{FileOffset, MetricResult},
     versioning::Hash,
 };
 
-use super::ProbSerialize;
+use super::DenseSerialize;
 
 // @SERIALIZED_SIZE:
 //   2 bytes for length +
@@ -22,20 +22,14 @@ use super::ProbSerialize;
 //     10 bytes offset & version +
 //     5 bytes for distance/similarity
 //   ) = 2 + len * 19
-impl ProbSerialize for Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]> {
+impl DenseSerialize for Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]> {
     fn serialize(
         &self,
         bufmans: &BufferManagerFactory<Hash>,
-        level_0_bufmans: &BufferManagerFactory<Hash>,
         version: Hash,
         cursor: u64,
-        is_level_0: bool,
     ) -> Result<u32, BufIoError> {
-        let bufman = if is_level_0 {
-            level_0_bufmans.get(version)?
-        } else {
-            bufmans.get(version)?
-        };
+        let bufman = bufmans.get(version)?;
         let start = bufman.cursor_position(cursor)?;
         debug_assert_eq!(
             (start - 39) % (self.len() as u64 * 19 + 121),
@@ -43,21 +37,19 @@ impl ProbSerialize for Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]> {
             "offset: {}",
             start
         );
-        let mut buf = Vec::with_capacity(2 + self.len() * 19);
-        buf.extend((self.len() as u16).to_le_bytes());
+        bufman.update_u16_with_cursor(cursor, self.len() as u16)?;
 
         for neighbor in self.iter() {
             let (node_id, node_ptr, dist) = unsafe {
                 if let Some(neighbor) = neighbor.load(Ordering::SeqCst).as_ref() {
                     neighbor.clone()
                 } else {
-                    buf.extend([u8::MAX; 19]);
+                    bufman.update_with_cursor(cursor, &[u8::MAX; 19])?;
                     continue;
                 }
             };
 
             let node = unsafe { &*node_ptr };
-            debug_assert_eq!(node.is_level_0, is_level_0);
 
             let (node_offset, node_version_number, node_version_id) = match node.get_file_index() {
                 FileIndex::Valid {
@@ -67,24 +59,20 @@ impl ProbSerialize for Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]> {
                 } => (offset.0, version_number, version_id),
                 _ => unreachable!(),
             };
-            buf.extend(node_id.to_le_bytes());
-            buf.extend(node_offset.to_le_bytes());
-            buf.extend(node_version_number.to_le_bytes());
-            buf.extend(node_version_id.to_le_bytes());
-            let (tag, value) = dist.get_tag_and_value();
-            buf.push(tag);
-            buf.extend(value.to_le_bytes());
-        }
 
-        bufman.update_with_cursor(cursor, &buf)?;
+            bufman.update_u32_with_cursor(cursor, node_id)?;
+            bufman.update_u32_with_cursor(cursor, node_offset)?;
+            bufman.update_u16_with_cursor(cursor, node_version_number)?;
+            bufman.update_u32_with_cursor(cursor, *node_version_id)?;
+            crate::models::serializer::SimpleSerialize::serialize(&dist, &bufman, cursor)?;
+        }
         Ok(start as u32)
     }
 
     fn deserialize(
         bufmans: &BufferManagerFactory<Hash>,
-        level_0_bufmans: &BufferManagerFactory<Hash>,
         file_index: FileIndex,
-        cache: &ProbCache,
+        cache: &DenseIndexCache,
         max_loads: u16,
         skipm: &mut HashSet<u64>,
         is_level_0: bool,
@@ -100,11 +88,7 @@ impl ProbSerialize for Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]> {
                 version_number: _,
                 offset: FileOffset(offset),
             } => {
-                let bufman = if is_level_0 {
-                    level_0_bufmans.get(version_id)?
-                } else {
-                    bufmans.get(version_id)?
-                };
+                let bufman = bufmans.get(version_id)?;
                 let cursor = bufman.open_cursor()?;
                 bufman.seek_with_cursor(cursor, offset as u64)?;
                 let len = bufman.read_u16_with_cursor(cursor)? as usize;
@@ -137,7 +121,6 @@ impl ProbSerialize for Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]> {
 
                     let node = SharedNode::deserialize(
                         bufmans,
-                        level_0_bufmans,
                         node_file_index,
                         cache,
                         max_loads,

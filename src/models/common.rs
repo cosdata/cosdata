@@ -1,5 +1,5 @@
 use super::buffered_io::BufIoError;
-use super::cache_loader::ProbCache;
+use super::cache_loader::DenseIndexCache;
 use super::lazy_load::LazyItem;
 use super::prob_node::SharedNode;
 use super::types::{MergedNode, MetricResult, VectorId};
@@ -493,7 +493,7 @@ pub fn add_option_vecs(
 pub fn remove_duplicates_and_filter(
     vec: Vec<(SharedNode, MetricResult)>,
     k: Option<usize>,
-    cache: &ProbCache,
+    cache: &DenseIndexCache,
 ) -> Vec<(VectorId, MetricResult)> {
     let mut seen = HashSet::new();
     let mut collected = vec
@@ -666,6 +666,16 @@ impl<K: Eq + Hash, V> TSHashTable<K, V> {
                 new_v
             }
         }
+    }
+
+    pub fn modify_or_insert<M, I>(&self, k: K, modify: M, insert: I)
+    where
+        M: FnOnce(&mut V),
+        I: FnOnce() -> V,
+    {
+        let index = self.hash_key(&k);
+        let mut ht = self.hash_table_list[index].lock().unwrap();
+        ht.entry(k).and_modify(modify).or_insert_with(insert);
     }
 
     // This bool represents whether the key was found in the map or not.

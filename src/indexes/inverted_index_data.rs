@@ -29,7 +29,7 @@ impl TryFrom<Arc<InvertedIndex>> for InvertedIndexData {
             auto_create_index: inverted_index.auto_create_index,
             metadata_schema: inverted_index.metadata_schema.clone(),
             max_vectors: inverted_index.max_vectors,
-            quantization: inverted_index.root.quantization,
+            quantization: inverted_index.root.root.quantization_bits,
             // TODO add a FileIndex value to root prop
             // to persist the root of the inverted index
             // root: inverted_index

@@ -1,6 +1,54 @@
-use std::cell::Cell;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, RwLock,
+};
 
-#[derive(Clone, Default, Debug, PartialEq)]
+use crate::models::{types::FileOffset, versioning::Hash};
+
+#[derive(Debug, Clone)]
+pub struct VersionedPagepool<const LEN: usize> {
+    pub current_version: Hash,
+    pub serialized_at: Arc<RwLock<Option<FileOffset>>>,
+    pub pagepool: Pagepool<LEN>,
+    pub next: Arc<RwLock<Option<VersionedPagepool<LEN>>>>,
+}
+
+impl<const LEN: usize> PartialEq for VersionedPagepool<LEN> {
+    fn eq(&self, other: &Self) -> bool {
+        self.current_version == other.current_version
+            && *self.serialized_at.read().unwrap() == *other.serialized_at.read().unwrap()
+            && self.pagepool == other.pagepool
+            && *self.next.read().unwrap() == *other.next.read().unwrap()
+    }
+}
+
+impl<const LEN: usize> VersionedPagepool<LEN> {
+    pub fn new(version: Hash) -> Self {
+        Self {
+            current_version: version,
+            serialized_at: Arc::new(RwLock::new(None)),
+            pagepool: Pagepool::default(),
+            next: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    pub fn push(&mut self, version: Hash, vector_id: u32) {
+        if self.current_version != version {
+            let mut next_write_guard = self.next.write().unwrap();
+            if let Some(next) = &mut *next_write_guard {
+                return next.push(version, vector_id);
+            }
+
+            let mut new_next = Self::new(version);
+            new_next.push(version, vector_id);
+            *next_write_guard = Some(new_next);
+            return;
+        }
+        self.pagepool.push(vector_id);
+    }
+}
+
+#[derive(Default, Debug, Clone, PartialEq)]
 pub struct Pagepool<const LEN: usize> {
     pub inner: Vec<Page<LEN>>,
 }
@@ -35,11 +83,18 @@ impl<const LEN: usize> std::ops::Deref for Pagepool<LEN> {
     }
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Debug, Clone)]
 pub struct Page<const LEN: usize> {
     pub data: [u32; LEN],
     pub len: usize,
-    pub serialized_at: Cell<Option<u32>>,
+    pub serialized_at: Arc<RwLock<Option<FileOffset>>>,
+    pub dirty: Arc<AtomicBool>,
+}
+
+impl<const LEN: usize> PartialEq for Page<LEN> {
+    fn eq(&self, other: &Self) -> bool {
+        self.data == other.data && self.len == other.len
+    }
 }
 
 impl<const LEN: usize> std::ops::Deref for Page<LEN> {
@@ -55,20 +110,23 @@ impl<const LEN: usize> Page<LEN> {
         Self {
             data: [u32::MAX; LEN],
             len: 0,
-            serialized_at: Cell::new(None),
+            serialized_at: Arc::new(RwLock::new(None)),
+            dirty: Arc::new(AtomicBool::new(true)),
         }
     }
 
     pub fn push(&mut self, data: u32) {
         self.data[self.len] = data;
         self.len += 1;
+        self.dirty.store(true, Ordering::Release);
     }
 
     fn from_data(data: [u32; LEN]) -> Self {
         Self {
             data,
             len: 0,
-            serialized_at: Cell::new(None),
+            serialized_at: Arc::new(RwLock::new(None)),
+            dirty: Arc::new(AtomicBool::new(true)),
         }
     }
 

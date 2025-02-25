@@ -1,13 +1,17 @@
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
-use crate::models::{
-    buffered_io::BufIoError,
-    cache_loader::{ProbCache, ProbCacheable},
-    lazy_load::{largest_power_of_4_below, FileIndex, SyncPersist},
-    prob_node::ProbNode,
-    serializer::prob::ProbSerialize,
-    types::FileOffset,
-    versioning::Hash,
+use crate::{
+    models::{
+        buffered_io::BufIoError,
+        cache_loader::{DenseIndexCache, InvertedIndexCache},
+        fixedset::VersionedInvertedFixedSetIndex,
+        lazy_load::{largest_power_of_4_below, FileIndex, SyncPersist},
+        prob_node::ProbNode,
+        serializer::inverted::DATA_FILE_PARTS,
+        types::FileOffset,
+        versioning::Hash,
+    },
+    storage::inverted_index_sparse_ann_basic::InvertedIndexSparseAnnNodeBasicTSHashmapData,
 };
 
 use super::lazy_item_array::ProbLazyItemArray;
@@ -143,24 +147,22 @@ impl<T> ProbLazyItem<T> {
     }
 }
 
-impl<T: ProbSerialize + ProbCacheable> ProbLazyItem<T> {
-    pub fn try_get_data<'a>(&self, cache: &ProbCache) -> Result<&'a T, BufIoError> {
+impl ProbLazyItem<ProbNode> {
+    pub fn try_get_data<'a>(&self, cache: &DenseIndexCache) -> Result<&'a ProbNode, BufIoError> {
         unsafe {
             match &*self.state.load(Ordering::Relaxed) {
                 ProbLazyItemState::Ready(state) => Ok(&state.data),
                 ProbLazyItemState::Pending(file_index) => {
-                    (&*(cache.get_object(file_index.clone(), self.is_level_0)?)).try_get_data(cache)
+                    (*(cache.get_object(file_index.clone(), self.is_level_0)?)).try_get_data(cache)
                 }
             }
         }
     }
-}
 
-impl ProbLazyItem<ProbNode> {
     pub fn add_version(
         this: *mut Self,
         version: *mut Self,
-        cache: &ProbCache,
+        cache: &DenseIndexCache,
     ) -> Result<Result<*mut Self, *mut Self>, BufIoError> {
         let data = unsafe { &*this }.try_get_data(cache)?;
         let versions = &data.versions;
@@ -179,7 +181,7 @@ impl ProbLazyItem<ProbNode> {
         version: *mut Self,
         self_relative_version_number: u16,
         target_relative_version_number: u16,
-        cache: &ProbCache,
+        cache: &DenseIndexCache,
     ) -> Result<Result<*mut Self, *mut Self>, BufIoError> {
         let target_diff = target_relative_version_number - self_relative_version_number;
         if target_diff == 0 {
@@ -206,7 +208,7 @@ impl ProbLazyItem<ProbNode> {
 
     pub fn get_latest_version(
         this: *mut Self,
-        cache: &ProbCache,
+        cache: &DenseIndexCache,
     ) -> Result<(*mut Self, u16), BufIoError> {
         let data = unsafe { &*this }.try_get_data(cache)?;
         let versions = &data.versions;
@@ -217,7 +219,7 @@ impl ProbLazyItem<ProbNode> {
     fn get_latest_version_inner<const LEN: usize>(
         this: *mut Self,
         versions: &ProbLazyItemArray<ProbNode, LEN>,
-        cache: &ProbCache,
+        cache: &DenseIndexCache,
     ) -> Result<(*mut Self, u16), BufIoError> {
         if let Some(last) = versions.last() {
             let (latest_version, relative_local_version_number) =
@@ -231,7 +233,10 @@ impl ProbLazyItem<ProbNode> {
         }
     }
 
-    pub fn get_root_version(this: *mut Self, cache: &ProbCache) -> Result<*mut Self, BufIoError> {
+    pub fn get_root_version(
+        this: *mut Self,
+        cache: &DenseIndexCache,
+    ) -> Result<*mut Self, BufIoError> {
         let self_ = unsafe { &*this };
         let root = self_.try_get_data(cache)?.root_version;
         Ok(if root.is_null() { this } else { root })
@@ -240,7 +245,7 @@ impl ProbLazyItem<ProbNode> {
     pub fn get_version(
         this: *mut Self,
         version: u16,
-        cache: &ProbCache,
+        cache: &DenseIndexCache,
     ) -> Result<Option<*mut Self>, BufIoError> {
         let self_ = unsafe { &*this };
         let version_number = self_.get_current_version_number();
@@ -268,6 +273,44 @@ impl ProbLazyItem<ProbNode> {
         }
 
         Self::get_version(prev, version, cache)
+    }
+}
+
+impl ProbLazyItem<InvertedIndexSparseAnnNodeBasicTSHashmapData> {
+    pub fn try_get_data<'a>(
+        &self,
+        cache: &InvertedIndexCache,
+        dim: u32,
+    ) -> Result<&'a InvertedIndexSparseAnnNodeBasicTSHashmapData, BufIoError> {
+        unsafe {
+            match &*self.state.load(Ordering::Relaxed) {
+                ProbLazyItemState::Ready(state) => Ok(&state.data),
+                ProbLazyItemState::Pending(file_index) => {
+                    let offset = file_index.get_offset().unwrap();
+                    (*(cache.get_data(offset, (dim % DATA_FILE_PARTS) as u8)?))
+                        .try_get_data(cache, dim)
+                }
+            }
+        }
+    }
+}
+
+impl ProbLazyItem<VersionedInvertedFixedSetIndex> {
+    pub fn try_get_data<'a>(
+        &self,
+        cache: &InvertedIndexCache,
+        dim: u32,
+    ) -> Result<&'a VersionedInvertedFixedSetIndex, BufIoError> {
+        unsafe {
+            match &*self.state.load(Ordering::Relaxed) {
+                ProbLazyItemState::Ready(state) => Ok(&state.data),
+                ProbLazyItemState::Pending(file_index) => {
+                    let offset = file_index.get_offset().unwrap();
+                    (*(cache.get_sets(offset, (dim % DATA_FILE_PARTS) as u8)?))
+                        .try_get_data(cache, dim)
+                }
+            }
+        }
     }
 }
 

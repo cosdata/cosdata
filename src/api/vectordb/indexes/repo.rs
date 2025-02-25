@@ -73,7 +73,7 @@ pub(crate) async fn create_sparse_index(
         .get_collection(&collection_name)
         .ok_or(IndexesError::CollectionNotFound)?;
 
-    init_inverted_index_for_collection(ctx, &collection, quantization.into_u8())
+    init_inverted_index_for_collection(ctx, &collection, quantization.into_bits())
         .await
         .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;
 

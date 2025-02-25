@@ -2,10 +2,12 @@ use serde::Serialize;
 
 use super::inverted_index_sparse_ann_basic::{
     InvertedIndexSparseAnnBasic, InvertedIndexSparseAnnBasicDashMap,
-    InvertedIndexSparseAnnNodeBasic, InvertedIndexSparseAnnNodeBasicDashMap,
+    InvertedIndexSparseAnnBasicTSHashmap, InvertedIndexSparseAnnNodeBasic,
+    InvertedIndexSparseAnnNodeBasicDashMap,
 };
-use crate::indexes::inverted_index::InvertedIndex;
-use crate::storage::page::Pagepool;
+use super::page::VersionedPagepool;
+use crate::models::buffered_io::BufIoError;
+use crate::models::versioning::Hash;
 
 use crate::models::types::{SparseQueryVector, SparseQueryVectorDimensionType, SparseVector};
 use std::collections::{HashMap, HashSet};
@@ -45,13 +47,22 @@ impl SparseAnnQueryBasic {
 
     // Creates a sparse query vector with dimension types based on the posting list length.
     // This is used to optimize sparse ANN search using a cuckoo filter and two-stage search.
-    fn create_sparse_query_vector(&self, index: &InvertedIndex) -> SparseQueryVector {
+    fn create_sparse_query_vector(
+        &self,
+        index: &InvertedIndexSparseAnnBasicTSHashmap,
+        version: Hash,
+    ) -> Result<SparseQueryVector, BufIoError> {
         let mut posting_list_lengths: Vec<(u32, usize)> = Vec::new();
         for (dim_index, _) in &self.query_vector.entries {
             if let Some(node) = index.find_node(*dim_index) {
                 let mut length = 0;
                 for key in 0..64 {
-                    length += node.data.get_or_create(key, Pagepool::default).len();
+                    length += unsafe { &*node.data }
+                        .try_get_data(&index.cache, node.dim_index)?
+                        .map
+                        .get_or_create(key, || VersionedPagepool::new(version))
+                        .pagepool
+                        .len();
                 }
                 posting_list_lengths.push((*dim_index, length));
             }
@@ -106,7 +117,10 @@ impl SparseAnnQueryBasic {
             }
         }
 
-        SparseQueryVector::new(self.query_vector.vector_id, query_entries)
+        Ok(SparseQueryVector::new(
+            self.query_vector.vector_id,
+            query_entries,
+        ))
     }
 
     pub fn sequential_search(&self, index: &InvertedIndexSparseAnnBasic) -> Vec<SparseAnnResult> {
@@ -164,11 +178,12 @@ impl SparseAnnQueryBasic {
 
     pub fn sequential_search_tshashmap(
         &self,
-        index: &InvertedIndex,
+        index: &InvertedIndexSparseAnnBasicTSHashmap,
         // 16,32,64
         quantization: u8,
-    ) -> Vec<SparseAnnResult> {
-        let sparse_query_vector = self.create_sparse_query_vector(index);
+        version: Hash,
+    ) -> Result<Vec<SparseAnnResult>, BufIoError> {
+        let sparse_query_vector = self.create_sparse_query_vector(index, version)?;
         let mut dot_products: HashMap<u32, u32> = HashMap::new();
         // same as `0.5` quantized
         let half_quantized = quantization / 2;
@@ -195,7 +210,9 @@ impl SparseAnnQueryBasic {
                             // Only read the values from the cuckoo filter tree, without
                             // going through the entire list of values for this dimension.
                             for vector_id in shortlisted_ids.iter() {
-                                if let Some(index) = node.find_key_of_id(*vector_id) {
+                                if let Some(index) =
+                                    node.find_key_of_id(*vector_id, &index.cache)?
+                                {
                                     let dot_product =
                                         dot_products.entry(*vector_id).or_insert(0u32);
                                     *dot_product += (quantized_query_value * index as u8) as u32;
@@ -214,7 +231,9 @@ impl SparseAnnQueryBasic {
 
                             // First do cuckoo filter lookups using the shortlisted ids
                             for vector_id in shortlisted_ids.iter() {
-                                if let Some(index) = node.find_key_of_id(*vector_id) {
+                                if let Some(index) =
+                                    node.find_key_of_id(*vector_id, &index.cache)?
+                                {
                                     let dot_product =
                                         dot_products.entry(*vector_id).or_insert(0u32);
                                     *dot_product += (quantized_query_value * index as u8) as u32;
@@ -223,7 +242,11 @@ impl SparseAnnQueryBasic {
 
                             // Then iterate through the map/list for the remaining quantized keys
                             for key in (three_fourth_quantized..quantization).rev() {
-                                let p = node.data.get_or_create(key, Pagepool::default);
+                                let p = unsafe { &*node.data }
+                                    .try_get_data(&index.cache, node.dim_index)?
+                                    .map
+                                    .get_or_create(key, || VersionedPagepool::new(version))
+                                    .pagepool;
                                 for x in p.iter() {
                                     for x in x.iter() {
                                         let vec_id = x;
@@ -258,7 +281,9 @@ impl SparseAnnQueryBasic {
 
                             // First do cuckoo filter lookups using the shortlisted ids
                             for vector_id in shortlisted_ids.iter() {
-                                if let Some(index) = node.find_key_of_id(*vector_id) {
+                                if let Some(index) =
+                                    node.find_key_of_id(*vector_id, &index.cache)?
+                                {
                                     let dot_product =
                                         dot_products.entry(*vector_id).or_insert(0u32);
                                     *dot_product += (quantized_query_value * index as u8) as u32;
@@ -267,7 +292,11 @@ impl SparseAnnQueryBasic {
 
                             // Then iterate through the map/list for the remaining quantized keys
                             for key in (three_fourth_quantized..quantization).rev() {
-                                let p = node.data.get_or_create(key, Pagepool::default);
+                                let p = unsafe { &*node.data }
+                                    .try_get_data(&index.cache, node.dim_index)?
+                                    .map
+                                    .get_or_create(key, || VersionedPagepool::new(version))
+                                    .pagepool;
                                 for x in p.iter() {
                                     for x in x.iter() {
                                         let vec_id = x;
@@ -292,7 +321,11 @@ impl SparseAnnQueryBasic {
                             // in inverted index, and then use these shortlisted ids to lookup
                             // when needed in the cuckoo filter tree of the other dims
                             for key in (0..quantization).rev() {
-                                let p = node.data.get_or_create(key, Pagepool::default);
+                                let p = unsafe { &*node.data }
+                                    .try_get_data(&index.cache, node.dim_index)?
+                                    .map
+                                    .get_or_create(key, || VersionedPagepool::new(version))
+                                    .pagepool;
                                 for x in p.iter() {
                                     for x in x.iter() {
                                         let vec_id = x;
@@ -332,7 +365,7 @@ impl SparseAnnQueryBasic {
                 .partial_cmp(&a.similarity)
                 .unwrap_or(Ordering::Equal)
         });
-        results
+        Ok(results)
     }
 
     pub fn sequential_search_dashmap(

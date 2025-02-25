@@ -3,7 +3,7 @@ use crate::indexes::inverted_index::{InvertedIndex, InvertedIndexTransaction};
 use crate::indexes::inverted_index_types::{RawSparseVectorEmbedding, SparsePair};
 use crate::macros::key;
 use crate::models::buffered_io::BufferManagerFactory;
-use crate::models::cache_loader::ProbCache;
+use crate::models::cache_loader::DenseIndexCache;
 use crate::models::collection::Collection;
 use crate::models::common::*;
 use crate::models::embedding_persist::EmbeddingOffset;
@@ -85,7 +85,7 @@ pub async fn init_dense_index_for_collection(
     ));
 
     // TODO: May be the value can be taken from config
-    let cache = Arc::new(ProbCache::new(
+    let cache = Arc::new(DenseIndexCache::new(
         index_manager.clone(),
         level_0_index_manager.clone(),
         prop_file.clone(),
@@ -150,7 +150,7 @@ pub async fn init_dense_index_for_collection(
 pub async fn init_inverted_index_for_collection(
     ctx: Arc<AppContext>,
     collection: &Collection,
-    quantization: u8,
+    quantization_bits: u8,
 ) -> Result<Arc<InvertedIndex>, WaCustomError> {
     let collection_name = &collection.name;
     let collection_path: Arc<Path> = collection.get_path();
@@ -176,33 +176,21 @@ pub async fn init_inverted_index_for_collection(
         8192,
     ));
 
-    let index_manager = Arc::new(BufferManagerFactory::new(
-        index_path.into(),
-        |root, ver: &Hash| root.join(format!("{}.index", **ver)),
-        8192,
-    ));
-
-    // TODO FIX THE FOLLOWING ISSUE
-    // Has to call index.manager.get() here
-    // to create the index file on disk upon index creation
-    let _ = index_manager.get(hash);
-    index_manager.flush_all()?;
-
     let index = Arc::new(InvertedIndex::new(
         collection_name.clone(),
         collection.description.clone(),
+        index_path.clone().into(),
         collection.sparse_vector.auto_create_index,
         // @TODO(vineet): Fix the following after confirming that
         // metadata schema is not required for inverted indexes
         None,
         collection.config.max_vectors,
         lmdb,
-        ArcShift::new(hash),
+        hash,
         vcs,
         vec_raw_manager,
-        index_manager,
-        quantization,
-    ));
+        quantization_bits,
+    )?);
 
     ctx.ain_env
         .collections_map
@@ -460,12 +448,14 @@ pub fn run_upload_sparse_vector(
 
     vecs.into_iter()
         .map(|(id, vec)| {
-            vec.iter().for_each(|vec| {
-                // TODO (Question)
-                // should InvertedIndexSparseAnnNodeBasic::insert params change
-                // to accept vector_id as  u64 ??
-                inverted_index.insert(vec.0, vec.1, id.0 as u32);
-            });
+            vec.iter()
+                .map(|vec| {
+                    // TODO (Question)
+                    // should InvertedIndexSparseAnnNodeBasic::insert params change
+                    // to accept vector_id as  u64 ??
+                    inverted_index.insert(vec.0, vec.1, id.0 as u32, current_version)
+                })
+                .collect::<Result<(), _>>()?;
 
             // let vec_emb = RawSparseVectorEmbedding {
             //     raw_vec: Arc::new(vec),
@@ -485,7 +475,8 @@ pub fn run_upload_sparse_vector(
     bufman.flush()?;
 
     inverted_index.vec_raw_manager.flush_all()?;
-    inverted_index.index_manager.flush_all()?;
+    inverted_index.root.cache.dim_bufman.flush()?;
+    inverted_index.root.cache.data_bufmans.flush_all()?;
 
     Ok(())
 }
@@ -496,16 +487,20 @@ pub fn run_upload_sparse_vectors_in_transaction(
     transaction: &InvertedIndexTransaction,
     sample_points: Vec<(VectorId, Vec<SparsePair>)>,
 ) -> Result<(), WaCustomError> {
-    sample_points.into_iter().for_each(|(id, vec)| {
-        vec.iter().for_each(|vec| {
-            inverted_index.insert(vec.0, vec.1, id.0 as u32);
-        });
-        let vec_emb = RawSparseVectorEmbedding {
-            raw_vec: Arc::new(vec),
-            hash_vec: id,
-        };
-        transaction.post_raw_embedding(vec_emb);
-    });
+    sample_points
+        .into_iter()
+        .map(|(id, vec)| {
+            vec.iter()
+                .map(|vec| inverted_index.insert(vec.0, vec.1, id.0 as u32, transaction.id))
+                .collect::<Result<(), _>>()?;
+            let vec_emb = RawSparseVectorEmbedding {
+                raw_vec: Arc::new(vec),
+                hash_vec: id,
+            };
+            transaction.post_raw_embedding(vec_emb);
+            Ok::<_, WaCustomError>(())
+        })
+        .collect::<Result<(), _>>()?;
 
     Ok(())
 }

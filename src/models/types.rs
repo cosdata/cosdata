@@ -1,5 +1,5 @@
 use super::buffered_io::BufferManagerFactory;
-use super::cache_loader::ProbCache;
+use super::cache_loader::DenseIndexCache;
 use super::collection::Collection;
 use super::crypto::{DoubleSHA256Hash, SingleSHA256Hash};
 use super::embedding_persist::{write_embedding, EmbeddingOffset};
@@ -573,7 +573,7 @@ pub struct DenseIndex {
     pub storage_type: ArcShift<StorageType>,
     pub vcs: Arc<VersionControl>,
     pub hnsw_params: Arc<RwLock<HNSWHyperParams>>,
-    pub cache: Arc<ProbCache>,
+    pub cache: Arc<DenseIndexCache>,
     pub index_manager: Arc<BufferManagerFactory<Hash>>,
     pub level_0_index_manager: Arc<BufferManagerFactory<Hash>>,
     pub vec_raw_manager: Arc<BufferManagerFactory<Hash>>,
@@ -602,7 +602,7 @@ impl DenseIndex {
         storage_type: ArcShift<StorageType>,
         vcs: Arc<VersionControl>,
         hnsw_params: HNSWHyperParams,
-        cache: Arc<ProbCache>,
+        cache: Arc<DenseIndexCache>,
         index_manager: Arc<BufferManagerFactory<Hash>>,
         level_0_index_manager: Arc<BufferManagerFactory<Hash>>,
         vec_raw_manager: Arc<BufferManagerFactory<Hash>>,
@@ -801,7 +801,7 @@ impl CollectionsMap {
             |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
             8192,
         ));
-        let cache = Arc::new(ProbCache::new(
+        let cache = Arc::new(DenseIndexCache::new(
             index_manager.clone(),
             level_0_index_manager.clone(),
             prop_file.clone(),
@@ -957,11 +957,6 @@ impl CollectionsMap {
         let collection_path: Arc<Path> = root_path.join(&coll.name).into();
         let index_path = collection_path.join("sparse_inverted_index");
 
-        let index_manager = Arc::new(BufferManagerFactory::new(
-            index_path.clone().into(),
-            |root, ver: &Hash| root.join(format!("{}.index", **ver)),
-            8192,
-        ));
         let vec_raw_manager = Arc::new(BufferManagerFactory::new(
             index_path.clone().into(),
             |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
@@ -987,19 +982,20 @@ impl CollectionsMap {
             db,
         };
         let current_version = retrieve_current_version(&lmdb)?;
+        // TODO(a-rustacean): deserialize inverted index
         let inverted_index = InvertedIndex::new(
             coll.name.clone(),
             inverted_index_data.description,
+            index_path,
             inverted_index_data.auto_create_index,
             inverted_index_data.metadata_schema,
             inverted_index_data.max_vectors,
             lmdb,
-            ArcShift::new(current_version),
+            current_version,
             vcs,
             vec_raw_manager,
-            index_manager,
             inverted_index_data.quantization,
-        );
+        )?;
 
         Ok(inverted_index)
     }
