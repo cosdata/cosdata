@@ -1,4 +1,5 @@
 use std::cmp::{Ord, PartialOrd};
+use std::collections::HashMap;
 use std::fmt;
 
 use de::FieldValueVisitor;
@@ -60,7 +61,7 @@ fn decimal_to_binary_vec(num: u16, size: usize) -> Vec<u8> {
 
 type FieldName = String;
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 #[non_exhaustive]
 pub enum FieldValue {
     Int(i32),
@@ -84,6 +85,8 @@ impl<'de> Deserialize<'de> for FieldValue {
         deserializer.deserialize_any(FieldValueVisitor)
     }
 }
+
+pub type MetadataFields = HashMap<FieldName, FieldValue>;
 
 #[cfg(test)]
 mod tests {

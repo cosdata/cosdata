@@ -6,6 +6,7 @@ use crate::distance::DistanceFunction;
 use crate::indexes::inverted_index::InvertedIndex;
 use crate::indexes::inverted_index_types::RawSparseVectorEmbedding;
 use crate::macros::key;
+use crate::metadata::MetadataFields;
 use crate::models::buffered_io::*;
 use crate::models::common::*;
 use crate::models::dot_product::dot_product_f32;
@@ -676,16 +677,17 @@ pub fn index_embeddings_in_transaction(
     version: Hash,
     version_number: u16,
     transaction: &DenseIndexTransaction,
-    vecs: Vec<(VectorId, Vec<f32>)>,
+    vecs: Vec<(VectorId, Vec<f32>, Option<MetadataFields>)>,
 ) -> Result<(), WaCustomError> {
     let quantization = &*dense_index.quantization_metric;
     let hnsw_params = dense_index.hnsw_params.clone();
     let hnsw_params_guard = hnsw_params.read().unwrap();
-    let index = |vecs: Vec<(VectorId, Vec<f32>)>| {
-        for (id, values) in vecs {
+    let index = |vecs: Vec<(VectorId, Vec<f32>, Option<MetadataFields>)>| {
+        for (id, values, metadata) in vecs {
             let raw_emb = RawVectorEmbedding {
                 hash_vec: id,
                 raw_vec: Arc::new(values),
+                raw_metadata: metadata,
             };
             transaction.post_raw_embedding(raw_emb.clone());
             let lp = &dense_index.levels_prob;

@@ -2,6 +2,7 @@ use crate::app_context::AppContext;
 use crate::indexes::inverted_index::{InvertedIndex, InvertedIndexTransaction};
 use crate::indexes::inverted_index_types::{RawSparseVectorEmbedding, SparsePair};
 use crate::macros::key;
+use crate::metadata::MetadataFields;
 use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::cache_loader::ProbCache;
 use crate::models::collection::Collection;
@@ -216,7 +217,7 @@ pub fn run_upload_in_transaction(
     ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
     transaction: &DenseIndexTransaction,
-    mut sample_points: Vec<(VectorId, Vec<f32>)>,
+    mut sample_points: Vec<(VectorId, Vec<f32>, Option<MetadataFields>)>,
 ) -> Result<(), WaCustomError> {
     let version = transaction.id;
     let version_number = transaction.version_number;
@@ -229,7 +230,7 @@ pub fn run_upload_in_transaction(
             .fetch_add(sample_points.len(), Ordering::SeqCst);
 
         if collected_count < dense_index.sample_threshold {
-            for (_, values) in &sample_points {
+            for (_, values, _) in &sample_points {
                 for value in values {
                     let value = *value;
 
@@ -514,7 +515,7 @@ pub fn run_upload_sparse_vectors_in_transaction(
 pub fn run_upload(
     ctx: Arc<AppContext>,
     dense_index: Arc<DenseIndex>,
-    vecs: Vec<(VectorId, Vec<f32>)>,
+    vecs: Vec<(VectorId, Vec<f32>, Option<MetadataFields>)>,
 ) -> Result<(), WaCustomError> {
     let env = dense_index.lmdb.env.clone();
     let db = dense_index.lmdb.db.clone();
@@ -612,10 +613,11 @@ pub fn run_upload(
     let bufman = dense_index.vec_raw_manager.get(current_version)?;
 
     vecs.into_par_iter()
-        .map(|(id, vec)| {
+        .map(|(id, vec, metadata)| {
             let vec_emb = RawVectorEmbedding {
                 raw_vec: Arc::new(vec),
                 hash_vec: id,
+                raw_metadata: metadata,
             };
 
             insert_embedding(

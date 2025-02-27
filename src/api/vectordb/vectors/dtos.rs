@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::storage::sparse_ann_query_basic::SparseAnnResult;
+use crate::{metadata::MetadataFields, storage::sparse_ann_query_basic::SparseAnnResult};
 use serde::{
     de::{self, Visitor},
     Deserialize, Deserializer, Serialize,
@@ -15,6 +15,7 @@ use crate::{
 pub(crate) struct CreateDenseVectorDto {
     pub id: VectorId,
     pub values: Vec<f32>,
+    pub metadata: Option<MetadataFields>,
 }
 
 #[derive(Serialize, Debug)]

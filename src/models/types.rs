@@ -20,6 +20,7 @@ use crate::distance::{
 use crate::indexes::inverted_index::InvertedIndex;
 use crate::indexes::inverted_index_data::InvertedIndexData;
 use crate::macros::key;
+use crate::metadata::MetadataFields;
 use crate::models::buffered_io::BufIoError;
 use crate::models::common::*;
 use crate::models::identity_collections::*;
@@ -592,7 +593,7 @@ pub struct DenseIndex {
     pub vec_raw_manager: Arc<BufferManagerFactory<Hash>>,
     pub is_configured: Arc<AtomicBool>,
     pub values_range: Arc<RwLock<(f32, f32)>>,
-    pub vectors: Arc<RwLock<Vec<(VectorId, Vec<f32>)>>>,
+    pub vectors: Arc<RwLock<Vec<(VectorId, Vec<f32>, Option<MetadataFields>)>>>,
     pub sampling_data: Arc<SamplingData>,
     pub vectors_collected: Arc<AtomicUsize>,
     pub sample_threshold: usize,
@@ -690,6 +691,7 @@ pub struct QuantizedVectorEmbedding {
 pub struct RawVectorEmbedding {
     pub raw_vec: Arc<Vec<f32>>,
     pub hash_vec: VectorId,
+    pub raw_metadata: Option<MetadataFields>,
 }
 
 pub struct CollectionsMap {

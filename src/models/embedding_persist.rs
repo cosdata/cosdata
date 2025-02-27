@@ -213,9 +213,9 @@ pub fn read_embedding(
 #[cfg(test)]
 mod tests {
     use super::{read_embedding, write_embedding, RawVectorEmbedding};
-    use crate::models::{buffered_io::BufferManager, types::VectorId};
+    use crate::{metadata, models::{buffered_io::BufferManager, types::VectorId}};
     use rand::{distributions::Uniform, rngs::ThreadRng, thread_rng, Rng};
-    use std::sync::Arc;
+    use std::{collections::HashMap, sync::Arc};
     use tempfile::tempfile;
 
     fn get_random_embedding(rng: &mut ThreadRng) -> RawVectorEmbedding {
@@ -229,6 +229,7 @@ mod tests {
         RawVectorEmbedding {
             raw_vec: Arc::new(raw_vec),
             hash_vec: VectorId(rng.gen()),
+            raw_metadata: None,
         }
     }
 
@@ -266,5 +267,21 @@ mod tests {
 
             assert_eq!(embedding, deserialized);
         }
+    }
+
+    #[test]
+    fn test_embedding_with_metadata_serialization() {
+        let mut rng = thread_rng();
+        let mut embedding = get_random_embedding(&mut rng);
+        let mut md: metadata::MetadataFields = HashMap::with_capacity(2);
+        md.insert("city".to_owned(), metadata::FieldValue::String("Bangalore".to_owned()));
+        md.insert("limit".to_owned(), metadata::FieldValue::Int(100));
+        embedding.raw_metadata = Some(md);
+
+        let tempfile = tempfile().unwrap();
+        let bufman = Arc::new(BufferManager::new(tempfile, 8192).unwrap());
+        let offset = write_embedding(bufman.clone(), &embedding).unwrap();
+        let (deserialized, _) = read_embedding(bufman.clone(), offset).unwrap();
+        assert_eq!(embedding, deserialized);
     }
 }
