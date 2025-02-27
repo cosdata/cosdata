@@ -8,7 +8,7 @@ use crate::{
         lazy_load::{FileIndex, SyncPersist},
         prob_lazy_load::{lazy_item::ProbLazyItem, lazy_item_array::ProbLazyItemArray},
         prob_node::{ProbNode, SharedNode},
-        types::{FileOffset, HNSWLevel, MetricResult, NodeProp, VectorId},
+        types::{FileOffset, HNSWLevel, MetricResult, NodePropValue, VectorId},
         versioning::{Hash, Version, VersionControl},
     },
     storage::Storage,
@@ -37,7 +37,7 @@ pub trait EqualityTest {
 impl EqualityTest for ProbNode {
     fn assert_eq(&self, other: &Self, tester: &mut EqualityTester) {
         assert_eq!(self.hnsw_level, other.hnsw_level);
-        assert_eq!(self.prop, other.prop);
+        assert_eq!(self.prop_value, other.prop_value);
         self.versions.assert_eq(&other.versions, tester);
 
         let parent = self.get_parent();
@@ -135,9 +135,9 @@ fn create_prob_node(id: u64, prop_file: &RwLock<File>) -> ProbNode {
     let mut prop_file_guard = prop_file.write().unwrap();
     let location = write_prop_to_file(&id, value.clone(), &mut *prop_file_guard).unwrap();
     drop(prop_file_guard);
-    let prop = Arc::new(NodeProp {
+    let prop = Arc::new(NodePropValue {
         id,
-        value,
+        vec: value,
         location,
     });
     ProbNode::new(

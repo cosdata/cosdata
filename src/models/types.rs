@@ -85,13 +85,13 @@ impl Identifiable for MergedNode {
 pub type PropPersistRef = (FileOffset, BytesToRead);
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct NodeProp {
+pub struct NodePropValue {
     pub id: VectorId,
-    pub value: Arc<Storage>,
+    pub vec: Arc<Storage>,
     pub location: PropPersistRef,
 }
 
-impl StdHash for NodeProp {
+impl StdHash for NodePropValue {
     fn hash<H>(&self, state: &mut H)
     where
         H: Hasher,
@@ -102,7 +102,7 @@ impl StdHash for NodeProp {
 
 #[derive(Debug, Clone, Hash)]
 pub enum PropState {
-    Ready(Arc<NodeProp>),
+    Ready(Arc<NodePropValue>),
     Pending(PropPersistRef),
 }
 
@@ -298,7 +298,7 @@ impl MergedNode {
         arc.update(PropState::Pending(prop_ref));
     }
 
-    pub fn set_prop_ready(&self, node_prop: Arc<NodeProp>) {
+    pub fn set_prop_ready(&self, node_prop: Arc<NodePropValue>) {
         let mut arc = self.prop.clone();
         arc.update(PropState::Ready(node_prop));
     }

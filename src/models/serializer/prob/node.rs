@@ -55,7 +55,7 @@ impl ProbSerialize for ProbNode {
         buf.push(self.hnsw_level.0);
 
         // Serialize prop
-        let (FileOffset(offset), BytesToRead(length)) = &self.prop.location;
+        let (FileOffset(offset), BytesToRead(length)) = &self.prop_value.location;
         buf.extend(offset.to_le_bytes());
         buf.extend(length.to_le_bytes());
 

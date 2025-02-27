@@ -9,14 +9,14 @@ use std::{
 use super::{
     cache_loader::ProbCache,
     prob_lazy_load::{lazy_item::ProbLazyItem, lazy_item_array::ProbLazyItemArray},
-    types::{HNSWLevel, MetricResult, NodeProp, VectorId},
+    types::{HNSWLevel, MetricResult, NodePropValue, VectorId},
 };
 
 pub type SharedNode = *mut ProbLazyItem<ProbNode>;
 
 pub struct ProbNode {
     pub hnsw_level: HNSWLevel,
-    pub prop: Arc<NodeProp>,
+    pub prop_value: Arc<NodePropValue>,
     // (neighbor_id, neighbor_node, distance)
     // even though `VectorId` is an u64 we don't need the full range here.
     neighbors: Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]>,
@@ -33,7 +33,7 @@ unsafe impl Sync for ProbNode {}
 impl ProbNode {
     pub fn new(
         hnsw_level: HNSWLevel,
-        prop: Arc<NodeProp>,
+        prop_value: Arc<NodePropValue>,
         parent: SharedNode,
         child: SharedNode,
         neighbors_count: usize,
@@ -46,7 +46,7 @@ impl ProbNode {
 
         Self {
             hnsw_level,
-            prop,
+            prop_value,
             neighbors: neighbors.into_boxed_slice(),
             parent: AtomicPtr::new(parent),
             child: AtomicPtr::new(child),
@@ -58,7 +58,7 @@ impl ProbNode {
 
     pub fn new_with_neighbors_and_versions_and_root_version(
         hnsw_level: HNSWLevel,
-        prop: Arc<NodeProp>,
+        prop_value: Arc<NodePropValue>,
         neighbors: Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]>,
         parent: SharedNode,
         child: SharedNode,
@@ -84,7 +84,7 @@ impl ProbNode {
 
         Self {
             hnsw_level,
-            prop,
+            prop_value,
             neighbors,
             parent: AtomicPtr::new(parent),
             child: AtomicPtr::new(child),
@@ -111,7 +111,7 @@ impl ProbNode {
     }
 
     pub fn get_id(&self) -> &VectorId {
-        &self.prop.id
+        &self.prop_value.id
     }
 
     pub fn add_neighbor(

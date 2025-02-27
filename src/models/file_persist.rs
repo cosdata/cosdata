@@ -3,7 +3,7 @@ use super::common::WaCustomError;
 use super::lazy_load::SyncPersist;
 use super::prob_node::SharedNode;
 use super::serializer::prob::ProbSerialize;
-use super::types::{BytesToRead, FileOffset, NodeProp, VectorId};
+use super::types::{BytesToRead, FileOffset, NodePropValue, VectorId};
 use super::versioning::Hash;
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
@@ -72,7 +72,7 @@ pub fn write_prop_to_file(
 pub fn read_prop_from_file(
     (offset, bytes_to_read): (FileOffset, BytesToRead),
     file: &mut File,
-) -> Result<NodeProp, BufIoError> {
+) -> Result<NodePropValue, BufIoError> {
     let mut bytes = vec![0u8; bytes_to_read.0 as usize];
     file.seek(SeekFrom::Start(offset.0 as u64))?;
     file.read_exact(&mut bytes)?;
@@ -80,9 +80,9 @@ pub fn read_prop_from_file(
     let prop: NodePropDeserialize = serde_cbor::from_slice(&bytes)
         .map_err(|e| BufIoError::Io(io::Error::new(io::ErrorKind::InvalidData, e.to_string())))?;
 
-    Ok(NodeProp {
+    Ok(NodePropValue {
         id: prop.id,
-        value: prop.value,
+        vec: prop.value,
         location: (offset, bytes_to_read),
     })
 }

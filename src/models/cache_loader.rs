@@ -278,7 +278,7 @@ define_prob_cache_items! {
 
 pub struct ProbCache {
     registry: LRUCache<u64, ProbCacheItem>,
-    props_registry: DashMap<u64, Weak<NodeProp>>,
+    props_registry: DashMap<u64, Weak<NodePropValue>>,
     bufmans: Arc<BufferManagerFactory<Hash>>,
     level_0_bufmans: Arc<BufferManagerFactory<Hash>>,
     prop_file: Arc<RwLock<File>>,
@@ -321,7 +321,7 @@ impl ProbCache {
         &self,
         offset: FileOffset,
         length: BytesToRead,
-    ) -> Result<Arc<NodeProp>, BufIoError> {
+    ) -> Result<Arc<NodePropValue>, BufIoError> {
         let key = Self::get_prop_key(offset, length);
         if let Some(prop) = self
             .props_registry
@@ -344,9 +344,9 @@ impl ProbCache {
     pub fn insert_lazy_object(&self, version: Hash, offset: u32, item: SharedNode) {
         let combined_index = (offset as u64) << 32 | (*version as u64);
         if let Some(node) = unsafe { &*item }.get_lazy_data() {
-            let prop_key = Self::get_prop_key(node.prop.location.0, node.prop.location.1);
+            let prop_key = Self::get_prop_key(node.prop_value.location.0, node.prop_value.location.1);
             self.props_registry
-                .insert(prop_key, Arc::downgrade(&node.prop));
+                .insert(prop_key, Arc::downgrade(&node.prop_value));
         }
         self.registry
             .insert(combined_index, ProbNode::into_cache_item(item));

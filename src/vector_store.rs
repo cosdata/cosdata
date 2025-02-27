@@ -60,9 +60,9 @@ pub fn create_root_node(
     let location = write_prop_to_file(&vec_hash, vector_list.clone(), &mut *prop_file_guard)?;
     drop(prop_file_guard);
 
-    let prop = Arc::new(NodeProp {
+    let prop = Arc::new(NodePropValue {
         id: vec_hash,
-        value: vector_list.clone(),
+        vec: vector_list.clone(),
         location,
     });
 
@@ -145,7 +145,7 @@ pub fn ann_search(
     let mut z = if z.is_empty() {
         let dist = dense_index
             .distance_metric
-            .calculate(&fvec, &cur_node.prop.value)?;
+            .calculate(&fvec, &cur_node.prop_value.vec)?;
 
         vec![(cur_entry, dist)]
     } else {
@@ -537,9 +537,9 @@ pub fn index_embeddings(
                 )
                 .expect("failed to write prop");
                 drop(prop_file_guard);
-                let prop = Arc::new(NodeProp {
+                let prop = Arc::new(NodePropValue {
                     id: raw_emb.hash_vec.clone(),
-                    value: quantized_vec.clone(),
+                    vec: quantized_vec.clone(),
                     location,
                 });
                 let embedding = QuantizedVectorEmbedding {
@@ -700,9 +700,9 @@ pub fn index_embeddings_in_transaction(
             )?;
             drop(prop_file_guard);
 
-            let prop = Arc::new(NodeProp {
+            let prop = Arc::new(NodePropValue {
                 id: raw_emb.hash_vec.clone(),
-                value: quantized_vec.clone(),
+                vec: quantized_vec.clone(),
                 location,
             });
 
@@ -776,7 +776,7 @@ pub fn index_embedding(
     dense_index: Arc<DenseIndex>,
     parent: SharedNode,
     vector_emb: QuantizedVectorEmbedding,
-    prop: Arc<NodeProp>,
+    prop: Arc<NodePropValue>,
     cur_entry: SharedNode,
     cur_level: HNSWLevel,
     version: Hash,
@@ -812,7 +812,7 @@ pub fn index_embedding(
     let z = if z.is_empty() {
         let dist = dense_index
             .distance_metric
-            .calculate(&fvec, &cur_node.prop.value)?;
+            .calculate(&fvec, &cur_node.prop_value.vec)?;
 
         vec![(cur_entry, dist)]
     } else {
@@ -925,7 +925,7 @@ fn create_node(
     version_id: Hash,
     version_number: u16,
     hnsw_level: HNSWLevel,
-    prop: Arc<NodeProp>,
+    prop: Arc<NodePropValue>,
     parent: SharedNode,
     child: SharedNode,
     neighbors_count: usize,
@@ -968,7 +968,7 @@ fn get_or_create_version(
 
             let new_node = ProbNode::new_with_neighbors_and_versions_and_root_version(
                 node.hnsw_level,
-                node.prop.clone(),
+                node.prop_value.clone(),
                 node.clone_neighbors(),
                 node.get_parent(),
                 node.get_child(),
@@ -1146,7 +1146,7 @@ fn traverse_find_nearest(
     let start_data = unsafe { &*start_version }.try_get_data(&dense_index.cache)?;
     let start_dist = dense_index
         .distance_metric
-        .calculate(&fvec, &start_data.prop.value)?;
+        .calculate(&fvec, &start_data.prop_value.vec)?;
     let start_id = start_data.get_id().0 as u32;
     skipm.insert(start_id);
     candidate_queue.push((start_dist, start_node));
@@ -1179,7 +1179,7 @@ fn traverse_find_nearest(
                 let neighbor_data = unsafe { &*neighbor_node }.try_get_data(&dense_index.cache)?;
                 let dist = dense_index
                     .distance_metric
-                    .calculate(&fvec, &neighbor_data.prop.value)?;
+                    .calculate(&fvec, &neighbor_data.prop_value.vec)?;
                 skipm.insert(neighbor_id);
                 candidate_queue.push((dist, neighbor_node));
             }
