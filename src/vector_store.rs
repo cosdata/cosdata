@@ -60,16 +60,19 @@ pub fn create_root_node(
     let location = write_prop_to_file(&vec_hash, vector_list.clone(), &mut *prop_file_guard)?;
     drop(prop_file_guard);
 
-    let prop = Arc::new(NodePropValue {
+    let prop_value = Arc::new(NodePropValue {
         id: vec_hash,
         vec: vector_list.clone(),
         location,
     });
 
+    let prop_metadata = None;
+
     let mut root = ProbLazyItem::new(
         ProbNode::new(
             HNSWLevel(0),
-            prop.clone(),
+            prop_value.clone(),
+            prop_metadata.clone(),
             ptr::null_mut(),
             ptr::null_mut(),
             hnsw_params.level_0_neighbors_count,
@@ -89,7 +92,8 @@ pub fn create_root_node(
     for l in 1..=hnsw_params.num_layers {
         let current_node = ProbNode::new(
             HNSWLevel(l),
-            prop.clone(),
+            prop_value.clone(),
+            prop_metadata.clone(),
             ptr::null_mut(),
             root,
             hnsw_params.neighbors_count,
@@ -932,7 +936,8 @@ fn create_node(
     is_level_0: bool,
     offset: u32,
 ) -> SharedNode {
-    let node = ProbNode::new(hnsw_level, prop, parent, child, neighbors_count);
+    // @TODO(vineet): Add support for optional metadata dimensions
+    let node = ProbNode::new(hnsw_level, prop, None, parent, child, neighbors_count);
     ProbLazyItem::new(
         node,
         version_id,
@@ -969,6 +974,8 @@ fn get_or_create_version(
             let new_node = ProbNode::new_with_neighbors_and_versions_and_root_version(
                 node.hnsw_level,
                 node.prop_value.clone(),
+                // @TODO(vineet): Add support for optional metadata dimensions
+                None,
                 node.clone_neighbors(),
                 node.get_parent(),
                 node.get_child(),

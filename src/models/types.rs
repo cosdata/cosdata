@@ -100,6 +100,19 @@ impl StdHash for NodePropValue {
     }
 }
 
+pub struct Metadata {
+    pub mag: u32,
+    pub mbits: Vec<u16>,
+}
+
+pub struct MetadataId(pub u8);
+
+pub struct NodePropMetadata {
+    pub id: MetadataId,
+    pub vec: Arc<Metadata>,
+    pub location: PropPersistRef,
+}
+
 #[derive(Debug, Clone, Hash)]
 pub enum PropState {
     Ready(Arc<NodePropValue>),

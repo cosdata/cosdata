@@ -286,6 +286,8 @@ impl ProbSerialize for ProbNode {
                 Ok(Self::new_with_neighbors_and_versions_and_root_version(
                     hnsw_level,
                     prop,
+                    // @TODO(vineet): Add support for optional metadata dimensions
+                    None,
                     neighbors,
                     parent,
                     child,

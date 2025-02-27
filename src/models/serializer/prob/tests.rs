@@ -143,6 +143,8 @@ fn create_prob_node(id: u64, prop_file: &RwLock<File>) -> ProbNode {
     ProbNode::new(
         HNSWLevel(2),
         prop.clone(),
+        // @TODO(vineet): Add tests for optional metadata dimensions
+        None,
         ptr::null_mut(),
         ptr::null_mut(),
         8,
