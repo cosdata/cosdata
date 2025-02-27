@@ -1,5 +1,4 @@
 use std::cmp::{Ord, PartialOrd};
-use std::collections::HashMap;
 use std::fmt;
 
 use de::FieldValueVisitor;
