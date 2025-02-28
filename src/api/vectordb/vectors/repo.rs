@@ -219,7 +219,6 @@ pub(crate) async fn find_similar_sparse_vectors(
         .sequential_search_tshashmap(
             &inverted_index.root,
             inverted_index.root.root.quantization_bits,
-            *inverted_index.current_version.shared_get(),
         )
         .map_err(|e| VectorsError::FailedToFindSimilarVectors(e.to_string()))?;
 

@@ -222,7 +222,7 @@ impl VersionedInvertedFixedSetIndex {
         }
 
         result.dedup();
-        result.sort_unstable();
+        result.sort();
         result
     }
 

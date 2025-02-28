@@ -131,7 +131,7 @@ fn sparse_ann_query_tshashmap_benchmark(c: &mut Criterion) {
             b.iter(|| {
                 let _res = black_box(
                     sparse_ann_query_basic
-                        .sequential_search_tshashmap(&inverted_index, 6, 0.into())
+                        .sequential_search_tshashmap(&inverted_index, 6)
                         .unwrap(),
                 );
             });

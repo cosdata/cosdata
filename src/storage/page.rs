@@ -47,6 +47,20 @@ impl<const LEN: usize> VersionedPagepool<LEN> {
         }
         self.pagepool.push(vector_id);
     }
+
+    pub fn len(&self) -> usize {
+        self.pagepool
+            .inner
+            .iter()
+            .map(|page| page.len)
+            .sum::<usize>()
+            + self
+                .next
+                .read()
+                .unwrap()
+                .as_ref()
+                .map_or(0, |next| next.len())
+    }
 }
 
 #[derive(Default, Debug, Clone, PartialEq)]
@@ -73,14 +87,6 @@ impl<const LEN: usize> Pagepool<LEN> {
 
     pub fn contains(&self, data: u32) -> bool {
         self.inner.iter().any(|p| p.data.contains(&data))
-    }
-}
-
-impl<const LEN: usize> std::ops::Deref for Pagepool<LEN> {
-    type Target = Vec<Page<LEN>>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
     }
 }
 

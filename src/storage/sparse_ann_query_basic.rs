@@ -5,9 +5,7 @@ use super::inverted_index_sparse_ann_basic::{
     InvertedIndexSparseAnnBasicTSHashmap, InvertedIndexSparseAnnNodeBasic,
     InvertedIndexSparseAnnNodeBasicDashMap,
 };
-use super::page::VersionedPagepool;
 use crate::models::buffered_io::BufIoError;
-use crate::models::versioning::Hash;
 
 use crate::models::types::{SparseQueryVector, SparseQueryVectorDimensionType, SparseVector};
 use std::collections::{HashMap, HashSet};
@@ -50,7 +48,6 @@ impl SparseAnnQueryBasic {
     fn create_sparse_query_vector(
         &self,
         index: &InvertedIndexSparseAnnBasicTSHashmap,
-        version: Hash,
     ) -> Result<SparseQueryVector, BufIoError> {
         let mut posting_list_lengths: Vec<(u32, usize)> = Vec::new();
         for (dim_index, _) in &self.query_vector.entries {
@@ -60,9 +57,8 @@ impl SparseAnnQueryBasic {
                     length += unsafe { &*node.data }
                         .try_get_data(&index.cache, node.dim_index)?
                         .map
-                        .get_or_create(key, || VersionedPagepool::new(version))
-                        .pagepool
-                        .len();
+                        .lookup(&key)
+                        .map_or(0, |p| p.len());
                 }
                 posting_list_lengths.push((*dim_index, length));
             }
@@ -181,9 +177,8 @@ impl SparseAnnQueryBasic {
         index: &InvertedIndexSparseAnnBasicTSHashmap,
         // 16,32,64
         quantization: u8,
-        version: Hash,
     ) -> Result<Vec<SparseAnnResult>, BufIoError> {
-        let sparse_query_vector = self.create_sparse_query_vector(index, version)?;
+        let sparse_query_vector = self.create_sparse_query_vector(index)?;
         let mut dot_products: HashMap<u32, u32> = HashMap::new();
         // same as `0.5` quantized
         let half_quantized = quantization / 2;
@@ -242,26 +237,29 @@ impl SparseAnnQueryBasic {
 
                             // Then iterate through the map/list for the remaining quantized keys
                             for key in (three_fourth_quantized..quantization).rev() {
-                                let p = unsafe { &*node.data }
+                                let mut current_versioned_pagepool = unsafe { &*node.data }
                                     .try_get_data(&index.cache, node.dim_index)?
                                     .map
-                                    .get_or_create(key, || VersionedPagepool::new(version))
-                                    .pagepool;
-                                for x in p.iter() {
-                                    for x in x.iter() {
-                                        let vec_id = x;
-                                        if shortlisted_ids.contains(vec_id) {
-                                            // Prevent double counting
-                                            continue;
+                                    .lookup(&key);
+                                while let Some(versioned_pagepool) = current_versioned_pagepool {
+                                    for x in versioned_pagepool.pagepool.inner.iter() {
+                                        for x in x.iter() {
+                                            let vec_id = x;
+                                            if shortlisted_ids.contains(vec_id) {
+                                                // Prevent double counting
+                                                continue;
+                                            }
+
+                                            let dot_product =
+                                                dot_products.entry(*vec_id).or_insert(0u32);
+                                            *dot_product += (quantized_query_value * key) as u32;
+
+                                            // Shortlist vector id for future cuckoo filter lookups
+                                            shortlisted_ids.insert(*vec_id);
                                         }
-
-                                        let dot_product =
-                                            dot_products.entry(*vec_id).or_insert(0u32);
-                                        *dot_product += (quantized_query_value * key) as u32;
-
-                                        // Shortlist vector id for future cuckoo filter lookups
-                                        shortlisted_ids.insert(*vec_id);
                                     }
+                                    current_versioned_pagepool =
+                                        versioned_pagepool.next.read().unwrap().clone();
                                 }
                             }
                         }
@@ -292,26 +290,29 @@ impl SparseAnnQueryBasic {
 
                             // Then iterate through the map/list for the remaining quantized keys
                             for key in (three_fourth_quantized..quantization).rev() {
-                                let p = unsafe { &*node.data }
+                                let mut current_versioned_pagepool = unsafe { &*node.data }
                                     .try_get_data(&index.cache, node.dim_index)?
                                     .map
-                                    .get_or_create(key, || VersionedPagepool::new(version))
-                                    .pagepool;
-                                for x in p.iter() {
-                                    for x in x.iter() {
-                                        let vec_id = x;
-                                        if shortlisted_ids.contains(vec_id) {
-                                            // Prevent double counting
-                                            continue;
+                                    .lookup(&key);
+                                while let Some(versioned_pagepool) = current_versioned_pagepool {
+                                    for x in versioned_pagepool.pagepool.inner.iter() {
+                                        for x in x.iter() {
+                                            let vec_id = x;
+                                            if shortlisted_ids.contains(vec_id) {
+                                                // Prevent double counting
+                                                continue;
+                                            }
+
+                                            let dot_product =
+                                                dot_products.entry(*vec_id).or_insert(0u32);
+                                            *dot_product += (quantized_query_value * key) as u32;
+
+                                            // Shortlist vector id for future cuckoo filter lookups
+                                            shortlisted_ids.insert(*vec_id);
                                         }
-
-                                        let dot_product =
-                                            dot_products.entry(*vec_id).or_insert(0u32);
-                                        *dot_product += (quantized_query_value * key) as u32;
-
-                                        // Shortlist vector id for future cuckoo filter lookups
-                                        shortlisted_ids.insert(*vec_id);
                                     }
+                                    current_versioned_pagepool =
+                                        versioned_pagepool.next.read().unwrap().clone();
                                 }
                             }
                         }
@@ -321,21 +322,24 @@ impl SparseAnnQueryBasic {
                             // in inverted index, and then use these shortlisted ids to lookup
                             // when needed in the cuckoo filter tree of the other dims
                             for key in (0..quantization).rev() {
-                                let p = unsafe { &*node.data }
+                                let mut current_versioned_pagepool = unsafe { &*node.data }
                                     .try_get_data(&index.cache, node.dim_index)?
                                     .map
-                                    .get_or_create(key, || VersionedPagepool::new(version))
-                                    .pagepool;
-                                for x in p.iter() {
-                                    for x in x.iter() {
-                                        let vec_id = x;
-                                        let dot_product =
-                                            dot_products.entry(*vec_id).or_insert(0u32);
-                                        *dot_product += (quantized_query_value * key) as u32;
+                                    .lookup(&key);
+                                while let Some(versioned_pagepool) = current_versioned_pagepool {
+                                    for x in versioned_pagepool.pagepool.inner.iter() {
+                                        for x in x.iter() {
+                                            let vec_id = x;
+                                            let dot_product =
+                                                dot_products.entry(*vec_id).or_insert(0u32);
+                                            *dot_product += (quantized_query_value * key) as u32;
 
-                                        // Shortlist vector id for future cuckoo filter lookups
-                                        shortlisted_ids.insert(*vec_id);
+                                            // Shortlist vector id for future cuckoo filter lookups
+                                            shortlisted_ids.insert(*vec_id);
+                                        }
                                     }
+                                    current_versioned_pagepool =
+                                        versioned_pagepool.next.read().unwrap().clone();
                                 }
                             }
                         }
