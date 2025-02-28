@@ -121,12 +121,12 @@ Install the binaries:
 cargo install --path .
 ```
 
-And run the binary
+And run the binary:
 ```
-cosdata
+cosdata --admin-key <your admin key>
 ```
 
-This should start the server and will ask for the Server Key to be entered. You can enter any text key (something simple like 'foobar' is fine for basic testing). You should see log lines similar to the following lines -
+This should start the server. You should see log lines similar to the following:
 
 ```
 [2025-02-21T02:30:29Z INFO  cosdata::web_server] starting HTTP server at http://127.0.0.1:8443

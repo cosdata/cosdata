@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
+use crate::args::CosdataArgs;
 use crate::config_loader::Config;
+use crate::models::common::WaCustomError;
 use crate::models::types::{get_app_env, AppEnv};
 use rayon::ThreadPool;
-use crate::models::common::WaCustomError;
 
 #[allow(unused)]
 pub struct AppContext {
@@ -13,8 +14,8 @@ pub struct AppContext {
 }
 
 impl AppContext {
-    pub fn new(config: Config) -> Result<Self, WaCustomError> {
-        let ain_env = get_app_env(&config)?;
+    pub fn new(config: Config, args: CosdataArgs) -> Result<Self, WaCustomError> {
+        let ain_env = get_app_env(&config, args)?;
         let threadpool = rayon::ThreadPoolBuilder::new()
             .num_threads(config.thread_pool.pool_size)
             .build()

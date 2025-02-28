@@ -10,6 +10,7 @@ use super::meta_persist::{
 use super::prob_lazy_load::lazy_item::ProbLazyItem;
 use super::prob_node::{ProbNode, SharedNode};
 use super::versioning::VersionControl;
+use crate::args::CosdataArgs;
 use crate::config_loader::Config;
 use crate::distance::cosine::CosineSimilarity;
 use crate::distance::DistanceError;
@@ -35,7 +36,6 @@ use arcshift::ArcShift;
 use dashmap::DashMap;
 use lmdb::{Cursor, Database, DatabaseFlags, Environment, Transaction, WriteFlags};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use rpassword::prompt_password;
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher24;
 use std::hash::{DefaultHasher, Hash as StdHash, Hasher};
@@ -1246,47 +1246,45 @@ pub struct AppEnv {
     pub persist: Arc<Environment>,
     // Single hash, must not be persisted to disk, only the double hash must be
     // written to disk
-    pub server_key: SingleSHA256Hash,
+    pub admin_key: SingleSHA256Hash,
     pub active_sessions: Arc<DashMap<String, SessionDetails>>,
 }
 
-fn get_server_key(env: Arc<Environment>) -> lmdb::Result<SingleSHA256Hash> {
+fn get_admin_key(env: Arc<Environment>, args: CosdataArgs) -> lmdb::Result<SingleSHA256Hash> {
     let db = env.create_db(Some("security_metadata"), DatabaseFlags::empty())?;
     let mut txn = env.begin_rw_txn()?;
-    let server_key_from_lmdb = match txn.get(db, &"server_key") {
+    let admin_key_from_lmdb = match txn.get(db, &"admin_key") {
         Ok(key) => Some(DoubleSHA256Hash(key.try_into().unwrap())),
         Err(lmdb::Error::NotFound) => None,
         Err(err) => return Err(err),
     };
-    let server_key_hash = if let Some(server_key_from_lmdb) = server_key_from_lmdb {
+    let admin_key_hash = if let Some(admin_key_from_lmdb) = admin_key_from_lmdb {
         txn.abort();
-        let entered_server_key =
-            prompt_password("Enter server key: ").expect("Unable to read master key");
-        let entered_server_key_hash = SingleSHA256Hash::from_str(&entered_server_key);
-        let entered_server_key_double_hash = entered_server_key_hash.hash_again();
-        if !server_key_from_lmdb.verify_eq(&entered_server_key_double_hash) {
-            eprintln!("Invalid server key!");
+        let arg_admin_key = args.admin_key;
+        let arg_admin_key_hash = SingleSHA256Hash::from_str(&arg_admin_key);
+        let arg_admin_key_double_hash = arg_admin_key_hash.hash_again();
+        if !admin_key_from_lmdb.verify_eq(&arg_admin_key_double_hash) {
+            log::error!("Invalid admin key!");
             std::process::exit(1);
         }
-        entered_server_key_hash
+        arg_admin_key_hash
     } else {
-        let entered_server_key =
-            prompt_password("Create a server key: ").expect("Unable to read server key");
-        let entered_server_key_hash = SingleSHA256Hash::from_str(&entered_server_key);
-        let entered_server_key_double_hash = entered_server_key_hash.hash_again();
+        let arg_admin_key = args.admin_key;
+        let arg_admin_key_hash = SingleSHA256Hash::from_str(&arg_admin_key);
+        let arg_admin_key_double_hash = arg_admin_key_hash.hash_again();
         txn.put(
             db,
-            &"server_key",
-            &entered_server_key_double_hash.0,
+            &"admin_key",
+            &arg_admin_key_double_hash.0,
             WriteFlags::empty(),
         )?;
         txn.commit()?;
-        entered_server_key_hash
+        arg_admin_key_hash
     };
-    Ok(server_key_hash)
+    Ok(admin_key_hash)
 }
 
-pub fn get_app_env(config: &Config) -> Result<Arc<AppEnv>, WaCustomError> {
+pub fn get_app_env(config: &Config, args: CosdataArgs) -> Result<Arc<AppEnv>, WaCustomError> {
     let path = Path::new("./_mdb"); // TODO: prefix the customer & database name
 
     // Ensure the directory exists
@@ -1300,7 +1298,7 @@ pub fn get_app_env(config: &Config) -> Result<Arc<AppEnv>, WaCustomError> {
 
     let env_arc = Arc::new(env);
 
-    let server_key = get_server_key(env_arc.clone())
+    let admin_key = get_admin_key(env_arc.clone(), args)
         .map_err(|err| WaCustomError::DatabaseError(err.to_string()))?;
 
     let collections_map = CollectionsMap::load(env_arc.clone(), config)
@@ -1321,7 +1319,7 @@ pub fn get_app_env(config: &Config) -> Result<Arc<AppEnv>, WaCustomError> {
         collections_map,
         users_map,
         persist: env_arc,
-        server_key,
+        admin_key,
         active_sessions: Arc::new(DashMap::new()),
     }))
 }

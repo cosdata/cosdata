@@ -14,7 +14,7 @@ pub struct SingleSHA256Hash(pub [u8; 32]);
 #[derive(Clone)]
 pub struct DoubleSHA256Hash(pub [u8; 32]);
 
-// Master key derived from user password and server key
+// Master key derived from user password and admin key
 pub struct MasterKey(pub [u8; 32]);
 
 impl SingleSHA256Hash {
@@ -44,6 +44,7 @@ impl SingleSHA256Hash {
         DoubleSHA256Hash(result)
     }
 
+    #[allow(unused)]
     pub fn verify_eq(&self, other: &Self) -> bool {
         verify_slices_are_equal(&self.0, &other.0).is_ok()
     }
@@ -74,7 +75,7 @@ impl DoubleSHA256Hash {
 }
 
 impl MasterKey {
-    // Derives master key from server key and user password
+    // Derives master key from admin key and user password
     // Flow:
     //
     //   User Key -> |HMAC-SHA256| -> Master Key
@@ -82,12 +83,12 @@ impl MasterKey {
     //                      |
     //                as signing key
     //                      |
-    //                  Server Key
-    pub fn new(server_key: &SingleSHA256Hash, user_key: &SingleSHA256Hash) -> Self {
-        // Initialize HMAC with server key
-        let key = hmac::Key::new(hmac::HMAC_SHA256, &server_key.0);
+    //                  Admin Key
+    pub fn new(admin_key: &SingleSHA256Hash, user_key: &SingleSHA256Hash) -> Self {
+        // Initialize HMAC with admin key
+        let key = hmac::Key::new(hmac::HMAC_SHA256, &admin_key.0);
 
-        // Sign user key with server key via HMAC
+        // Sign user key with admin key via HMAC
         let derived = hmac::sign(&key, &user_key.0);
 
         // Convert to fixed-size array
@@ -117,17 +118,17 @@ pub fn get_current_timestamp() -> u64 {
 
 // Creates a new session with time-based access token
 // Flow:
-// 1. Derive master key from server key and user key
+// 1. Derive master key from admin key and user key
 // 2. Generate token key using current timestamp
 // 3. Create and sign payload (username + timestamp)
 // 4. Encode final token in URL-safe base64
 pub fn create_session(
     username: &str,
-    server_key: &SingleSHA256Hash,
+    admin_key: &SingleSHA256Hash,
     user_key: &SingleSHA256Hash,
 ) -> (String, u64) {
     // Generate master key from user credentials
-    let master_key = MasterKey::new(server_key, user_key);
+    let master_key = MasterKey::new(admin_key, user_key);
 
     // Get current timestamp for token
     let timestamp = get_current_timestamp();
