@@ -4,7 +4,7 @@ use dashmap::DashMap;
 use rayon::prelude::*;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::{path::Path, sync::RwLock};
 
 use std::sync::Arc;
@@ -14,6 +14,7 @@ use crate::models::buffered_io::{BufIoError, BufferManager};
 use crate::models::cache_loader::InvertedIndexCache;
 use crate::models::fixedset::VersionedInvertedFixedSetIndex;
 use crate::models::prob_lazy_load::lazy_item::ProbLazyItem;
+use crate::models::serializer::inverted::InvertedIndexSerialize;
 use crate::models::types::FileOffset;
 use crate::models::versioning::Hash;
 use crate::models::{
@@ -249,6 +250,8 @@ impl InvertedIndexSparseAnnNodeBasicTSHashmapData {
 
 // #[derive(Debug)]
 pub struct InvertedIndexSparseAnnNodeBasicTSHashmap {
+    pub is_serialized: AtomicBool,
+    pub is_dirty: AtomicBool,
     pub file_offset: FileOffset,
     pub dim_index: u32,
     pub implicit: bool,
@@ -287,12 +290,35 @@ impl std::fmt::Debug for InvertedIndexSparseAnnNodeBasicTSHashmap {
     }
 }
 
-// #[derive(Clone)]
 pub struct InvertedIndexSparseAnnBasicTSHashmap {
     pub root: Arc<InvertedIndexSparseAnnNodeBasicTSHashmap>,
     pub cache: Arc<InvertedIndexCache>,
     pub offset_counter: AtomicU32,
     pub node_size: u32,
+}
+
+#[cfg(test)]
+impl PartialEq for InvertedIndexSparseAnnBasicTSHashmap {
+    fn eq(&self, other: &Self) -> bool {
+        self.root == other.root
+            && self.offset_counter.load(Ordering::Relaxed)
+                == other.offset_counter.load(Ordering::Relaxed)
+            && self.node_size == other.node_size
+    }
+}
+
+#[cfg(test)]
+impl std::fmt::Debug for InvertedIndexSparseAnnBasicTSHashmap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InvertedIndexSparseAnnBasicTSHashmap")
+            .field("root", &self.root)
+            .field(
+                "offset_counter",
+                &self.offset_counter.load(Ordering::Relaxed),
+            )
+            .field("node_size", &self.node_size)
+            .finish()
+    }
 }
 
 unsafe impl Send for InvertedIndexSparseAnnNodeBasicTSHashmap {}
@@ -326,6 +352,8 @@ impl InvertedIndexSparseAnnNodeBasicTSHashmap {
         );
 
         Self {
+            is_serialized: AtomicBool::new(false),
+            is_dirty: AtomicBool::new(true),
             file_offset,
             dim_index,
             implicit,
@@ -352,15 +380,19 @@ impl InvertedIndexSparseAnnNodeBasicTSHashmap {
                 current_node = res;
                 continue;
             }
-            let new_child = current_node.children.get_or_insert(child_index, || {
-                Box::into_raw(Box::new(Self::new(
-                    new_dim_index,
-                    true,
-                    self.quantization_bits,
-                    version_id,
-                    FileOffset(offset_fn()),
-                )))
-            });
+            let (new_child, is_newly_created) =
+                current_node.children.get_or_insert(child_index, || {
+                    Box::into_raw(Box::new(Self::new(
+                        new_dim_index,
+                        true,
+                        self.quantization_bits,
+                        version_id,
+                        FileOffset(offset_fn()),
+                    )))
+                });
+            if is_newly_created {
+                self.is_dirty.store(true, Ordering::Release);
+            }
             let res = unsafe { &*new_child };
             current_node = res;
         }
@@ -400,6 +432,7 @@ impl InvertedIndexSparseAnnNodeBasicTSHashmap {
             );
         let sets = unsafe { &*self.fixed_sets }.try_get_data(cache, self.dim_index)?;
         sets.insert(version, quantized_value, vector_id);
+        self.is_dirty.store(true, Ordering::Release);
         Ok(())
     }
 
@@ -471,11 +504,6 @@ impl InvertedIndexSparseAnnBasicTSHashmap {
         Some(current_node)
     }
 
-    // //Fetches quantized u8 value for a dim_index and vector_Id present at respective node in index
-    // pub fn get(&self, dim_index: u32, vector_id: u32) -> Option<u8> {
-    //     self.root.get(dim_index, vector_id, self.cache.clone())
-    // }
-
     //Inserts vec_id, quantized value u8 at particular node based on path
     pub fn insert(
         &self,
@@ -506,6 +534,45 @@ impl InvertedIndexSparseAnnBasicTSHashmap {
                 Ok(())
             })
             .collect()
+    }
+
+    pub fn serialize(&self) -> Result<(), BufIoError> {
+        let cursor = self.cache.dim_bufman.open_cursor()?;
+        self.root
+            .serialize(&self.cache.dim_bufman, &self.cache.data_bufmans, 0, cursor)?;
+        self.cache.dim_bufman.close_cursor(cursor)?;
+        Ok(())
+    }
+
+    pub fn deserialize(root_path: PathBuf, quantization_bits: u8) -> Result<Self, BufIoError> {
+        let dim_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(root_path.join("index-tree.dim"))?;
+        let node_size =
+            InvertedIndexSparseAnnNodeBasicTSHashmap::get_serialized_size(quantization_bits);
+        let dim_bufman = Arc::new(BufferManager::new(dim_file, node_size as usize * 1000)?);
+        let offset_counter = AtomicU32::new(dim_bufman.file_size() as u32);
+        let data_bufmans = Arc::new(BufferManagerFactory::new(
+            root_path.into(),
+            |root, idx: &u8| root.join(format!("{}.idat", idx)),
+            8192,
+        ));
+        let cache = Arc::new(InvertedIndexCache::new(dim_bufman, data_bufmans));
+
+        Ok(Self {
+            root: Arc::new(InvertedIndexSparseAnnNodeBasicTSHashmap::deserialize(
+                &cache.dim_bufman,
+                &cache.data_bufmans,
+                FileOffset(0),
+                0,
+                &cache,
+            )?),
+            cache,
+            offset_counter,
+            node_size,
+        })
     }
 }
 

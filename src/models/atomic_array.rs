@@ -81,12 +81,12 @@ impl<T, const N: usize> AtomicArray<T, N> {
         self.items[idx].store(value, Ordering::SeqCst);
     }
 
-    pub fn get_or_insert<F>(&self, idx: usize, mut f: F) -> *mut T
+    pub fn get_or_insert<F>(&self, idx: usize, mut f: F) -> (*mut T, bool)
     where
         F: FnMut() -> *mut T,
     {
         let mut return_value = ptr::null_mut();
-        let _ = self.items[idx].fetch_update(Ordering::SeqCst, Ordering::SeqCst, |existing| {
+        let res = self.items[idx].fetch_update(Ordering::SeqCst, Ordering::SeqCst, |existing| {
             if existing.is_null() {
                 let value = f();
                 return_value = value;
@@ -96,6 +96,6 @@ impl<T, const N: usize> AtomicArray<T, N> {
                 None
             }
         });
-        return_value
+        (return_value, res.is_ok())
     }
 }

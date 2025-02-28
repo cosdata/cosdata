@@ -14,7 +14,8 @@ use crate::{
     },
     storage::{
         inverted_index_sparse_ann_basic::{
-            InvertedIndexSparseAnnNodeBasicTSHashmap, InvertedIndexSparseAnnNodeBasicTSHashmapData,
+            InvertedIndexSparseAnnBasicTSHashmap, InvertedIndexSparseAnnNodeBasicTSHashmap,
+            InvertedIndexSparseAnnNodeBasicTSHashmapData,
         },
         page::{Pagepool, VersionedPagepool},
     },
@@ -700,4 +701,166 @@ fn test_inverted_index_node_incremental_serialization_with_multiple_versions() {
     .unwrap();
 
     assert_eq!(inverted_index_node, deserialized);
+}
+
+#[test]
+fn test_inverted_index_serialization() {
+    let temp_dir = tempdir().unwrap();
+    let mut rng = rand::thread_rng();
+    let inverted_index =
+        InvertedIndexSparseAnnBasicTSHashmap::new(temp_dir.as_ref().into(), 6, 0.into()).unwrap();
+
+    for _ in 0..100000 {
+        inverted_index
+            .insert(
+                rng.gen_range(0..1000),
+                rng.gen_range(0.0..1.0),
+                rng.gen_range(0..u32::MAX),
+                0.into(),
+            )
+            .unwrap();
+    }
+
+    inverted_index.serialize().unwrap();
+    inverted_index.cache.dim_bufman.flush().unwrap();
+    inverted_index.cache.data_bufmans.flush_all().unwrap();
+
+    let deserialized =
+        InvertedIndexSparseAnnBasicTSHashmap::deserialize(temp_dir.as_ref().into(), 6).unwrap();
+
+    assert_eq!(inverted_index, deserialized);
+}
+
+#[test]
+fn test_inverted_index_incremental_serialization() {
+    let temp_dir = tempdir().unwrap();
+    let mut rng = rand::thread_rng();
+    let inverted_index =
+        InvertedIndexSparseAnnBasicTSHashmap::new(temp_dir.as_ref().into(), 6, 0.into()).unwrap();
+
+    for _ in 0..100000 {
+        inverted_index
+            .insert(
+                rng.gen_range(0..1000),
+                rng.gen_range(0.0..1.0),
+                rng.gen_range(0..u32::MAX),
+                0.into(),
+            )
+            .unwrap();
+    }
+
+    inverted_index.serialize().unwrap();
+
+    for _ in 0..100000 {
+        inverted_index
+            .insert(
+                rng.gen_range(0..1000),
+                rng.gen_range(0.0..1.0),
+                rng.gen_range(0..u32::MAX),
+                0.into(),
+            )
+            .unwrap();
+    }
+
+    inverted_index.serialize().unwrap();
+    inverted_index.cache.dim_bufman.flush().unwrap();
+    inverted_index.cache.data_bufmans.flush_all().unwrap();
+
+    let deserialized =
+        InvertedIndexSparseAnnBasicTSHashmap::deserialize(temp_dir.as_ref().into(), 6).unwrap();
+
+    assert_eq!(inverted_index, deserialized);
+}
+
+#[test]
+fn test_inverted_index_incremental_serialization_with_multiple_versions() {
+    let temp_dir = tempdir().unwrap();
+    let mut rng = rand::thread_rng();
+    let inverted_index =
+        InvertedIndexSparseAnnBasicTSHashmap::new(temp_dir.as_ref().into(), 6, 0.into()).unwrap();
+
+    for _ in 0..100000 {
+        inverted_index
+            .insert(
+                rng.gen_range(0..1000),
+                rng.gen_range(0.0..1.0),
+                rng.gen_range(0..u32::MAX),
+                0.into(),
+            )
+            .unwrap();
+    }
+
+    inverted_index.serialize().unwrap();
+
+    for _ in 0..100000 {
+        inverted_index
+            .insert(
+                rng.gen_range(0..1000),
+                rng.gen_range(0.0..1.0),
+                rng.gen_range(0..u32::MAX),
+                0.into(),
+            )
+            .unwrap();
+    }
+
+    inverted_index.serialize().unwrap();
+
+    for _ in 0..100000 {
+        inverted_index
+            .insert(
+                rng.gen_range(0..1000),
+                rng.gen_range(0.0..1.0),
+                rng.gen_range(0..u32::MAX),
+                1.into(),
+            )
+            .unwrap();
+    }
+
+    inverted_index.serialize().unwrap();
+
+    for _ in 0..100000 {
+        inverted_index
+            .insert(
+                rng.gen_range(0..1000),
+                rng.gen_range(0.0..1.0),
+                rng.gen_range(0..u32::MAX),
+                1.into(),
+            )
+            .unwrap();
+    }
+
+    inverted_index.serialize().unwrap();
+
+    for _ in 0..100000 {
+        inverted_index
+            .insert(
+                rng.gen_range(0..1000),
+                rng.gen_range(0.0..1.0),
+                rng.gen_range(0..u32::MAX),
+                2.into(),
+            )
+            .unwrap();
+    }
+
+    inverted_index.serialize().unwrap();
+
+    for _ in 0..100000 {
+        inverted_index
+            .insert(
+                rng.gen_range(0..1000),
+                rng.gen_range(0.0..1.0),
+                rng.gen_range(0..u32::MAX),
+                2.into(),
+            )
+            .unwrap();
+    }
+
+    inverted_index.serialize().unwrap();
+    inverted_index.cache.dim_bufman.flush().unwrap();
+    inverted_index.cache.data_bufmans.flush_all().unwrap();
+
+    let deserialized =
+        InvertedIndexSparseAnnBasicTSHashmap::deserialize(temp_dir.as_ref().into(), 6).unwrap();
+
+    assert_eq!(inverted_index, deserialized);
 }

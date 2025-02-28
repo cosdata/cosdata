@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use crate::{
     models::{
         atomic_array::AtomicArray,
@@ -33,20 +35,31 @@ impl InvertedIndexSerialize for InvertedIndexSparseAnnNodeBasicTSHashmap {
         _: u8,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
-        dim_bufman.seek_with_cursor(cursor, self.file_offset.0 as u64)?;
-        dim_bufman.update_u32_with_cursor(cursor, self.dim_index)?;
-        let mut quantization_and_implicit = self.quantization_bits;
-        if self.implicit {
-            quantization_and_implicit |= 1u8 << 7;
-        }
-        dim_bufman.update_u8_with_cursor(cursor, quantization_and_implicit)?;
-        let data_file_idx = (self.dim_index % DATA_FILE_PARTS) as u8;
-        self.data
-            .serialize(dim_bufman, data_bufmans, data_file_idx, cursor)?;
-        self.children
-            .serialize(dim_bufman, data_bufmans, data_file_idx, cursor)?;
-        self.fixed_sets
-            .serialize(dim_bufman, data_bufmans, data_file_idx, cursor)?;
+        if !self.is_serialized.swap(true, Ordering::AcqRel) {
+            dim_bufman.seek_with_cursor(cursor, self.file_offset.0 as u64)?;
+            dim_bufman.update_u32_with_cursor(cursor, self.dim_index)?;
+            let mut quantization_and_implicit = self.quantization_bits;
+            if self.implicit {
+                quantization_and_implicit |= 1u8 << 7;
+            }
+            dim_bufman.update_u8_with_cursor(cursor, quantization_and_implicit)?;
+            let data_file_idx = (self.dim_index % DATA_FILE_PARTS) as u8;
+            self.data
+                .serialize(dim_bufman, data_bufmans, data_file_idx, cursor)?;
+            self.children
+                .serialize(dim_bufman, data_bufmans, data_file_idx, cursor)?;
+            self.fixed_sets
+                .serialize(dim_bufman, data_bufmans, data_file_idx, cursor)?;
+        } else if self.is_dirty.swap(false, Ordering::AcqRel) {
+            dim_bufman.seek_with_cursor(cursor, self.file_offset.0 as u64 + 5)?;
+            let data_file_idx = (self.dim_index % DATA_FILE_PARTS) as u8;
+            self.data
+                .serialize(dim_bufman, data_bufmans, data_file_idx, cursor)?;
+            self.children
+                .serialize(dim_bufman, data_bufmans, data_file_idx, cursor)?;
+            self.fixed_sets
+                .serialize(dim_bufman, data_bufmans, data_file_idx, cursor)?;
+        };
         Ok(self.file_offset.0)
     }
 
@@ -89,6 +102,8 @@ impl InvertedIndexSerialize for InvertedIndexSparseAnnNodeBasicTSHashmap {
         )?;
 
         Ok(Self {
+            is_serialized: AtomicBool::new(true),
+            is_dirty: AtomicBool::new(false),
             dim_index,
             implicit,
             file_offset,
