@@ -113,8 +113,8 @@ impl VersionedInvertedFixedSetIndex {
                 return next.insert(version, quantized_value, vector_id);
             }
             drop(next_read_guard);
-            let mut next_write_gaurd = self.next.write().unwrap();
-            if let Some(next) = &*next_write_gaurd {
+            let mut next_write_guard = self.next.write().unwrap();
+            if let Some(next) = &*next_write_guard {
                 return next.insert(version, quantized_value, vector_id);
             }
             let new_next = Self {
@@ -133,7 +133,7 @@ impl VersionedInvertedFixedSetIndex {
                 next: RwLock::new(None),
             };
             new_next.insert(version, quantized_value, vector_id);
-            *next_write_gaurd = Some(Box::new(new_next));
+            *next_write_guard = Some(Box::new(new_next));
             return;
         }
 
