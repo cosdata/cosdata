@@ -1,3 +1,4 @@
+pub mod atomic_array;
 pub mod buffered_io;
 pub mod cache_loader;
 pub mod collection;

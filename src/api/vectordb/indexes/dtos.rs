@@ -20,6 +20,7 @@ pub enum SparseIndexQuantization {
     B32,
     B64,
     B128,
+    B256,
 }
 
 impl<'de> Deserialize<'de> for SparseIndexQuantization {
@@ -33,8 +34,9 @@ impl<'de> Deserialize<'de> for SparseIndexQuantization {
             32 => Ok(Self::B32),
             64 => Ok(Self::B64),
             128 => Ok(Self::B128),
+            256 => Ok(Self::B256),
             _ => Err(serde::de::Error::custom(format!(
-                "Invalid value for quantization: {}. Expected 16, 32, 64 or 128.",
+                "Invalid value for quantization: {}. Expected 16, 32, 64, 128 or 256.",
                 value
             ))),
         }
@@ -42,12 +44,13 @@ impl<'de> Deserialize<'de> for SparseIndexQuantization {
 }
 
 impl SparseIndexQuantization {
-    pub fn into_u8(self) -> u8 {
+    pub fn into_bits(self) -> u8 {
         match self {
-            Self::B16 => 16,
-            Self::B32 => 32,
-            Self::B64 => 64,
-            Self::B128 => 128,
+            Self::B16 => 4,
+            Self::B32 => 5,
+            Self::B64 => 6,
+            Self::B128 => 7,
+            Self::B256 => 8,
         }
     }
 }

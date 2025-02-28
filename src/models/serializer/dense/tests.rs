@@ -1,11 +1,11 @@
-use super::ProbSerialize;
+use super::DenseSerialize;
 use crate::{
     distance::cosine::CosineSimilarity,
     models::{
         buffered_io::{BufferManager, BufferManagerFactory},
-        cache_loader::ProbCache,
+        cache_loader::DenseIndexCache,
         file_persist::write_prop_to_file,
-        lazy_load::{FileIndex, SyncPersist},
+        lazy_load::FileIndex,
         prob_lazy_load::{lazy_item::ProbLazyItem, lazy_item_array::ProbLazyItemArray},
         prob_node::{ProbNode, SharedNode},
         types::{FileOffset, HNSWLevel, MetricResult, NodeProp, VectorId},
@@ -27,7 +27,7 @@ use tempfile::{tempdir, TempDir};
 
 pub struct EqualityTester {
     checked: HashSet<(*mut ProbLazyItem<ProbNode>, *mut ProbLazyItem<ProbNode>)>,
-    cache: Arc<ProbCache>,
+    cache: Arc<DenseIndexCache>,
 }
 
 pub trait EqualityTest {
@@ -98,7 +98,10 @@ impl EqualityTest for SharedNode {
         if tester.checked.insert((*self, *other)) {
             let self_ = unsafe { &**self };
             let other = unsafe { &**other };
-            assert_eq!(self_.get_current_version(), other.get_current_version());
+            assert_eq!(
+                self_.get_current_version_id(),
+                other.get_current_version_id()
+            );
             assert_eq!(
                 self_.get_current_version_number(),
                 other.get_current_version_number()
@@ -111,7 +114,7 @@ impl EqualityTest for SharedNode {
 }
 
 impl EqualityTester {
-    pub fn new(cache: Arc<ProbCache>) -> Self {
+    pub fn new(cache: Arc<DenseIndexCache>) -> Self {
         Self {
             checked: HashSet::new(),
             cache,
@@ -122,8 +125,8 @@ impl EqualityTester {
 fn get_cache(
     bufmans: Arc<BufferManagerFactory<Hash>>,
     prop_file: Arc<RwLock<File>>,
-) -> Arc<ProbCache> {
-    Arc::new(ProbCache::new(bufmans.clone(), bufmans, prop_file))
+) -> Arc<DenseIndexCache> {
+    Arc::new(DenseIndexCache::new(bufmans.clone(), bufmans, prop_file))
 }
 
 fn create_prob_node(id: u64, prop_file: &RwLock<File>) -> ProbNode {
@@ -153,7 +156,7 @@ fn setup_test(
     root_version: Hash,
 ) -> (
     Arc<BufferManagerFactory<Hash>>,
-    Arc<ProbCache>,
+    Arc<DenseIndexCache>,
     Arc<BufferManager>,
     u64,
     Arc<RwLock<File>>,
@@ -195,7 +198,7 @@ fn test_lazy_item_serialization() {
     );
 
     let offset = lazy_item
-        .serialize(&bufmans, &bufmans, root_version_id, cursor, false)
+        .serialize(&bufmans, root_version_id, cursor)
         .unwrap();
     bufman.close_cursor(cursor).unwrap();
 
@@ -219,9 +222,7 @@ fn test_prob_node_acyclic_serialization() {
 
     let node = create_prob_node(0, &prop_file);
 
-    let offset = node
-        .serialize(&bufmans, &bufmans, root_version_id, cursor, false)
-        .unwrap();
+    let offset = node.serialize(&bufmans, root_version_id, cursor).unwrap();
     let file_index = FileIndex::Valid {
         offset: FileOffset(offset),
         version_number: 0,
@@ -258,14 +259,12 @@ fn test_prob_lazy_item_array_serialization() {
     }
     let offset = node_size - 80;
     bufman.seek_with_cursor(cursor, offset as u64).unwrap();
-    array
-        .serialize(&bufmans, &bufmans, root_version_id, cursor, false)
-        .unwrap();
+    array.serialize(&bufmans, root_version_id, cursor).unwrap();
     for i in 0..5 {
         array
             .get(i)
             .unwrap()
-            .serialize(&bufmans, &bufmans, root_version_id, cursor, false)
+            .serialize(&bufmans, root_version_id, cursor)
             .unwrap();
     }
     let file_index = FileIndex::Valid {
@@ -321,8 +320,7 @@ fn test_prob_node_serialization_with_neighbors() {
     }
 
     for node in nodes {
-        node.serialize(&bufmans, &bufmans, root_version_id, cursor, false)
-            .unwrap();
+        node.serialize(&bufmans, root_version_id, cursor).unwrap();
     }
 
     let file_index = FileIndex::Valid {
@@ -374,12 +372,8 @@ fn test_prob_lazy_item_cyclic_serialization() {
         .unwrap()
         .set_child(lazy0.clone());
 
-    lazy0
-        .serialize(&bufmans, &bufmans, root_version_id, cursor, false)
-        .unwrap();
-    lazy1
-        .serialize(&bufmans, &bufmans, root_version_id, cursor, false)
-        .unwrap();
+    lazy0.serialize(&bufmans, root_version_id, cursor).unwrap();
+    lazy1.serialize(&bufmans, root_version_id, cursor).unwrap();
 
     let file_index = FileIndex::Valid {
         offset: FileOffset(0),
@@ -396,7 +390,7 @@ fn test_prob_lazy_item_cyclic_serialization() {
 }
 
 fn validate_lazy_item_versions(
-    cache: &Arc<ProbCache>,
+    cache: &Arc<DenseIndexCache>,
     lazy_item: &ProbLazyItem<ProbNode>,
     version_number: u16,
 ) {
@@ -473,8 +467,7 @@ fn test_prob_lazy_item_with_versions_serialization_and_validation() {
     validate_lazy_item_versions(&cache, unsafe { &*root }, 0);
 
     for node in nodes {
-        node.serialize(&bufmans, &bufmans, v0_hash, cursor, false)
-            .unwrap();
+        node.serialize(&bufmans, v0_hash, cursor).unwrap();
     }
     let file_index = FileIndex::Valid {
         offset: FileOffset(0),

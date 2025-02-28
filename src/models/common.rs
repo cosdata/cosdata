@@ -1,5 +1,5 @@
 use super::buffered_io::BufIoError;
-use super::cache_loader::ProbCache;
+use super::cache_loader::DenseIndexCache;
 use super::lazy_load::LazyItem;
 use super::prob_node::SharedNode;
 use super::types::{MergedNode, MetricResult, VectorId};
@@ -493,7 +493,7 @@ pub fn add_option_vecs(
 pub fn remove_duplicates_and_filter(
     vec: Vec<(SharedNode, MetricResult)>,
     k: Option<usize>,
-    cache: &ProbCache,
+    cache: &DenseIndexCache,
 ) -> Vec<(VectorId, MetricResult)> {
     let mut seen = HashSet::new();
     let mut collected = vec
@@ -596,6 +596,43 @@ pub struct TSHashTable<K, V> {
     pub size: u8,
 }
 
+#[cfg(test)]
+impl<K: Eq + Hash + Clone + PartialEq, V: Clone + PartialEq> PartialEq for TSHashTable<K, V> {
+    fn eq(&self, other: &Self) -> bool {
+        let self_list = self.to_list();
+        let other_list = other.to_list();
+
+        for (k, v) in &self_list {
+            let Some((_, v2)) = other_list.iter().find(|(k2, _)| k2 == k) else {
+                return false;
+            };
+            if v != v2 {
+                return false;
+            }
+        }
+
+        for (k, v) in &other_list {
+            let Some((_, v2)) = self_list.iter().find(|(k2, _)| k2 == k) else {
+                return false;
+            };
+            if v != v2 {
+                return false;
+            }
+        }
+
+        true
+    }
+}
+
+#[cfg(test)]
+impl<K: Eq + Hash + Clone + std::fmt::Debug, V: Clone + std::fmt::Debug> std::fmt::Debug
+    for TSHashTable<K, V>
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_map().entries(self.to_list()).finish()
+    }
+}
+
 unsafe impl<K, V> Send for TSHashTable<K, V> {}
 unsafe impl<K, V> Sync for TSHashTable<K, V> {}
 
@@ -666,6 +703,16 @@ impl<K: Eq + Hash, V> TSHashTable<K, V> {
                 new_v
             }
         }
+    }
+
+    pub fn modify_or_insert<M, I>(&self, k: K, modify: M, insert: I)
+    where
+        M: FnOnce(&mut V),
+        I: FnOnce() -> V,
+    {
+        let index = self.hash_key(&k);
+        let mut ht = self.hash_table_list[index].lock().unwrap();
+        ht.entry(k).and_modify(modify).or_insert_with(insert);
     }
 
     // This bool represents whether the key was found in the map or not.

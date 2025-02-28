@@ -1,8 +1,10 @@
 mod cuckoo_filter_tree;
 mod dashmap;
+pub mod dense;
 mod eager_lazy_item;
 mod eager_lazy_item_set;
 mod incremental_serializable_growable_data;
+pub mod inverted;
 mod inverted_index;
 mod inverted_index_item;
 mod inverted_index_sparse_ann_node;
@@ -14,10 +16,7 @@ mod lazy_item_vec;
 mod metric_distance;
 mod neighbour;
 mod node;
-mod page;
-pub mod prob;
 mod storage;
-mod tshashtable;
 
 #[cfg(test)]
 mod tests;

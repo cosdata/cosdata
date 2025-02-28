@@ -203,6 +203,12 @@ impl BufferManager {
         Ok(f32::from_le_bytes(buffer))
     }
 
+    pub fn read_u64_with_cursor(&self, cursor_id: u64) -> Result<u64, BufIoError> {
+        let mut buffer = [0u8; 8];
+        self.read_with_cursor(cursor_id, &mut buffer)?;
+        Ok(u64::from_le_bytes(buffer))
+    }
+
     pub fn read_u32_with_cursor(&self, cursor_id: u64) -> Result<u32, BufIoError> {
         let mut buffer = [0u8; 4];
         self.read_with_cursor(cursor_id, &mut buffer)?;
@@ -269,6 +275,11 @@ impl BufferManager {
     }
 
     pub fn update_f32_with_cursor(&self, cursor_id: u64, value: f32) -> Result<u64, BufIoError> {
+        let buffer = value.to_le_bytes();
+        self.write_with_cursor(cursor_id, &buffer, false)
+    }
+
+    pub fn update_u64_with_cursor(&self, cursor_id: u64, value: u64) -> Result<u64, BufIoError> {
         let buffer = value.to_le_bytes();
         self.write_with_cursor(cursor_id, &buffer, false)
     }
