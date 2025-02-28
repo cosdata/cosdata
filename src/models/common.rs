@@ -596,6 +596,43 @@ pub struct TSHashTable<K, V> {
     pub size: u8,
 }
 
+#[cfg(test)]
+impl<K: Eq + Hash + Clone + PartialEq, V: Clone + PartialEq> PartialEq for TSHashTable<K, V> {
+    fn eq(&self, other: &Self) -> bool {
+        let self_list = self.to_list();
+        let other_list = other.to_list();
+
+        for (k, v) in &self_list {
+            let Some((_, v2)) = other_list.iter().find(|(k2, _)| k2 == k) else {
+                return false;
+            };
+            if v != v2 {
+                return false;
+            }
+        }
+
+        for (k, v) in &other_list {
+            let Some((_, v2)) = self_list.iter().find(|(k2, _)| k2 == k) else {
+                return false;
+            };
+            if v != v2 {
+                return false;
+            }
+        }
+
+        true
+    }
+}
+
+#[cfg(test)]
+impl<K: Eq + Hash + Clone + std::fmt::Debug, V: Clone + std::fmt::Debug> std::fmt::Debug
+    for TSHashTable<K, V>
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_map().entries(self.to_list()).finish()
+    }
+}
+
 unsafe impl<K, V> Send for TSHashTable<K, V> {}
 unsafe impl<K, V> Sync for TSHashTable<K, V> {}
 

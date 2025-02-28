@@ -1,6 +1,5 @@
 use super::buffered_io::{BufIoError, BufferManagerFactory};
 use super::common::WaCustomError;
-use super::lazy_load::SyncPersist;
 use super::prob_node::SharedNode;
 use super::serializer::dense::DenseSerialize;
 use super::types::{BytesToRead, FileOffset, NodeProp, VectorId};
@@ -25,10 +24,7 @@ pub fn write_node_to_file(
         (bufmans.get(version)?, bufmans)
     };
     let cursor = bufman.open_cursor()?;
-
-    lazy_item_ref.set_persistence(true);
     let offset = lazy_item.serialize(bufmans, version, cursor)?;
-
     bufman.close_cursor(cursor)?;
 
     Ok(offset)

@@ -7,6 +7,29 @@ pub struct AtomicArray<T, const N: usize> {
     items: [AtomicPtr<T>; N],
 }
 
+#[cfg(test)]
+impl<T: PartialEq, const N: usize> PartialEq for AtomicArray<T, N> {
+    fn eq(&self, other: &Self) -> bool {
+        self.items.len() == other.items.len()
+            && self.items.iter().zip(&other.items).all(|(s, o)| unsafe {
+                s.load(Ordering::Relaxed).as_ref() == o.load(Ordering::Relaxed).as_ref()
+            })
+    }
+}
+
+#[cfg(test)]
+impl<T: std::fmt::Debug, const N: usize> std::fmt::Debug for AtomicArray<T, N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list()
+            .entries(
+                self.items
+                    .iter()
+                    .map(|i| unsafe { i.load(Ordering::Relaxed).as_ref() }),
+            )
+            .finish()
+    }
+}
+
 impl<T, const N: usize> AtomicArray<T, N> {
     pub fn new() -> Self {
         Self {

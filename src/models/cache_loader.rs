@@ -663,10 +663,16 @@ impl InvertedIndexCache {
             break;
         }
 
+        let dim_cursor = self.dim_bufman.open_cursor()?;
+        self.dim_bufman
+            .seek_with_cursor(dim_cursor, file_offset.0 as u64)?;
+        let data_offset = self.dim_bufman.read_u32_with_cursor(dim_cursor)?;
+        self.dim_bufman.close_cursor(dim_cursor)?;
+
         let data = VersionedInvertedFixedSetIndex::deserialize(
             &self.dim_bufman,
             &self.data_bufmans,
-            file_offset,
+            FileOffset(data_offset),
             data_file_idx,
             self,
         )?;

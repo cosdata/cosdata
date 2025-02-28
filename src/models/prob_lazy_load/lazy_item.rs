@@ -1,4 +1,7 @@
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::{
+    fmt::Debug,
+    sync::atomic::{AtomicPtr, Ordering},
+};
 
 use crate::{
     models::{
@@ -16,6 +19,7 @@ use crate::{
 
 use super::lazy_item_array::ProbLazyItemArray;
 
+#[derive(PartialEq, Debug)]
 pub struct ReadyState<T> {
     pub data: T,
     pub file_offset: FileOffset,
@@ -24,6 +28,7 @@ pub struct ReadyState<T> {
 }
 
 // not cloneable
+#[derive(PartialEq, Debug)]
 pub enum ProbLazyItemState<T> {
     Ready(ReadyState<T>),
     Pending(FileIndex),
@@ -48,6 +53,24 @@ impl<T> ProbLazyItemState<T> {
 pub struct ProbLazyItem<T> {
     state: AtomicPtr<ProbLazyItemState<T>>,
     pub is_level_0: bool,
+}
+
+impl<T: PartialEq> PartialEq for ProbLazyItem<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.is_level_0 == other.is_level_0
+            && unsafe {
+                *self.state.load(Ordering::Relaxed) == *other.state.load(Ordering::Relaxed)
+            }
+    }
+}
+
+impl<T: Debug> Debug for ProbLazyItem<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProbLazyItem")
+            .field("state", unsafe { &*self.state.load(Ordering::Relaxed) })
+            .field("is_level_0", &self.is_level_0)
+            .finish()
+    }
 }
 
 impl<T> ProbLazyItem<T> {

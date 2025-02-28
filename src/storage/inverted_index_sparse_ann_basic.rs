@@ -232,6 +232,7 @@ impl InvertedIndexSparseAnnBasic {
     }
 }
 
+#[cfg_attr(test, derive(PartialEq, Debug))]
 pub struct InvertedIndexSparseAnnNodeBasicTSHashmapData {
     pub map: TSHashTable<u8, VersionedPagepool<PAGE_SIZE>>,
     pub max_key: u8,
@@ -246,6 +247,7 @@ impl InvertedIndexSparseAnnNodeBasicTSHashmapData {
     }
 }
 
+// #[derive(Debug)]
 pub struct InvertedIndexSparseAnnNodeBasicTSHashmap {
     pub file_offset: FileOffset,
     pub dim_index: u32,
@@ -255,6 +257,34 @@ pub struct InvertedIndexSparseAnnNodeBasicTSHashmap {
     pub data: *mut ProbLazyItem<InvertedIndexSparseAnnNodeBasicTSHashmapData>,
     pub children: AtomicArray<InvertedIndexSparseAnnNodeBasicTSHashmap, 16>,
     pub fixed_sets: *mut ProbLazyItem<VersionedInvertedFixedSetIndex>,
+}
+
+#[cfg(test)]
+impl PartialEq for InvertedIndexSparseAnnNodeBasicTSHashmap {
+    fn eq(&self, other: &Self) -> bool {
+        self.file_offset == other.file_offset
+            && self.dim_index == other.dim_index
+            && self.implicit == other.implicit
+            && self.quantization_bits == other.quantization_bits
+            && unsafe { *self.data == *other.data }
+            && self.children == other.children
+            && unsafe { *self.fixed_sets == *other.fixed_sets }
+    }
+}
+
+#[cfg(test)]
+impl std::fmt::Debug for InvertedIndexSparseAnnNodeBasicTSHashmap {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("InvertedIndexSparseAnnNodeBasicTSHashmap")
+            .field("file_offset", &self.file_offset)
+            .field("dim_index", &self.dim_index)
+            .field("implicit", &self.implicit)
+            .field("quantization_bits", &self.quantization_bits)
+            .field("data", unsafe { &*self.data })
+            .field("children", &self.children)
+            .field("fixed_sets", unsafe { &*self.fixed_sets })
+            .finish()
+    }
 }
 
 // #[derive(Clone)]

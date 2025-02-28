@@ -57,8 +57,13 @@ impl InvertedIndexSerialize for *mut ProbLazyItem<VersionedInvertedFixedSetIndex
             ProbLazyItemState::Ready(ReadyState {
                 data, file_offset, ..
             }) => {
+                let data_bufman = data_bufmans.get(data_file_idx)?;
+                let data_cursor = data_bufman.open_cursor()?;
+                let data_offset =
+                    data.serialize(dim_bufman, data_bufmans, data_file_idx, data_cursor)?;
+                data_bufman.close_cursor(data_cursor)?;
                 dim_bufman.seek_with_cursor(cursor, file_offset.0 as u64)?;
-                data.serialize(dim_bufman, data_bufmans, data_file_idx, cursor)?;
+                dim_bufman.update_u32_with_cursor(cursor, data_offset)?;
                 Ok(file_offset.0)
             }
         }

@@ -5,7 +5,7 @@ use std::sync::{
 
 use super::{types::FileOffset, versioning::Hash};
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct PerformantFixedSet {
     pub buckets: Vec<u64>,
 }
@@ -69,12 +69,36 @@ impl AtomicFixedSet {
 pub const INVERTED_FIXED_SET_INDEX_SIZE: usize = 8;
 
 // id -> quantized value
+#[derive(Debug)]
 pub struct VersionedInvertedFixedSetIndex {
     pub current_hash: Hash,
     pub serialized_at: RwLock<Option<FileOffset>>,
     pub exclusives: Vec<RwLock<PerformantFixedSet>>,
     pub bits: Vec<RwLock<PerformantFixedSet>>,
     pub next: RwLock<Option<Box<VersionedInvertedFixedSetIndex>>>,
+}
+
+#[cfg(test)]
+impl PartialEq for VersionedInvertedFixedSetIndex {
+    fn eq(&self, other: &Self) -> bool {
+        self.current_hash == other.current_hash
+            && *self.serialized_at.read().unwrap() == *other.serialized_at.read().unwrap()
+            && self.exclusives.len() == other.exclusives.len()
+            && self.exclusives.iter().zip(&other.exclusives).all(
+                |(self_exclusive, other_exclusive)| {
+                    *self_exclusive.read().unwrap() == *other_exclusive.read().unwrap()
+                },
+            )
+            && self.bits.len() == other.bits.len()
+            && self
+                .bits
+                .iter()
+                .zip(&other.bits)
+                .all(|(self_bit, other_bit)| {
+                    *self_bit.read().unwrap() == *other_bit.read().unwrap()
+                })
+            && *self.next.read().unwrap() == *other.next.read().unwrap()
+    }
 }
 
 impl VersionedInvertedFixedSetIndex {

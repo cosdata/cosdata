@@ -44,32 +44,27 @@ impl InvertedIndexSerialize for VersionedInvertedFixedSetIndex {
             }
             buf
         };
-        let data_bufman = data_bufmans.get(data_file_idx)?;
-        let data_cursor = data_bufman.open_cursor()?;
-        let data_offset =
-            if let Some(offset) = *self.serialized_at.read().map_err(|_| BufIoError::Locking)? {
-                data_bufman.seek_with_cursor(data_cursor, offset.0 as u64)?;
-                data_bufman.update_with_cursor(data_cursor, &buf)?;
-                offset.0
-            } else {
-                let mut serialized_at = self
-                    .serialized_at
-                    .write()
-                    .map_err(|_| BufIoError::Locking)?;
-                if let Some(offset) = *serialized_at {
-                    data_bufman.seek_with_cursor(data_cursor, offset.0 as u64)?;
-                    data_bufman.update_with_cursor(data_cursor, &buf)?;
-                    return Ok(offset.0);
-                } else {
-                    let offset = data_bufman.write_to_end_of_file(data_cursor, &buf)? as u32;
-                    *serialized_at = Some(FileOffset(offset));
-                    offset
-                }
-            };
-        data_bufman.close_cursor(data_cursor)?;
-        let dim_offset = dim_bufman.cursor_position(cursor)? as u32;
-        dim_bufman.update_u32_with_cursor(cursor, data_offset)?;
-        Ok(dim_offset)
+        let bufman = data_bufmans.get(data_file_idx)?;
+        let serialized_at_read_guard =
+            self.serialized_at.read().map_err(|_| BufIoError::Locking)?;
+        if let Some(offset) = *serialized_at_read_guard {
+            bufman.seek_with_cursor(cursor, offset.0 as u64)?;
+            bufman.update_with_cursor(cursor, &buf)?;
+            return Ok(offset.0);
+        }
+        drop(serialized_at_read_guard);
+        let mut serialized_at = self
+            .serialized_at
+            .write()
+            .map_err(|_| BufIoError::Locking)?;
+        if let Some(offset) = *serialized_at {
+            bufman.seek_with_cursor(cursor, offset.0 as u64)?;
+            bufman.update_with_cursor(cursor, &buf)?;
+            return Ok(offset.0);
+        }
+        let data_offset = bufman.write_to_end_of_file(cursor, &buf)? as u32;
+        *serialized_at = Some(FileOffset(data_offset));
+        Ok(data_offset)
     }
 
     fn deserialize(

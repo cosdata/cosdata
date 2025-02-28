@@ -13,6 +13,7 @@ pub struct VersionedPagepool<const LEN: usize> {
     pub next: Arc<RwLock<Option<VersionedPagepool<LEN>>>>,
 }
 
+#[cfg(test)]
 impl<const LEN: usize> PartialEq for VersionedPagepool<LEN> {
     fn eq(&self, other: &Self) -> bool {
         self.current_version == other.current_version
