@@ -30,6 +30,7 @@ use crate::quantization::{
     product::ProductQuantization, scalar::ScalarQuantization, Quantization, QuantizationError,
     StorageType,
 };
+use crate::storage::inverted_index_sparse_ann_basic::InvertedIndexSparseAnnBasicTSHashmap;
 use crate::storage::Storage;
 use arcshift::ArcShift;
 use dashmap::DashMap;
@@ -982,20 +983,22 @@ impl CollectionsMap {
             db,
         };
         let current_version = retrieve_current_version(&lmdb)?;
-        // TODO(a-rustacean): deserialize inverted index
-        let inverted_index = InvertedIndex::new(
-            coll.name.clone(),
-            inverted_index_data.description,
-            index_path,
-            inverted_index_data.auto_create_index,
-            inverted_index_data.metadata_schema,
-            inverted_index_data.max_vectors,
+        let inverted_index = InvertedIndex {
+            name: coll.name.clone(),
+            description: inverted_index_data.description,
+            auto_create_index: inverted_index_data.auto_create_index,
+            metadata_schema: inverted_index_data.metadata_schema,
+            max_vectors: inverted_index_data.max_vectors,
+            root: Arc::new(InvertedIndexSparseAnnBasicTSHashmap::deserialize(
+                index_path,
+                inverted_index_data.quantization_bits,
+            )?),
             lmdb,
-            current_version,
+            current_version: ArcShift::new(current_version),
+            current_open_transaction: AtomicPtr::new(ptr::null_mut()),
             vcs,
             vec_raw_manager,
-            inverted_index_data.quantization,
-        )?;
+        };
 
         Ok(inverted_index)
     }

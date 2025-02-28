@@ -15,9 +15,7 @@ pub struct InvertedIndexData {
     pub auto_create_index: bool,
     pub metadata_schema: Option<String>,
     pub max_vectors: Option<i32>,
-    pub quantization: u8,
-    // TODO should have a reference to the root node FileIndex ?
-    // pub root_offset: FileIndex,
+    pub quantization_bits: u8,
 }
 
 impl TryFrom<Arc<InvertedIndex>> for InvertedIndexData {
@@ -29,13 +27,7 @@ impl TryFrom<Arc<InvertedIndex>> for InvertedIndexData {
             auto_create_index: inverted_index.auto_create_index,
             metadata_schema: inverted_index.metadata_schema.clone(),
             max_vectors: inverted_index.max_vectors,
-            quantization: inverted_index.root.root.quantization_bits,
-            // TODO add a FileIndex value to root prop
-            // to persist the root of the inverted index
-            // root: inverted_index
-            //     .root
-            //     .serialize()
-            //     .expect("failed to serialize"),
+            quantization_bits: inverted_index.root.root.quantization_bits,
         };
         Ok(inverted_index_data)
     }

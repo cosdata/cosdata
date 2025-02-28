@@ -188,8 +188,11 @@ impl InvertedIndexTransaction {
         self.raw_embedding_channel.send(raw_emb).unwrap();
     }
 
-    pub fn pre_commit(self) -> Result<(), WaCustomError> {
+    pub fn pre_commit(self, inverted_index: &InvertedIndex) -> Result<(), WaCustomError> {
         drop(self.raw_embedding_channel);
+        inverted_index.root.serialize()?;
+        inverted_index.root.cache.dim_bufman.flush()?;
+        inverted_index.root.cache.data_bufmans.flush_all()?;
         self.raw_embedding_serializer_thread_handle
             .join()
             .unwrap()?;
