@@ -1,3 +1,6 @@
+#[macro_use]
+pub mod cfg_macros;
+
 pub mod config_loader;
 pub mod cosql;
 pub mod distance;

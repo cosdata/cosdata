@@ -21,6 +21,33 @@ message SparseVector {
     repeated SparsePair values = 2;
 }
 
+// Metadata types
+message FieldValue {
+    oneof value {
+        int32 int_value = 1;
+        string string_value = 2;
+    }
+}
+
+message MetadataField {
+    string name = 1;
+    repeated FieldValue values = 2;
+}
+
+message SupportedCondition {
+    enum OperationType {
+        AND = 0;
+        OR = 1;
+    }
+    OperationType op = 1;
+    repeated string field_names = 2;
+}
+
+message MetadataSchema {
+    repeated MetadataField fields = 1;
+    repeated SupportedCondition supported_conditions = 2;
+}
+
 // Auth Service
 service AuthService {
     rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
@@ -73,7 +100,7 @@ message CreateCollectionRequest {
     optional string description = 2;
     DenseVectorOptions dense_vector = 3;
     SparseVectorOptions sparse_vector = 4;
-    optional string metadata_schema = 5;
+    optional MetadataSchema metadata_schema = 5;
     CollectionConfig config = 6;
 }
 

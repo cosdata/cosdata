@@ -3,64 +3,39 @@
 #+DATE: 2025-02-09
 
 * Overview
-This document outlines the design specification for a property graph storage engine utilizing an inverted index-based approach for efficient entity and relationship storage and retrieval. The system uses sparse vector representations mapped to an inverted index structure, enabling efficient storage and querying of entities, their properties, and relationships.
+This document outlines the design specification for a property graph storage engine utilizing an index-based approach for efficient entity and relationship storage and retrieval. The system maps entities, properties and relationships to an index structure, enabling efficient storage and querying.
 
 * Core Data Model
 
 ** Entity Encoding
-Entities and relationships are converted to sparse vector representations for storage in the inverted index. The implementation accepts arbitrary byte slices as input, allowing for flexible encoding of various types of identifiers and properties. 
-
-** Sparse Vector Representation
-Each entity, property, and relationship is represented as a dimension in a sparse vector space:
-
-*** Single Entity (e.g., Person with just ID):
- - One dimension in sparse vector
- - One entry in inverted index
-
-*** Entity with Property:
- - One dimension for entity ID
- - Additional dimension for each filterable property
- - Example: Person(id="person:123", name="alice") has two dimensions
-
-*** Relationship between Entities:
- - One dimension for source entity
- -  One dimension for target entity
- - One dimension for relationship itself
- - Additional dimensions for any filterable relationship properties
- - Example: Person123 -KNOWS{since=2024}-> Person456 has four dimensions
+Entities and relationships are encoded for storage in the index. The implementation accepts arbitrary byte slices as input, allowing for flexible encoding of various types of identifiers and properties. 
 
 ** Vector Dimension Format
-Each dimension in the sparse vector is represented by:
-- Configuration A: (index_position: u32, map_key: u8, divisor: u64)
-- Configuration B: (index_position: u32, divisor: u64)
+Each entry in the index is represented by:
+- (index_position: u32, map_key: u8, divisor: u64, data_offset: u32)
 
 Example representations:
 
 #+begin_src
 # Person with ID and name
-Dimension 1 (ID="person:123"):   (45123, 178, 982347)
-Dimension 2 (name="alice"):      (12834, 45,  673891)
+For ID="person:123":  (45123, 178, 982347, 24680)
+For name="alice":     (12834, 45,  673891, 13579)
 
 # Relationship with property
-Dimension 1 (Entity1="person:123"):     (45123, 178, 982347)
-Dimension 2 (Entity2="person:456"):     (23456, 89,  445678)
-Dimension 3 (Rel="knows:789"):          (78901, 234, 123456)
-Dimension 4 (prop="since:2024"):        (34567, 123, 789012)
+For Entity1="person:123":   (45123, 178, 982347, 24680)
+For Entity2="person:456":   (23456, 89,  445678, 35791)
+For Rel="knows:789":        (78901, 234, 123456, 46802)
+For prop="since:2024":      (34567, 123, 789012, 57913)
 #+end_src
 
 * Storage Architecture
 
-** Inverted Index Structure
-The system implements a power-of-4 based inverted index with two possible configurations:
+** Index Structure
+The system implements a power-of-4 based index:
 
-*** Configuration A: 4^8 with Internal Maps
+*** Configuration: 4^8 with Internal Maps
 - Total nodes: 65,536 (4^8)
 - Each node contains internal map (256 keys)
-- Value format: (divisor: u64, file_offset: u32)
-
-*** Configuration B: 4^12 Direct Mapping
-- Total nodes: 16,777,216 (4^12)
-- Direct key-value storage
 - Value format: (divisor: u64, file_offset: u32)
 
 ** Implementation Details
@@ -77,78 +52,80 @@ fn simple_hash(bytes: &[u8]) -> u64 {
    hash
 }
 
-// Configuration A (4^8 = 65,536 with internal maps)
-fn encode_entity_config_a(bytes: &[u8]) -> (u32, u8, u64) {
+// Configuration (4^8 = 65,536 with internal maps)
+fn encode_entity(bytes: &[u8]) -> (u32, u8, u64) {
    let hash = simple_hash(bytes);
    
-   let index_position = (hash % 65536) as u32;
-   let map_key = ((hash / 65536) % 256) as u8;
-   let divisor = hash / (65536 * 256);
+   // For efficiency, use bit operations instead of modulo and division
+   let index_position = (hash & 0xFFFF) as u32;
+   let map_key = ((hash >> 16) & 0xFF) as u8;
+   let divisor = hash >> 24;
    
    (index_position, map_key, divisor)
 }
 
-fn validate_entity_config_a(index_position: u32, map_key: u8, divisor: u64, bytes: &[u8]) -> bool {
-   let hash = simple_hash(bytes);
-   let reconstructed_hash = divisor * (65536 * 256) + 
-                          (map_key as u64) * 65536 + 
-                          index_position as u64;
-   hash == reconstructed_hash
-}
-
-// Configuration B (4^12 = 16,777,216 direct mapping)
-fn encode_entity_config_b(bytes: &[u8]) -> (u32, u64) {
-   let hash = simple_hash(bytes);
-   
-   let index_position = (hash % 16_777_216) as u32;
-   let divisor = hash / 16_777_216;
-   
-   (index_position, divisor)
-}
-
-fn validate_entity_config_b(index_position: u32, divisor: u64, bytes: &[u8]) -> bool {
-   let hash = simple_hash(bytes);
-   let reconstructed_hash = divisor * 16_777_216 + index_position as u64;
-   hash == reconstructed_hash
+fn validate_entity(index_position: u32, map_key: u8, divisor: u64, bytes: &[u8]) -> bool {
+    let hash = simple_hash(bytes);
+    let reconstructed_hash = (divisor << 24) | ((map_key as u64) << 16) | (index_position as u64);
+    hash == reconstructed_hash
 }
 
 fn main() {
    // Example with different types of identifiers
    let id_bytes = "person:123".as_bytes();
-   let property_bytes = "name:alice".as_bytes();
    
-   // Config A
-   let (pos_a, key_a, div_a) = encode_entity_config_a(id_bytes);
-   println!("Config A Encoding:");
-   println!("Index Position: {}", pos_a);
-   println!("Map Key: {}", key_a);
-   println!("Divisor: {}", div_a);
-   println!("Validation: {}", validate_entity_config_a(pos_a, key_a, div_a, id_bytes));
-   println!();
-   
-   // Config B
-   let (pos_b, div_b) = encode_entity_config_b(property_bytes);
-   println!("Config B Encoding:");
-   println!("Index Position: {}", pos_b);
-   println!("Divisor: {}", div_b);
-   println!("Validation: {}", validate_entity_config_b(pos_b, div_b, property_bytes));
+   let (pos, key, div) = encode_entity(id_bytes);
+   println!("Encoding:");
+   println!("Index Position: {}", pos);
+   println!("Map Key: {}", key);
+   println!("Divisor: {}", div);
+   println!("Validation: {}", validate_entity(pos, key, div, id_bytes));
 }
 #+end_src
+
+* Entity and Relationship Storage Structure
+
+** Entity Type Storage
+When storing an entity type (e.g., Person):
+- Hash the entity type according to the scheme
+- Create an entry in the index
+- The entry points to a data file offset containing:
+  - The "schema" for the entity type (serialized appropriately)
+  - A u64 counter tracking how many instances of this entity exist
+  - A chunked list of entity instances with appropriate IDs indexed in the tree
+
+** Entity Instance Storage
+For each entity instance (e.g., a specific Person):
+- Create one entry in the tree by hashing the entity instance with its unique-id
+- The entry contains an offset to the data file containing:
+  - Properties (firstname, lastname, age, gender, etc.)
+  - Number of relationships grouped by type
+  - Chunked list of relationship types (employee, spouse, member-of-club, etc.)
+
+** Relationship Type Storage
+For each relationship type associated with an entity instance:
+- Create a unique entry in the index tree by hashing the relationship-type
+- The entry points to a data file offset containing:
+  - Count for each relationship type (edges count)
+  - Chunked list of neighbors
+  - Property hash (as relationships are first-class citizens)
+  - Indexed in the tree for direct lookup with key attributes
+
+** Relationship Instance Storage
+For each instance of a relationship, as relationships are first class citizens in a property graph:
+- Create one entry in the tree by hashing the relationship instance with its unique-id
+- The entry contains an offset to data file that holds the properties of the relationships themselves
 
 * Query Execution
 
 ** Lookup Process
 1. Calculate hash of the entity/property bytes
 2. Determine index position
-3. For Configuration A:
-  - Use index position to locate storage bucket
-  - Calculate remainder and divisor
-  - Use remainder as key to locate entry
-  - Validate entry using divisor
-4. For Configuration B:
-  - Use index position to directly locate entry
-  - Validate entry using divisor
-5. Retrieve entity data using file offset
+3. Use index position to locate storage bucket
+4. Calculate remainder and divisor
+5. Use remainder as key to locate entry
+6. Validate entry using divisor
+7. Retrieve entity data using file offset
 
 ** Traversal Optimization
 - Implicit nodes represent structural relationships
@@ -156,34 +133,11 @@ fn main() {
 - Combined approach enables efficient path finding
 - Multiple dimensions can be queried in parallel
 
-* Storage Format
-
-** Entity Storage
-- Entities stored in separate data files
-- File offsets are 32-bit unsigned integers
-- Entity records contain type information, properties, and relationship references
-
-** Relationship Storage
-- Relationships are first-class entities
-- Store both incoming and outgoing node references
-- Properties stored similarly to entities
-
 * Performance Considerations
-
-** Space-Time Tradeoffs
-*** Configuration A:
- - Lower memory usage for sparse datasets
- - Additional lookup step through internal map
- - Better for memory-constrained systems
-*** Configuration B:
- - Higher memory usage
- - Faster direct lookups
- - Better for dense datasets
- - Suitable for systems with abundant memory
 
 ** Hashing and Index Considerations
 - While this example uses a simple hash function for demonstration, production systems should use xxHash for its superior distribution characteristics, computation speed, collision resistance, and proven reliability in production environments
-- Index positions stored as u32 to optimize memory usage, as values never exceed 16,777,216 (4^12)
+- Index positions stored as u32 to optimize memory usage
 
 ** Caching Strategy
 - Frequently accessed entries kept in memory
@@ -194,3 +148,4 @@ fn main() {
 - Each dimension can be queried independently
 - Parallel lookup across dimensions possible
 - Validation scheme ensures accuracy of results
+- Direct lookup of relationships with key attributes
