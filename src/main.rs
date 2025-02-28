@@ -1,6 +1,7 @@
 pub(crate) mod api;
 mod api_service;
 mod app_context;
+mod args;
 pub mod config_loader;
 pub mod cosql;
 pub mod distance;
@@ -20,15 +21,18 @@ mod cfg_macros;
 pub mod grpc;
 
 use actix_web::web::Data;
+use args::CosdataArgs;
+use clap::Parser;
 
 use crate::{app_context::AppContext, web_server::run_actix_server_with_context};
 
 #[actix_web::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = CosdataArgs::parse();
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
     let config = config_loader::load_config();
     // Create context
-    let context = Data::new(AppContext::new(config)?);
+    let context = Data::new(AppContext::new(config, args)?);
 
     // Start gRPC server
     #[cfg(feature = "grpc-server")]
