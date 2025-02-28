@@ -342,8 +342,6 @@ impl DenseIndexCache {
         let state = ProbLazyItemState::Ready(ReadyState {
             data,
             file_offset,
-            is_serialized: AtomicBool::new(true),
-            persist_flag: AtomicBool::new(false),
             version_id,
             version_number,
         });
@@ -418,8 +416,6 @@ impl DenseIndexCache {
         let state = ProbLazyItemState::Ready(ReadyState {
             data,
             file_offset,
-            is_serialized: AtomicBool::new(true),
-            persist_flag: AtomicBool::new(false),
             version_id,
             version_number,
         });
@@ -617,8 +613,6 @@ impl InvertedIndexCache {
         let state = ProbLazyItemState::Ready(ReadyState {
             data,
             file_offset,
-            is_serialized: AtomicBool::new(true),
-            persist_flag: AtomicBool::new(false),
             version_id: 0.into(),
             version_number: 0,
         });
@@ -679,8 +673,6 @@ impl InvertedIndexCache {
         let state = ProbLazyItemState::Ready(ReadyState {
             data,
             file_offset,
-            is_serialized: AtomicBool::new(true),
-            persist_flag: AtomicBool::new(false),
             version_id: 0.into(),
             version_number: 0,
         });

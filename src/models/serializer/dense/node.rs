@@ -10,7 +10,7 @@ use crate::models::{
     versioning::Hash,
 };
 
-use super::{DenseSerialize, DenseUpdateSerialized};
+use super::DenseSerialize;
 
 // @SERIALIZED_SIZE:
 //   Properties:
@@ -268,25 +268,5 @@ impl DenseSerialize for ProbNode {
                 ))
             }
         }
-    }
-}
-
-impl DenseUpdateSerialized for ProbNode {
-    fn update_serialized(
-        &self,
-        bufmans: &BufferManagerFactory<Hash>,
-        version: Hash,
-        FileOffset(offset): FileOffset,
-        cursor: u64,
-    ) -> Result<u32, BufIoError> {
-        let size = Self::get_serialized_size(self.get_neighbors_raw().len()) as u32;
-        debug_assert_eq!(offset % size, 0);
-        let bufman = bufmans.get(version)?;
-        bufman.seek_with_cursor(cursor, offset as u64 + 39)?;
-        self.get_neighbors_raw()
-            .serialize(bufmans, version, cursor)?;
-        self.versions.serialize(bufmans, version, cursor)?;
-
-        Ok(offset)
     }
 }

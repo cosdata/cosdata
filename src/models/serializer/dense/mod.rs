@@ -11,7 +11,6 @@ use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
     cache_loader::DenseIndexCache,
     lazy_load::FileIndex,
-    types::FileOffset,
     versioning::Hash,
 };
 
@@ -31,14 +30,4 @@ pub trait DenseSerialize: Sized {
         skipm: &mut HashSet<u64>,
         is_level_0: bool,
     ) -> Result<Self, BufIoError>;
-}
-
-pub trait DenseUpdateSerialized {
-    fn update_serialized(
-        &self,
-        bufmans: &BufferManagerFactory<Hash>,
-        version: Hash,
-        offset: FileOffset,
-        cursor: u64,
-    ) -> Result<u32, BufIoError>;
 }

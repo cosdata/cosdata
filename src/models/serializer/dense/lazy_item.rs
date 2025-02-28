@@ -1,4 +1,4 @@
-use std::{collections::HashSet, sync::atomic::Ordering};
+use std::collections::HashSet;
 
 use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
@@ -9,7 +9,7 @@ use crate::models::{
     versioning::Hash,
 };
 
-use super::{DenseSerialize, DenseUpdateSerialized};
+use super::DenseSerialize;
 
 impl DenseSerialize for SharedNode {
     fn serialize(
@@ -24,46 +24,23 @@ impl DenseSerialize for SharedNode {
             ProbLazyItemState::Ready(ReadyState {
                 data,
                 file_offset,
-                persist_flag,
                 version_id,
-                is_serialized,
                 ..
             }) => {
                 let bufman = bufmans.get(*version_id)?;
 
-                if is_serialized.load(Ordering::Acquire) {
-                    if !persist_flag.swap(false, Ordering::Acquire) {
-                        return Ok(file_offset.0);
-                    }
-
-                    let cursor = if version_id == &version {
-                        cursor
-                    } else {
-                        bufman.open_cursor()?
-                    };
-
-                    data.update_serialized(bufmans, *version_id, *file_offset, cursor)?;
-
-                    if version_id != &version {
-                        bufman.close_cursor(cursor)?;
-                    }
+                let cursor = if version_id == &version {
+                    cursor
                 } else {
-                    let cursor = if version_id == &version {
-                        cursor
-                    } else {
-                        bufman.open_cursor()?
-                    };
+                    bufman.open_cursor()?
+                };
 
-                    bufman.seek_with_cursor(cursor, file_offset.0 as u64)?;
+                bufman.seek_with_cursor(cursor, file_offset.0 as u64)?;
 
-                    is_serialized.store(true, Ordering::Release);
-                    persist_flag.store(false, Ordering::Release);
+                data.serialize(bufmans, *version_id, cursor)?;
 
-                    data.serialize(bufmans, *version_id, cursor)?;
-
-                    if version_id != &version {
-                        bufman.close_cursor(cursor)?;
-                    }
+                if version_id != &version {
+                    bufman.close_cursor(cursor)?;
                 }
 
                 Ok(file_offset.0)

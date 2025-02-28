@@ -5,7 +5,7 @@ use crate::{
         buffered_io::BufIoError,
         cache_loader::{DenseIndexCache, InvertedIndexCache},
         fixedset::VersionedInvertedFixedSetIndex,
-        lazy_load::{largest_power_of_4_below, FileIndex, SyncPersist},
+        lazy_load::{largest_power_of_4_below, FileIndex},
         prob_node::ProbNode,
         serializer::inverted::DATA_FILE_PARTS,
         types::FileOffset,
@@ -19,8 +19,6 @@ use super::lazy_item_array::ProbLazyItemArray;
 pub struct ReadyState<T> {
     pub data: T,
     pub file_offset: FileOffset,
-    pub is_serialized: AtomicBool,
-    pub persist_flag: AtomicBool,
     pub version_id: Hash,
     pub version_number: u16,
 }
@@ -65,8 +63,6 @@ impl<T> ProbLazyItem<T> {
                 ReadyState {
                     data,
                     file_offset,
-                    is_serialized: AtomicBool::new(false),
-                    persist_flag: AtomicBool::new(true),
                     version_id,
                     version_number,
                 },
@@ -144,6 +140,14 @@ impl<T> ProbLazyItem<T> {
                 },
             }
         }
+    }
+
+    pub fn get_current_version_id(&self) -> Hash {
+        unsafe { (*self.state.load(Ordering::Acquire)).get_version_id() }
+    }
+
+    pub fn get_current_version_number(&self) -> u16 {
+        unsafe { (*self.state.load(Ordering::Acquire)).get_version_number() }
     }
 }
 
@@ -311,34 +315,6 @@ impl ProbLazyItem<VersionedInvertedFixedSetIndex> {
                 }
             }
         }
-    }
-}
-
-impl<T> SyncPersist for ProbLazyItem<T> {
-    fn set_persistence(&self, flag: bool) {
-        unsafe {
-            if let ProbLazyItemState::Ready(state) = &*self.state.load(Ordering::Acquire) {
-                state.persist_flag.store(flag, Ordering::SeqCst);
-            }
-        }
-    }
-
-    fn needs_persistence(&self) -> bool {
-        unsafe {
-            if let ProbLazyItemState::Ready(state) = &*self.state.load(Ordering::Acquire) {
-                state.persist_flag.load(Ordering::SeqCst)
-            } else {
-                false
-            }
-        }
-    }
-
-    fn get_current_version(&self) -> Hash {
-        unsafe { (*self.state.load(Ordering::Acquire)).get_version_id() }
-    }
-
-    fn get_current_version_number(&self) -> u16 {
-        unsafe { (*self.state.load(Ordering::Acquire)).get_version_number() }
     }
 }
 

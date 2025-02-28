@@ -5,7 +5,7 @@ use crate::{
         buffered_io::{BufferManager, BufferManagerFactory},
         cache_loader::DenseIndexCache,
         file_persist::write_prop_to_file,
-        lazy_load::{FileIndex, SyncPersist},
+        lazy_load::FileIndex,
         prob_lazy_load::{lazy_item::ProbLazyItem, lazy_item_array::ProbLazyItemArray},
         prob_node::{ProbNode, SharedNode},
         types::{FileOffset, HNSWLevel, MetricResult, NodeProp, VectorId},
@@ -98,7 +98,10 @@ impl EqualityTest for SharedNode {
         if tester.checked.insert((*self, *other)) {
             let self_ = unsafe { &**self };
             let other = unsafe { &**other };
-            assert_eq!(self_.get_current_version(), other.get_current_version());
+            assert_eq!(
+                self_.get_current_version_id(),
+                other.get_current_version_id()
+            );
             assert_eq!(
                 self_.get_current_version_number(),
                 other.get_current_version_number()
