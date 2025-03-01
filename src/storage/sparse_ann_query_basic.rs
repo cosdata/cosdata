@@ -175,15 +175,17 @@ impl SparseAnnQueryBasic {
     pub fn sequential_search_tshashmap(
         &self,
         index: &InvertedIndexSparseAnnBasicTSHashmap,
-        // 16,32,64
-        quantization: u8,
+        // 4, 5, 6
+        quantization_bits: u8,
     ) -> Result<Vec<SparseAnnResult>, BufIoError> {
         let sparse_query_vector = self.create_sparse_query_vector(index)?;
         let mut dot_products: HashMap<u32, u32> = HashMap::new();
         // same as `0.5` quantized
-        let half_quantized = quantization / 2;
+        let half_quantized = 1u8 << (quantization_bits - 1);
         // same as `0.75` quantized
-        let three_fourth_quantized = (quantization / 4) * 3;
+        let three_fourth_quantized = 3u8 << (quantization_bits - 2);
+        // same as `1` quantized
+        let one_quantized = ((1u32 << quantization_bits) - 1) as u8;
 
         let mut sorted_query_dims: Vec<(u32, SparseQueryVectorDimensionType, f32)> =
             sparse_query_vector.entries.clone();
@@ -236,7 +238,7 @@ impl SparseAnnQueryBasic {
                             }
 
                             // Then iterate through the map/list for the remaining quantized keys
-                            for key in (three_fourth_quantized..quantization).rev() {
+                            for key in (three_fourth_quantized..=one_quantized).rev() {
                                 let mut current_versioned_pagepool = unsafe { &*node.data }
                                     .try_get_data(&index.cache, node.dim_index)?
                                     .map
@@ -289,7 +291,7 @@ impl SparseAnnQueryBasic {
                             }
 
                             // Then iterate through the map/list for the remaining quantized keys
-                            for key in (three_fourth_quantized..quantization).rev() {
+                            for key in (three_fourth_quantized..=one_quantized).rev() {
                                 let mut current_versioned_pagepool = unsafe { &*node.data }
                                     .try_get_data(&index.cache, node.dim_index)?
                                     .map
@@ -321,7 +323,7 @@ impl SparseAnnQueryBasic {
                             // Iterate through the full list of values for this dimension
                             // in inverted index, and then use these shortlisted ids to lookup
                             // when needed in the cuckoo filter tree of the other dims
-                            for key in (0..quantization).rev() {
+                            for key in (0..=one_quantized).rev() {
                                 let mut current_versioned_pagepool = unsafe { &*node.data }
                                     .try_get_data(&index.cache, node.dim_index)?
                                     .map
