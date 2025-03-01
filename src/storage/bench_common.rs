@@ -49,7 +49,7 @@ pub fn generate_random_sparse_vectors(num_records: usize, dimensions: usize) -> 
 
         // Generate random values for the nonzero indices
         for dim_index in unique_indices {
-            let value = rng.gen();
+            let value = rng.gen_range(0.0..5.0);
             entries.push((dim_index as u32, value));
         }
 

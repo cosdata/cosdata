@@ -6,6 +6,7 @@ use super::embedding_persist::{write_embedding, EmbeddingOffset};
 use super::meta_persist::{
     delete_dense_index, lmdb_init_collections_db, lmdb_init_db, load_collections,
     load_dense_index_data, persist_dense_index, retrieve_current_version,
+    retrieve_values_upper_bound,
 };
 use super::prob_lazy_load::lazy_item::ProbLazyItem;
 use super::prob_node::{ProbNode, SharedNode};
@@ -983,6 +984,7 @@ impl CollectionsMap {
             db,
         };
         let current_version = retrieve_current_version(&lmdb)?;
+        let values_upper_bound = retrieve_values_upper_bound(&lmdb)?;
         let inverted_index = InvertedIndex {
             name: coll.name.clone(),
             description: inverted_index_data.description,
@@ -997,6 +999,12 @@ impl CollectionsMap {
             current_version: ArcShift::new(current_version),
             current_open_transaction: AtomicPtr::new(ptr::null_mut()),
             vcs,
+            values_upper_bound: RwLock::new(values_upper_bound.unwrap_or(1.0)),
+            is_configured: AtomicBool::new(values_upper_bound.is_some()),
+            vectors: RwLock::new(Vec::new()),
+            vectors_collected: AtomicUsize::new(0),
+            sampling_data: crate::indexes::inverted_index::SamplingData::default(),
+            sample_threshold: inverted_index_data.sample_threshold,
             vec_raw_manager,
         };
 

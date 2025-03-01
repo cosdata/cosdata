@@ -7,7 +7,9 @@ use crate::models::cache_loader::DenseIndexCache;
 use crate::models::collection::Collection;
 use crate::models::common::*;
 use crate::models::embedding_persist::EmbeddingOffset;
-use crate::models::meta_persist::{store_values_range, update_current_version};
+use crate::models::meta_persist::{
+    store_values_range, store_values_upper_bound, update_current_version,
+};
 use crate::models::prob_node::ProbNode;
 use crate::models::types::*;
 use crate::models::user::Statistics;
@@ -151,6 +153,7 @@ pub async fn init_inverted_index_for_collection(
     ctx: Arc<AppContext>,
     collection: &Collection,
     quantization_bits: u8,
+    sample_threshold: usize,
 ) -> Result<Arc<InvertedIndex>, WaCustomError> {
     let collection_name = &collection.name;
     let collection_path: Arc<Path> = collection.get_path();
@@ -190,6 +193,7 @@ pub async fn init_inverted_index_for_collection(
         vcs,
         vec_raw_manager,
         quantization_bits,
+        sample_threshold,
     )?);
 
     ctx.ain_env
@@ -334,20 +338,6 @@ pub fn run_upload_in_transaction(
                 (dense_index.sampling_data.below_01.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
 
-            println!("Above percentages:");
-            println!("> 0.5: {:.2}%", above_05_percent);
-            println!("> 0.4: {:.2}%", above_04_percent);
-            println!("> 0.3: {:.2}%", above_03_percent);
-            println!("> 0.2: {:.2}%", above_02_percent);
-            println!("> 0.1: {:.2}%", above_01_percent);
-
-            println!("Below percentages:");
-            println!("< -0.5: {:.2}%", below_05_percent);
-            println!("< -0.4: {:.2}%", below_04_percent);
-            println!("< -0.3: {:.2}%", below_03_percent);
-            println!("< -0.2: {:.2}%", below_02_percent);
-            println!("< -0.1: {:.2}%", below_01_percent);
-
             let range_start = if below_01_percent <= ctx.config.indexing.clamp_margin_percent {
                 -0.1
             } else if below_02_percent <= ctx.config.indexing.clamp_margin_percent {
@@ -377,7 +367,6 @@ pub fn run_upload_in_transaction(
             };
 
             let range = (range_start, range_end);
-            println!("Range: {:?}", range);
             *dense_index.values_range.write().unwrap() = range;
             dense_index.is_configured.store(true, Ordering::Release);
             store_values_range(&dense_index.lmdb, range).map_err(|e| {
@@ -483,10 +472,178 @@ pub fn run_upload_sparse_vector(
 
 /// uploads a vector embedding within a transaction
 pub fn run_upload_sparse_vectors_in_transaction(
+    ctx: Arc<AppContext>,
     inverted_index: Arc<InvertedIndex>,
     transaction: &InvertedIndexTransaction,
-    sample_points: Vec<(VectorId, Vec<SparsePair>)>,
+    mut sample_points: Vec<(VectorId, Vec<SparsePair>)>,
 ) -> Result<(), WaCustomError> {
+    if !inverted_index.is_configured.load(Ordering::Acquire) {
+        let collected_count = inverted_index
+            .vectors_collected
+            .fetch_add(sample_points.len(), Ordering::SeqCst);
+
+        if collected_count < inverted_index.sample_threshold {
+            for (_, pairs) in &sample_points {
+                for pair in pairs {
+                    let value = pair.1;
+
+                    if value > 1.0 {
+                        inverted_index
+                            .sampling_data
+                            .above_1
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    if value > 2.0 {
+                        inverted_index
+                            .sampling_data
+                            .above_2
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    if value > 3.0 {
+                        inverted_index
+                            .sampling_data
+                            .above_3
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    if value > 4.0 {
+                        inverted_index
+                            .sampling_data
+                            .above_4
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    if value > 5.0 {
+                        inverted_index
+                            .sampling_data
+                            .above_5
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    if value > 6.0 {
+                        inverted_index
+                            .sampling_data
+                            .above_6
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    if value > 7.0 {
+                        inverted_index
+                            .sampling_data
+                            .above_7
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    if value > 8.0 {
+                        inverted_index
+                            .sampling_data
+                            .above_8
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    if value > 9.0 {
+                        inverted_index
+                            .sampling_data
+                            .above_9
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    inverted_index
+                        .sampling_data
+                        .values_collected
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+            }
+
+            let mut vectors = inverted_index.vectors.write().unwrap();
+            vectors.extend(sample_points);
+            if vectors.len() < inverted_index.sample_threshold {
+                return Ok(());
+            }
+
+            let values_count = inverted_index
+                .sampling_data
+                .values_collected
+                .load(Ordering::Relaxed) as f32;
+
+            let above_1_percent = (inverted_index.sampling_data.above_1.load(Ordering::Relaxed)
+                as f32
+                / values_count)
+                * 100.0;
+            let above_2_percent = (inverted_index.sampling_data.above_2.load(Ordering::Relaxed)
+                as f32
+                / values_count)
+                * 100.0;
+            let above_3_percent = (inverted_index.sampling_data.above_3.load(Ordering::Relaxed)
+                as f32
+                / values_count)
+                * 100.0;
+            let above_4_percent = (inverted_index.sampling_data.above_4.load(Ordering::Relaxed)
+                as f32
+                / values_count)
+                * 100.0;
+            let above_5_percent = (inverted_index.sampling_data.above_5.load(Ordering::Relaxed)
+                as f32
+                / values_count)
+                * 100.0;
+            let above_6_percent = (inverted_index.sampling_data.above_6.load(Ordering::Relaxed)
+                as f32
+                / values_count)
+                * 100.0;
+            let above_7_percent = (inverted_index.sampling_data.above_7.load(Ordering::Relaxed)
+                as f32
+                / values_count)
+                * 100.0;
+            let above_8_percent = (inverted_index.sampling_data.above_8.load(Ordering::Relaxed)
+                as f32
+                / values_count)
+                * 100.0;
+            let above_9_percent = (inverted_index.sampling_data.above_9.load(Ordering::Relaxed)
+                as f32
+                / values_count)
+                * 100.0;
+
+            let values_upper_bound = if above_1_percent <= ctx.config.indexing.clamp_margin_percent
+            {
+                1.0
+            } else if above_2_percent <= ctx.config.indexing.clamp_margin_percent {
+                2.0
+            } else if above_3_percent <= ctx.config.indexing.clamp_margin_percent {
+                3.0
+            } else if above_4_percent <= ctx.config.indexing.clamp_margin_percent {
+                4.0
+            } else if above_5_percent <= ctx.config.indexing.clamp_margin_percent {
+                5.0
+            } else if above_6_percent <= ctx.config.indexing.clamp_margin_percent {
+                6.0
+            } else if above_7_percent <= ctx.config.indexing.clamp_margin_percent {
+                7.0
+            } else if above_8_percent <= ctx.config.indexing.clamp_margin_percent {
+                8.0
+            } else if above_9_percent <= ctx.config.indexing.clamp_margin_percent {
+                9.0
+            } else {
+                10.0
+            };
+
+            *inverted_index.values_upper_bound.write().unwrap() = values_upper_bound;
+            inverted_index.is_configured.store(true, Ordering::Release);
+            store_values_upper_bound(&inverted_index.lmdb, values_upper_bound).map_err(|e| {
+                WaCustomError::DatabaseError(format!(
+                    "Failed to store values upper bound to LMDB: {}",
+                    e
+                ))
+            })?;
+            sample_points = std::mem::replace(&mut *vectors, Vec::new());
+        } else {
+            while !inverted_index.is_configured.load(Ordering::Relaxed) {
+                drop(inverted_index.vectors.read().unwrap());
+            }
+        }
+    }
+
     sample_points
         .into_iter()
         .map(|(id, vec)| {

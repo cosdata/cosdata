@@ -400,10 +400,10 @@ impl InvertedIndexSparseAnnNodeBasicTSHashmap {
         current_node
     }
 
-    pub fn quantize(&self, value: f32) -> u8 {
+    pub fn quantize(&self, value: f32, values_upper_bound: f32) -> u8 {
         let quantization = ((1u32 << self.quantization_bits) - 1) as u8;
         let max_val = quantization as f32;
-        ((value * max_val).clamp(0.0, max_val) as u8).min(quantization)
+        (((value / values_upper_bound) * max_val).clamp(0.0, max_val) as u8).min(quantization)
     }
 
     /// Inserts a value into the index at the specified dimension index.
@@ -414,8 +414,9 @@ impl InvertedIndexSparseAnnNodeBasicTSHashmap {
         vector_id: u32,
         cache: &InvertedIndexCache,
         version: Hash,
+        values_upper_bound: f32,
     ) -> Result<(), BufIoError> {
-        let quantized_value = self.quantize(value);
+        let quantized_value = self.quantize(value, values_upper_bound);
         unsafe { &*self.data }
             .try_get_data(cache, self.dim_index)?
             .map
@@ -511,6 +512,7 @@ impl InvertedIndexSparseAnnBasicTSHashmap {
         value: f32,
         vector_id: u32,
         version: Hash,
+        values_upper_bound: f32,
     ) -> Result<(), BufIoError> {
         let path = calculate_path(dim_index, self.root.dim_index);
         let node = self.root.find_or_create_node(&path, version, || {
@@ -518,18 +520,23 @@ impl InvertedIndexSparseAnnBasicTSHashmap {
                 .fetch_add(self.node_size, Ordering::Relaxed)
         });
         //value will be quantized while being inserted into the Node.
-        node.insert(value, vector_id, &self.cache, version)
+        node.insert(value, vector_id, &self.cache, version, values_upper_bound)
     }
 
     /// Adds a sparse vector to the index.
-    pub fn add_sparse_vector(&self, vector: SparseVector, version: Hash) -> Result<(), BufIoError> {
+    pub fn add_sparse_vector(
+        &self,
+        vector: SparseVector,
+        version: Hash,
+        values_upper_bound: f32,
+    ) -> Result<(), BufIoError> {
         let vector_id = vector.vector_id;
         vector
             .entries
             .par_iter()
             .map(|(dim_index, value)| {
                 if *value != 0.0 {
-                    return self.insert(*dim_index, *value, vector_id, version);
+                    return self.insert(*dim_index, *value, vector_id, version, values_upper_bound);
                 }
                 Ok(())
             })

@@ -53,7 +53,7 @@ pub fn create_inverted_index_and_query_vector(
                     println!("Time elapsed : {:?} secs", now.elapsed().as_secs_f32());
                 }
                 inverted_index
-                    .add_sparse_vector(x, 0.into())
+                    .add_sparse_vector(x, 0.into(), 5.0)
                     .unwrap_or_else(|e| println!("Error : {:?}", e));
             }
         });
@@ -131,7 +131,7 @@ fn sparse_ann_query_tshashmap_benchmark(c: &mut Criterion) {
             b.iter(|| {
                 let _res = black_box(
                     sparse_ann_query_basic
-                        .sequential_search_tshashmap(&inverted_index, 6)
+                        .sequential_search_tshashmap(&inverted_index, 6, 5.0)
                         .unwrap(),
                 );
             });

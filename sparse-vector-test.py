@@ -86,6 +86,7 @@ def create_explicit_index(name):
     data = {
         "name": name,  # Name of the index
         "quantization": 16,
+        "sample_threshold": 1000,
     }
     response = requests.post(
         f"{base_url}/collections/{name}/indexes/sparse",

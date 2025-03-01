@@ -1,7 +1,10 @@
 use std::{
     path::PathBuf,
     ptr,
-    sync::{atomic::AtomicPtr, mpsc, Arc},
+    sync::{
+        atomic::{AtomicBool, AtomicPtr, AtomicUsize},
+        mpsc, Arc, RwLock,
+    },
     thread,
 };
 
@@ -14,7 +17,7 @@ use crate::{
         buffered_io::{BufIoError, BufferManagerFactory},
         common::WaCustomError,
         embedding_persist::{write_sparse_embedding, EmbeddingOffset},
-        types::{MetaDb, SparseVector},
+        types::{MetaDb, SparseVector, VectorId},
         versioning::{Hash, Version, VersionControl},
     },
     storage::inverted_index_sparse_ann_basic::{
@@ -22,7 +25,21 @@ use crate::{
     },
 };
 
-use super::inverted_index_types::RawSparseVectorEmbedding;
+use super::inverted_index_types::{RawSparseVectorEmbedding, SparsePair};
+
+#[derive(Default)]
+pub struct SamplingData {
+    pub above_1: AtomicUsize,
+    pub above_9: AtomicUsize,
+    pub above_8: AtomicUsize,
+    pub above_7: AtomicUsize,
+    pub above_6: AtomicUsize,
+    pub above_5: AtomicUsize,
+    pub above_4: AtomicUsize,
+    pub above_3: AtomicUsize,
+    pub above_2: AtomicUsize,
+    pub values_collected: AtomicUsize,
+}
 
 pub struct InvertedIndex {
     pub name: String,
@@ -35,6 +52,12 @@ pub struct InvertedIndex {
     pub current_version: ArcShift<Hash>,
     pub current_open_transaction: AtomicPtr<InvertedIndexTransaction>,
     pub vcs: Arc<VersionControl>,
+    pub values_upper_bound: RwLock<f32>,
+    pub is_configured: AtomicBool,
+    pub sampling_data: SamplingData,
+    pub vectors: RwLock<Vec<(VectorId, Vec<SparsePair>)>>,
+    pub vectors_collected: AtomicUsize,
+    pub sample_threshold: usize,
     pub vec_raw_manager: Arc<BufferManagerFactory<Hash>>,
 }
 
@@ -54,6 +77,7 @@ impl InvertedIndex {
         vcs: Arc<VersionControl>,
         vec_raw_manager: Arc<BufferManagerFactory<Hash>>,
         quantization_bits: u8,
+        sample_threshold: usize,
     ) -> Result<Self, BufIoError> {
         let root = Arc::new(InvertedIndexSparseAnnBasicTSHashmap::new(
             root_path,
@@ -72,6 +96,12 @@ impl InvertedIndex {
             current_version: ArcShift::new(current_version),
             current_open_transaction: AtomicPtr::new(ptr::null_mut()),
             vcs,
+            values_upper_bound: RwLock::new(1.0),
+            is_configured: AtomicBool::new(false),
+            sampling_data: SamplingData::default(),
+            vectors: RwLock::new(Vec::new()),
+            vectors_collected: AtomicUsize::new(0),
+            sample_threshold,
             vec_raw_manager,
         })
     }
@@ -91,12 +121,19 @@ impl InvertedIndex {
         vector_id: u32,
         version: Hash,
     ) -> Result<(), BufIoError> {
-        self.root.insert(dim_index, value, vector_id, version)
+        self.root.insert(
+            dim_index,
+            value,
+            vector_id,
+            version,
+            *self.values_upper_bound.read().unwrap(),
+        )
     }
 
     /// Adds a sparse vector to the index.
     pub fn add_sparse_vector(&self, vector: SparseVector, version: Hash) -> Result<(), BufIoError> {
-        self.root.add_sparse_vector(vector, version)
+        self.root
+            .add_sparse_vector(vector, version, *self.values_upper_bound.read().unwrap())
     }
 
     // Get method

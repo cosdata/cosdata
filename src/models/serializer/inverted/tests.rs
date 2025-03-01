@@ -547,6 +547,7 @@ fn test_inverted_index_node_serialization() {
                 rng.gen_range(0..u32::MAX),
                 &cache,
                 0.into(),
+                1.0,
             )
             .unwrap();
     }
@@ -584,6 +585,7 @@ fn test_inverted_index_node_incremental_serialization() {
                 rng.gen_range(0..u32::MAX),
                 &cache,
                 0.into(),
+                1.0,
             )
             .unwrap();
     }
@@ -599,6 +601,7 @@ fn test_inverted_index_node_incremental_serialization() {
                 rng.gen_range(0..u32::MAX),
                 &cache,
                 0.into(),
+                1.0,
             )
             .unwrap();
     }
@@ -636,6 +639,7 @@ fn test_inverted_index_node_incremental_serialization_with_multiple_versions() {
                 rng.gen_range(0..u32::MAX),
                 &cache,
                 0.into(),
+                1.0,
             )
             .unwrap();
     }
@@ -651,6 +655,7 @@ fn test_inverted_index_node_incremental_serialization_with_multiple_versions() {
                 rng.gen_range(0..u32::MAX),
                 &cache,
                 0.into(),
+                1.0,
             )
             .unwrap();
     }
@@ -666,6 +671,7 @@ fn test_inverted_index_node_incremental_serialization_with_multiple_versions() {
                 rng.gen_range(0..u32::MAX),
                 &cache,
                 1.into(),
+                1.0,
             )
             .unwrap();
     }
@@ -681,6 +687,7 @@ fn test_inverted_index_node_incremental_serialization_with_multiple_versions() {
                 rng.gen_range(0..u32::MAX),
                 &cache,
                 1.into(),
+                1.0,
             )
             .unwrap();
     }
@@ -717,6 +724,7 @@ fn test_inverted_index_serialization() {
                 rng.gen_range(0.0..1.0),
                 rng.gen_range(0..u32::MAX),
                 0.into(),
+                1.0,
             )
             .unwrap();
     }
@@ -745,6 +753,7 @@ fn test_inverted_index_incremental_serialization() {
                 rng.gen_range(0.0..1.0),
                 rng.gen_range(0..u32::MAX),
                 0.into(),
+                1.0,
             )
             .unwrap();
     }
@@ -758,6 +767,7 @@ fn test_inverted_index_incremental_serialization() {
                 rng.gen_range(0.0..1.0),
                 rng.gen_range(0..u32::MAX),
                 0.into(),
+                1.0,
             )
             .unwrap();
     }
@@ -786,6 +796,7 @@ fn test_inverted_index_incremental_serialization_with_multiple_versions() {
                 rng.gen_range(0.0..1.0),
                 rng.gen_range(0..u32::MAX),
                 0.into(),
+                1.0,
             )
             .unwrap();
     }
@@ -799,6 +810,7 @@ fn test_inverted_index_incremental_serialization_with_multiple_versions() {
                 rng.gen_range(0.0..1.0),
                 rng.gen_range(0..u32::MAX),
                 0.into(),
+                1.0,
             )
             .unwrap();
     }
@@ -812,6 +824,7 @@ fn test_inverted_index_incremental_serialization_with_multiple_versions() {
                 rng.gen_range(0.0..1.0),
                 rng.gen_range(0..u32::MAX),
                 1.into(),
+                1.0,
             )
             .unwrap();
     }
@@ -825,6 +838,7 @@ fn test_inverted_index_incremental_serialization_with_multiple_versions() {
                 rng.gen_range(0.0..1.0),
                 rng.gen_range(0..u32::MAX),
                 1.into(),
+                1.0,
             )
             .unwrap();
     }
@@ -838,6 +852,7 @@ fn test_inverted_index_incremental_serialization_with_multiple_versions() {
                 rng.gen_range(0.0..1.0),
                 rng.gen_range(0..u32::MAX),
                 2.into(),
+                1.0,
             )
             .unwrap();
     }
@@ -851,6 +866,7 @@ fn test_inverted_index_incremental_serialization_with_multiple_versions() {
                 rng.gen_range(0.0..1.0),
                 rng.gen_range(0..u32::MAX),
                 2.into(),
+                1.0,
             )
             .unwrap();
     }

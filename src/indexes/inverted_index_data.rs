@@ -16,6 +16,7 @@ pub struct InvertedIndexData {
     pub metadata_schema: Option<String>,
     pub max_vectors: Option<i32>,
     pub quantization_bits: u8,
+    pub sample_threshold: usize,
 }
 
 impl TryFrom<Arc<InvertedIndex>> for InvertedIndexData {
@@ -28,6 +29,7 @@ impl TryFrom<Arc<InvertedIndex>> for InvertedIndexData {
             metadata_schema: inverted_index.metadata_schema.clone(),
             max_vectors: inverted_index.max_vectors,
             quantization_bits: inverted_index.root.root.quantization_bits,
+            sample_threshold: inverted_index.sample_threshold,
         };
         Ok(inverted_index_data)
     }

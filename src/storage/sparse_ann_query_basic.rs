@@ -177,6 +177,7 @@ impl SparseAnnQueryBasic {
         index: &InvertedIndexSparseAnnBasicTSHashmap,
         // 4, 5, 6
         quantization_bits: u8,
+        values_upper_bound: f32,
     ) -> Result<Vec<SparseAnnResult>, BufIoError> {
         let sparse_query_vector = self.create_sparse_query_vector(index)?;
         let mut dot_products: HashMap<u32, u32> = HashMap::new();
@@ -197,7 +198,7 @@ impl SparseAnnQueryBasic {
         // Iterate over the query vector dimensions
         for &(dim_index, dimension_type, dim_value) in &sorted_query_dims {
             if let Some(node) = index.find_node(dim_index) {
-                let quantized_query_value = node.quantize(dim_value);
+                let quantized_query_value = node.quantize(dim_value, values_upper_bound);
 
                 if quantized_query_value < half_quantized {
                     // Quantized value is LOW
