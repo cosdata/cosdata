@@ -33,6 +33,7 @@ impl DenseSerialize for ProbNode {
         version: Hash,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
+        let is_level_0 = self.hnsw_level.0 == 0;
         let bufman = bufmans.get(version)?;
         let start_offset = bufman.cursor_position(cursor)?;
 
@@ -41,18 +42,21 @@ impl DenseSerialize for ProbNode {
 
         debug_assert_eq!(start_offset % size, 0, "offset: {}", start_offset);
 
+        let mut buf = Vec::with_capacity(39);
+
         // Serialize basic fields
-        bufman.update_u8_with_cursor(cursor, self.hnsw_level.0)?;
+        buf.push(self.hnsw_level.0);
 
         // Serialize prop
         let (FileOffset(offset), BytesToRead(length)) = &self.prop.location;
-        bufman.update_u32_with_cursor(cursor, *offset)?;
-        bufman.update_u32_with_cursor(cursor, *length)?;
+        buf.extend(offset.to_le_bytes());
+        buf.extend(length.to_le_bytes());
 
         let parent_ptr = self.get_parent();
 
         // Get parent file index
         let parent_file_index = if let Some(parent) = unsafe { parent_ptr.as_ref() } {
+            debug_assert!(!parent.is_level_0);
             let file_index = match parent.get_file_index() {
                 FileIndex::Valid {
                     offset,
@@ -70,6 +74,7 @@ impl DenseSerialize for ProbNode {
 
         // Get child file index
         let child_file_index = if let Some(child) = unsafe { child_ptr.as_ref() } {
+            debug_assert_eq!(child.is_level_0, self.hnsw_level.0 == 1);
             let file_index = match child.get_file_index() {
                 FileIndex::Valid {
                     offset,
@@ -84,22 +89,23 @@ impl DenseSerialize for ProbNode {
         };
 
         if let Some((offset, version_number, version_id)) = parent_file_index {
-            bufman.update_u32_with_cursor(cursor, offset)?;
-            bufman.update_u16_with_cursor(cursor, version_number)?;
-            bufman.update_u32_with_cursor(cursor, *version_id)?;
+            buf.extend(offset.to_le_bytes());
+            buf.extend(version_number.to_le_bytes());
+            buf.extend(version_id.to_le_bytes());
         } else {
-            bufman.update_with_cursor(cursor, &[u8::MAX; 10])?;
+            buf.extend([u8::MAX; 10]);
         }
 
         if let Some((offset, version_number, version_id)) = child_file_index {
-            bufman.update_u32_with_cursor(cursor, offset)?;
-            bufman.update_u16_with_cursor(cursor, version_number)?;
-            bufman.update_u32_with_cursor(cursor, *version_id)?;
+            buf.extend(offset.to_le_bytes());
+            buf.extend(version_number.to_le_bytes());
+            buf.extend(version_id.to_le_bytes());
         } else {
-            bufman.update_with_cursor(cursor, &[u8::MAX; 10])?;
+            buf.extend([u8::MAX; 10]);
         }
 
         if let Some(root) = unsafe { self.root_version.as_ref() } {
+            debug_assert_eq!(root.is_level_0, is_level_0);
             let (offset, version_number, version_id) = match root.get_file_index() {
                 FileIndex::Valid {
                     offset,
@@ -108,12 +114,14 @@ impl DenseSerialize for ProbNode {
                 } => (offset.0, version_number, version_id),
                 _ => unimplemented!(),
             };
-            bufman.update_u32_with_cursor(cursor, offset)?;
-            bufman.update_u16_with_cursor(cursor, version_number)?;
-            bufman.update_u32_with_cursor(cursor, *version_id)?;
+            buf.extend(offset.to_le_bytes());
+            buf.extend(version_number.to_le_bytes());
+            buf.extend(version_id.to_le_bytes());
         } else {
-            bufman.update_with_cursor(cursor, &[u8::MAX; 10])?;
+            buf.extend([u8::MAX; 10]);
         }
+
+        bufman.update_with_cursor(cursor, &buf)?;
 
         #[cfg(debug_assertions)]
         {
@@ -220,7 +228,7 @@ impl DenseSerialize for ProbNode {
                         cache,
                         max_loads,
                         skipm,
-                        hnsw_level.0 == 1,
+                        hnsw_level.0 == 0,
                     )?
                 } else {
                     ptr::null_mut()

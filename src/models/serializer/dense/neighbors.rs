@@ -59,12 +59,15 @@ impl DenseSerialize for Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]> {
                 } => (offset.0, version_number, version_id),
                 _ => unreachable!(),
             };
-
-            bufman.update_u32_with_cursor(cursor, node_id)?;
-            bufman.update_u32_with_cursor(cursor, node_offset)?;
-            bufman.update_u16_with_cursor(cursor, node_version_number)?;
-            bufman.update_u32_with_cursor(cursor, *node_version_id)?;
-            crate::models::serializer::SimpleSerialize::serialize(&dist, &bufman, cursor)?;
+            let mut buf = Vec::with_capacity(19);
+            buf.extend(node_id.to_le_bytes());
+            buf.extend(node_offset.to_le_bytes());
+            buf.extend(node_version_number.to_le_bytes());
+            buf.extend(node_version_id.to_le_bytes());
+            let (tag, value) = dist.get_tag_and_value();
+            buf.push(tag);
+            buf.extend(value.to_le_bytes());
+            bufman.update_with_cursor(cursor, &buf)?;
         }
         Ok(start as u32)
     }
