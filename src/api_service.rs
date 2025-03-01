@@ -302,75 +302,75 @@ pub fn run_upload_in_transaction(
             let dimension = vectors[0].1.len();
             let values_count = (dimension * vectors.len()) as f32;
 
-            let above_05_pecent =
+            let above_05_percent =
                 (dense_index.sampling_data.above_05.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
-            let above_04_pecent =
+            let above_04_percent =
                 (dense_index.sampling_data.above_04.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
-            let above_03_pecent =
+            let above_03_percent =
                 (dense_index.sampling_data.above_03.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
-            let above_02_pecent =
+            let above_02_percent =
                 (dense_index.sampling_data.above_02.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
-            let above_01_pecent =
+            let above_01_percent =
                 (dense_index.sampling_data.above_01.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
 
-            let below_05_pecent =
+            let below_05_percent =
                 (dense_index.sampling_data.below_05.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
-            let below_04_pecent =
+            let below_04_percent =
                 (dense_index.sampling_data.below_04.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
-            let below_03_pecent =
+            let below_03_percent =
                 (dense_index.sampling_data.below_03.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
-            let below_02_pecent =
+            let below_02_percent =
                 (dense_index.sampling_data.below_02.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
-            let below_01_pecent =
+            let below_01_percent =
                 (dense_index.sampling_data.below_01.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
 
             println!("Above percentages:");
-            println!("> 0.5: {:.2}%", above_05_pecent);
-            println!("> 0.4: {:.2}%", above_04_pecent);
-            println!("> 0.3: {:.2}%", above_03_pecent);
-            println!("> 0.2: {:.2}%", above_02_pecent);
-            println!("> 0.1: {:.2}%", above_01_pecent);
+            println!("> 0.5: {:.2}%", above_05_percent);
+            println!("> 0.4: {:.2}%", above_04_percent);
+            println!("> 0.3: {:.2}%", above_03_percent);
+            println!("> 0.2: {:.2}%", above_02_percent);
+            println!("> 0.1: {:.2}%", above_01_percent);
 
             println!("Below percentages:");
-            println!("< -0.5: {:.2}%", below_05_pecent);
-            println!("< -0.4: {:.2}%", below_04_pecent);
-            println!("< -0.3: {:.2}%", below_03_pecent);
-            println!("< -0.2: {:.2}%", below_02_pecent);
-            println!("< -0.1: {:.2}%", below_01_pecent);
+            println!("< -0.5: {:.2}%", below_05_percent);
+            println!("< -0.4: {:.2}%", below_04_percent);
+            println!("< -0.3: {:.2}%", below_03_percent);
+            println!("< -0.2: {:.2}%", below_02_percent);
+            println!("< -0.1: {:.2}%", below_01_percent);
 
-            let range_start = if below_01_pecent <= ctx.config.indexing.clamp_margin_percent {
+            let range_start = if below_01_percent <= ctx.config.indexing.clamp_margin_percent {
                 -0.1
-            } else if below_02_pecent <= ctx.config.indexing.clamp_margin_percent {
+            } else if below_02_percent <= ctx.config.indexing.clamp_margin_percent {
                 -0.2
-            } else if below_03_pecent <= ctx.config.indexing.clamp_margin_percent {
+            } else if below_03_percent <= ctx.config.indexing.clamp_margin_percent {
                 -0.3
-            } else if below_04_pecent <= ctx.config.indexing.clamp_margin_percent {
+            } else if below_04_percent <= ctx.config.indexing.clamp_margin_percent {
                 -0.4
-            } else if below_05_pecent <= ctx.config.indexing.clamp_margin_percent {
+            } else if below_05_percent <= ctx.config.indexing.clamp_margin_percent {
                 -0.5
             } else {
                 -1.0
             };
 
-            let range_end = if above_01_pecent <= ctx.config.indexing.clamp_margin_percent {
+            let range_end = if above_01_percent <= ctx.config.indexing.clamp_margin_percent {
                 0.1
-            } else if above_02_pecent <= ctx.config.indexing.clamp_margin_percent {
+            } else if above_02_percent <= ctx.config.indexing.clamp_margin_percent {
                 0.2
-            } else if above_03_pecent <= ctx.config.indexing.clamp_margin_percent {
+            } else if above_03_percent <= ctx.config.indexing.clamp_margin_percent {
                 0.3
-            } else if above_04_pecent <= ctx.config.indexing.clamp_margin_percent {
+            } else if above_04_percent <= ctx.config.indexing.clamp_margin_percent {
                 0.4
-            } else if above_05_pecent <= ctx.config.indexing.clamp_margin_percent {
+            } else if above_05_percent <= ctx.config.indexing.clamp_margin_percent {
                 0.5
             } else {
                 1.0
