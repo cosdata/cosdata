@@ -14,6 +14,8 @@ pub struct Config {
     pub upload_threshold: u32,
     pub upload_process_batch_size: usize,
     pub num_regions_to_load_on_restart: usize,
+    #[serde(default)]
+    pub cache: CacheConfig,
 }
 
 #[derive(Deserialize, Clone)]
@@ -54,6 +56,21 @@ impl Default for ThreadPool {
     fn default() -> Self {
         Self {
             pool_size: num_cpus::get(),
+        }
+    }
+}
+
+#[derive(Clone, Deserialize)]
+pub struct CacheConfig {
+    pub max_collections: usize,
+    pub collection_ttl_secs: u64,
+}
+
+impl Default for CacheConfig {
+    fn default() -> Self {
+        Self {
+            max_collections: 10,   // Default to 10 collections in memory
+            collection_ttl_secs: 120, // Default to 2 minutes TTL
         }
     }
 }
