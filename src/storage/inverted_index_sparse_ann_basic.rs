@@ -3,14 +3,18 @@ use core::array::from_fn;
 use dashmap::DashMap;
 use rayon::prelude::*;
 use std::fs::OpenOptions;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::{path::Path, sync::RwLock};
 
 use std::sync::Arc;
 
-use crate::models::cache_loader::ProbCache;
-use crate::models::fixedset::PerformantFixedSet;
+use crate::models::atomic_array::AtomicArray;
+use crate::models::buffered_io::{BufIoError, BufferManager};
+use crate::models::cache_loader::InvertedIndexCache;
+use crate::models::fixedset::VersionedInvertedFixedSetIndex;
 use crate::models::prob_lazy_load::lazy_item::ProbLazyItem;
-use crate::models::prob_lazy_load::lazy_item_array::ProbLazyItemArray;
+use crate::models::serializer::inverted::InvertedIndexSerialize;
 use crate::models::types::FileOffset;
 use crate::models::versioning::Hash;
 use crate::models::{
@@ -21,10 +25,11 @@ use crate::models::{
     types::SparseVector,
 };
 
-use super::page::Pagepool;
+use super::page::VersionedPagepool;
 
 // Size of a page in the hash table
-const PAGE_SIZE: usize = 32;
+pub const PAGE_SIZE: usize = 32;
+pub const FIXED_SET_SIZE: usize = 8;
 
 // TODO: Add more powers for larger jumps
 // TODO: Or switch to dynamic calculation of power of max power of 4
@@ -228,55 +233,92 @@ impl InvertedIndexSparseAnnBasic {
     }
 }
 
-fn get_permutations(num: u8) -> Vec<u8> {
-    let mut result = vec![num];
-    let mut one_positions = Vec::new();
-    let mut n = num;
-    let mut pos = 0;
-
-    // Find positions of 1s
-    while n > 0 {
-        if n & 1 == 1 {
-            one_positions.push(pos);
-        }
-        n >>= 1;
-        pos += 1;
-    }
-
-    // For each 1 bit, create new numbers by flipping it to 0
-    for &pos in &one_positions {
-        let mask = !(1 << pos);
-        let len = result.len();
-        for i in 0..len {
-            let new_num = result[i] & mask;
-            if new_num > 0 {
-                // Only add if not zero
-                result.push(new_num);
-            }
-        }
-    }
-
-    result.dedup();
-    result.sort_unstable();
-    result
+#[cfg_attr(test, derive(PartialEq, Debug))]
+pub struct InvertedIndexSparseAnnNodeBasicTSHashmapData {
+    pub map: TSHashTable<u8, VersionedPagepool<PAGE_SIZE>>,
+    pub max_key: u8,
 }
 
+impl InvertedIndexSparseAnnNodeBasicTSHashmapData {
+    pub fn new(quantization_bits: u8) -> Self {
+        Self {
+            map: TSHashTable::new(16),
+            max_key: ((1u32 << quantization_bits) - 1) as u8,
+        }
+    }
+}
+
+// #[derive(Debug)]
 pub struct InvertedIndexSparseAnnNodeBasicTSHashmap {
+    pub is_serialized: AtomicBool,
+    pub is_dirty: AtomicBool,
+    pub file_offset: FileOffset,
     pub dim_index: u32,
     pub implicit: bool,
-    pub data: TSHashTable<u8, Pagepool<PAGE_SIZE>>,
-    // len = quantization (16, 32, 64)
-    pub exclusive_key_fixed_sets: Vec<RwLock<PerformantFixedSet>>,
-    pub lazy_children: ProbLazyItemArray<InvertedIndexSparseAnnNodeBasicTSHashmap, 16>,
-    // len = number of bits used to store quantized value (4, 5, 6)
-    pub bit_fixed_sets: Vec<RwLock<PerformantFixedSet>>,
-    pub quantization: u8,
+    // (4, 5, 6)
+    pub quantization_bits: u8,
+    pub data: *mut ProbLazyItem<InvertedIndexSparseAnnNodeBasicTSHashmapData>,
+    pub children: AtomicArray<InvertedIndexSparseAnnNodeBasicTSHashmap, 16>,
+    pub fixed_sets: *mut ProbLazyItem<VersionedInvertedFixedSetIndex>,
 }
 
-#[derive(Clone)]
+#[cfg(test)]
+impl PartialEq for InvertedIndexSparseAnnNodeBasicTSHashmap {
+    fn eq(&self, other: &Self) -> bool {
+        self.file_offset == other.file_offset
+            && self.dim_index == other.dim_index
+            && self.implicit == other.implicit
+            && self.quantization_bits == other.quantization_bits
+            && unsafe { *self.data == *other.data }
+            && self.children == other.children
+            && unsafe { *self.fixed_sets == *other.fixed_sets }
+    }
+}
+
+#[cfg(test)]
+impl std::fmt::Debug for InvertedIndexSparseAnnNodeBasicTSHashmap {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("InvertedIndexSparseAnnNodeBasicTSHashmap")
+            .field("file_offset", &self.file_offset)
+            .field("dim_index", &self.dim_index)
+            .field("implicit", &self.implicit)
+            .field("quantization_bits", &self.quantization_bits)
+            .field("data", unsafe { &*self.data })
+            .field("children", &self.children)
+            .field("fixed_sets", unsafe { &*self.fixed_sets })
+            .finish()
+    }
+}
+
 pub struct InvertedIndexSparseAnnBasicTSHashmap {
     pub root: Arc<InvertedIndexSparseAnnNodeBasicTSHashmap>,
-    pub cache: Arc<ProbCache>,
+    pub cache: Arc<InvertedIndexCache>,
+    pub offset_counter: AtomicU32,
+    pub node_size: u32,
+}
+
+#[cfg(test)]
+impl PartialEq for InvertedIndexSparseAnnBasicTSHashmap {
+    fn eq(&self, other: &Self) -> bool {
+        self.root == other.root
+            && self.offset_counter.load(Ordering::Relaxed)
+                == other.offset_counter.load(Ordering::Relaxed)
+            && self.node_size == other.node_size
+    }
+}
+
+#[cfg(test)]
+impl std::fmt::Debug for InvertedIndexSparseAnnBasicTSHashmap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InvertedIndexSparseAnnBasicTSHashmap")
+            .field("root", &self.root)
+            .field(
+                "offset_counter",
+                &self.offset_counter.load(Ordering::Relaxed),
+            )
+            .field("node_size", &self.node_size)
+            .finish()
+    }
 }
 
 unsafe impl Send for InvertedIndexSparseAnnNodeBasicTSHashmap {}
@@ -288,186 +330,165 @@ impl InvertedIndexSparseAnnNodeBasicTSHashmap {
     pub fn new(
         dim_index: u32,
         implicit: bool,
-        // 16, 32, 64
-        quantization: u8,
+        // 4, 5, 6
+        quantization_bits: u8,
+        version_id: Hash,
+        file_offset: FileOffset,
     ) -> Self {
-        let data = TSHashTable::new(16);
-        let fixed_set_size = 8;
+        let data = ProbLazyItem::new(
+            InvertedIndexSparseAnnNodeBasicTSHashmapData::new(quantization_bits),
+            0.into(),
+            0,
+            false,
+            FileOffset(file_offset.0 + 5),
+        );
 
-        let mut exclusive_key_fixed_sets = Vec::with_capacity(quantization as usize);
-
-        for _ in 0..quantization {
-            exclusive_key_fixed_sets.push(RwLock::new(PerformantFixedSet::new(fixed_set_size)));
-        }
-
-        let mut bit_fixed_sets = Vec::with_capacity(quantization.trailing_zeros() as usize);
-
-        for _ in 0..quantization.trailing_zeros() {
-            bit_fixed_sets.push(RwLock::new(PerformantFixedSet::new(
-                (quantization >> 1) as usize * fixed_set_size,
-            )));
-        }
+        let fixed_sets = ProbLazyItem::new(
+            VersionedInvertedFixedSetIndex::new(quantization_bits, version_id),
+            0.into(),
+            0,
+            false,
+            FileOffset(file_offset.0 + (1u32 << quantization_bits) * 4 + 69),
+        );
 
         Self {
+            is_serialized: AtomicBool::new(false),
+            is_dirty: AtomicBool::new(true),
+            file_offset,
             dim_index,
             implicit,
             data,
-            exclusive_key_fixed_sets,
-            lazy_children: ProbLazyItemArray::new(),
-            bit_fixed_sets,
-            quantization,
+            children: AtomicArray::new(),
+            quantization_bits,
+            fixed_sets,
         }
     }
 
     /// Finds or creates the node where the data should be inserted.
     /// Traverses the tree iteratively and returns a reference to the node.
-    pub fn find_or_create_node(&self, path: &[usize], cache: &ProbCache) -> &Self {
+    pub fn find_or_create_node(
+        &self,
+        path: &[usize],
+        version_id: Hash,
+        mut offset_fn: impl FnMut() -> u32,
+    ) -> &Self {
         let mut current_node = self;
         for &child_index in path {
             let new_dim_index = current_node.dim_index + POWERS_OF_4[child_index];
-            if let Some(child) = current_node.lazy_children.get(child_index) {
-                let res = unsafe { &*child }.try_get_data(cache).unwrap();
+            if let Some(child) = current_node.children.get(child_index) {
+                let res = unsafe { &*child };
                 current_node = res;
                 continue;
             }
-            let new_child = current_node.lazy_children.get_or_insert(child_index, || {
-                ProbLazyItem::new(
-                    Self::new(new_dim_index, true, self.quantization),
-                    0.into(),
-                    0,
-                    false,
-                    FileOffset(0),
-                )
-            });
-            let res = unsafe { &*new_child }.try_get_data(cache).unwrap();
+            let (new_child, is_newly_created) =
+                current_node.children.get_or_insert(child_index, || {
+                    Box::into_raw(Box::new(Self::new(
+                        new_dim_index,
+                        true,
+                        self.quantization_bits,
+                        version_id,
+                        FileOffset(offset_fn()),
+                    )))
+                });
+            if is_newly_created {
+                self.is_dirty.store(true, Ordering::Release);
+            }
+            let res = unsafe { &*new_child };
             current_node = res;
         }
 
         current_node
     }
 
-    pub fn quantize(&self, value: f32) -> u8 {
-        let max_val = self.quantization as f32 - 1.0;
-        ((value * max_val).clamp(0.0, max_val) as u8).min(self.quantization - 1)
+    pub fn quantize(&self, value: f32, values_upper_bound: f32) -> u8 {
+        let quantization = ((1u32 << self.quantization_bits) - 1) as u8;
+        let max_val = quantization as f32;
+        (((value / values_upper_bound) * max_val).clamp(0.0, max_val) as u8).min(quantization)
     }
 
     /// Inserts a value into the index at the specified dimension index.
     /// Finds the quantized value and pushes the vec_Id in array at index = quantized_value
-    pub fn insert(&self, value: f32, vector_id: u32) {
-        let quantized_value = self.quantize(value);
-        self.data
-            .get_or_create(quantized_value, || Pagepool::default());
-        self.data.mutate(quantized_value, |x| {
-            let mut vecof_vec_id = x.unwrap();
-            vecof_vec_id.push(vector_id);
-            Some(vecof_vec_id)
-        });
-        self.exclusive_key_fixed_sets[quantized_value as usize]
-            .write()
-            .unwrap()
-            .insert(vector_id);
-        // println!("vector_id -> {vector_id}");
-        for i in 0..4 {
-            if (quantized_value & (1u8 << i)) != 0 {
-                self.bit_fixed_sets[i].write().unwrap().insert(vector_id);
-            }
-        }
-        // println!("vector_id_2 -> {vector_id}");
+    pub fn insert(
+        &self,
+        value: f32,
+        vector_id: u32,
+        cache: &InvertedIndexCache,
+        version: Hash,
+        values_upper_bound: f32,
+    ) -> Result<(), BufIoError> {
+        let quantized_value = self.quantize(value, values_upper_bound);
+        unsafe { &*self.data }
+            .try_get_data(cache, self.dim_index)?
+            .map
+            .modify_or_insert(
+                quantized_value,
+                |list| {
+                    list.push(version, vector_id);
+                },
+                || {
+                    let mut pool = VersionedPagepool::new(version);
+                    pool.push(version, vector_id);
+                    pool
+                },
+            );
+        let sets = unsafe { &*self.fixed_sets }.try_get_data(cache, self.dim_index)?;
+        sets.insert(version, quantized_value, vector_id);
+        self.is_dirty.store(true, Ordering::Release);
+        Ok(())
     }
 
-    pub fn search_fixed_sets(&self, vector_id: u32) -> Option<u8> {
-        let mut index = 0u8;
-        for i in 0..4 {
-            if self.bit_fixed_sets[i].read().unwrap().is_member(vector_id) {
-                index |= 1 << i;
-            }
-        }
-
-        if index == 0 {
-            None
-        } else {
-            Some(index)
-        }
+    pub fn find_key_of_id(
+        &self,
+        vector_id: u32,
+        cache: &InvertedIndexCache,
+    ) -> Result<Option<u8>, BufIoError> {
+        Ok(unsafe { &*self.fixed_sets }
+            .try_get_data(cache, self.dim_index)?
+            .search(vector_id))
     }
 
-    pub fn find_key_of_id(&self, vector_id: u32) -> Option<u8> {
-        let index = self.search_fixed_sets(vector_id)?;
-        let found = self.exclusive_key_fixed_sets[index as usize]
-            .read()
-            .unwrap()
-            .is_member(vector_id);
-        if found {
-            return Some(index);
-        }
-        let alternate_keys = get_permutations(index);
-        for i in alternate_keys {
-            let found = self.exclusive_key_fixed_sets[i as usize]
-                .read()
-                .unwrap()
-                .is_member(vector_id);
-            if found {
-                return Some(i);
-            }
-        }
-        None
+    /// See [`crate::models::serializer::inverted::node`] for how its calculated
+    pub fn get_serialized_size(quantization_bits: u8) -> u32 {
+        let qv = 1u32 << quantization_bits;
+
+        qv * 4 + 73
     }
-
-    // /// Retrieves a value from the index at the specified dimension index.
-    // /// Calculates the path and delegates to `get_value`.
-    // pub fn get(&self, dim_index: u32, vector_id: u32, cache: Arc<NodeRegistry>) -> Option<u8> {
-    //     let path = calculate_path(dim_index, self.dim_index);
-    //     self.get_value(&path, vector_id, cache)
-    // }
-
-    // /// Retrieves a value from the index following the specified path.
-    // /// Recursively traverses child nodes or searches the data vector.
-    // fn get_value(&self, path: &[usize], vector_id: u32, cache: Arc<NodeRegistry>) -> Option<u8> {
-    //     match path.get(0) {
-    //         Some(child_index) => self
-    //             .lazy_children
-    //             .get(*child_index)
-    //             .map(|data| {
-    //                 data.get_data(cache.clone())
-    //                     .get_value(&path[1..], vector_id, cache)
-    //             })
-    //             .flatten(),
-    //         None => {
-    //             let res = self.data.to_list();
-    //             for (x, y) in res {
-    //                 if y.contains(vector_id) {
-    //                     return Some(x);
-    //                 }
-    //             }
-    //             None
-    //         }
-    //     }
-    // }
 }
 
 impl InvertedIndexSparseAnnBasicTSHashmap {
-    pub fn new(quantization: u8) -> Self {
-        let bufmans = Arc::new(BufferManagerFactory::new(
-            Path::new(".").into(),
-            |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+    pub fn new(
+        root_path: PathBuf,
+        quantization_bits: u8,
+        version: Hash,
+    ) -> Result<Self, BufIoError> {
+        let dim_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(root_path.join("index-tree.dim"))?;
+        let node_size =
+            InvertedIndexSparseAnnNodeBasicTSHashmap::get_serialized_size(quantization_bits);
+        let dim_bufman = Arc::new(BufferManager::new(dim_file, node_size as usize * 1000)?);
+        let offset_counter = AtomicU32::new(node_size);
+        let data_bufmans = Arc::new(BufferManagerFactory::new(
+            root_path.into(),
+            |root, idx: &u8| root.join(format!("{}.idat", idx)),
             8192,
         ));
-        let prop_file = Arc::new(RwLock::new(
-            OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .open("prop.data")
-                .unwrap(),
-        ));
-        let cache = Arc::new(ProbCache::new(bufmans.clone(), bufmans, prop_file));
-        InvertedIndexSparseAnnBasicTSHashmap {
+        let cache = Arc::new(InvertedIndexCache::new(dim_bufman, data_bufmans));
+
+        Ok(InvertedIndexSparseAnnBasicTSHashmap {
             root: Arc::new(InvertedIndexSparseAnnNodeBasicTSHashmap::new(
                 0,
                 false,
-                quantization,
+                quantization_bits,
+                version,
+                FileOffset(0),
             )),
             cache,
-        }
+            offset_counter,
+            node_size,
+        })
     }
 
     /// Finds the node at a given dimension
@@ -476,36 +497,89 @@ impl InvertedIndexSparseAnnBasicTSHashmap {
         let mut current_node = &*self.root;
         let path = calculate_path(dim_index, self.root.dim_index);
         for child_index in path {
-            let child = current_node.lazy_children.get(child_index)?;
-            let node_res = unsafe { &*child }.try_get_data(&self.cache).unwrap();
+            let child = current_node.children.get(child_index)?;
+            let node_res = unsafe { &*child };
             current_node = node_res;
         }
 
         Some(current_node)
     }
 
-    // //Fetches quantized u8 value for a dim_index and vector_Id present at respective node in index
-    // pub fn get(&self, dim_index: u32, vector_id: u32) -> Option<u8> {
-    //     self.root.get(dim_index, vector_id, self.cache.clone())
-    // }
-
     //Inserts vec_id, quantized value u8 at particular node based on path
-    pub fn insert(&self, dim_index: u32, value: f32, vector_id: u32) {
+    pub fn insert(
+        &self,
+        dim_index: u32,
+        value: f32,
+        vector_id: u32,
+        version: Hash,
+        values_upper_bound: f32,
+    ) -> Result<(), BufIoError> {
         let path = calculate_path(dim_index, self.root.dim_index);
-        let node = self.root.find_or_create_node(&path, &self.cache);
+        let node = self.root.find_or_create_node(&path, version, || {
+            self.offset_counter
+                .fetch_add(self.node_size, Ordering::Relaxed)
+        });
         //value will be quantized while being inserted into the Node.
-        node.insert(value, vector_id)
+        node.insert(value, vector_id, &self.cache, version, values_upper_bound)
     }
 
     /// Adds a sparse vector to the index.
-    pub fn add_sparse_vector(&self, vector: SparseVector) -> Result<(), String> {
+    pub fn add_sparse_vector(
+        &self,
+        vector: SparseVector,
+        version: Hash,
+        values_upper_bound: f32,
+    ) -> Result<(), BufIoError> {
         let vector_id = vector.vector_id;
-        vector.entries.par_iter().for_each(|(dim_index, value)| {
-            if *value != 0.0 {
-                self.insert(*dim_index, *value, vector_id);
-            }
-        });
+        vector
+            .entries
+            .par_iter()
+            .map(|(dim_index, value)| {
+                if *value != 0.0 {
+                    return self.insert(*dim_index, *value, vector_id, version, values_upper_bound);
+                }
+                Ok(())
+            })
+            .collect()
+    }
+
+    pub fn serialize(&self) -> Result<(), BufIoError> {
+        let cursor = self.cache.dim_bufman.open_cursor()?;
+        self.root
+            .serialize(&self.cache.dim_bufman, &self.cache.data_bufmans, 0, cursor)?;
+        self.cache.dim_bufman.close_cursor(cursor)?;
         Ok(())
+    }
+
+    pub fn deserialize(root_path: PathBuf, quantization_bits: u8) -> Result<Self, BufIoError> {
+        let dim_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(root_path.join("index-tree.dim"))?;
+        let node_size =
+            InvertedIndexSparseAnnNodeBasicTSHashmap::get_serialized_size(quantization_bits);
+        let dim_bufman = Arc::new(BufferManager::new(dim_file, node_size as usize * 1000)?);
+        let offset_counter = AtomicU32::new(dim_bufman.file_size() as u32);
+        let data_bufmans = Arc::new(BufferManagerFactory::new(
+            root_path.into(),
+            |root, idx: &u8| root.join(format!("{}.idat", idx)),
+            8192,
+        ));
+        let cache = Arc::new(InvertedIndexCache::new(dim_bufman, data_bufmans));
+
+        Ok(Self {
+            root: Arc::new(InvertedIndexSparseAnnNodeBasicTSHashmap::deserialize(
+                &cache.dim_bufman,
+                &cache.data_bufmans,
+                FileOffset(0),
+                0,
+                &cache,
+            )?),
+            cache,
+            offset_counter,
+            node_size,
+        })
     }
 }
 

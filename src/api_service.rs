@@ -3,11 +3,13 @@ use crate::indexes::inverted_index::{InvertedIndex, InvertedIndexTransaction};
 use crate::indexes::inverted_index_types::{RawSparseVectorEmbedding, SparsePair};
 use crate::macros::key;
 use crate::models::buffered_io::BufferManagerFactory;
-use crate::models::cache_loader::ProbCache;
+use crate::models::cache_loader::DenseIndexCache;
 use crate::models::collection::Collection;
 use crate::models::common::*;
 use crate::models::embedding_persist::EmbeddingOffset;
-use crate::models::meta_persist::{store_values_range, update_current_version};
+use crate::models::meta_persist::{
+    store_values_range, store_values_upper_bound, update_current_version,
+};
 use crate::models::prob_node::ProbNode;
 use crate::models::types::*;
 use crate::models::user::Statistics;
@@ -85,7 +87,7 @@ pub async fn init_dense_index_for_collection(
     ));
 
     // TODO: May be the value can be taken from config
-    let cache = Arc::new(ProbCache::new(
+    let cache = Arc::new(DenseIndexCache::new(
         index_manager.clone(),
         level_0_index_manager.clone(),
         prop_file.clone(),
@@ -150,7 +152,8 @@ pub async fn init_dense_index_for_collection(
 pub async fn init_inverted_index_for_collection(
     ctx: Arc<AppContext>,
     collection: &Collection,
-    quantization: u8,
+    quantization_bits: u8,
+    sample_threshold: usize,
 ) -> Result<Arc<InvertedIndex>, WaCustomError> {
     let collection_name = &collection.name;
     let collection_path: Arc<Path> = collection.get_path();
@@ -176,33 +179,22 @@ pub async fn init_inverted_index_for_collection(
         8192,
     ));
 
-    let index_manager = Arc::new(BufferManagerFactory::new(
-        index_path.into(),
-        |root, ver: &Hash| root.join(format!("{}.index", **ver)),
-        8192,
-    ));
-
-    // TODO FIX THE FOLLOWING ISSUE
-    // Has to call index.manager.get() here
-    // to create the index file on disk upon index creation
-    let _ = index_manager.get(hash);
-    index_manager.flush_all()?;
-
     let index = Arc::new(InvertedIndex::new(
         collection_name.clone(),
         collection.description.clone(),
+        index_path.clone().into(),
         collection.sparse_vector.auto_create_index,
         // @TODO(vineet): Fix the following after confirming that
         // metadata schema is not required for inverted indexes
         None,
         collection.config.max_vectors,
         lmdb,
-        ArcShift::new(hash),
+        hash,
         vcs,
         vec_raw_manager,
-        index_manager,
-        quantization,
-    ));
+        quantization_bits,
+        sample_threshold,
+    )?);
 
     ctx.ain_env
         .collections_map
@@ -314,82 +306,67 @@ pub fn run_upload_in_transaction(
             let dimension = vectors[0].1.len();
             let values_count = (dimension * vectors.len()) as f32;
 
-            let above_05_pecent =
+            let above_05_percent =
                 (dense_index.sampling_data.above_05.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
-            let above_04_pecent =
+            let above_04_percent =
                 (dense_index.sampling_data.above_04.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
-            let above_03_pecent =
+            let above_03_percent =
                 (dense_index.sampling_data.above_03.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
-            let above_02_pecent =
+            let above_02_percent =
                 (dense_index.sampling_data.above_02.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
-            let above_01_pecent =
+            let above_01_percent =
                 (dense_index.sampling_data.above_01.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
 
-            let below_05_pecent =
+            let below_05_percent =
                 (dense_index.sampling_data.below_05.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
-            let below_04_pecent =
+            let below_04_percent =
                 (dense_index.sampling_data.below_04.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
-            let below_03_pecent =
+            let below_03_percent =
                 (dense_index.sampling_data.below_03.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
-            let below_02_pecent =
+            let below_02_percent =
                 (dense_index.sampling_data.below_02.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
-            let below_01_pecent =
+            let below_01_percent =
                 (dense_index.sampling_data.below_01.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
 
-            println!("Above percentages:");
-            println!("> 0.5: {:.2}%", above_05_pecent);
-            println!("> 0.4: {:.2}%", above_04_pecent);
-            println!("> 0.3: {:.2}%", above_03_pecent);
-            println!("> 0.2: {:.2}%", above_02_pecent);
-            println!("> 0.1: {:.2}%", above_01_pecent);
-
-            println!("Below percentages:");
-            println!("< -0.5: {:.2}%", below_05_pecent);
-            println!("< -0.4: {:.2}%", below_04_pecent);
-            println!("< -0.3: {:.2}%", below_03_pecent);
-            println!("< -0.2: {:.2}%", below_02_pecent);
-            println!("< -0.1: {:.2}%", below_01_pecent);
-
-            let range_start = if below_01_pecent <= ctx.config.indexing.clamp_margin_percent {
+            let range_start = if below_01_percent <= ctx.config.indexing.clamp_margin_percent {
                 -0.1
-            } else if below_02_pecent <= ctx.config.indexing.clamp_margin_percent {
+            } else if below_02_percent <= ctx.config.indexing.clamp_margin_percent {
                 -0.2
-            } else if below_03_pecent <= ctx.config.indexing.clamp_margin_percent {
+            } else if below_03_percent <= ctx.config.indexing.clamp_margin_percent {
                 -0.3
-            } else if below_04_pecent <= ctx.config.indexing.clamp_margin_percent {
+            } else if below_04_percent <= ctx.config.indexing.clamp_margin_percent {
                 -0.4
-            } else if below_05_pecent <= ctx.config.indexing.clamp_margin_percent {
+            } else if below_05_percent <= ctx.config.indexing.clamp_margin_percent {
                 -0.5
             } else {
                 -1.0
             };
 
-            let range_end = if above_01_pecent <= ctx.config.indexing.clamp_margin_percent {
+            let range_end = if above_01_percent <= ctx.config.indexing.clamp_margin_percent {
                 0.1
-            } else if above_02_pecent <= ctx.config.indexing.clamp_margin_percent {
+            } else if above_02_percent <= ctx.config.indexing.clamp_margin_percent {
                 0.2
-            } else if above_03_pecent <= ctx.config.indexing.clamp_margin_percent {
+            } else if above_03_percent <= ctx.config.indexing.clamp_margin_percent {
                 0.3
-            } else if above_04_pecent <= ctx.config.indexing.clamp_margin_percent {
+            } else if above_04_percent <= ctx.config.indexing.clamp_margin_percent {
                 0.4
-            } else if above_05_pecent <= ctx.config.indexing.clamp_margin_percent {
+            } else if above_05_percent <= ctx.config.indexing.clamp_margin_percent {
                 0.5
             } else {
                 1.0
             };
 
             let range = (range_start, range_end);
-            println!("Range: {:?}", range);
             *dense_index.values_range.write().unwrap() = range;
             dense_index.is_configured.store(true, Ordering::Release);
             store_values_range(&dense_index.lmdb, range).map_err(|e| {
@@ -460,12 +437,14 @@ pub fn run_upload_sparse_vector(
 
     vecs.into_iter()
         .map(|(id, vec)| {
-            vec.iter().for_each(|vec| {
-                // TODO (Question)
-                // should InvertedIndexSparseAnnNodeBasic::insert params change
-                // to accept vector_id as  u64 ??
-                inverted_index.insert(vec.0, vec.1, id.0 as u32);
-            });
+            vec.iter()
+                .map(|vec| {
+                    // TODO (Question)
+                    // should InvertedIndexSparseAnnNodeBasic::insert params change
+                    // to accept vector_id as  u64 ??
+                    inverted_index.insert(vec.0, vec.1, id.0 as u32, current_version)
+                })
+                .collect::<Result<(), _>>()?;
 
             // let vec_emb = RawSparseVectorEmbedding {
             //     raw_vec: Arc::new(vec),
@@ -485,27 +464,200 @@ pub fn run_upload_sparse_vector(
     bufman.flush()?;
 
     inverted_index.vec_raw_manager.flush_all()?;
-    inverted_index.index_manager.flush_all()?;
+    inverted_index.root.cache.dim_bufman.flush()?;
+    inverted_index.root.cache.data_bufmans.flush_all()?;
 
     Ok(())
 }
 
 /// uploads a vector embedding within a transaction
 pub fn run_upload_sparse_vectors_in_transaction(
+    ctx: Arc<AppContext>,
     inverted_index: Arc<InvertedIndex>,
     transaction: &InvertedIndexTransaction,
-    sample_points: Vec<(VectorId, Vec<SparsePair>)>,
+    mut sample_points: Vec<(VectorId, Vec<SparsePair>)>,
 ) -> Result<(), WaCustomError> {
-    sample_points.into_iter().for_each(|(id, vec)| {
-        vec.iter().for_each(|vec| {
-            inverted_index.insert(vec.0, vec.1, id.0 as u32);
-        });
-        let vec_emb = RawSparseVectorEmbedding {
-            raw_vec: Arc::new(vec),
-            hash_vec: id,
-        };
-        transaction.post_raw_embedding(vec_emb);
-    });
+    if !inverted_index.is_configured.load(Ordering::Acquire) {
+        let collected_count = inverted_index
+            .vectors_collected
+            .fetch_add(sample_points.len(), Ordering::SeqCst);
+
+        if collected_count < inverted_index.sample_threshold {
+            for (_, pairs) in &sample_points {
+                for pair in pairs {
+                    let value = pair.1;
+
+                    if value > 1.0 {
+                        inverted_index
+                            .sampling_data
+                            .above_1
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    if value > 2.0 {
+                        inverted_index
+                            .sampling_data
+                            .above_2
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    if value > 3.0 {
+                        inverted_index
+                            .sampling_data
+                            .above_3
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    if value > 4.0 {
+                        inverted_index
+                            .sampling_data
+                            .above_4
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    if value > 5.0 {
+                        inverted_index
+                            .sampling_data
+                            .above_5
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    if value > 6.0 {
+                        inverted_index
+                            .sampling_data
+                            .above_6
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    if value > 7.0 {
+                        inverted_index
+                            .sampling_data
+                            .above_7
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    if value > 8.0 {
+                        inverted_index
+                            .sampling_data
+                            .above_8
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    if value > 9.0 {
+                        inverted_index
+                            .sampling_data
+                            .above_9
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    inverted_index
+                        .sampling_data
+                        .values_collected
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+            }
+
+            let mut vectors = inverted_index.vectors.write().unwrap();
+            vectors.extend(sample_points);
+            if vectors.len() < inverted_index.sample_threshold {
+                return Ok(());
+            }
+
+            let values_count = inverted_index
+                .sampling_data
+                .values_collected
+                .load(Ordering::Relaxed) as f32;
+
+            let above_1_percent = (inverted_index.sampling_data.above_1.load(Ordering::Relaxed)
+                as f32
+                / values_count)
+                * 100.0;
+            let above_2_percent = (inverted_index.sampling_data.above_2.load(Ordering::Relaxed)
+                as f32
+                / values_count)
+                * 100.0;
+            let above_3_percent = (inverted_index.sampling_data.above_3.load(Ordering::Relaxed)
+                as f32
+                / values_count)
+                * 100.0;
+            let above_4_percent = (inverted_index.sampling_data.above_4.load(Ordering::Relaxed)
+                as f32
+                / values_count)
+                * 100.0;
+            let above_5_percent = (inverted_index.sampling_data.above_5.load(Ordering::Relaxed)
+                as f32
+                / values_count)
+                * 100.0;
+            let above_6_percent = (inverted_index.sampling_data.above_6.load(Ordering::Relaxed)
+                as f32
+                / values_count)
+                * 100.0;
+            let above_7_percent = (inverted_index.sampling_data.above_7.load(Ordering::Relaxed)
+                as f32
+                / values_count)
+                * 100.0;
+            let above_8_percent = (inverted_index.sampling_data.above_8.load(Ordering::Relaxed)
+                as f32
+                / values_count)
+                * 100.0;
+            let above_9_percent = (inverted_index.sampling_data.above_9.load(Ordering::Relaxed)
+                as f32
+                / values_count)
+                * 100.0;
+
+            let values_upper_bound = if above_1_percent <= ctx.config.indexing.clamp_margin_percent
+            {
+                1.0
+            } else if above_2_percent <= ctx.config.indexing.clamp_margin_percent {
+                2.0
+            } else if above_3_percent <= ctx.config.indexing.clamp_margin_percent {
+                3.0
+            } else if above_4_percent <= ctx.config.indexing.clamp_margin_percent {
+                4.0
+            } else if above_5_percent <= ctx.config.indexing.clamp_margin_percent {
+                5.0
+            } else if above_6_percent <= ctx.config.indexing.clamp_margin_percent {
+                6.0
+            } else if above_7_percent <= ctx.config.indexing.clamp_margin_percent {
+                7.0
+            } else if above_8_percent <= ctx.config.indexing.clamp_margin_percent {
+                8.0
+            } else if above_9_percent <= ctx.config.indexing.clamp_margin_percent {
+                9.0
+            } else {
+                10.0
+            };
+
+            *inverted_index.values_upper_bound.write().unwrap() = values_upper_bound;
+            inverted_index.is_configured.store(true, Ordering::Release);
+            store_values_upper_bound(&inverted_index.lmdb, values_upper_bound).map_err(|e| {
+                WaCustomError::DatabaseError(format!(
+                    "Failed to store values upper bound to LMDB: {}",
+                    e
+                ))
+            })?;
+            sample_points = std::mem::replace(&mut *vectors, Vec::new());
+        } else {
+            while !inverted_index.is_configured.load(Ordering::Relaxed) {
+                drop(inverted_index.vectors.read().unwrap());
+            }
+        }
+    }
+
+    sample_points
+        .into_iter()
+        .map(|(id, vec)| {
+            vec.iter()
+                .map(|vec| inverted_index.insert(vec.0, vec.1, id.0 as u32, transaction.id))
+                .collect::<Result<(), _>>()?;
+            let vec_emb = RawSparseVectorEmbedding {
+                raw_vec: Arc::new(vec),
+                hash_vec: id,
+            };
+            transaction.post_raw_embedding(vec_emb);
+            Ok::<_, WaCustomError>(())
+        })
+        .collect::<Result<(), _>>()?;
 
     Ok(())
 }

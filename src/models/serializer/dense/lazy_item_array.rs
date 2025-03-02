@@ -2,7 +2,7 @@ use std::{collections::HashSet, io};
 
 use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
-    cache_loader::ProbCache,
+    cache_loader::DenseIndexCache,
     lazy_load::FileIndex,
     prob_lazy_load::lazy_item_array::ProbLazyItemArray,
     prob_node::{ProbNode, SharedNode},
@@ -10,7 +10,7 @@ use crate::models::{
     versioning::Hash,
 };
 
-use super::ProbSerialize;
+use super::DenseSerialize;
 
 // @SERIALIZED_SIZE:
 //   length * (
@@ -18,20 +18,14 @@ use super::ProbSerialize;
 //     2 bytes for version number +
 //     4 bytes for version hash
 //   ) = N * 10
-impl<const N: usize> ProbSerialize for ProbLazyItemArray<ProbNode, N> {
+impl<const N: usize> DenseSerialize for ProbLazyItemArray<ProbNode, N> {
     fn serialize(
         &self,
         bufmans: &BufferManagerFactory<Hash>,
-        level_0_bufmans: &BufferManagerFactory<Hash>,
         version: Hash,
         cursor: u64,
-        is_level_0: bool,
     ) -> Result<u32, BufIoError> {
-        let bufman = if is_level_0 {
-            level_0_bufmans.get(version)?
-        } else {
-            bufmans.get(version)?
-        };
+        let bufman = bufmans.get(version)?;
         let start_offset = bufman.cursor_position(cursor)?;
         bufman.update_with_cursor(cursor, &vec![u8::MAX; 10 * N])?;
         bufman.seek_with_cursor(cursor, start_offset)?;
@@ -42,7 +36,6 @@ impl<const N: usize> ProbSerialize for ProbLazyItemArray<ProbNode, N> {
             };
 
             let item = unsafe { &*item_ptr };
-            debug_assert_eq!(item.is_level_0, is_level_0);
             let (offset, version_number, version_id) = match item.get_file_index() {
                 FileIndex::Valid {
                     offset,
@@ -62,9 +55,8 @@ impl<const N: usize> ProbSerialize for ProbLazyItemArray<ProbNode, N> {
 
     fn deserialize(
         bufmans: &BufferManagerFactory<Hash>,
-        level_0_bufmans: &BufferManagerFactory<Hash>,
         file_index: FileIndex,
-        cache: &ProbCache,
+        cache: &DenseIndexCache,
         max_loads: u16,
         skipm: &mut HashSet<u64>,
         is_level_0: bool,
@@ -80,11 +72,7 @@ impl<const N: usize> ProbSerialize for ProbLazyItemArray<ProbNode, N> {
                 version_id,
                 ..
             } => {
-                let bufman = if is_level_0 {
-                    level_0_bufmans.get(version_id)?
-                } else {
-                    bufmans.get(version_id)?
-                };
+                let bufman = bufmans.get(version_id)?;
                 let cursor = bufman.open_cursor()?;
 
                 let placeholder_offset = offset as u64;
@@ -104,13 +92,7 @@ impl<const N: usize> ProbSerialize for ProbLazyItemArray<ProbNode, N> {
                         version_id,
                     };
                     let item = SharedNode::deserialize(
-                        bufmans,
-                        level_0_bufmans,
-                        file_index,
-                        cache,
-                        max_loads,
-                        skipm,
-                        is_level_0,
+                        bufmans, file_index, cache, max_loads, skipm, is_level_0,
                     )?;
                     array.push(item);
                 }

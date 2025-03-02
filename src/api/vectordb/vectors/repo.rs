@@ -216,7 +216,12 @@ pub(crate) async fn find_similar_sparse_vectors(
     };
 
     let query = SparseAnnQueryBasic::new(sparse_vec)
-        .sequential_search_tshashmap(&inverted_index, inverted_index.root.quantization);
+        .sequential_search_tshashmap(
+            &inverted_index.root,
+            inverted_index.root.root.quantization_bits,
+            *inverted_index.values_upper_bound.read().unwrap(),
+        )
+        .map_err(|e| VectorsError::FailedToFindSimilarVectors(e.to_string()))?;
 
     Ok(FindSimilarVectorsResponseDto::Sparse(query))
 }
@@ -274,6 +279,7 @@ pub(crate) async fn upsert_sparse_vectors_in_transaction(
         .ok_or(VectorsError::NotFound)?;
 
     run_upload_sparse_vectors_in_transaction(
+        ctx,
         inverted_index,
         transaction,
         vectors

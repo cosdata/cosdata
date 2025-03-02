@@ -1,30 +1,45 @@
 use std::{
-    fs::OpenOptions,
+    path::PathBuf,
     ptr,
-    sync::{atomic::AtomicPtr, mpsc, Arc, RwLock},
+    sync::{
+        atomic::{AtomicBool, AtomicPtr, AtomicUsize},
+        mpsc, Arc, RwLock,
+    },
     thread,
 };
 
 use arcshift::ArcShift;
 use lmdb::{Transaction, WriteFlags};
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use crate::{
     macros::key,
     models::{
-        buffered_io::BufferManagerFactory,
-        cache_loader::{NodeRegistry, ProbCache},
+        buffered_io::{BufIoError, BufferManagerFactory},
         common::WaCustomError,
         embedding_persist::{write_sparse_embedding, EmbeddingOffset},
-        types::{MetaDb, SparseVector},
+        types::{MetaDb, SparseVector, VectorId},
         versioning::{Hash, Version, VersionControl},
     },
     storage::inverted_index_sparse_ann_basic::{
-        calculate_path, InvertedIndexSparseAnnNodeBasicTSHashmap,
+        InvertedIndexSparseAnnBasicTSHashmap, InvertedIndexSparseAnnNodeBasicTSHashmap,
     },
 };
 
-use super::inverted_index_types::RawSparseVectorEmbedding;
+use super::inverted_index_types::{RawSparseVectorEmbedding, SparsePair};
+
+#[derive(Default)]
+pub struct SamplingData {
+    pub above_1: AtomicUsize,
+    pub above_9: AtomicUsize,
+    pub above_8: AtomicUsize,
+    pub above_7: AtomicUsize,
+    pub above_6: AtomicUsize,
+    pub above_5: AtomicUsize,
+    pub above_4: AtomicUsize,
+    pub above_3: AtomicUsize,
+    pub above_2: AtomicUsize,
+    pub values_collected: AtomicUsize,
+}
 
 pub struct InvertedIndex {
     pub name: String,
@@ -32,15 +47,18 @@ pub struct InvertedIndex {
     pub auto_create_index: bool,
     pub metadata_schema: Option<String>, //object (optional)
     pub max_vectors: Option<i32>,
-    pub root: Arc<InvertedIndexSparseAnnNodeBasicTSHashmap>,
-    pub cache: Arc<NodeRegistry>,
-    pub prob_cache: Arc<ProbCache>,
+    pub root: Arc<InvertedIndexSparseAnnBasicTSHashmap>,
     pub lmdb: MetaDb,
     pub current_version: ArcShift<Hash>,
     pub current_open_transaction: AtomicPtr<InvertedIndexTransaction>,
     pub vcs: Arc<VersionControl>,
+    pub values_upper_bound: RwLock<f32>,
+    pub is_configured: AtomicBool,
+    pub sampling_data: SamplingData,
+    pub vectors: RwLock<Vec<(VectorId, Vec<SparsePair>)>>,
+    pub vectors_collected: AtomicUsize,
+    pub sample_threshold: usize,
     pub vec_raw_manager: Arc<BufferManagerFactory<Hash>>,
-    pub index_manager: Arc<BufferManagerFactory<Hash>>,
 }
 
 unsafe impl Send for InvertedIndex {}
@@ -50,86 +68,72 @@ impl InvertedIndex {
     pub fn new(
         name: String,
         description: Option<String>,
+        root_path: PathBuf,
         auto_create_index: bool,
         metadata_schema: Option<String>,
         max_vectors: Option<i32>,
         lmdb: MetaDb,
-        current_version: ArcShift<Hash>,
+        current_version: Hash,
         vcs: Arc<VersionControl>,
         vec_raw_manager: Arc<BufferManagerFactory<Hash>>,
-        index_manager: Arc<BufferManagerFactory<Hash>>,
-        quantization: u8,
-    ) -> Self {
-        let root = Arc::new(InvertedIndexSparseAnnNodeBasicTSHashmap::new(
-            0,
-            false,
-            quantization,
-        ));
-        let cache = Arc::new(NodeRegistry::new(1000, index_manager.clone()));
-        let prop_file = Arc::new(RwLock::new(
-            OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .open(format!("collections/{}/prop.data", name))
-                .unwrap(),
-        ));
-        let prob_cache = Arc::new(ProbCache::new(
-            index_manager.clone(),
-            index_manager.clone(),
-            prop_file,
-        ));
+        quantization_bits: u8,
+        sample_threshold: usize,
+    ) -> Result<Self, BufIoError> {
+        let root = Arc::new(InvertedIndexSparseAnnBasicTSHashmap::new(
+            root_path,
+            quantization_bits,
+            current_version,
+        )?);
 
-        InvertedIndex {
+        Ok(Self {
             name,
             auto_create_index,
             description,
             max_vectors,
             metadata_schema,
             root,
-            cache,
-            prob_cache,
             lmdb,
-            current_version,
+            current_version: ArcShift::new(current_version),
             current_open_transaction: AtomicPtr::new(ptr::null_mut()),
             vcs,
+            values_upper_bound: RwLock::new(1.0),
+            is_configured: AtomicBool::new(false),
+            sampling_data: SamplingData::default(),
+            vectors: RwLock::new(Vec::new()),
+            vectors_collected: AtomicUsize::new(0),
+            sample_threshold,
             vec_raw_manager,
-            index_manager,
-        }
+        })
     }
 
     /// Finds the node at a given dimension
     ///
     /// Traverses the tree iteratively and returns a reference to the node.
     pub fn find_node(&self, dim_index: u32) -> Option<&InvertedIndexSparseAnnNodeBasicTSHashmap> {
-        let mut current_node = &*self.root;
-        let path = calculate_path(dim_index, self.root.dim_index);
-        for child_index in path {
-            let child = current_node.lazy_children.get(child_index)?;
-            let node_res = unsafe { &*child }.try_get_data(&self.prob_cache).unwrap();
-            current_node = node_res
-        }
-
-        Some(current_node)
+        self.root.find_node(dim_index)
     }
 
     /// Inserts vec_id, quantized value u8 at particular node based on path
-    pub fn insert(&self, dim_index: u32, value: f32, vector_id: u32) {
-        let path = calculate_path(dim_index, self.root.dim_index);
-        let node = self.root.find_or_create_node(&path, &self.prob_cache);
-        // value will be quantized while being inserted into the Node.
-        node.insert(value, vector_id);
+    pub fn insert(
+        &self,
+        dim_index: u32,
+        value: f32,
+        vector_id: u32,
+        version: Hash,
+    ) -> Result<(), BufIoError> {
+        self.root.insert(
+            dim_index,
+            value,
+            vector_id,
+            version,
+            *self.values_upper_bound.read().unwrap(),
+        )
     }
 
     /// Adds a sparse vector to the index.
-    pub fn add_sparse_vector(&self, vector: SparseVector) -> Result<(), String> {
-        let vector_id = vector.vector_id;
-        vector.entries.par_iter().for_each(|(dim_index, value)| {
-            if *value != 0.0 {
-                self.insert(*dim_index, *value, vector_id);
-            }
-        });
-        Ok(())
+    pub fn add_sparse_vector(&self, vector: SparseVector, version: Hash) -> Result<(), BufIoError> {
+        self.root
+            .add_sparse_vector(vector, version, *self.values_upper_bound.read().unwrap())
     }
 
     // Get method
@@ -221,8 +225,11 @@ impl InvertedIndexTransaction {
         self.raw_embedding_channel.send(raw_emb).unwrap();
     }
 
-    pub fn pre_commit(self) -> Result<(), WaCustomError> {
+    pub fn pre_commit(self, inverted_index: &InvertedIndex) -> Result<(), WaCustomError> {
         drop(self.raw_embedding_channel);
+        inverted_index.root.serialize()?;
+        inverted_index.root.cache.dim_bufman.flush()?;
+        inverted_index.root.cache.data_bufmans.flush_all()?;
         self.raw_embedding_serializer_thread_handle
             .join()
             .unwrap()?;

@@ -13,7 +13,6 @@ use crate::models::embedding_persist::*;
 use crate::models::file_persist::*;
 use crate::models::fixedset::PerformantFixedSet;
 use crate::models::lazy_load::FileIndex;
-use crate::models::lazy_load::SyncPersist;
 use crate::models::prob_lazy_load::lazy_item::ProbLazyItem;
 use crate::models::prob_lazy_load::lazy_item_array::ProbLazyItemArray;
 use crate::models::prob_node::ProbNode;
@@ -743,7 +742,7 @@ pub fn index_embeddings_in_transaction(
             vecs.into_par_iter()
                 .chunks(batch_size)
                 .map(index)
-                .collect::<Result<_, _>>()?;
+                .collect::<Result<(), _>>()?;
         }
     }
 
@@ -993,7 +992,7 @@ fn get_or_create_version(
                 updated_node,
                 &dense_index.index_manager,
                 &dense_index.level_0_index_manager,
-                unsafe { &*updated_node }.get_current_version(),
+                unsafe { &*updated_node }.get_current_version_id(),
             )
             .unwrap();
 
