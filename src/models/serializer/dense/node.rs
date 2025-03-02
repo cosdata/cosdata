@@ -2,7 +2,7 @@ use std::{collections::HashSet, io, ptr, sync::atomic::AtomicPtr};
 
 use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
-    cache_loader::ProbCache,
+    cache_loader::DenseIndexCache,
     lazy_load::FileIndex,
     prob_lazy_load::lazy_item_array::ProbLazyItemArray,
     prob_node::{ProbNode, SharedNode},
@@ -10,7 +10,7 @@ use crate::models::{
     versioning::Hash,
 };
 
-use super::{ProbSerialize, UpdateSerialized};
+use super::DenseSerialize;
 
 // @SERIALIZED_SIZE:
 //   Properties:
@@ -26,22 +26,15 @@ use super::{ProbSerialize, UpdateSerialized};
 //     8 * 10 bytes for version link                    | nb * 19 + 112
 //
 //   Total = nb * 19 + 121 (where `nb` is the neighbors count)
-impl ProbSerialize for ProbNode {
+impl DenseSerialize for ProbNode {
     fn serialize(
         &self,
         bufmans: &BufferManagerFactory<Hash>,
-        level_0_bufmans: &BufferManagerFactory<Hash>,
         version: Hash,
         cursor: u64,
-        _is_level_0: bool,
     ) -> Result<u32, BufIoError> {
         let is_level_0 = self.hnsw_level.0 == 0;
-        debug_assert_eq!(_is_level_0, is_level_0);
-        let bufman = if is_level_0 {
-            level_0_bufmans.get(version)?
-        } else {
-            bufmans.get(version)?
-        };
+        let bufman = bufmans.get(version)?;
         let start_offset = bufman.cursor_position(cursor)?;
 
         let neighbors = self.get_neighbors_raw();
@@ -137,18 +130,16 @@ impl ProbSerialize for ProbNode {
             assert_eq!(current, start_offset + 39);
         }
 
-        neighbors.serialize(bufmans, level_0_bufmans, version, cursor, is_level_0)?;
-        self.versions
-            .serialize(bufmans, level_0_bufmans, version, cursor, is_level_0)?;
+        neighbors.serialize(bufmans, version, cursor)?;
+        self.versions.serialize(bufmans, version, cursor)?;
 
         Ok(start_offset as u32)
     }
 
     fn deserialize(
         bufmans: &BufferManagerFactory<Hash>,
-        level_0_bufmans: &BufferManagerFactory<Hash>,
         file_index: FileIndex,
-        cache: &ProbCache,
+        cache: &DenseIndexCache,
         max_loads: u16,
         skipm: &mut HashSet<u64>,
         is_level_0: bool,
@@ -164,11 +155,7 @@ impl ProbSerialize for ProbNode {
                 version_number,
                 offset: FileOffset(offset),
             } => {
-                let bufman = if is_level_0 {
-                    level_0_bufmans.get(version_id)?
-                } else {
-                    bufmans.get(version_id)?
-                };
+                let bufman = bufmans.get(version_id)?;
                 let cursor = bufman.open_cursor()?;
                 bufman.seek_with_cursor(cursor, offset as u64)?;
                 // Read basic fields
@@ -199,7 +186,6 @@ impl ProbSerialize for ProbNode {
                 let parent = if parent_offset != u32::MAX {
                     SharedNode::deserialize(
                         bufmans,
-                        level_0_bufmans,
                         FileIndex::Valid {
                             offset: FileOffset(parent_offset),
                             version_number: parent_version_number,
@@ -217,7 +203,6 @@ impl ProbSerialize for ProbNode {
                 let child = if child_offset != u32::MAX {
                     SharedNode::deserialize(
                         bufmans,
-                        level_0_bufmans,
                         FileIndex::Valid {
                             offset: FileOffset(child_offset),
                             version_number: child_version_number,
@@ -235,7 +220,6 @@ impl ProbSerialize for ProbNode {
                 let root_version = if root_version_offset != u32::MAX {
                     SharedNode::deserialize(
                         bufmans,
-                        level_0_bufmans,
                         FileIndex::Valid {
                             offset: FileOffset(root_version_offset),
                             version_number: root_version_version_number,
@@ -257,9 +241,8 @@ impl ProbSerialize for ProbNode {
                 };
 
                 let neighbors: Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]> =
-                    ProbSerialize::deserialize(
+                    DenseSerialize::deserialize(
                         bufmans,
-                        level_0_bufmans,
                         neighbors_file_index,
                         cache,
                         max_loads,
@@ -275,7 +258,6 @@ impl ProbSerialize for ProbNode {
 
                 let versions = ProbLazyItemArray::deserialize(
                     bufmans,
-                    level_0_bufmans,
                     versions_file_index,
                     cache,
                     max_loads,
@@ -294,39 +276,5 @@ impl ProbSerialize for ProbNode {
                 ))
             }
         }
-    }
-}
-
-impl UpdateSerialized for ProbNode {
-    fn update_serialized(
-        &self,
-        bufmans: &BufferManagerFactory<Hash>,
-        level_0_bufmans: &BufferManagerFactory<Hash>,
-        version: Hash,
-        FileOffset(offset): FileOffset,
-        cursor: u64,
-        _is_level_0: bool,
-    ) -> Result<u32, BufIoError> {
-        let is_level_0 = self.hnsw_level.0 == 0;
-        debug_assert_eq!(_is_level_0, is_level_0);
-        let size = Self::get_serialized_size(self.get_neighbors_raw().len()) as u32;
-        debug_assert_eq!(offset % size, 0);
-        let bufman = if is_level_0 {
-            level_0_bufmans.get(version)?
-        } else {
-            bufmans.get(version)?
-        };
-        bufman.seek_with_cursor(cursor, offset as u64 + 39)?;
-        self.get_neighbors_raw().serialize(
-            bufmans,
-            level_0_bufmans,
-            version,
-            cursor,
-            is_level_0,
-        )?;
-        self.versions
-            .serialize(bufmans, level_0_bufmans, version, cursor, is_level_0)?;
-
-        Ok(offset)
     }
 }

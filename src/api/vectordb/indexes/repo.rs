@@ -66,6 +66,7 @@ pub(crate) async fn create_sparse_index(
     collection_name: String,
     _name: String,
     quantization: SparseIndexQuantization,
+    sample_threshold: usize,
 ) -> Result<(), IndexesError> {
     let collection = ctx
         .ain_env
@@ -73,9 +74,14 @@ pub(crate) async fn create_sparse_index(
         .get_collection(&collection_name)
         .ok_or(IndexesError::CollectionNotFound)?;
 
-    init_inverted_index_for_collection(ctx, &collection, quantization.into_u8())
-        .await
-        .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;
+    init_inverted_index_for_collection(
+        ctx,
+        &collection,
+        quantization.into_bits(),
+        sample_threshold,
+    )
+    .await
+    .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;
 
     Ok(())
 }
