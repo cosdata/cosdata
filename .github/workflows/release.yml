@@ -1,0 +1,43 @@
+name: "release-main-latest"
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: ["completed"]
+    branches: ["main"]
+
+jobs:
+  pre-release:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    name: "Release Latest Main"
+    runs-on: "ubuntu-latest"
+
+    steps:
+      - uses: "taiki-e/checkout-action@v1"
+      - name: Install Protobuf Compiler and Musl GCC
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler musl-tools musl-dev
+      - name: Set Short Release SHA
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+      - uses: "dtolnay/rust-toolchain@1.85"
+        with:
+          targets: "x86_64-unknown-linux-musl"
+      - name: Set MUSL target
+        run: echo "CARGO_BUILD_TARGET=x86_64-unknown-linux-musl" >> $GITHUB_ENV
+      - name: Perform Release build with MUSL libc
+        run: cargo build --release --all-features
+      - uses: "ncipollo/release-action@v1"
+        with:
+          token: "${{ github.token }}"
+          tag: "latest-${{ steps.vars.outputs.sha_short }}"
+          prerelease: true
+          name: "Development Build"
+          replacesArtifacts: true
+          artifacts: |
+            config.toml
+            LICENSE
+            *.md
+            ./target/x86_64-unknown-linux-musl/release/cosdata
+
