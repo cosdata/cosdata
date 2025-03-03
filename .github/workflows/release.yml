@@ -1,5 +1,9 @@
 name: "release-main-latest"
 
+permissions:
+  contents: write
+  packages: write
+  
 on:
   workflow_run:
     workflows: ["CI"]
@@ -30,7 +34,7 @@ jobs:
         run: cargo build --release --all-features
       - uses: "ncipollo/release-action@v1"
         with:
-          token: ${{ secrets.GH_PAT }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           tag: "latest-${{ steps.vars.outputs.sha_short }}"
           prerelease: true
           name: "Development Build"
