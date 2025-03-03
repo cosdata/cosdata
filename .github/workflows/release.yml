@@ -30,7 +30,7 @@ jobs:
         run: cargo build --release --all-features
       - uses: "ncipollo/release-action@v1"
         with:
-          token: "${{ github.token }}"
+          token: ${{ secrets.GH_PAT }}
           tag: "latest-${{ steps.vars.outputs.sha_short }}"
           prerelease: true
           name: "Development Build"
