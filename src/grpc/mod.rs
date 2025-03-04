@@ -1,5 +1,7 @@
+pub mod auth;
 pub mod collections;
 pub mod error;
+pub mod indexes;
 pub mod metadata;
 pub mod server;
 pub mod vectors;

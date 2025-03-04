@@ -5,7 +5,7 @@ mod controller;
 pub(crate) mod dtos;
 mod error;
 mod repo;
-mod service;
+pub(crate) mod service;
 
 pub(crate) fn indexes_module() -> Scope {
     let indexes_module = web::scope("/collections/{collection_id}/indexes")
