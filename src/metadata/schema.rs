@@ -27,21 +27,31 @@ pub struct MetadataField {
     pub num_dims: u8,
 }
 
+// Converts a set of `FieldValue`s into a HashMap in which
+// `FieldValue`s are the keys and integers (monotonically increasing
+// id) as values. Note that the ids start from 1 and not 0 because 0
+// is considered as the base dimension. The input hash set is first
+// sorted to make sure the result is deterministic.
+//
+// @NOTE: This function assumes that all FieldValue instances in the
+// HashSet are of the same variant.
 fn set_to_value_index(value_set: HashSet<FieldValue>) -> HashMap<FieldValue, u16> {
     let mut values = value_set.into_iter().collect::<Vec<FieldValue>>();
     values.sort_by(|a, b| {
         match (a, b) {
             (FieldValue::Int(a), FieldValue::Int(b)) => a.cmp(b),
             (FieldValue::String(a), FieldValue::String(b)) => a.cmp(b),
-            // The following cases need not be handled as the set is
-            // validated to be homogeneous by this time.
-            (FieldValue::Int(_), FieldValue::String(_)) => std::cmp::Ordering::Less,
-            (FieldValue::String(_), FieldValue::Int(_)) => std::cmp::Ordering::Greater,
+            // @NOTE: We are assuming that the input hash set is
+            // homogeneous i.e. contains FieldValue instances of the
+            // same variant.
+            _ => std::cmp::Ordering::Less,
         }
     });
     let mut value_index = HashMap::with_capacity(values.len());
     for (i, v) in values.into_iter().enumerate() {
-        value_index.insert(v, i as u16);
+        // @NOTE: the values are monotonically increasing identifiers
+        // that are one-indexed and not zero-indexed
+        value_index.insert(v, (i + 1) as u16);
     }
     value_index
 }
@@ -62,7 +72,12 @@ impl MetadataField {
             ));
         }
         let value_index = set_to_value_index(values);
-        let num_dims = nearest_power_of_two(value_index.len() as u16)
+        let cardinality = value_index.len();
+        // @NOTE: No. of dimensions are calculated to support 1 value
+        // more than the cardinality because the index in value_index
+        // starts with 1 and not 0. In other words, 0 is not used to
+        // represent any value.
+        let num_dims = nearest_power_of_two((cardinality + 1) as u16)
             .ok_or(Error::InvalidFieldCardinality(format!("Field = {name}")))?;
         Ok(Self {
             name,
@@ -301,10 +316,10 @@ mod tests {
         s.insert(d.clone());
 
         let m = set_to_value_index(s);
-        assert_eq!(&0, m.get(&a).unwrap());
-        assert_eq!(&1, m.get(&b).unwrap());
-        assert_eq!(&2, m.get(&d).unwrap());
-        assert_eq!(&3, m.get(&n).unwrap());
+        assert_eq!(&1, m.get(&a).unwrap());
+        assert_eq!(&2, m.get(&b).unwrap());
+        assert_eq!(&3, m.get(&d).unwrap());
+        assert_eq!(&4, m.get(&n).unwrap());
     }
 
     #[test]
@@ -324,12 +339,15 @@ mod tests {
         assert!(result.is_ok());
         let m = result.unwrap();
         assert_eq!(name, m.name);
-        assert_eq!(2, m.num_dims);
+        // Even though there are 4 values, we need 3 dimensions
+        // because ids start from 1 and not 0. In other words, 0 is
+        // not used to represent any value.
+        assert_eq!(3, m.num_dims);
         let vi = m.value_index;
-        assert_eq!(&0, vi.get(&a).unwrap());
-        assert_eq!(&1, vi.get(&b).unwrap());
-        assert_eq!(&2, vi.get(&d).unwrap());
-        assert_eq!(&3, vi.get(&n).unwrap());
+        assert_eq!(&1, vi.get(&a).unwrap());
+        assert_eq!(&2, vi.get(&b).unwrap());
+        assert_eq!(&3, vi.get(&d).unwrap());
+        assert_eq!(&4, vi.get(&n).unwrap());
     }
 
     #[test]
@@ -535,7 +553,7 @@ mod tests {
         fields.insert("age".to_owned(), FieldValue::Int(5));
         let wd = schema.weighted_dimensions(&fields, 1024).unwrap();
         let exp_dim1 = vec![
-            0, 1024, 0, 0, // 4 (original value: 5)
+            0, 1024, 0, 1024, // 5 (original value: 5)
             0, 0, // (not specified)
             0, 0, // (not specified)
         ];
@@ -549,8 +567,8 @@ mod tests {
         fields.insert("group".to_owned(), FieldValue::String("a".to_owned()));
         let wd = schema.weighted_dimensions(&fields, 1024).unwrap();
         let exp_dim1 = vec![
-            0, 1024, 0, 0, // 4 (original value: 5)
-            0, 0, // 0 (original value: a) @TODO: Fix: 0 is indistinguishable from not specified
+            0, 1024, 0, 1024, // 5 (original value: 5)
+            0, 1024, // 1 (original value: a)
             0, 0, // (not specified)
         ];
         assert_eq!(vec![exp_dim1], wd);
@@ -560,9 +578,9 @@ mod tests {
         fields.insert("group".to_owned(), FieldValue::String("c".to_owned()));
         let wd = schema.weighted_dimensions(&fields, 1024).unwrap();
         let exp_dim1 = vec![
-            0, 0, 1024, 0, // 2 (original value: 4)
-            1024, 0, // 2 (original value: c)
-            0, 0, // (not specified) @TODO: Fix
+            0, 0, 1024, 1024, // 3 (original value: 3)
+            1024, 1024, // 3 (original value: c)
+            0, 0, // (not specified)
         ];
         assert_eq!(vec![exp_dim1], wd);
 
@@ -576,23 +594,23 @@ mod tests {
 
         // dimensions to support AND(age, group)
         let exp_dim1 = vec![
-            0, 1024, 0, 0, // 4 (original value: 5)
-            0, 0, // 0 (original value: a)
+            0, 1024, 0, 1024, // 5 (original value: 5)
+            0, 1024, // 1 (original value: a)
             0, 0,
         ];
 
         // dimensions to support AND(age, level)
         let exp_dim2 = vec![
-            0, 1024, 0, 0, // 4 (original value: 5)
+            0, 1024, 0, 1024, // 5 (original value: 5)
             0, 0,
-            1024, 0, // 2 (original value: third)
+            1024, 1024, // 3 (original value: third)
         ];
 
         // all fields dimensions to support individual field and OR queries
         let exp_dim3 = vec![
-            0, 1024, 0, 0, // 4 (original value: 5)
-            0, 0, // 0 (original value: a) @TODO: Fix
-            1024, 0, // 2 (original value: third)
+            0, 1024, 0, 1024, // 5 (original value: 5)
+            0, 1024, // 0 (original value: a)
+            1024, 1024, // 3 (original value: third)
         ];
         for i in 0..wd.len() {
             assert!(wd[i] == exp_dim1 || wd[i] == exp_dim2 || wd[i] == exp_dim3);

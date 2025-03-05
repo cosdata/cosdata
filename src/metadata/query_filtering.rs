@@ -165,7 +165,7 @@ mod tests {
         let qfed = filter_encoded_dimensions(&schema, &filter).unwrap();
         assert_eq!(
             vec![vec![
-                -1, 1, -1, 1, // 5 (original value: 6)
+                -1, 1, 1, -1, // 6 (original value: 6)
                 -1, -1
             ]],
             qfed
@@ -187,8 +187,8 @@ mod tests {
         let qfed = filter_encoded_dimensions(&schema, &filter).unwrap();
         assert_eq!(
             vec![vec![
-                -1, -1, -1, 1, // 1 (original value: 2)
-                1, -1 // !1 (original value: !b)
+                -1, -1, 1, -1, // 2 (original value: 2)
+                -1, 1 // !2 (original value: !b)
             ]],
             qfed
         );
@@ -210,12 +210,12 @@ mod tests {
         assert_eq!(
             vec![
                 vec![
-                    -1, -1, -1, 1, // 1 (original value: 2)
+                    -1, -1, 1, -1, // 2 (original value: 2)
                     -1, -1
                 ],
                 vec![
                     -1, -1, -1, -1,
-                    1, -1  // !1 (original value: !b)
+                    -1, 1  // !2 (original value: !b)
                 ]
             ],
             qfed
