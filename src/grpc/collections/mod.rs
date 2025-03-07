@@ -2,11 +2,11 @@ use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
 use crate::app_context::AppContext;
+use crate::metadata::schema::MetadataSchema;
 use crate::models::collection::{
     Collection, CollectionConfig, DenseVectorOptions, SparseVectorOptions,
 };
 use crate::models::common::WaCustomError;
-use crate::metadata::schema::MetadataSchema;
 
 crate::cfg_grpc! {
 use super::proto::collections_service_server::CollectionsService;

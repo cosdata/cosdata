@@ -1,12 +1,13 @@
+use super::common::WaCustomError;
+use super::paths::{get_config_path, get_data_path};
+use crate::metadata::MetadataSchema;
 use lmdb::{Database, Environment, Transaction, WriteFlags};
 use serde::{Deserialize, Serialize};
 use serde_cbor::to_vec;
 use siphasher::sip::SipHasher24;
+use std::fs::create_dir_all;
+use std::path::PathBuf;
 use std::{fs, hash::Hasher, path::Path, sync::Arc};
-
-use crate::metadata::MetadataSchema;
-
-use super::common::WaCustomError;
 
 #[derive(Deserialize, Clone, Serialize, Debug)]
 pub struct DenseVectorOptions {
@@ -82,8 +83,9 @@ impl Collection {
 
     /// creates a path out of the collection name
     pub fn get_path(&self) -> Arc<Path> {
-        let root_path = Path::new("./collections/");
-        root_path.join(&self.name).into()
+        let collections_path = get_data_path().join("collections");
+        create_dir_all(&collections_path).expect("Failed to create collections directory");
+        collections_path.join(&self.name).into()
     }
 
     /// serializes the collection
