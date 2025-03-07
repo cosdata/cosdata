@@ -8,6 +8,7 @@ use super::meta_persist::{
     load_dense_index_data, persist_dense_index, retrieve_current_version,
     retrieve_values_upper_bound,
 };
+use super::paths::{get_config_path, get_data_path};
 use super::prob_lazy_load::lazy_item::ProbLazyItem;
 use super::prob_node::{ProbNode, SharedNode};
 use super::versioning::VersionControl;
@@ -1292,15 +1293,15 @@ fn get_admin_key(env: Arc<Environment>, args: CosdataArgs) -> lmdb::Result<Singl
 }
 
 pub fn get_app_env(config: &Config, args: CosdataArgs) -> Result<Arc<AppEnv>, WaCustomError> {
-    let path = Path::new("./_mdb"); // TODO: prefix the customer & database name
+    let db_path = get_data_path().join("_mdb"); // TODO: prefix the customer & database name
 
     // Ensure the directory exists
-    create_dir_all(&path).map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+    create_dir_all(&db_path).map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
     // Initialize the environment
     let env = Environment::new()
         .set_max_dbs(10)
         .set_map_size(1048576000) // Set the maximum size of the database to 1GB
-        .open(&path)
+        .open(&db_path)
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
     let env_arc = Arc::new(env);
