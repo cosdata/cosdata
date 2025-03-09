@@ -3,8 +3,8 @@ use std::sync::{atomic::Ordering, Arc};
 use crate::api_service::run_upload_sparse_vectors_in_transaction;
 use crate::distance::dotproduct::DotProductDistance;
 use crate::indexes::inverted_index::{InvertedIndex, InvertedIndexTransaction};
+use crate::indexes::inverted_index_types::SparsePair;
 use crate::models::common::WaCustomError;
-use crate::models::dot_product::dot_product_f32;
 use crate::models::rpc::DenseVector;
 use crate::models::types::MetricResult;
 use crate::storage::sparse_ann_query_basic::SparseAnnResult;
@@ -230,23 +230,10 @@ pub(crate) async fn find_similar_sparse_vectors(
         )
         .map_err(|e| VectorsError::FailedToFindSimilarVectors(e.to_string()))?;
 
-    let mut query_vector_values = find_similar_vectors.values;
-
-    query_vector_values.sort_by_key(|p| p.0);
-
-    let mut query_vector = Vec::with_capacity(query_vector_values.last().unwrap().0 as usize + 1);
-
-    for pair in query_vector_values {
-        while query_vector.len() < pair.0 as usize {
-            query_vector.push(0.0);
-        }
-        query_vector.insert(pair.0 as usize, pair.1);
-    }
-
     let results = finalize_sparse_ann_results(
         inverted_index,
         intermediate_results,
-        &query_vector,
+        &find_similar_vectors.values,
         find_similar_vectors.top_k,
     )
     .map_err(|e| VectorsError::FailedToFindSimilarVectors(e.to_string()))?;
@@ -257,15 +244,20 @@ pub(crate) async fn find_similar_sparse_vectors(
 fn finalize_sparse_ann_results(
     inverted_index: Arc<InvertedIndex>,
     intermediate_results: Vec<SparseAnnResult>,
-    query: &[f32],
+    query: &[SparsePair],
     k: Option<usize>,
 ) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
     let mut results = Vec::with_capacity(k.unwrap_or(intermediate_results.len()));
 
     for result in intermediate_results {
         let id = VectorId(result.vector_id as u64);
-        let raw = get_sparse_embedding_by_id(inverted_index.clone(), &id)?.into_dense(query.len());
-        let dp = dot_product_f32(query, &raw.raw_vec);
+        let map = get_sparse_embedding_by_id(inverted_index.clone(), &id)?.into_map();
+        let mut dp = 0.0;
+        for pair in query {
+            if let Some(val) = map.get(&pair.0) {
+                dp += val * pair.1;
+            }
+        }
         results.push((id, MetricResult::DotProductDistance(DotProductDistance(dp))));
     }
 
