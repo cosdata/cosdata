@@ -17,6 +17,7 @@ pub mod lazy_load;
 pub mod lookup_table;
 pub mod lru_cache;
 pub mod meta_persist;
+pub mod paths;
 pub mod prob_lazy_load;
 pub mod prob_node;
 pub mod rpc;

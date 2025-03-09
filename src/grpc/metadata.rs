@@ -1,5 +1,5 @@
 use crate::grpc::proto;
-use crate::metadata::{FieldValue, schema};
+use crate::metadata::{schema, FieldValue};
 use std::collections::HashSet;
 
 // FieldValue conversions
@@ -43,7 +43,8 @@ impl From<schema::MetadataField> for proto::MetadataField {
     fn from(field: schema::MetadataField) -> Self {
         proto::MetadataField {
             name: field.name,
-            values: field.value_index
+            values: field
+                .value_index
                 .keys()
                 .map(|v| proto::FieldValue::from(v.clone()))
                 .collect(),
@@ -104,14 +105,8 @@ impl TryFrom<proto::MetadataSchema> for schema::MetadataSchema {
 impl From<schema::MetadataSchema> for proto::MetadataSchema {
     fn from(schema: schema::MetadataSchema) -> Self {
         proto::MetadataSchema {
-            fields: schema.fields
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-            supported_conditions: schema.conditions
-                .into_iter()
-                .map(Into::into)
-                .collect(),
+            fields: schema.fields.into_iter().map(Into::into).collect(),
+            supported_conditions: schema.conditions.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -145,10 +140,7 @@ mod tests {
         values.insert(FieldValue::Int(1));
         values.insert(FieldValue::Int(2));
 
-        let field = schema::MetadataField::new(
-            "test_field".to_string(),
-            values,
-        ).unwrap();
+        let field = schema::MetadataField::new("test_field".to_string(), values).unwrap();
 
         let proto_field: proto::MetadataField = field.clone().into();
         let converted_back: schema::MetadataField = proto_field.try_into().unwrap();
@@ -171,7 +163,7 @@ mod tests {
         match converted_back {
             schema::SupportedCondition::And(converted_fields) => {
                 assert_eq!(converted_fields, fields);
-            },
+            }
             _ => panic!("Wrong condition type after conversion"),
         }
 
@@ -183,7 +175,7 @@ mod tests {
         match converted_back {
             schema::SupportedCondition::Or(converted_fields) => {
                 assert_eq!(converted_fields, fields);
-            },
+            }
             _ => panic!("Wrong condition type after conversion"),
         }
     }
@@ -208,10 +200,7 @@ mod tests {
         let condition = schema::SupportedCondition::And(field_names);
 
         // Create schema
-        let schema = schema::MetadataSchema::new(
-            vec![field1, field2],
-            vec![condition],
-        ).unwrap();
+        let schema = schema::MetadataSchema::new(vec![field1, field2], vec![condition]).unwrap();
 
         // Convert to proto and back
         let proto_schema: proto::MetadataSchema = schema.clone().into();

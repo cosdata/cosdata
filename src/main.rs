@@ -30,7 +30,7 @@ use crate::{app_context::AppContext, web_server::run_actix_server_with_context};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = CosdataArgs::parse();
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
-    let config = config_loader::load_config();
+    let config = config_loader::load_config()?;
     // Create context
     let context = Data::new(AppContext::new(config, args)?);
 
