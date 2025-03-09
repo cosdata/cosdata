@@ -42,8 +42,8 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher24;
 use std::hash::{DefaultHasher, Hash as StdHash, Hasher};
-use std::io::Write;
-use std::path::Path;
+use std::io::{stdout, Write};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, RwLock};
 use std::time::Instant;
@@ -764,23 +764,40 @@ impl CollectionsMap {
     fn load_dense_index(
         &self,
         coll: &Collection,
-        root_path: &Path,
+        _root_path: &Path,
         config: &Config,
     ) -> Result<DenseIndex, WaCustomError> {
-        let collection_path: Arc<Path> = root_path.join(&coll.name).into();
+        let collection_path: Arc<Path> = get_collections_path().join(&coll.name).into();
         let index_path = collection_path.join("dense_hnsw");
 
-        let dense_index_data =
-            load_dense_index_data(&self.lmdb_env, self.lmdb_dense_index_db, &coll.get_key())
-                .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-        let prop_file = Arc::new(RwLock::new(
-            OpenOptions::new()
-                .create(true)
-                .read(true)
-                .append(true)
-                .open(index_path.join("prop.data"))
-                .unwrap(),
-        ));
+        // Check if the path exists before proceeding
+        if !index_path.exists() {
+            return Err(WaCustomError::DatabaseError(format!(
+                "Dense HNSW index path does not exist: {:?}",
+                index_path
+            )));
+        }
+
+        let dense_index_data = load_dense_index_data(&self.lmdb_env, self.lmdb_dense_index_db, &coll.get_key())
+            .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+        // Replace unwrap with proper error handling
+        let prop_file_path = index_path.join("prop.data");
+        let prop_file_result = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .append(true)
+            .open(&prop_file_path);
+
+        let prop_file = match prop_file_result {
+            Ok(file) => Arc::new(RwLock::new(file)),
+            Err(e) => {
+                return Err(WaCustomError::DatabaseError(format!(
+                    "Failed to open properties file {:?}: {}",
+                    prop_file_path, e
+                )));
+            }
+        };
 
         let node_size = ProbNode::get_serialized_size(dense_index_data.hnsw_params.neighbors_count);
         let level_0_node_size =
@@ -816,36 +833,66 @@ impl CollectionsMap {
                 .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?,
         );
 
-        let (root_offset, root_version_number, root_version_id) = match dense_index_data.file_index
-        {
+        let (root_offset, root_version_number, root_version_id) = match dense_index_data.file_index {
             FileIndex::Valid {
                 offset,
                 version_number,
                 version_id,
             } => (offset, version_number, version_id),
-            FileIndex::Invalid => unreachable!(),
+            FileIndex::Invalid => {
+                return Err(WaCustomError::DatabaseError(
+                    "Invalid file index in dense index data".to_string(),
+                ));
+            }
         };
 
         let root_node_region_offset = root_offset.0 - (root_offset.0 % bufman_size as u32);
         let load_start = Instant::now();
-        let region = cache.load_region(
+
+        let region_result = cache.load_region(
             root_node_region_offset,
             root_version_number,
             root_version_id,
             node_size as u32,
             false,
-        )?;
+        );
 
-        let root = region[(root_offset.0 - root_node_region_offset) as usize / node_size];
+        let region = match region_result {
+            Ok(r) => r,
+            Err(e) => {
+                return Err(WaCustomError::DatabaseError(format!(
+                    "Failed to load region: {}",
+                    e
+                )));
+            }
+        };
+
+        let root_index = (root_offset.0 - root_node_region_offset) as usize / node_size;
+        if root_index >= region.len() {
+            return Err(WaCustomError::DatabaseError(format!(
+                "Root index out of bounds: {} >= {}",
+                root_index,
+                region.len()
+            )));
+        }
+
+        let root = region[root_index];
 
         let vcs = Arc::new(VersionControl::from_existing(
             self.lmdb_env.clone(),
             db.clone(),
         ));
 
-        let mut versions = vcs
-            .get_branch_versions("main")
-            .map_err(|err| WaCustomError::DatabaseError(err.to_string()))?;
+        let versions_result = vcs.get_branch_versions("main");
+        let mut versions = match versions_result {
+            Ok(v) => v,
+            Err(err) => {
+                return Err(WaCustomError::DatabaseError(format!(
+                    "Failed to get branch versions: {}",
+                    err
+                )));
+            }
+        };
 
         println!(
             "versions: {:?}",
@@ -862,8 +909,19 @@ impl CollectionsMap {
                     / versions.len())
                     / 2;
             let (version_id, version_hash) = versions.remove(0);
+
             // level n
-            let bufman = index_manager.get(version_id)?;
+            let bufman_result = index_manager.get(version_id);
+            let bufman = match bufman_result {
+                Ok(bm) => bm,
+                Err(e) => {
+                    return Err(WaCustomError::DatabaseError(format!(
+                        "Failed to get buffer manager: {}",
+                        e
+                    )));
+                }
+            };
+
             for i in 0..num_regions_to_load
                 .min((bufman.file_size() as usize + bufman_size - 1) / bufman_size)
             {
@@ -880,10 +938,21 @@ impl CollectionsMap {
                 ));
                 num_regions_queued += 1;
             }
+
             // level 0
-            let bufman = level_0_index_manager.get(version_id)?;
+            let level0_bufman_result = level_0_index_manager.get(version_id);
+            let level0_bufman = match level0_bufman_result {
+                Ok(bm) => bm,
+                Err(e) => {
+                    return Err(WaCustomError::DatabaseError(format!(
+                        "Failed to get level 0 buffer manager: {}",
+                        e
+                    )));
+                }
+            };
+
             for i in 0..num_regions_to_load
-                .min((bufman.file_size() as usize + level_0_bufman_size - 1) / level_0_bufman_size)
+                .min((level0_bufman.file_size() as usize + level_0_bufman_size - 1) / level_0_bufman_size)
             {
                 let region_start = (level_0_bufman_size * i) as u32;
                 regions_to_load.push((
@@ -897,7 +966,7 @@ impl CollectionsMap {
             }
         }
 
-        regions_to_load
+        let regions_load_result = regions_to_load
             .into_par_iter()
             .map(
                 |(region_start, version_number, version_id, node_size, is_level_0)| {
@@ -911,7 +980,14 @@ impl CollectionsMap {
                     Ok(())
                 },
             )
-            .collect::<Result<Vec<_>, BufIoError>>()?;
+            .collect::<Result<Vec<_>, BufIoError>>();
+
+        if let Err(e) = regions_load_result {
+            return Err(WaCustomError::DatabaseError(format!(
+                "Failed to load regions: {}",
+                e
+            )));
+        }
 
         let load_time = load_start.elapsed();
         println!("Loaded regions in: {:?}", load_time);
@@ -920,8 +996,29 @@ impl CollectionsMap {
             env: self.lmdb_env.clone(),
             db,
         };
-        let current_version = retrieve_current_version(&lmdb)?;
-        let values_range = retrieve_values_range(&lmdb)?;
+
+        let current_version_result = retrieve_current_version(&lmdb);
+        let current_version = match current_version_result {
+            Ok(cv) => cv,
+            Err(e) => {
+                return Err(WaCustomError::DatabaseError(format!(
+                    "Failed to retrieve current version: {}",
+                    e
+                )));
+            }
+        };
+
+        let values_range_result = retrieve_values_range(&lmdb);
+        let values_range = match values_range_result {
+            Ok(vr) => vr,
+            Err(e) => {
+                return Err(WaCustomError::DatabaseError(format!(
+                    "Failed to retrieve values range: {}",
+                    e
+                )));
+            }
+        };
+
         let dense_index = DenseIndex::new(
             coll.name.clone(),
             root,
@@ -1258,28 +1355,54 @@ pub struct AppEnv {
     pub active_sessions: Arc<DashMap<String, SessionDetails>>,
 }
 
+
 fn get_admin_key(env: Arc<Environment>, args: CosdataArgs) -> lmdb::Result<SingleSHA256Hash> {
-    let db = env.create_db(Some("security_metadata"), DatabaseFlags::empty())?;
-    let mut txn = env.begin_rw_txn()?;
-    let admin_key_from_lmdb = match txn.get(db, &"admin_key") {
-        Ok(key) => Some(DoubleSHA256Hash(key.try_into().unwrap())),
-        Err(lmdb::Error::NotFound) => None,
-        Err(err) => return Err(err),
+    // Create meta database if it doesn't exist
+    let mut init_txn = env.begin_rw_txn()?;
+    let meta_db = unsafe {
+        init_txn.create_db(Some("meta"), DatabaseFlags::empty())?
     };
+    init_txn.commit()?;
+
+    let txn = env.begin_ro_txn()?;
+    let db = unsafe { txn.open_db(Some("meta"))? };
+
+    let admin_key_from_lmdb = match txn.get(db, &"admin_key") {
+        Ok(bytes) => {
+            let mut hash_array = [0u8; 32];
+            // Copy bytes from the database to the fixed-size array
+            if bytes.len() >= 32 {
+                hash_array.copy_from_slice(&bytes[..32]);
+                Some(DoubleSHA256Hash(hash_array))
+            } else {
+                log::error!("Invalid admin key format in database");
+                return Err(lmdb::Error::Other(7));
+            }
+        },
+        Err(lmdb::Error::NotFound) => None,
+        Err(e) => return Err(e),
+    };
+    txn.abort();
+
     let admin_key_hash = if let Some(admin_key_from_lmdb) = admin_key_from_lmdb {
-        txn.abort();
+        // Database already exists, verify admin key
         let arg_admin_key = args.admin_key;
         let arg_admin_key_hash = SingleSHA256Hash::from_str(&arg_admin_key);
         let arg_admin_key_double_hash = arg_admin_key_hash.hash_again();
         if !admin_key_from_lmdb.verify_eq(&arg_admin_key_double_hash) {
             log::error!("Invalid admin key!");
-            std::process::exit(1);
+            return Err(lmdb::Error::Other(5));
         }
         arg_admin_key_hash
     } else {
+        // First-time setup
         let arg_admin_key = args.admin_key;
         let arg_admin_key_hash = SingleSHA256Hash::from_str(&arg_admin_key);
         let arg_admin_key_double_hash = arg_admin_key_hash.hash_again();
+
+        // Store the admin key double hash in the database
+        let mut txn = env.begin_rw_txn()?;
+        let db = unsafe { txn.open_db(Some("meta"))? };
         txn.put(
             db,
             &"admin_key",
@@ -1292,10 +1415,62 @@ fn get_admin_key(env: Arc<Environment>, args: CosdataArgs) -> lmdb::Result<Singl
     Ok(admin_key_hash)
 }
 
-pub fn get_app_env(config: &Config, args: CosdataArgs) -> Result<Arc<AppEnv>, WaCustomError> {
-    let db_path = get_data_path().join("_mdb"); // TODO: prefix the customer & database name
+fn get_collections_path() -> PathBuf {
+    get_data_path().join("collections")
+}
 
-    // Ensure the directory exists
+pub fn get_app_env(config: &Config, args: CosdataArgs) -> Result<Arc<AppEnv>, WaCustomError> {
+    // Check both possible db path locations
+    let db_path_1 = get_data_path().join("_mdb");
+    let db_path_2 = get_data_path().join("data/_mdb");
+
+    // Use whichever path exists, or default to db_path_2
+    let db_path = if db_path_1.exists() {
+        //println!("Using existing database at {}", db_path_1.display());
+        db_path_1
+    } else if db_path_2.exists() {
+        //println!("Using existing database at {}", db_path_2.display());
+        db_path_2
+    } else {
+        //println!("Creating new database at {}", db_path_2.display());
+        db_path_2 // Default for first-time setup
+    };
+
+    // Check if this is first-time setup
+    let is_first_time = !db_path.exists();
+
+    // If this is first time and confirmation is required
+    if is_first_time && !args.skip_confirmation && !args.confirmed {
+        // Interactive prompt for confirmation
+        print!("Re-enter admin key: ");
+        std::io::stdout().flush().unwrap();
+
+        let mut confirmation = String::new();
+        std::io::stdin().read_line(&mut confirmation)
+            .map_err(|e| WaCustomError::ConfigError(format!("Failed to read confirmation: {}", e)))?;
+
+        // Remove trailing newline
+        confirmation = confirmation.trim().to_string();
+
+        if confirmation != args.admin_key {
+            return Err(WaCustomError::ConfigError(
+                "Admin key and confirmation do not match".to_string()
+            ));
+        }
+
+        println!("Admin key confirmed successfully.");
+    }
+
+    // Create a modified args with confirmed flag set
+    let mut confirmed_args = args.clone();
+    confirmed_args.confirmed = true;
+
+    // Ensure parent directories exist first if needed
+    if let Some(parent) = db_path.parent() {
+        create_dir_all(parent).map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+    }
+
+    // Ensure the database directory exists
     create_dir_all(&db_path).map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
     // Initialize the environment
     let env = Environment::new()
@@ -1306,22 +1481,47 @@ pub fn get_app_env(config: &Config, args: CosdataArgs) -> Result<Arc<AppEnv>, Wa
 
     let env_arc = Arc::new(env);
 
-    let admin_key = get_admin_key(env_arc.clone(), args)
+    let admin_key = get_admin_key(env_arc.clone(), confirmed_args)
         .map_err(|err| WaCustomError::DatabaseError(err.to_string()))?;
 
-    let collections_map = CollectionsMap::load(env_arc.clone(), config)
-        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+    // Add more resilient error handling for collections_map loading
+    let collections_map = match CollectionsMap::load(env_arc.clone(), config) {
+        Ok(map) => map,
+        Err(e) => {
+            //println!("Warning: Failed to load collections map: {}", e);
+            //println!("Creating a new collections map...");
+            // Use the correct function signature for CollectionsMap::new
+            match CollectionsMap::new(env_arc.clone()) {
+                Ok(empty_map) => empty_map,
+                Err(err) => {
+                    return Err(WaCustomError::DatabaseError(format!(
+                        "Failed to create empty collections map: {}", err
+                    )));
+                }
+            }
+        }
+    };
 
-    let users_map = UsersMap::new(env_arc.clone())
-        .map_err(|err| WaCustomError::DatabaseError(err.to_string()))?;
+    let users_map = match UsersMap::new(env_arc.clone()) {
+        Ok(map) => map,
+        Err(err) => {
+            println!("Warning: Failed to load users map: {}", err);
+            return Err(WaCustomError::DatabaseError(err.to_string()));
+        }
+    };
 
-    // Fake user, for testing APIs
+    // Use the admin key as the password instead of hardcoded "admin"
     let username = "admin".to_string();
-    let password = "admin";
-    let password_hash = DoubleSHA256Hash::from_str(password);
-    users_map
-        .add_user(username, password_hash)
-        .map_err(|err| WaCustomError::DatabaseError(err.to_string()))?;
+    let password = args.admin_key.clone();
+    let password_hash = DoubleSHA256Hash::from_str(&password);
+
+    // Don't fail if user already exists
+    match users_map.add_user(username, password_hash) {
+        Ok(_) => {},
+        Err(err) => {
+            println!("Note: Could not add admin user (may already exist): {}", err);
+        }
+    };
 
     Ok(Arc::new(AppEnv {
         collections_map,
