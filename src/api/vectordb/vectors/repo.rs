@@ -221,7 +221,7 @@ pub(crate) async fn find_similar_sparse_vectors(
             .collect(),
     };
 
-    let interm_results = SparseAnnQueryBasic::new(sparse_vec)
+    let intermediate_results = SparseAnnQueryBasic::new(sparse_vec)
         .sequential_search_tshashmap(
             &inverted_index.root,
             inverted_index.root.root.quantization_bits,
@@ -245,7 +245,7 @@ pub(crate) async fn find_similar_sparse_vectors(
 
     let results = finalize_sparse_ann_results(
         inverted_index,
-        interm_results,
+        intermediate_results,
         &query_vector,
         find_similar_vectors.top_k,
     )
@@ -256,13 +256,13 @@ pub(crate) async fn find_similar_sparse_vectors(
 
 fn finalize_sparse_ann_results(
     inverted_index: Arc<InvertedIndex>,
-    interm_results: Vec<SparseAnnResult>,
+    intermediate_results: Vec<SparseAnnResult>,
     query: &[f32],
     k: Option<usize>,
 ) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
-    let mut results = Vec::with_capacity(k.unwrap_or(interm_results.len()));
+    let mut results = Vec::with_capacity(k.unwrap_or(intermediate_results.len()));
 
-    for result in interm_results {
+    for result in intermediate_results {
         let id = VectorId(result.vector_id as u64);
         let raw = get_sparse_embedding_by_id(inverted_index.clone(), &id)?.into_dense(query.len());
         let dp = dot_product_f32(query, &raw.raw_vec);
