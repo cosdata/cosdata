@@ -178,12 +178,15 @@ impl SparseAnnQueryBasic {
         // 4, 5, 6
         quantization_bits: u8,
         values_upper_bound: f32,
+        search_threshold: f32,
         k: Option<usize>,
     ) -> Result<Vec<SparseAnnResult>, BufIoError> {
         let sparse_query_vector = self.create_sparse_query_vector(index)?;
         let mut dot_products: HashMap<u32, u32> = HashMap::new();
         // same as `0.5` quantized
         let half_quantized = 1u8 << (quantization_bits - 1);
+        let search_threshold_value = ((1u32 << quantization_bits) as f32 * (1.0 - search_threshold))
+            .min(u8::MAX as f32) as u8;
         // same as `1` quantized
         let one_quantized = ((1u32 << quantization_bits) - 1) as u8;
 
@@ -227,7 +230,7 @@ impl SparseAnnQueryBasic {
                         let mut new_ids = HashSet::new();
 
                         // First iterate through the map/list
-                        for key in (half_quantized..=one_quantized).rev() {
+                        for key in (search_threshold_value..=one_quantized).rev() {
                             let mut current_versioned_pagepool = unsafe { &*node.data }
                                 .try_get_data(&index.cache, node.dim_index)?
                                 .map

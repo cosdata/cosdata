@@ -154,6 +154,7 @@ pub async fn init_inverted_index_for_collection(
     collection: &Collection,
     quantization_bits: u8,
     sample_threshold: usize,
+    search_threshold: f32,
 ) -> Result<Arc<InvertedIndex>, WaCustomError> {
     let collection_name = &collection.name;
     let collection_path: Arc<Path> = collection.get_path();
@@ -194,6 +195,7 @@ pub async fn init_inverted_index_for_collection(
         vec_raw_manager,
         quantization_bits,
         sample_threshold,
+        search_threshold,
     )?);
 
     ctx.ain_env

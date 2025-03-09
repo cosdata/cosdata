@@ -1006,6 +1006,7 @@ impl CollectionsMap {
             sampling_data: crate::indexes::inverted_index::SamplingData::default(),
             sample_threshold: inverted_index_data.sample_threshold,
             vec_raw_manager,
+            search_threshold: inverted_index_data.search_threshold,
         };
 
         Ok(inverted_index)

@@ -67,7 +67,13 @@ pub(crate) async fn create_sparse_index(
     _name: String,
     quantization: SparseIndexQuantization,
     sample_threshold: usize,
+    search_threshold: f32,
 ) -> Result<(), IndexesError> {
+    if search_threshold < 0.0 || search_threshold > 1.0 {
+        return Err(IndexesError::FailedToCreateIndex(
+            "Invalid `search_threshold` value (must be between 0.0 and 1.0)".to_string(),
+        ));
+    }
     let collection = ctx
         .ain_env
         .collections_map
@@ -79,6 +85,7 @@ pub(crate) async fn create_sparse_index(
         &collection,
         quantization.into_bits(),
         sample_threshold,
+        search_threshold,
     )
     .await
     .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;

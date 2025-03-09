@@ -226,6 +226,7 @@ pub(crate) async fn find_similar_sparse_vectors(
             &inverted_index.root,
             inverted_index.root.root.quantization_bits,
             *inverted_index.values_upper_bound.read().unwrap(),
+            inverted_index.search_threshold,
             find_similar_vectors.top_k,
         )
         .map_err(|e| VectorsError::FailedToFindSimilarVectors(e.to_string()))?;
