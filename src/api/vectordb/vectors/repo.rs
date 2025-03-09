@@ -1,8 +1,14 @@
 use std::sync::{atomic::Ordering, Arc};
 
 use crate::api_service::run_upload_sparse_vectors_in_transaction;
-use crate::indexes::inverted_index::InvertedIndexTransaction;
+use crate::distance::dotproduct::DotProductDistance;
+use crate::indexes::inverted_index::{InvertedIndex, InvertedIndexTransaction};
+use crate::models::common::WaCustomError;
+use crate::models::dot_product::dot_product_f32;
 use crate::models::rpc::DenseVector;
+use crate::models::types::MetricResult;
+use crate::storage::sparse_ann_query_basic::SparseAnnResult;
+use crate::vector_store::get_sparse_embedding_by_id;
 use crate::{models::types::SparseVector, storage::sparse_ann_query_basic::SparseAnnQueryBasic};
 
 use crate::{
@@ -207,7 +213,7 @@ pub(crate) async fn find_similar_sparse_vectors(
 
     // create a query to get similar sparse vectors
     let sparse_vec = SparseVector {
-        vector_id: find_similar_vectors.id.0 as u32,
+        vector_id: u32::MAX,
         entries: find_similar_vectors
             .values
             .iter()
@@ -215,15 +221,60 @@ pub(crate) async fn find_similar_sparse_vectors(
             .collect(),
     };
 
-    let query = SparseAnnQueryBasic::new(sparse_vec)
+    let interm_results = SparseAnnQueryBasic::new(sparse_vec)
         .sequential_search_tshashmap(
             &inverted_index.root,
             inverted_index.root.root.quantization_bits,
             *inverted_index.values_upper_bound.read().unwrap(),
+            find_similar_vectors.top_k,
         )
         .map_err(|e| VectorsError::FailedToFindSimilarVectors(e.to_string()))?;
 
-    Ok(FindSimilarVectorsResponseDto::Sparse(query))
+    let mut query_vector_values = find_similar_vectors.values;
+
+    query_vector_values.sort_by_key(|p| p.0);
+
+    let mut query_vector = Vec::with_capacity(query_vector_values.last().unwrap().0 as usize + 1);
+
+    for pair in query_vector_values {
+        while query_vector.len() < pair.0 as usize {
+            query_vector.push(0.0);
+        }
+        query_vector.insert(pair.0 as usize, pair.1);
+    }
+
+    let results = finalize_sparse_ann_results(
+        inverted_index,
+        interm_results,
+        &query_vector,
+        find_similar_vectors.top_k,
+    )
+    .map_err(|e| VectorsError::FailedToFindSimilarVectors(e.to_string()))?;
+
+    Ok(FindSimilarVectorsResponseDto::Sparse(results))
+}
+
+fn finalize_sparse_ann_results(
+    inverted_index: Arc<InvertedIndex>,
+    interm_results: Vec<SparseAnnResult>,
+    query: &[f32],
+    k: Option<usize>,
+) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
+    let mut results = Vec::with_capacity(k.unwrap_or(interm_results.len()));
+
+    for result in interm_results {
+        let id = VectorId(result.vector_id as u64);
+        let raw = get_sparse_embedding_by_id(inverted_index.clone(), &id)?.into_dense(query.len());
+        let dp = dot_product_f32(query, &raw.raw_vec);
+        results.push((id, MetricResult::DotProductDistance(DotProductDistance(dp))));
+    }
+
+    results.sort_unstable_by(|(_, a), (_, b)| b.get_value().total_cmp(&a.get_value()));
+    if let Some(k) = k {
+        results.truncate(k);
+    }
+
+    Ok(results)
 }
 
 pub(crate) async fn delete_vector_by_id(

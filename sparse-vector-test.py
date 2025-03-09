@@ -1,40 +1,15 @@
-"""
-Sparse Vector Database Test Script
-
-This script demonstrates and tests the functionality of a sparse vector database system.
-It includes operations for creating a sparse vector index, inserting sparse vectors,
-and querying the index for similar vectors.
-
-Key Features:
-- Generation of random sparse vectors with varying degrees of sparsity
-- Creation of a sparse vector index using a RESTful API
-- Perturbation of sparse vectors to simulate real-world query scenarios
-- Querying the sparse vector index and retrieving similar vectors
-
-The script uses a sparse vector representation where each vector is defined by its
-non-zero indices and corresponding values. This approach is memory-efficient for
-high-dimensional data where most elements are zero. The perturbation logic
-simulates realistic query scenarios by slightly modifying existing vectors,
-allowing for robust testing of the similarity search capabilities.
-
-Usage:
-- Ensure the vector database API is running and accessible
-- Set the appropriate base_url and authentication token
-- Run the script to perform a series of operations including index creation,
-  vector insertion, and similarity querying
-- The script outputs the responses from these operations for verification and testing
-
-Note: This script is intended for testing and demonstration purposes. In a production
-environment, additional error handling, security measures, and optimizations would be necessary.
-"""
-
 import requests
 import json
 import numpy as np
 import time
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib3
 import random
+import pickle
+from tqdm import tqdm
+import heapq
+from pathlib import Path
 
 # Suppress only the single InsecureRequestWarning from urllib3 needed for this script
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -44,10 +19,13 @@ token = None
 host = "http://127.0.0.1:8443"
 base_url = f"{host}/vectordb"
 
+# Filenames for saving data
+DATASET_FILE = "sparse_dataset/vectors.pkl"
+QUERY_VECTORS_FILE = "sparse_dataset/query.pkl"
+BRUTE_FORCE_RESULTS_FILE = "sparse_dataset/brute_force_results.pkl"
 
 def generate_headers():
     return {"Authorization": f"Bearer {token}", "Content-type": "application/json"}
-
 
 # Function to login with credentials
 def create_session():
@@ -61,8 +39,7 @@ def create_session():
     token = session["access_token"]
     return token
 
-
-def create_db(name, description=None, dimension=1024):
+def create_db(name, description=None, dimension=20000):
     url = f"{base_url}/collections"
     data = {
         "name": name,
@@ -81,12 +58,11 @@ def create_db(name, description=None, dimension=1024):
     )
     return response.json()
 
-
 def create_explicit_index(name):
     data = {
         "name": name,  # Name of the index
-        "quantization": 16,
-        "sample_threshold": 1000,
+        "quantization": 64,
+        "sample_threshold": 10,
     }
     response = requests.post(
         f"{base_url}/collections/{name}/indexes/sparse",
@@ -94,51 +70,7 @@ def create_explicit_index(name):
         data=json.dumps(data),
         verify=False,
     )
-
     return response.json()
-
-
-# Function to create sparse vectors in an inverted index
-def create_sparse_vector(vector_db_name, vector):
-    url = f"{base_url}/collections/{vector_db_name}/vectors"
-    data = {"sparse": vector}
-    response = requests.post(
-        url, headers=generate_headers(), data=json.dumps(data), verify=False
-    )
-    return response.json()
-
-
-def upsert_in_transaction(vector_db_name, transaction_id, vectors):
-    url = (
-        f"{base_url}/collections/{vector_db_name}/transactions/{transaction_id}/upsert"
-    )
-    data = {"index_type": "sparse", "vectors": vectors}
-    print(f"Request URL: {url}")
-    print(f"Request Vectors Count: {len(vectors)}")
-    response = requests.post(
-        url, headers=generate_headers(), data=json.dumps(data), verify=False
-    )
-    print(f"Response Status: {response.status_code}")
-    if response.status_code not in [200, 204]:
-        raise Exception(f"Failed to create vector: {response.status_code}")
-
-
-def search_sparse_vector(vector_db_name, vector):
-    url = f"{base_url}/collections/{vector_db_name}/vectors/search"
-    data = {"sparse": vector}
-    response = requests.post(
-        url, headers=generate_headers(), data=json.dumps(data), verify=False
-    )
-    return response.json()
-
-
-def generate_random_sparse_vector(id, dimension, non_zero_dims):
-    return {
-        "id": id,
-        "indices": random.sample(range(dimension), non_zero_dims),
-        "values": np.random.uniform(0.1, 1.0, non_zero_dims).tolist(),
-    }
-
 
 def create_transaction(collection_name):
     url = f"{base_url}/collections/{collection_name}/transactions"
@@ -148,11 +80,17 @@ def create_transaction(collection_name):
     )
     return response.json()
 
+def upsert_in_transaction(vector_db_name, transaction_id, vectors):
+    url = f"{base_url}/collections/{vector_db_name}/transactions/{transaction_id}/upsert"
+    data = {"index_type": "sparse", "vectors": vectors}
+    response = requests.post(
+        url, headers=generate_headers(), data=json.dumps(data), verify=False
+    )
+    if response.status_code not in [200, 204]:
+        raise Exception(f"Failed to create vector: {response.status_code} - {response.text}")
 
 def commit_transaction(collection_name, transaction_id):
-    url = (
-        f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/commit"
-    )
+    url = f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/commit"
     data = {"index_type": "sparse"}
     response = requests.post(
         url, data=json.dumps(data), headers=generate_headers(), verify=False
@@ -162,82 +100,258 @@ def commit_transaction(collection_name, transaction_id):
         raise Exception(f"Failed to commit transaction: {response.status_code}")
     return response.json() if response.text else None
 
-
-def abort_transaction(collection_name, transaction_id):
-    url = (
-        f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/abort"
-    )
-    data = {"index_type": "sparse"}
+def search_sparse_vector(vector_db_name, vector, top_k=10):
+    url = f"{base_url}/collections/{vector_db_name}/vectors/search"
+    data = {
+        "sparse": {
+            "values": vector["values"],
+            "top_k": top_k,
+        },
+    }
     response = requests.post(
-        url, data=json.dumps(data), headers=generate_headers(), verify=False
+        url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
     return response.json()
 
+def generate_random_sparse_vector(id, dimension, non_zero_dims):
+    # Generate a random number of non-zero dimensions between 20 and 100
+    actual_non_zero_dims = random.randint(20, non_zero_dims)
+    
+    # Generate unique indices
+    indices = sorted(random.sample(range(dimension), actual_non_zero_dims))
+    
+    # Generate values between 0 and 2.0
+    values = np.random.uniform(0.0, 2.0, actual_non_zero_dims).tolist()
+    
+    return {
+        "id": id,
+        "indices": indices,
+        "values": values
+    }
 
-if __name__ == "__main__":
-    vector_db_name = "sparse_testdb"
-    max_index = 1000
-    num_vectors = 100_000
-    perturbation_degree = 0.25
-    non_zero_dims = 100
-    dimension = 20_000
-    batch_size = 100
-
-    # first login to get the access token
-    session_response = create_session()
-    print("Session Response:", session_response)
-    create_collection_response = create_db(
-        name=vector_db_name,
-    )
-    print("Create Collection(DB) Response:", create_collection_response)
-    create_explicit_index(vector_db_name)
-
-    print("Generating vectors")
+def generate_dataset(num_vectors, dimension, max_non_zero_dims):
+    """Generate dataset if not already on disk"""
+    if os.path.exists(DATASET_FILE):
+        print(f"Loading existing dataset from {DATASET_FILE}")
+        with open(DATASET_FILE, 'rb') as f:
+            vectors = pickle.load(f)
+        return vectors
+        
+    print(f"Generating {num_vectors} random sparse vectors...")
     vectors = [
-        generate_random_sparse_vector(id, dimension, non_zero_dims)
-        for id in range(num_vectors)
+        generate_random_sparse_vector(id, dimension, max_non_zero_dims)
+        for id in tqdm(range(num_vectors))
     ]
+    
+    # Save to disk
+    with open(DATASET_FILE, 'wb') as f:
+        pickle.dump(vectors, f)
+    
+    print(f"Dataset generated and saved to {DATASET_FILE}")
+    return vectors
+
+def select_query_vectors(vectors, num_queries):
+    """Select random query vectors from the dataset"""
+    if os.path.exists(QUERY_VECTORS_FILE):
+        print(f"Loading existing query vectors from {QUERY_VECTORS_FILE}")
+        with open(QUERY_VECTORS_FILE, 'rb') as f:
+            query_indices = pickle.load(f)
+        return [vectors[i] for i in query_indices]
+    
+    print(f"Selecting {num_queries} random query vectors...")
+    query_indices = random.sample(range(len(vectors)), num_queries)
+    query_vectors = [vectors[i] for i in query_indices]
+    
+    # Save indices to disk
+    with open(QUERY_VECTORS_FILE, 'wb') as f:
+        pickle.dump(query_indices, f)
+    
+    print(f"Query vectors selected and indices saved to {QUERY_VECTORS_FILE}")
+    return query_vectors
+
+def compute_brute_force_results(vectors, query_vectors, dimension, top_k=10):
+    """Compute dot product similarity between query vectors and all vectors"""
+    if os.path.exists(BRUTE_FORCE_RESULTS_FILE):
+        print(f"Loading existing brute force results from {BRUTE_FORCE_RESULTS_FILE}")
+        with open(BRUTE_FORCE_RESULTS_FILE, 'rb') as f:
+            return pickle.load(f)
+    
+    print(f"Computing brute force dot product similarity for {len(query_vectors)} queries...")
+    results = []
+    
+    for query in tqdm(query_vectors):
+        # Create a sparse row vector for the query
+        query_indices = query["indices"]
+        query_values = query["values"]
+
+        dot_products = []
+        for vec in vectors:
+            # Find common indices between query and vector
+            common_indices = list(set(query_indices) & set(vec["indices"]))
+            
+            # Compute dot product only for common indices
+            dot_product = sum(
+                query_values[query_indices.index(idx)] * vec["values"][vec["indices"].index(idx)]
+                for idx in common_indices
+            )
+            
+            dot_products.append(dot_product)
+        
+        # Get top-k results
+        top_indices = heapq.nlargest(top_k, range(len(dot_products)), key=lambda i: dot_products[i])
+        
+        # Filter out the query vector itself (if it's in the top results)
+        top_results = [
+            {"id": vectors[idx]["id"], "score": float(dot_products[idx])}
+            for idx in top_indices
+        ][:top_k]
+        
+        results.append({
+            "query_id": query["id"],
+            "top_results": top_results
+        })
+    
+    # Save to disk
+    with open(BRUTE_FORCE_RESULTS_FILE, 'wb') as f:
+        pickle.dump(results, f)
+    
+    print(f"Brute force results computed and saved to {BRUTE_FORCE_RESULTS_FILE}")
+    return results
+
+def format_for_server_query(vector):
+    """Format a vector for server query"""
+    return {
+        "id": vector["id"],
+        "values": [[ind, val] for ind, val in zip(vector["indices"], vector["values"])]
+    }
+
+def calculate_recall(brute_force_results, server_results, top_k=10):
+    """Calculate recall metrics"""
+    recalls = []
+    
+    for bf_result, server_result in zip(brute_force_results, server_results):
+        bf_ids = set(item["id"] for item in bf_result["top_results"])
+        server_ids = set(item[0] for item in server_result.get("Sparse", []))
+        
+        if not bf_ids:
+            continue  # Skip if brute force found no results
+            
+        intersection = bf_ids.intersection(server_ids)
+        recall = len(intersection) / len(bf_ids)
+        recalls.append(recall)
+        
+    avg_recall = sum(recalls) / len(recalls) if recalls else 0
+    return avg_recall, recalls
+
+def main():
+    vector_db_name = "sparse_eval_db"
+    num_vectors = 100_000
+    dimension = 20_000
+    max_non_zero_dims = 100
+    num_queries = 100
+    batch_size = 100
+    top_k = 10
+
+    Path("sparse_dataset").mkdir(parents=True, exist_ok=True)
+    
+    # Generate or load dataset
+    vectors = generate_dataset(num_vectors, dimension, max_non_zero_dims)
+    
+    # Select query vectors
+    query_vectors = select_query_vectors(vectors, num_queries)
+    
+    # Compute brute force results
+    brute_force_results = compute_brute_force_results(vectors, query_vectors, dimension, top_k)
+    
+    # Login to get access token
+    print("Logging in to server...")
+    create_session()
+    print("Session established")
+    
+    # Create collection
+    try:
+        print(f"Creating collection: {vector_db_name}")
+        create_db(name=vector_db_name, dimension=dimension)
+        print("Collection created")
+        
+        # Create explicit index
+        create_explicit_index(vector_db_name)
+        print("Explicit index created")
+    except Exception as e:
+        print(f"Collection may already exist: {e}")
+    
+    # Insert vectors into server
     print("Creating transaction")
     transaction_id = create_transaction(vector_db_name)["transaction_id"]
-    print("Inserting vectors")
+    
+    print(f"Inserting {num_vectors} vectors in batches of {batch_size}...")
     start = time.time()
+    
     with ThreadPoolExecutor(max_workers=32) as executor:
         futures = []
         for batch_start in range(0, num_vectors, batch_size):
-            batch = vectors[batch_start : batch_start + batch_size]
+            batch = vectors[batch_start: batch_start + batch_size]
             futures.append(
                 executor.submit(
                     upsert_in_transaction, vector_db_name, transaction_id, batch
                 )
             )
-        for i, future in enumerate(as_completed(futures)):
+        
+        for i, future in enumerate(tqdm(as_completed(futures), total=len(futures))):
             try:
                 future.result()
-                print(f"Request {i + 1} completed successfully")
             except Exception as e:
-                print(f"Request {i + 1} failed: {e}")
+                print(f"Batch {i + 1} failed: {e}")
+    
     print("Committing transaction")
     commit_transaction(vector_db_name, transaction_id)
+    
     end = time.time()
     insertion_time = end - start
-
-    print(f"Insertion time: {insertion_time} seconds")
-    search_vector = random.choice(vectors)
-    query = {
-        "id": num_vectors,
-        "values": [
-            [ind, search_vector["values"][i]]
-            for i, ind in enumerate(search_vector["indices"])
-        ],
+    print(f"Insertion time: {insertion_time:.2f} seconds")
+    
+    # Search vectors and compare results
+    print(f"Searching {num_queries} vectors and comparing results...")
+    server_results = []
+    
+    start_search = time.time()
+    for query in tqdm(query_vectors):
+        formatted_query = format_for_server_query(query)
+        try:
+            result = search_sparse_vector(vector_db_name, formatted_query, top_k)
+            server_results.append(result)
+        except Exception as e:
+            print(f"Search failed for query {query['id']}: {e}")
+            server_results.append({"Sparse": []})
+    
+    search_time = time.time() - start_search
+    print(f"Average search time: {search_time / num_queries:.4f} seconds per query")
+    
+    # Calculate and display recall metrics
+    avg_recall, recalls = calculate_recall(brute_force_results, server_results, top_k)
+    
+    print("\n=== Evaluation Results ===")
+    print(f"Average Recall@{top_k}: {avg_recall * 100:.2f}%")
+    print(f"Min Recall: {min(recalls) * 100:.2f}%")
+    print(f"Max Recall: {max(recalls) * 100:.2f}%")
+    
+    # Count perfect recalls
+    perfect_recalls = sum(1 for r in recalls if r == 1.0)
+    print(f"Queries with perfect recall: {perfect_recalls} out of {len(recalls)} ({perfect_recalls / len(recalls) * 100:.2f}%)")
+    
+    # Save detailed results
+    detailed_results = {
+        "avg_recall": avg_recall,
+        "recalls": recalls,
+        "perfect_recalls": perfect_recalls,
+        "insertion_time": insertion_time,
+        "search_time": search_time / num_queries,
     }
-    print("Searching vector:", search_vector["id"])
-    start = time.time()
-    search_res = search_sparse_vector(vector_db_name, query)
-    end = time.time()
-    search_time = end - start
-    print(f"Search time: {search_time} seconds")
-    print(f"Search response:")
-    for i, result in enumerate(search_res["Sparse"]):
-        id = result["vector_id"]
-        sim = result["similarity"]
-        print(f"{i + 1}. {id} ({sim})")
+    
+    with open("sparse_dataset/vector_evaluation_results.pkl", 'wb') as f:
+        pickle.dump(detailed_results, f)
+    
+    print("Detailed results saved to sparse_dataset/vector_evaluation_results.pkl")
+    
+if __name__ == "__main__":
+    main()
