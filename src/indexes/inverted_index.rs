@@ -80,11 +80,13 @@ impl InvertedIndex {
         quantization_bits: u8,
         sample_threshold: usize,
         search_threshold: f32,
+        data_file_parts: u8,
     ) -> Result<Self, BufIoError> {
         let root = Arc::new(InvertedIndexSparseAnnBasicTSHashmap::new(
             root_path,
             quantization_bits,
             current_version,
+            data_file_parts,
         )?);
 
         Ok(Self {

@@ -196,6 +196,7 @@ pub async fn init_inverted_index_for_collection(
         quantization_bits,
         sample_threshold,
         search_threshold,
+        ctx.config.inverted_index_data_file_parts,
     )?);
 
     ctx.ain_env

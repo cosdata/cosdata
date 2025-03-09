@@ -10,7 +10,6 @@ use crate::{
         fixedset::VersionedInvertedFixedSetIndex,
         lazy_load::{largest_power_of_4_below, FileIndex},
         prob_node::ProbNode,
-        serializer::inverted::DATA_FILE_PARTS,
         types::FileOffset,
         versioning::Hash,
     },
@@ -314,7 +313,7 @@ impl ProbLazyItem<InvertedIndexSparseAnnNodeBasicTSHashmapData> {
                 ProbLazyItemState::Ready(state) => Ok(&state.data),
                 ProbLazyItemState::Pending(file_index) => {
                     let offset = file_index.get_offset().unwrap();
-                    (*(cache.get_data(offset, (dim % DATA_FILE_PARTS) as u8)?))
+                    (*(cache.get_data(offset, (dim % cache.data_file_parts as u32) as u8)?))
                         .try_get_data(cache, dim)
                 }
             }
@@ -333,7 +332,7 @@ impl ProbLazyItem<VersionedInvertedFixedSetIndex> {
                 ProbLazyItemState::Ready(state) => Ok(&state.data),
                 ProbLazyItemState::Pending(file_index) => {
                     let offset = file_index.get_offset().unwrap();
-                    (*(cache.get_sets(offset, (dim % DATA_FILE_PARTS) as u8)?))
+                    (*(cache.get_sets(offset, (dim % cache.data_file_parts as u32) as u8)?))
                         .try_get_data(cache, dim)
                 }
             }

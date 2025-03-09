@@ -29,7 +29,7 @@ pub fn create_inverted_index_and_query_vector(
 ) -> (InvertedIndexSparseAnnBasicTSHashmap, SparseVector) {
     let tempdir = tempdir().unwrap();
     let inverted_index =
-        InvertedIndexSparseAnnBasicTSHashmap::new(tempdir.as_ref().to_path_buf(), 6, 0.into())
+        InvertedIndexSparseAnnBasicTSHashmap::new(tempdir.as_ref().to_path_buf(), 6, 0.into(), 8)
             .unwrap();
 
     let mut original_vectors: Vec<SparseVector> =

@@ -16,14 +16,13 @@ use crate::models::{
     types::FileOffset,
 };
 
-pub const DATA_FILE_PARTS: u32 = 8;
-
 pub trait InvertedIndexSerialize: Sized {
     fn serialize(
         &self,
         dim_bufman: &BufferManager,
         data_bufmans: &BufferManagerFactory<u8>,
         data_file_idx: u8,
+        data_file_parts: u8,
         cursor: u64,
     ) -> Result<u32, BufIoError>;
 
@@ -32,6 +31,7 @@ pub trait InvertedIndexSerialize: Sized {
         data_bufmans: &BufferManagerFactory<u8>,
         file_offset: FileOffset,
         data_file_idx: u8,
+        data_file_parts: u8,
         cache: &InvertedIndexCache,
     ) -> Result<Self, BufIoError>;
 }

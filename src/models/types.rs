@@ -994,6 +994,7 @@ impl CollectionsMap {
             root: Arc::new(InvertedIndexSparseAnnBasicTSHashmap::deserialize(
                 index_path,
                 inverted_index_data.quantization_bits,
+                config.inverted_index_data_file_parts,
             )?),
             lmdb,
             current_version: ArcShift::new(current_version),
