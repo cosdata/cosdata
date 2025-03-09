@@ -14,7 +14,7 @@ use crate::{
     },
 };
 
-use super::{InvertedIndexSerialize, DATA_FILE_PARTS};
+use super::InvertedIndexSerialize;
 
 // @SERIALIZED_SIZE:
 //
@@ -33,6 +33,7 @@ impl InvertedIndexSerialize for InvertedIndexSparseAnnNodeBasicTSHashmap {
         dim_bufman: &BufferManager,
         data_bufmans: &BufferManagerFactory<u8>,
         _: u8,
+        data_file_parts: u8,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
         if !self.is_serialized.swap(true, Ordering::AcqRel) {
@@ -43,22 +44,52 @@ impl InvertedIndexSerialize for InvertedIndexSparseAnnNodeBasicTSHashmap {
                 quantization_and_implicit |= 1u8 << 7;
             }
             dim_bufman.update_u8_with_cursor(cursor, quantization_and_implicit)?;
-            let data_file_idx = (self.dim_index % DATA_FILE_PARTS) as u8;
-            self.data
-                .serialize(dim_bufman, data_bufmans, data_file_idx, cursor)?;
-            self.children
-                .serialize(dim_bufman, data_bufmans, data_file_idx, cursor)?;
-            self.fixed_sets
-                .serialize(dim_bufman, data_bufmans, data_file_idx, cursor)?;
+            let data_file_idx = (self.dim_index % data_file_parts as u32) as u8;
+            self.data.serialize(
+                dim_bufman,
+                data_bufmans,
+                data_file_idx,
+                data_file_parts,
+                cursor,
+            )?;
+            self.children.serialize(
+                dim_bufman,
+                data_bufmans,
+                data_file_idx,
+                data_file_parts,
+                cursor,
+            )?;
+            self.fixed_sets.serialize(
+                dim_bufman,
+                data_bufmans,
+                data_file_idx,
+                data_file_parts,
+                cursor,
+            )?;
         } else if self.is_dirty.swap(false, Ordering::AcqRel) {
             dim_bufman.seek_with_cursor(cursor, self.file_offset.0 as u64 + 5)?;
-            let data_file_idx = (self.dim_index % DATA_FILE_PARTS) as u8;
-            self.data
-                .serialize(dim_bufman, data_bufmans, data_file_idx, cursor)?;
-            self.children
-                .serialize(dim_bufman, data_bufmans, data_file_idx, cursor)?;
-            self.fixed_sets
-                .serialize(dim_bufman, data_bufmans, data_file_idx, cursor)?;
+            let data_file_idx = (self.dim_index % data_file_parts as u32) as u8;
+            self.data.serialize(
+                dim_bufman,
+                data_bufmans,
+                data_file_idx,
+                data_file_parts,
+                cursor,
+            )?;
+            self.children.serialize(
+                dim_bufman,
+                data_bufmans,
+                data_file_idx,
+                data_file_parts,
+                cursor,
+            )?;
+            self.fixed_sets.serialize(
+                dim_bufman,
+                data_bufmans,
+                data_file_idx,
+                data_file_parts,
+                cursor,
+            )?;
         };
         Ok(self.file_offset.0)
     }
@@ -68,6 +99,7 @@ impl InvertedIndexSerialize for InvertedIndexSparseAnnNodeBasicTSHashmap {
         data_bufmans: &BufferManagerFactory<u8>,
         file_offset: FileOffset,
         _: u8,
+        data_file_parts: u8,
         cache: &InvertedIndexCache,
     ) -> Result<Self, BufIoError> {
         let cursor = dim_bufman.open_cursor()?;
@@ -78,12 +110,13 @@ impl InvertedIndexSerialize for InvertedIndexSparseAnnNodeBasicTSHashmap {
         let quantization_bits = (quantization_and_implicit << 1) >> 1;
         let qb = quantization_bits as u32;
         let qv = 1u32 << qb;
-        let data_file_idx = (dim_index % DATA_FILE_PARTS) as u8;
+        let data_file_idx = (dim_index % data_file_parts as u32) as u8;
         let data = <*mut ProbLazyItem<InvertedIndexSparseAnnNodeBasicTSHashmapData>>::deserialize(
             dim_bufman,
             data_bufmans,
             FileOffset(file_offset.0 + 5),
             data_file_idx,
+            data_file_parts,
             cache,
         )?;
         let children = AtomicArray::deserialize(
@@ -91,6 +124,7 @@ impl InvertedIndexSerialize for InvertedIndexSparseAnnNodeBasicTSHashmap {
             data_bufmans,
             FileOffset(file_offset.0 + 5 + qv * 4),
             data_file_idx,
+            data_file_parts,
             cache,
         )?;
         let fixed_sets = <*mut ProbLazyItem<VersionedInvertedFixedSetIndex>>::deserialize(
@@ -98,6 +132,7 @@ impl InvertedIndexSerialize for InvertedIndexSparseAnnNodeBasicTSHashmap {
             data_bufmans,
             FileOffset(file_offset.0 + 69 + qv * 4),
             data_file_idx,
+            data_file_parts,
             cache,
         )?;
 

@@ -67,7 +67,13 @@ pub(crate) async fn create_sparse_index(
     _name: String,
     quantization: SparseIndexQuantization,
     sample_threshold: usize,
+    early_terminate_threshold: f32,
 ) -> Result<(), IndexesError> {
+    if early_terminate_threshold < 0.0 || early_terminate_threshold > 1.0 {
+        return Err(IndexesError::FailedToCreateIndex(
+            "Invalid `early_terminate_threshold` value (must be between 0.0 and 1.0)".to_string(),
+        ));
+    }
     let collection = ctx
         .ain_env
         .collections_map
@@ -79,6 +85,7 @@ pub(crate) async fn create_sparse_index(
         &collection,
         quantization.into_bits(),
         sample_threshold,
+        early_terminate_threshold,
     )
     .await
     .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;

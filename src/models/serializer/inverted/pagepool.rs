@@ -15,6 +15,7 @@ impl<const LEN: usize> InvertedIndexSerialize for Pagepool<LEN> {
         dim_bufman: &BufferManager,
         data_bufmans: &BufferManagerFactory<u8>,
         data_file_idx: u8,
+        data_file_parts: u8,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
         let total_items = self.inner.len();
@@ -23,13 +24,24 @@ impl<const LEN: usize> InvertedIndexSerialize for Pagepool<LEN> {
         }
         let bufman = data_bufmans.get(data_file_idx)?;
 
-        let start_offset =
-            self.inner[0].serialize(dim_bufman, data_bufmans, data_file_idx, cursor)?;
+        let start_offset = self.inner[0].serialize(
+            dim_bufman,
+            data_bufmans,
+            data_file_idx,
+            data_file_parts,
+            cursor,
+        )?;
 
         let mut prev_offset = start_offset;
 
         for item in self.inner.iter().skip(1) {
-            let new_offset = item.serialize(dim_bufman, data_bufmans, data_file_idx, cursor)?;
+            let new_offset = item.serialize(
+                dim_bufman,
+                data_bufmans,
+                data_file_idx,
+                data_file_parts,
+                cursor,
+            )?;
             bufman.seek_with_cursor(cursor, prev_offset as u64)?;
             bufman.update_u32_with_cursor(cursor, new_offset)?;
             prev_offset = new_offset;
@@ -43,6 +55,7 @@ impl<const LEN: usize> InvertedIndexSerialize for Pagepool<LEN> {
         data_bufmans: &BufferManagerFactory<u8>,
         file_offset: FileOffset,
         data_file_idx: u8,
+        data_file_parts: u8,
         cache: &InvertedIndexCache,
     ) -> Result<Self, BufIoError> {
         if file_offset.0 == u32::MAX {
@@ -62,6 +75,7 @@ impl<const LEN: usize> InvertedIndexSerialize for Pagepool<LEN> {
                 data_bufmans,
                 FileOffset(current_page_offset),
                 data_file_idx,
+                data_file_parts,
                 cache,
             )?;
             page_pool.inner.push(page);

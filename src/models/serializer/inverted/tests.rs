@@ -25,7 +25,7 @@ fn get_cache(
     dim_bufman: Arc<BufferManager>,
     data_bufmans: Arc<BufferManagerFactory<u8>>,
 ) -> Arc<InvertedIndexCache> {
-    Arc::new(InvertedIndexCache::new(dim_bufman, data_bufmans))
+    Arc::new(InvertedIndexCache::new(dim_bufman, data_bufmans, 8))
 }
 
 fn setup_test(
@@ -140,13 +140,13 @@ fn test_pagepool_serialization() {
     let (dim_bufman, data_bufmans, cache, data_bufman, _dim_cursor, data_cursor, _temp_dir) =
         setup_test(0);
     let offset = page_pool
-        .serialize(&dim_bufman, &data_bufmans, 0, data_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
         .unwrap();
 
     data_bufman.close_cursor(data_cursor).unwrap();
 
     let deserialized =
-        Pagepool::<10>::deserialize(&dim_bufman, &data_bufmans, FileOffset(offset), 0, &cache)
+        Pagepool::<10>::deserialize(&dim_bufman, &data_bufmans, FileOffset(offset), 0, 8, &cache)
             .unwrap();
 
     assert_eq!(page_pool, deserialized);
@@ -160,18 +160,18 @@ fn test_pagepool_incremental_serialization() {
     let (dim_bufman, data_bufmans, cache, data_bufman, _dim_cursor, data_cursor, _temp_dir) =
         setup_test(0);
     let _offset = page_pool
-        .serialize(&dim_bufman, &data_bufmans, 0, data_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
         .unwrap();
 
     add_random_items_to_pagepool(&mut rng, &mut page_pool, 100);
 
     let offset = page_pool
-        .serialize(&dim_bufman, &data_bufmans, 0, data_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
         .unwrap();
     data_bufman.close_cursor(data_cursor).unwrap();
 
     let deserialized =
-        Pagepool::<10>::deserialize(&dim_bufman, &data_bufmans, FileOffset(offset), 0, &cache)
+        Pagepool::<10>::deserialize(&dim_bufman, &data_bufmans, FileOffset(offset), 0, 8, &cache)
             .unwrap();
 
     assert_eq!(page_pool, deserialized);
@@ -185,7 +185,7 @@ fn test_versioned_pagepool_serialization() {
     let (dim_bufman, data_bufmans, cache, data_bufman, _dim_cursor, data_cursor, _temp_dir) =
         setup_test(0);
     let offset = page_pool
-        .serialize(&dim_bufman, &data_bufmans, 0, data_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
         .unwrap();
 
     data_bufman.close_cursor(data_cursor).unwrap();
@@ -195,6 +195,7 @@ fn test_versioned_pagepool_serialization() {
         &data_bufmans,
         FileOffset(offset),
         0,
+        8,
         &cache,
     )
     .unwrap();
@@ -210,13 +211,13 @@ fn test_versioned_pagepool_incremental_serialization() {
     let (dim_bufman, data_bufmans, cache, data_bufman, _dim_cursor, data_cursor, _temp_dir) =
         setup_test(0);
     let _offset = page_pool
-        .serialize(&dim_bufman, &data_bufmans, 0, data_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
         .unwrap();
 
     add_random_items_to_versioned_pagepool(&mut rng, &mut page_pool, 100, 0.into());
 
     let offset = page_pool
-        .serialize(&dim_bufman, &data_bufmans, 0, data_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
         .unwrap();
     data_bufman.close_cursor(data_cursor).unwrap();
 
@@ -225,6 +226,7 @@ fn test_versioned_pagepool_incremental_serialization() {
         &data_bufmans,
         FileOffset(offset),
         0,
+        8,
         &cache,
     )
     .unwrap();
@@ -240,25 +242,25 @@ fn test_versioned_pagepool_incremental_serialization2() {
     let (dim_bufman, data_bufmans, cache, data_bufman, _dim_cursor, data_cursor, _temp_dir) =
         setup_test(0);
     let _offset = page_pool
-        .serialize(&dim_bufman, &data_bufmans, 0, data_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
         .unwrap();
 
     add_random_items_to_versioned_pagepool(&mut rng, &mut page_pool, 100, 0.into());
 
     let _offset = page_pool
-        .serialize(&dim_bufman, &data_bufmans, 0, data_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
         .unwrap();
 
     add_random_items_to_versioned_pagepool(&mut rng, &mut page_pool, 100, 1.into());
 
     let _offset = page_pool
-        .serialize(&dim_bufman, &data_bufmans, 0, data_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
         .unwrap();
 
     add_random_items_to_versioned_pagepool(&mut rng, &mut page_pool, 100, 1.into());
 
     let offset = page_pool
-        .serialize(&dim_bufman, &data_bufmans, 0, data_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
         .unwrap();
     data_bufman.close_cursor(data_cursor).unwrap();
 
@@ -267,6 +269,7 @@ fn test_versioned_pagepool_incremental_serialization2() {
         &data_bufmans,
         FileOffset(offset),
         0,
+        8,
         &cache,
     )
     .unwrap();
@@ -290,7 +293,7 @@ fn test_inverted_index_data_serialization() {
         setup_test(0);
     dim_bufman.update_u8_with_cursor(dim_cursor, 6).unwrap();
     let offset = table
-        .serialize(&dim_bufman, &data_bufmans, 0, dim_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, dim_cursor)
         .unwrap();
     dim_bufman.close_cursor(dim_cursor).unwrap();
 
@@ -299,6 +302,7 @@ fn test_inverted_index_data_serialization() {
         &data_bufmans,
         FileOffset(offset),
         0,
+        8,
         &cache,
     )
     .unwrap();
@@ -329,7 +333,7 @@ fn test_inverted_index_data_incremental_serialization_with_updated_values() {
         setup_test(0.into());
     dim_bufman.update_u8_with_cursor(dim_cursor, 6).unwrap();
     let offset = table
-        .serialize(&dim_bufman, &data_bufmans, 0, dim_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, dim_cursor)
         .unwrap();
 
     for i in (0..32).map(|x| x * 2) {
@@ -343,7 +347,7 @@ fn test_inverted_index_data_incremental_serialization_with_updated_values() {
         .seek_with_cursor(dim_cursor, offset as u64)
         .unwrap();
     let offset = table
-        .serialize(&dim_bufman, &data_bufmans, 0, dim_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, dim_cursor)
         .unwrap();
     dim_bufman.close_cursor(dim_cursor).unwrap();
 
@@ -352,6 +356,7 @@ fn test_inverted_index_data_incremental_serialization_with_updated_values() {
         &data_bufmans,
         FileOffset(offset),
         0,
+        8,
         &cache,
     )
     .unwrap();
@@ -382,7 +387,7 @@ fn test_inverted_index_data_incremental_serialization_with_new_entries() {
         setup_test(0.into());
     dim_bufman.update_u8_with_cursor(dim_cursor, 6).unwrap();
     let offset = table
-        .serialize(&dim_bufman, &data_bufmans, 0, dim_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, dim_cursor)
         .unwrap();
 
     for i in (0..32).map(|x| (x * 2) + 1) {
@@ -394,7 +399,7 @@ fn test_inverted_index_data_incremental_serialization_with_new_entries() {
         .seek_with_cursor(dim_cursor, offset as u64)
         .unwrap();
     let offset = table
-        .serialize(&dim_bufman, &data_bufmans, 0, dim_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, dim_cursor)
         .unwrap();
     dim_bufman.close_cursor(dim_cursor).unwrap();
 
@@ -403,6 +408,7 @@ fn test_inverted_index_data_incremental_serialization_with_new_entries() {
         &data_bufmans,
         FileOffset(offset),
         0,
+        8,
         &cache,
     )
     .unwrap();
@@ -425,7 +431,7 @@ fn test_fixedset_serialization() {
     let sets = get_random_versioned_fixedset_index(&mut rng, 0.into());
 
     let offset = sets
-        .serialize(&dim_bufman, &data_bufmans, 0, data_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
         .unwrap();
 
     data_bufman.close_cursor(dim_cursor).unwrap();
@@ -435,6 +441,7 @@ fn test_fixedset_serialization() {
         &data_bufmans,
         FileOffset(offset),
         0,
+        8,
         &cache,
     )
     .unwrap();
@@ -450,7 +457,7 @@ fn test_fixedset_incremental_serialization() {
     let sets = get_random_versioned_fixedset_index(&mut rng, 0.into());
 
     let offset = sets
-        .serialize(&dim_bufman, &data_bufmans, 0, data_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
         .unwrap();
 
     add_random_items_to_versioned_fixedset_index(&mut rng, &sets, 20, 0.into());
@@ -460,7 +467,7 @@ fn test_fixedset_incremental_serialization() {
         .unwrap();
 
     let offset = sets
-        .serialize(&dim_bufman, &data_bufmans, 0, data_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
         .unwrap();
 
     data_bufman.close_cursor(data_cursor).unwrap();
@@ -470,6 +477,7 @@ fn test_fixedset_incremental_serialization() {
         &data_bufmans,
         FileOffset(offset),
         0,
+        8,
         &cache,
     )
     .unwrap();
@@ -485,7 +493,7 @@ fn test_fixedset_incremental_serialization_with_multiple_versions() {
     let sets = get_random_versioned_fixedset_index(&mut rng, 0.into());
 
     let offset = sets
-        .serialize(&dim_bufman, &data_bufmans, 0, data_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
         .unwrap();
 
     add_random_items_to_versioned_fixedset_index(&mut rng, &sets, 20, 0.into());
@@ -495,7 +503,7 @@ fn test_fixedset_incremental_serialization_with_multiple_versions() {
         .unwrap();
 
     let offset = sets
-        .serialize(&dim_bufman, &data_bufmans, 0, data_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
         .unwrap();
 
     add_random_items_to_versioned_fixedset_index(&mut rng, &sets, 20, 1.into());
@@ -505,7 +513,7 @@ fn test_fixedset_incremental_serialization_with_multiple_versions() {
         .unwrap();
 
     let offset = sets
-        .serialize(&dim_bufman, &data_bufmans, 0, data_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
         .unwrap();
 
     add_random_items_to_versioned_fixedset_index(&mut rng, &sets, 20, 1.into());
@@ -515,7 +523,7 @@ fn test_fixedset_incremental_serialization_with_multiple_versions() {
         .unwrap();
 
     let offset = sets
-        .serialize(&dim_bufman, &data_bufmans, 0, data_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
         .unwrap();
 
     data_bufman.close_cursor(data_cursor).unwrap();
@@ -525,6 +533,7 @@ fn test_fixedset_incremental_serialization_with_multiple_versions() {
         &data_bufmans,
         FileOffset(offset),
         0,
+        8,
         &cache,
     )
     .unwrap();
@@ -553,7 +562,7 @@ fn test_inverted_index_node_serialization() {
     }
 
     let offset = inverted_index_node
-        .serialize(&dim_bufman, &data_bufmans, 0, dim_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, dim_cursor)
         .unwrap();
 
     dim_bufman.close_cursor(dim_cursor).unwrap();
@@ -563,6 +572,7 @@ fn test_inverted_index_node_serialization() {
         &data_bufmans,
         FileOffset(offset),
         0,
+        8,
         &cache,
     )
     .unwrap();
@@ -591,7 +601,7 @@ fn test_inverted_index_node_incremental_serialization() {
     }
 
     let _offset = inverted_index_node
-        .serialize(&dim_bufman, &data_bufmans, 0, dim_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, dim_cursor)
         .unwrap();
 
     for _ in 0..300 {
@@ -607,7 +617,7 @@ fn test_inverted_index_node_incremental_serialization() {
     }
 
     let offset = inverted_index_node
-        .serialize(&dim_bufman, &data_bufmans, 0, dim_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, dim_cursor)
         .unwrap();
 
     dim_bufman.close_cursor(dim_cursor).unwrap();
@@ -617,6 +627,7 @@ fn test_inverted_index_node_incremental_serialization() {
         &data_bufmans,
         FileOffset(offset),
         0,
+        8,
         &cache,
     )
     .unwrap();
@@ -645,7 +656,7 @@ fn test_inverted_index_node_incremental_serialization_with_multiple_versions() {
     }
 
     let _offset = inverted_index_node
-        .serialize(&dim_bufman, &data_bufmans, 0, dim_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, dim_cursor)
         .unwrap();
 
     for _ in 0..300 {
@@ -661,7 +672,7 @@ fn test_inverted_index_node_incremental_serialization_with_multiple_versions() {
     }
 
     let _offset = inverted_index_node
-        .serialize(&dim_bufman, &data_bufmans, 0, dim_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, dim_cursor)
         .unwrap();
 
     for _ in 0..300 {
@@ -677,7 +688,7 @@ fn test_inverted_index_node_incremental_serialization_with_multiple_versions() {
     }
 
     let _offset = inverted_index_node
-        .serialize(&dim_bufman, &data_bufmans, 0, dim_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, dim_cursor)
         .unwrap();
 
     for _ in 0..300 {
@@ -693,7 +704,7 @@ fn test_inverted_index_node_incremental_serialization_with_multiple_versions() {
     }
 
     let offset = inverted_index_node
-        .serialize(&dim_bufman, &data_bufmans, 0, dim_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, dim_cursor)
         .unwrap();
 
     dim_bufman.close_cursor(dim_cursor).unwrap();
@@ -703,6 +714,7 @@ fn test_inverted_index_node_incremental_serialization_with_multiple_versions() {
         &data_bufmans,
         FileOffset(offset),
         0,
+        8,
         &cache,
     )
     .unwrap();
@@ -715,7 +727,8 @@ fn test_inverted_index_serialization() {
     let temp_dir = tempdir().unwrap();
     let mut rng = rand::thread_rng();
     let inverted_index =
-        InvertedIndexSparseAnnBasicTSHashmap::new(temp_dir.as_ref().into(), 6, 0.into()).unwrap();
+        InvertedIndexSparseAnnBasicTSHashmap::new(temp_dir.as_ref().into(), 6, 0.into(), 8)
+            .unwrap();
 
     for _ in 0..100000 {
         inverted_index
@@ -734,7 +747,7 @@ fn test_inverted_index_serialization() {
     inverted_index.cache.data_bufmans.flush_all().unwrap();
 
     let deserialized =
-        InvertedIndexSparseAnnBasicTSHashmap::deserialize(temp_dir.as_ref().into(), 6).unwrap();
+        InvertedIndexSparseAnnBasicTSHashmap::deserialize(temp_dir.as_ref().into(), 6, 8).unwrap();
 
     assert_eq!(inverted_index, deserialized);
 }
@@ -744,7 +757,8 @@ fn test_inverted_index_incremental_serialization() {
     let temp_dir = tempdir().unwrap();
     let mut rng = rand::thread_rng();
     let inverted_index =
-        InvertedIndexSparseAnnBasicTSHashmap::new(temp_dir.as_ref().into(), 6, 0.into()).unwrap();
+        InvertedIndexSparseAnnBasicTSHashmap::new(temp_dir.as_ref().into(), 6, 0.into(), 8)
+            .unwrap();
 
     for _ in 0..100000 {
         inverted_index
@@ -777,7 +791,7 @@ fn test_inverted_index_incremental_serialization() {
     inverted_index.cache.data_bufmans.flush_all().unwrap();
 
     let deserialized =
-        InvertedIndexSparseAnnBasicTSHashmap::deserialize(temp_dir.as_ref().into(), 6).unwrap();
+        InvertedIndexSparseAnnBasicTSHashmap::deserialize(temp_dir.as_ref().into(), 6, 8).unwrap();
 
     assert_eq!(inverted_index, deserialized);
 }
@@ -787,7 +801,8 @@ fn test_inverted_index_incremental_serialization_with_multiple_versions() {
     let temp_dir = tempdir().unwrap();
     let mut rng = rand::thread_rng();
     let inverted_index =
-        InvertedIndexSparseAnnBasicTSHashmap::new(temp_dir.as_ref().into(), 6, 0.into()).unwrap();
+        InvertedIndexSparseAnnBasicTSHashmap::new(temp_dir.as_ref().into(), 6, 0.into(), 8)
+            .unwrap();
 
     for _ in 0..100000 {
         inverted_index
@@ -876,7 +891,7 @@ fn test_inverted_index_incremental_serialization_with_multiple_versions() {
     inverted_index.cache.data_bufmans.flush_all().unwrap();
 
     let deserialized =
-        InvertedIndexSparseAnnBasicTSHashmap::deserialize(temp_dir.as_ref().into(), 6).unwrap();
+        InvertedIndexSparseAnnBasicTSHashmap::deserialize(temp_dir.as_ref().into(), 6, 8).unwrap();
 
     assert_eq!(inverted_index, deserialized);
 }
