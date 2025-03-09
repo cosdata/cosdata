@@ -179,6 +179,7 @@ impl SparseAnnQueryBasic {
         quantization_bits: u8,
         values_upper_bound: f32,
         search_threshold: f32,
+        reranking_factor: usize,
         k: Option<usize>,
     ) -> Result<Vec<SparseAnnResult>, BufIoError> {
         let sparse_query_vector = self.create_sparse_query_vector(index)?;
@@ -297,7 +298,8 @@ impl SparseAnnQueryBasic {
         }
 
         // Create a min-heap to keep track of the top K results
-        let mut heap = BinaryHeap::with_capacity(k.map_or(dot_products.len(), |k| k * 100) + 1);
+        let mut heap =
+            BinaryHeap::with_capacity(k.map_or(dot_products.len(), |k| k * reranking_factor) + 1);
 
         // Process the dot products and maintain the top K results
         for (vector_id, similarity) in dot_products.into_iter() {
@@ -306,7 +308,7 @@ impl SparseAnnQueryBasic {
                 similarity,
             });
             if let Some(k) = k {
-                if heap.len() > k * 100 {
+                if heap.len() > k * reranking_factor {
                     heap.pop();
                 }
             }
