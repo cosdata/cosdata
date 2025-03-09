@@ -59,7 +59,7 @@ pub struct InvertedIndex {
     pub vectors_collected: AtomicUsize,
     pub sample_threshold: usize,
     pub vec_raw_manager: Arc<BufferManagerFactory<Hash>>,
-    pub search_threshold: f32,
+    pub early_terminate_threshold: f32,
 }
 
 unsafe impl Send for InvertedIndex {}
@@ -79,7 +79,7 @@ impl InvertedIndex {
         vec_raw_manager: Arc<BufferManagerFactory<Hash>>,
         quantization_bits: u8,
         sample_threshold: usize,
-        search_threshold: f32,
+        early_terminate_threshold: f32,
         data_file_parts: u8,
     ) -> Result<Self, BufIoError> {
         let root = Arc::new(InvertedIndexSparseAnnBasicTSHashmap::new(
@@ -107,7 +107,7 @@ impl InvertedIndex {
             vectors_collected: AtomicUsize::new(0),
             sample_threshold,
             vec_raw_manager,
-            search_threshold,
+            early_terminate_threshold,
         })
     }
 
