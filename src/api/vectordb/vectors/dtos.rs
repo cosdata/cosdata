@@ -1,6 +1,8 @@
 use std::fmt;
 
-use crate::{metadata::MetadataFields, storage::sparse_ann_query_basic::SparseAnnResult};
+use crate::metadata::MetadataFields;
+use crate::models::types::MetricResult;
+
 use serde::{
     de::{self, Visitor},
     Deserialize, Deserializer, Serialize,
@@ -129,7 +131,7 @@ pub(crate) struct FindSimilarDenseVectorsDto {
 #[derive(Deserialize, Debug)]
 pub(crate) struct FindSimilarSparseVectorsDto {
     pub values: Vec<SparsePair>,
-    pub id: VectorId,
+    pub top_k: Option<usize>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -148,7 +150,7 @@ pub(crate) struct SimilarVector {
 #[derive(Serialize)]
 pub(crate) enum FindSimilarVectorsResponseDto {
     Dense(Vec<SimilarVector>),
-    Sparse(Vec<SparseAnnResult>),
+    Sparse(Vec<(VectorId, MetricResult)>),
 }
 
 #[derive(Deserialize)]

@@ -3,8 +3,8 @@ use std::sync::Arc;
 use crate::{
     app_context::AppContext,
     indexes::inverted_index::InvertedIndex,
-    models::{collection::Collection, types::DenseIndex},
     models::common::WaCustomError,
+    models::{collection::Collection, types::DenseIndex},
 };
 
 use super::{

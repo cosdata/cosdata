@@ -33,7 +33,7 @@ pub(crate) async fn create_session(
 
     let (access_token, timestamp) = crypto::create_session(
         &create_session_dto.username,
-        &ctx.ain_env.server_key,
+        &ctx.ain_env.admin_key,
         &password_hash,
     );
 

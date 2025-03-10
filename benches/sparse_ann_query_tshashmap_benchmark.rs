@@ -13,10 +13,11 @@ use cosdata::{
         sparse_ann_query_basic::SparseAnnQueryBasic,
     },
 };
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 
 use rand::Rng;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use tempfile::tempdir;
 
 const NUM_OF_VECTORS: usize = 100000; // Each of these will be used to create 100 more perturbed vectors
 const NUM_OF_DIMENSIONS: usize = 50000;
@@ -26,7 +27,10 @@ pub fn create_inverted_index_and_query_vector(
     num_dimensions: usize,
     num_vectors: usize,
 ) -> (InvertedIndexSparseAnnBasicTSHashmap, SparseVector) {
-    let inverted_index = InvertedIndexSparseAnnBasicTSHashmap::new();
+    let tempdir = tempdir().unwrap();
+    let inverted_index =
+        InvertedIndexSparseAnnBasicTSHashmap::new(tempdir.as_ref().to_path_buf(), 6, 0.into(), 8)
+            .unwrap();
 
     let mut original_vectors: Vec<SparseVector> =
         bench_common::generate_random_sparse_vectors(num_vectors as usize, num_dimensions as usize);
@@ -49,7 +53,7 @@ pub fn create_inverted_index_and_query_vector(
                     println!("Time elapsed : {:?} secs", now.elapsed().as_secs_f32());
                 }
                 inverted_index
-                    .add_sparse_vector(x)
+                    .add_sparse_vector(x, 0.into(), 5.0)
                     .unwrap_or_else(|e| println!("Error : {:?}", e));
             }
         });
@@ -125,7 +129,11 @@ fn sparse_ann_query_tshashmap_benchmark(c: &mut Criterion) {
         ),
         |b| {
             b.iter(|| {
-                let _res = sparse_ann_query_basic.sequential_search_tshashmap(&inverted_index);
+                let _res = black_box(
+                    sparse_ann_query_basic
+                        .sequential_search_tshashmap(&inverted_index, 6, 5.0, 0.5, 100, Some(10))
+                        .unwrap(),
+                );
             });
         },
     );

@@ -1,27 +1,33 @@
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::{
+    fmt::Debug,
+    sync::atomic::{AtomicPtr, Ordering},
+};
 
-use crate::models::{
-    buffered_io::BufIoError,
-    cache_loader::{ProbCache, ProbCacheable},
-    lazy_load::{largest_power_of_4_below, FileIndex, SyncPersist},
-    prob_node::ProbNode,
-    serializer::prob::ProbSerialize,
-    types::FileOffset,
-    versioning::Hash,
+use crate::{
+    models::{
+        buffered_io::BufIoError,
+        cache_loader::{DenseIndexCache, InvertedIndexCache},
+        fixedset::VersionedInvertedFixedSetIndex,
+        lazy_load::{largest_power_of_4_below, FileIndex},
+        prob_node::ProbNode,
+        types::FileOffset,
+        versioning::Hash,
+    },
+    storage::inverted_index_sparse_ann_basic::InvertedIndexSparseAnnNodeBasicTSHashmapData,
 };
 
 use super::lazy_item_array::ProbLazyItemArray;
 
+#[derive(PartialEq, Debug)]
 pub struct ReadyState<T> {
     pub data: T,
     pub file_offset: FileOffset,
-    pub is_serialized: AtomicBool,
-    pub persist_flag: AtomicBool,
     pub version_id: Hash,
     pub version_number: u16,
 }
 
 // not cloneable
+#[derive(PartialEq, Debug)]
 pub enum ProbLazyItemState<T> {
     Ready(ReadyState<T>),
     Pending(FileIndex),
@@ -48,6 +54,24 @@ pub struct ProbLazyItem<T> {
     pub is_level_0: bool,
 }
 
+impl<T: PartialEq> PartialEq for ProbLazyItem<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.is_level_0 == other.is_level_0
+            && unsafe {
+                *self.state.load(Ordering::Relaxed) == *other.state.load(Ordering::Relaxed)
+            }
+    }
+}
+
+impl<T: Debug> Debug for ProbLazyItem<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProbLazyItem")
+            .field("state", unsafe { &*self.state.load(Ordering::Relaxed) })
+            .field("is_level_0", &self.is_level_0)
+            .finish()
+    }
+}
+
 impl<T> ProbLazyItem<T> {
     pub fn new(
         data: T,
@@ -61,8 +85,6 @@ impl<T> ProbLazyItem<T> {
                 ReadyState {
                     data,
                     file_offset,
-                    is_serialized: AtomicBool::new(false),
-                    persist_flag: AtomicBool::new(true),
                     version_id,
                     version_number,
                 },
@@ -141,26 +163,32 @@ impl<T> ProbLazyItem<T> {
             }
         }
     }
-}
 
-impl<T: ProbSerialize + ProbCacheable> ProbLazyItem<T> {
-    pub fn try_get_data<'a>(&self, cache: &ProbCache) -> Result<&'a T, BufIoError> {
-        unsafe {
-            match &*self.state.load(Ordering::Relaxed) {
-                ProbLazyItemState::Ready(state) => Ok(&state.data),
-                ProbLazyItemState::Pending(file_index) => {
-                    (&*(cache.get_object(file_index.clone(), self.is_level_0)?)).try_get_data(cache)
-                }
-            }
-        }
+    pub fn get_current_version_id(&self) -> Hash {
+        unsafe { (*self.state.load(Ordering::Acquire)).get_version_id() }
+    }
+
+    pub fn get_current_version_number(&self) -> u16 {
+        unsafe { (*self.state.load(Ordering::Acquire)).get_version_number() }
     }
 }
 
 impl ProbLazyItem<ProbNode> {
+    pub fn try_get_data<'a>(&self, cache: &DenseIndexCache) -> Result<&'a ProbNode, BufIoError> {
+        unsafe {
+            match &*self.state.load(Ordering::Relaxed) {
+                ProbLazyItemState::Ready(state) => Ok(&state.data),
+                ProbLazyItemState::Pending(file_index) => {
+                    (*(cache.get_object(file_index.clone(), self.is_level_0)?)).try_get_data(cache)
+                }
+            }
+        }
+    }
+
     pub fn add_version(
         this: *mut Self,
         version: *mut Self,
-        cache: &ProbCache,
+        cache: &DenseIndexCache,
     ) -> Result<Result<*mut Self, *mut Self>, BufIoError> {
         let data = unsafe { &*this }.try_get_data(cache)?;
         let versions = &data.versions;
@@ -179,7 +207,7 @@ impl ProbLazyItem<ProbNode> {
         version: *mut Self,
         self_relative_version_number: u16,
         target_relative_version_number: u16,
-        cache: &ProbCache,
+        cache: &DenseIndexCache,
     ) -> Result<Result<*mut Self, *mut Self>, BufIoError> {
         let target_diff = target_relative_version_number - self_relative_version_number;
         if target_diff == 0 {
@@ -206,7 +234,7 @@ impl ProbLazyItem<ProbNode> {
 
     pub fn get_latest_version(
         this: *mut Self,
-        cache: &ProbCache,
+        cache: &DenseIndexCache,
     ) -> Result<(*mut Self, u16), BufIoError> {
         let data = unsafe { &*this }.try_get_data(cache)?;
         let versions = &data.versions;
@@ -217,7 +245,7 @@ impl ProbLazyItem<ProbNode> {
     fn get_latest_version_inner<const LEN: usize>(
         this: *mut Self,
         versions: &ProbLazyItemArray<ProbNode, LEN>,
-        cache: &ProbCache,
+        cache: &DenseIndexCache,
     ) -> Result<(*mut Self, u16), BufIoError> {
         if let Some(last) = versions.last() {
             let (latest_version, relative_local_version_number) =
@@ -231,7 +259,10 @@ impl ProbLazyItem<ProbNode> {
         }
     }
 
-    pub fn get_root_version(this: *mut Self, cache: &ProbCache) -> Result<*mut Self, BufIoError> {
+    pub fn get_root_version(
+        this: *mut Self,
+        cache: &DenseIndexCache,
+    ) -> Result<*mut Self, BufIoError> {
         let self_ = unsafe { &*this };
         let root = self_.try_get_data(cache)?.root_version;
         Ok(if root.is_null() { this } else { root })
@@ -240,7 +271,7 @@ impl ProbLazyItem<ProbNode> {
     pub fn get_version(
         this: *mut Self,
         version: u16,
-        cache: &ProbCache,
+        cache: &DenseIndexCache,
     ) -> Result<Option<*mut Self>, BufIoError> {
         let self_ = unsafe { &*this };
         let version_number = self_.get_current_version_number();
@@ -271,31 +302,41 @@ impl ProbLazyItem<ProbNode> {
     }
 }
 
-impl<T> SyncPersist for ProbLazyItem<T> {
-    fn set_persistence(&self, flag: bool) {
+impl ProbLazyItem<InvertedIndexSparseAnnNodeBasicTSHashmapData> {
+    pub fn try_get_data<'a>(
+        &self,
+        cache: &InvertedIndexCache,
+        dim: u32,
+    ) -> Result<&'a InvertedIndexSparseAnnNodeBasicTSHashmapData, BufIoError> {
         unsafe {
-            if let ProbLazyItemState::Ready(state) = &*self.state.load(Ordering::Acquire) {
-                state.persist_flag.store(flag, Ordering::SeqCst);
+            match &*self.state.load(Ordering::Relaxed) {
+                ProbLazyItemState::Ready(state) => Ok(&state.data),
+                ProbLazyItemState::Pending(file_index) => {
+                    let offset = file_index.get_offset().unwrap();
+                    (*(cache.get_data(offset, (dim % cache.data_file_parts as u32) as u8)?))
+                        .try_get_data(cache, dim)
+                }
             }
         }
     }
+}
 
-    fn needs_persistence(&self) -> bool {
+impl ProbLazyItem<VersionedInvertedFixedSetIndex> {
+    pub fn try_get_data<'a>(
+        &self,
+        cache: &InvertedIndexCache,
+        dim: u32,
+    ) -> Result<&'a VersionedInvertedFixedSetIndex, BufIoError> {
         unsafe {
-            if let ProbLazyItemState::Ready(state) = &*self.state.load(Ordering::Acquire) {
-                state.persist_flag.load(Ordering::SeqCst)
-            } else {
-                false
+            match &*self.state.load(Ordering::Relaxed) {
+                ProbLazyItemState::Ready(state) => Ok(&state.data),
+                ProbLazyItemState::Pending(file_index) => {
+                    let offset = file_index.get_offset().unwrap();
+                    (*(cache.get_sets(offset, (dim % cache.data_file_parts as u32) as u8)?))
+                        .try_get_data(cache, dim)
+                }
             }
         }
-    }
-
-    fn get_current_version(&self) -> Hash {
-        unsafe { (*self.state.load(Ordering::Acquire)).get_version_id() }
-    }
-
-    fn get_current_version_number(&self) -> u16 {
-        unsafe { (*self.state.load(Ordering::Acquire)).get_version_number() }
     }
 }
 

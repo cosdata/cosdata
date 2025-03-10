@@ -7,7 +7,7 @@ use std::{
 };
 
 use super::{
-    cache_loader::ProbCache,
+    cache_loader::DenseIndexCache,
     prob_lazy_load::{lazy_item::ProbLazyItem, lazy_item_array::ProbLazyItemArray},
     types::{HNSWLevel, MetricResult, NodePropMetadata, NodePropValue, VectorId},
 };
@@ -124,7 +124,7 @@ impl ProbNode {
         neighbor_id: u32,
         neighbor_node: SharedNode,
         dist: MetricResult,
-        cache: &ProbCache,
+        cache: &DenseIndexCache,
     ) -> Option<u8> {
         // First find an empty slot or the slot with lowest similarity
         let mut lowest_idx_guard = self.lowest_index.lock().unwrap();
@@ -261,7 +261,7 @@ impl ProbNode {
         &self.neighbors
     }
 
-    /// See [`crate::models::serializer::prob::node`] for how its calculated
+    /// See [`crate::models::serializer::dense::node`] for how its calculated
     pub fn get_serialized_size(neighbors_len: usize) -> usize {
         neighbors_len * 19 + 121
     }

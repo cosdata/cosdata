@@ -1,8 +1,14 @@
 use std::sync::{atomic::Ordering, Arc};
 
 use crate::api_service::run_upload_sparse_vectors_in_transaction;
-use crate::indexes::inverted_index::InvertedIndexTransaction;
+use crate::distance::dotproduct::DotProductDistance;
+use crate::indexes::inverted_index::{InvertedIndex, InvertedIndexTransaction};
+use crate::indexes::inverted_index_types::SparsePair;
+use crate::models::common::WaCustomError;
 use crate::models::rpc::DenseVector;
+use crate::models::types::MetricResult;
+use crate::storage::sparse_ann_query_basic::SparseAnnResult;
+use crate::vector_store::get_sparse_embedding_by_id;
 use crate::{models::types::SparseVector, storage::sparse_ann_query_basic::SparseAnnQueryBasic};
 
 use crate::{
@@ -214,7 +220,7 @@ pub(crate) async fn find_similar_sparse_vectors(
 
     // create a query to get similar sparse vectors
     let sparse_vec = SparseVector {
-        vector_id: find_similar_vectors.id.0 as u32,
+        vector_id: u32::MAX,
         entries: find_similar_vectors
             .values
             .iter()
@@ -222,10 +228,54 @@ pub(crate) async fn find_similar_sparse_vectors(
             .collect(),
     };
 
-    let query = SparseAnnQueryBasic::new(sparse_vec)
-        .sequential_search_tshashmap(&inverted_index, inverted_index.root.quantization);
+    let intermediate_results = SparseAnnQueryBasic::new(sparse_vec)
+        .sequential_search_tshashmap(
+            &inverted_index.root,
+            inverted_index.root.root.quantization_bits,
+            *inverted_index.values_upper_bound.read().unwrap(),
+            inverted_index.early_terminate_threshold,
+            ctx.config.sparse_raw_values_reranking_factor,
+            find_similar_vectors.top_k,
+        )
+        .map_err(|e| VectorsError::FailedToFindSimilarVectors(e.to_string()))?;
 
-    Ok(FindSimilarVectorsResponseDto::Sparse(query))
+    let results = finalize_sparse_ann_results(
+        inverted_index,
+        intermediate_results,
+        &find_similar_vectors.values,
+        find_similar_vectors.top_k,
+    )
+    .map_err(|e| VectorsError::FailedToFindSimilarVectors(e.to_string()))?;
+
+    Ok(FindSimilarVectorsResponseDto::Sparse(results))
+}
+
+fn finalize_sparse_ann_results(
+    inverted_index: Arc<InvertedIndex>,
+    intermediate_results: Vec<SparseAnnResult>,
+    query: &[SparsePair],
+    k: Option<usize>,
+) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
+    let mut results = Vec::with_capacity(k.unwrap_or(intermediate_results.len()));
+
+    for result in intermediate_results {
+        let id = VectorId(result.vector_id as u64);
+        let map = get_sparse_embedding_by_id(inverted_index.clone(), &id)?.into_map();
+        let mut dp = 0.0;
+        for pair in query {
+            if let Some(val) = map.get(&pair.0) {
+                dp += val * pair.1;
+            }
+        }
+        results.push((id, MetricResult::DotProductDistance(DotProductDistance(dp))));
+    }
+
+    results.sort_unstable_by(|(_, a), (_, b)| b.get_value().total_cmp(&a.get_value()));
+    if let Some(k) = k {
+        results.truncate(k);
+    }
+
+    Ok(results)
 }
 
 pub(crate) async fn delete_vector_by_id(
@@ -282,6 +332,7 @@ pub(crate) async fn upsert_sparse_vectors_in_transaction(
         .ok_or(VectorsError::NotFound)?;
 
     run_upload_sparse_vectors_in_transaction(
+        ctx,
         inverted_index,
         transaction,
         vectors

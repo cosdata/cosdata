@@ -14,7 +14,6 @@ use crate::models::embedding_persist::*;
 use crate::models::file_persist::*;
 use crate::models::fixedset::PerformantFixedSet;
 use crate::models::lazy_load::FileIndex;
-use crate::models::lazy_load::SyncPersist;
 use crate::models::prob_lazy_load::lazy_item::ProbLazyItem;
 use crate::models::prob_lazy_load::lazy_item_array::ProbLazyItemArray;
 use crate::models::prob_node::ProbNode;
@@ -189,12 +188,12 @@ pub fn finalize_ann_results(
     k: Option<usize>,
 ) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
     let filtered = remove_duplicates_and_filter(results, k, &dense_index.cache);
-    let mut results = Vec::new();
+    let mut results = Vec::with_capacity(k.unwrap_or(filtered.len()));
+    let mag_query = query.iter().map(|x| x * x).sum::<f32>().sqrt();
 
     for (id, _) in filtered {
         let raw = get_embedding_by_id(dense_index.clone(), &id)?;
         let dp = dot_product_f32(query, &raw.raw_vec);
-        let mag_query = query.iter().map(|x| x * x).sum::<f32>().sqrt();
         let mag_raw = raw.raw_vec.iter().map(|x| x * x).sum::<f32>().sqrt();
         let cs = dp / (mag_query * mag_raw);
         results.push((id, MetricResult::CosineSimilarity(CosineSimilarity(cs))));
@@ -286,6 +285,36 @@ pub fn get_embedding_by_id(
     let current_version = embedding_offset.version;
     let bufman = dense_index.vec_raw_manager.get(current_version)?;
     let (embedding, _next) = read_embedding(bufman.clone(), offset)?;
+
+    Ok(embedding)
+}
+
+pub fn get_sparse_embedding_by_id(
+    inverted_index: Arc<InvertedIndex>,
+    vector_id: &VectorId,
+) -> Result<RawSparseVectorEmbedding, WaCustomError> {
+    let env = inverted_index.lmdb.env.clone();
+    let db = inverted_index.lmdb.db.clone();
+
+    let txn = env
+        .begin_ro_txn()
+        .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
+
+    let embedding_key = key!(e:vector_id);
+
+    let offset_serialized = txn.get(*db, &embedding_key).map_err(|e| {
+        WaCustomError::DatabaseError(format!("Failed to get serialized embedding offset: {}", e))
+    })?;
+
+    let embedding_offset = EmbeddingOffset::deserialize(offset_serialized)
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+    txn.abort();
+
+    let offset = embedding_offset.offset;
+    let current_version = embedding_offset.version;
+    let bufman = inverted_index.vec_raw_manager.get(current_version)?;
+    let (embedding, _next) = read_sparse_embedding(bufman.clone(), offset)?;
 
     Ok(embedding)
 }
@@ -749,7 +778,7 @@ pub fn index_embeddings_in_transaction(
             vecs.into_par_iter()
                 .chunks(batch_size)
                 .map(index)
-                .collect::<Result<_, _>>()?;
+                .collect::<Result<(), _>>()?;
         }
     }
 
@@ -1002,7 +1031,7 @@ fn get_or_create_version(
                 updated_node,
                 &dense_index.index_manager,
                 &dense_index.level_0_index_manager,
-                unsafe { &*updated_node }.get_current_version(),
+                unsafe { &*updated_node }.get_current_version_id(),
             )
             .unwrap();
 

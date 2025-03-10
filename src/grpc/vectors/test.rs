@@ -1,21 +1,20 @@
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, fs};
+    use std::{fs, sync::Arc};
     use tokio::time::{timeout, Duration};
     use tonic::{Request, Response};
 
     use crate::app_context::AppContext;
     use crate::config_loader::Config;
-    use crate::grpc::vectors::VectorsServiceImpl;
-    use crate::grpc::proto::vectors_service_server::VectorsService;
-    use crate::grpc::proto::collections_service_server::CollectionsService;
     use crate::grpc::collections::CollectionsServiceImpl;
+    use crate::grpc::proto::collections_service_server::CollectionsService;
+    use crate::grpc::proto::vectors_service_server::VectorsService;
     use crate::grpc::proto::{
-        Vector, CreateVectorRequest, GetVectorRequest,
-        UpdateVectorRequest, DeleteVectorRequest,
-        FindSimilarVectorsRequest, CreateCollectionRequest,
-        DenseVectorOptions, CollectionConfig
+        CollectionConfig, CreateCollectionRequest, CreateVectorRequest, DeleteVectorRequest,
+        DenseVectorOptions, FindSimilarVectorsRequest, GetVectorRequest, UpdateVectorRequest,
+        Vector,
     };
+    use crate::grpc::vectors::VectorsServiceImpl;
 
     fn create_test_config() {
         let test_config = r#"
@@ -53,10 +52,11 @@ mod tests {
         fs::write("config.toml", test_config).expect("Failed to write test config");
     }
 
-    async fn setup_with_timeout() -> Result<(VectorsServiceImpl, Arc<AppContext>, String), tokio::time::error::Elapsed> {
+    async fn setup_with_timeout(
+    ) -> Result<(VectorsServiceImpl, Arc<AppContext>, String), tokio::time::error::Elapsed> {
         timeout(Duration::from_secs(5), async {
             create_test_config();
-            let config = crate::config_loader::load_config();
+            let config = crate::config_loader::load_config()?;
             let context = AppContext::new(config).unwrap();
             let context = Arc::new(context);
 
@@ -71,7 +71,9 @@ mod tests {
                 dense_vector: Some(DenseVectorOptions { dimension: 4 }),
                 sparse_vector: None,
                 metadata_schema: None,
-                config: Some(CollectionConfig { on_disk_payload: false }),
+                config: Some(CollectionConfig {
+                    on_disk_payload: false,
+                }),
             };
 
             collections_service
@@ -84,7 +86,8 @@ mod tests {
             };
 
             Ok((vectors_service, context, collection_name))
-        }).await?
+        })
+        .await?
     }
 
     fn cleanup() {
@@ -100,10 +103,14 @@ mod tests {
         let create_result = timeout(Duration::from_secs(5), async {
             let create_req = CreateVectorRequest {
                 collection_id: collection_id.clone(),
-                vector: Some(Vector { id: 1, values: vec![0.1, 0.2, 0.3, 0.4] }),
+                vector: Some(Vector {
+                    id: 1,
+                    values: vec![0.1, 0.2, 0.3, 0.4],
+                }),
             };
             service.create_vector(Request::new(create_req)).await
-        }).await;
+        })
+        .await;
 
         assert!(create_result.is_ok(), "Create operation timed out");
         let create_response = create_result.unwrap().unwrap();
@@ -121,10 +128,18 @@ mod tests {
         timeout(Duration::from_secs(5), async {
             let create_req = CreateVectorRequest {
                 collection_id: collection_id.clone(),
-                vector: Some(Vector { id: 1, values: vec![0.1, 0.2, 0.3, 0.4] }),
+                vector: Some(Vector {
+                    id: 1,
+                    values: vec![0.1, 0.2, 0.3, 0.4],
+                }),
             };
-            service.create_vector(Request::new(create_req)).await.unwrap();
-        }).await.unwrap();
+            service
+                .create_vector(Request::new(create_req))
+                .await
+                .unwrap();
+        })
+        .await
+        .unwrap();
 
         let update_result = timeout(Duration::from_secs(5), async {
             let update_req = UpdateVectorRequest {
@@ -133,7 +148,8 @@ mod tests {
                 values: vec![0.5, 0.6, 0.7, 0.8],
             };
             service.update_vector(Request::new(update_req)).await
-        }).await;
+        })
+        .await;
 
         assert!(update_result.is_ok(), "Update operation timed out");
         let update_response = update_result.unwrap().unwrap();
@@ -160,8 +176,13 @@ mod tests {
                     collection_id: collection_id.clone(),
                     vector: Some(Vector { id, values }),
                 };
-                service.create_vector(Request::new(create_req)).await.unwrap();
-            }).await.unwrap();
+                service
+                    .create_vector(Request::new(create_req))
+                    .await
+                    .unwrap();
+            })
+            .await
+            .unwrap();
         }
 
         let find_result = timeout(Duration::from_secs(5), async {
@@ -170,9 +191,13 @@ mod tests {
                 k: 2,
             };
             service.find_similar_vectors(Request::new(find_req)).await
-        }).await;
+        })
+        .await;
 
-        assert!(find_result.is_ok(), "Find similar vectors operation timed out");
+        assert!(
+            find_result.is_ok(),
+            "Find similar vectors operation timed out"
+        );
         let find_response = find_result.unwrap().unwrap();
         assert!(!find_response.get_ref().results.is_empty());
         assert!(find_response.get_ref().results.len() <= 2);
@@ -189,18 +214,36 @@ mod tests {
         timeout(Duration::from_secs(5), async {
             let create_req = CreateVectorRequest {
                 collection_id: collection_id.clone(),
-                vector: Some(Vector { id: 1, values: vec![0.1, 0.2, 0.3, 0.4] }),
+                vector: Some(Vector {
+                    id: 1,
+                    values: vec![0.1, 0.2, 0.3, 0.4],
+                }),
             };
-            service.create_vector(Request::new(create_req)).await.unwrap();
-        }).await.unwrap();
+            service
+                .create_vector(Request::new(create_req))
+                .await
+                .unwrap();
+        })
+        .await
+        .unwrap();
 
         let delete_result = timeout(Duration::from_secs(5), async {
-            let delete_req = DeleteVectorRequest { collection_id, vector_id: 1 };
+            let delete_req = DeleteVectorRequest {
+                collection_id,
+                vector_id: 1,
+            };
             service.delete_vector(Request::new(delete_req)).await
-        }).await;
+        })
+        .await;
 
-        assert!(delete_result.is_err(), "Delete operation should fail (Unimplemented)");
-        assert_eq!(delete_result.unwrap_err().code(), tonic::Code::Unimplemented);
+        assert!(
+            delete_result.is_err(),
+            "Delete operation should fail (Unimplemented)"
+        );
+        assert_eq!(
+            delete_result.unwrap_err().code(),
+            tonic::Code::Unimplemented
+        );
 
         cleanup();
     }

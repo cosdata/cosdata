@@ -56,6 +56,10 @@ impl<T, const N: usize> ProbLazyItemArray<T, N> {
         self.items[0].load(Ordering::SeqCst).is_null()
     }
 
+    pub fn insert(&self, idx: usize, value: *mut ProbLazyItem<T>) {
+        self.items[idx].store(value, Ordering::SeqCst);
+    }
+
     pub fn get_or_insert<F>(&self, idx: usize, mut f: F) -> *mut ProbLazyItem<T>
     where
         F: FnMut() -> *mut ProbLazyItem<T>,

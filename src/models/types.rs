@@ -1,15 +1,18 @@
 use super::buffered_io::BufferManagerFactory;
-use super::cache_loader::ProbCache;
+use super::cache_loader::DenseIndexCache;
 use super::collection::Collection;
 use super::crypto::{DoubleSHA256Hash, SingleSHA256Hash};
 use super::embedding_persist::{write_embedding, EmbeddingOffset};
 use super::meta_persist::{
     delete_dense_index, lmdb_init_collections_db, lmdb_init_db, load_collections,
     load_dense_index_data, persist_dense_index, retrieve_current_version,
+    retrieve_values_upper_bound,
 };
+use super::paths::{get_config_path, get_data_path};
 use super::prob_lazy_load::lazy_item::ProbLazyItem;
 use super::prob_node::{ProbNode, SharedNode};
 use super::versioning::VersionControl;
+use crate::args::CosdataArgs;
 use crate::config_loader::Config;
 use crate::distance::cosine::CosineSimilarity;
 use crate::distance::DistanceError;
@@ -31,12 +34,12 @@ use crate::quantization::{
     product::ProductQuantization, scalar::ScalarQuantization, Quantization, QuantizationError,
     StorageType,
 };
+use crate::storage::inverted_index_sparse_ann_basic::InvertedIndexSparseAnnBasicTSHashmap;
 use crate::storage::Storage;
 use arcshift::ArcShift;
 use dashmap::DashMap;
 use lmdb::{Cursor, Database, DatabaseFlags, Environment, Transaction, WriteFlags};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use rpassword::prompt_password;
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher24;
 use std::hash::{DefaultHasher, Hash as StdHash, Hasher};
@@ -587,7 +590,7 @@ pub struct DenseIndex {
     pub storage_type: ArcShift<StorageType>,
     pub vcs: Arc<VersionControl>,
     pub hnsw_params: Arc<RwLock<HNSWHyperParams>>,
-    pub cache: Arc<ProbCache>,
+    pub cache: Arc<DenseIndexCache>,
     pub index_manager: Arc<BufferManagerFactory<Hash>>,
     pub level_0_index_manager: Arc<BufferManagerFactory<Hash>>,
     pub vec_raw_manager: Arc<BufferManagerFactory<Hash>>,
@@ -616,7 +619,7 @@ impl DenseIndex {
         storage_type: ArcShift<StorageType>,
         vcs: Arc<VersionControl>,
         hnsw_params: HNSWHyperParams,
-        cache: Arc<ProbCache>,
+        cache: Arc<DenseIndexCache>,
         index_manager: Arc<BufferManagerFactory<Hash>>,
         level_0_index_manager: Arc<BufferManagerFactory<Hash>>,
         vec_raw_manager: Arc<BufferManagerFactory<Hash>>,
@@ -816,7 +819,7 @@ impl CollectionsMap {
             |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
             8192,
         ));
-        let cache = Arc::new(ProbCache::new(
+        let cache = Arc::new(DenseIndexCache::new(
             index_manager.clone(),
             level_0_index_manager.clone(),
             prop_file.clone(),
@@ -972,11 +975,6 @@ impl CollectionsMap {
         let collection_path: Arc<Path> = root_path.join(&coll.name).into();
         let index_path = collection_path.join("sparse_inverted_index");
 
-        let index_manager = Arc::new(BufferManagerFactory::new(
-            index_path.clone().into(),
-            |root, ver: &Hash| root.join(format!("{}.index", **ver)),
-            8192,
-        ));
         let vec_raw_manager = Arc::new(BufferManagerFactory::new(
             index_path.clone().into(),
             |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
@@ -1002,19 +1000,31 @@ impl CollectionsMap {
             db,
         };
         let current_version = retrieve_current_version(&lmdb)?;
-        let inverted_index = InvertedIndex::new(
-            coll.name.clone(),
-            inverted_index_data.description,
-            inverted_index_data.auto_create_index,
-            inverted_index_data.metadata_schema,
-            inverted_index_data.max_vectors,
+        let values_upper_bound = retrieve_values_upper_bound(&lmdb)?;
+        let inverted_index = InvertedIndex {
+            name: coll.name.clone(),
+            description: inverted_index_data.description,
+            auto_create_index: inverted_index_data.auto_create_index,
+            metadata_schema: inverted_index_data.metadata_schema,
+            max_vectors: inverted_index_data.max_vectors,
+            root: Arc::new(InvertedIndexSparseAnnBasicTSHashmap::deserialize(
+                index_path,
+                inverted_index_data.quantization_bits,
+                config.inverted_index_data_file_parts,
+            )?),
             lmdb,
-            ArcShift::new(current_version),
+            current_version: ArcShift::new(current_version),
+            current_open_transaction: AtomicPtr::new(ptr::null_mut()),
             vcs,
+            values_upper_bound: RwLock::new(values_upper_bound.unwrap_or(1.0)),
+            is_configured: AtomicBool::new(values_upper_bound.is_some()),
+            vectors: RwLock::new(Vec::new()),
+            vectors_collected: AtomicUsize::new(0),
+            sampling_data: crate::indexes::inverted_index::SamplingData::default(),
+            sample_threshold: inverted_index_data.sample_threshold,
             vec_raw_manager,
-            index_manager,
-            inverted_index_data.quantization,
-        );
+            early_terminate_threshold: inverted_index_data.early_terminate_threshold,
+        };
 
         Ok(inverted_index)
     }
@@ -1261,61 +1271,59 @@ pub struct AppEnv {
     pub persist: Arc<Environment>,
     // Single hash, must not be persisted to disk, only the double hash must be
     // written to disk
-    pub server_key: SingleSHA256Hash,
+    pub admin_key: SingleSHA256Hash,
     pub active_sessions: Arc<DashMap<String, SessionDetails>>,
 }
 
-fn get_server_key(env: Arc<Environment>) -> lmdb::Result<SingleSHA256Hash> {
+fn get_admin_key(env: Arc<Environment>, args: CosdataArgs) -> lmdb::Result<SingleSHA256Hash> {
     let db = env.create_db(Some("security_metadata"), DatabaseFlags::empty())?;
     let mut txn = env.begin_rw_txn()?;
-    let server_key_from_lmdb = match txn.get(db, &"server_key") {
+    let admin_key_from_lmdb = match txn.get(db, &"admin_key") {
         Ok(key) => Some(DoubleSHA256Hash(key.try_into().unwrap())),
         Err(lmdb::Error::NotFound) => None,
         Err(err) => return Err(err),
     };
-    let server_key_hash = if let Some(server_key_from_lmdb) = server_key_from_lmdb {
+    let admin_key_hash = if let Some(admin_key_from_lmdb) = admin_key_from_lmdb {
         txn.abort();
-        let entered_server_key =
-            prompt_password("Enter server key: ").expect("Unable to read master key");
-        let entered_server_key_hash = SingleSHA256Hash::from_str(&entered_server_key);
-        let entered_server_key_double_hash = entered_server_key_hash.hash_again();
-        if !server_key_from_lmdb.verify_eq(&entered_server_key_double_hash) {
-            eprintln!("Invalid server key!");
+        let arg_admin_key = args.admin_key;
+        let arg_admin_key_hash = SingleSHA256Hash::from_str(&arg_admin_key);
+        let arg_admin_key_double_hash = arg_admin_key_hash.hash_again();
+        if !admin_key_from_lmdb.verify_eq(&arg_admin_key_double_hash) {
+            log::error!("Invalid admin key!");
             std::process::exit(1);
         }
-        entered_server_key_hash
+        arg_admin_key_hash
     } else {
-        let entered_server_key =
-            prompt_password("Create a server key: ").expect("Unable to read server key");
-        let entered_server_key_hash = SingleSHA256Hash::from_str(&entered_server_key);
-        let entered_server_key_double_hash = entered_server_key_hash.hash_again();
+        let arg_admin_key = args.admin_key;
+        let arg_admin_key_hash = SingleSHA256Hash::from_str(&arg_admin_key);
+        let arg_admin_key_double_hash = arg_admin_key_hash.hash_again();
         txn.put(
             db,
-            &"server_key",
-            &entered_server_key_double_hash.0,
+            &"admin_key",
+            &arg_admin_key_double_hash.0,
             WriteFlags::empty(),
         )?;
         txn.commit()?;
-        entered_server_key_hash
+        arg_admin_key_hash
     };
-    Ok(server_key_hash)
+    Ok(admin_key_hash)
 }
 
-pub fn get_app_env(config: &Config) -> Result<Arc<AppEnv>, WaCustomError> {
-    let path = Path::new("./_mdb"); // TODO: prefix the customer & database name
+pub fn get_app_env(config: &Config, args: CosdataArgs) -> Result<Arc<AppEnv>, WaCustomError> {
+    let db_path = get_data_path().join("_mdb"); // TODO: prefix the customer & database name
 
     // Ensure the directory exists
-    create_dir_all(&path).map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+    create_dir_all(&db_path).map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
     // Initialize the environment
     let env = Environment::new()
         .set_max_dbs(10)
         .set_map_size(1048576000) // Set the maximum size of the database to 1GB
-        .open(&path)
+        .open(&db_path)
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
     let env_arc = Arc::new(env);
 
-    let server_key = get_server_key(env_arc.clone())
+    let admin_key = get_admin_key(env_arc.clone(), args)
         .map_err(|err| WaCustomError::DatabaseError(err.to_string()))?;
 
     let collections_map = CollectionsMap::load(env_arc.clone(), config)
@@ -1336,7 +1344,7 @@ pub fn get_app_env(config: &Config) -> Result<Arc<AppEnv>, WaCustomError> {
         collections_map,
         users_map,
         persist: env_arc,
-        server_key,
+        admin_key,
         active_sessions: Arc::new(DashMap::new()),
     }))
 }

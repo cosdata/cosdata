@@ -1,8 +1,7 @@
 use super::buffered_io::{BufIoError, BufferManagerFactory};
 use super::common::WaCustomError;
-use super::lazy_load::SyncPersist;
 use super::prob_node::SharedNode;
-use super::serializer::prob::ProbSerialize;
+use super::serializer::dense::DenseSerialize;
 use super::types::{BytesToRead, FileOffset, NodePropValue, VectorId};
 use super::versioning::Hash;
 use crate::storage::Storage;
@@ -19,16 +18,13 @@ pub fn write_node_to_file(
 ) -> Result<u32, WaCustomError> {
     let lazy_item_ref = unsafe { &*lazy_item };
     let is_level_0 = lazy_item_ref.is_level_0;
-    let bufman = if is_level_0 {
-        level_0_bufmans.get(version)?
+    let (bufman, bufmans) = if is_level_0 {
+        (level_0_bufmans.get(version)?, level_0_bufmans)
     } else {
-        bufmans.get(version)?
+        (bufmans.get(version)?, bufmans)
     };
     let cursor = bufman.open_cursor()?;
-
-    lazy_item_ref.set_persistence(true);
-    let offset = lazy_item.serialize(bufmans, level_0_bufmans, version, cursor, is_level_0)?;
-
+    let offset = lazy_item.serialize(bufmans, version, cursor)?;
     bufman.close_cursor(cursor)?;
 
     Ok(offset)

@@ -1,11 +1,13 @@
-use super::buffered_io::{BufIoError, BufferManagerFactory};
+use super::buffered_io::{BufIoError, BufferManager, BufferManagerFactory};
 use super::common::TSHashTable;
 use super::file_persist::read_prop_from_file;
+use super::fixedset::VersionedInvertedFixedSetIndex;
 use super::lazy_load::{FileIndex, LazyItem, LazyItemVec, VectorData};
 use super::lru_cache::LRUCache;
 use super::prob_lazy_load::lazy_item::{ProbLazyItem, ProbLazyItemState, ReadyState};
 use super::prob_node::{ProbNode, SharedNode};
-use super::serializer::prob::ProbSerialize;
+use super::serializer::dense::DenseSerialize;
+use super::serializer::inverted::InvertedIndexSerialize;
 use super::serializer::CustomSerialize;
 use super::types::*;
 use super::versioning::Hash;
@@ -14,9 +16,9 @@ use crate::storage::inverted_index_old::InvertedIndexItem;
 use crate::storage::inverted_index_sparse_ann::{
     InvertedIndexSparseAnn, InvertedIndexSparseAnnNode,
 };
-use crate::storage::inverted_index_sparse_ann_basic::InvertedIndexSparseAnnNodeBasic;
+use crate::storage::inverted_index_sparse_ann_basic::InvertedIndexSparseAnnNodeBasicDashMap;
 use crate::storage::inverted_index_sparse_ann_basic::{
-    InvertedIndexSparseAnnNodeBasicDashMap, InvertedIndexSparseAnnNodeBasicTSHashmap,
+    InvertedIndexSparseAnnNodeBasic, InvertedIndexSparseAnnNodeBasicTSHashmapData,
 };
 use crate::storage::inverted_index_sparse_ann_new_ds::InvertedIndexNewDSNode;
 use crate::storage::Storage;
@@ -240,44 +242,8 @@ impl NodeRegistry {
     // }
 }
 
-macro_rules! define_prob_cache_items {
-    ($($variant:ident = $type:ty),+ $(,)?) => {
-        #[derive(Clone)]
-        pub enum ProbCacheItem {
-            $($variant(*mut ProbLazyItem<$type>)),+
-        }
-
-
-        pub trait ProbCacheable: 'static + Sized {
-            fn from_cache_item(cache_item: ProbCacheItem) -> Option<*mut ProbLazyItem<Self>>;
-            fn into_cache_item(item: *mut ProbLazyItem<Self>) -> ProbCacheItem;
-        }
-
-        $(
-            impl ProbCacheable for $type {
-                fn from_cache_item(cache_item: ProbCacheItem) -> Option<*mut ProbLazyItem<Self>> {
-                    if let ProbCacheItem::$variant(item) = cache_item {
-                        Some(item)
-                    } else {
-                        None
-                    }
-                }
-
-                fn into_cache_item(item: *mut ProbLazyItem<Self>) -> ProbCacheItem {
-                    ProbCacheItem::$variant(item)
-                }
-            }
-        )+
-    };
-}
-
-define_prob_cache_items! {
-    ProbNode = ProbNode,
-    InvertedIndex = InvertedIndexSparseAnnNodeBasicTSHashmap
-}
-
-pub struct ProbCache {
-    registry: LRUCache<u64, ProbCacheItem>,
+pub struct DenseIndexCache {
+    registry: LRUCache<u64, SharedNode>,
     props_registry: DashMap<u64, Weak<NodePropValue>>,
     bufmans: Arc<BufferManagerFactory<Hash>>,
     level_0_bufmans: Arc<BufferManagerFactory<Hash>>,
@@ -294,10 +260,10 @@ pub struct ProbCache {
     batch_load_lock: Mutex<()>,
 }
 
-unsafe impl Send for ProbCache {}
-unsafe impl Sync for ProbCache {}
+unsafe impl Send for DenseIndexCache {}
+unsafe impl Sync for DenseIndexCache {}
 
-impl ProbCache {
+impl DenseIndexCache {
     pub fn new(
         bufmans: Arc<BufferManagerFactory<Hash>>,
         level_0_bufmans: Arc<BufferManagerFactory<Hash>>,
@@ -348,27 +314,23 @@ impl ProbCache {
             self.props_registry
                 .insert(prop_key, Arc::downgrade(&node.prop_value));
         }
-        self.registry
-            .insert(combined_index, ProbNode::into_cache_item(item));
+        self.registry.insert(combined_index, item);
     }
 
-    pub fn force_load_single_object<T: ProbSerialize + ProbCacheable>(
+    pub fn force_load_single_object(
         &self,
         file_index: FileIndex,
         is_level_0: bool,
-    ) -> Result<*mut ProbLazyItem<T>, BufIoError> {
+    ) -> Result<SharedNode, BufIoError> {
         let combined_index = Self::combine_index(&file_index, is_level_0);
         let mut skipm = HashSet::new();
         skipm.insert(combined_index);
-        let data = T::deserialize(
-            &self.bufmans,
-            &self.level_0_bufmans,
-            file_index,
-            self,
-            0,
-            &mut skipm,
-            is_level_0,
-        )?;
+        let bufmans = if is_level_0 {
+            &self.level_0_bufmans
+        } else {
+            &self.bufmans
+        };
+        let data = ProbNode::deserialize(bufmans, file_index, self, 0, &mut skipm, is_level_0)?;
         let (file_offset, version_number, version_id) = match file_index {
             FileIndex::Valid {
                 offset,
@@ -380,33 +342,28 @@ impl ProbCache {
         let state = ProbLazyItemState::Ready(ReadyState {
             data,
             file_offset,
-            is_serialized: AtomicBool::new(true),
-            persist_flag: AtomicBool::new(false),
             version_id,
             version_number,
         });
 
         let item = ProbLazyItem::new_from_state(state, is_level_0);
 
-        self.registry
-            .insert(combined_index.clone(), T::into_cache_item(item.clone()));
+        self.registry.insert(combined_index.clone(), item.clone());
 
         Ok(item)
     }
 
-    pub fn get_lazy_object<T: ProbSerialize + ProbCacheable>(
+    pub fn get_lazy_object(
         &self,
         file_index: FileIndex,
         max_loads: u16,
         skipm: &mut HashSet<u64>,
         is_level_0: bool,
-    ) -> Result<*mut ProbLazyItem<T>, BufIoError> {
+    ) -> Result<SharedNode, BufIoError> {
         let combined_index = Self::combine_index(&file_index, is_level_0);
 
         if let Some(item) = self.registry.get(&combined_index) {
-            if let Some(item) = T::from_cache_item(item) {
-                return Ok(item);
-            }
+            return Ok(item);
         }
 
         if max_loads == 0 || !skipm.insert(combined_index) {
@@ -421,9 +378,7 @@ impl ProbCache {
         loop {
             // check again
             if let Some(item) = self.registry.get(&combined_index) {
-                if let Some(item) = T::from_cache_item(item) {
-                    return Ok(item);
-                }
+                return Ok(item);
             }
 
             // another thread loaded the data but its not in the registry (got evicted), retry
@@ -450,28 +405,24 @@ impl ProbCache {
             (FileOffset(0), 0, 0.into())
         };
 
-        let data = T::deserialize(
-            &self.bufmans,
-            &self.level_0_bufmans,
-            file_index,
-            self,
-            max_loads - 1,
-            skipm,
-            is_level_0,
-        )?;
+        let bufmans = if is_level_0 {
+            &self.level_0_bufmans
+        } else {
+            &self.bufmans
+        };
+
+        let data =
+            ProbNode::deserialize(bufmans, file_index, self, max_loads - 1, skipm, is_level_0)?;
         let state = ProbLazyItemState::Ready(ReadyState {
             data,
             file_offset,
-            is_serialized: AtomicBool::new(true),
-            persist_flag: AtomicBool::new(false),
             version_id,
             version_number,
         });
 
         let item = ProbLazyItem::new_from_state(state, is_level_0);
 
-        self.registry
-            .insert(combined_index.clone(), T::into_cache_item(item.clone()));
+        self.registry.insert(combined_index.clone(), item.clone());
 
         *load_complete = true;
         self.loading_items.delete(&combined_index);
@@ -532,11 +483,11 @@ impl ProbCache {
     //
     // After determining the appropriate `max_loads`, the function proceeds by calling `get_lazy_object`, which handles
     // the actual loading process, and retrieves the lazy-loaded data.
-    pub fn get_object<T: ProbSerialize + ProbCacheable>(
+    pub fn get_object(
         &self,
         file_index: FileIndex,
         is_level_0: bool,
-    ) -> Result<*mut ProbLazyItem<T>, BufIoError> {
+    ) -> Result<SharedNode, BufIoError> {
         let (_lock, max_loads) = match self.batch_load_lock.try_lock() {
             Ok(lock) => (Some(lock), 1000),
             Err(TryLockError::Poisoned(poison_err)) => panic!("lock error: {}", poison_err),
@@ -562,7 +513,7 @@ impl ProbCache {
         (file_offset as u64) << 32 | (length as u64)
     }
 
-    pub fn load_item<T: ProbSerialize>(
+    pub fn load_item<T: DenseSerialize>(
         &self,
         file_index: FileIndex,
         is_level_0: bool,
@@ -577,14 +528,200 @@ impl ProbCache {
             .into());
         };
 
-        T::deserialize(
-            &self.bufmans,
-            &self.level_0_bufmans,
-            file_index,
+        let bufmans = if is_level_0 {
+            &self.level_0_bufmans
+        } else {
+            &self.bufmans
+        };
+
+        T::deserialize(bufmans, file_index, self, 1000, &mut skipm, is_level_0)
+    }
+}
+
+pub struct InvertedIndexCache {
+    data_registry: LRUCache<u64, *mut ProbLazyItem<InvertedIndexSparseAnnNodeBasicTSHashmapData>>,
+    sets_registry: LRUCache<u64, *mut ProbLazyItem<VersionedInvertedFixedSetIndex>>,
+    pub dim_bufman: Arc<BufferManager>,
+    pub data_bufmans: Arc<BufferManagerFactory<u8>>,
+    loading_data: TSHashTable<u64, Arc<Mutex<bool>>>,
+    loading_sets: TSHashTable<u64, Arc<Mutex<bool>>>,
+    pub data_file_parts: u8,
+}
+
+unsafe impl Send for InvertedIndexCache {}
+unsafe impl Sync for InvertedIndexCache {}
+
+impl InvertedIndexCache {
+    pub fn new(
+        dim_bufman: Arc<BufferManager>,
+        data_bufmans: Arc<BufferManagerFactory<u8>>,
+        data_file_parts: u8,
+    ) -> Self {
+        let data_registry = LRUCache::with_prob_eviction(100_000_000, 0.03125);
+        let sets_registry = LRUCache::with_prob_eviction(100_000_000, 0.03125);
+
+        Self {
+            data_registry,
+            sets_registry,
+            dim_bufman,
+            data_bufmans,
+            loading_data: TSHashTable::new(16),
+            loading_sets: TSHashTable::new(16),
+            data_file_parts,
+        }
+    }
+
+    pub fn get_data(
+        &self,
+        file_offset: FileOffset,
+        data_file_idx: u8,
+    ) -> Result<*mut ProbLazyItem<InvertedIndexSparseAnnNodeBasicTSHashmapData>, BufIoError> {
+        let combined_index = Self::combine_index(file_offset, 0);
+
+        if let Some(item) = self.data_registry.get(&combined_index) {
+            return Ok(item);
+        }
+
+        let mut mutex = self
+            .loading_data
+            .get_or_create(combined_index, || Arc::new(Mutex::new(false)));
+        let mut load_complete = mutex.lock().unwrap();
+
+        loop {
+            // check again
+            if let Some(item) = self.data_registry.get(&combined_index) {
+                return Ok(item);
+            }
+
+            // another thread loaded the data but its not in the registry (got evicted), retry
+            if *load_complete {
+                drop(load_complete);
+                mutex = self
+                    .loading_data
+                    .get_or_create(combined_index, || Arc::new(Mutex::new(false)));
+                load_complete = mutex.lock().unwrap();
+                continue;
+            }
+
+            break;
+        }
+
+        let data = InvertedIndexSparseAnnNodeBasicTSHashmapData::deserialize(
+            &self.dim_bufman,
+            &self.data_bufmans,
+            file_offset,
+            data_file_idx,
+            self.data_file_parts,
             self,
-            1000,
-            &mut skipm,
-            is_level_0,
+        )?;
+        let state = ProbLazyItemState::Ready(ReadyState {
+            data,
+            file_offset,
+            version_id: 0.into(),
+            version_number: 0,
+        });
+
+        let item = ProbLazyItem::new_from_state(state, false);
+
+        self.data_registry
+            .insert(combined_index.clone(), item.clone());
+
+        *load_complete = true;
+        self.loading_data.delete(&combined_index);
+
+        Ok(item)
+    }
+
+    pub fn get_sets(
+        &self,
+        file_offset: FileOffset,
+        data_file_idx: u8,
+    ) -> Result<*mut ProbLazyItem<VersionedInvertedFixedSetIndex>, BufIoError> {
+        let combined_index = Self::combine_index(file_offset, 0);
+
+        if let Some(item) = self.sets_registry.get(&combined_index) {
+            return Ok(item);
+        }
+
+        let mut mutex = self
+            .loading_data
+            .get_or_create(combined_index, || Arc::new(Mutex::new(false)));
+        let mut load_complete = mutex.lock().unwrap();
+
+        loop {
+            // check again
+            if let Some(item) = self.sets_registry.get(&combined_index) {
+                return Ok(item);
+            }
+
+            // another thread loaded the data but its not in the registry (got evicted), retry
+            if *load_complete {
+                drop(load_complete);
+                mutex = self
+                    .loading_data
+                    .get_or_create(combined_index, || Arc::new(Mutex::new(false)));
+                load_complete = mutex.lock().unwrap();
+                continue;
+            }
+
+            break;
+        }
+
+        let dim_cursor = self.dim_bufman.open_cursor()?;
+        self.dim_bufman
+            .seek_with_cursor(dim_cursor, file_offset.0 as u64)?;
+        let data_offset = self.dim_bufman.read_u32_with_cursor(dim_cursor)?;
+        self.dim_bufman.close_cursor(dim_cursor)?;
+
+        let data = VersionedInvertedFixedSetIndex::deserialize(
+            &self.dim_bufman,
+            &self.data_bufmans,
+            FileOffset(data_offset),
+            data_file_idx,
+            self.data_file_parts,
+            self,
+        )?;
+        let state = ProbLazyItemState::Ready(ReadyState {
+            data,
+            file_offset,
+            version_id: 0.into(),
+            version_number: 0,
+        });
+
+        let item = ProbLazyItem::new_from_state(state, false);
+
+        self.sets_registry
+            .insert(combined_index.clone(), item.clone());
+
+        *load_complete = true;
+        self.loading_sets.delete(&combined_index);
+
+        Ok(item)
+    }
+
+    pub fn combine_index(file_offset: FileOffset, data_file_idx: u8) -> u64 {
+        (data_file_idx as u64) << 32 | file_offset.0 as u64
+    }
+
+    pub fn get_prop_key(
+        FileOffset(file_offset): FileOffset,
+        BytesToRead(length): BytesToRead,
+    ) -> u64 {
+        (file_offset as u64) << 32 | (length as u64)
+    }
+
+    pub fn load_item<T: InvertedIndexSerialize>(
+        &self,
+        file_offset: FileOffset,
+        data_file_idx: u8,
+    ) -> Result<T, BufIoError> {
+        T::deserialize(
+            &self.dim_bufman,
+            &self.data_bufmans,
+            file_offset,
+            data_file_idx,
+            self.data_file_parts,
+            self,
         )
     }
 }

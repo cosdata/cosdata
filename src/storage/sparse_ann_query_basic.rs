@@ -2,10 +2,10 @@ use serde::Serialize;
 
 use super::inverted_index_sparse_ann_basic::{
     InvertedIndexSparseAnnBasic, InvertedIndexSparseAnnBasicDashMap,
-    InvertedIndexSparseAnnNodeBasic, InvertedIndexSparseAnnNodeBasicDashMap,
+    InvertedIndexSparseAnnBasicTSHashmap, InvertedIndexSparseAnnNodeBasic,
+    InvertedIndexSparseAnnNodeBasicDashMap,
 };
-use crate::indexes::inverted_index::InvertedIndex;
-use crate::storage::page::Pagepool;
+use crate::models::buffered_io::BufIoError;
 
 use crate::models::types::{SparseQueryVector, SparseQueryVectorDimensionType, SparseVector};
 use std::collections::{HashMap, HashSet};
@@ -23,7 +23,7 @@ impl Eq for SparseAnnResult {}
 
 impl PartialOrd for SparseAnnResult {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.similarity.partial_cmp(&other.similarity)
+        other.similarity.partial_cmp(&self.similarity)
     }
 }
 
@@ -45,13 +45,20 @@ impl SparseAnnQueryBasic {
 
     // Creates a sparse query vector with dimension types based on the posting list length.
     // This is used to optimize sparse ANN search using a cuckoo filter and two-stage search.
-    fn create_sparse_query_vector(&self, index: &InvertedIndex) -> SparseQueryVector {
+    fn create_sparse_query_vector(
+        &self,
+        index: &InvertedIndexSparseAnnBasicTSHashmap,
+    ) -> Result<SparseQueryVector, BufIoError> {
         let mut posting_list_lengths: Vec<(u32, usize)> = Vec::new();
         for (dim_index, _) in &self.query_vector.entries {
             if let Some(node) = index.find_node(*dim_index) {
                 let mut length = 0;
                 for key in 0..64 {
-                    length += node.data.get_or_create(key, Pagepool::default).len();
+                    length += unsafe { &*node.data }
+                        .try_get_data(&index.cache, node.dim_index)?
+                        .map
+                        .lookup(&key)
+                        .map_or(0, |p| p.len());
                 }
                 posting_list_lengths.push((*dim_index, length));
             }
@@ -106,7 +113,10 @@ impl SparseAnnQueryBasic {
             }
         }
 
-        SparseQueryVector::new(self.query_vector.vector_id, query_entries)
+        Ok(SparseQueryVector::new(
+            self.query_vector.vector_id,
+            query_entries,
+        ))
     }
 
     pub fn sequential_search(&self, index: &InvertedIndexSparseAnnBasic) -> Vec<SparseAnnResult> {
@@ -164,16 +174,23 @@ impl SparseAnnQueryBasic {
 
     pub fn sequential_search_tshashmap(
         &self,
-        index: &InvertedIndex,
-        // 16,32,64
-        quantization: u8,
-    ) -> Vec<SparseAnnResult> {
-        let sparse_query_vector = self.create_sparse_query_vector(index);
+        index: &InvertedIndexSparseAnnBasicTSHashmap,
+        // 4, 5, 6
+        quantization_bits: u8,
+        values_upper_bound: f32,
+        early_terminate_threshold: f32,
+        reranking_factor: usize,
+        k: Option<usize>,
+    ) -> Result<Vec<SparseAnnResult>, BufIoError> {
+        let sparse_query_vector = self.create_sparse_query_vector(index)?;
         let mut dot_products: HashMap<u32, u32> = HashMap::new();
         // same as `0.5` quantized
-        let half_quantized = quantization / 2;
-        // same as `0.75` quantized
-        let three_fourth_quantized = (quantization / 4) * 3;
+        let half_quantized = 1u8 << (quantization_bits - 1);
+        let early_terminate_value = ((1u32 << quantization_bits) as f32
+            * (1.0 - early_terminate_threshold))
+            .min(u8::MAX as f32) as u8;
+        // same as `1` quantized
+        let one_quantized = ((1u32 << quantization_bits) - 1) as u8;
 
         let mut sorted_query_dims: Vec<(u32, SparseQueryVectorDimensionType, f32)> =
             sparse_query_vector.entries.clone();
@@ -185,154 +202,123 @@ impl SparseAnnQueryBasic {
         // Iterate over the query vector dimensions
         for &(dim_index, dimension_type, dim_value) in &sorted_query_dims {
             if let Some(node) = index.find_node(dim_index) {
-                let quantized_query_value = node.quantize(dim_value);
+                let quantized_query_value = node.quantize(dim_value, values_upper_bound) as u32;
 
-                if quantized_query_value < half_quantized {
-                    // Quantized value is LOW
-                    match dimension_type {
-                        SparseQueryVectorDimensionType::Common => {
-                            // Common and low quantized value
-                            // Only read the values from the cuckoo filter tree, without
-                            // going through the entire list of values for this dimension.
-                            for vector_id in shortlisted_ids.iter() {
-                                if let Some(index) = node.find_key_of_id(*vector_id) {
-                                    let dot_product =
-                                        dot_products.entry(*vector_id).or_insert(0u32);
-                                    *dot_product += (quantized_query_value * index as u8) as u32;
-                                }
-                            }
-                        }
-                        SparseQueryVectorDimensionType::Rare => {
-                            // Rare and low quantized value
-                            // Iterate through the map/list ONLY for until a certain threshold
-                            // (say 3/4th) of quantized keys (i.e. 48..64). Include these ids in
-                            // the cuckoo filter lookup list for other dimensions. Also do
-                            // cuckoo filter lookups using the shortlisted ids (from other
-                            // dimensions) on this dimension, ensure we do NOT double count
-                            // the vectorids that were already encountered in the iteration
-                            // from 48..64
+                let is_low = quantized_query_value < half_quantized as u32;
 
-                            // First do cuckoo filter lookups using the shortlisted ids
-                            for vector_id in shortlisted_ids.iter() {
-                                if let Some(index) = node.find_key_of_id(*vector_id) {
-                                    let dot_product =
-                                        dot_products.entry(*vector_id).or_insert(0u32);
-                                    *dot_product += (quantized_query_value * index as u8) as u32;
-                                }
-                            }
-
-                            // Then iterate through the map/list for the remaining quantized keys
-                            for key in (three_fourth_quantized..quantization).rev() {
-                                let p = node.data.get_or_create(key, Pagepool::default);
-                                for x in p.iter() {
-                                    for x in x.iter() {
-                                        let vec_id = x;
-                                        if shortlisted_ids.contains(vec_id) {
-                                            // Prevent double counting
-                                            continue;
-                                        }
-
-                                        let dot_product =
-                                            dot_products.entry(*vec_id).or_insert(0u32);
-                                        *dot_product += (quantized_query_value * key) as u32;
-
-                                        // Shortlist vector id for future cuckoo filter lookups
-                                        shortlisted_ids.insert(*vec_id);
-                                    }
-                                }
+                match (dimension_type, is_low) {
+                    (SparseQueryVectorDimensionType::Common, true) => {
+                        // Common and low quantized value
+                        // Only read the values from the cuckoo filter tree, without
+                        // going through the entire list of values for this dimension.
+                        for vector_id in shortlisted_ids.iter() {
+                            if let Some(index) = node.find_key_of_id(*vector_id, &index.cache)? {
+                                let dot_product = dot_products.entry(*vector_id).or_insert(0u32);
+                                *dot_product += quantized_query_value * index as u32;
                             }
                         }
                     }
-                } else {
-                    // Quantized value is HIGH
-                    match dimension_type {
-                        SparseQueryVectorDimensionType::Common => {
-                            // Common and high quantized value
-                            // Iterate through the map/list ONLY for until a certain threshold
-                            // (say 3/4th) of quantized keys (i.e. 48..64 for 64 quantization). Include these ids
-                            // in the cuckoo filter lookup list for other dimensions. Also do
-                            // cuckoo filter lookups using the shortlisted ids (from other
-                            // dimensions) on this dimension, ensure we do NOT double count
-                            // the vectorids that were already encountered in the iteration
-                            // from 48..64
+                    (SparseQueryVectorDimensionType::Rare, true)
+                    | (SparseQueryVectorDimensionType::Common, false) => {
+                        // "Rare and low quantized value" or "Common and high quantized value"
+                        // Iterate through the map/list ONLY for until a certain threshold
+                        // (say 3/4th) of quantized keys (i.e. 48..64). Include these ids in
+                        // the cuckoo filter lookup list for other dimensions. Also do
+                        // cuckoo filter lookups using the shortlisted ids (from other
+                        // dimensions) on this dimension, ensure we do NOT double count
+                        // the vectorids that were already encountered in the iteration
+                        // from 48..64
 
-                            // First do cuckoo filter lookups using the shortlisted ids
-                            for vector_id in shortlisted_ids.iter() {
-                                if let Some(index) = node.find_key_of_id(*vector_id) {
-                                    let dot_product =
-                                        dot_products.entry(*vector_id).or_insert(0u32);
-                                    *dot_product += (quantized_query_value * index as u8) as u32;
-                                }
-                            }
+                        let mut new_ids = HashSet::new();
 
-                            // Then iterate through the map/list for the remaining quantized keys
-                            for key in (three_fourth_quantized..quantization).rev() {
-                                let p = node.data.get_or_create(key, Pagepool::default);
-                                for x in p.iter() {
+                        // First iterate through the map/list
+                        for key in (early_terminate_value..=one_quantized).rev() {
+                            let mut current_versioned_pagepool = unsafe { &*node.data }
+                                .try_get_data(&index.cache, node.dim_index)?
+                                .map
+                                .lookup(&key);
+                            while let Some(versioned_pagepool) = current_versioned_pagepool {
+                                for x in versioned_pagepool.pagepool.inner.iter() {
                                     for x in x.iter() {
-                                        let vec_id = x;
-                                        if shortlisted_ids.contains(vec_id) {
-                                            // Prevent double counting
-                                            continue;
-                                        }
+                                        let vec_id = *x;
 
                                         let dot_product =
-                                            dot_products.entry(*vec_id).or_insert(0u32);
-                                        *dot_product += (quantized_query_value * key) as u32;
+                                            dot_products.entry(vec_id).or_insert(0u32);
+                                        *dot_product += quantized_query_value * key as u32;
 
-                                        // Shortlist vector id for future cuckoo filter lookups
-                                        shortlisted_ids.insert(*vec_id);
+                                        new_ids.insert(vec_id);
                                     }
                                 }
+                                current_versioned_pagepool =
+                                    versioned_pagepool.next.read().unwrap().clone();
                             }
                         }
-                        SparseQueryVectorDimensionType::Rare => {
-                            // Rare and high quantized value
-                            // Iterate through the full list of values for this dimension
-                            // in inverted index, and then use these shortlisted ids to lookup
-                            // when needed in the cuckoo filter tree of the other dims
-                            for key in (0..quantization).rev() {
-                                let p = node.data.get_or_create(key, Pagepool::default);
-                                for x in p.iter() {
+
+                        // Then do cuckoo filter lookups using the shortlisted ids
+                        for vector_id in shortlisted_ids.iter() {
+                            if new_ids.contains(vector_id) {
+                                continue;
+                            }
+                            if let Some(index) = node.find_key_of_id(*vector_id, &index.cache)? {
+                                let dot_product = dot_products.entry(*vector_id).or_insert(0u32);
+                                *dot_product += quantized_query_value * index as u32;
+                            }
+                        }
+
+                        shortlisted_ids.extend(new_ids);
+                    }
+                    (SparseQueryVectorDimensionType::Rare, false) => {
+                        // Rare and high quantized value
+                        // Iterate through the full list of values for this dimension
+                        // in inverted index, and then use these shortlisted ids to lookup
+                        // when needed in the cuckoo filter tree of the other dims
+                        for key in (0..=one_quantized).rev() {
+                            let mut current_versioned_pagepool = unsafe { &*node.data }
+                                .try_get_data(&index.cache, node.dim_index)?
+                                .map
+                                .lookup(&key);
+                            while let Some(versioned_pagepool) = current_versioned_pagepool {
+                                for x in versioned_pagepool.pagepool.inner.iter() {
                                     for x in x.iter() {
-                                        let vec_id = x;
+                                        let vec_id = *x;
                                         let dot_product =
-                                            dot_products.entry(*vec_id).or_insert(0u32);
-                                        *dot_product += (quantized_query_value * key) as u32;
+                                            dot_products.entry(vec_id).or_insert(0u32);
+                                        *dot_product += quantized_query_value * key as u32;
 
                                         // Shortlist vector id for future cuckoo filter lookups
-                                        shortlisted_ids.insert(*vec_id);
+                                        shortlisted_ids.insert(vec_id);
                                     }
                                 }
+                                current_versioned_pagepool =
+                                    versioned_pagepool.next.read().unwrap().clone();
                             }
                         }
                     }
-                };
+                }
             }
         }
 
         // Create a min-heap to keep track of the top K results
-        let mut heap = BinaryHeap::with_capacity(K + 1);
+        let mut heap =
+            BinaryHeap::with_capacity(k.map_or(dot_products.len(), |k| k * reranking_factor) + 1);
 
         // Process the dot products and maintain the top K results
-        for (vector_id, sim_score) in dot_products.iter() {
+        for (vector_id, similarity) in dot_products.into_iter() {
             heap.push(SparseAnnResult {
-                vector_id: *vector_id,
-                similarity: *sim_score,
+                vector_id,
+                similarity,
             });
-            if heap.len() > K {
-                heap.pop();
+            if let Some(k) = k {
+                if heap.len() > k * reranking_factor {
+                    heap.pop();
+                }
             }
         }
 
         // Convert the heap to a vector and reverse it to get descending order
         let mut results: Vec<SparseAnnResult> = heap.into_vec();
-        results.sort_by(|a, b| {
-            b.similarity
-                .partial_cmp(&a.similarity)
-                .unwrap_or(Ordering::Equal)
-        });
-        results
+        results.sort_by(|a, b| b.similarity.cmp(&a.similarity));
+        Ok(results)
     }
 
     pub fn sequential_search_dashmap(
