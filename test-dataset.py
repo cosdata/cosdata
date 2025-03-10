@@ -8,6 +8,7 @@ import urllib3
 import os
 import math
 import random
+import getpass
 
 # Suppress only the single InsecureRequestWarning from urllib3 needed for this script
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -96,7 +97,13 @@ def generate_headers():
 
 def create_session():
     url = f"{host}/auth/create-session"
-    data = {"username": "admin", "password": "admin"}
+    # Use environment variable if available, otherwise prompt
+    if "ADMIN_PASSWORD" in os.environ:
+        password = os.environ["ADMIN_PASSWORD"]
+    else:
+        password = getpass.getpass("Enter admin password: ")
+
+    data = {"username": "admin", "password": password}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
@@ -792,6 +799,10 @@ def run_rps_tests(rps_test_vectors, vector_db_name, batch_size=100):
 
 
 if __name__ == "__main__":
+
+    session_response = create_session()
+    print("Session Response:", session_response)
+
     # Create database
     vector_db_name = "testdb"
     batch_size = 100
@@ -805,9 +816,6 @@ if __name__ == "__main__":
     # Load or generate brute force results
     brute_force_results = load_or_generate_brute_force_results(dataset_name)
     print(f"Loaded {len(brute_force_results)} pre-computed brute force results")
-
-    session_response = create_session()
-    print("Session Response:", session_response)
 
     create_collection_response = create_db(
         name=vector_db_name,
