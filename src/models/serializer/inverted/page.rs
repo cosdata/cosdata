@@ -20,6 +20,7 @@ impl<const LEN: usize> InvertedIndexSerialize for Page<LEN> {
         _dim_bufman: &BufferManager,
         data_bufmans: &BufferManagerFactory<u8>,
         data_file_idx: u8,
+        _data_file_parts: u8,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
         let bufman = data_bufmans.get(data_file_idx)?;
@@ -65,6 +66,7 @@ impl<const LEN: usize> InvertedIndexSerialize for Page<LEN> {
         data_bufmans: &BufferManagerFactory<u8>,
         file_offset: FileOffset,
         data_file_idx: u8,
+        _data_file_parts: u8,
         _cache: &InvertedIndexCache,
     ) -> Result<Self, BufIoError> {
         let bufman = data_bufmans.get(data_file_idx)?;

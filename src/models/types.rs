@@ -995,6 +995,7 @@ impl CollectionsMap {
             root: Arc::new(InvertedIndexSparseAnnBasicTSHashmap::deserialize(
                 index_path,
                 inverted_index_data.quantization_bits,
+                config.inverted_index_data_file_parts,
             )?),
             lmdb,
             current_version: ArcShift::new(current_version),
@@ -1007,6 +1008,7 @@ impl CollectionsMap {
             sampling_data: crate::indexes::inverted_index::SamplingData::default(),
             sample_threshold: inverted_index_data.sample_threshold,
             vec_raw_manager,
+            early_terminate_threshold: inverted_index_data.early_terminate_threshold,
         };
 
         Ok(inverted_index)

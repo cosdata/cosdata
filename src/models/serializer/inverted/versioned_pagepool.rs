@@ -18,16 +18,27 @@ impl<const LEN: usize> InvertedIndexSerialize for VersionedPagepool<LEN> {
         dim_bufman: &BufferManager,
         data_bufmans: &BufferManagerFactory<u8>,
         data_file_idx: u8,
+        data_file_parts: u8,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
         let bufman = data_bufmans.get(data_file_idx)?;
-        let pagepool_offset =
-            self.pagepool
-                .serialize(dim_bufman, data_bufmans, data_file_idx, cursor)?;
+        let pagepool_offset = self.pagepool.serialize(
+            dim_bufman,
+            data_bufmans,
+            data_file_idx,
+            data_file_parts,
+            cursor,
+        )?;
         let next_offset = {
             let next = self.next.read().map_err(|_| BufIoError::Locking)?;
             if let Some(next) = &*next {
-                next.serialize(dim_bufman, data_bufmans, data_file_idx, cursor)?
+                next.serialize(
+                    dim_bufman,
+                    data_bufmans,
+                    data_file_idx,
+                    data_file_parts,
+                    cursor,
+                )?
             } else {
                 u32::MAX
             }
@@ -62,6 +73,7 @@ impl<const LEN: usize> InvertedIndexSerialize for VersionedPagepool<LEN> {
         data_bufmans: &BufferManagerFactory<u8>,
         file_offset: FileOffset,
         data_file_idx: u8,
+        data_file_parts: u8,
         cache: &InvertedIndexCache,
     ) -> Result<Self, BufIoError> {
         let bufman = data_bufmans.get(data_file_idx)?;
@@ -76,6 +88,7 @@ impl<const LEN: usize> InvertedIndexSerialize for VersionedPagepool<LEN> {
             data_bufmans,
             FileOffset(pagepool_offset),
             data_file_idx,
+            data_file_parts,
             cache,
         )?;
         let next = if next_offset == u32::MAX {
@@ -86,6 +99,7 @@ impl<const LEN: usize> InvertedIndexSerialize for VersionedPagepool<LEN> {
                 data_bufmans,
                 FileOffset(next_offset),
                 data_file_idx,
+                data_file_parts,
                 cache,
             )?)
         };

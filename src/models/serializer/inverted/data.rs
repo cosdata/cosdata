@@ -19,6 +19,7 @@ impl InvertedIndexSerialize for InvertedIndexSparseAnnNodeBasicTSHashmapData {
         dim_bufman: &BufferManager,
         data_bufmans: &BufferManagerFactory<u8>,
         data_file_idx: u8,
+        data_file_parts: u8,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
         let start = dim_bufman.cursor_position(cursor)?;
@@ -29,7 +30,13 @@ impl InvertedIndexSerialize for InvertedIndexSparseAnnNodeBasicTSHashmapData {
                 dim_bufman.update_u32_with_cursor(cursor, u32::MAX)?;
                 continue;
             };
-            let offset = pool.serialize(dim_bufman, data_bufmans, data_file_idx, data_cursor)?;
+            let offset = pool.serialize(
+                dim_bufman,
+                data_bufmans,
+                data_file_idx,
+                data_file_parts,
+                data_cursor,
+            )?;
             dim_bufman.update_u32_with_cursor(cursor, offset)?;
         }
         Ok(start as u32)
@@ -40,6 +47,7 @@ impl InvertedIndexSerialize for InvertedIndexSparseAnnNodeBasicTSHashmapData {
         data_bufmans: &BufferManagerFactory<u8>,
         file_offset: FileOffset,
         data_file_idx: u8,
+        data_file_parts: u8,
         cache: &InvertedIndexCache,
     ) -> Result<Self, BufIoError> {
         let cursor = dim_bufman.open_cursor()?;
@@ -59,6 +67,7 @@ impl InvertedIndexSerialize for InvertedIndexSparseAnnNodeBasicTSHashmapData {
                 data_bufmans,
                 FileOffset(offset),
                 data_file_idx,
+                data_file_parts,
                 cache,
             )?;
             map.insert(i, pool);

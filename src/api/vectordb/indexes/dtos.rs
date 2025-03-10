@@ -113,6 +113,7 @@ pub(crate) struct CreateSparseIndexDto {
     pub name: String,
     #[serde(default)]
     pub quantization: SparseIndexQuantization,
+    pub early_terminate_threshold: f32,
     pub sample_threshold: usize,
 }
 

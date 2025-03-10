@@ -18,6 +18,7 @@ impl<const N: usize> InvertedIndexSerialize
         dim_bufman: &BufferManager,
         data_bufmans: &BufferManagerFactory<u8>,
         data_file_idx: u8,
+        data_file_parts: u8,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
         let start = dim_bufman.cursor_position(cursor)?;
@@ -32,7 +33,13 @@ impl<const N: usize> InvertedIndexSerialize
 
             let item = unsafe { &*item_ptr };
             let current_pos = dim_bufman.cursor_position(cursor)?;
-            let item_offset = item.serialize(dim_bufman, data_bufmans, data_file_idx, cursor)?;
+            let item_offset = item.serialize(
+                dim_bufman,
+                data_bufmans,
+                data_file_idx,
+                data_file_parts,
+                cursor,
+            )?;
             dim_bufman.seek_with_cursor(cursor, current_pos)?;
 
             dim_bufman.update_u32_with_cursor(cursor, item_offset)?;
@@ -46,6 +53,7 @@ impl<const N: usize> InvertedIndexSerialize
         data_bufmans: &BufferManagerFactory<u8>,
         file_offset: FileOffset,
         data_file_idx: u8,
+        data_file_parts: u8,
         cache: &InvertedIndexCache,
     ) -> Result<Self, BufIoError> {
         let cursor = dim_bufman.open_cursor()?;
@@ -64,6 +72,7 @@ impl<const N: usize> InvertedIndexSerialize
                 data_bufmans,
                 FileOffset(offset),
                 data_file_idx,
+                data_file_parts,
                 cache,
             )?));
             array.insert(i, item);

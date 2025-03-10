@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::models::types::VectorId;
@@ -9,6 +10,17 @@ use crate::models::types::VectorId;
 pub struct RawSparseVectorEmbedding {
     pub raw_vec: Arc<Vec<SparsePair>>,
     pub hash_vec: VectorId,
+}
+
+impl RawSparseVectorEmbedding {
+    pub fn into_map(&self) -> FxHashMap<u32, f32> {
+        let mut map = FxHashMap::default();
+
+        for pair in &*self.raw_vec {
+            map.insert(pair.0, pair.1);
+        }
+        map
+    }
 }
 
 #[derive(
