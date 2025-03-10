@@ -1,6 +1,6 @@
 use super::buffered_io::{BufIoError, BufferManager, BufferManagerFactory};
 use super::common::TSHashTable;
-use super::file_persist::read_prop_from_file;
+use super::file_persist::read_prop_value_from_file;
 use super::fixedset::VersionedInvertedFixedSetIndex;
 use super::lazy_load::{FileIndex, LazyItem, LazyItemVec, VectorData};
 use super::lru_cache::LRUCache;
@@ -297,7 +297,7 @@ impl DenseIndexCache {
             return Ok(prop);
         }
         let mut prop_file_guard = self.prop_file.write().unwrap();
-        let prop = Arc::new(read_prop_from_file(
+        let prop = Arc::new(read_prop_value_from_file(
             (offset, length),
             &mut *prop_file_guard,
         )?);

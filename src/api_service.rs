@@ -718,6 +718,7 @@ pub fn run_upload(
     if index_before_insertion {
         index_embeddings(
             &ctx.config,
+            &ctx.ain_env,
             dense_index.clone(),
             ctx.config.upload_process_batch_size,
             lazy_item_versions_table.clone(),
@@ -809,6 +810,7 @@ pub fn run_upload(
     if count_unindexed >= ctx.config.upload_threshold {
         index_embeddings(
             &ctx.config,
+            &ctx.ain_env,
             dense_index.clone(),
             ctx.config.upload_process_batch_size,
             lazy_item_versions_table,

@@ -6,7 +6,9 @@ use crate::distance::DistanceFunction;
 use crate::indexes::inverted_index::InvertedIndex;
 use crate::indexes::inverted_index_types::RawSparseVectorEmbedding;
 use crate::macros::key;
+use crate::metadata::schema::MetadataDimensions;
 use crate::metadata::MetadataFields;
+use crate::metadata::MetadataSchema;
 use crate::models::buffered_io::*;
 use crate::models::common::*;
 use crate::models::dot_product::dot_product_f32;
@@ -57,7 +59,7 @@ pub fn create_root_node(
     let vector_list = Arc::new(quantization_metric.quantize(&vec, storage_type, values_range)?);
 
     let mut prop_file_guard = prop_file.write().unwrap();
-    let location = write_prop_to_file(&vec_hash, vector_list.clone(), &mut *prop_file_guard)?;
+    let location = write_prop_value_to_file(&vec_hash, vector_list.clone(), &mut *prop_file_guard)?;
     drop(prop_file_guard);
 
     let prop_value = Arc::new(NodePropValue {
@@ -489,8 +491,135 @@ pub fn insert_embedding(
     Ok(())
 }
 
+/// Intermediate representation of the embedding in a form that's
+/// ready for indexing.
+///
+/// i.e. with quantization performed and property values and metadata
+/// fields converted into appropriate types.
+struct IndexableEmbedding {
+    prop_value: Arc<NodePropValue>,
+    prop_metadata: Option<Arc<NodePropMetadata>>,
+    embedding: QuantizedVectorEmbedding,
+}
+
+/// Computes and returns all metadata dimensions for the provided
+/// metadata `fields` based on the metadata `schema`
+///
+/// Note that the result includes base_dimensions as well as
+/// weighted_dimensions.
+fn metadata_dimensions(
+    schema: &MetadataSchema,
+    fields: &MetadataFields
+) -> Vec<(u8, MetadataDimensions)> {
+    let mut result = vec![];
+    // First add base dimensions
+    result.push((0_u8, schema.base_dimensions()));
+    // @TODO(vineet): Replace with appropriate weight
+    let wdims = schema.weighted_dimensions(fields, 64000).unwrap();
+    for (i, wd) in wdims.into_iter().enumerate() {
+        result.push(((i+1) as u8, wd));
+    }
+    result
+}
+
+/// Converts raw embeddings into IndexableEmbedding i.e. ready to be
+/// indexed - with quantization performed and property values and
+/// metadata fields converted into appropriate types.
+fn preprocess_embedding(
+    app_env: &AppEnv,
+    dense_index: Arc<DenseIndex>,
+    quantization: &QuantizationMetric,
+    raw_emb: &RawVectorEmbedding
+) -> Vec<IndexableEmbedding> {
+    let quantized_vec = Arc::new(
+        quantization
+            .quantize(
+                &raw_emb.raw_vec,
+                dense_index.storage_type.clone().get().clone(),
+                *dense_index.values_range.read().unwrap(),
+            )
+            .expect("Quantization failed"),
+    );
+
+    // Write props to the prop file
+    let mut prop_file_guard = dense_index.prop_file.write().unwrap();
+    let location = write_prop_value_to_file(
+        &raw_emb.hash_vec,
+        quantized_vec.clone(),
+        &mut *prop_file_guard,
+    ).expect("failed to write prop");
+    drop(prop_file_guard);
+
+    let prop_value = Arc::new(NodePropValue {
+        id: raw_emb.hash_vec.clone(),
+        vec: quantized_vec.clone(),
+        location,
+    });
+
+    let embedding = QuantizedVectorEmbedding {
+        quantized_vec,
+        hash_vec: raw_emb.hash_vec.clone(),
+    };
+
+    let coll = app_env
+        .collections_map
+        .get_collection(&dense_index.database_name)
+        .expect("Couldn't get collection from ain_env");
+    // @TODO(vineet): Remove unwrap
+    let metadata_schema = coll.metadata_schema.as_ref().unwrap();
+
+    match &raw_emb.raw_metadata {
+        Some(metadata_fields) => {
+            let wdims = metadata_dimensions(metadata_schema, metadata_fields);
+            let mut result = Vec::with_capacity(wdims.len());
+            for (i, wdim) in wdims {
+                let vec = Arc::new(Metadata::from(wdim));
+                // @TODO(vineet): Need more clarity about how a
+                // metadata ids that are unique within a replica set
+                // (v/s unique across all vectors in a collections)
+                // will result in deterministic composite identifiers
+                // for the ProbNode. Ref:
+                // https://discord.com/channels/1250672673856421938/1335809236537446452/1348638117984206848
+                let id = MetadataId(i + 1);
+
+                // Write metadata to the same prop file
+                // @TODO(vineet): Remove unwrap
+                let mut prop_file_guard = dense_index.prop_file.write().unwrap();
+                let location = write_prop_metadata_to_file(
+                    &id,
+                    vec.clone(),
+                    &mut *prop_file_guard
+                ).unwrap();
+                drop(prop_file_guard);
+
+                let prop_metadata = NodePropMetadata {
+                    id,
+                    vec,
+                    location,
+                };
+                let emb = IndexableEmbedding {
+                    prop_value: prop_value.clone(),
+                    prop_metadata: Some(Arc::new(prop_metadata)),
+                    embedding: embedding.clone()
+                };
+                result.push(emb);
+            }
+            result
+        },
+        None => {
+            let emb = IndexableEmbedding {
+                prop_value,
+                prop_metadata: None,
+                embedding: embedding.clone(),
+            };
+            vec![emb]
+        },
+    }
+}
+
 pub fn index_embeddings(
     config: &Config,
+    app_env: &AppEnv,
     dense_index: Arc<DenseIndex>,
     upload_process_batch_size: usize,
     lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16, u8), SharedNode>>,
@@ -543,46 +672,16 @@ pub fn index_embeddings(
     let hnsw_params = dense_index.hnsw_params.clone();
     let hnsw_params_guard = hnsw_params.read().unwrap();
 
-    let mut index = |embeddings: Vec<RawVectorEmbedding>,
-                     next_offset: u32|
-     -> Result<(), WaCustomError> {
+    let mut index = |embeddings: Vec<RawVectorEmbedding>, next_offset: u32| -> Result<(), WaCustomError> {
         let mut quantization_arc = dense_index.quantization_metric.clone();
         let quantization = quantization_arc.get();
-
         let results: Vec<()> = embeddings
             .into_iter()
-            .map(|raw_emb| {
+            .flat_map(|raw_emb| preprocess_embedding(app_env, dense_index.clone(), quantization, &raw_emb))
+            .map(|emb| {
                 let lp = &dense_index.levels_prob;
                 let iv = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
-                let quantized_vec = Arc::new(
-                    quantization
-                        .quantize(
-                            &raw_emb.raw_vec,
-                            dense_index.storage_type.clone().get().clone(),
-                            *dense_index.values_range.read().unwrap(),
-                        )
-                        .expect("Quantization failed"),
-                );
-                let mut prop_file_guard = dense_index.prop_file.write().unwrap();
-                let location = write_prop_to_file(
-                    &raw_emb.hash_vec,
-                    quantized_vec.clone(),
-                    &mut *prop_file_guard,
-                )
-                .expect("failed to write prop");
-                drop(prop_file_guard);
-                let prop = Arc::new(NodePropValue {
-                    id: raw_emb.hash_vec.clone(),
-                    vec: quantized_vec.clone(),
-                    location,
-                });
-                let embedding = QuantizedVectorEmbedding {
-                    quantized_vec,
-                    hash_vec: raw_emb.hash_vec,
-                };
-
                 let current_level = HNSWLevel(iv.try_into().unwrap());
-
                 let mut current_entry = dense_index.get_root_vec();
 
                 loop {
@@ -602,8 +701,9 @@ pub fn index_embeddings(
                     config,
                     dense_index.clone(),
                     ptr::null_mut(),
-                    embedding,
-                    prop,
+                    emb.embedding,
+                    emb.prop_value,
+                    emb.prop_metadata,
                     current_entry,
                     current_level,
                     version,
@@ -712,39 +812,23 @@ pub fn index_embeddings_in_transaction(
     let hnsw_params = dense_index.hnsw_params.clone();
     let hnsw_params_guard = hnsw_params.read().unwrap();
     let index = |vecs: Vec<(VectorId, Vec<f32>, Option<MetadataFields>)>| {
-        for (id, values, metadata) in vecs {
-            let raw_emb = RawVectorEmbedding {
-                hash_vec: id,
-                raw_vec: Arc::new(values),
-                raw_metadata: metadata,
-            };
-            transaction.post_raw_embedding(raw_emb.clone());
+        let embeddings = vecs
+            .into_iter()
+            .map(|vec| {
+                let (id, values, metadata) = vec;
+                let raw_emb = RawVectorEmbedding {
+                    hash_vec: id,
+                    raw_vec: Arc::new(values),
+                    raw_metadata: metadata,
+                };
+                transaction.post_raw_embedding(raw_emb.clone());
+                raw_emb
+            })
+            .flat_map(|emb| preprocess_embedding(&ctx.ain_env, dense_index.clone(), quantization, &emb))
+            .collect::<Vec<IndexableEmbedding>>();
+        for emb in embeddings {
             let lp = &dense_index.levels_prob;
             let max_level = get_max_insert_level(rand::random::<f32>().into(), lp.clone());
-            let quantized_vec = Arc::new(quantization.quantize(
-                &raw_emb.raw_vec,
-                dense_index.storage_type.clone().get().clone(),
-                *dense_index.values_range.read().unwrap(),
-            )?);
-
-            let mut prop_file_guard = dense_index.prop_file.write().unwrap();
-            let location = write_prop_to_file(
-                &raw_emb.hash_vec,
-                quantized_vec.clone(),
-                &mut *prop_file_guard,
-            )?;
-            drop(prop_file_guard);
-
-            let prop = Arc::new(NodePropValue {
-                id: raw_emb.hash_vec.clone(),
-                vec: quantized_vec.clone(),
-                location,
-            });
-
-            let embedding = QuantizedVectorEmbedding {
-                quantized_vec,
-                hash_vec: raw_emb.hash_vec,
-            };
 
             // Start from root at highest level
             let root_entry = dense_index.get_root_vec();
@@ -754,8 +838,9 @@ pub fn index_embeddings_in_transaction(
                 &ctx.config,
                 dense_index.clone(),
                 ptr::null_mut(),
-                embedding,
-                prop,
+                emb.embedding,
+                emb.prop_value,
+                emb.prop_metadata,
                 root_entry,
                 highest_level,
                 version,
@@ -811,7 +896,8 @@ pub fn index_embedding(
     dense_index: Arc<DenseIndex>,
     parent: SharedNode,
     vector_emb: QuantizedVectorEmbedding,
-    prop: Arc<NodePropValue>,
+    prop_value: Arc<NodePropValue>,
+    prop_metadata: Option<Arc<NodePropMetadata>>,
     cur_entry: SharedNode,
     cur_level: HNSWLevel,
     version: Hash,
@@ -861,7 +947,8 @@ pub fn index_embedding(
                 dense_index.clone(),
                 ptr::null_mut(),
                 vector_emb.clone(),
-                prop.clone(),
+                prop_value.clone(),
+                prop_metadata.clone(),
                 unsafe { &*z[0].0 }
                     .try_get_data(&dense_index.cache)?
                     .get_child(),
@@ -891,7 +978,8 @@ pub fn index_embedding(
             version,
             version_number,
             cur_level,
-            prop.clone(),
+            prop_value.clone(),
+            prop_metadata.clone(),
             parent,
             ptr::null_mut(),
             neighbors_count,
@@ -914,7 +1002,8 @@ pub fn index_embedding(
                 dense_index.clone(),
                 lazy_node,
                 vector_emb.clone(),
-                prop.clone(),
+                prop_value.clone(),
+                prop_metadata.clone(),
                 unsafe { &*z[0].0 }
                     .try_get_data(&dense_index.cache)?
                     .get_child(),
@@ -960,15 +1049,15 @@ fn create_node(
     version_id: Hash,
     version_number: u16,
     hnsw_level: HNSWLevel,
-    prop: Arc<NodePropValue>,
+    prop_value: Arc<NodePropValue>,
+    prop_metadata: Option<Arc<NodePropMetadata>>,
     parent: SharedNode,
     child: SharedNode,
     neighbors_count: usize,
     is_level_0: bool,
     offset: u32,
 ) -> SharedNode {
-    // @TODO(vineet): Add support for optional metadata dimensions
-    let node = ProbNode::new(hnsw_level, prop, None, parent, child, neighbors_count);
+    let node = ProbNode::new(hnsw_level, prop_value, prop_metadata, parent, child, neighbors_count);
     ProbLazyItem::new(
         node,
         version_id,
@@ -1005,8 +1094,7 @@ fn get_or_create_version(
             let new_node = ProbNode::new_with_neighbors_and_versions_and_root_version(
                 node.hnsw_level,
                 node.prop_value.clone(),
-                // @TODO(vineet): Add support for optional metadata dimensions
-                None,
+                node.prop_metadata.clone(),
                 node.clone_neighbors(),
                 node.get_parent(),
                 node.get_child(),

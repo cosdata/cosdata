@@ -4,7 +4,7 @@ use crate::{
     models::{
         buffered_io::{BufferManager, BufferManagerFactory},
         cache_loader::DenseIndexCache,
-        file_persist::write_prop_to_file,
+        file_persist::write_prop_value_to_file,
         lazy_load::FileIndex,
         prob_lazy_load::{lazy_item::ProbLazyItem, lazy_item_array::ProbLazyItemArray},
         prob_node::{ProbNode, SharedNode},
@@ -136,7 +136,7 @@ fn create_prob_node(id: u64, prop_file: &RwLock<File>) -> ProbNode {
         quant_vec: vec![1, 2, 3],
     });
     let mut prop_file_guard = prop_file.write().unwrap();
-    let location = write_prop_to_file(&id, value.clone(), &mut *prop_file_guard).unwrap();
+    let location = write_prop_value_to_file(&id, value.clone(), &mut *prop_file_guard).unwrap();
     drop(prop_file_guard);
     let prop = Arc::new(NodePropValue {
         id,

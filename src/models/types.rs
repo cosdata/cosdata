@@ -23,6 +23,7 @@ use crate::distance::{
 use crate::indexes::inverted_index::InvertedIndex;
 use crate::indexes::inverted_index_data::InvertedIndexData;
 use crate::macros::key;
+use crate::metadata::schema::MetadataDimensions;
 use crate::metadata::MetadataFields;
 use crate::models::buffered_io::BufIoError;
 use crate::models::common::*;
@@ -104,11 +105,23 @@ impl StdHash for NodePropValue {
     }
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct Metadata {
-    pub mag: u32,
-    pub mbits: Vec<u16>,
+    pub mag: f32,
+    pub mbits: Vec<i32>,
 }
 
+impl From<MetadataDimensions> for Metadata {
+    fn from(dims: MetadataDimensions) -> Self {
+        Self {
+            // Euclidean norm
+            mag: dims.iter().map(|d| (*d as f32) * (*d as f32)).sum::<f32>().sqrt(),
+            mbits: dims
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 pub struct MetadataId(pub u8);
 
 pub struct NodePropMetadata {
@@ -580,6 +593,7 @@ pub struct DenseIndex {
     pub database_name: String,
     pub root_vec: Arc<AtomicPtr<ProbLazyItem<ProbNode>>>,
     pub levels_prob: Arc<Vec<(f64, i32)>>,
+    // @TODO(vineet): Should this be with or without phantom dimensions
     pub dim: usize,
     pub prop_file: Arc<RwLock<File>>,
     pub lmdb: MetaDb,

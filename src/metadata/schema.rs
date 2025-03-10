@@ -272,7 +272,7 @@ impl MetadataSchema {
     }
 }
 
-type MetadataDimensions = Vec<i32>;
+pub type MetadataDimensions = Vec<i32>;
 
 // Functionality to be implemented
 //
