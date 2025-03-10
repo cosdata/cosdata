@@ -6,6 +6,8 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib3
 import random
+import getpass
+import os
 import pickle
 from tqdm import tqdm
 import heapq
@@ -30,7 +32,13 @@ def generate_headers():
 # Function to login with credentials
 def create_session():
     url = f"{host}/auth/create-session"
-    data = {"username": "admin", "password": "admin"}
+    # Use environment variable if available, otherwise prompt
+    if "ADMIN_PASSWORD" in os.environ:
+        password = os.environ["ADMIN_PASSWORD"]
+    else:
+        password = getpass.getpass("Enter admin password: ")
+
+    data = {"username": "admin", "password": password}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
