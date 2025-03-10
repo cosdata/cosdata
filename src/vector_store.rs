@@ -772,7 +772,7 @@ pub fn index_embeddings_in_transaction(
             vecs.into_par_iter()
                 .chunks(batch_size)
                 .map(index)
-                .collect::<Result<(), _>>()?;
+                .collect::<Result<Vec<()>, _>>()?;
         }
     }
 
