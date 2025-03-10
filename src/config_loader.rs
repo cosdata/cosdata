@@ -1,3 +1,5 @@
+use super::models::common::WaCustomError;
+use super::models::paths::{get_config_path, get_data_path};
 use serde::{Deserialize, Deserializer};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 use std::{fs, path::PathBuf};
@@ -14,6 +16,8 @@ pub struct Config {
     pub upload_threshold: u32,
     pub upload_process_batch_size: usize,
     pub num_regions_to_load_on_restart: usize,
+    pub inverted_index_data_file_parts: u8,
+    pub sparse_raw_values_reranking_factor: usize,
 }
 
 #[derive(Deserialize, Clone)]
@@ -174,9 +178,12 @@ pub struct Search {
     pub shortlist_size: usize,
 }
 
-pub fn load_config() -> Config {
-    let config_contents = fs::read_to_string("config.toml").expect("Failed to load config file");
-    let config: Config =
-        toml::from_str(&config_contents).expect("Failed to parse config file contents!");
-    config
+pub fn load_config() -> Result<Config, WaCustomError> {
+    let config_path = get_config_path();
+
+    let config_contents = std::fs::read_to_string(&config_path)
+        .map_err(|e| WaCustomError::ConfigError(format!("Failed to read config file: {}", e)))?;
+
+    toml::from_str(&config_contents)
+        .map_err(|e| WaCustomError::ConfigError(format!("Invalid config format: {}", e)))
 }

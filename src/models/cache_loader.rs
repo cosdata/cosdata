@@ -545,6 +545,7 @@ pub struct InvertedIndexCache {
     pub data_bufmans: Arc<BufferManagerFactory<u8>>,
     loading_data: TSHashTable<u64, Arc<Mutex<bool>>>,
     loading_sets: TSHashTable<u64, Arc<Mutex<bool>>>,
+    pub data_file_parts: u8,
 }
 
 unsafe impl Send for InvertedIndexCache {}
@@ -554,6 +555,7 @@ impl InvertedIndexCache {
     pub fn new(
         dim_bufman: Arc<BufferManager>,
         data_bufmans: Arc<BufferManagerFactory<u8>>,
+        data_file_parts: u8,
     ) -> Self {
         let data_registry = LRUCache::with_prob_eviction(100_000_000, 0.03125);
         let sets_registry = LRUCache::with_prob_eviction(100_000_000, 0.03125);
@@ -565,6 +567,7 @@ impl InvertedIndexCache {
             data_bufmans,
             loading_data: TSHashTable::new(16),
             loading_sets: TSHashTable::new(16),
+            data_file_parts,
         }
     }
 
@@ -608,6 +611,7 @@ impl InvertedIndexCache {
             &self.data_bufmans,
             file_offset,
             data_file_idx,
+            self.data_file_parts,
             self,
         )?;
         let state = ProbLazyItemState::Ready(ReadyState {
@@ -674,6 +678,7 @@ impl InvertedIndexCache {
             &self.data_bufmans,
             FileOffset(data_offset),
             data_file_idx,
+            self.data_file_parts,
             self,
         )?;
         let state = ProbLazyItemState::Ready(ReadyState {
@@ -715,6 +720,7 @@ impl InvertedIndexCache {
             &self.data_bufmans,
             file_offset,
             data_file_idx,
+            self.data_file_parts,
             self,
         )
     }

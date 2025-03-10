@@ -293,6 +293,7 @@ impl std::fmt::Debug for InvertedIndexSparseAnnNodeBasicTSHashmap {
 pub struct InvertedIndexSparseAnnBasicTSHashmap {
     pub root: Arc<InvertedIndexSparseAnnNodeBasicTSHashmap>,
     pub cache: Arc<InvertedIndexCache>,
+    pub data_file_parts: u8,
     pub offset_counter: AtomicU32,
     pub node_size: u32,
 }
@@ -460,6 +461,7 @@ impl InvertedIndexSparseAnnBasicTSHashmap {
         root_path: PathBuf,
         quantization_bits: u8,
         version: Hash,
+        data_file_parts: u8,
     ) -> Result<Self, BufIoError> {
         let dim_file = OpenOptions::new()
             .read(true)
@@ -475,7 +477,11 @@ impl InvertedIndexSparseAnnBasicTSHashmap {
             |root, idx: &u8| root.join(format!("{}.idat", idx)),
             8192,
         ));
-        let cache = Arc::new(InvertedIndexCache::new(dim_bufman, data_bufmans));
+        let cache = Arc::new(InvertedIndexCache::new(
+            dim_bufman,
+            data_bufmans,
+            data_file_parts,
+        ));
 
         Ok(InvertedIndexSparseAnnBasicTSHashmap {
             root: Arc::new(InvertedIndexSparseAnnNodeBasicTSHashmap::new(
@@ -486,6 +492,7 @@ impl InvertedIndexSparseAnnBasicTSHashmap {
                 FileOffset(0),
             )),
             cache,
+            data_file_parts,
             offset_counter,
             node_size,
         })
@@ -545,13 +552,22 @@ impl InvertedIndexSparseAnnBasicTSHashmap {
 
     pub fn serialize(&self) -> Result<(), BufIoError> {
         let cursor = self.cache.dim_bufman.open_cursor()?;
-        self.root
-            .serialize(&self.cache.dim_bufman, &self.cache.data_bufmans, 0, cursor)?;
+        self.root.serialize(
+            &self.cache.dim_bufman,
+            &self.cache.data_bufmans,
+            0,
+            self.data_file_parts,
+            cursor,
+        )?;
         self.cache.dim_bufman.close_cursor(cursor)?;
         Ok(())
     }
 
-    pub fn deserialize(root_path: PathBuf, quantization_bits: u8) -> Result<Self, BufIoError> {
+    pub fn deserialize(
+        root_path: PathBuf,
+        quantization_bits: u8,
+        data_file_parts: u8,
+    ) -> Result<Self, BufIoError> {
         let dim_file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -566,7 +582,11 @@ impl InvertedIndexSparseAnnBasicTSHashmap {
             |root, idx: &u8| root.join(format!("{}.idat", idx)),
             8192,
         ));
-        let cache = Arc::new(InvertedIndexCache::new(dim_bufman, data_bufmans));
+        let cache = Arc::new(InvertedIndexCache::new(
+            dim_bufman,
+            data_bufmans,
+            data_file_parts,
+        ));
 
         Ok(Self {
             root: Arc::new(InvertedIndexSparseAnnNodeBasicTSHashmap::deserialize(
@@ -574,9 +594,11 @@ impl InvertedIndexSparseAnnBasicTSHashmap {
                 &cache.data_bufmans,
                 FileOffset(0),
                 0,
+                data_file_parts,
                 &cache,
             )?),
             cache,
+            data_file_parts,
             offset_counter,
             node_size,
         })

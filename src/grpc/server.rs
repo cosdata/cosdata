@@ -1,8 +1,7 @@
+use log::info;
 use std::sync::Arc;
 use tonic::transport::Server;
-use log::info;
 
-use crate::app_context::AppContext;
 use super::collections::CollectionsServiceImpl;
 use super::vectors::VectorsServiceImpl;
 use super::auth::AuthServiceImpl;
@@ -13,6 +12,7 @@ use super::proto::{
     auth_service_server::AuthServiceServer,
     indexes_service_server::IndexesServiceServer,
 };
+use crate::app_context::AppContext;
 use tonic_reflection::server::{ServerReflection, ServerReflectionServer};
 
 fn reflection_service() -> ServerReflectionServer<impl ServerReflection> {
@@ -22,7 +22,10 @@ fn reflection_service() -> ServerReflectionServer<impl ServerReflection> {
         .unwrap()
 }
 
-pub async fn start_grpc_server(context: Arc<AppContext>, port: u16) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn start_grpc_server(
+    context: Arc<AppContext>,
+    port: u16,
+) -> Result<(), Box<dyn std::error::Error>> {
     const DEFAULT_HOST: &str = "[::1]";
     let addr = format!("{}:{}", DEFAULT_HOST, port).parse()?;
 
