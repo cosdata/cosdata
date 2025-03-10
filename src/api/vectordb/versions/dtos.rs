@@ -5,7 +5,7 @@ use crate::models::versioning::Hash;
 pub struct VersionMetadata {
     pub hash: Hash,
     pub version_number: u32,
-    pub timestamp: u64,
+    pub timestamp: u32,
     pub vector_count: u64,
 }
 

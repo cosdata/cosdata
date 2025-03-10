@@ -3,6 +3,7 @@ use actix_web::{
     HttpResponse, ResponseError,
 };
 use std::fmt::Display;
+use crate::models::common::WaCustomError;
 
 #[derive(Debug)]
 pub enum VersionError {
@@ -36,6 +37,15 @@ impl ResponseError for VersionError {
             Self::InvalidVersionHash => StatusCode::BAD_REQUEST,
             Self::UpdateFailed(_) => StatusCode::BAD_REQUEST,
             Self::DatabaseError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+}
+
+impl From<WaCustomError> for VersionError {
+    fn from(error: WaCustomError) -> Self {
+        match error {
+            WaCustomError::DatabaseError(msg) => VersionError::DatabaseError(msg),
+            _ => VersionError::DatabaseError(error.to_string()),
         }
     }
 }
