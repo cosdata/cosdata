@@ -1,6 +1,8 @@
 upload_threshold = 100
 upload_process_batch_size = 1000
 num_regions_to_load_on_restart = 10000
+inverted_index_data_file_parts = 8
+sparse_raw_values_reranking_factor = 20
 
 [server]
 host = "127.0.0.1"

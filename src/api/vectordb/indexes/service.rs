@@ -35,6 +35,7 @@ pub(crate) async fn create_sparse_index(
         create_index_dto.name,
         create_index_dto.quantization,
         create_index_dto.sample_threshold,
+        create_index_dto.early_terminate_threshold,
     )
     .await
 }
