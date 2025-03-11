@@ -1,4 +1,6 @@
 use std::sync::Arc;
+use async_std::task::current;
+
 use crate::{
     app_context::AppContext,
     models::{common::WaCustomError, meta_persist::{retrieve_current_version, update_current_version}, types::{get_app_env, MetaDb}, versioning::VersionControl}
@@ -10,14 +12,10 @@ pub(crate) async fn list_versions(
     ctx: Arc<AppContext>,
     collection_id: &str,
 ) -> Result<VersionListResponse, VersionError> {
-    let environment = get_app_env(&ctx.config)?;
-    // let collection = ctx.ain_env.collections_map
-    // .get_collection(collection_id)
-    // .ok_or(VersionError::CollectionNotFound)?;
     let env = ctx.ain_env.persist.clone();
-    let lmdb = MetaDb::from_env(env.clone(), &collection_id)
+    let lmdb = MetaDb::from_env(env.clone(), collection_id)
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-    let version_control = VersionControl::from_existing(environment.persist.clone(), lmdb.db.clone());
+    let version_control = VersionControl::from_existing(env.clone(), lmdb.db.clone());
     let versions = version_control.get_branch_versions("main")
     .map_err(|e|WaCustomError::DatabaseError(e.to_string()))?;
     let current_hash = retrieve_current_version(&lmdb)
@@ -41,7 +39,24 @@ pub(crate) async fn get_current_version(
     ctx: Arc<AppContext>,
     collection_id: &str,
 ) -> Result<CurrentVersionResponse, VersionError> {
-   todo!() 
+    let env = ctx.ain_env.persist.clone();
+    let lmdb = MetaDb::from_env(env.clone(), collection_id)
+        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+    let version_control = VersionControl::from_existing(env.clone(), lmdb.db.clone());
+    let versions = version_control.get_branch_versions("main")
+    .map_err(|e|WaCustomError::DatabaseError(e.to_string()))?;
+    let current_hash = retrieve_current_version(&lmdb)
+        .map_err(|e| VersionError::DatabaseError(e.to_string()))?;
+    let current_version = versions.into_iter()
+        .find(|(hash, _)| *hash == current_hash)
+        .map(|(hash, version_hash)| CurrentVersionResponse {
+            hash,
+            version_number: *version_hash.version,
+            timestamp: version_hash.timestamp.0 as u64,
+            vector_count: 0
+        })
+        .ok_or(VersionError::InvalidVersionHash)?;
+    Ok(current_version)
 }
 
 pub(crate) async fn set_current_version(
