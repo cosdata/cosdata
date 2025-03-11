@@ -12,7 +12,7 @@ pub struct VersionMetadata {
 #[derive(Serialize)]
 pub struct VersionListResponse {
     pub versions: Vec<VersionMetadata>,
-    pub current_version: Hash,
+    pub current_hash: Hash,
 }
 
 #[derive(Serialize)]

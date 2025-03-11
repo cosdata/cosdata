@@ -20,7 +20,7 @@ pub(crate) async fn list_versions(
     .map_err(|e|WaCustomError::DatabaseError(e.to_string()))?;
     let current_hash = retrieve_current_version(&lmdb)
         .map_err(|e| VersionError::DatabaseError(e.to_string()))?;
-    let versions = versions.into_iter().map(|(hash, version_hash)|{
+    let mut versions = versions.into_iter().map(|(hash, version_hash)|{
         VersionMetadata{
             hash,
             version_number: *version_hash.version,
@@ -28,9 +28,10 @@ pub(crate) async fn list_versions(
             vector_count: 0
         }
     }).collect::<Vec<VersionMetadata>>();
+    versions.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     Ok(VersionListResponse{
             versions,
-            current_version: current_hash
+            current_hash
     })
    
 }
