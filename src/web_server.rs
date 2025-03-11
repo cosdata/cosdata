@@ -61,8 +61,8 @@ pub async fn run_actix_server_with_context(ctx: Data<AppContext>) -> std::io::Re
                     .service(indexes_module())
                     .service(vectors_module())
                     .service(transactions_module())
-                    .service(version_module())      // This should come before collections
-                    .service(collections_module())  // This should come last
+                    .service(version_module())      
+                    .service(collections_module()) 
                     .service(web::resource("/upsert").route(web::post().to(api::vectordb::upsert)))
                     .service(web::resource("/search").route(web::post().to(api::vectordb::search)))
                     .service(
