@@ -42,7 +42,7 @@ impl Deref for Version {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Timestamp(u32);
+pub struct Timestamp(pub u32);
 
 impl From<u32> for Timestamp {
     fn from(inner: u32) -> Self {
