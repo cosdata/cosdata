@@ -5,13 +5,15 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib3
 import random
+import getpass
+import os
 
 # Suppress only the single InsecureRequestWarning from urllib3 needed for this script
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Define your dynamic variables
 token = None
-host = "https://127.0.0.1:8443"
+host = "http://127.0.0.1:8443"
 base_url = f"{host}/vectordb"
 
 
@@ -21,7 +23,13 @@ def generate_headers():
 
 def create_session():
     url = f"{host}/auth/create-session"
-    data = {"username": "admin", "password": "admin"}
+    # Use environment variable if available, otherwise prompt
+    if "ADMIN_PASSWORD" in os.environ:
+        password = os.environ["ADMIN_PASSWORD"]
+    else:
+        password = getpass.getpass("Enter admin password: ")
+
+    data = {"username": "admin", "password": password}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )

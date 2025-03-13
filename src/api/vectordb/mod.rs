@@ -11,3 +11,4 @@ pub(crate) use search::batch_search;
 pub(crate) use search::search;
 pub(crate) use upsert::upsert;
 pub(crate) mod indexes;
+pub(crate) mod versions;

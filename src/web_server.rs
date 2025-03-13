@@ -4,6 +4,7 @@ use crate::api::vectordb::collections::collections_module;
 use crate::api::vectordb::indexes::indexes_module;
 use crate::api::vectordb::transactions::transactions_module;
 use crate::api::vectordb::vectors::vectors_module;
+use crate::api::vectordb::versions::version_module;
 use crate::app_context::AppContext;
 use crate::config_loader::{ServerMode, Ssl};
 use actix_cors::Cors;
@@ -60,6 +61,7 @@ pub async fn run_actix_server_with_context(ctx: Data<AppContext>) -> std::io::Re
                     .service(indexes_module())
                     .service(vectors_module())
                     .service(transactions_module())
+                    .service(version_module())
                     .service(collections_module())
                     .service(web::resource("/upsert").route(web::post().to(api::vectordb::upsert)))
                     .service(web::resource("/search").route(web::post().to(api::vectordb::search)))
