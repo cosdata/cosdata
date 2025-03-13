@@ -186,7 +186,9 @@ pub struct DenseVector {
 // }
 
 pub type Single = MetadataColumnValue;
-pub type Multiple = Vec<MetadataColumnValue>;
+
+// @NOTE: Comparison with multiple fields not support for now
+// pub type Multiple = Vec<MetadataColumnValue>;
 
 // Define the generic MetadataColumn type
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -194,7 +196,8 @@ pub type Multiple = Vec<MetadataColumnValue>;
 pub enum MetadataColumnValue {
     StringValue(String),
     IntValue(i32),
-    FloatValue(f64),
+    // @NOTE: Float not supported yet
+    // FloatValue(f64),
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -205,23 +208,25 @@ pub enum ComparisonOperator {
     #[serde(rename = "$ne")]
     Ne(Single),
 
-    #[serde(rename = "$gt")]
-    Gt(Single),
+    // @NOTE: Only eq and neq are supported for now
 
-    #[serde(rename = "$gte")]
-    Gte(Single),
+    // #[serde(rename = "$gt")]
+    // Gt(Single),
 
-    #[serde(rename = "$lt")]
-    Lt(Single),
+    // #[serde(rename = "$gte")]
+    // Gte(Single),
 
-    #[serde(rename = "$lte")]
-    Lte(Single),
+    // #[serde(rename = "$lt")]
+    // Lt(Single),
 
-    #[serde(rename = "$in")]
-    In(Multiple),
+    // #[serde(rename = "$lte")]
+    // Lte(Single),
 
-    #[serde(rename = "$nin")]
-    Nin(Multiple),
+    // #[serde(rename = "$in")]
+    // In(Multiple),
+
+    // #[serde(rename = "$nin")]
+    // Nin(Multiple),
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -241,4 +246,62 @@ pub enum Filter {
         column: HashMap<String, ComparisonOperator>,
     },
     Logical(LogicalOperator),
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    #[test]
+    fn test_filter_serde() {
+        let input = "{\"foo\":{\"$eq\":\"hello\"},\"bar\":{\"$ne\":1}}";
+        let filter: Filter = serde_json::from_str(input).unwrap();
+        match filter {
+            Filter::Comparison { column } => {
+                let foo = column.get("foo").unwrap();
+                match foo {
+                    ComparisonOperator::Eq(MetadataColumnValue::StringValue(x)) => assert_eq!("hello", x),
+                    _ => assert!(false),
+                }
+
+                let bar = column.get("bar").unwrap();
+                match bar {
+                    ComparisonOperator::Ne(MetadataColumnValue::IntValue(x)) => assert_eq!(1, *x),
+                    _ => assert!(false),
+                }
+            },
+            Filter::Logical(_) => assert!(false),
+        }
+
+        let input = "{\"$and\":[{\"foo\":{\"$eq\":\"abc\"}},{\"bar\":{\"$ne\":\"def\"}}]}";
+        let filter: Filter = serde_json::from_str(input).unwrap();
+        match filter {
+            Filter::Logical(LogicalOperator::And(vec)) => {
+                match &vec[0] {
+                    Filter::Comparison { column } => {
+                        let foo = column.get("foo").unwrap();
+                        match foo {
+                            ComparisonOperator::Eq(MetadataColumnValue::StringValue(x)) => assert_eq!("abc", x),
+                            _ => assert!(false),
+                        }
+                    },
+                    _ => assert!(false),
+                }
+
+                match &vec[1] {
+                    Filter::Comparison { column } => {
+                        let bar = column.get("bar").unwrap();
+                        match bar {
+                            ComparisonOperator::Ne(MetadataColumnValue::StringValue(x)) => assert_eq!("def", x),
+                            _ => assert!(false),
+                        }
+                    },
+                    _ => assert!(false),
+                }
+            },
+            _ => assert!(false),
+        }
+    }
+
 }
