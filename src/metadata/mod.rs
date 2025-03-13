@@ -10,6 +10,7 @@ pub mod query_filtering;
 pub mod schema;
 
 pub use schema::MetadataSchema;
+pub use query_filtering::{Filter, Predicate, Operator};
 
 #[derive(Debug, Clone)]
 pub enum Error {
@@ -18,6 +19,7 @@ pub enum Error {
     InvalidFieldValue(String),
     InvalidFieldValues(String),
     InvalidMetadataSchema,
+    UnsupportedFilter(String),
 }
 
 impl fmt::Display for Error {
@@ -28,6 +30,7 @@ impl fmt::Display for Error {
             Self::InvalidFieldValue(msg) => write!(f, "Invalid field value: {msg}"),
             Self::InvalidFieldValues(msg) => write!(f, "Invalid field values: {msg}"),
             Self::InvalidMetadataSchema => write!(f, "Invalid metadata schema"),
+            Self::UnsupportedFilter(msg) => write!(f, "Unsupported filter: {msg}"),
         }
     }
 }
@@ -66,6 +69,7 @@ type FieldName = String;
 pub enum FieldValue {
     Int(i32),
     String(String),
+    // @TODO: Add support for float
 }
 
 impl FieldValue {

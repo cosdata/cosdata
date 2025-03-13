@@ -8,9 +8,9 @@ pub enum Operator {
 }
 
 pub struct Predicate {
-    field_name: FieldName,
-    field_value: FieldValue,
-    operator: Operator,
+    pub field_name: FieldName,
+    pub field_value: FieldValue,
+    pub operator: Operator,
 }
 
 // @NOTE: Nested And/Or not supported for now
