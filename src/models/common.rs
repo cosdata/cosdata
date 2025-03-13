@@ -1,14 +1,11 @@
 use super::buffered_io::BufIoError;
-use super::cache_loader::DenseIndexCache;
-use super::lazy_load::LazyItem;
+use super::cache_loader::HNSWIndexCache;
 use super::prob_node::SharedNode;
-use super::types::{MergedNode, MetricResult, VectorId};
+use super::types::{MetricResult, VectorId};
 use crate::distance::DistanceError;
 use crate::metadata;
-use crate::models::types::VectorQt;
 use crate::quantization::QuantizationError;
 use sha2::{Digest, Sha256};
-use std::cmp::Ordering;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -17,9 +14,6 @@ use std::{fmt, thread};
 
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
-
-#[cfg(target_arch = "x86_64")]
-use super::dot_product::x86_64::dot_product_u8_avx2;
 
 #[allow(dead_code)]
 #[cfg(target_arch = "x86_64")]
@@ -227,80 +221,7 @@ pub fn get_magnitude_plus_quantized_vec(quant_vec: &[Vec<u32>], _size: usize) ->
     result
 }
 
-#[allow(dead_code)]
-#[cfg(target_arch = "x86_64")]
-pub fn cosine_similarity_scalar_u8(x: &VectorQt, y: &VectorQt) -> f32 {
-    if let (
-        VectorQt::UnsignedByte {
-            mag: x_mag,
-            quant_vec: x_vec,
-        },
-        VectorQt::UnsignedByte {
-            mag: y_mag,
-            quant_vec: y_vec,
-        },
-    ) = (x, y)
-    {
-        let dot_product = unsafe { dot_product_u8_avx2(x_vec, y_vec) };
-        dot_product as f32 / ((*x_mag as f32).sqrt() * (*y_mag as f32).sqrt())
-    } else {
-        panic!("cosine_similarity_scalar_u8 called with non-UnsignedByte VectorQt")
-    }
-}
-#[allow(dead_code)]
-pub fn cosine_coalesce(x: &VectorQt, y: &VectorQt, length: usize) -> f32 {
-    if let (
-        VectorQt::SubByte {
-            quant_vec: x_vec,
-            resolution: x_res,
-            ..
-        },
-        VectorQt::SubByte {
-            quant_vec: y_vec,
-            resolution: y_res,
-            ..
-        },
-    ) = (x, y)
-    {
-        if x_res != y_res {
-            panic!("Resolution mismatch in cosine_coalesce");
-        }
-
-        let parts = 2_usize.pow(*x_res as u32);
-        let mut final_result: usize = 0;
-
-        for index in 0..parts {
-            let sum: usize = x_vec[index]
-                .iter()
-                .zip(&y_vec[index])
-                .map(|(&x_item, &y_item)| (x_item ^ y_item).count_ones() as usize)
-                .sum();
-            final_result += sum << index;
-        }
-
-        final_result as f32 / length as f32
-    } else {
-        panic!("cosine_coalesce called with non-SubByte VectorQt")
-    }
-}
-#[allow(dead_code)]
-#[cfg(target_arch = "x86_64")]
-pub fn cosine_similarity_qt(
-    x: &VectorQt,
-    y: &VectorQt,
-    length: usize,
-) -> Result<f32, WaCustomError> {
-    match (x, y) {
-        (VectorQt::SubByte { .. }, VectorQt::SubByte { .. }) => Ok(cosine_coalesce(x, y, length)),
-        (VectorQt::UnsignedByte { .. }, VectorQt::UnsignedByte { .. }) => {
-            Ok(cosine_similarity_scalar_u8(x, y))
-        }
-        _ => Err(WaCustomError::QuantizationMismatch),
-    }
-}
-//////
 #[inline]
-
 fn to_float_flag(x: f32, bits_per_value: usize, step: f32) -> Vec<bool> {
     let mut n = ((x + 1.0) / step).floor() as usize;
     let mut result = vec![false; bits_per_value];
@@ -311,29 +232,6 @@ fn to_float_flag(x: f32, bits_per_value: usize, step: f32) -> Vec<bool> {
     }
 
     result
-}
-
-pub fn simp_quant(v: &[f32]) -> Result<Vec<u8>, QuantizationError> {
-    let (out_of_range, has_negative) = v.iter().fold((false, false), |(oor, neg), &x| {
-        (oor || x > 1.0 || x < -1.0, neg || x < 0.0)
-    });
-    if out_of_range {
-        return Err(QuantizationError::InvalidInput(String::from(
-            "Values sent in vector for simp_quant are out of range [-1,+1]",
-        )));
-    }
-    let res: Vec<u8> = v
-        .iter()
-        .map(|&x| {
-            let y = if has_negative { x + 1.0 } else { x };
-            (y * 255.0).round() as u8
-        })
-        .collect();
-    Ok(res)
-}
-
-pub fn mag_square_u8(vec: &[u8]) -> u32 {
-    vec.iter().map(|&x| x as u32 * x as u32).sum()
 }
 
 pub fn quantize_to_u8_bits(fins: &[f32], resolution: u8) -> Vec<Vec<u8>> {
@@ -461,14 +359,14 @@ pub fn hash_float_vec(vec: Vec<f32>) -> Vec<u8> {
     // Convert the Vec<f32> to a byte representation
     for &num in &vec {
         // Convert each f32 to its byte representation and update the hasher
-        hasher.update(&num.to_le_bytes());
+        hasher.update(num.to_le_bytes());
     }
 
     // Finalize the hash and return the result as a Vec<u8>
     hasher.finalize().to_vec()
 }
 
-pub fn get_max_insert_level(x: f64, levels: Arc<Vec<(f64, i32)>>) -> i32 {
+pub fn get_max_insert_level(x: f64, levels: &[(f64, u8)]) -> u8 {
     let lst = levels.iter();
     match lst.clone().find(|(value, _)| x >= *value) {
         Some((_, index)) => *index,
@@ -476,26 +374,10 @@ pub fn get_max_insert_level(x: f64, levels: Arc<Vec<(f64, i32)>>) -> i32 {
     }
 }
 
-#[allow(dead_code)]
-pub fn add_option_vecs(
-    a: &Option<Vec<(LazyItem<MergedNode>, MetricResult)>>,
-    b: &Option<Vec<(LazyItem<MergedNode>, MetricResult)>>,
-) -> Option<Vec<(LazyItem<MergedNode>, MetricResult)>> {
-    match (a, b) {
-        (None, None) => None,
-        (Some(vec), None) | (None, Some(vec)) => Some(vec.clone()),
-        (Some(vec1), Some(vec2)) => {
-            let mut combined = vec1.clone();
-            combined.extend(vec2.iter().cloned());
-            Some(combined)
-        }
-    }
-}
-
 pub fn remove_duplicates_and_filter(
     vec: Vec<(SharedNode, MetricResult)>,
     k: Option<usize>,
-    cache: &DenseIndexCache,
+    cache: &HNSWIndexCache,
 ) -> Vec<(VectorId, MetricResult)> {
     let mut seen = HashSet::new();
     let mut collected = vec
@@ -516,59 +398,23 @@ pub fn remove_duplicates_and_filter(
         })
         .collect::<Vec<_>>();
 
-    collected.sort_unstable_by(|(_, a), (_, b)| {
-        b.get_value()
-            .partial_cmp(&a.get_value())
-            .unwrap_or(Ordering::Equal)
-    });
+    collected.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
     if let Some(k) = k {
         collected.truncate(5 * k);
     }
     collected
 }
 
-pub fn generate_tuples(x: f64, num_levels: u8) -> Vec<(f64, i32)> {
+pub fn generate_level_probs(x: f64, num_levels: u8) -> Vec<(f64, u8)> {
     let mut result = Vec::new();
     for n in (0..=num_levels).rev() {
         let first_item = 1.0 - x.powi(-(n as i32));
-        let second_item = n as i32;
+        let second_item = n;
         result.push((first_item, second_item));
     }
     result
 }
 
-#[allow(dead_code)]
-pub fn calculate_hash<T: Hash>(t: &T) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    t.hash(&mut hasher);
-    hasher.finish()
-}
-
-// Extract VectorId values for hashing purposes
-#[allow(dead_code)]
-pub fn extract_ids(neighbors: &[(VectorId, f32)]) -> Vec<VectorId> {
-    neighbors.iter().map(|(id, _)| id.clone()).collect()
-}
-
-#[allow(dead_code)]
-pub fn cat_maybes<T>(iter: impl Iterator<Item = Option<T>>) -> Vec<T> {
-    iter.flat_map(|maybe| maybe).collect()
-}
-
-#[allow(dead_code)]
-pub fn tapered_total_hops(hops: u8, cur_level: u8, max_level: u8) -> u8 {
-    //div by 2
-    if cur_level > max_level >> 1 {
-        return hops;
-    } else {
-        // div by 4
-        if cur_level > max_level >> 2 {
-            return 3 * (hops >> 2); // 3/4
-        } else {
-            return hops >> 1; // 1/2
-        }
-    }
-}
 //typically skips is 1 while near
 #[allow(dead_code)]
 pub fn tapered_skips(skips: i8, cur_distance: i8, max_distance: i8) -> i8 {
@@ -638,6 +484,7 @@ impl<K: Eq + Hash + Clone + std::fmt::Debug, V: Clone + std::fmt::Debug> std::fm
 unsafe impl<K, V> Send for TSHashTable<K, V> {}
 unsafe impl<K, V> Sync for TSHashTable<K, V> {}
 
+#[allow(unused)]
 impl<K: Eq + Hash, V> TSHashTable<K, V> {
     pub fn new(size: u8) -> Self {
         let hash_table_list = (0..size)
@@ -799,7 +646,7 @@ impl<K: Eq + Hash, V> TSHashTable<K, V> {
         let mut list = Vec::new();
         for ht in &self.hash_table_list {
             let mut ht = ht.lock().unwrap();
-            let map = std::mem::replace(&mut *ht, HashMap::new());
+            let map = std::mem::take(&mut *ht);
             list.extend(map.into_iter());
         }
         list

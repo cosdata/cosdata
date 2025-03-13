@@ -1,9 +1,15 @@
 use crate::app_context::AppContext;
-use crate::indexes::inverted_index::{InvertedIndex, InvertedIndexTransaction};
-use crate::indexes::inverted_index_types::{RawSparseVectorEmbedding, SparsePair};
+use crate::indexes::hnsw::transaction::HNSWIndexTransaction;
+use crate::indexes::hnsw::types::{
+    HNSWHyperParams, QuantizedDenseVectorEmbedding, RawDenseVectorEmbedding,
+};
+use crate::indexes::hnsw::HNSWIndex;
+use crate::indexes::inverted::transaction::InvertedIndexTransaction;
+use crate::indexes::inverted::types::{RawSparseVectorEmbedding, SparsePair};
+use crate::indexes::inverted::InvertedIndex;
 use crate::macros::key;
 use crate::models::buffered_io::BufferManagerFactory;
-use crate::models::cache_loader::DenseIndexCache;
+use crate::models::cache_loader::HNSWIndexCache;
 use crate::models::collection::Collection;
 use crate::models::common::*;
 use crate::models::embedding_persist::EmbeddingOffset;
@@ -12,11 +18,9 @@ use crate::models::meta_persist::{
 };
 use crate::models::prob_node::ProbNode;
 use crate::models::types::*;
-use crate::models::user::Statistics;
 use crate::models::versioning::{Hash, VersionControl};
 use crate::quantization::{Quantization, StorageType};
 use crate::vector_store::*;
-use arcshift::ArcShift;
 use lmdb::Transaction;
 use lmdb::WriteFlags;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
@@ -27,8 +31,8 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
 
 /// creates a dense index for a collection
-#[allow(unused_variables)]
-pub async fn init_dense_index_for_collection(
+#[allow(clippy::too_many_arguments)]
+pub async fn init_hnsw_index_for_collection(
     ctx: Arc<AppContext>,
     collection: &Collection,
     values_range: Option<(f32, f32)>,
@@ -38,7 +42,7 @@ pub async fn init_dense_index_for_collection(
     storage_type: StorageType,
     sample_threshold: usize,
     is_configured: bool,
-) -> Result<Arc<DenseIndex>, WaCustomError> {
+) -> Result<Arc<HNSWIndex>, WaCustomError> {
     let collection_name = &collection.name;
     let collection_path: Arc<Path> = collection.get_path();
     let index_path = collection_path.join("dense_hnsw");
@@ -47,27 +51,25 @@ pub async fn init_dense_index_for_collection(
 
     let env = ctx.ain_env.persist.clone();
 
-    let lmdb = MetaDb::from_env(env.clone(), &collection_name)
+    let lmdb = MetaDb::from_env(env.clone(), collection_name)
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
     let (vcs, hash) = VersionControl::new(env.clone(), lmdb.db.clone())
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-
-    let vcs = Arc::new(vcs);
 
     // Note that setting .write(true).append(true) has the same effect
     // as setting only .append(true)
     //
     // what is the prop file exactly?
     // a file that stores the quantized version of raw vec
-    let prop_file = Arc::new(RwLock::new(
+    let prop_file = RwLock::new(
         fs::OpenOptions::new()
             .create(true)
             .read(true)
             .append(true)
             .open(index_path.join("prop.data"))
             .map_err(|e| WaCustomError::FsError(e.to_string()))?,
-    ));
+    );
 
     let index_manager = Arc::new(BufferManagerFactory::new(
         index_path.clone().into(),
@@ -80,18 +82,20 @@ pub async fn init_dense_index_for_collection(
         |root, ver: &Hash| root.join(format!("{}_0.index", **ver)),
         ProbNode::get_serialized_size(hnsw_params.level_0_neighbors_count) * 1000,
     ));
-    let vec_raw_manager = Arc::new(BufferManagerFactory::new(
+    let vec_raw_manager = BufferManagerFactory::new(
         index_path.into(),
         |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
         8192,
-    ));
+    );
+    let distance_metric = Arc::new(RwLock::new(distance_metric));
 
     // TODO: May be the value can be taken from config
-    let cache = Arc::new(DenseIndexCache::new(
+    let cache = HNSWIndexCache::new(
         index_manager.clone(),
         level_0_index_manager.clone(),
-        prop_file.clone(),
-    ));
+        prop_file,
+        distance_metric.clone(),
+    );
     if let Some(values_range) = values_range {
         store_values_range(&lmdb, values_range).map_err(|e| {
             WaCustomError::DatabaseError(format!("Failed to store values range to LMDB: {}", e))
@@ -103,12 +107,13 @@ pub async fn init_dense_index_for_collection(
         &quantization_metric,
         storage_type,
         collection.dense_vector.dimension,
-        prop_file.clone(),
+        &cache.prop_file,
         hash,
         &index_manager,
         &level_0_index_manager,
         values_range,
         &hnsw_params,
+        *distance_metric.read().unwrap(),
     )?;
 
     index_manager.flush_all()?;
@@ -117,24 +122,21 @@ pub async fn init_dense_index_for_collection(
     // -- TODO level entry ratio
     // ---------------------------
     let factor_levels = 4.0;
-    let lp = Arc::new(generate_tuples(factor_levels, hnsw_params.num_layers));
+    let lp = generate_level_probs(factor_levels, hnsw_params.num_layers);
 
-    let dense_index = Arc::new(DenseIndex::new(
+    let hnsw_index = Arc::new(HNSWIndex::new(
         collection_name.clone(),
         root,
         lp,
         collection.dense_vector.dimension,
-        prop_file,
         lmdb,
-        ArcShift::new(hash),
-        ArcShift::new(quantization_metric),
-        ArcShift::new(distance_metric),
-        ArcShift::new(storage_type),
+        hash,
+        quantization_metric,
+        distance_metric,
+        storage_type,
         vcs,
         hnsw_params,
         cache,
-        index_manager,
-        level_0_index_manager,
         vec_raw_manager,
         values_range,
         sample_threshold,
@@ -143,9 +145,9 @@ pub async fn init_dense_index_for_collection(
 
     ctx.ain_env
         .collections_map
-        .insert(&collection_name, dense_index.clone())?;
+        .insert_hnsw_index(collection_name, hnsw_index.clone())?;
 
-    Ok(dense_index)
+    Ok(hnsw_index)
 }
 
 /// creates an inverted index for a collection
@@ -163,27 +165,25 @@ pub async fn init_inverted_index_for_collection(
 
     let env = ctx.ain_env.persist.clone();
 
-    let lmdb = MetaDb::from_env(env.clone(), &collection_name)
+    let lmdb = MetaDb::from_env(env.clone(), collection_name)
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
     let (vcs, hash) = VersionControl::new(env.clone(), lmdb.db.clone())
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-
-    let vcs = Arc::new(vcs);
     //
     // what is the difference between vec_raw_manager and index_manager?
     // vec_raw_manager manages persisting raw embeddings/vectors on disk
     // index_manager manages persisting index data on disk
-    let vec_raw_manager = Arc::new(BufferManagerFactory::new(
+    let vec_raw_manager = BufferManagerFactory::new(
         index_path.clone().into(),
         |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
         8192,
-    ));
+    );
 
     let index = Arc::new(InvertedIndex::new(
         collection_name.clone(),
         collection.description.clone(),
-        index_path.clone().into(),
+        index_path.clone(),
         collection.sparse_vector.auto_create_index,
         // @TODO(vineet): Fix the following after confirming that
         // metadata schema is not required for inverted indexes
@@ -201,16 +201,16 @@ pub async fn init_inverted_index_for_collection(
 
     ctx.ain_env
         .collections_map
-        .insert_inverted_index(&collection_name, index.clone())?;
+        .insert_inverted_index(collection_name, index.clone())?;
     update_current_version(&index.lmdb, hash)?;
     Ok(index)
 }
 
 /// uploads a vector embedding within a transaction
-pub fn run_upload_in_transaction(
+pub fn run_upload_dense_vectors_in_transaction(
     ctx: Arc<AppContext>,
-    dense_index: Arc<DenseIndex>,
-    transaction: &DenseIndexTransaction,
+    hnsw_index: Arc<HNSWIndex>,
+    transaction: &HNSWIndexTransaction,
     mut sample_points: Vec<(VectorId, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
     let version = transaction.id;
@@ -218,81 +218,81 @@ pub fn run_upload_in_transaction(
 
     let mut is_first_batch = false;
 
-    if !dense_index.is_configured.load(Ordering::Acquire) {
-        let collected_count = dense_index
+    if !hnsw_index.is_configured.load(Ordering::Acquire) {
+        let collected_count = hnsw_index
             .vectors_collected
             .fetch_add(sample_points.len(), Ordering::SeqCst);
 
-        if collected_count < dense_index.sample_threshold {
+        if collected_count < hnsw_index.sample_threshold {
             for (_, values) in &sample_points {
                 for value in values {
                     let value = *value;
 
                     if value > 0.1 {
-                        dense_index
+                        hnsw_index
                             .sampling_data
                             .above_01
                             .fetch_add(1, Ordering::Relaxed);
                     }
 
                     if value > 0.2 {
-                        dense_index
+                        hnsw_index
                             .sampling_data
                             .above_02
                             .fetch_add(1, Ordering::Relaxed);
                     }
 
                     if value > 0.3 {
-                        dense_index
+                        hnsw_index
                             .sampling_data
                             .above_03
                             .fetch_add(1, Ordering::Relaxed);
                     }
 
                     if value > 0.4 {
-                        dense_index
+                        hnsw_index
                             .sampling_data
                             .above_04
                             .fetch_add(1, Ordering::Relaxed);
                     }
 
                     if value > 0.5 {
-                        dense_index
+                        hnsw_index
                             .sampling_data
                             .above_05
                             .fetch_add(1, Ordering::Relaxed);
                     }
 
                     if value < -0.1 {
-                        dense_index
+                        hnsw_index
                             .sampling_data
                             .below_01
                             .fetch_add(1, Ordering::Relaxed);
                     }
 
                     if value < -0.2 {
-                        dense_index
+                        hnsw_index
                             .sampling_data
                             .below_02
                             .fetch_add(1, Ordering::Relaxed);
                     }
 
                     if value < -0.3 {
-                        dense_index
+                        hnsw_index
                             .sampling_data
                             .below_03
                             .fetch_add(1, Ordering::Relaxed);
                     }
 
                     if value < -0.4 {
-                        dense_index
+                        hnsw_index
                             .sampling_data
                             .below_04
                             .fetch_add(1, Ordering::Relaxed);
                     }
 
                     if value < -0.5 {
-                        dense_index
+                        hnsw_index
                             .sampling_data
                             .below_05
                             .fetch_add(1, Ordering::Relaxed);
@@ -300,9 +300,9 @@ pub fn run_upload_in_transaction(
                 }
             }
 
-            let mut vectors = dense_index.vectors.write().unwrap();
+            let mut vectors = hnsw_index.vectors.write().unwrap();
             vectors.extend(sample_points);
-            if vectors.len() < dense_index.sample_threshold {
+            if vectors.len() < hnsw_index.sample_threshold {
                 return Ok(());
             }
 
@@ -310,35 +310,35 @@ pub fn run_upload_in_transaction(
             let values_count = (dimension * vectors.len()) as f32;
 
             let above_05_percent =
-                (dense_index.sampling_data.above_05.load(Ordering::Relaxed) as f32 / values_count)
+                (hnsw_index.sampling_data.above_05.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
             let above_04_percent =
-                (dense_index.sampling_data.above_04.load(Ordering::Relaxed) as f32 / values_count)
+                (hnsw_index.sampling_data.above_04.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
             let above_03_percent =
-                (dense_index.sampling_data.above_03.load(Ordering::Relaxed) as f32 / values_count)
+                (hnsw_index.sampling_data.above_03.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
             let above_02_percent =
-                (dense_index.sampling_data.above_02.load(Ordering::Relaxed) as f32 / values_count)
+                (hnsw_index.sampling_data.above_02.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
             let above_01_percent =
-                (dense_index.sampling_data.above_01.load(Ordering::Relaxed) as f32 / values_count)
+                (hnsw_index.sampling_data.above_01.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
 
             let below_05_percent =
-                (dense_index.sampling_data.below_05.load(Ordering::Relaxed) as f32 / values_count)
+                (hnsw_index.sampling_data.below_05.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
             let below_04_percent =
-                (dense_index.sampling_data.below_04.load(Ordering::Relaxed) as f32 / values_count)
+                (hnsw_index.sampling_data.below_04.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
             let below_03_percent =
-                (dense_index.sampling_data.below_03.load(Ordering::Relaxed) as f32 / values_count)
+                (hnsw_index.sampling_data.below_03.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
             let below_02_percent =
-                (dense_index.sampling_data.below_02.load(Ordering::Relaxed) as f32 / values_count)
+                (hnsw_index.sampling_data.below_02.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
             let below_01_percent =
-                (dense_index.sampling_data.below_01.load(Ordering::Relaxed) as f32 / values_count)
+                (hnsw_index.sampling_data.below_01.load(Ordering::Relaxed) as f32 / values_count)
                     * 100.0;
 
             let range_start = if below_01_percent <= ctx.config.indexing.clamp_margin_percent {
@@ -370,16 +370,16 @@ pub fn run_upload_in_transaction(
             };
 
             let range = (range_start, range_end);
-            *dense_index.values_range.write().unwrap() = range;
-            dense_index.is_configured.store(true, Ordering::Release);
-            store_values_range(&dense_index.lmdb, range).map_err(|e| {
+            *hnsw_index.values_range.write().unwrap() = range;
+            hnsw_index.is_configured.store(true, Ordering::Release);
+            store_values_range(&hnsw_index.lmdb, range).map_err(|e| {
                 WaCustomError::DatabaseError(format!("Failed to store values range to LMDB: {}", e))
             })?;
-            sample_points = std::mem::replace(&mut *vectors, Vec::new());
+            sample_points = std::mem::take(&mut *vectors);
             is_first_batch = true;
         } else {
-            while !dense_index.is_configured.load(Ordering::Relaxed) {
-                drop(dense_index.vectors.read().unwrap());
+            while !hnsw_index.is_configured.load(Ordering::Relaxed) {
+                drop(hnsw_index.vectors.read().unwrap());
             }
         }
     }
@@ -391,7 +391,7 @@ pub fn run_upload_in_transaction(
             .map(|chunk| {
                 index_embeddings_in_transaction(
                     ctx.clone(),
-                    dense_index.clone(),
+                    &hnsw_index,
                     version,
                     version_number,
                     transaction,
@@ -402,7 +402,7 @@ pub fn run_upload_in_transaction(
     } else {
         index_embeddings_in_transaction(
             ctx.clone(),
-            dense_index.clone(),
+            &hnsw_index,
             version,
             version_number,
             transaction,
@@ -414,7 +414,7 @@ pub fn run_upload_in_transaction(
 }
 
 /// uploads a sparse vector for inverted index
-pub fn run_upload_sparse_vector(
+pub fn run_upload_sparse_vectors(
     inverted_index: Arc<InvertedIndex>,
     vecs: Vec<(VectorId, Vec<SparsePair>)>,
 ) -> Result<(), WaCustomError> {
@@ -440,14 +440,12 @@ pub fn run_upload_sparse_vector(
 
     vecs.into_iter()
         .map(|(id, vec)| {
-            vec.iter()
-                .map(|vec| {
-                    // TODO (Question)
-                    // should InvertedIndexSparseAnnNodeBasic::insert params change
-                    // to accept vector_id as  u64 ??
-                    inverted_index.insert(vec.0, vec.1, id.0 as u32, current_version)
-                })
-                .collect::<Result<(), _>>()?;
+            vec.iter().try_for_each(|vec| {
+                // TODO (Question)
+                // should InvertedIndexSparseAnnNodeBasic::insert params change
+                // to accept vector_id as  u64 ??
+                inverted_index.insert(vec.0, vec.1, id.0 as u32, current_version)
+            })?;
 
             // let vec_emb = RawSparseVectorEmbedding {
             //     raw_vec: Arc::new(vec),
@@ -639,7 +637,7 @@ pub fn run_upload_sparse_vectors_in_transaction(
                     e
                 ))
             })?;
-            sample_points = std::mem::replace(&mut *vectors, Vec::new());
+            sample_points = std::mem::take(&mut *vectors);
         } else {
             while !inverted_index.is_configured.load(Ordering::Relaxed) {
                 drop(inverted_index.vectors.read().unwrap());
@@ -647,38 +645,34 @@ pub fn run_upload_sparse_vectors_in_transaction(
         }
     }
 
-    sample_points
-        .into_iter()
-        .map(|(id, vec)| {
-            vec.iter()
-                .map(|vec| inverted_index.insert(vec.0, vec.1, id.0 as u32, transaction.id))
-                .collect::<Result<(), _>>()?;
-            let vec_emb = RawSparseVectorEmbedding {
-                raw_vec: Arc::new(vec),
-                hash_vec: id,
-            };
-            transaction.post_raw_embedding(vec_emb);
-            Ok::<_, WaCustomError>(())
-        })
-        .collect::<Result<(), _>>()?;
+    sample_points.into_iter().try_for_each(|(id, vec)| {
+        vec.iter()
+            .try_for_each(|vec| inverted_index.insert(vec.0, vec.1, id.0 as u32, transaction.id))?;
+        let vec_emb = RawSparseVectorEmbedding {
+            raw_vec: Arc::new(vec),
+            hash_vec: id,
+        };
+        transaction.post_raw_embedding(vec_emb);
+        Ok::<_, WaCustomError>(())
+    })?;
 
     Ok(())
 }
 
 /// uploads a vector embedding
-pub fn run_upload(
+pub fn run_upload_dense_vectors(
     ctx: Arc<AppContext>,
-    dense_index: Arc<DenseIndex>,
+    hnsw_index: Arc<HNSWIndex>,
     vecs: Vec<(VectorId, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
-    let env = dense_index.lmdb.env.clone();
-    let db = dense_index.lmdb.db.clone();
+    let env = hnsw_index.lmdb.env.clone();
+    let db = hnsw_index.lmdb.db.clone();
     let txn = env
         .begin_ro_txn()
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
     // Check if the previous version is unindexed, and continue from where we left.
-    let prev_version = dense_index.get_current_version();
+    let prev_version = hnsw_index.get_current_version();
     let index_before_insertion = match txn.get(*db, &"next_embedding_offset") {
         Ok(bytes) => {
             let embedding_offset = EmbeddingOffset::deserialize(bytes)
@@ -689,7 +683,7 @@ pub fn run_upload(
                 "Last unindexed embedding's version must be the previous version of the collection"
             );
 
-            let prev_bufman = dense_index.vec_raw_manager.get(prev_version)?;
+            let prev_bufman = hnsw_index.vec_raw_manager.get(prev_version)?;
             let cursor = prev_bufman.open_cursor()?;
             let prev_file_len = prev_bufman.file_size() as u32;
             prev_bufman.close_cursor(cursor)?;
@@ -706,7 +700,7 @@ pub fn run_upload(
     let lazy_item_versions_table = Arc::new(TSHashTable::new(16));
 
     let (node_size, level_0_node_size) = {
-        let hnsw_params = dense_index.hnsw_params.read().unwrap();
+        let hnsw_params = hnsw_index.hnsw_params.read().unwrap();
         let node_size = ProbNode::get_serialized_size(hnsw_params.neighbors_count);
         let level_0_node_size = ProbNode::get_serialized_size(hnsw_params.level_0_neighbors_count);
         (node_size as u32, level_0_node_size as u32)
@@ -717,7 +711,7 @@ pub fn run_upload(
     if index_before_insertion {
         index_embeddings(
             &ctx.config,
-            dense_index.clone(),
+            &hnsw_index,
             ctx.config.upload_process_batch_size,
             lazy_item_versions_table.clone(),
             || {
@@ -734,12 +728,12 @@ pub fn run_upload(
     }
 
     // Add next version
-    let (current_version, _) = dense_index
+    let (current_version, _) = hnsw_index
         .vcs
         .add_next_version("main")
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-    dense_index.set_current_version(current_version);
-    update_current_version(&dense_index.lmdb, current_version)?;
+    hnsw_index.set_current_version(current_version);
+    update_current_version(&hnsw_index.lmdb, current_version)?;
 
     // Update LMDB metadata
     let new_offset = EmbeddingOffset {
@@ -764,18 +758,18 @@ pub fn run_upload(
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
     // Insert vectors
-    let bufman = dense_index.vec_raw_manager.get(current_version)?;
+    let bufman = hnsw_index.vec_raw_manager.get(current_version)?;
 
     vecs.into_par_iter()
         .map(|(id, vec)| {
-            let vec_emb = RawVectorEmbedding {
+            let vec_emb = RawDenseVectorEmbedding {
                 raw_vec: Arc::new(vec),
                 hash_vec: id,
             };
 
             insert_embedding(
                 bufman.clone(),
-                dense_index.clone(),
+                hnsw_index.clone(),
                 &vec_emb,
                 current_version,
             )
@@ -783,8 +777,8 @@ pub fn run_upload(
         .collect::<Result<Vec<_>, _>>()?;
     bufman.flush()?;
 
-    let env = dense_index.lmdb.env.clone();
-    let db = dense_index.lmdb.db.clone();
+    let env = hnsw_index.lmdb.env.clone();
+    let db = hnsw_index.lmdb.db.clone();
 
     let txn = env
         .begin_ro_txn()
@@ -807,7 +801,7 @@ pub fn run_upload(
     if count_unindexed >= ctx.config.upload_threshold {
         index_embeddings(
             &ctx.config,
-            dense_index.clone(),
+            &hnsw_index,
             ctx.config.upload_process_batch_size,
             lazy_item_versions_table,
             || {
@@ -834,50 +828,48 @@ pub fn run_upload(
     //     }
     // }
 
-    dense_index.vec_raw_manager.flush_all()?;
-    dense_index.index_manager.flush_all()?;
-    dense_index.level_0_index_manager.flush_all()?;
+    hnsw_index.vec_raw_manager.flush_all()?;
+    hnsw_index.cache.flush_all()?;
 
     Ok(())
 }
 
 pub async fn ann_vector_query(
     ctx: Arc<AppContext>,
-    dense_index: Arc<DenseIndex>,
+    hnsw_index: Arc<HNSWIndex>,
     query: Vec<f32>,
     k: Option<usize>,
 ) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
-    let dense_index = dense_index.clone();
     let vec_hash = VectorId(u64::MAX - 1);
-    let vector_list = dense_index.quantization_metric.quantize(
+    let vector_list = hnsw_index.quantization_metric.read().unwrap().quantize(
         &query,
-        *dense_index.storage_type.clone().get(),
-        *dense_index.values_range.read().unwrap(),
+        *hnsw_index.storage_type.read().unwrap(),
+        *hnsw_index.values_range.read().unwrap(),
     )?;
 
-    let vec_emb = QuantizedVectorEmbedding {
+    let vec_emb = QuantizedDenseVectorEmbedding {
         quantized_vec: Arc::new(vector_list.clone()),
         hash_vec: vec_hash.clone(),
     };
 
-    let hnsw_params = dense_index.hnsw_params.clone();
-    let hnsw_params_guard = hnsw_params.read().unwrap();
+    let hnsw_params_guard = hnsw_index.hnsw_params.read().unwrap();
 
     let results = ann_search(
         &ctx.config,
-        dense_index.clone(),
+        hnsw_index.clone(),
         vec_emb,
-        dense_index.get_root_vec(),
+        hnsw_index.get_root_vec(),
         HNSWLevel(hnsw_params_guard.num_layers),
-        &*hnsw_params_guard,
+        &hnsw_params_guard,
     )?;
-    let output = finalize_ann_results(dense_index, results, &query, k)?;
+    drop(hnsw_params_guard);
+    let output = finalize_ann_results(hnsw_index, results, &query, k)?;
     Ok(output)
 }
 
 pub async fn batch_ann_vector_query(
     ctx: Arc<AppContext>,
-    dense_index: Arc<DenseIndex>,
+    hnsw_index: Arc<HNSWIndex>,
     queries: Vec<Vec<f32>>,
     k: Option<usize>,
 ) -> Result<Vec<Vec<(VectorId, MetricResult)>>, WaCustomError> {
@@ -885,48 +877,36 @@ pub async fn batch_ann_vector_query(
         .into_par_iter()
         .map(|query| {
             let vec_hash = VectorId(u64::MAX - 1);
-            let vector_list = dense_index.quantization_metric.quantize(
+            let vector_list = hnsw_index.quantization_metric.read().unwrap().quantize(
                 &query,
-                *dense_index.storage_type.clone().get(),
-                *dense_index.values_range.read().unwrap(),
+                *hnsw_index.storage_type.read().unwrap(),
+                *hnsw_index.values_range.read().unwrap(),
             )?;
 
-            let vec_emb = QuantizedVectorEmbedding {
+            let vec_emb = QuantizedDenseVectorEmbedding {
                 quantized_vec: Arc::new(vector_list.clone()),
                 hash_vec: vec_hash.clone(),
             };
 
-            let hnsw_params = dense_index.hnsw_params.read().unwrap();
+            let hnsw_params = hnsw_index.hnsw_params.read().unwrap();
             let results = ann_search(
                 &ctx.config,
-                dense_index.clone(),
+                hnsw_index.clone(),
                 vec_emb,
-                dense_index.get_root_vec(),
+                hnsw_index.get_root_vec(),
                 HNSWLevel(hnsw_params.num_layers),
                 &hnsw_params,
             )?;
-            let output = finalize_ann_results(dense_index.clone(), results, &query, k)?;
+            let output = finalize_ann_results(hnsw_index.clone(), results, &query, k)?;
             Ok::<_, WaCustomError>(output)
         })
         .collect()
 }
 
 pub async fn fetch_vector_neighbors(
-    dense_index: Arc<DenseIndex>,
+    hnsw_index: Arc<HNSWIndex>,
     vector_id: VectorId,
 ) -> Vec<Option<(VectorId, Vec<(VectorId, MetricResult)>)>> {
-    let results = vector_fetch(dense_index.clone(), vector_id);
-    return results.expect("Failed fetching vector neighbors");
-}
-
-#[allow(dead_code)]
-fn calculate_statistics(_: &[i32]) -> Option<Statistics> {
-    // Placeholder for calculating statistics
-    None
-}
-
-#[allow(dead_code)]
-fn vector_knn(_vs: &Vec<f32>, _vecs: &Vec<f32>) -> Vec<(i8, i8, String, f64)> {
-    // Placeholder for vector KNN
-    vec![]
+    let results = vector_fetch(hnsw_index.clone(), vector_id);
+    results.expect("Failed fetching vector neighbors")
 }

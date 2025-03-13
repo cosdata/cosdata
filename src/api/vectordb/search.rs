@@ -12,7 +12,11 @@ pub(crate) async fn search(
     ctx: web::Data<AppContext>,
 ) -> HttpResponse {
     // Try to get the vector store from the environment
-    let vec_store = match ctx.ain_env.collections_map.get(&body.vector_db_name) {
+    let hnsw_index = match ctx
+        .ain_env
+        .collections_map
+        .get_hnsw_index(&body.vector_db_name)
+    {
         Some(store) => store,
         None => {
             // Vector store not found, return an error response
@@ -22,7 +26,7 @@ pub(crate) async fn search(
 
     let result = match ann_vector_query(
         ctx.into_inner(),
-        vec_store.clone(),
+        hnsw_index.clone(),
         body.vector,
         body.nn_count,
     )
@@ -44,7 +48,11 @@ pub(crate) async fn batch_search(
     ctx: web::Data<AppContext>,
 ) -> HttpResponse {
     // Try to get the vector store from the environment
-    let vec_store = match ctx.ain_env.collections_map.get(&body.vector_db_name) {
+    let vec_store = match ctx
+        .ain_env
+        .collections_map
+        .get_hnsw_index(&body.vector_db_name)
+    {
         Some(store) => store,
         None => {
             // Vector store not found, return an error response

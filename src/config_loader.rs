@@ -1,8 +1,8 @@
 use super::models::common::WaCustomError;
-use super::models::paths::{get_config_path, get_data_path};
+use super::models::paths::get_config_path;
 use serde::{Deserialize, Deserializer};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
-use std::{fs, path::PathBuf};
+use std::path::PathBuf;
 use std::{io, vec};
 
 #[derive(Deserialize, Clone)]
@@ -118,7 +118,7 @@ impl<'de> Deserialize<'de> for Port {
 pub struct HostPort<'a>(&'a Host, &'a Port);
 
 // Implement ToSocketAddrs for the HostPort type
-impl<'a> ToSocketAddrs for HostPort<'a> {
+impl ToSocketAddrs for HostPort<'_> {
     type Iter = std::vec::IntoIter<SocketAddr>;
 
     fn to_socket_addrs(&self) -> io::Result<Self::Iter> {

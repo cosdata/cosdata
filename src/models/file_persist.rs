@@ -1,7 +1,7 @@
 use super::buffered_io::{BufIoError, BufferManagerFactory};
 use super::common::WaCustomError;
 use super::prob_node::SharedNode;
-use super::serializer::dense::DenseSerialize;
+use super::serializer::hnsw::HNSWIndexSerialize;
 use super::types::{BytesToRead, FileOffset, NodeProp, VectorId};
 use super::versioning::Hash;
 use crate::storage::Storage;
@@ -10,6 +10,7 @@ use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::sync::Arc;
 
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn write_node_to_file(
     lazy_item: SharedNode,
     bufmans: &BufferManagerFactory<Hash>,
@@ -46,7 +47,7 @@ pub struct NodePropDeserialize {
 pub fn write_prop_to_file(
     id: &VectorId,
     value: Arc<Storage>,
-    mut file: &File,
+    file: &mut File,
 ) -> Result<(FileOffset, BytesToRead), WaCustomError> {
     let prop = NodePropSerialize { id, value };
     let prop_bytes =

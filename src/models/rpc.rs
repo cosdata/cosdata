@@ -1,13 +1,7 @@
 use super::types::{MetricResult, VectorId};
-use crate::{
-    indexes::inverted_index_types::SparsePair,
-    models::user::{AddUserResp, AuthResp, Statistics},
-};
-use serde::{
-    de::{self, Visitor},
-    Deserialize, Deserializer, Serialize,
-};
-use std::{collections::HashMap, fmt};
+use crate::models::user::{AddUserResp, AuthResp, Statistics};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct Authenticate {
@@ -53,88 +47,6 @@ pub struct FetchNeighbors {
 pub struct UpsertVectors {
     pub vector_db_name: String,
     pub vectors: Vec<DenseVector>,
-}
-
-#[derive(Deserialize)]
-pub struct UpsertSparseVectors {
-    pub vector_db_name: String,
-    pub vectors: Vec<CreateSparseVectorDto>,
-}
-
-pub struct CreateSparseVectorDto {
-    pub id: VectorId,
-    pub values: Vec<SparsePair>,
-}
-
-impl<'de> Deserialize<'de> for CreateSparseVectorDto {
-    fn deserialize<D>(deserializer: D) -> Result<CreateSparseVectorDto, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        // A custom visitor to process the deserialization
-        struct CreateSparseVectorDtoVisitor;
-
-        impl<'de> Visitor<'de> for CreateSparseVectorDtoVisitor {
-            type Value = CreateSparseVectorDto;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                write!(formatter, "struct CreateSparseVectorDto")
-            }
-
-            fn visit_map<M>(self, mut map: M) -> Result<CreateSparseVectorDto, M::Error>
-            where
-                M: de::MapAccess<'de>,
-            {
-                let mut id = None;
-                let mut values: Option<Vec<f32>> = None;
-                let mut indices: Option<Vec<u32>> = None;
-
-                while let Some(key) = map.next_key::<String>()? {
-                    match key.as_str() {
-                        "id" => {
-                            if id.is_some() {
-                                return Err(de::Error::duplicate_field("id"));
-                            }
-                            id = Some(map.next_value()?);
-                        }
-                        "values" => {
-                            if values.is_some() {
-                                return Err(de::Error::duplicate_field("values"));
-                            }
-                            values = Some(map.next_value()?);
-                        }
-                        "indices" => {
-                            if indices.is_some() {
-                                return Err(de::Error::duplicate_field("indices"));
-                            }
-                            indices = Some(map.next_value()?);
-                        }
-                        _ => {
-                            return Err(de::Error::unknown_field(
-                                key.as_str(),
-                                &["id", "values", "indices"],
-                            ));
-                        }
-                    }
-                }
-
-                let id = id.ok_or_else(|| de::Error::missing_field("id"))?;
-                let values = values.ok_or_else(|| de::Error::missing_field("values"))?;
-                let indices = indices.ok_or_else(|| de::Error::missing_field("indices"))?;
-
-                // Combine the values and indices into a Vec<SparsePair>
-                let values = indices
-                    .into_iter()
-                    .zip(values.into_iter())
-                    .map(|(index, value)| SparsePair(index, value))
-                    .collect();
-
-                Ok(CreateSparseVectorDto { id, values })
-            }
-        }
-
-        deserializer.deserialize_map(CreateSparseVectorDtoVisitor)
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -189,6 +101,7 @@ pub type Single = MetadataColumnValue;
 pub type Multiple = Vec<MetadataColumnValue>;
 
 // Define the generic MetadataColumn type
+#[allow(clippy::enum_variant_names)]
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 #[serde(untagged)]
 pub enum MetadataColumnValue {

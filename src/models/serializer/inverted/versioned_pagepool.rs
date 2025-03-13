@@ -1,13 +1,11 @@
 use std::sync::{Arc, RwLock};
 
-use crate::{
-    models::{
-        buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
-        cache_loader::InvertedIndexCache,
-        types::FileOffset,
-        versioning::Hash,
-    },
-    storage::page::{Pagepool, VersionedPagepool},
+use crate::models::{
+    buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
+    cache_loader::InvertedIndexCache,
+    page::{Pagepool, VersionedPagepool},
+    types::FileOffset,
+    versioning::Hash,
 };
 
 use super::InvertedIndexSerialize;

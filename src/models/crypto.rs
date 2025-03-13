@@ -2,7 +2,11 @@
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use ring::{constant_time::verify_slices_are_equal, digest, hmac};
-use std::time::{SystemTime, UNIX_EPOCH};
+use rkyv::Infallible;
+use std::{
+    str::FromStr,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 // Single SHA256 hash
 // Flow: Input -> |SHA256| -> 32-byte hash
@@ -17,6 +21,14 @@ pub struct DoubleSHA256Hash(pub [u8; 32]);
 // Master key derived from user password and admin key
 pub struct MasterKey(pub [u8; 32]);
 
+impl FromStr for SingleSHA256Hash {
+    type Err = Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self::new(s.as_bytes()))
+    }
+}
+
 impl SingleSHA256Hash {
     // Computes single-pass SHA256 hash of input data
     pub fn new(input: &[u8]) -> Self {
@@ -27,10 +39,6 @@ impl SingleSHA256Hash {
         let mut result = [0u8; 32];
         result.copy_from_slice(hash.as_ref());
         Self(result)
-    }
-
-    pub fn from_str(str: &str) -> Self {
-        Self::new(str.as_bytes())
     }
 
     // Computes double-pass SHA256 hash by hashing this single-pass SHA256 again
@@ -50,6 +58,14 @@ impl SingleSHA256Hash {
     }
 }
 
+impl FromStr for DoubleSHA256Hash {
+    type Err = Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self::new(s.as_bytes()))
+    }
+}
+
 impl DoubleSHA256Hash {
     // Computes double-pass SHA256 hash
     pub fn new(input: &[u8]) -> Self {
@@ -63,10 +79,6 @@ impl DoubleSHA256Hash {
         let mut result = [0u8; 32];
         result.copy_from_slice(double_hash.as_ref());
         DoubleSHA256Hash(result)
-    }
-
-    pub fn from_str(str: &str) -> Self {
-        Self::new(str.as_bytes())
     }
 
     pub fn verify_eq(&self, other: &Self) -> bool {

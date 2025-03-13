@@ -6,7 +6,7 @@ use super::{schema::SupportedCondition, FieldValue};
 
 pub struct FieldValueVisitor;
 
-impl<'de> Visitor<'de> for FieldValueVisitor {
+impl Visitor<'_> for FieldValueVisitor {
     type Value = FieldValue;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
@@ -68,10 +68,10 @@ impl<'de> Visitor<'de> for FieldValueVisitor {
 
 pub struct SupportedConditionVisitor;
 
-impl<'de> Visitor<'de> for SupportedConditionVisitor {
+impl Visitor<'_> for SupportedConditionVisitor {
     type Value = SupportedCondition;
 
-    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+    fn expecting(&self, _formatter: &mut fmt::Formatter) -> fmt::Result {
         todo!()
     }
 }

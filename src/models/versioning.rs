@@ -220,6 +220,7 @@ pub struct VersionControl {
     pub db: Arc<Database>,
 }
 
+#[allow(unused)]
 impl VersionControl {
     pub fn new(env: Arc<Environment>, db: Arc<Database>) -> lmdb::Result<(Self, Hash)> {
         let main_branch_id = BranchId::new("main");
@@ -476,5 +477,27 @@ impl VersionControl {
         }
         versions.sort_unstable_by_key(|(_, v)| *v.version);
         Ok(versions)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::*;
+
+    #[test]
+    fn test_version_hashing_function_uniqueness() {
+        let branch_id = BranchId::new("main");
+        let mut versions = HashSet::new();
+
+        for i in 0..1000 {
+            let version_hash = VersionHash::new(branch_id, Version::from(i));
+            versions.insert(version_hash.calculate_hash());
+            // simulate some processing
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        assert_eq!(versions.len(), 1000);
     }
 }

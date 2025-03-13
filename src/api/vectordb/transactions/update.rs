@@ -7,7 +7,7 @@ pub(crate) async fn update(
     ctx: web::Data<AppContext>,
 ) -> HttpResponse {
     let (database_name, _transaction_id) = path_data.into_inner();
-    let Some(_vec_store) = ctx.ain_env.collections_map.get(&database_name) else {
+    let Some(_hnsw_index) = ctx.ain_env.collections_map.get_hnsw_index(&database_name) else {
         return HttpResponse::NotFound().body("Vector store not found");
     };
 

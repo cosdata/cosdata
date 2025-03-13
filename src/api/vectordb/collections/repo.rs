@@ -2,9 +2,8 @@ use std::sync::Arc;
 
 use crate::{
     app_context::AppContext,
-    indexes::inverted_index::InvertedIndex,
-    models::common::WaCustomError,
-    models::{collection::Collection, types::DenseIndex},
+    indexes::{hnsw::HNSWIndex, inverted::InvertedIndex},
+    models::{collection::Collection, common::WaCustomError},
 };
 
 use super::{
@@ -44,43 +43,20 @@ pub(crate) async fn create_collection(
         metadata_schema,
         config,
     )
-    .map_err(|e| CollectionsError::WaCustomError(e))?;
+    .map_err(CollectionsError::WaCustomError)?;
 
     // adding the created collection into the in-memory map
     ctx.ain_env
         .collections_map
         .insert_collection(Arc::new(collection.clone()))
-        .map_err(|e| CollectionsError::WaCustomError(e))?;
+        .map_err(CollectionsError::WaCustomError)?;
 
     // persisting collection after creation
     let _ = collection
-        .persist(env, collections_db.clone())
-        .map_err(|e| CollectionsError::WaCustomError(e));
+        .persist(env, *collections_db)
+        .map_err(CollectionsError::WaCustomError);
     Ok(collection)
 }
-
-/// creates a dense_index for a collection
-// pub(crate) async fn create_dense_index(
-//     ctx: Arc<AppContext>,
-//     collection: &Collection,
-//     size: usize,
-//     lower_bound: Option<f32>,
-//     upper_bound: Option<f32>,
-//     num_layers: u8,
-//     _auto_config: bool,
-// ) -> Result<Arc<DenseIndex>, CollectionsError> {
-//     // Call init_vector_store using web::block
-//     let result = init_dense_index_for_collection(
-//         ctx,
-//         collection,
-//         size,
-//         lower_bound,
-//         upper_bound,
-//         num_layers,
-//     )
-//     .await;
-//     result.map_err(|e| CollectionsError::FailedToCreateCollection(e.to_string()))
-// }
 
 /// gets a list of collections
 /// TODO results should be filtered based on search params,
@@ -117,19 +93,19 @@ pub(crate) async fn get_collection_by_name(
 }
 
 /// gets a dense index for a collection by name
-pub(crate) async fn get_dense_index_by_name(
+pub(crate) async fn get_hnsw_index_by_name(
     ctx: Arc<AppContext>,
     name: &str,
-) -> Result<Arc<DenseIndex>, CollectionsError> {
+) -> Result<Arc<HNSWIndex>, CollectionsError> {
     // Try to get the dense_index from the environment
-    let dense_index = match ctx.ain_env.collections_map.get(name) {
+    let hnsw_index = match ctx.ain_env.collections_map.get_hnsw_index(name) {
         Some(index) => index.clone(),
         None => {
             // dense index not found, return an error response
             return Err(CollectionsError::NotFound);
         }
     };
-    Ok(dense_index)
+    Ok(hnsw_index)
 }
 
 /// gets an inverted index for a collection by name
@@ -159,36 +135,36 @@ pub(crate) async fn delete_collection_by_name(
 
     // deleting collection from disk
     collection
-        .delete(env, collections_db.clone())
-        .map_err(|e| CollectionsError::WaCustomError(e))?;
+        .delete(env, *collections_db)
+        .map_err(CollectionsError::WaCustomError)?;
 
     // deleting collection from in-memory map
     let collection = ctx
         .ain_env
         .collections_map
         .remove_collection(name)
-        .map_err(|e| CollectionsError::WaCustomError(e))?;
+        .map_err(CollectionsError::WaCustomError)?;
 
     Ok(collection)
 }
 
 #[allow(dead_code)]
 /// deletes a dense index of a collection by name
-pub(crate) async fn delete_dense_index_by_name(
+pub(crate) async fn delete_hnsw_index_by_name(
     ctx: Arc<AppContext>,
     name: &str,
-) -> Result<Arc<DenseIndex>, CollectionsError> {
+) -> Result<Arc<HNSWIndex>, CollectionsError> {
     // Try to get the dense index from the environment
     let result = ctx
         .ain_env
         .collections_map
-        .remove(name)
+        .remove_hnsw_index(name)
         .map_err(CollectionsError::WaCustomError)?;
     match result {
         Some((_, index)) => Ok(index),
         None => {
             // dense index not found, return an error response
-            return Err(CollectionsError::NotFound);
+            Err(CollectionsError::NotFound)
         }
     }
 }

@@ -34,7 +34,7 @@ impl TryFrom<proto::MetadataField> for schema::MetadataField {
             .into_iter()
             .map(|v| v.try_into())
             .collect::<Result<HashSet<_>, String>>()
-            .map_err(|e| crate::metadata::Error::InvalidFieldValue(e))?;
+            .map_err(crate::metadata::Error::InvalidFieldValue)?;
         schema::MetadataField::new(name, values)
     }
 }

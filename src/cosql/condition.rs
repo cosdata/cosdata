@@ -114,7 +114,7 @@ pub fn continue_parsing_condition(input: &str, left: Condition) -> IResult<&str,
 
 pub fn parse_condition(input: &str) -> IResult<&str, Condition> {
     let (input, first) = alt((
-        map(parse_binary_condition, |bc| Condition::Binary(bc)),
+        map(parse_binary_condition, Condition::Binary),
         map(
             tuple((char('('), ws(parse_condition), char(')'))),
             |(_, condition, _)| condition,

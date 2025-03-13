@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use crate::{
     app_context::AppContext,
-    indexes::inverted_index::InvertedIndex,
-    models::{collection::Collection, types::DenseIndex},
+    indexes::{hnsw::HNSWIndex, inverted::InvertedIndex},
+    models::collection::Collection,
 };
 
 use super::{
@@ -53,8 +53,8 @@ pub(crate) async fn get_collection_by_id(
 pub(crate) async fn get_dense_index_by_id(
     ctx: Arc<AppContext>,
     collection_id: &str,
-) -> Result<Arc<DenseIndex>, CollectionsError> {
-    let index = repo::get_dense_index_by_name(ctx, collection_id).await?;
+) -> Result<Arc<HNSWIndex>, CollectionsError> {
+    let index = repo::get_hnsw_index_by_name(ctx, collection_id).await?;
     Ok(index)
 }
 

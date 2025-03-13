@@ -5,14 +5,13 @@ use crate::api::vectordb::indexes::indexes_module;
 use crate::api::vectordb::transactions::transactions_module;
 use crate::api::vectordb::vectors::vectors_module;
 use crate::app_context::AppContext;
-use crate::config_loader::{load_config, ServerMode, Ssl};
+use crate::config_loader::{ServerMode, Ssl};
 use actix_cors::Cors;
 use actix_web::web::Data;
 use actix_web::{middleware, web, App, HttpServer};
 use rustls::{pki_types::PrivateKeyDer, ServerConfig};
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use std::{fs::File, io::BufReader};
 
 #[derive(Debug, Serialize, Deserialize)]

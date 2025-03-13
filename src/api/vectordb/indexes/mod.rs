@@ -8,9 +8,7 @@ mod repo;
 mod service;
 
 pub(crate) fn indexes_module() -> Scope {
-    let indexes_module = web::scope("/collections/{collection_id}/indexes")
+    web::scope("/collections/{collection_id}/indexes")
         .route("/dense", web::post().to(create_dense_index))
-        .route("/sparse", web::post().to(create_sparse_index));
-
-    indexes_module
+        .route("/sparse", web::post().to(create_sparse_index))
 }

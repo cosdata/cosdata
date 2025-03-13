@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use crate::indexes::inverted_index_types::RawSparseVectorEmbedding;
-
-use super::{
-    buffered_io::BufferManager, common::WaCustomError, types::RawVectorEmbedding, versioning::Hash,
+use crate::indexes::{
+    hnsw::types::RawDenseVectorEmbedding, inverted::types::RawSparseVectorEmbedding,
 };
+
+use super::{buffered_io::BufferManager, common::WaCustomError, versioning::Hash};
 
 pub struct EmbeddingOffset {
     pub version: Hash,
@@ -36,9 +36,9 @@ impl EmbeddingOffset {
     }
 }
 
-pub fn write_embedding(
+pub fn write_dense_embedding(
     bufman: Arc<BufferManager>,
-    emb: &RawVectorEmbedding,
+    emb: &RawDenseVectorEmbedding,
 ) -> Result<u32, WaCustomError> {
     // TODO: select a better value for `N` (number of bytes to pre-allocate)
     let serialized = rkyv::to_bytes::<_, 256>(emb)
@@ -49,7 +49,7 @@ pub fn write_embedding(
 
     let mut buf = Vec::with_capacity(4 + serialized.len());
     buf.extend(len.to_le_bytes());
-    buf.extend(serialized.into_iter());
+    buf.extend(&*serialized);
 
     let start = bufman.write_to_end_of_file(cursor, &buf)? as u32;
 
@@ -99,7 +99,7 @@ pub fn write_sparse_embedding(
 
     let mut buf = Vec::with_capacity(4 + serialized.len());
     buf.extend(len.to_le_bytes());
-    buf.extend(serialized.into_iter());
+    buf.extend(&*serialized);
 
     let start = bufman.write_to_end_of_file(cursor, &buf)? as u32;
 
@@ -180,7 +180,7 @@ pub fn read_sparse_embedding(
 pub fn read_embedding(
     bufman: Arc<BufferManager>,
     offset: u32,
-) -> Result<(RawVectorEmbedding, u32), WaCustomError> {
+) -> Result<(RawDenseVectorEmbedding, u32), WaCustomError> {
     let cursor = bufman.open_cursor()?;
 
     bufman
@@ -212,21 +212,20 @@ pub fn read_embedding(
 
 #[cfg(test)]
 mod tests {
-    use super::{read_embedding, write_embedding, RawVectorEmbedding};
+    use super::{read_embedding, write_dense_embedding, RawDenseVectorEmbedding};
     use crate::models::{buffered_io::BufferManager, types::VectorId};
     use rand::{distributions::Uniform, rngs::ThreadRng, thread_rng, Rng};
     use std::sync::Arc;
     use tempfile::tempfile;
 
-    fn get_random_embedding(rng: &mut ThreadRng) -> RawVectorEmbedding {
+    fn get_random_embedding(rng: &mut ThreadRng) -> RawDenseVectorEmbedding {
         let range = Uniform::new(-1.0, 1.0);
 
         let raw_vec: Vec<f32> = (0..rng.gen_range(100..200))
-            .into_iter()
-            .map(|_| rng.sample(&range))
+            .map(|_| rng.sample(range))
             .collect();
 
-        RawVectorEmbedding {
+        RawDenseVectorEmbedding {
             raw_vec: Arc::new(raw_vec),
             hash_vec: VectorId(rng.gen()),
         }
@@ -239,7 +238,7 @@ mod tests {
         let tempfile = tempfile().unwrap();
 
         let bufman = Arc::new(BufferManager::new(tempfile, 8192).unwrap());
-        let offset = write_embedding(bufman.clone(), &embedding).unwrap();
+        let offset = write_dense_embedding(bufman.clone(), &embedding).unwrap();
 
         let (deserialized, _) = read_embedding(bufman.clone(), offset).unwrap();
 
@@ -255,7 +254,7 @@ mod tests {
         let bufman = Arc::new(BufferManager::new(tempfile, 8192).unwrap());
 
         for embedding in &embeddings {
-            write_embedding(bufman.clone(), embedding).unwrap();
+            write_dense_embedding(bufman.clone(), embedding).unwrap();
         }
 
         let mut offset = 0;

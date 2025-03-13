@@ -21,7 +21,7 @@ pub(crate) async fn create_sparse_index_transaction(
     ctx: Arc<AppContext>,
     collection_id: &str,
 ) -> Result<CreateTransactionResponseDto, TransactionError> {
-    repo::create_sparse_index_transaction(ctx, collection_id).await
+    repo::create_inverted_index_transaction(ctx, collection_id).await
 }
 
 pub(crate) async fn commit_dense_index_transaction(

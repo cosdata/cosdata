@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
+#[serde(rename_all = "UPPERCASE")]
 pub enum EncodingFormat {
-    CBOR,
-    JSON,
-    DEFAULT,
+    Cbor,
+    Json,
+    Default,
 }

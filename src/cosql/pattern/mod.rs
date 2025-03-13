@@ -32,11 +32,11 @@ pub fn parse_patterns1(input: &str) -> IResult<&str, Patterns> {
 
 pub fn parse_pattern(input: &str) -> IResult<&str, Pattern> {
     alt((
-        map(parse_entity_pattern, |ep| Pattern::EntityPattern(ep)),
+        map(parse_entity_pattern, Pattern::EntityPattern),
         map(parse_relationship_pattern, |rp| {
             Pattern::RelationshipPattern(rp)
         }),
-        map(parse_condition, |c| Pattern::Condition(c)),
+        map(parse_condition, Pattern::Condition),
     ))(input)
 }
 

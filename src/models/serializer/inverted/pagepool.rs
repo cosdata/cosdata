@@ -1,10 +1,8 @@
-use crate::{
-    models::{
-        buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
-        cache_loader::InvertedIndexCache,
-        types::FileOffset,
-    },
-    storage::page::{Page, Pagepool},
+use crate::models::{
+    buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
+    cache_loader::InvertedIndexCache,
+    page::{Page, Pagepool},
+    types::FileOffset,
 };
 
 use super::InvertedIndexSerialize;

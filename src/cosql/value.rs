@@ -40,7 +40,7 @@ pub fn parse_date(input: &str) -> IResult<&str, Date> {
 pub fn parse_value(input: &str) -> IResult<&str, Value> {
     alt((
         map(parse_string_literal, |s| Value::String(s.to_string())),
-        map(parse_date, |date| Value::Date(date)),
+        map(parse_date, Value::Date),
         map_res(
             recognize(tuple((opt(char('-')), digit1, char('.'), digit1))),
             |s: &str| Ok::<_, ParseFloatError>(Value::Double(s.parse()?)),

@@ -1,3 +1,5 @@
+#![allow(clippy::type_complexity)]
+
 use dashmap::DashMap;
 use half::f16;
 use rand::Rng;
@@ -25,6 +27,7 @@ pub struct EvictionIndex {
     inner: [AtomicU64; 256],
 }
 
+#[allow(unused)]
 impl EvictionIndex {
     fn new() -> Self {
         Self {
@@ -39,7 +42,7 @@ impl EvictionIndex {
     }
 
     fn is_empty(&self, idx: usize) -> bool {
-        self.inner[idx as usize].load(Ordering::SeqCst) == u64::MAX
+        self.inner[idx].load(Ordering::SeqCst) == u64::MAX
     }
 
     fn clear(&self, idx: usize) {
@@ -92,6 +95,7 @@ pub struct ProbEviction {
     lambda: f16,
 }
 
+#[allow(unused)]
 impl ProbEviction {
     pub fn new(prob: f16) -> Self {
         Self {
@@ -107,8 +111,7 @@ impl ProbEviction {
     fn eviction_probability(&self, global_counter: u32, counter_value: u32) -> f32 {
         let age = counter_age(global_counter, counter_value);
         let recency_prob = (-self.lambda.to_f32() * age as f32).exp();
-        let eviction_prob = 1.0 - recency_prob;
-        eviction_prob
+        1.0 - recency_prob
     }
 
     fn should_evict(&self, global_counter: u32, counter_value: u32) -> bool {
@@ -126,6 +129,7 @@ pub enum EvictStrategy {
     Probabilistic(ProbEviction),
 }
 
+#[allow(unused)]
 pub struct LRUCache<K, V>
 where
     K: Eq + std::hash::Hash + Clone + Into<u64> + From<u64>,
@@ -158,6 +162,7 @@ impl<V> CachedValue<V> {
     }
 }
 
+#[allow(unused)]
 impl<K, V> LRUCache<K, V>
 where
     K: Eq + std::hash::Hash + Clone + Into<u64> + From<u64>,
@@ -227,7 +232,7 @@ where
             .map
             .entry(key)
             .and_modify(|(_, counter)| {
-                let old_counter = counter.clone();
+                let old_counter = *counter;
                 let new_counter = self.increment_counter();
                 self.index.on_cache_hit(old_counter, new_counter, k1.into());
                 *counter = new_counter;
@@ -261,7 +266,7 @@ where
                 EvictStrategy::Immediate => self.evict_lru(),
                 EvictStrategy::Probabilistic(prob) => {
                     if self.map.len() > self.capacity && prob.should_trigger() {
-                        self.evict_lru_probabilistic(&prob);
+                        self.evict_lru_probabilistic(prob);
                     }
                 }
             }
@@ -302,7 +307,7 @@ where
             let global_counter = self.counter.load(Ordering::SeqCst);
             let mut pairs_to_evict = Vec::with_capacity(num_to_evict as usize);
             // @TODO: What if num_to_evict is > 256?
-            for (idx, key) in self.index.get_keys(num_to_evict as u8) {
+            for (idx, key) in self.index.get_keys(num_to_evict) {
                 if pairs_to_evict.len() as u8 >= num_to_evict {
                     break;
                 }
@@ -368,7 +373,7 @@ where
 #[cfg(test)]
 mod tests {
 
-    use std::{collections::HashMap, sync::Arc, thread};
+    use std::collections::HashMap;
 
     use super::*;
 

@@ -3,13 +3,11 @@ use std::sync::{
     Arc, RwLock,
 };
 
-use crate::{
-    models::{
-        buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
-        cache_loader::InvertedIndexCache,
-        types::FileOffset,
-    },
-    storage::page::Page,
+use crate::models::{
+    buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
+    cache_loader::InvertedIndexCache,
+    page::Page,
+    types::FileOffset,
 };
 
 use super::InvertedIndexSerialize;
@@ -75,9 +73,8 @@ impl<const LEN: usize> InvertedIndexSerialize for Page<LEN> {
         let len = bufman.read_u32_with_cursor(cursor)? as usize;
         let mut data = [u32::MAX; LEN];
 
-        for i in 0..len {
-            let el = bufman.read_u32_with_cursor(cursor)?;
-            data[i] = el;
+        for el in data.iter_mut().take(len) {
+            *el = bufman.read_u32_with_cursor(cursor)?;
         }
 
         bufman.close_cursor(cursor)?;

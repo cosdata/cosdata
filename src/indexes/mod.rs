@@ -1,3 +1,2 @@
-pub(crate) mod inverted_index;
-pub(crate) mod inverted_index_data;
-pub(crate) mod inverted_index_types;
+pub(crate) mod hnsw;
+pub(crate) mod inverted;

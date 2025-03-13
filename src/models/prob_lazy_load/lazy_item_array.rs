@@ -9,11 +9,18 @@ pub struct ProbLazyItemArray<T, const N: usize> {
     items: [AtomicPtr<ProbLazyItem<T>>; N],
 }
 
-impl<T, const N: usize> ProbLazyItemArray<T, N> {
-    pub fn new() -> Self {
+impl<T, const N: usize> Default for ProbLazyItemArray<T, N> {
+    fn default() -> Self {
         Self {
             items: std::array::from_fn(|_| AtomicPtr::new(ptr::null_mut())),
         }
+    }
+}
+
+#[allow(unused)]
+impl<T, const N: usize> ProbLazyItemArray<T, N> {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn push(&self, item: *mut ProbLazyItem<T>) {

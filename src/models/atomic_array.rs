@@ -30,6 +30,13 @@ impl<T: std::fmt::Debug, const N: usize> std::fmt::Debug for AtomicArray<T, N> {
     }
 }
 
+impl<T, const N: usize> Default for AtomicArray<T, N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[allow(unused)]
 impl<T, const N: usize> AtomicArray<T, N> {
     pub fn new() -> Self {
         Self {

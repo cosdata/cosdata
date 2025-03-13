@@ -1,17 +1,13 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::{
-    models::{
-        atomic_array::AtomicArray,
-        buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
-        cache_loader::InvertedIndexCache,
-        fixedset::VersionedInvertedFixedSetIndex,
-        prob_lazy_load::lazy_item::ProbLazyItem,
-        types::FileOffset,
-    },
-    storage::inverted_index_sparse_ann_basic::{
-        InvertedIndexSparseAnnNodeBasicTSHashmap, InvertedIndexSparseAnnNodeBasicTSHashmapData,
-    },
+use crate::models::{
+    atomic_array::AtomicArray,
+    buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
+    cache_loader::InvertedIndexCache,
+    fixedset::VersionedInvertedFixedSetIndex,
+    inverted_index::{InvertedIndexNode, InvertedIndexNodeData},
+    prob_lazy_load::lazy_item::ProbLazyItem,
+    types::FileOffset,
 };
 
 use super::InvertedIndexSerialize;
@@ -27,7 +23,7 @@ use super::InvertedIndexSerialize;
 //   4 bytes for pagepool offset +                   | qv * 4 + 5
 //   16 * 4 bytes for dimension offsets +            | qv * 4 + 69
 //   4 bytes of sets offset                          | qv * 4 + 73
-impl InvertedIndexSerialize for InvertedIndexSparseAnnNodeBasicTSHashmap {
+impl InvertedIndexSerialize for InvertedIndexNode {
     fn serialize(
         &self,
         dim_bufman: &BufferManager,
@@ -111,7 +107,7 @@ impl InvertedIndexSerialize for InvertedIndexSparseAnnNodeBasicTSHashmap {
         let qb = quantization_bits as u32;
         let qv = 1u32 << qb;
         let data_file_idx = (dim_index % data_file_parts as u32) as u8;
-        let data = <*mut ProbLazyItem<InvertedIndexSparseAnnNodeBasicTSHashmapData>>::deserialize(
+        let data = <*mut ProbLazyItem<InvertedIndexNodeData>>::deserialize(
             dim_bufman,
             data_bufmans,
             FileOffset(file_offset.0 + 5),

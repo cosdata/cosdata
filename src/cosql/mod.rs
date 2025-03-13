@@ -67,7 +67,7 @@ pub fn parse_cosql_statement(input: &str) -> IResult<&str, CosQLStatement> {
                         CosQLStatement::RelationshipDefinition(rd)
                     }),
                 ),
-                preceded(ws_tag("rule"), map(parse_rule, |r| CosQLStatement::Rule(r))),
+                preceded(ws_tag("rule"), map(parse_rule, CosQLStatement::Rule)),
             )),
         ),
         preceded(
@@ -81,10 +81,7 @@ pub fn parse_cosql_statement(input: &str) -> IResult<&str, CosQLStatement> {
                 }),
             )),
         ),
-        preceded(
-            ws_tag("match"),
-            map(parse_query, |q| CosQLStatement::Query(q)),
-        ),
+        preceded(ws_tag("match"), map(parse_query, CosQLStatement::Query)),
     ))(input)
 }
 

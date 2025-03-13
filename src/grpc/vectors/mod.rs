@@ -1,7 +1,10 @@
-use crate::app_context::AppContext;
-use crate::indexes::inverted_index_types::SparsePair;
+// contains errors
+// #[cfg(test)]
+// mod tests;
+
 use crate::models::common::WaCustomError;
 use crate::models::types::VectorId;
+use crate::{app_context::AppContext, indexes::inverted::types::SparsePair};
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
@@ -43,16 +46,16 @@ impl VectorsService for VectorsServiceImpl {
 
                 // Prepare vector for insertion
                 let vec_to_insert = vec![(VectorId(dense.id), dense.values.clone())];
-                let dense_index = self.context.ain_env.collections_map
-                    .get(&req.collection_id)
+                let hnsw_index = self.context.ain_env.collections_map
+                    .get_hnsw_index(&req.collection_id)
                     .ok_or_else(|| Status::failed_precondition(
                         "Dense index not initialized. Try recreating the collection with dense vectors enabled."
                     ))?;
 
                 // Upload vector to storage
-                crate::api_service::run_upload(
+                crate::api_service::run_upload_dense_vectors(
                     self.context.clone(),
-                    dense_index,
+                    hnsw_index,
                     vec_to_insert,
                 ).map_err(|e| match e {
                     WaCustomError::NotFound(msg) => Status::not_found(msg),
@@ -88,7 +91,7 @@ impl VectorsService for VectorsServiceImpl {
                     ))?;
 
                 // Upload sparse vector
-                crate::api_service::run_upload_sparse_vector(
+                crate::api_service::run_upload_sparse_vectors(
                     sparse_index,
                     vec_to_insert,
                 ).map_err(|e| match e {
@@ -129,12 +132,12 @@ impl VectorsService for VectorsServiceImpl {
         }
 
         // Get dense index and retrieve vector
-        let dense_index = self.context.ain_env.collections_map
-            .get(&req.collection_id)
+        let hnsw_index = self.context.ain_env.collections_map
+            .get_hnsw_index(&req.collection_id)
             .ok_or_else(|| Status::failed_precondition("Dense index not initialized"))?;
 
-        let embedding = crate::vector_store::get_embedding_by_id(
-            dense_index,
+        let embedding = crate::vector_store::get_dense_embedding_by_id(
+            hnsw_index,
             &VectorId(req.vector_id)
         ).map_err(|e| match e {
             WaCustomError::NotFound(msg) => Status::not_found(msg),
@@ -166,14 +169,14 @@ impl VectorsService for VectorsServiceImpl {
         }
 
         // Update vector in storage
-        let dense_index = self.context.ain_env.collections_map
-            .get(&req.collection_id)
+        let hnsw_index = self.context.ain_env.collections_map
+            .get_hnsw_index(&req.collection_id)
             .ok_or_else(|| Status::failed_precondition("Dense index not initialized"))?;
 
         let vec_to_update = vec![(VectorId(req.vector_id), req.values.clone())];
-        crate::api_service::run_upload(
+        crate::api_service::run_upload_dense_vectors(
             self.context.clone(),
-            dense_index.clone(),
+            hnsw_index.clone(),
             vec_to_update,
         ).map_err(|e| match e {
             WaCustomError::NotFound(msg) => Status::not_found(msg),
@@ -215,14 +218,14 @@ impl VectorsService for VectorsServiceImpl {
                     return Err(Status::failed_precondition("Dense vectors are not enabled for this collection"));
                 }
 
-                let dense_index = self.context.ain_env.collections_map
-                    .get(&req.collection_id)
+                let hnsw_index = self.context.ain_env.collections_map
+                    .get_hnsw_index(&req.collection_id)
                     .ok_or_else(|| Status::failed_precondition("Dense index not initialized"))?;
 
                 // Perform similarity search
                 let results = crate::api_service::ann_vector_query(
                     self.context.clone(),
-                    dense_index,
+                    hnsw_index,
                     dense.vector,
                     Some(dense.k as usize),
                 ).await.map_err(|e| match e {
