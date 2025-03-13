@@ -2,10 +2,10 @@
 #+AUTHOR: Nithin Mani
 #+DATE: 2025-02-09
 
-Overview
+* Overview
 This document outlines the design specification for a property graph storage engine utilizing an index-based approach for efficient entity and relationship storage and retrieval. The system maps entities, properties and relationships to an index structure, enabling efficient storage and querying. Additionally, it incorporates an agentic memory system with probabilistic recall, reinforcement, and forgetting.
 
-Core Data Model
+* Core Data Model
 
 ** Entity Encoding
 Entities and relationships are encoded for storage in the index. The implementation accepts arbitrary byte slices as input, allowing for flexible encoding of various types of identifiers and properties.
@@ -13,12 +13,13 @@ Entities and relationships are encoded for storage in the index. The implementat
 ** Vector Dimension Format
 Each entry in the index is represented by:
 
+#+begin_src plaintext
 (index_position: u32, map_key: u8, divisor: u64, data_offset: u32, retention_score: f32)
+#+end_src
 
 Example representations:
 
-#+begin_src
-
+#+begin_src plaintext
 Person with ID and name
 
 For ID="person:123":  (45123, 178, 982347, 24680, 0.95)
@@ -32,92 +33,89 @@ For Rel="knows:789":        (78901, 234, 123456, 46802, 0.85)
 For prop="since:2024":      (34567, 123, 789012, 57913, 0.65)
 #+end_src
 
-Storage Architecture
+* Storage Architecture
 
 ** Index Structure
 The system implements a power-of-4 based index:
 
 *** Configuration: 4^8 with Internal Maps
-
-Total nodes: 65,536 (4^8)
-
-Each node contains internal map (256 keys)
-
-Value format: (divisor: u64, file_offset: u32, retention_score: f32)
+- Total nodes: 65,536 (4^8)
+- Each node contains internal map (256 keys)
+- Value format: (divisor: u64, file_offset: u32, retention_score: f32)
 
 ** Implementation Details
 
 #+begin_src rust
 // Note: Production systems should use xxHash instead of this simple hash
 fn simple_hash(bytes: &[u8]) -> u64 {
-let mut hash: u64 = 14695981039346656037;
-for byte in bytes {
-hash = hash ^ (*byte as u64);
-hash = hash.wrapping_mul(1099511628211);
-}
-hash
+    let mut hash: u64 = 14695981039346656037;
+    for byte in bytes {
+        hash = hash ^ (*byte as u64);
+        hash = hash.wrapping_mul(1099511628211);
+    }
+    hash
 }
 
 // Encoding with retention score
 fn encode_entity(bytes: &[u8]) -> (u32, u8, u64, f32) {
-let hash = simple_hash(bytes);
-let index_position = (hash & 0xFFFF) as u32;
-let map_key = ((hash >> 16) & 0xFF) as u8;
-let divisor = hash >> 24;
-let retention_score = 1.0; // Default memory strength
+    let hash = simple_hash(bytes);
+    let index_position = (hash & 0xFFFF) as u32;
+    let map_key = ((hash >> 16) & 0xFF) as u8;
+    let divisor = hash >> 24;
+    let retention_score = 1.0; // Default memory strength
 
-(index_position, map_key, divisor, retention_score)
+    (index_position, map_key, divisor, retention_score)
 }
 #+end_src
 
-Entity and Relationship Storage Structure
+* Entity and Relationship Storage Structure
 
 ** Retention Score Management (Probabilistic Memory)
 Each entity and relationship has a retention score (f32, 0.0 - 1.0), which dynamically updates based on access frequency, significance, and time.
 
-Decay Function:
-
+*** Decay Function:
+#+BEGIN_EXPORT latex
 R(t) = R_0 \cdot e^{-\lambda_{adaptive} \cdot t}
+#+END_EXPORT
 
-Dynamic decay factor (λadaptive): Adjusts based on query frequency and importance.
+- Dynamic decay factor (λ_{adaptive}): Adjusts based on query frequency and importance.
 
-Reinforcement rule:
+*** Reinforcement Rule:
+#+BEGIN_EXPORT latex
+R_{new} = R_{old} + \alpha \cdot (importance) \cdot (reinforcement\ frequency) \cdot (emotional\ weight) - \beta \cdot (conflict\ penalty)
+#+END_EXPORT
 
-R_{new} = R_{old} + \alpha \cdot (importance) \cdot (reinforcement frequency) \cdot (emotional weight) - \beta \cdot (conflict penalty)
+*** Forgetting Mechanism: 
+If R < 0.05, entity enters dormant state (not deleted but pruned from active retrieval).
 
-Forgetting Mechanism: If R < 0.05, entity enters dormant state (not deleted but pruned from active retrieval).
+*** Memory Compression: 
+If multiple weak memories exist, they merge into an abstraction (e.g., "Alice often eats Italian food" instead of storing every meal).
 
-Memory Compression: If multiple weak memories exist, they merge into an abstraction (e.g., "Alice often eats Italian food" instead of storing every meal).
-
-Query Execution
+* Query Execution
 
 ** Probabilistic Graph Traversal (Human-Like Recall)
 Instead of fixed graph walks, queries use adaptive probabilistic selection:
 
+#+BEGIN_EXPORT latex
 P_{next}(N_i) = \frac{R(N_i) \cdot S(Q, N_i)}{\sum R(N) \cdot S(Q, N)}
+#+END_EXPORT
 
 Where:
+- R(N_i) = Retention strength of node N_i.
+- S(Q, N_i) = Similarity between query context and node N_i.
 
- = Retention strength of node .
+*** Exploration-Exploitation Balance: 
+- 80% probability of picking high-retention nodes
+- 20% probability of exploring weakly connected nodes
 
- = Similarity between query context and node .
-
-Exploration-Exploitation Balance: 80% probability of picking high-retention nodes, 20% chance of exploring weakly connected ones.
-
-Performance Considerations
+* Performance Considerations
 
 ** Caching Strategy
-
-LRU Cache for entity data.
-
-Frequently accessed entities are kept in memory.
-
-Configurable cache sizes based on available memory.
+- LRU Cache for entity data.
+- Frequently accessed entities are kept in memory.
+- Configurable cache sizes based on available memory.
 
 ** Query Performance Enhancements
-
-Parallel lookup across multiple memory dimensions.
-
-Validation scheme ensures accuracy.
-
-Direct lookup of relationships with key attributes.
+- Parallel lookup across multiple memory dimensions.
+- Validation scheme ensures accuracy.
+- Direct lookup of relationships with key attributes.
