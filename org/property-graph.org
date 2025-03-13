@@ -2,150 +2,122 @@
 #+AUTHOR: Nithin Mani
 #+DATE: 2025-02-09
 
-* Overview
-This document outlines the design specification for a property graph storage engine utilizing an index-based approach for efficient entity and relationship storage and retrieval. The system maps entities, properties and relationships to an index structure, enabling efficient storage and querying.
+Overview
+This document outlines the design specification for a property graph storage engine utilizing an index-based approach for efficient entity and relationship storage and retrieval. The system maps entities, properties and relationships to an index structure, enabling efficient storage and querying. Additionally, it incorporates an agentic memory system with probabilistic recall, reinforcement, and forgetting.
 
-* Core Data Model
+Core Data Model
 
 ** Entity Encoding
-Entities and relationships are encoded for storage in the index. The implementation accepts arbitrary byte slices as input, allowing for flexible encoding of various types of identifiers and properties. 
+Entities and relationships are encoded for storage in the index. The implementation accepts arbitrary byte slices as input, allowing for flexible encoding of various types of identifiers and properties.
 
 ** Vector Dimension Format
 Each entry in the index is represented by:
-- (index_position: u32, map_key: u8, divisor: u64, data_offset: u32)
+
+(index_position: u32, map_key: u8, divisor: u64, data_offset: u32, retention_score: f32)
 
 Example representations:
 
 #+begin_src
-# Person with ID and name
-For ID="person:123":  (45123, 178, 982347, 24680)
-For name="alice":     (12834, 45,  673891, 13579)
 
-# Relationship with property
-For Entity1="person:123":   (45123, 178, 982347, 24680)
-For Entity2="person:456":   (23456, 89,  445678, 35791)
-For Rel="knows:789":        (78901, 234, 123456, 46802)
-For prop="since:2024":      (34567, 123, 789012, 57913)
+Person with ID and name
+
+For ID="person:123":  (45123, 178, 982347, 24680, 0.95)
+For name="alice":     (12834, 45,  673891, 13579, 0.80)
+
+Relationship with property
+
+For Entity1="person:123":   (45123, 178, 982347, 24680, 0.95)
+For Entity2="person:456":   (23456, 89,  445678, 35791, 0.70)
+For Rel="knows:789":        (78901, 234, 123456, 46802, 0.85)
+For prop="since:2024":      (34567, 123, 789012, 57913, 0.65)
 #+end_src
 
-* Storage Architecture
+Storage Architecture
 
 ** Index Structure
 The system implements a power-of-4 based index:
 
 *** Configuration: 4^8 with Internal Maps
-- Total nodes: 65,536 (4^8)
-- Each node contains internal map (256 keys)
-- Value format: (divisor: u64, file_offset: u32)
+
+Total nodes: 65,536 (4^8)
+
+Each node contains internal map (256 keys)
+
+Value format: (divisor: u64, file_offset: u32, retention_score: f32)
 
 ** Implementation Details
 
 #+begin_src rust
 // Note: Production systems should use xxHash instead of this simple hash
 fn simple_hash(bytes: &[u8]) -> u64 {
-   // Simple FNV-1a hash for demonstration
-   let mut hash: u64 = 14695981039346656037;
-   for byte in bytes {
-       hash = hash ^ (*byte as u64);
-       hash = hash.wrapping_mul(1099511628211);
-   }
-   hash
+let mut hash: u64 = 14695981039346656037;
+for byte in bytes {
+hash = hash ^ (*byte as u64);
+hash = hash.wrapping_mul(1099511628211);
+}
+hash
 }
 
-// Configuration (4^8 = 65,536 with internal maps)
-fn encode_entity(bytes: &[u8]) -> (u32, u8, u64) {
-   let hash = simple_hash(bytes);
-   
-   // For efficiency, use bit operations instead of modulo and division
-   let index_position = (hash & 0xFFFF) as u32;
-   let map_key = ((hash >> 16) & 0xFF) as u8;
-   let divisor = hash >> 24;
-   
-   (index_position, map_key, divisor)
-}
+// Encoding with retention score
+fn encode_entity(bytes: &[u8]) -> (u32, u8, u64, f32) {
+let hash = simple_hash(bytes);
+let index_position = (hash & 0xFFFF) as u32;
+let map_key = ((hash >> 16) & 0xFF) as u8;
+let divisor = hash >> 24;
+let retention_score = 1.0; // Default memory strength
 
-fn validate_entity(index_position: u32, map_key: u8, divisor: u64, bytes: &[u8]) -> bool {
-    let hash = simple_hash(bytes);
-    let reconstructed_hash = (divisor << 24) | ((map_key as u64) << 16) | (index_position as u64);
-    hash == reconstructed_hash
-}
-
-fn main() {
-   // Example with different types of identifiers
-   let id_bytes = "person:123".as_bytes();
-   
-   let (pos, key, div) = encode_entity(id_bytes);
-   println!("Encoding:");
-   println!("Index Position: {}", pos);
-   println!("Map Key: {}", key);
-   println!("Divisor: {}", div);
-   println!("Validation: {}", validate_entity(pos, key, div, id_bytes));
+(index_position, map_key, divisor, retention_score)
 }
 #+end_src
 
-* Entity and Relationship Storage Structure
+Entity and Relationship Storage Structure
 
-** Entity Type Storage
-When storing an entity type (e.g., Person):
-- Hash the entity type according to the scheme
-- Create an entry in the index
-- The entry points to a data file offset containing:
-  - The "schema" for the entity type (serialized appropriately)
-  - A u64 counter tracking how many instances of this entity exist
-  - A chunked list of entity instances with appropriate IDs indexed in the tree
+** Retention Score Management (Probabilistic Memory)
+Each entity and relationship has a retention score (f32, 0.0 - 1.0), which dynamically updates based on access frequency, significance, and time.
 
-** Entity Instance Storage
-For each entity instance (e.g., a specific Person):
-- Create one entry in the tree by hashing the entity instance with its unique-id
-- The entry contains an offset to the data file containing:
-  - Properties (firstname, lastname, age, gender, etc.)
-  - Number of relationships grouped by type
-  - Chunked list of relationship types (employee, spouse, member-of-club, etc.)
+Decay Function:
 
-** Relationship Type Storage
-For each relationship type associated with an entity instance:
-- Create a unique entry in the index tree by hashing the relationship-type
-- The entry points to a data file offset containing:
-  - Count for each relationship type (edges count)
-  - Chunked list of neighbors
-  - Property hash (as relationships are first-class citizens)
-  - Indexed in the tree for direct lookup with key attributes
+R(t) = R_0 \cdot e^{-\lambda_{adaptive} \cdot t}
 
-** Relationship Instance Storage
-For each instance of a relationship, as relationships are first class citizens in a property graph:
-- Create one entry in the tree by hashing the relationship instance with its unique-id
-- The entry contains an offset to data file that holds the properties of the relationships themselves
+Dynamic decay factor (λadaptive): Adjusts based on query frequency and importance.
 
-* Query Execution
+Reinforcement rule:
 
-** Lookup Process
-1. Calculate hash of the entity/property bytes
-2. Determine index position
-3. Use index position to locate storage bucket
-4. Calculate remainder and divisor
-5. Use remainder as key to locate entry
-6. Validate entry using divisor
-7. Retrieve entity data using file offset
+R_{new} = R_{old} + \alpha \cdot (importance) \cdot (reinforcement frequency) \cdot (emotional weight) - \beta \cdot (conflict penalty)
 
-** Traversal Optimization
-- Implicit nodes represent structural relationships
-- Explicit nodes store actual entity and relationship data
-- Combined approach enables efficient path finding
-- Multiple dimensions can be queried in parallel
+Forgetting Mechanism: If R < 0.05, entity enters dormant state (not deleted but pruned from active retrieval).
 
-* Performance Considerations
+Memory Compression: If multiple weak memories exist, they merge into an abstraction (e.g., "Alice often eats Italian food" instead of storing every meal).
 
-** Hashing and Index Considerations
-- While this example uses a simple hash function for demonstration, production systems should use xxHash for its superior distribution characteristics, computation speed, collision resistance, and proven reliability in production environments
-- Index positions stored as u32 to optimize memory usage
+Query Execution
+
+** Probabilistic Graph Traversal (Human-Like Recall)
+Instead of fixed graph walks, queries use adaptive probabilistic selection:
+
+P_{next}(N_i) = \frac{R(N_i) \cdot S(Q, N_i)}{\sum R(N) \cdot S(Q, N)}
+
+Where:
+
+ = Retention strength of node .
+
+ = Similarity between query context and node .
+
+Exploration-Exploitation Balance: 80% probability of picking high-retention nodes, 20% chance of exploring weakly connected ones.
+
+Performance Considerations
 
 ** Caching Strategy
-- Frequently accessed entries kept in memory
-- LRU cache for entity data
-- Configurable cache sizes based on available memory
 
-** Query Performance
-- Each dimension can be queried independently
-- Parallel lookup across dimensions possible
-- Validation scheme ensures accuracy of results
-- Direct lookup of relationships with key attributes
+LRU Cache for entity data.
+
+Frequently accessed entities are kept in memory.
+
+Configurable cache sizes based on available memory.
+
+** Query Performance Enhancements
+
+Parallel lookup across multiple memory dimensions.
+
+Validation scheme ensures accuracy.
+
+Direct lookup of relationships with key attributes.
