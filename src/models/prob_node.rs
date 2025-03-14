@@ -7,23 +7,24 @@ use std::{
 };
 
 use super::{
-    cache_loader::DenseIndexCache,
+    cache_loader::HNSWIndexCache,
     prob_lazy_load::{lazy_item::ProbLazyItem, lazy_item_array::ProbLazyItemArray},
-    types::{HNSWLevel, MetricResult, NodeProp, VectorId},
+    types::{DistanceMetric, HNSWLevel, MetricResult, NodeProp, VectorId},
 };
 
 pub type SharedNode = *mut ProbLazyItem<ProbNode>;
+pub type Neighbors = Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]>;
 
 pub struct ProbNode {
     pub hnsw_level: HNSWLevel,
     pub prop: Arc<NodeProp>,
     // (neighbor_id, neighbor_node, distance)
     // even though `VectorId` is an u64 we don't need the full range here.
-    neighbors: Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]>,
+    neighbors: Neighbors,
     parent: AtomicPtr<ProbLazyItem<ProbNode>>,
     child: AtomicPtr<ProbLazyItem<ProbNode>>,
     pub versions: ProbLazyItemArray<ProbNode, 8>,
-    lowest_index: Mutex<(u8, f32)>,
+    lowest_index: Mutex<(u8, MetricResult)>,
     pub root_version: SharedNode,
 }
 
@@ -37,6 +38,7 @@ impl ProbNode {
         parent: SharedNode,
         child: SharedNode,
         neighbors_count: usize,
+        dist_metric: DistanceMetric,
     ) -> Self {
         let mut neighbors = Vec::with_capacity(neighbors_count);
 
@@ -51,34 +53,35 @@ impl ProbNode {
             parent: AtomicPtr::new(parent),
             child: AtomicPtr::new(child),
             versions: ProbLazyItemArray::new(),
-            lowest_index: Mutex::new((0, -1.0)),
+            lowest_index: Mutex::new((0, MetricResult::min(dist_metric))),
             root_version: ptr::null_mut(),
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_neighbors_and_versions_and_root_version(
         hnsw_level: HNSWLevel,
         prop: Arc<NodeProp>,
-        neighbors: Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]>,
+        neighbors: Neighbors,
         parent: SharedNode,
         child: SharedNode,
         versions: ProbLazyItemArray<ProbNode, 8>,
         root_version: SharedNode,
+        dist_metric: DistanceMetric,
     ) -> Self {
         let mut lowest_idx = 0;
-        let mut lowest_sim = 2.0;
+        let mut lowest_sim = MetricResult::max(dist_metric);
 
         for (idx, neighbor) in neighbors.iter().enumerate() {
             let neighbor = unsafe { neighbor.load(Ordering::Relaxed).as_ref() };
             let Some((_, _, sim)) = neighbor else {
                 lowest_idx = idx;
-                lowest_sim = -1.0;
+                lowest_sim = MetricResult::min(dist_metric);
                 break;
             };
-            let sim = sim.get_value();
-            if sim < lowest_sim {
+            if sim < &lowest_sim {
                 lowest_idx = idx;
-                lowest_sim = sim;
+                lowest_sim = *sim;
             }
         }
 
@@ -119,19 +122,20 @@ impl ProbNode {
         neighbor_id: u32,
         neighbor_node: SharedNode,
         dist: MetricResult,
-        cache: &DenseIndexCache,
+        cache: &HNSWIndexCache,
+        dist_metric: DistanceMetric,
     ) -> Option<u8> {
         // First find an empty slot or the slot with lowest similarity
         let mut lowest_idx_guard = self.lowest_index.lock().unwrap();
         let (lowest_idx, lowest_sim) = *lowest_idx_guard;
 
         // If we didn't find an empty slot and new neighbor isn't better, return
-        if dist.get_value() <= lowest_sim {
+        if dist <= lowest_sim {
             return None;
         }
 
         // Create new neighbor and attempt atomic update
-        let new_neighbor = Box::new((neighbor_id, neighbor_node.clone(), dist));
+        let new_neighbor = Box::new((neighbor_id, neighbor_node, dist));
         let new_ptr = Box::into_raw(new_neighbor);
 
         let result = self.neighbors[lowest_idx as usize].fetch_update(
@@ -139,9 +143,7 @@ impl ProbNode {
             Ordering::Acquire,
             |current| match unsafe { current.as_ref() } {
                 None => Some(new_ptr),
-                Some((_, _, curr_dist)) if dist.get_value() > curr_dist.get_value() => {
-                    Some(new_ptr)
-                }
+                Some((_, _, curr_dist)) if &dist > curr_dist => Some(new_ptr),
                 _ => None,
             },
         );
@@ -170,18 +172,17 @@ impl ProbNode {
         };
 
         let mut new_lowest_idx = 0;
-        let mut new_lowest_sim = 2.0;
+        let mut new_lowest_sim = MetricResult::max(dist_metric);
 
         for (idx, nbr) in self.neighbors.iter().enumerate() {
             let nbr = unsafe { nbr.load(Ordering::Relaxed).as_ref() };
             let Some((_, _, nbr_sim)) = nbr else {
-                new_lowest_sim = -1.0;
+                new_lowest_sim = MetricResult::min(dist_metric);
                 new_lowest_idx = idx;
                 break;
             };
-            let nbr_sim = nbr_sim.get_value();
-            if nbr_sim < new_lowest_sim {
-                new_lowest_sim = nbr_sim;
+            if nbr_sim < &new_lowest_sim {
+                new_lowest_sim = *nbr_sim;
                 new_lowest_idx = idx;
             }
         }
@@ -227,32 +228,22 @@ impl ProbNode {
         );
     }
 
-    pub fn get_neighbors(&self) -> Vec<SharedNode> {
-        self.neighbors
-            .iter()
-            .flat_map(|neighbor| unsafe {
-                neighbor
-                    .load(Ordering::Relaxed)
-                    .as_ref()
-                    .map(|neighbor| neighbor.1)
-            })
-            .collect()
-    }
-
-    pub fn clone_neighbors(&self) -> Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]> {
+    pub fn clone_neighbors(&self) -> Neighbors {
         self.neighbors
             .iter()
             .map(|neighbor| unsafe {
-                AtomicPtr::new(neighbor.load(Ordering::SeqCst).as_ref().map_or_else(
-                    || ptr::null_mut(),
-                    |neighbor| Box::into_raw(Box::new(neighbor.clone())),
-                ))
+                AtomicPtr::new(
+                    neighbor
+                        .load(Ordering::SeqCst)
+                        .as_ref()
+                        .map_or_else(ptr::null_mut, |neighbor| Box::into_raw(Box::new(*neighbor))),
+                )
             })
             .collect::<Vec<_>>()
             .into_boxed_slice()
     }
 
-    pub fn get_neighbors_raw(&self) -> &Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]> {
+    pub fn get_neighbors_raw(&self) -> &Neighbors {
         &self.neighbors
     }
 

@@ -1,8 +1,7 @@
 use serde::{Deserialize, Deserializer};
 
 use crate::{
-    config_loader::Config,
-    models::types::{DistanceMetric, HNSWHyperParams},
+    config_loader::Config, indexes::hnsw::types::HNSWHyperParams, models::types::DistanceMetric,
     quantization::StorageType,
 };
 

@@ -81,6 +81,7 @@ fn generate_random_data_u8(size: usize) -> Vec<(u8, u8)> {
 }
 
 // Function to generate random u8 vectors
+#[cfg(target_arch = "x86_64")]
 fn generate_random_vectors(count: usize, len: usize) -> Vec<Vec<u8>> {
     let mut rng = rand::thread_rng();
     (0..count)
@@ -90,6 +91,7 @@ fn generate_random_vectors(count: usize, len: usize) -> Vec<Vec<u8>> {
 
 fn bench_dot_product(c: &mut Criterion) {
     let sizes = [1000, 1500, 2000];
+    #[cfg(target_arch = "x86_64")]
     let vector_count = 100;
     let _vector_length = 1024; // Make sure this is a multiple of your SIMD width
 
@@ -98,6 +100,7 @@ fn bench_dot_product(c: &mut Criterion) {
         let mut dst_b = dst_a.clone();
         let src_u8 = generate_random_data_u8(*size);
         // Generate random vectors outside the benchmark loop
+        #[cfg(target_arch = "x86_64")]
         let vectors = generate_random_vectors(vector_count, *size);
 
         c.bench_function(&format!("dot_product_a_{}", size), |b| {

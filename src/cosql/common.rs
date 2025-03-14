@@ -12,9 +12,9 @@ pub fn ws_tag<'a>(t: &'a str) -> impl Fn(&'a str) -> IResult<&'a str, &'a str> {
     move |input| delimited(multispace0, tag(t), multispace0)(input)
 }
 
-pub fn ws<'a, F: 'a, O>(inner: F) -> impl FnMut(&'a str) -> IResult<&'a str, O>
+pub fn ws<'a, F, O>(inner: F) -> impl FnMut(&'a str) -> IResult<&'a str, O>
 where
-    F: Fn(&'a str) -> IResult<&'a str, O>,
+    F: Fn(&'a str) -> IResult<&'a str, O> + 'a,
 {
     delimited(multispace0, inner, multispace0)
 }

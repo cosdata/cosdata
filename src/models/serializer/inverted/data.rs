@@ -1,19 +1,15 @@
-use crate::{
-    models::{
-        buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
-        cache_loader::InvertedIndexCache,
-        common::TSHashTable,
-        types::FileOffset,
-    },
-    storage::{
-        inverted_index_sparse_ann_basic::InvertedIndexSparseAnnNodeBasicTSHashmapData,
-        page::VersionedPagepool,
-    },
+use crate::models::{
+    buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
+    cache_loader::InvertedIndexCache,
+    common::TSHashTable,
+    inverted_index::InvertedIndexNodeData,
+    page::VersionedPagepool,
+    types::FileOffset,
 };
 
 use super::InvertedIndexSerialize;
 
-impl InvertedIndexSerialize for InvertedIndexSparseAnnNodeBasicTSHashmapData {
+impl InvertedIndexSerialize for InvertedIndexNodeData {
     fn serialize(
         &self,
         dim_bufman: &BufferManager,

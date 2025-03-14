@@ -6,10 +6,7 @@ use serde::{
     Deserialize, Deserializer, Serialize,
 };
 
-use crate::{
-    indexes::inverted_index_types::SparsePair,
-    models::{rpc::DenseVector, types::VectorId},
-};
+use crate::{indexes::inverted::types::SparsePair, models::types::VectorId};
 
 #[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct CreateDenseVectorDto {
@@ -82,7 +79,7 @@ impl<'de> Deserialize<'de> for CreateSparseVectorDto {
                 // Combine the values and indices into a Vec<SparsePair>
                 let values = indices
                     .into_iter()
-                    .zip(values.into_iter())
+                    .zip(values)
                     .map(|(index, value)| SparsePair(index, value))
                     .collect();
 
@@ -148,9 +145,4 @@ pub(crate) struct SimilarVector {
 pub(crate) enum FindSimilarVectorsResponseDto {
     Dense(Vec<SimilarVector>),
     Sparse(Vec<(VectorId, MetricResult)>),
-}
-
-#[derive(Deserialize)]
-pub(crate) struct UpsertDto {
-    pub vectors: Vec<DenseVector>,
 }

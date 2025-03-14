@@ -6,14 +6,13 @@ use crate::api::vectordb::transactions::transactions_module;
 use crate::api::vectordb::vectors::vectors_module;
 use crate::api::vectordb::versions::version_module;
 use crate::app_context::AppContext;
-use crate::config_loader::{load_config, ServerMode, Ssl};
+use crate::config_loader::{ServerMode, Ssl};
 use actix_cors::Cors;
 use actix_web::web::Data;
 use actix_web::{middleware, web, App, HttpServer};
 use rustls::{pki_types::PrivateKeyDer, ServerConfig};
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use std::{fs::File, io::BufReader};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -62,8 +61,8 @@ pub async fn run_actix_server_with_context(ctx: Data<AppContext>) -> std::io::Re
                     .service(indexes_module())
                     .service(vectors_module())
                     .service(transactions_module())
-                    .service(version_module())      
-                    .service(collections_module()) 
+                    .service(version_module())
+                    .service(collections_module())
                     .service(web::resource("/upsert").route(web::post().to(api::vectordb::upsert)))
                     .service(web::resource("/search").route(web::post().to(api::vectordb::search)))
                     .service(

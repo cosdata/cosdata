@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::models::versioning::Hash;
+use serde::Serialize;
 
 #[derive(Serialize)]
 pub struct VersionMetadata {
@@ -22,4 +22,3 @@ pub struct CurrentVersionResponse {
     pub timestamp: u64,
     pub vector_count: u64,
 }
-

@@ -1,11 +1,12 @@
+use crate::models::common::WaCustomError;
 use actix_web::{
     http::{header::ContentType, StatusCode},
     HttpResponse, ResponseError,
 };
 use std::fmt::Display;
-use crate::models::common::WaCustomError;
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum VersionError {
     CollectionNotFound,
     InvalidVersionHash,
@@ -49,4 +50,3 @@ impl From<WaCustomError> for VersionError {
         }
     }
 }
-

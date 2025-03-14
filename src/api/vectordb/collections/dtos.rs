@@ -106,30 +106,30 @@ mod tests {
 
         let field_1 = &param.fields[0];
         assert_eq!("myfield1", field_1.name);
-        let expected_vals = vec![1, 2, 3];
-        for i in 0..3 {
+        let expected_vals = [1, 2, 3];
+        for (i, expected_val) in expected_vals.into_iter().enumerate() {
             let val = &field_1.values[i];
             match val {
-                FieldValue::Int(x) => assert_eq!(expected_vals[i], *x),
-                FieldValue::String(_) => assert!(false),
+                FieldValue::Int(x) => assert_eq!(expected_val, *x),
+                FieldValue::String(_) => panic!(),
             }
         }
 
         let field_2 = &param.fields[1];
         assert_eq!("myfield2", field_2.name);
-        let expected_vals = vec!["ok", "not-ok"];
-        for i in 0..2 {
+        let expected_vals = ["ok", "not-ok"];
+        for (i, expected_val) in expected_vals.into_iter().enumerate() {
             let val = &field_2.values[i];
             match val {
-                FieldValue::Int(_) => assert!(false),
-                FieldValue::String(s) => assert_eq!(expected_vals[i], s),
+                FieldValue::Int(_) => panic!(),
+                FieldValue::String(s) => assert_eq!(expected_val, s),
             }
         }
 
         let cond = &param.supported_conditions[0];
         match cond.op {
-            ConditionOp::And => assert!(true),
-            ConditionOp::Or => assert!(false),
+            ConditionOp::And => {}
+            ConditionOp::Or => panic!(),
         }
 
         assert_eq!(vec!["myfield1", "myfield2"], cond.field_names);

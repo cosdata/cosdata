@@ -6,7 +6,6 @@ use crate::metadata::schema::MetadataSchema;
 use crate::models::collection::{
     Collection, CollectionConfig, DenseVectorOptions, SparseVectorOptions,
 };
-use crate::models::common::WaCustomError;
 
 crate::cfg_grpc! {
 use super::proto::collections_service_server::CollectionsService;
@@ -16,7 +15,6 @@ use super::proto::{
     GetCollectionsRequest, GetCollectionsResponse,
     GetCollectionRequest, DeleteCollectionRequest,
 };
-use prost::Message; // For Empty message
 
 pub struct CollectionsServiceImpl {
     pub context: Arc<AppContext>,
@@ -33,13 +31,13 @@ impl CollectionsService for CollectionsServiceImpl {
         // Create options from request
         let dense_vector = DenseVectorOptions {
             dimension: req.dense_vector.as_ref().map_or(0, |d| d.dimension as usize),
-            enabled: req.dense_vector.as_ref().map_or(false, |d| d.enabled),
-            auto_create_index: req.dense_vector.as_ref().map_or(false, |d| d.auto_create_index),
+            enabled: req.dense_vector.as_ref().is_some_and(|d| d.enabled),
+            auto_create_index: req.dense_vector.as_ref().is_some_and(|d| d.auto_create_index),
         };
 
         let sparse_vector = SparseVectorOptions {
-            enabled: req.sparse_vector.as_ref().map_or(false, |d| d.enabled),
-            auto_create_index: req.sparse_vector.as_ref().map_or(false, |d| d.auto_create_index),
+            enabled: req.sparse_vector.as_ref().is_some_and(|d| d.enabled),
+            auto_create_index: req.sparse_vector.as_ref().is_some_and(|d| d.auto_create_index),
         };
 
         let config = CollectionConfig {

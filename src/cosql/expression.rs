@@ -113,10 +113,7 @@ pub fn parse_binary_expression_operator(input: &str) -> IResult<&str, BinaryExpr
 }
 
 pub fn parse_unary_expression_argument(input: &str) -> IResult<&str, Expression> {
-    alt((
-        map(parse_value, |value| Expression::Value(value)),
-        parse_paren_expression,
-    ))(input)
+    alt((map(parse_value, Expression::Value), parse_paren_expression))(input)
 }
 
 pub fn parse_unary_expression_or_higher(input: &str) -> IResult<&str, Expression> {

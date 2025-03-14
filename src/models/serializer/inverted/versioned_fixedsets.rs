@@ -13,10 +13,10 @@ use super::InvertedIndexSerialize;
 impl InvertedIndexSerialize for VersionedInvertedFixedSetIndex {
     fn serialize(
         &self,
-        dim_bufman: &BufferManager,
+        _dim_bufman: &BufferManager,
         data_bufmans: &BufferManagerFactory<u8>,
         data_file_idx: u8,
-        data_file_parts: u8,
+        _data_file_parts: u8,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
         let buf = {
@@ -27,10 +27,10 @@ impl InvertedIndexSerialize for VersionedInvertedFixedSetIndex {
             let next = self.next.read().map_err(|_| BufIoError::Locking)?;
             let next_offset = if let Some(next) = &*next {
                 next.serialize(
-                    dim_bufman,
+                    _dim_bufman,
                     data_bufmans,
                     data_file_idx,
-                    data_file_parts,
+                    _data_file_parts,
                     cursor,
                 )?
             } else {
@@ -75,12 +75,12 @@ impl InvertedIndexSerialize for VersionedInvertedFixedSetIndex {
     }
 
     fn deserialize(
-        dim_bufman: &BufferManager,
+        _dim_bufman: &BufferManager,
         data_bufmans: &BufferManagerFactory<u8>,
         file_offset: FileOffset,
         data_file_idx: u8,
-        data_file_parts: u8,
-        cache: &InvertedIndexCache,
+        _data_file_parts: u8,
+        _cache: &InvertedIndexCache,
     ) -> Result<Self, BufIoError> {
         let bufman = data_bufmans.get(data_file_idx)?;
         let cursor = bufman.open_cursor()?;
@@ -113,12 +113,12 @@ impl InvertedIndexSerialize for VersionedInvertedFixedSetIndex {
             None
         } else {
             Some(Box::new(VersionedInvertedFixedSetIndex::deserialize(
-                dim_bufman,
+                _dim_bufman,
                 data_bufmans,
                 FileOffset(next_offset),
                 data_file_idx,
-                data_file_parts,
-                cache,
+                _data_file_parts,
+                _cache,
             )?))
         };
 

@@ -30,7 +30,7 @@ pub fn parse_inferences1(input: &str) -> IResult<&str, Inferences> {
 
 pub fn parse_inference(input: &str) -> IResult<&str, Inference> {
     alt((
-        map(parse_entity_inference, |i| Inference::EntityInference(i)),
+        map(parse_entity_inference, Inference::EntityInference),
         map(parse_extend_entity_inference, |i| {
             Inference::ExtendEntityInference(i)
         }),

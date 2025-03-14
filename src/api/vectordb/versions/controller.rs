@@ -1,6 +1,6 @@
-use actix_web::{web, HttpResponse, Result};
+use super::service;
 use crate::app_context::AppContext;
-use super::{dtos::{VersionListResponse, VersionMetadata}, service};
+use actix_web::{web, HttpResponse, Result};
 
 pub(crate) async fn list_versions(
     collection_id: web::Path<String>,
@@ -18,6 +18,7 @@ pub(crate) async fn get_current_version(
     Ok(HttpResponse::Ok().json(current_version))
 }
 
+#[allow(unused)]
 pub(crate) async fn set_current_version(
     path: web::Path<(String, String)>,
     ctx: web::Data<AppContext>,
@@ -26,4 +27,3 @@ pub(crate) async fn set_current_version(
     service::set_current_version(ctx.into_inner(), &collection_id, &version_hash).await?;
     Ok(HttpResponse::Ok().finish())
 }
-

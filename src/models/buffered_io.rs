@@ -117,6 +117,7 @@ impl<K: Hash + Eq + Clone> BufferManagerFactory<K> {
                     .read(true)
                     .write(true)
                     .create(true)
+                    .truncate(false)
                     .open(&path)?;
                 let bufman = Arc::new(BufferManager::new(file, self.buffer_size)?);
 
@@ -232,7 +233,7 @@ impl BufferManager {
         cursors
             .get(&cursor_id)
             .map(|cursor| cursor.position)
-            .ok_or_else(|| BufIoError::InvalidCursor(cursor_id))
+            .ok_or(BufIoError::InvalidCursor(cursor_id))
     }
 
     pub fn read_with_cursor(&self, cursor_id: u64, buf: &mut [u8]) -> Result<usize, BufIoError> {
@@ -240,7 +241,7 @@ impl BufferManager {
             let cursors = self.cursors.read().map_err(|_| BufIoError::Locking)?;
             let cursor = cursors
                 .get(&cursor_id)
-                .ok_or_else(|| BufIoError::InvalidCursor(cursor_id))?;
+                .ok_or(BufIoError::InvalidCursor(cursor_id))?;
             cursor.position
         };
 
@@ -268,7 +269,7 @@ impl BufferManager {
         let mut cursors = self.cursors.write().map_err(|_| BufIoError::Locking)?;
         let cursor = cursors
             .get_mut(&cursor_id)
-            .ok_or_else(|| BufIoError::InvalidCursor(cursor_id))?;
+            .ok_or(BufIoError::InvalidCursor(cursor_id))?;
         cursor.position = curr_pos;
 
         Ok(total_read)
@@ -279,6 +280,7 @@ impl BufferManager {
         self.write_with_cursor(cursor_id, &buffer, false)
     }
 
+    #[allow(unused)]
     pub fn update_u64_with_cursor(&self, cursor_id: u64, value: u64) -> Result<u64, BufIoError> {
         let buffer = value.to_le_bytes();
         self.write_with_cursor(cursor_id, &buffer, false)
@@ -313,7 +315,7 @@ impl BufferManager {
             let cursors = self.cursors.read().map_err(|_| BufIoError::Locking)?;
             let cursor = cursors
                 .get(&cursor_id)
-                .ok_or_else(|| BufIoError::InvalidCursor(cursor_id))?;
+                .ok_or(BufIoError::InvalidCursor(cursor_id))?;
             cursor.position
         };
 
@@ -382,7 +384,7 @@ impl BufferManager {
         let mut cursors = self.cursors.write().map_err(|_| BufIoError::Locking)?;
         let cursor = cursors
             .get_mut(&cursor_id)
-            .ok_or_else(|| BufIoError::InvalidCursor(cursor_id))?;
+            .ok_or(BufIoError::InvalidCursor(cursor_id))?;
         cursor.position = curr_pos;
 
         Ok(start_pos)
@@ -404,7 +406,7 @@ impl BufferManager {
         let mut cursors = self.cursors.write().map_err(|_| BufIoError::Locking)?;
         let cursor = cursors
             .get_mut(&cursor_id)
-            .ok_or_else(|| BufIoError::InvalidCursor(cursor_id))?;
+            .ok_or(BufIoError::InvalidCursor(cursor_id))?;
 
         cursor.position = pos;
         Ok(())
@@ -624,7 +626,7 @@ mod tests {
             })
         };
 
-        for t in vec![t1, t2, t3] {
+        for t in [t1, t2, t3] {
             t.join().unwrap();
         }
     }
@@ -705,7 +707,7 @@ mod tests {
         bufman.seek_with_cursor(cursor, 7).unwrap();
         let txt = String::from("Hello, World");
         let data = txt.as_bytes();
-        let res = bufman.write_with_cursor(cursor, &data, false).unwrap();
+        let res = bufman.write_with_cursor(cursor, data, false).unwrap();
         assert_eq!(res, 7);
 
         // Verify that `bufman.file_size` has correctly increased
@@ -817,7 +819,7 @@ mod tests {
         } else if x == 9 {
             assert_eq!(8, y);
         } else {
-            assert!(false);
+            panic!();
         }
 
         bufman.close_cursor(cursor).unwrap();
@@ -1061,7 +1063,7 @@ mod tests {
 
     #[test]
     fn test_seek_with_cursor() {
-        let filesize = 1000 as usize;
+        let filesize = 1000_usize;
         let file = create_tmp_file_of_size(filesize as u16).unwrap();
         let bufman = BufferManager::new(file, BUFFER_SIZE).unwrap();
         let cursor = bufman.open_cursor().unwrap();
@@ -1192,11 +1194,9 @@ mod tests {
         let bufsize = size as usize;
         let file = create_tmp_file_of_size(0).unwrap();
         let bufman = BufferManager::new(file, BUFFER_SIZE).unwrap();
-        let mut buffer = vec![0; bufsize];
+        let buffer = vec![0; bufsize];
         let cursor = bufman.open_cursor().unwrap();
-        let written_at = bufman
-            .write_with_cursor(cursor, &mut buffer[..], true)
-            .unwrap();
+        let written_at = bufman.write_with_cursor(cursor, &buffer[..], true).unwrap();
         bufman.close_cursor(cursor).unwrap();
         written_at == 0
     }
@@ -1210,10 +1210,10 @@ mod tests {
         let bufman = BufferManager::new(file, BUFFER_SIZE).unwrap();
 
         // Write to the file
-        let mut input_buffer = vec![1; bufsize];
+        let input_buffer = vec![1; bufsize];
         let cursor = bufman.open_cursor().unwrap();
         bufman
-            .write_with_cursor(cursor, &mut input_buffer[..], true)
+            .write_with_cursor(cursor, &input_buffer[..], true)
             .unwrap();
         bufman.close_cursor(cursor).unwrap();
 

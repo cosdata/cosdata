@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{str::FromStr, sync::Arc};
 
 use crate::{
     app_context::AppContext,
@@ -23,8 +23,8 @@ pub(crate) async fn create_session(
         .ain_env
         .users_map
         .get_user(&create_session_dto.username)
-        .ok_or_else(|| AuthError::WrongCredentials)?;
-    let password_hash = SingleSHA256Hash::from_str(&create_session_dto.password);
+        .ok_or(AuthError::WrongCredentials)?;
+    let password_hash = SingleSHA256Hash::from_str(&create_session_dto.password).unwrap();
     let password_double_hash = password_hash.hash_again();
     // check if passwords match, in constant time to prevents timing attacks
     if !password_double_hash.verify_eq(&user.password_hash) {

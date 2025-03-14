@@ -1,22 +1,49 @@
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
+
 use std::{
     fmt::Debug,
     sync::atomic::{AtomicPtr, Ordering},
 };
 
-use crate::{
-    models::{
-        buffered_io::BufIoError,
-        cache_loader::{DenseIndexCache, InvertedIndexCache},
-        fixedset::VersionedInvertedFixedSetIndex,
-        lazy_load::{largest_power_of_4_below, FileIndex},
-        prob_node::ProbNode,
-        types::FileOffset,
-        versioning::Hash,
-    },
-    storage::inverted_index_sparse_ann_basic::InvertedIndexSparseAnnNodeBasicTSHashmapData,
+use serde::{Deserialize, Serialize};
+
+use crate::models::{
+    buffered_io::BufIoError,
+    cache_loader::{HNSWIndexCache, InvertedIndexCache},
+    fixedset::VersionedInvertedFixedSetIndex,
+    inverted_index::InvertedIndexNodeData,
+    prob_node::ProbNode,
+    types::FileOffset,
+    versioning::Hash,
 };
 
 use super::lazy_item_array::ProbLazyItemArray;
+
+#[derive(Debug, Eq, PartialEq, Hash, Copy, Clone, Serialize, Deserialize)]
+pub struct FileIndex {
+    pub offset: FileOffset,
+    pub version_number: u16,
+    pub version_id: Hash,
+}
+
+pub fn largest_power_of_4_below(x: u16) -> u8 {
+    // This function is used to calculate the largest power of 4 (4^n) such that
+    // 4^n <= x, where x represents the gap between the current version and the
+    // target version in our version control system.
+    //
+    // The system uses an exponentially spaced versioning scheme, where each
+    // checkpoint is spaced by powers of 4 (1, 4, 16, 64, etc.). This minimizes
+    // the number of intermediate versions stored, allowing efficient lookups
+    // and updates by focusing only on meaningful checkpoints.
+    //
+    // The input x should not be zero because finding a "largest power of 4 below zero"
+    // is undefined, as zero does not have any significant bits for such a calculation.
+    assert_ne!(x, 0, "x should not be zero");
+
+    // must be small enough to fit inside u8
+    let msb_position = (15 - x.leading_zeros()) as u8; // Find the most significant bit's position
+    msb_position / 2 // Return the power index of the largest 4^n ≤ x
+}
 
 #[derive(PartialEq, Debug)]
 pub struct ReadyState<T> {
@@ -36,14 +63,14 @@ pub enum ProbLazyItemState<T> {
 impl<T> ProbLazyItemState<T> {
     pub fn get_version_number(&self) -> u16 {
         match self {
-            Self::Pending(file_index) => file_index.get_version_number().unwrap(),
+            Self::Pending(file_index) => file_index.version_number,
             Self::Ready(state) => state.version_number,
         }
     }
 
     pub fn get_version_id(&self) -> Hash {
         match self {
-            Self::Pending(file_index) => file_index.get_version_id().unwrap(),
+            Self::Pending(file_index) => file_index.version_id,
             Self::Ready(state) => state.version_id,
         }
     }
@@ -72,6 +99,7 @@ impl<T: Debug> Debug for ProbLazyItem<T> {
     }
 }
 
+#[allow(unused)]
 impl<T> ProbLazyItem<T> {
     pub fn new(
         data: T,
@@ -154,8 +182,8 @@ impl<T> ProbLazyItem<T> {
     pub fn get_file_index(&self) -> FileIndex {
         unsafe {
             match &*self.state.load(Ordering::Acquire) {
-                ProbLazyItemState::Pending(file_index) => file_index.clone(),
-                ProbLazyItemState::Ready(state) => FileIndex::Valid {
+                ProbLazyItemState::Pending(file_index) => *file_index,
+                ProbLazyItemState::Ready(state) => FileIndex {
                     offset: state.file_offset,
                     version_number: state.version_number,
                     version_id: state.version_id,
@@ -174,12 +202,12 @@ impl<T> ProbLazyItem<T> {
 }
 
 impl ProbLazyItem<ProbNode> {
-    pub fn try_get_data<'a>(&self, cache: &DenseIndexCache) -> Result<&'a ProbNode, BufIoError> {
+    pub fn try_get_data<'a>(&self, cache: &HNSWIndexCache) -> Result<&'a ProbNode, BufIoError> {
         unsafe {
             match &*self.state.load(Ordering::Relaxed) {
                 ProbLazyItemState::Ready(state) => Ok(&state.data),
                 ProbLazyItemState::Pending(file_index) => {
-                    (*(cache.get_object(file_index.clone(), self.is_level_0)?)).try_get_data(cache)
+                    (*(cache.get_object(*file_index, self.is_level_0)?)).try_get_data(cache)
                 }
             }
         }
@@ -188,7 +216,7 @@ impl ProbLazyItem<ProbNode> {
     pub fn add_version(
         this: *mut Self,
         version: *mut Self,
-        cache: &DenseIndexCache,
+        cache: &HNSWIndexCache,
     ) -> Result<Result<*mut Self, *mut Self>, BufIoError> {
         let data = unsafe { &*this }.try_get_data(cache)?;
         let versions = &data.versions;
@@ -207,7 +235,7 @@ impl ProbLazyItem<ProbNode> {
         version: *mut Self,
         self_relative_version_number: u16,
         target_relative_version_number: u16,
-        cache: &DenseIndexCache,
+        cache: &HNSWIndexCache,
     ) -> Result<Result<*mut Self, *mut Self>, BufIoError> {
         let target_diff = target_relative_version_number - self_relative_version_number;
         if target_diff == 0 {
@@ -227,14 +255,14 @@ impl ProbLazyItem<ProbNode> {
             )
         } else {
             debug_assert_eq!(versions.len(), index as usize);
-            versions.push(version.clone());
+            versions.push(version);
             Ok(Ok(this))
         }
     }
 
     pub fn get_latest_version(
         this: *mut Self,
-        cache: &DenseIndexCache,
+        cache: &HNSWIndexCache,
     ) -> Result<(*mut Self, u16), BufIoError> {
         let data = unsafe { &*this }.try_get_data(cache)?;
         let versions = &data.versions;
@@ -245,7 +273,7 @@ impl ProbLazyItem<ProbNode> {
     fn get_latest_version_inner<const LEN: usize>(
         this: *mut Self,
         versions: &ProbLazyItemArray<ProbNode, LEN>,
-        cache: &DenseIndexCache,
+        cache: &HNSWIndexCache,
     ) -> Result<(*mut Self, u16), BufIoError> {
         if let Some(last) = versions.last() {
             let (latest_version, relative_local_version_number) =
@@ -261,7 +289,7 @@ impl ProbLazyItem<ProbNode> {
 
     pub fn get_root_version(
         this: *mut Self,
-        cache: &DenseIndexCache,
+        cache: &HNSWIndexCache,
     ) -> Result<*mut Self, BufIoError> {
         let self_ = unsafe { &*this };
         let root = self_.try_get_data(cache)?.root_version;
@@ -271,7 +299,7 @@ impl ProbLazyItem<ProbNode> {
     pub fn get_version(
         this: *mut Self,
         version: u16,
-        cache: &DenseIndexCache,
+        cache: &HNSWIndexCache,
     ) -> Result<Option<*mut Self>, BufIoError> {
         let self_ = unsafe { &*this };
         let version_number = self_.get_current_version_number();
@@ -302,17 +330,17 @@ impl ProbLazyItem<ProbNode> {
     }
 }
 
-impl ProbLazyItem<InvertedIndexSparseAnnNodeBasicTSHashmapData> {
+impl ProbLazyItem<InvertedIndexNodeData> {
     pub fn try_get_data<'a>(
         &self,
         cache: &InvertedIndexCache,
         dim: u32,
-    ) -> Result<&'a InvertedIndexSparseAnnNodeBasicTSHashmapData, BufIoError> {
+    ) -> Result<&'a InvertedIndexNodeData, BufIoError> {
         unsafe {
             match &*self.state.load(Ordering::Relaxed) {
                 ProbLazyItemState::Ready(state) => Ok(&state.data),
                 ProbLazyItemState::Pending(file_index) => {
-                    let offset = file_index.get_offset().unwrap();
+                    let offset = file_index.offset;
                     (*(cache.get_data(offset, (dim % cache.data_file_parts as u32) as u8)?))
                         .try_get_data(cache, dim)
                 }
@@ -331,7 +359,7 @@ impl ProbLazyItem<VersionedInvertedFixedSetIndex> {
             match &*self.state.load(Ordering::Relaxed) {
                 ProbLazyItemState::Ready(state) => Ok(&state.data),
                 ProbLazyItemState::Pending(file_index) => {
-                    let offset = file_index.get_offset().unwrap();
+                    let offset = file_index.offset;
                     (*(cache.get_sets(offset, (dim % cache.data_file_parts as u32) as u8)?))
                         .try_get_data(cache, dim)
                 }
