@@ -1,219 +1,479 @@
-#+TITLE: Inverted Index Building and Querying
+* Inverted Index Implementation in Rust
 
-* Overview
+** Overview
+This Rust code implements an inverted index data structure using a tree-like structure. The main components are:
+- InvertedIndexNode: Represents a node in the tree
+- InvertedIndexRoot: The main data structure that holds the root node
+- Helper functions for path calculation and power-of-4 operations
+- Persistence capabilities with serialization/deserialization
 
-This document outlines the process of building an inverted index using the provided graph data structure, querying it efficiently using SIMD operations, and returning the top K candidates with their highest dot product scores.
+** Visual Representation
 
-* Inverted Index Structure Illustration
+A populated inverted index with dimension indices and quantized values might look like this:
 
-Below is an illustration of the inverted index structure we aim to build:
+#+BEGIN_SRC
+Root (dim_index: 0, explicit)
+│
+├── 4^0 = 1 (dim_index: 1, explicit)
+│   │
+│   ├── [quantized values]
+│   │   ├── 0: [vector_ids: 42, 101, 305]
+│   │   └── 3: [vector_ids: 7, 19]
+│   │
+│   └── 4^0 = 1 (dim_index: 2, explicit)
+│       └── [quantized values]
+│           ├── 2: [vector_ids: 55, 89]
+│           └── 5: [vector_ids: 13, 21, 34]
+│
+├── 4^1 = 4 (dim_index: 4, explicit)
+│   │
+│   ├── [quantized values]
+│   │   ├── 1: [vector_ids: 3, 144, 377]
+│   │   └── 6: [vector_ids: 2, 8, 55]
+│   │
+│   └── 4^0 = 1 (dim_index: 5, explicit)
+│       └── [quantized values]
+│           └── 4: [vector_ids: 1, 13, 21]
+│
+└── 4^2 = 16 (dim_index: 16, explicit)
+   │
+   ├── [quantized values]
+   │   ├── 0: [vector_ids: 5, 233]
+   │   ├── 2: [vector_ids: 8, 34, 55]
+   │   └── 7: [vector_ids: 1, 2, 3, 5, 8]
+   │
+   └── 4^0 = 1 (dim_index: 17, explicit)
+       └── [quantized values]
+           ├── 1: [vector_ids: 42, 377]
+           └── 3: [vector_ids: 21, 34, 55]
+#+END_SRC
 
-#+BEGIN_EXAMPLE
- 0  -> [(0.23, 1)]
- 1  -> [(0.78, 2), (0.14, 3)]
- 2  -> [(0.56, 4)]
- 3  -> [(0.92, 5)]
- 4  -> [(0.33, 6), (0.88, 7), (0.21, 8)]
- 6  -> [(0.67, 9)]
- 8  -> [(0.49, 1), (0.75, 2)]
- 9  -> [(0.82, 3)]
-11  -> [(0.60, 4), (0.28, 5)]
-12  -> [(0.39, 6)]
-14  -> [(0.77, 7), (0.91, 8)]
-15  -> [(0.41, 9)]
-17  -> [(0.18, 1)]
-19  -> [(0.84, 2)]
-20  -> [(0.12, 3), (0.95, 4)]
-21  -> [(0.68, 5)]
-23  -> [(0.50, 6), (0.30, 7)]
-25  -> [(0.89, 8)]
-27  -> [(0.34, 9)]
-29  -> [(0.71, 1), (0.44, 2)]
-31  -> [(0.99, 3)]
-32  -> [(0.13, 4)]
-34  -> [(0.56, 5)]
-36  -> [(0.85, 6), (0.37, 7)]
-37  -> [(0.62, 8)]
-39  -> [(0.27, 9)]
-...
-99  -> [(0.59, 1)]
-100 -> [(0.74, 2)]
-#+END_EXAMPLE
+** Data Structures
 
-In this structure, the left-hand side represents the dimension index of the sparse vector, and the right-hand side contains lists of (value, vector_id) tuples. Vector IDs are unique for a given dimension but can be repeated across dimensions.
-
-* Building the Inverted Index
-
-** Data Structure
-
-We'll use a modified version of the ~InvertedIndex~ structure from the [[./inverted_index_ds.org][provided code]]:
-
+*** Constants
 #+BEGIN_SRC rust
-struct InvertedIndex {
-    root: Arc<Mutex<InvertedIndexItem>>,
+// Size of a page in the hash table
+pub const PAGE_SIZE: usize = 32;
+#+END_SRC
+
+*** InvertedIndexNodeData
+#+BEGIN_SRC rust
+pub struct InvertedIndexNodeData {
+   // Thread-safe hash table mapping quantized values to vector IDs
+   pub map: TSHashTable<u8, VersionedPagepool<PAGE_SIZE>>,
+   // Maximum quantized value based on quantization bits
+   pub max_key: u8,
+}
+
+impl InvertedIndexNodeData {
+   pub fn new(quantization_bits: u8) -> Self {
+       Self {
+           map: TSHashTable::new(16),
+           max_key: ((1u32 << quantization_bits) - 1) as u8,
+       }
+   }
 }
 #+END_SRC
 
-** Steps
-
-1. Create a new ~InvertedIndex~:
-
+*** InvertedIndexNode
 #+BEGIN_SRC rust
-let inverted_index = InvertedIndex::new();
+pub struct InvertedIndexNode {
+   // Flag indicating if the node is serialized to disk
+   pub is_serialized: AtomicBool,
+   // Flag indicating if the node has been modified since last serialization
+   pub is_dirty: AtomicBool,
+   // Offset in the file where this node is stored
+   pub file_offset: FileOffset,
+   // The dimension index this node represents
+   pub dim_index: u32,
+   // Whether this node was created as an intermediate (true) or explicitly added (false)
+   pub implicit: bool,
+   // Number of bits used for quantization (typically 4-6)
+   pub quantization_bits: u8,
+   // Lazy-loaded node data containing the mapping of quantized values to vector IDs
+   pub data: *mut ProbLazyItem<InvertedIndexNodeData>,
+   // Array of child nodes, indexed by power-of-4 exponent
+   pub children: AtomicArray<InvertedIndexNode, 16>,
+   // Fixed sets for fast lookups
+   pub fixed_sets: *mut ProbLazyItem<VersionedInvertedFixedSetIndex>,
+}
+
+impl InvertedIndexNode {
+   // Creates a new node with the specified parameters
+   pub fn new(
+       dim_index: u32,
+       implicit: bool,
+       quantization_bits: u8,
+       version_id: Hash,
+       file_offset: FileOffset,
+   ) -> Self {
+       // Initialize node data and fixed sets as lazy-loaded items
+       // Set up atomic flags
+       // Return the new node
+   }
+
+   // Finds or creates a node at the specified path
+   pub fn find_or_create_node(
+       &self,
+       path: &[u8],
+       version_id: Hash,
+       mut offset_fn: impl FnMut() -> u32,
+   ) -> &Self {
+       // Traverse the tree following the path
+       // Create nodes that don't exist
+       // Return the target node
+   }
+
+   // Quantizes a floating-point value to a discrete value
+   pub fn quantize(&self, value: f32, values_upper_bound: f32) -> u8 {
+       // Scale value to [0, 1] range
+       // Map to [0, 2^quantization_bits - 1] range
+       // Return the quantized value
+   }
+
+   // Inserts a value into the index
+   pub fn insert(
+       &self,
+       value: f32,
+       vector_id: u32,
+       cache: &InvertedIndexCache,
+       version: Hash,
+       values_upper_bound: f32,
+   ) -> Result<(), BufIoError> {
+       // Quantize the value
+       // Add the vector ID to the appropriate bucket
+       // Update fixed sets for fast lookups
+       // Mark the node as dirty
+   }
+
+   // Finds the quantized value associated with a vector ID
+   pub fn find_key_of_id(
+       &self,
+       vector_id: u32,
+       cache: &InvertedIndexCache,
+   ) -> Result<Option<u8>, BufIoError> {
+       // Search the fixed sets for the vector ID
+       // Return the associated quantized value if found
+   }
+
+   // Calculates the serialized size of a node
+   pub fn get_serialized_size(quantization_bits: u8) -> u32 {
+       // Calculate based on number of possible quantized values and overhead
+       let qv = 1u32 << quantization_bits;
+       qv * 4 + 73
+   }
+   
+   // Serializes the node to disk
+   pub fn serialize(
+       &self,
+       dim_bufman: &BufferManager,
+       data_bufmans: &BufferManagerFactory<u8>,
+       depth: u32,
+       data_file_parts: u8,
+       cursor: Cursor,
+   ) -> Result<(), BufIoError> {
+       // Serialize node metadata (dim_index, implicit flag, etc.)
+       // Serialize node data (quantized values and vector IDs)
+       // Serialize child pointers
+       // Recursively serialize children
+   }
+   
+   // Deserializes a node from disk
+   pub fn deserialize(
+       dim_bufman: &BufferManager,
+       data_bufmans: &BufferManagerFactory<u8>,
+       file_offset: FileOffset,
+       depth: u32,
+       data_file_parts: u8,
+       cache: &InvertedIndexCache,
+   ) -> Result<Self, BufIoError> {
+       // Read node metadata
+       // Create node with lazy-loaded data
+       // Read child pointers
+       // Return the deserialized node
+   }
+}
 #+END_SRC
 
-2. For each dimension index in the sparse vector data, add the dimension and its associated data in a single step:
-
+*** InvertedIndexRoot
 #+BEGIN_SRC rust
-fn add_dim_index(&self, dim_index: u32, value: f32, vector_id: u32) -> Result<(), String> {
-    // Implementation needed:
-    // - Modify the existing add_dim_index method to include value and vector_id
-    // - Update the InvertedIndexItem structure to store (value, vector_id) tuples
-    // - Adjust the insertion logic to handle the additional data
+pub struct InvertedIndexRoot {
+   // Root node of the tree
+   pub root: Arc<InvertedIndexNode>,
+   // Cache for efficient node access
+   pub cache: Arc<InvertedIndexCache>,
+   // Number of data file parts for parallel I/O
+   pub data_file_parts: u8,
+   // Counter for assigning file offsets to new nodes
+   pub offset_counter: AtomicU32,
+   // Size of a serialized node
+   pub node_size: u32,
 }
 
-// Usage
-inverted_index.add_dim_index(dimension_index, value, vector_id)?;
-#+END_SRC
+impl InvertedIndexRoot {
+   // Creates a new index with the specified parameters
+   pub fn new(
+       root_path: PathBuf,
+       quantization_bits: u8,
+       version: Hash,
+       data_file_parts: u8,
+   ) -> Result<Self, BufIoError> {
+       // Create or open index files
+       // Set up buffer managers for I/O
+       // Create the root node
+       // Initialize counters and caches
+   }
 
-Note: The existing code in inverted_index_ds.org will need to be modified to accommodate this change. The ~InvertedIndexItem~ structure should be updated to store a list of (value, vector_id) tuples, and the insertion logic should be adjusted accordingly.
+   // Finds a node at the specified dimension index
+   pub fn find_node(&self, dim_index: u32) -> Option<&InvertedIndexNode> {
+       // Calculate path to the target dimension
+       // Traverse the tree following the path
+       // Return the node if found
+   }
 
-3. Create a quantized property list:
+   // Inserts a value at the specified dimension index
+   pub fn insert(
+       &self,
+       dim_index: u32,
+       value: f32,
+       vector_id: u32,
+       version: Hash,
+       values_upper_bound: f32,
+   ) -> Result<(), BufIoError> {
+       // Calculate path to the target dimension
+       // Find or create the node
+       // Insert the value into the node
+   }
 
-#+BEGIN_SRC rust
-fn create_quantized_property_list(values: &[f32]) -> Vec<u8> {
-    // Implementation needed: quantize to octal (3 bits)
-}
+   // Adds an entire sparse vector to the index
+   pub fn add_sparse_vector(
+       &self,
+       vector: SparseVector,
+       version: Hash,
+       values_upper_bound: f32,
+   ) -> Result<(), BufIoError> {
+       // Process each non-zero dimension in parallel
+       // Insert each value at its dimension index
+   }
 
-let quantized_list = create_quantized_property_list(&values);
-#+END_SRC
+   // Serializes the entire index to disk
+   pub fn serialize(&self) -> Result<(), BufIoError> {
+       // Open a cursor to the dimension file
+       // Serialize the root node (and recursively, the entire tree)
+       // Close the cursor
+   }
 
-* Querying the Inverted Index
-
-** Setup
-
-1. Create an MPSC channel for candidate vectors:
-
-#+BEGIN_SRC rust
-use std::sync::mpsc;
-
-let (tx, rx) = mpsc::channel();
-#+END_SRC
-
-2. Create a set to track posted candidates:
-
-#+BEGIN_SRC rust
-use std::collections::HashSet;
-
-let mut posted_candidates = HashSet::new();
-#+END_SRC
-
-** Query Process
-
-1. For each dimension in the query vector:
-
-#+BEGIN_SRC rust
-fn query_dimension(&self, dim_index: u32, tx: &mpsc::Sender<u32>, posted_candidates: &mut HashSet<u32>) -> Result<(), String> {
-    // Implementation needed:
-    // - Look up the dimension index in the inverted index
-    // - For each (value, vector_id) in the dimension's list:
-    //   - If vector_id not in posted_candidates:
-    //     - tx.send(vector_id)?;
-    //     - posted_candidates.insert(vector_id);
-    Ok(())
-}
-
-// Usage
-for (dim_index, _) in query_vector {
-    inverted_index.query_dimension(dim_index, &tx, &mut posted_candidates)?;
-}
-#+END_SRC
-
-2. Close the sender channel:
-
-#+BEGIN_SRC rust
-drop(tx);
-#+END_SRC
-
-3. Process candidates in the consumer:
-
-#+BEGIN_SRC rust
-fn process_candidates(rx: mpsc::Receiver<u32>, quantized_list: &[u8], query_vector: &[(u32, f32)], k: usize) -> Vec<(u32, f32)> {
-    // Implementation needed:
-    // - For each candidate received from rx:
-    //   - Perform SIMD binary AND operation
-    //   - Use SIMD count_ones function
-    //   - Apply weights and calculate dot product
-    // - Maintain a min-heap of size K to keep track of top K candidates
-    // - Return vector of top K (candidate_id, score) tuples
-}
-
-let k = 10; // Number of top candidates to return
-let results = process_candidates(rx, &quantized_list, &query_vector, k);
-#+END_SRC
-
-* SIMD Operations
-
-Implement the following SIMD functions for efficient processing:
-
-#+BEGIN_SRC rust
-fn simd_binary_and(a: &[u8], b: &[u8]) -> Vec<u8> {
-    // Implementation needed
-}
-
-fn simd_count_ones(data: &[u8]) -> u32 {
-    // Implementation needed
+   // Deserializes the index from disk
+   pub fn deserialize(
+       root_path: PathBuf,
+       quantization_bits: u8,
+       data_file_parts: u8,
+   ) -> Result<Self, BufIoError> {
+       // Open index files
+       // Set up buffer managers
+       // Deserialize the root node
+       // Set up counters and caches
+   }
 }
 #+END_SRC
 
-* Top K Filtering
-
-To maintain the top K candidates efficiently, use a min-heap:
-
+*** Supporting Types
 #+BEGIN_SRC rust
-use std::collections::BinaryHeap;
-use std::cmp::Reverse;
-
-struct ScoredCandidate(f32, u32); // (score, candidate_id)
-
-impl PartialOrd for ScoredCandidate {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.0.partial_cmp(&other.0)
-    }
+// Sparse vector representation
+pub struct SparseVector {
+   pub vector_id: u32,
+   pub entries: Vec<(u32, f32)>,  // (dimension_index, value) pairs
 }
 
-impl Ord for ScoredCandidate {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.partial_cmp(other).unwrap()
-    }
-}
+// File offset type for serialization
+pub struct FileOffset(pub u32);
 
-impl PartialEq for ScoredCandidate {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
-    }
-}
+// Version hash for supporting multiple versions of the index
+pub struct Hash(/* Implementation details */);
+#+END_SRC
 
-impl Eq for ScoredCandidate {}
+** Helper Functions
 
-fn maintain_top_k(heap: &mut BinaryHeap<Reverse<ScoredCandidate>>, score: f32, candidate_id: u32, k: usize) {
-    if heap.len() < k {
-        heap.push(Reverse(ScoredCandidate(score, candidate_id)));
-    } else if score > heap.peek().unwrap().0.0 {
-        heap.pop();
-        heap.push(Reverse(ScoredCandidate(score, candidate_id)));
-    }
+*** largest_power_of_4_below
+#+BEGIN_SRC rust
+pub fn largest_power_of_4_below(n: u32) -> (u8, u32) {
+   // Ensure n is not zero
+   assert_ne!(n, 0, "Cannot find largest power of 4 below 0");
+   
+   // Find the most significant bit position
+   let msb_position = (31 - n.leading_zeros()) as u8;
+   
+   // Calculate the power and value
+   let power = msb_position / 2;
+   let value = 1u32 << (power * 2);
+   
+   (power, value)
 }
 #+END_SRC
+
+*** calculate_path
+#+BEGIN_SRC rust
+pub fn calculate_path(target_dim_index: u32, current_dim_index: u32) -> Vec<u8> {
+   // Initialize path vector
+   let mut path = Vec::new();
+   
+   // Calculate difference between target and current indices
+   let mut remaining = target_dim_index - current_dim_index;
+   
+   // Decompose the difference into powers of 4
+   while remaining > 0 {
+       // Find the largest power of 4 that doesn't exceed the remaining difference
+       let (child_index, pow_4) = largest_power_of_4_below(remaining);
+       
+       // Add the power to the path
+       path.push(child_index);
+       
+       // Subtract the power from the remaining difference
+       remaining -= pow_4;
+   }
+   
+   path
+}
+#+END_SRC
+
+** Query Processing and Inner Product Calculation
+
+*** Query Vector Processing Strategy
+The inverted index optimizes inner product calculations for sparse vector queries through several key strategies:
+
+**** High-Value Query Dimensions
+For dimensions with high values in the query vector:
+- Collect all vector IDs stored in these dimensions
+- The rationale is that high query values multiply with any indexed values will contribute significantly to the inner product
+- These vector IDs are added to a results map with their current accumulated scores
+
+**** Low-Value Query Dimensions
+For dimensions with low values in the query vector:
+- Only collect a limited number of vector IDs based on early termination settings
+- Prioritize vectors with higher quantized values in these dimensions
+- This approach reduces computation for dimensions that will contribute less to the final score
+- Early termination threshold determines how many vectors to consider
+
+**** Approximate Inner Product Calculation
+After shortlisting candidate vector IDs:
+- For each shortlisted ID, examine all dimensions of the query vector
+- Use fixed set lookups to get approximate quantized values for each vector in each dimension
+- Update the results map with these approximate inner product contributions
+- Final score = sum(query_value_i * approximate_indexed_value_i) for all dimensions i
+
+**** Early Termination in Fixed Set Lookups
+To further optimize performance:
+- Implement bit-level early termination during fixed set lookups
+- Only examine the minimum number of bits needed based on the early termination threshold
+- For example, if early termination is set to only consider the top 25% of values, we might only need to check the top 2 bits of an 8-bit quantized value
+- This significantly reduces the computational overhead for fixed set operations
+
+
+** Serialization and Persistence
+
+*** BufferManager
+The index uses a buffer manager for efficient file I/O:
+
+#+BEGIN_SRC rust
+// Buffer manager for dimension index file
+let dim_bufman = Arc::new(BufferManager::new(dim_file, node_size as usize * 1000)?);
+
+// Buffer manager factory for data files
+let data_bufmans = Arc::new(BufferManagerFactory::new(
+   root_path.into(),
+   |root, idx: &u8| root.join(format!("{}.idat", idx)),
+   8192,
+));
+#+END_SRC
+
+*** File Structure
+The index is stored across multiple files:
+- ~index-tree.dim~: Stores the dimension index tree structure
+- ~{0..N}.idat~: Store the actual data (vector IDs) for each dimension index
+
+*** Serialization Process
+When serializing a node:
+1. Write the node metadata (dimension index, implicit flag, etc.)
+2. Write the node data (quantized values and vector IDs)
+3. Write pointers to child nodes
+4. Recursively serialize children
+
+*** Deserialization Process
+When deserializing:
+1. Load the root node from the dimension index file
+2. Set up lazy loading for node data
+3. Recursively load child nodes as needed during traversal
+
+*** Lazy Loading
+The ~ProbLazyItem~ type is used for lazy loading of node data and fixed sets:
+- Data is only loaded from disk when needed
+- Frequently accessed items are kept in memory
+- Less frequently accessed items are evicted to save memory
+
+** Key Concepts
+
+*** Path Calculation and Traversal
+- Dimension indices are reached by following a path of powers of 4
+- ~calculate_path~ decomposes the difference between indices into powers of 4
+- Tree is traversed by following the path from the root to the target
+
+*** Quantization
+- Floating-point values are quantized to discrete bins
+- Number of bins determined by ~quantization_bits~ (typically 4-6 bits)
+- Quantization balances precision and storage efficiency
+
+*** Thread Safety
+- Atomic operations for flags and counters
+- Thread-safe collections for concurrent access
+- Parallel processing of sparse vectors
+
+*** Versioning
+- Support for multiple versions of the index
+- Version-aware data structures (~VersionedPagepool~, ~VersionedInvertedFixedSetIndex~)
+- Allows for efficient updates without rebuilding the entire index
+
+*** Early Termination
+- Reduces computational overhead by focusing on most important contributions
+- Applies at both dimension level (which dimensions to fully process) and bit level (how precisely to examine values)
+- Configurable threshold to balance precision and performance
+
+** Performance Considerations
+
+*** Memory Efficiency
+- Lazy loading of data
+- Distinction between implicit and explicit nodes
+- Quantization to reduce storage requirements
+
+*** Parallelism
+- Parallel processing of sparse vectors
+- Multiple data files for I/O parallelism
+- Thread-safe data structures
+
+*** I/O Optimization
+- Buffered I/O
+- Fixed-size serialization
+- Efficient random access to nodes
+
+*** Query Optimization
+- Prioritize high-value query dimensions
+- Early termination for low-value dimensions
+- Bit-level early termination in fixed set lookups
+- Approximate inner product calculation with refinement
+
+** Potential Applications
+
+- Text search engines (inverted indices for words in documents)
+- Similarity search in high-dimensional spaces
+- Feature matching in machine learning pipelines
+- Content-based recommendation systems
+
+** Potential Improvements
+
+- Implement deletion operations
+- Enhanced caching strategies
+- Compression for further storage optimization
+- Dynamic quantization based on data distribution
+- Adaptive early termination thresholds based on query characteristics
 
 * Conclusion
-
-This document outlines the process of building an inverted index using the provided graph data structure, querying it efficiently using SIMD operations, and returning the top K candidates with their highest dot product scores. The main steps involve:
-
-1. Building the inverted index
-2. Creating a quantized property list
-3. Querying the index using an MPSC channel
-4. Processing candidates with SIMD operations
-5. Filtering and returning the top K candidates
-
-Implement the missing functions and integrate them into the existing codebase to complete the inverted index system with top K candidate filtering.
+This implementation provides an efficient, thread-safe, and persistent inverted index for high-dimensional sparse vectors. The tree-based structure with power-of-4 decomposition allows for efficient storage and retrieval of indexed data, while the quantization approach balances precision and performance. The support for versioning, parallel processing, and lazy loading makes it suitable for large-scale applications with high throughput requirements. The optimized query processing with dimension-level and bit-level early termination enables fast approximate inner product calculations, making it particularly effective for similarity search in high-dimensional spaces.
