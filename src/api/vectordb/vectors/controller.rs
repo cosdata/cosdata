@@ -1,7 +1,7 @@
 use actix_web::{web, HttpResponse, Result};
 
 use super::{
-    dtos::{CreateVectorDto, FindSimilarVectorsDto, UpdateVectorDto},
+    dtos::{BatchSearchVectorsDto, CreateVectorDto, FindSimilarVectorsDto, UpdateVectorDto},
     service,
 };
 use crate::{app_context::AppContext, models::types::VectorId};
@@ -50,6 +50,16 @@ pub(crate) async fn find_similar_vectors(
     let similar_vectors =
         service::find_similar_vectors(ctx.into_inner(), &collection_id, find_similar_vectors)
             .await?;
+    Ok(HttpResponse::Ok().json(similar_vectors))
+}
+
+pub(crate) async fn batch_search(
+    ctx: web::Data<AppContext>,
+    collection_id: web::Path<String>,
+    web::Json(batch_search_vectors): web::Json<BatchSearchVectorsDto>,
+) -> Result<HttpResponse> {
+    let similar_vectors =
+        service::batch_search(ctx.into_inner(), &collection_id, batch_search_vectors).await?;
     Ok(HttpResponse::Ok().json(similar_vectors))
 }
 

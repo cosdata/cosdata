@@ -10,6 +10,7 @@ pub(crate) fn vectors_module() -> Scope {
     web::scope("/collections/{collection_id}/vectors")
         .route("", web::post().to(controller::create_vector))
         .route("/search", web::post().to(controller::find_similar_vectors))
+        .route("/batch-search", web::post().to(controller::batch_search))
         .route("/{vector_id}", web::get().to(controller::get_vector_by_id))
         .route(
             "/{vector_id}",
