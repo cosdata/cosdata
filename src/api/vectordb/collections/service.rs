@@ -79,3 +79,38 @@ pub(crate) async fn delete_collection_by_id(
     let collection = repo::delete_collection_by_name(ctx, collection_id).await?;
     Ok(collection)
 }
+
+pub(crate) async fn load_collection(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+) -> Result<Collection, CollectionsError> {
+    // First check if collection exists by loading its metadata
+    let collection = repo::get_collection_by_name(ctx.clone(), collection_id).await?;
+
+    // Then load it into the cache
+    ctx.collection_cache_manager.load_collection(collection_id)
+        .map_err(|e| CollectionsError::ServerError(format!("Failed to load collection: {}", e)))?;
+
+    Ok(collection.as_ref().clone())
+}
+
+pub(crate) async fn unload_collection(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+) -> Result<(), CollectionsError> {
+    // Check if collection exists
+    let _ = repo::get_collection_by_name(ctx.clone(), collection_id).await?;
+
+    // Then unload it from the cache
+    ctx.collection_cache_manager.unload_collection(collection_id)
+        .map_err(|e| CollectionsError::ServerError(format!("Failed to unload collection: {}", e)))?;
+
+    Ok(())
+}
+
+pub(crate) async fn get_loaded_collections(
+    ctx: Arc<AppContext>,
+) -> Result<Vec<String>, CollectionsError> {
+    // Just return the list of loaded collections directly
+    Ok(ctx.collection_cache_manager.get_loaded_collections())
+}
