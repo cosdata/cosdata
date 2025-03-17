@@ -229,6 +229,9 @@ impl VectorsService for VectorsServiceImpl {
                     self.context.clone(),
                     hnsw_index,
                     dense.vector,
+                    // @TODO: Support for metadata filtering to be
+                    // added for grpc endpoints
+                    None,
                     Some(dense.k as usize),
                 ).await.map_err(|e| match e {
                     WaCustomError::NotFound(msg) => Status::not_found(msg),

@@ -23,7 +23,7 @@ use crate::{
     }, indexes::{
         hnsw::{data::HNSWIndexData, HNSWIndex},
         inverted::{data::InvertedIndexData, InvertedIndex},
-    }, metadata::schema::MetadataDimensions, models::{
+    }, metadata::{schema::MetadataDimensions, QueryFilterDimensions}, models::{
         buffered_io::BufIoError, common::*, meta_persist::retrieve_values_range, versioning::*,
     }, quantization::{
         product::ProductQuantization, scalar::ScalarQuantization, Quantization, QuantizationError,
@@ -83,11 +83,27 @@ pub struct Metadata {
 
 impl From<MetadataDimensions> for Metadata {
     fn from(dims: MetadataDimensions) -> Self {
+        // Euclidean norm
+        let mag = dims.iter()
+            .map(|d| {
+                let x = *d as f32;
+                x * x
+            })
+            .sum::<f32>()
+            .sqrt();
         Self {
-            // Euclidean norm
-            mag: dims.iter().map(|d| (*d as f32) * (*d as f32)).sum::<f32>().sqrt(),
+            mag,
             mbits: dims
         }
+    }
+}
+
+impl From<&QueryFilterDimensions> for Metadata {
+    fn from(dims: &QueryFilterDimensions) -> Self {
+        // Convert QueryFilterDimensions to MetadataDimensions in
+        // order to reuse code
+        let dims: MetadataDimensions = dims.iter().map(|d| i32::from(*d)).collect();
+        Metadata::from(dims)
     }
 }
 

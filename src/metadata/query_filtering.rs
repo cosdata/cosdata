@@ -20,7 +20,7 @@ pub enum Filter {
     Or(Vec<Predicate>),
 }
 
-type QueryFilterDimensions = Vec<i8>;
+pub type QueryFilterDimensions = Vec<i8>;
 
 fn query_filter_encoding(value_id: u16, size: usize, operator: &Operator) -> QueryFilterDimensions {
     decimal_to_binary_vec(value_id, size)

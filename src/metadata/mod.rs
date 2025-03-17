@@ -10,7 +10,7 @@ pub mod query_filtering;
 pub mod schema;
 
 pub use schema::MetadataSchema;
-pub use query_filtering::{Filter, Predicate, Operator};
+pub use query_filtering::{Filter, Predicate, Operator, QueryFilterDimensions};
 
 #[derive(Debug, Clone)]
 pub enum Error {

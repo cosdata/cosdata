@@ -8,7 +8,8 @@ use crate::indexes::inverted::transaction::InvertedIndexTransaction;
 use crate::indexes::inverted::types::{RawSparseVectorEmbedding, SparsePair};
 use crate::indexes::inverted::InvertedIndex;
 use crate::macros::key;
-use crate::metadata::MetadataFields;
+use crate::metadata::query_filtering::filter_encoded_dimensions;
+use crate::metadata::{self, MetadataFields};
 use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::cache_loader::HNSWIndexCache;
 use crate::models::collection::Collection;
@@ -842,6 +843,7 @@ pub async fn ann_vector_query(
     ctx: Arc<AppContext>,
     hnsw_index: Arc<HNSWIndex>,
     query: Vec<f32>,
+    metadata_filter: Option<metadata::Filter>,
     k: Option<usize>,
 ) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
     let vec_hash = VectorId(u64::MAX - 1);
@@ -858,10 +860,22 @@ pub async fn ann_vector_query(
 
     let hnsw_params_guard = hnsw_index.hnsw_params.read().unwrap();
 
+    // @TODO(vineet): Remove unwrap
+    let coll = ctx.ain_env
+        .collections_map
+        .get_collection(&hnsw_index.name)
+        .expect("Couldn't get collection from ain_env");
+    let metadata_schema = coll.metadata_schema.as_ref().unwrap();
+
+    let query_filter_dims = metadata_filter.map(|filter| {
+        filter_encoded_dimensions(metadata_schema, &filter).unwrap()
+    });
+
     let results = ann_search(
         &ctx.config,
         hnsw_index.clone(),
         vec_emb,
+        query_filter_dims.as_ref(),
         hnsw_index.get_root_vec(),
         HNSWLevel(hnsw_params_guard.num_layers),
         &hnsw_params_guard,
@@ -875,8 +889,21 @@ pub async fn batch_ann_vector_query(
     ctx: Arc<AppContext>,
     hnsw_index: Arc<HNSWIndex>,
     queries: Vec<Vec<f32>>,
+    metadata_filter: Option<metadata::Filter>,
     k: Option<usize>,
 ) -> Result<Vec<Vec<(VectorId, MetricResult)>>, WaCustomError> {
+
+    // @TODO(vineet): Remove unwrap
+    let coll = ctx.ain_env
+        .collections_map
+        .get_collection(&hnsw_index.name)
+        .expect("Couldn't get collection from ain_env");
+    let metadata_schema = coll.metadata_schema.as_ref().unwrap();
+
+    let query_filter_dims = metadata_filter.map(|filter| {
+        filter_encoded_dimensions(metadata_schema, &filter).unwrap()
+    });
+
     queries
         .into_par_iter()
         .map(|query| {
@@ -897,6 +924,7 @@ pub async fn batch_ann_vector_query(
                 &ctx.config,
                 hnsw_index.clone(),
                 vec_emb,
+                query_filter_dims.as_ref(),
                 hnsw_index.get_root_vec(),
                 HNSWLevel(hnsw_params.num_layers),
                 &hnsw_params,

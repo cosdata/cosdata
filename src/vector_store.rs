@@ -11,6 +11,7 @@ use crate::indexes::hnsw::HNSWIndex;
 use crate::indexes::inverted::types::RawSparseVectorEmbedding;
 use crate::indexes::inverted::InvertedIndex;
 use crate::macros::key;
+use crate::metadata;
 use crate::metadata::schema::MetadataDimensions;
 use crate::metadata::MetadataFields;
 use crate::metadata::MetadataSchema;
@@ -132,6 +133,7 @@ pub fn ann_search(
     config: &Config,
     hnsw_index: Arc<HNSWIndex>,
     vector_emb: QuantizedDenseVectorEmbedding,
+    query_filter_dims: Option<&Vec<metadata::QueryFilterDimensions>>,
     cur_entry: SharedNode,
     cur_level: HNSWLevel,
     hnsw_params: &HNSWHyperParams,
@@ -142,27 +144,67 @@ pub fn ann_search(
     } else {
         hnsw_params.neighbors_count
     });
+    // @TODO(vineet): skipm should consider VectorId as well as
+    // MetadataId
     skipm.insert(vector_emb.hash_vec.0 as u32);
 
     let cur_node = unsafe { &*cur_entry }.try_get_data(&hnsw_index.cache)?;
 
-    let z = traverse_find_nearest(
-        config,
-        &hnsw_index,
-        cur_entry,
-        &fvec,
-        &mut 0,
-        &mut skipm,
-        &hnsw_index.distance_metric.read().unwrap(),
-        false,
-        hnsw_params.ef_search,
-    )?;
+    let z = match query_filter_dims.clone() {
+        Some(qf_dims) => {
+            let mut z_candidates: Vec<(SharedNode, MetricResult)> = vec![];
+            for qfd in qf_dims {
+                let mdims = Metadata::from(qfd);
+                let mut z_with_mdims = traverse_find_nearest(
+                    config,
+                    &hnsw_index,
+                    cur_entry,
+                    &fvec,
+                    Some(Arc::new(mdims)),
+                    &mut 0,
+                    &mut skipm,
+                    &hnsw_index.distance_metric.read().unwrap(),
+                    false,
+                    hnsw_params.ef_search,
+                )?;
+                // @NOTE: We're considering nearest neighbors computed
+                // for all metadata dims.
+                //
+                // @TODO(vineet): Need to make sure dedup happens
+                z_candidates.append(&mut z_with_mdims);
+            }
+            // Sort candidates by distance (asc)
+            z_candidates.sort_by_key(|c| c.1);
+            z_candidates.into_iter()
+                .rev() // Reverse the order (to get descending order)
+                .take(100) // Limit the number of results
+                .collect::<Vec<_>>()
+        },
+        None => {
+            traverse_find_nearest(
+                config,
+                &hnsw_index,
+                cur_entry,
+                &fvec,
+                None,
+                &mut 0,
+                &mut skipm,
+                &hnsw_index.distance_metric.read().unwrap(),
+                false,
+                hnsw_params.ef_search,
+            )?
+        },
+    };
 
     let mut z = if z.is_empty() {
+        // @TODO: If not nearest node is found, and if
+        // `query_filter_dims` are passed, do we need to find the min
+        // distance for the entry?
         let dist = hnsw_index
             .distance_metric
             .read()
             .unwrap()
+            // @TODO: May be change here
             .calculate(&fvec, &cur_node.prop_value.vec)?;
 
         vec![(cur_entry, dist)]
@@ -175,6 +217,7 @@ pub fn ann_search(
             config,
             hnsw_index.clone(),
             vector_emb,
+            query_filter_dims,
             unsafe { &*z[0].0 }
                 .try_get_data(&hnsw_index.cache)?
                 .get_child(),
@@ -906,11 +949,14 @@ pub fn index_embedding(
     let cur_node = unsafe { &*ProbLazyItem::get_latest_version(cur_entry, &hnsw_index.cache)?.0 }
         .try_get_data(&hnsw_index.cache)?;
 
+    let mdims = prop_metadata.clone().map(|pm| pm.vec.clone());
+
     let z = traverse_find_nearest(
         config,
         hnsw_index,
         cur_entry,
         &fvec,
+        mdims,
         &mut 0,
         &mut skipm,
         &distance_metric,
@@ -1272,6 +1318,7 @@ fn traverse_find_nearest(
     hnsw_index: &HNSWIndex,
     start_node: SharedNode,
     fvec: &Storage,
+    mdims: Option<Arc<Metadata>>,
     nodes_visited: &mut u32,
     skipm: &mut PerformantFixedSet,
     distance_metric: &DistanceMetric,
@@ -1316,6 +1363,10 @@ fn traverse_find_nearest(
             if !skipm.is_member(neighbor_id) {
                 let neighbor_data = unsafe { &*neighbor_node }.try_get_data(&hnsw_index.cache)?;
                 let dist = distance_metric.calculate(&fvec, &neighbor_data.prop_value.vec)?;
+                // @TODO(vineet): neighbor_id should be a combination
+                // of VectorId and metadata Id. Also need to check if
+                // the neighbors code should be modified to have the
+                // correct id during insertion instead
                 skipm.insert(neighbor_id);
                 candidate_queue.push((dist, neighbor_node));
             }

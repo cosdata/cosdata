@@ -187,7 +187,7 @@ pub enum Filter {
 impl Filter {
     /// Converts the filter in request body to internal
     /// representation. Perhaps the two types can be unified later
-    fn to_internal(&self) -> Result<metadata::Filter, WaCustomError> {
+    pub fn to_internal(&self) -> Result<metadata::Filter, WaCustomError> {
         let filter_err = |msg: &str| {
             WaCustomError::MetadataError(metadata::Error::UnsupportedFilter(msg.to_string()))
         };
