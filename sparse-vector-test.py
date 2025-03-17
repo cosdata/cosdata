@@ -7,7 +7,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib3
 import random
 import getpass
-import os
 import pickle
 from tqdm import tqdm
 import heapq
@@ -70,7 +69,7 @@ def create_explicit_index(name):
     data = {
         "name": name,  # Name of the index
         "quantization": 64,
-        "sample_threshold": 10,
+        "sample_threshold": 1000,
         "early_terminate_threshold": 0.5,
     }
     response = requests.post(
@@ -112,14 +111,27 @@ def commit_transaction(collection_name, transaction_id):
 def search_sparse_vector(vector_db_name, vector, top_k=10):
     url = f"{base_url}/collections/{vector_db_name}/vectors/search"
     data = {
-        "sparse": {
-            "values": vector["values"],
-            "top_k": top_k,
-        },
+        "index_type": "sparse",
+        "values": vector["values"],
+        "top_k": top_k,
     }
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
+    return response.json()
+
+def batch_ann_search(vector_db_name, batch, top_k=10):
+    url = f"{base_url}/collections/{vector_db_name}/vectors/batch-search"
+    data = {
+        "index_type": "sparse",
+        "vectors": batch,
+        "top_k": top_k,
+    }
+    response = requests.post(
+        url, headers=generate_headers(), data=json.dumps(data), verify=False
+    )
+    if response.status_code not in [200, 204]:
+        print(f"Error response ({response.status_code}): {response.text}")
     return response.json()
 
 def generate_random_sparse_vector(id, dimension, non_zero_dims):
@@ -240,7 +252,7 @@ def calculate_recall(brute_force_results, server_results, top_k=10):
     
     for bf_result, server_result in zip(brute_force_results, server_results):
         bf_ids = set(item["id"] for item in bf_result["top_results"])
-        server_ids = set(item[0] for item in server_result.get("Sparse", []))
+        server_ids = set(item["id"] for item in server_result["results"])
         
         if not bf_ids:
             continue  # Skip if brute force found no results
@@ -252,9 +264,48 @@ def calculate_recall(brute_force_results, server_results, top_k=10):
     avg_recall = sum(recalls) / len(recalls) if recalls else 0
     return avg_recall, recalls
 
+def run_rps_tests(rps_test_vectors, vector_db_name, batch_size=100):
+    """Run RPS (Requests Per Second) tests"""
+    print(f"Using {len(rps_test_vectors)} different test vectors for RPS testing")
+
+    start_time_rps = time.time()
+    results = []
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = []
+        for i in range(0, len(rps_test_vectors), batch_size):
+            batch = [
+                format_for_server_query(vector)["values"] for vector in rps_test_vectors[i : i + batch_size]
+            ]
+            futures.append(executor.submit(batch_ann_search, vector_db_name, batch))
+
+        for future in as_completed(futures):
+            try:
+                future.result()
+                results.append(True)
+            except Exception as e:
+                print(f"Error in RPS test: {e}")
+                results.append(False)
+
+    end_time_rps = time.time()
+    actual_duration = end_time_rps - start_time_rps
+
+    successful_requests = sum(results) * batch_size
+    failed_requests = (len(results) * batch_size) - successful_requests
+    total_requests = len(results) * batch_size
+    rps = successful_requests / actual_duration
+
+    print("\nRPS Test Results:")
+    print(f"Total Requests: {total_requests}")
+    print(f"Successful Requests: {successful_requests}")
+    print(f"Failed Requests: {failed_requests}")
+    print(f"Test Duration: {actual_duration:.2f} seconds")
+    print(f"Requests Per Second (RPS): {rps:.2f}")
+    print(f"Success Rate: {(successful_requests / total_requests * 100):.2f}%")
+
 def main():
     vector_db_name = "sparse_eval_db"
-    num_vectors = 100_000
+    num_vectors = 1_000_000
     dimension = 20_000
     max_non_zero_dims = 100
     num_queries = 100
@@ -276,91 +327,95 @@ def main():
     print("Logging in to server...")
     create_session()
     print("Session established")
+    insert_vectors = input("Insert vectors? (Y/n): ").strip().lower() in ["y", ""]
     
-    # Create collection
-    try:
-        print(f"Creating collection: {vector_db_name}")
-        create_db(name=vector_db_name, dimension=dimension)
-        print("Collection created")
-        
-        # Create explicit index
-        create_explicit_index(vector_db_name)
-        print("Explicit index created")
-    except Exception as e:
-        print(f"Collection may already exist: {e}")
-    
-    # Insert vectors into server
-    print("Creating transaction")
-    transaction_id = create_transaction(vector_db_name)["transaction_id"]
-    
-    print(f"Inserting {num_vectors} vectors in batches of {batch_size}...")
-    start = time.time()
-    
-    with ThreadPoolExecutor(max_workers=32) as executor:
-        futures = []
-        for batch_start in range(0, num_vectors, batch_size):
-            batch = vectors[batch_start: batch_start + batch_size]
-            futures.append(
-                executor.submit(
-                    upsert_in_transaction, vector_db_name, transaction_id, batch
-                )
-            )
-        
-        for i, future in enumerate(tqdm(as_completed(futures), total=len(futures))):
-            try:
-                future.result()
-            except Exception as e:
-                print(f"Batch {i + 1} failed: {e}")
-    
-    print("Committing transaction")
-    commit_transaction(vector_db_name, transaction_id)
-    
-    end = time.time()
-    insertion_time = end - start
-    print(f"Insertion time: {insertion_time:.2f} seconds")
-    
-    # Search vectors and compare results
-    print(f"Searching {num_queries} vectors and comparing results...")
-    server_results = []
-    
-    start_search = time.time()
-    for query in tqdm(query_vectors):
-        formatted_query = format_for_server_query(query)
+    if insert_vectors:
+        # Create collection
         try:
-            result = search_sparse_vector(vector_db_name, formatted_query, top_k)
-            server_results.append(result)
+            print(f"Creating collection: {vector_db_name}")
+            create_db(name=vector_db_name, dimension=dimension)
+            print("Collection created")
+        
+            # Create explicit index
+            create_explicit_index(vector_db_name)
+            print("Explicit index created")
         except Exception as e:
-            print(f"Search failed for query {query['id']}: {e}")
-            server_results.append({"Sparse": []})
+            print(f"Collection may already exist: {e}")
     
-    search_time = time.time() - start_search
-    print(f"Average search time: {search_time / num_queries:.4f} seconds per query")
+        # Insert vectors into server
+        print("Creating transaction")
+        transaction_id = create_transaction(vector_db_name)["transaction_id"]
     
-    # Calculate and display recall metrics
-    avg_recall, recalls = calculate_recall(brute_force_results, server_results, top_k)
+        print(f"Inserting {num_vectors} vectors in batches of {batch_size}...")
+        start = time.time()
     
-    print("\n=== Evaluation Results ===")
-    print(f"Average Recall@{top_k}: {avg_recall * 100:.2f}%")
-    print(f"Min Recall: {min(recalls) * 100:.2f}%")
-    print(f"Max Recall: {max(recalls) * 100:.2f}%")
+        with ThreadPoolExecutor(max_workers=32) as executor:
+            futures = []
+            for batch_start in range(0, num_vectors, batch_size):
+                batch = vectors[batch_start: batch_start + batch_size]
+                futures.append(
+                    executor.submit(
+                        upsert_in_transaction, vector_db_name, transaction_id, batch
+                    )
+                )
+        
+            for i, future in enumerate(tqdm(as_completed(futures), total=len(futures))):
+                try:
+                    future.result()
+                except Exception as e:
+                    print(f"Batch {i + 1} failed: {e}")
     
-    # Count perfect recalls
-    perfect_recalls = sum(1 for r in recalls if r == 1.0)
-    print(f"Queries with perfect recall: {perfect_recalls} out of {len(recalls)} ({perfect_recalls / len(recalls) * 100:.2f}%)")
+        print("Committing transaction")
+        commit_transaction(vector_db_name, transaction_id)
     
-    # Save detailed results
-    detailed_results = {
-        "avg_recall": avg_recall,
-        "recalls": recalls,
-        "perfect_recalls": perfect_recalls,
-        "insertion_time": insertion_time,
-        "search_time": search_time / num_queries,
-    }
+        end = time.time()
+        insertion_time = end - start
+        print(f"Insertion time: {insertion_time:.2f} seconds")
     
-    with open("sparse_dataset/vector_evaluation_results.pkl", 'wb') as f:
-        pickle.dump(detailed_results, f)
+        # Search vectors and compare results
+        print(f"Searching {num_queries} vectors and comparing results...")
+        server_results = []
     
-    print("Detailed results saved to sparse_dataset/vector_evaluation_results.pkl")
+        start_search = time.time()
+        for query in tqdm(query_vectors):
+            formatted_query = format_for_server_query(query)
+            try:
+                result = search_sparse_vector(vector_db_name, formatted_query, top_k)
+                server_results.append(result)
+            except Exception as e:
+                print(f"Search failed for query {query['id']}: {e}")
+                server_results.append({"Sparse": []})
+    
+        search_time = time.time() - start_search
+        print(f"Average search time: {search_time / num_queries:.4f} seconds per query")
+    
+        # Calculate and display recall metrics
+        avg_recall, recalls = calculate_recall(brute_force_results, server_results, top_k)
+    
+        print("\n=== Evaluation Results ===")
+        print(f"Average Recall@{top_k}: {avg_recall * 100:.2f}%")
+        print(f"Min Recall: {min(recalls) * 100:.2f}%")
+        print(f"Max Recall: {max(recalls) * 100:.2f}%")
+    
+        # Count perfect recalls
+        perfect_recalls = sum(1 for r in recalls if r == 1.0)
+        print(f"Queries with perfect recall: {perfect_recalls} out of {len(recalls)} ({perfect_recalls / len(recalls) * 100:.2f}%)")
+    
+        # Save detailed results
+        detailed_results = {
+            "avg_recall": avg_recall,
+            "recalls": recalls,
+            "perfect_recalls": perfect_recalls,
+            "insertion_time": insertion_time,
+            "search_time": search_time / num_queries,
+        }
+    
+        with open("sparse_dataset/vector_evaluation_results.pkl", 'wb') as f:
+            pickle.dump(detailed_results, f)
+    
+        print("Detailed results saved to sparse_dataset/vector_evaluation_results.pkl")
+
+    run_rps_tests(vectors[:10_000], vector_db_name, batch_size)
     
 if __name__ == "__main__":
     main()
