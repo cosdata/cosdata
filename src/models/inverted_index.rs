@@ -13,7 +13,6 @@ use super::{
     buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
     cache_loader::InvertedIndexCache,
     common::TSHashTable,
-    fixedset::VersionedInvertedFixedSetIndex,
     page::VersionedPagepool,
     prob_lazy_load::lazy_item::ProbLazyItem,
     serializer::inverted::InvertedIndexSerialize,
@@ -74,7 +73,6 @@ pub struct InvertedIndexNode {
     pub quantization_bits: u8,
     pub data: *mut ProbLazyItem<InvertedIndexNodeData>,
     pub children: AtomicArray<InvertedIndexNode, 16>,
-    pub fixed_sets: *mut ProbLazyItem<VersionedInvertedFixedSetIndex>,
 }
 
 #[cfg(test)]
@@ -86,7 +84,6 @@ impl PartialEq for InvertedIndexNode {
             && self.quantization_bits == other.quantization_bits
             && unsafe { *self.data == *other.data }
             && self.children == other.children
-            && unsafe { *self.fixed_sets == *other.fixed_sets }
     }
 }
 
@@ -100,7 +97,6 @@ impl std::fmt::Debug for InvertedIndexNode {
             .field("quantization_bits", &self.quantization_bits)
             .field("data", unsafe { &*self.data })
             .field("children", &self.children)
-            .field("fixed_sets", unsafe { &*self.fixed_sets })
             .finish()
     }
 }
@@ -148,7 +144,6 @@ impl InvertedIndexNode {
         implicit: bool,
         // 4, 5, 6
         quantization_bits: u8,
-        version_id: Hash,
         file_offset: FileOffset,
     ) -> Self {
         let data = ProbLazyItem::new(
@@ -157,14 +152,6 @@ impl InvertedIndexNode {
             0,
             false,
             FileOffset(file_offset.0 + 5),
-        );
-
-        let fixed_sets = ProbLazyItem::new(
-            VersionedInvertedFixedSetIndex::new(quantization_bits, version_id),
-            0.into(),
-            0,
-            false,
-            FileOffset(file_offset.0 + (1u32 << quantization_bits) * 4 + 69),
         );
 
         Self {
@@ -176,18 +163,12 @@ impl InvertedIndexNode {
             data,
             children: AtomicArray::new(),
             quantization_bits,
-            fixed_sets,
         }
     }
 
     /// Finds or creates the node where the data should be inserted.
     /// Traverses the tree iteratively and returns a reference to the node.
-    pub fn find_or_create_node(
-        &self,
-        path: &[u8],
-        version_id: Hash,
-        mut offset_fn: impl FnMut() -> u32,
-    ) -> &Self {
+    pub fn find_or_create_node(&self, path: &[u8], mut offset_fn: impl FnMut() -> u32) -> &Self {
         let mut current_node = self;
         for &child_index in path {
             let new_dim_index = (current_node.dim_index + 1u32) << (child_index * 2);
@@ -204,7 +185,6 @@ impl InvertedIndexNode {
                             new_dim_index,
                             true,
                             self.quantization_bits,
-                            version_id,
                             FileOffset(offset_fn()),
                         )))
                     });
@@ -244,32 +224,20 @@ impl InvertedIndexNode {
                     list.push(version, vector_id);
                 },
                 || {
-                    let mut pool = VersionedPagepool::new(version);
+                    let pool = VersionedPagepool::new(version);
                     pool.push(version, vector_id);
                     pool
                 },
             );
-        let sets = unsafe { &*self.fixed_sets }.try_get_data(cache, self.dim_index)?;
-        sets.insert(version, quantized_value, vector_id);
         self.is_dirty.store(true, Ordering::Release);
         Ok(())
-    }
-
-    pub fn find_key_of_id(
-        &self,
-        vector_id: u32,
-        cache: &InvertedIndexCache,
-    ) -> Result<Option<u8>, BufIoError> {
-        Ok(unsafe { &*self.fixed_sets }
-            .try_get_data(cache, self.dim_index)?
-            .search(vector_id))
     }
 
     /// See [`crate::models::serializer::inverted::node`] for how its calculated
     pub fn get_serialized_size(quantization_bits: u8) -> u32 {
         let qv = 1u32 << quantization_bits;
 
-        qv * 4 + 73
+        qv * 4 + 69
     }
 }
 
@@ -277,7 +245,6 @@ impl InvertedIndexRoot {
     pub fn new(
         root_path: PathBuf,
         quantization_bits: u8,
-        version: Hash,
         data_file_parts: u8,
     ) -> Result<Self, BufIoError> {
         let dim_file = OpenOptions::new()
@@ -305,7 +272,6 @@ impl InvertedIndexRoot {
                 0,
                 false,
                 quantization_bits,
-                version,
                 FileOffset(0),
             )),
             cache,
@@ -339,7 +305,7 @@ impl InvertedIndexRoot {
         values_upper_bound: f32,
     ) -> Result<(), BufIoError> {
         let path = calculate_path(dim_index, self.root.dim_index);
-        let node = self.root.find_or_create_node(&path, version, || {
+        let node = self.root.find_or_create_node(&path, || {
             self.offset_counter
                 .fetch_add(self.node_size, Ordering::Relaxed)
         });
