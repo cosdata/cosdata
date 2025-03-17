@@ -29,7 +29,7 @@ fn oct_quant(v: &[f32]) -> Vec<u8> {
 
 fn simp_quant(v: &[f32]) -> Result<Vec<u8>, String> {
     let (out_of_range, has_negative) = v.iter().fold((false, false), |(oor, neg), &x| {
-        (oor || x > 1.0 || x < -1.0, neg || x < 0.0)
+        (oor || !(-1.0..=1.0).contains(&x), neg || x < 0.0)
     });
     if out_of_range {
         return Err(String::from(

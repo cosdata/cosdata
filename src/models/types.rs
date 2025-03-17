@@ -1,56 +1,52 @@
-use super::buffered_io::BufferManagerFactory;
-use super::cache_loader::DenseIndexCache;
-use super::collection::Collection;
-use super::crypto::{DoubleSHA256Hash, SingleSHA256Hash};
-use super::embedding_persist::{write_embedding, EmbeddingOffset};
-use super::meta_persist::{
-    delete_dense_index, lmdb_init_collections_db, lmdb_init_db, load_collections,
-    load_dense_index_data, persist_dense_index, retrieve_current_version,
-    retrieve_values_upper_bound,
+use super::{
+    buffered_io::BufferManagerFactory,
+    cache_loader::HNSWIndexCache,
+    collection::Collection,
+    crypto::{DoubleSHA256Hash, SingleSHA256Hash},
+    inverted_index::InvertedIndexRoot,
+    meta_persist::{
+        lmdb_init_collections_db, lmdb_init_db, load_collections, retrieve_current_version,
+        retrieve_values_upper_bound,
+    },
+    paths::get_data_path,
+    prob_lazy_load::lazy_item::FileIndex,
+    prob_node::ProbNode,
+    versioning::VersionControl,
 };
-use super::paths::{get_config_path, get_data_path};
-use super::prob_lazy_load::lazy_item::ProbLazyItem;
-use super::prob_node::{ProbNode, SharedNode};
-use super::versioning::VersionControl;
-use crate::args::CosdataArgs;
-use crate::config_loader::Config;
-use crate::distance::cosine::CosineSimilarity;
-use crate::distance::DistanceError;
-use crate::distance::{
-    cosine::CosineDistance, dotproduct::DotProductDistance, euclidean::EuclideanDistance,
-    hamming::HammingDistance, DistanceFunction,
+use crate::{
+    args::CosdataArgs, config_loader::Config, distance::{
+        cosine::{CosineDistance, CosineSimilarity},
+        dotproduct::DotProductDistance,
+        euclidean::EuclideanDistance,
+        hamming::HammingDistance,
+        DistanceError, DistanceFunction,
+    }, indexes::{
+        hnsw::{data::HNSWIndexData, HNSWIndex},
+        inverted::{data::InvertedIndexData, InvertedIndex},
+    }, metadata::schema::MetadataDimensions, models::{
+        buffered_io::BufIoError, common::*, meta_persist::retrieve_values_range, versioning::*,
+    }, quantization::{
+        product::ProductQuantization, scalar::ScalarQuantization, Quantization, QuantizationError,
+        StorageType,
+    }, storage::Storage
 };
-use crate::indexes::inverted_index::InvertedIndex;
-use crate::indexes::inverted_index_data::InvertedIndexData;
-use crate::macros::key;
-use crate::metadata::schema::MetadataDimensions;
-use crate::metadata::MetadataFields;
-use crate::models::buffered_io::BufIoError;
-use crate::models::common::*;
-use crate::models::identity_collections::*;
-use crate::models::lazy_load::*;
-use crate::models::meta_persist::retrieve_values_range;
-use crate::models::versioning::*;
-use crate::quantization::{
-    product::ProductQuantization, scalar::ScalarQuantization, Quantization, QuantizationError,
-    StorageType,
-};
-use crate::storage::inverted_index_sparse_ann_basic::InvertedIndexSparseAnnBasicTSHashmap;
-use crate::storage::Storage;
-use arcshift::ArcShift;
 use dashmap::DashMap;
 use lmdb::{Cursor, Database, DatabaseFlags, Environment, Transaction, WriteFlags};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher24;
-use std::hash::{DefaultHasher, Hash as StdHash, Hasher};
+use std::hash::{Hash as StdHash, Hasher};
 use std::io::Write;
-use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, RwLock};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize};
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
-use std::{fmt, ptr};
-use std::{fs::*, thread};
+use std::{
+    fmt,
+    fs::{create_dir_all, OpenOptions},
+    ptr,
+    str::FromStr,
+};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct HNSWLevel(pub u8);
@@ -60,32 +56,6 @@ pub struct FileOffset(pub u32);
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct BytesToRead(pub u32);
-
-#[derive(Clone)]
-pub struct Neighbour {
-    pub node: LazyItem<MergedNode>,
-    pub cosine_similarity: CosineSimilarity,
-}
-
-impl Identifiable for Neighbour {
-    type Id = LazyItemId;
-
-    fn get_id(&self) -> Self::Id {
-        self.node.get_id()
-    }
-}
-
-impl Identifiable for MergedNode {
-    type Id = u64;
-
-    fn get_id(&self) -> Self::Id {
-        let mut prop_ref = self.prop.clone();
-        let prop = prop_ref.get();
-        let mut hasher = DefaultHasher::new();
-        prop.hash(&mut hasher);
-        hasher.finish()
-    }
-}
 
 pub type PropPersistRef = (FileOffset, BytesToRead);
 
@@ -158,29 +128,35 @@ impl VectorId {
     }
 }
 
-#[derive(Clone)]
-pub struct MergedNode {
-    pub hnsw_level: HNSWLevel,
-    pub prop: ArcShift<PropState>,
-    pub neighbors: EagerLazyItemSet<MergedNode, MetricResult>,
-    pub parent: LazyItemRef<MergedNode>,
-    pub child: LazyItemRef<MergedNode>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub enum MetricResult {
     CosineSimilarity(CosineSimilarity),
+    // @DOUBT: how can we obtain `CosineDistance`?
     CosineDistance(CosineDistance),
     EuclideanDistance(EuclideanDistance),
     HammingDistance(HammingDistance),
+    // @DOUBT: dot product shows similarity between two vectors, not distance,
+    // should rename it to `DotProduct`?
     DotProductDistance(DotProductDistance),
+}
+
+impl PartialOrd for MetricResult {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl Eq for MetricResult {}
 
 impl Ord for MetricResult {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.partial_cmp(other).unwrap_or(std::cmp::Ordering::Equal)
+        match self {
+            Self::CosineSimilarity(val) => val.0.total_cmp(&other.get_value()),
+            Self::CosineDistance(val) => other.get_value().total_cmp(&val.0),
+            Self::EuclideanDistance(val) => other.get_value().total_cmp(&val.0),
+            Self::HammingDistance(val) => other.get_value().total_cmp(&val.0),
+            Self::DotProductDistance(val) => val.0.total_cmp(&other.get_value()),
+        }
     }
 }
 
@@ -205,9 +181,33 @@ impl MetricResult {
             Self::DotProductDistance(value) => (4, value.0),
         }
     }
+
+    pub fn min(metric: DistanceMetric) -> Self {
+        match metric {
+            DistanceMetric::Cosine => Self::CosineSimilarity(CosineSimilarity(-1.0)),
+            DistanceMetric::Euclidean => {
+                Self::EuclideanDistance(EuclideanDistance(f32::NEG_INFINITY))
+            }
+            DistanceMetric::Hamming => Self::HammingDistance(HammingDistance(f32::NEG_INFINITY)),
+            DistanceMetric::DotProduct => {
+                Self::DotProductDistance(DotProductDistance(f32::NEG_INFINITY))
+            }
+        }
+    }
+
+    pub fn max(metric: DistanceMetric) -> Self {
+        match metric {
+            DistanceMetric::Cosine => Self::CosineSimilarity(CosineSimilarity(2.0)), // take care of precision issues
+            DistanceMetric::Euclidean => Self::EuclideanDistance(EuclideanDistance(f32::INFINITY)),
+            DistanceMetric::Hamming => Self::HammingDistance(HammingDistance(f32::INFINITY)),
+            DistanceMetric::DotProduct => {
+                Self::DotProductDistance(DotProductDistance(f32::INFINITY))
+            }
+        }
+    }
 }
 
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, Copy, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DistanceMetric {
     Cosine,
@@ -267,152 +267,12 @@ impl Quantization for QuantizationMetric {
     }
 }
 
-impl MergedNode {
-    pub fn new(hnsw_level: HNSWLevel) -> Self {
-        MergedNode {
-            hnsw_level,
-            prop: ArcShift::new(PropState::Pending((FileOffset(0), BytesToRead(0)))),
-            neighbors: EagerLazyItemSet::new(),
-            parent: LazyItemRef::new_invalid(),
-            child: LazyItemRef::new_invalid(),
-        }
-    }
-
-    pub fn add_ready_neighbor(&self, neighbor: LazyItem<MergedNode>, distance: MetricResult) {
-        self.neighbors.insert(EagerLazyItem(distance, neighbor));
-    }
-
-    pub fn set_parent(&self, parent: LazyItem<MergedNode>) {
-        let mut arc = self.parent.item.clone();
-        arc.update(parent);
-    }
-
-    pub fn set_child(&self, child: LazyItem<MergedNode>) {
-        let mut arc = self.child.item.clone();
-        arc.update(child);
-    }
-
-    pub fn add_ready_neighbors(&self, neighbors_list: Vec<(LazyItem<MergedNode>, MetricResult)>) {
-        for (neighbor, distance) in neighbors_list {
-            self.add_ready_neighbor(neighbor, distance);
-        }
-    }
-
-    pub fn get_neighbors(&self) -> EagerLazyItemSet<MergedNode, MetricResult> {
-        self.neighbors.clone()
-    }
-
-    pub fn get_parent(&self) -> LazyItemRef<MergedNode> {
-        self.parent.clone()
-    }
-
-    pub fn get_child(&self) -> LazyItemRef<MergedNode> {
-        self.child.clone()
-    }
-
-    pub fn get_prop_location(&self) -> PropPersistRef {
-        let mut arc = self.prop.clone();
-        match arc.get() {
-            PropState::Ready(node_prop) => node_prop.location.clone(),
-            PropState::Pending(location) => *location,
-        }
-    }
-
-    pub fn get_prop(&self) -> PropState {
-        let mut arc = self.prop.clone();
-        arc.get().clone()
-    }
-
-    pub fn set_prop_pending(&self, prop_ref: PropPersistRef) {
-        let mut arc = self.prop.clone();
-        arc.update(PropState::Pending(prop_ref));
-    }
-
-    pub fn set_prop_ready(&self, node_prop: Arc<NodePropValue>) {
-        let mut arc = self.prop.clone();
-        arc.update(PropState::Ready(node_prop));
-    }
-}
-
 // Implementing the std::fmt::Display trait for VectorId
 impl fmt::Display for VectorId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
 }
-
-impl fmt::Debug for MergedNode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "MergedNode {{")?;
-        // writeln!(f, "  version_id: {},", self.version_id.0)?;
-        writeln!(f, "  hnsw_level: {},", self.hnsw_level.0)?;
-
-        // Display PropState
-        write!(f, "  prop: ")?;
-        let mut prop_arc = self.prop.clone();
-        let prop = match prop_arc.get() {
-            PropState::Ready(node_prop) => format!("Ready {{ id: {} }}", node_prop.id),
-            PropState::Pending(_) => "Pending".to_string(),
-        };
-        f.debug_struct("MergedNode")
-            .field("hnsw_level", &self.hnsw_level)
-            .field("prop", &prop)
-            .field("neighbors", &self.neighbors.len())
-            .field(
-                "parent",
-                if self.parent.is_valid() {
-                    &"Valid"
-                } else {
-                    &"Invalid"
-                },
-            )
-            .field(
-                "child",
-                if self.child.is_valid() {
-                    &"Valid"
-                } else {
-                    &"Invalid"
-                },
-            )
-            .finish()
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum VectorQt {
-    UnsignedByte {
-        mag: u32,
-        quant_vec: Vec<u8>,
-    },
-    SubByte {
-        mag: u32,
-        quant_vec: Vec<Vec<u8>>,
-        resolution: u8,
-    },
-}
-
-impl VectorQt {
-    pub fn unsigned_byte(vec: &[f32]) -> Self {
-        let quant_vec = simp_quant(vec)
-            .inspect_err(|x| println!("{:?}", x))
-            .unwrap();
-        let mag = mag_square_u8(&quant_vec);
-        Self::UnsignedByte { mag, quant_vec }
-    }
-
-    pub fn sub_byte(vec: &[f32], resolution: u8) -> Self {
-        let quant_vec = quantize_to_u8_bits(vec, resolution);
-        let mag = 0; //implement a proper magnitude calculation
-        Self::SubByte {
-            mag,
-            quant_vec,
-            resolution,
-        }
-    }
-}
-
-// #[allow(dead_code)]
-// pub struct SizeBytes(pub u32);
 
 #[derive(Debug, Clone)]
 pub struct MetaDb {
@@ -428,299 +288,16 @@ impl MetaDb {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HNSWHyperParams {
-    pub num_layers: u8,
-    pub ef_construction: u32,
-    pub ef_search: u32,
-    pub max_cache_size: usize,
-    pub level_0_neighbors_count: usize,
-    pub neighbors_count: usize,
-}
-
-impl HNSWHyperParams {
-    pub fn default_from_config(config: &Config) -> Self {
-        Self {
-            ef_construction: config.hnsw.default_ef_construction,
-            ef_search: config.hnsw.default_ef_search,
-            num_layers: config.hnsw.default_num_layer,
-            max_cache_size: config.hnsw.default_max_cache_size,
-            level_0_neighbors_count: config.hnsw.default_level_0_neighbors_count,
-            neighbors_count: config.hnsw.default_neighbors_count,
-        }
-    }
-}
-
-pub struct DenseIndexTransaction {
-    pub id: Hash,
-    pub version_number: u16,
-    pub lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16, u8), SharedNode>>,
-    raw_embedding_serializer_thread_handle: thread::JoinHandle<Result<(), WaCustomError>>,
-    pub raw_embedding_channel: mpsc::Sender<RawVectorEmbedding>,
-    level_0_node_offset_counter: AtomicU32,
-    node_offset_counter: AtomicU32,
-    node_size: u32,
-    level_0_node_size: u32,
-}
-
-unsafe impl Send for DenseIndexTransaction {}
-unsafe impl Sync for DenseIndexTransaction {}
-
-impl DenseIndexTransaction {
-    pub fn new(dense_index: Arc<DenseIndex>) -> Result<Self, WaCustomError> {
-        let branch_info = dense_index
-            .vcs
-            .get_branch_info("main")
-            .map_err(|err| {
-                WaCustomError::DatabaseError(format!("Unable to get main branch info: {}", err))
-            })?
-            .unwrap();
-        let version_number = *branch_info.get_current_version() + 1;
-        let id = dense_index
-            .vcs
-            .generate_hash("main", Version::from(version_number))
-            .map_err(|err| {
-                WaCustomError::DatabaseError(format!("Unable to get transaction hash: {}", err))
-            })?;
-
-        let (raw_embedding_channel, rx) = mpsc::channel();
-
-        let raw_embedding_serializer_thread_handle = {
-            let bufman = dense_index.vec_raw_manager.get(id)?;
-            let dense_index = dense_index.clone();
-
-            thread::spawn(move || {
-                let mut offsets = Vec::new();
-                for raw_emb in rx {
-                    let offset = write_embedding(bufman.clone(), &raw_emb)?;
-                    let embedding_key = key!(e:raw_emb.hash_vec);
-                    offsets.push((embedding_key, offset));
-                }
-
-                let env = dense_index.lmdb.env.clone();
-                let db = dense_index.lmdb.db.clone();
-
-                let mut txn = env.begin_rw_txn().map_err(|e| {
-                    WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e))
-                })?;
-                for (key, offset) in offsets {
-                    let offset = EmbeddingOffset {
-                        version: id,
-                        offset,
-                    };
-                    let offset_serialized = offset.serialize();
-
-                    txn.put(*db, &key, &offset_serialized, WriteFlags::empty())
-                        .map_err(|e| {
-                            WaCustomError::DatabaseError(format!("Failed to put data: {}", e))
-                        })?;
-                }
-
-                txn.commit().map_err(|e| {
-                    WaCustomError::DatabaseError(format!("Failed to commit transaction: {}", e))
-                })?;
-                let start = Instant::now();
-                bufman.flush()?;
-                println!("Time took to flush: {:?}", start.elapsed());
-                Ok(())
-            })
-        };
-
-        let hnsw_params = dense_index.hnsw_params.read().unwrap();
-
-        Ok(Self {
-            id,
-            lazy_item_versions_table: Arc::new(TSHashTable::new(16)),
-            raw_embedding_channel,
-            raw_embedding_serializer_thread_handle,
-            version_number: version_number as u16,
-            node_offset_counter: AtomicU32::new(0),
-            level_0_node_offset_counter: AtomicU32::new(0),
-            node_size: ProbNode::get_serialized_size(hnsw_params.neighbors_count) as u32,
-            level_0_node_size: ProbNode::get_serialized_size(hnsw_params.level_0_neighbors_count)
-                as u32,
-        })
-    }
-
-    pub fn post_raw_embedding(&self, raw_emb: RawVectorEmbedding) {
-        self.raw_embedding_channel.send(raw_emb).unwrap();
-    }
-
-    pub fn pre_commit(self, dense_index: Arc<DenseIndex>) -> Result<(), WaCustomError> {
-        dense_index.index_manager.flush_all()?;
-        dense_index.level_0_index_manager.flush_all()?;
-        dense_index.prop_file.write().unwrap().flush().unwrap();
-        drop(self.raw_embedding_channel);
-        let start = Instant::now();
-        self.raw_embedding_serializer_thread_handle
-            .join()
-            .unwrap()?;
-        println!(
-            "Time took to wait for embedding serializer thread: {:?}",
-            start.elapsed()
-        );
-        Ok(())
-    }
-
-    pub fn get_new_node_offset(&self) -> u32 {
-        self.node_offset_counter
-            .fetch_add(self.node_size, Ordering::SeqCst)
-    }
-
-    pub fn get_new_level_0_node_offset(&self) -> u32 {
-        self.level_0_node_offset_counter
-            .fetch_add(self.level_0_node_size, Ordering::SeqCst)
-    }
-}
-
-#[derive(Default)]
-pub struct SamplingData {
-    pub above_05: AtomicUsize,
-    pub above_04: AtomicUsize,
-    pub above_03: AtomicUsize,
-    pub above_02: AtomicUsize,
-    pub above_01: AtomicUsize,
-
-    pub below_05: AtomicUsize,
-    pub below_04: AtomicUsize,
-    pub below_03: AtomicUsize,
-    pub below_02: AtomicUsize,
-    pub below_01: AtomicUsize,
-}
-
-#[derive(Clone)]
-pub struct DenseIndex {
-    pub database_name: String,
-    pub root_vec: Arc<AtomicPtr<ProbLazyItem<ProbNode>>>,
-    pub levels_prob: Arc<Vec<(f64, i32)>>,
-    // @TODO(vineet): Should this be with or without phantom dimensions
-    pub dim: usize,
-    pub prop_file: Arc<RwLock<File>>,
-    pub lmdb: MetaDb,
-    pub current_version: ArcShift<Hash>,
-    pub current_open_transaction: Arc<AtomicPtr<DenseIndexTransaction>>,
-    pub quantization_metric: ArcShift<QuantizationMetric>,
-    pub distance_metric: ArcShift<DistanceMetric>,
-    pub storage_type: ArcShift<StorageType>,
-    pub vcs: Arc<VersionControl>,
-    pub hnsw_params: Arc<RwLock<HNSWHyperParams>>,
-    pub cache: Arc<DenseIndexCache>,
-    pub index_manager: Arc<BufferManagerFactory<Hash>>,
-    pub level_0_index_manager: Arc<BufferManagerFactory<Hash>>,
-    pub vec_raw_manager: Arc<BufferManagerFactory<Hash>>,
-    pub is_configured: Arc<AtomicBool>,
-    pub values_range: Arc<RwLock<(f32, f32)>>,
-    pub vectors: Arc<RwLock<Vec<(VectorId, Vec<f32>, Option<MetadataFields>)>>>,
-    pub sampling_data: Arc<SamplingData>,
-    pub vectors_collected: Arc<AtomicUsize>,
-    pub sample_threshold: usize,
-}
-
-unsafe impl Send for DenseIndex {}
-unsafe impl Sync for DenseIndex {}
-
-impl DenseIndex {
-    pub fn new(
-        database_name: String,
-        root_vec: SharedNode,
-        levels_prob: Arc<Vec<(f64, i32)>>,
-        dim: usize,
-        prop_file: Arc<RwLock<File>>,
-        lmdb: MetaDb,
-        current_version: ArcShift<Hash>,
-        quantization_metric: ArcShift<QuantizationMetric>,
-        distance_metric: ArcShift<DistanceMetric>,
-        storage_type: ArcShift<StorageType>,
-        vcs: Arc<VersionControl>,
-        hnsw_params: HNSWHyperParams,
-        cache: Arc<DenseIndexCache>,
-        index_manager: Arc<BufferManagerFactory<Hash>>,
-        level_0_index_manager: Arc<BufferManagerFactory<Hash>>,
-        vec_raw_manager: Arc<BufferManagerFactory<Hash>>,
-        values_range: (f32, f32),
-        sample_threshold: usize,
-        is_configured: bool,
-    ) -> Self {
-        DenseIndex {
-            database_name,
-            root_vec: Arc::new(AtomicPtr::new(root_vec)),
-            levels_prob,
-            dim,
-            prop_file,
-            lmdb,
-            current_version,
-            current_open_transaction: Arc::new(AtomicPtr::new(ptr::null_mut())),
-            quantization_metric,
-            distance_metric,
-            storage_type,
-            vcs,
-            hnsw_params: Arc::new(RwLock::new(hnsw_params)),
-            cache,
-            index_manager,
-            level_0_index_manager,
-            vec_raw_manager,
-            is_configured: Arc::new(AtomicBool::new(is_configured)),
-            values_range: Arc::new(RwLock::new(values_range)),
-            vectors: Arc::new(RwLock::new(Vec::new())),
-            sampling_data: Arc::new(SamplingData::default()),
-            vectors_collected: Arc::new(AtomicUsize::new(0)),
-            sample_threshold,
-        }
-    }
-
-    // Get method
-    pub fn get_current_version(&self) -> Hash {
-        let mut arc = self.current_version.clone();
-        arc.get().clone()
-    }
-
-    // Set method
-    pub fn set_current_version(&self, new_version: Hash) {
-        let mut arc = self.current_version.clone();
-        arc.update(new_version);
-    }
-
-    pub fn set_root_vec(&self, root_vec: SharedNode) {
-        self.root_vec.store(root_vec, Ordering::SeqCst);
-    }
-
-    pub fn get_root_vec(&self) -> SharedNode {
-        self.root_vec.load(Ordering::SeqCst)
-    }
-
-    /// Returns FileIndex (offset) corresponding to the root
-    /// node. Returns None if the it's not set or the root node is an
-    /// invalid LazyItem
-    pub fn root_vec_offset(&self) -> FileIndex {
-        unsafe { &*self.get_root_vec() }.get_file_index()
-    }
-}
-
-// Quantized vector embedding
-#[derive(Debug, Clone, PartialEq)]
-pub struct QuantizedVectorEmbedding {
-    pub quantized_vec: Arc<Storage>,
-    pub hash_vec: VectorId,
-}
-
-// Raw vector embedding
-#[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize, PartialEq)]
-pub struct RawVectorEmbedding {
-    pub raw_vec: Arc<Vec<f32>>,
-    pub hash_vec: VectorId,
-    pub raw_metadata: Option<MetadataFields>,
-}
-
 pub struct CollectionsMap {
     /// holds an in-memory map of all dense indexes for all collections
-    inner: DashMap<String, Arc<DenseIndex>>,
-    inner_inverted_index: DashMap<String, Arc<InvertedIndex>>,
+    inner_hnsw_indexes: DashMap<String, Arc<HNSWIndex>>,
+    inner_inverted_indexes: DashMap<String, Arc<InvertedIndex>>,
     inner_collections: DashMap<String, Arc<Collection>>,
     lmdb_env: Arc<Environment>,
     // made it public temporarily
     // just to be able to persist collections from outside CollectionsMap
     pub(crate) lmdb_collections_db: Database,
-    lmdb_dense_index_db: Database,
+    lmdb_hnsw_index_db: Database,
     #[allow(dead_code)]
     lmdb_inverted_index_db: Database,
 }
@@ -728,15 +305,15 @@ pub struct CollectionsMap {
 impl CollectionsMap {
     fn new(env: Arc<Environment>) -> lmdb::Result<Self> {
         let collections_db = lmdb_init_collections_db(&env)?;
-        let dense_index_db = lmdb_init_db(&env, "dense_indexes")?;
+        let hnsw_index_db = lmdb_init_db(&env, "hnsw_indexes")?;
         let inverted_index_db = lmdb_init_db(&env, "inverted_indexes")?;
         let res = Self {
-            inner: DashMap::new(),
-            inner_inverted_index: DashMap::new(),
+            inner_hnsw_indexes: DashMap::new(),
+            inner_inverted_indexes: DashMap::new(),
             inner_collections: DashMap::new(),
             lmdb_env: env,
             lmdb_collections_db: collections_db,
-            lmdb_dense_index_db: dense_index_db,
+            lmdb_hnsw_index_db: hnsw_index_db,
             lmdb_inverted_index_db: inverted_index_db,
         };
         Ok(res)
@@ -752,13 +329,11 @@ impl CollectionsMap {
 
         let collections = load_collections(
             &collections_map.lmdb_env,
-            collections_map.lmdb_collections_db.clone(),
+            collections_map.lmdb_collections_db,
         )
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
-        let root_path = Path::new("./collections");
-
-        // let bufmans = cache.get_bufmans();
+        let root_path = get_data_path().join("collections");
 
         for coll in collections {
             let coll = Arc::new(coll);
@@ -768,18 +343,18 @@ impl CollectionsMap {
 
             // if collection has dense index load it from the lmdb
             if coll.dense_vector.enabled {
-                let dense_index = collections_map.load_dense_index(&coll, root_path, config)?;
+                let hnsw_index = collections_map.load_hnsw_index(&coll, &root_path, config)?;
                 collections_map
-                    .inner
-                    .insert(coll.name.clone(), Arc::new(dense_index));
+                    .inner_hnsw_indexes
+                    .insert(coll.name.clone(), Arc::new(hnsw_index));
             }
 
             // if collection has inverted index load it from the lmdb
             if coll.sparse_vector.enabled {
                 let inverted_index =
-                    collections_map.load_inverted_index(&coll, root_path, config)?;
+                    collections_map.load_inverted_index(&coll, &root_path, config)?;
                 collections_map
-                    .inner_inverted_index
+                    .inner_inverted_indexes
                     .insert(coll.name.clone(), Arc::new(inverted_index));
             }
         }
@@ -790,30 +365,46 @@ impl CollectionsMap {
     ///
     /// In doing so, the root vec for all collections' dense indexes are loaded into
     /// memory, which also ends up warming the cache (NodeRegistry)
-    fn load_dense_index(
+    fn load_hnsw_index(
         &self,
         coll: &Collection,
-        root_path: &Path,
+        _root_path: &Path,
         config: &Config,
-    ) -> Result<DenseIndex, WaCustomError> {
-        let collection_path: Arc<Path> = root_path.join(&coll.name).into();
+    ) -> Result<HNSWIndex, WaCustomError> {
+        let collection_path: Arc<Path> = get_collections_path().join(&coll.name).into();
         let index_path = collection_path.join("dense_hnsw");
 
-        let dense_index_data =
-            load_dense_index_data(&self.lmdb_env, self.lmdb_dense_index_db, &coll.get_key())
-                .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-        let prop_file = Arc::new(RwLock::new(
-            OpenOptions::new()
-                .create(true)
-                .read(true)
-                .append(true)
-                .open(index_path.join("prop.data"))
-                .unwrap(),
-        ));
+        // Check if the path exists before proceeding
+        if !index_path.exists() {
+            return Err(WaCustomError::DatabaseError(format!(
+                "Dense HNSW index path does not exist: {:?}",
+                index_path
+            )));
+        }
 
-        let node_size = ProbNode::get_serialized_size(dense_index_data.hnsw_params.neighbors_count);
+        let hnsw_index_data =
+            HNSWIndexData::load(&self.lmdb_env, self.lmdb_hnsw_index_db, &coll.get_key())
+                .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+        let prop_file_path = index_path.join("prop.data");
+        let prop_file_result = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .append(true)
+            .open(&prop_file_path);
+
+        let prop_file = match prop_file_result {
+            Ok(file) => RwLock::new(file),
+            Err(e) => {
+                return Err(WaCustomError::DatabaseError(format!(
+                    "Failed to open properties file {:?}: {}",
+                    prop_file_path, e
+                )));
+            }
+        };
+
+        let node_size = ProbNode::get_serialized_size(hnsw_index_data.hnsw_params.neighbors_count);
         let level_0_node_size =
-            ProbNode::get_serialized_size(dense_index_data.hnsw_params.level_0_neighbors_count);
+            ProbNode::get_serialized_size(hnsw_index_data.hnsw_params.level_0_neighbors_count);
 
         let bufman_size = node_size * 1000;
         let level_0_bufman_size = level_0_node_size * 1000;
@@ -828,16 +419,18 @@ impl CollectionsMap {
             |root, ver: &Hash| root.join(format!("{}_0.index", **ver)),
             level_0_bufman_size,
         ));
-        let vec_raw_manager = Arc::new(BufferManagerFactory::new(
+        let vec_raw_manager = BufferManagerFactory::new(
             index_path.clone().into(),
             |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
             8192,
-        ));
-        let cache = Arc::new(DenseIndexCache::new(
+        );
+        let distance_metric = Arc::new(RwLock::new(hnsw_index_data.distance_metric));
+        let cache = HNSWIndexCache::new(
             index_manager.clone(),
             level_0_index_manager.clone(),
-            prop_file.clone(),
-        ));
+            prop_file,
+            distance_metric.clone(),
+        );
 
         let db = Arc::new(
             self.lmdb_env
@@ -845,36 +438,56 @@ impl CollectionsMap {
                 .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?,
         );
 
-        let (root_offset, root_version_number, root_version_id) = match dense_index_data.file_index
-        {
-            FileIndex::Valid {
-                offset,
-                version_number,
-                version_id,
-            } => (offset, version_number, version_id),
-            FileIndex::Invalid => unreachable!(),
-        };
+        let FileIndex {
+            offset: root_offset,
+            version_number: root_version_number,
+            version_id: root_version_id,
+        } = hnsw_index_data.file_index;
 
         let root_node_region_offset = root_offset.0 - (root_offset.0 % bufman_size as u32);
         let load_start = Instant::now();
-        let region = cache.load_region(
+
+        let region_result = cache.load_region(
             root_node_region_offset,
             root_version_number,
             root_version_id,
             node_size as u32,
             false,
-        )?;
+        );
 
-        let root = region[(root_offset.0 - root_node_region_offset) as usize / node_size];
+        let region = match region_result {
+            Ok(r) => r,
+            Err(e) => {
+                return Err(WaCustomError::DatabaseError(format!(
+                    "Failed to load region: {}",
+                    e
+                )));
+            }
+        };
 
-        let vcs = Arc::new(VersionControl::from_existing(
-            self.lmdb_env.clone(),
-            db.clone(),
-        ));
+        let root_index = (root_offset.0 - root_node_region_offset) as usize / node_size;
+        if root_index >= region.len() {
+            return Err(WaCustomError::DatabaseError(format!(
+                "Root index out of bounds: {} >= {}",
+                root_index,
+                region.len()
+            )));
+        }
 
-        let mut versions = vcs
-            .get_branch_versions("main")
-            .map_err(|err| WaCustomError::DatabaseError(err.to_string()))?;
+        let root = region[root_index];
+
+        let vcs = VersionControl::from_existing(self.lmdb_env.clone(), db.clone());
+
+        let versions_result = vcs.get_branch_versions("main");
+        let mut versions = match versions_result {
+            Ok(v) => v,
+            Err(err) => {
+                return Err(WaCustomError::DatabaseError(format!(
+                    "Failed to get branch versions: {}",
+                    err
+                )));
+            }
+        };
 
         println!(
             "versions: {:?}",
@@ -886,15 +499,23 @@ impl CollectionsMap {
         let mut regions_to_load = Vec::new();
 
         while !versions.is_empty() {
-            let num_regions_to_load =
-                ((config.num_regions_to_load_on_restart - num_regions_queued + versions.len() - 1)
-                    / versions.len())
-                    / 2;
+            let num_regions_to_load = (config.num_regions_to_load_on_restart - num_regions_queued)
+                .div_ceil(versions.len())
+                / 2;
             let (version_id, version_hash) = versions.remove(0);
+
             // level n
-            let bufman = index_manager.get(version_id)?;
-            for i in 0..num_regions_to_load
-                .min((bufman.file_size() as usize + bufman_size - 1) / bufman_size)
+            let bufman_result = index_manager.get(version_id);
+            let bufman = match bufman_result {
+                Ok(bm) => bm,
+                Err(e) => {
+                    return Err(WaCustomError::DatabaseError(format!(
+                        "Failed to get buffer manager: {}",
+                        e
+                    )));
+                }
+            };
+            for i in 0..num_regions_to_load.min((bufman.file_size() as usize).div_ceil(bufman_size))
             {
                 let region_start = (bufman_size * i) as u32;
                 if version_id == root_version_id && region_start == root_node_region_offset {
@@ -909,10 +530,21 @@ impl CollectionsMap {
                 ));
                 num_regions_queued += 1;
             }
+
             // level 0
-            let bufman = level_0_index_manager.get(version_id)?;
+            let level0_bufman_result = level_0_index_manager.get(version_id);
+            let level0_bufman = match level0_bufman_result {
+                Ok(bm) => bm,
+                Err(e) => {
+                    return Err(WaCustomError::DatabaseError(format!(
+                        "Failed to get level 0 buffer manager: {}",
+                        e
+                    )));
+                }
+            };
+
             for i in 0..num_regions_to_load
-                .min((bufman.file_size() as usize + level_0_bufman_size - 1) / level_0_bufman_size)
+                .min((level0_bufman.file_size() as usize).div_ceil(level_0_bufman_size))
             {
                 let region_start = (level_0_bufman_size * i) as u32;
                 regions_to_load.push((
@@ -926,7 +558,7 @@ impl CollectionsMap {
             }
         }
 
-        regions_to_load
+        let regions_load_result = regions_to_load
             .into_par_iter()
             .map(
                 |(region_start, version_number, version_id, node_size, is_level_0)| {
@@ -940,7 +572,14 @@ impl CollectionsMap {
                     Ok(())
                 },
             )
-            .collect::<Result<Vec<_>, BufIoError>>()?;
+            .collect::<Result<Vec<_>, BufIoError>>();
+
+        if let Err(e) = regions_load_result {
+            return Err(WaCustomError::DatabaseError(format!(
+                "Failed to load regions: {}",
+                e
+            )));
+        }
 
         let load_time = load_start.elapsed();
         println!("Loaded regions in: {:?}", load_time);
@@ -949,31 +588,48 @@ impl CollectionsMap {
             env: self.lmdb_env.clone(),
             db,
         };
-        let current_version = retrieve_current_version(&lmdb)?;
-        let values_range = retrieve_values_range(&lmdb)?;
-        let dense_index = DenseIndex::new(
+
+        let current_version_result = retrieve_current_version(&lmdb);
+        let current_version = match current_version_result {
+            Ok(cv) => cv,
+            Err(e) => {
+                return Err(WaCustomError::DatabaseError(format!(
+                    "Failed to retrieve current version: {}",
+                    e
+                )));
+            }
+        };
+
+        let values_range_result = retrieve_values_range(&lmdb);
+        let values_range = match values_range_result {
+            Ok(vr) => vr,
+            Err(e) => {
+                return Err(WaCustomError::DatabaseError(format!(
+                    "Failed to retrieve values range: {}",
+                    e
+                )));
+            }
+        };
+        let hnsw_index = HNSWIndex::new(
             coll.name.clone(),
             root,
-            dense_index_data.levels_prob,
-            dense_index_data.dim,
-            prop_file.clone(),
+            hnsw_index_data.levels_prob,
+            hnsw_index_data.dim,
             lmdb,
-            ArcShift::new(current_version),
-            ArcShift::new(dense_index_data.quantization_metric),
-            ArcShift::new(dense_index_data.distance_metric),
-            ArcShift::new(dense_index_data.storage_type),
+            current_version,
+            hnsw_index_data.quantization_metric,
+            distance_metric,
+            hnsw_index_data.storage_type,
             vcs,
-            dense_index_data.hnsw_params,
+            hnsw_index_data.hnsw_params,
             cache,
-            index_manager,
-            level_0_index_manager,
             vec_raw_manager,
             values_range.unwrap_or((-1.0, 1.0)),
-            dense_index_data.sample_threshold,
+            hnsw_index_data.sample_threshold,
             values_range.is_some(),
         );
 
-        Ok(dense_index)
+        Ok(hnsw_index)
     }
 
     /// loads and initiates the inverted index of a collection from lmdb
@@ -989,11 +645,11 @@ impl CollectionsMap {
         let collection_path: Arc<Path> = root_path.join(&coll.name).into();
         let index_path = collection_path.join("sparse_inverted_index");
 
-        let vec_raw_manager = Arc::new(BufferManagerFactory::new(
+        let vec_raw_manager = BufferManagerFactory::new(
             index_path.clone().into(),
             |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
             8192,
-        ));
+        );
 
         let db = Arc::new(
             self.lmdb_env
@@ -1002,13 +658,10 @@ impl CollectionsMap {
         );
 
         let inverted_index_data =
-            InvertedIndexData::load(&self.lmdb_env, self.lmdb_dense_index_db, &coll.get_key())
+            InvertedIndexData::load(&self.lmdb_env, self.lmdb_inverted_index_db, &coll.get_key())
                 .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
-        let vcs = Arc::new(VersionControl::from_existing(
-            self.lmdb_env.clone(),
-            db.clone(),
-        ));
+        let vcs = VersionControl::from_existing(self.lmdb_env.clone(), db.clone());
         let lmdb = MetaDb {
             env: self.lmdb_env.clone(),
             db,
@@ -1021,20 +674,20 @@ impl CollectionsMap {
             auto_create_index: inverted_index_data.auto_create_index,
             metadata_schema: inverted_index_data.metadata_schema,
             max_vectors: inverted_index_data.max_vectors,
-            root: Arc::new(InvertedIndexSparseAnnBasicTSHashmap::deserialize(
+            root: InvertedIndexRoot::deserialize(
                 index_path,
                 inverted_index_data.quantization_bits,
                 config.inverted_index_data_file_parts,
-            )?),
+            )?,
             lmdb,
-            current_version: ArcShift::new(current_version),
+            current_version: RwLock::new(current_version),
             current_open_transaction: AtomicPtr::new(ptr::null_mut()),
             vcs,
             values_upper_bound: RwLock::new(values_upper_bound.unwrap_or(1.0)),
             is_configured: AtomicBool::new(values_upper_bound.is_some()),
             vectors: RwLock::new(Vec::new()),
             vectors_collected: AtomicUsize::new(0),
-            sampling_data: crate::indexes::inverted_index::SamplingData::default(),
+            sampling_data: crate::indexes::inverted::types::SamplingData::default(),
             sample_threshold: inverted_index_data.sample_threshold,
             vec_raw_manager,
             early_terminate_threshold: inverted_index_data.early_terminate_threshold,
@@ -1043,29 +696,26 @@ impl CollectionsMap {
         Ok(inverted_index)
     }
 
-    pub fn insert(&self, name: &str, dense_index: Arc<DenseIndex>) -> Result<(), WaCustomError> {
-        self.inner.insert(name.to_owned(), dense_index.clone());
-        persist_dense_index(
-            &self.lmdb_env,
-            self.lmdb_dense_index_db.clone(),
-            dense_index.clone(),
-        )
+    pub fn insert_hnsw_index(
+        &self,
+        name: &str,
+        hnsw_index: Arc<HNSWIndex>,
+    ) -> Result<(), WaCustomError> {
+        HNSWIndexData::persist(&self.lmdb_env, self.lmdb_hnsw_index_db, &hnsw_index)?;
+        self.inner_hnsw_indexes
+            .insert(name.to_owned(), hnsw_index.clone());
+        Ok(())
     }
 
-    // TODO MERGE insert AND insert_inverted_index INTO ONE GENERIC METHOD
-    // OVER INDEXES
     pub fn insert_inverted_index(
         &self,
         name: &str,
         index: Arc<InvertedIndex>,
     ) -> Result<(), WaCustomError> {
-        self.inner_inverted_index
+        InvertedIndexData::persist(&self.lmdb_env, self.lmdb_inverted_index_db, &index)?;
+        self.inner_inverted_indexes
             .insert(name.to_owned(), index.clone());
-        InvertedIndexData::persist(
-            &self.lmdb_env,
-            self.lmdb_dense_index_db.clone(),
-            index.clone(),
-        )
+        Ok(())
     }
 
     /// inserts a collection into the collections map
@@ -1076,7 +726,7 @@ impl CollectionsMap {
         Ok(())
     }
 
-    /// Returns the `DenseIndex` by collection's name
+    /// Returns the `HNSWIndex` by collection's name
     ///
     /// If not found, None is returned
     ///
@@ -1090,8 +740,8 @@ impl CollectionsMap {
     /// the DenseIndex exists in LMDB and caching it. But it's not
     /// required for the current use case.
     #[allow(dead_code)]
-    pub fn get(&self, name: &str) -> Option<Arc<DenseIndex>> {
-        self.inner.get(name).map(|index| index.clone())
+    pub fn get_hnsw_index(&self, name: &str) -> Option<Arc<HNSWIndex>> {
+        self.inner_hnsw_indexes.get(name).map(|index| index.clone())
     }
 
     /// Returns the `InvertedIndex` by collection's name
@@ -1108,7 +758,7 @@ impl CollectionsMap {
     /// the InvertedIndex exists in LMDB and caching it. But it's not
     /// required for the current use case.
     pub fn get_inverted_index(&self, name: &str) -> Option<Arc<InvertedIndex>> {
-        self.inner_inverted_index
+        self.inner_inverted_indexes
             .get(name)
             .map(|index| index.clone())
     }
@@ -1132,16 +782,34 @@ impl CollectionsMap {
     }
 
     #[allow(dead_code)]
-    pub fn remove(&self, name: &str) -> Result<Option<(String, Arc<DenseIndex>)>, WaCustomError> {
-        match self.inner.remove(name) {
-            Some((key, index)) => {
-                let dense_index = delete_dense_index(
+    pub fn remove_hnsw_index(
+        &self,
+        name: &str,
+    ) -> Result<Option<(String, Arc<HNSWIndex>)>, WaCustomError> {
+        match self.inner_hnsw_indexes.remove(name) {
+            Some((key, hnsw_index)) => {
+                HNSWIndexData::delete_index(&self.lmdb_env, self.lmdb_hnsw_index_db, &hnsw_index)
+                    .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+                Ok(Some((key, hnsw_index)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn remove_inverted_index(
+        &self,
+        name: &str,
+    ) -> Result<Option<(String, Arc<InvertedIndex>)>, WaCustomError> {
+        match self.inner_inverted_indexes.remove(name) {
+            Some((key, inverted_index)) => {
+                InvertedIndexData::delete_index(
                     &self.lmdb_env,
-                    self.lmdb_dense_index_db.clone(),
-                    index.clone(),
+                    self.lmdb_hnsw_index_db,
+                    &inverted_index,
                 )
                 .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-                Ok(Some((key, dense_index)))
+                Ok(Some((key, inverted_index)))
             }
             None => Ok(None),
         }
@@ -1158,21 +826,33 @@ impl CollectionsMap {
             Some((_, collection)) => Ok(collection),
             None => {
                 // collection not found, return an error response
-                return Err(WaCustomError::NotFound("collection".into()));
+                Err(WaCustomError::NotFound("collection".into()))
             }
         }
     }
 
     #[allow(dead_code)]
-    pub fn iter(
+    pub fn iter_hnsw_indexes(
         &self,
     ) -> dashmap::iter::Iter<
         String,
-        Arc<DenseIndex>,
+        Arc<HNSWIndex>,
         std::hash::RandomState,
-        DashMap<String, Arc<DenseIndex>>,
+        DashMap<String, Arc<HNSWIndex>>,
     > {
-        self.inner.iter()
+        self.inner_hnsw_indexes.iter()
+    }
+
+    #[allow(dead_code)]
+    pub fn iter_inverted_indexes(
+        &self,
+    ) -> dashmap::iter::Iter<
+        String,
+        Arc<InvertedIndex>,
+        std::hash::RandomState,
+        DashMap<String, Arc<InvertedIndex>>,
+    > {
+        self.inner_inverted_indexes.iter()
     }
 
     /// returns an iterator
@@ -1290,27 +970,50 @@ pub struct AppEnv {
 }
 
 fn get_admin_key(env: Arc<Environment>, args: CosdataArgs) -> lmdb::Result<SingleSHA256Hash> {
-    let db = env.create_db(Some("security_metadata"), DatabaseFlags::empty())?;
-    let mut txn = env.begin_rw_txn()?;
+    // Create meta database if it doesn't exist
+    let init_txn = env.begin_rw_txn()?;
+    unsafe { init_txn.create_db(Some("meta"), DatabaseFlags::empty())? };
+    init_txn.commit()?;
+
+    let txn = env.begin_ro_txn()?;
+    let db = unsafe { txn.open_db(Some("meta"))? };
+
     let admin_key_from_lmdb = match txn.get(db, &"admin_key") {
-        Ok(key) => Some(DoubleSHA256Hash(key.try_into().unwrap())),
+        Ok(bytes) => {
+            let mut hash_array = [0u8; 32];
+            // Copy bytes from the database to the fixed-size array
+            if bytes.len() >= 32 {
+                hash_array.copy_from_slice(&bytes[..32]);
+                Some(DoubleSHA256Hash(hash_array))
+            } else {
+                log::error!("Invalid admin key format in database");
+                return Err(lmdb::Error::Other(7));
+            }
+        }
         Err(lmdb::Error::NotFound) => None,
-        Err(err) => return Err(err),
+        Err(e) => return Err(e),
     };
+    txn.abort();
+
     let admin_key_hash = if let Some(admin_key_from_lmdb) = admin_key_from_lmdb {
-        txn.abort();
+        // Database already exists, verify admin key
         let arg_admin_key = args.admin_key;
-        let arg_admin_key_hash = SingleSHA256Hash::from_str(&arg_admin_key);
+        let arg_admin_key_hash = SingleSHA256Hash::from_str(&arg_admin_key).unwrap();
         let arg_admin_key_double_hash = arg_admin_key_hash.hash_again();
         if !admin_key_from_lmdb.verify_eq(&arg_admin_key_double_hash) {
             log::error!("Invalid admin key!");
-            std::process::exit(1);
+            return Err(lmdb::Error::Other(5));
         }
         arg_admin_key_hash
     } else {
+        // First-time setup
         let arg_admin_key = args.admin_key;
-        let arg_admin_key_hash = SingleSHA256Hash::from_str(&arg_admin_key);
+        let arg_admin_key_hash = SingleSHA256Hash::from_str(&arg_admin_key).unwrap();
         let arg_admin_key_double_hash = arg_admin_key_hash.hash_again();
+
+        // Store the admin key double hash in the database
+        let mut txn = env.begin_rw_txn()?;
+        let db = unsafe { txn.open_db(Some("meta"))? };
         txn.put(
             db,
             &"admin_key",
@@ -1323,10 +1026,63 @@ fn get_admin_key(env: Arc<Environment>, args: CosdataArgs) -> lmdb::Result<Singl
     Ok(admin_key_hash)
 }
 
-pub fn get_app_env(config: &Config, args: CosdataArgs) -> Result<Arc<AppEnv>, WaCustomError> {
-    let db_path = get_data_path().join("_mdb"); // TODO: prefix the customer & database name
+fn get_collections_path() -> PathBuf {
+    get_data_path().join("collections")
+}
 
-    // Ensure the directory exists
+pub fn get_app_env(config: &Config, args: CosdataArgs) -> Result<Arc<AppEnv>, WaCustomError> {
+    // Check both possible db path locations
+    let db_path_1 = get_data_path().join("_mdb");
+    let db_path_2 = get_data_path().join("data/_mdb");
+
+    // Use whichever path exists, or default to db_path_2
+    let db_path = if db_path_1.exists() {
+        //println!("Using existing database at {}", db_path_1.display());
+        db_path_1
+    } else if db_path_2.exists() {
+        //println!("Using existing database at {}", db_path_2.display());
+        db_path_2
+    } else {
+        //println!("Creating new database at {}", db_path_2.display());
+        db_path_2 // Default for first-time setup
+    };
+
+    // Check if this is first-time setup
+    let is_first_time = !db_path.exists();
+
+    // If this is first time and confirmation is required
+    if is_first_time && !args.skip_confirmation && !args.confirmed {
+        // Interactive prompt for confirmation
+        print!("Re-enter admin key: ");
+        std::io::stdout().flush().unwrap();
+
+        let mut confirmation = String::new();
+        std::io::stdin().read_line(&mut confirmation).map_err(|e| {
+            WaCustomError::ConfigError(format!("Failed to read confirmation: {}", e))
+        })?;
+
+        // Remove trailing newline
+        confirmation = confirmation.trim().to_string();
+
+        if confirmation != args.admin_key {
+            return Err(WaCustomError::ConfigError(
+                "Admin key and confirmation do not match".to_string(),
+            ));
+        }
+
+        println!("Admin key confirmed successfully.");
+    }
+
+    // Create a modified args with confirmed flag set
+    let mut confirmed_args = args.clone();
+    confirmed_args.confirmed = true;
+
+    // Ensure parent directories exist first if needed
+    if let Some(parent) = db_path.parent() {
+        create_dir_all(parent).map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+    }
+
+    // Ensure the database directory exists
     create_dir_all(&db_path).map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
     // Initialize the environment
     let env = Environment::new()
@@ -1337,22 +1093,51 @@ pub fn get_app_env(config: &Config, args: CosdataArgs) -> Result<Arc<AppEnv>, Wa
 
     let env_arc = Arc::new(env);
 
-    let admin_key = get_admin_key(env_arc.clone(), args)
+    let admin_key = get_admin_key(env_arc.clone(), confirmed_args)
         .map_err(|err| WaCustomError::DatabaseError(err.to_string()))?;
 
-    let collections_map = CollectionsMap::load(env_arc.clone(), config)
-        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+    // Add more resilient error handling for collections_map loading
+    let collections_map = match CollectionsMap::load(env_arc.clone(), config) {
+        Ok(map) => map,
+        Err(_e) => {
+            //println!("Warning: Failed to load collections map: {}", e);
+            //println!("Creating a new collections map...");
+            // Use the correct function signature for CollectionsMap::new
+            match CollectionsMap::new(env_arc.clone()) {
+                Ok(empty_map) => empty_map,
+                Err(err) => {
+                    return Err(WaCustomError::DatabaseError(format!(
+                        "Failed to create empty collections map: {}",
+                        err
+                    )));
+                }
+            }
+        }
+    };
 
-    let users_map = UsersMap::new(env_arc.clone())
-        .map_err(|err| WaCustomError::DatabaseError(err.to_string()))?;
+    let users_map = match UsersMap::new(env_arc.clone()) {
+        Ok(map) => map,
+        Err(err) => {
+            println!("Warning: Failed to load users map: {}", err);
+            return Err(WaCustomError::DatabaseError(err.to_string()));
+        }
+    };
 
-    // Fake user, for testing APIs
+    // Use the admin key as the password instead of hardcoded "admin"
     let username = "admin".to_string();
-    let password = "admin";
-    let password_hash = DoubleSHA256Hash::from_str(password);
-    users_map
-        .add_user(username, password_hash)
-        .map_err(|err| WaCustomError::DatabaseError(err.to_string()))?;
+    let password = args.admin_key.clone();
+    let password_hash = DoubleSHA256Hash::from_str(&password).unwrap();
+
+    // Don't fail if user already exists
+    match users_map.add_user(username, password_hash) {
+        Ok(_) => {}
+        Err(err) => {
+            println!(
+                "Note: Could not add admin user (may already exist): {}",
+                err
+            );
+        }
+    };
 
     Ok(Arc::new(AppEnv {
         collections_map,
@@ -1363,82 +1148,7 @@ pub fn get_app_env(config: &Config, args: CosdataArgs) -> Result<Arc<AppEnv>, Wa
     }))
 }
 
-#[derive(Clone)]
-pub struct STM<T: 'static> {
-    pub arcshift: ArcShift<T>,
-    max_retries: usize,
-    strict: bool,
-}
-
-fn backoff(iteration: usize) {
-    let spins = 1u64 << iteration;
-    for _ in 0..spins {
-        std::thread::yield_now();
-    }
-}
-
-impl<T> STM<T>
-where
-    T: 'static,
-{
-    pub fn new(initial_value: T, max_retries: usize, strict: bool) -> Self {
-        Self {
-            arcshift: ArcShift::new(initial_value),
-            max_retries,
-            strict,
-        }
-    }
-
-    pub fn get(&mut self) -> &T {
-        self.arcshift.get()
-    }
-
-    pub fn update(&mut self, new_value: T) {
-        self.arcshift.update(new_value);
-    }
-
-    /// Update the value inside the ArcShift using a transactional update function.
-    ///
-    /// Internally it uses [ArcShift::rcu] and performs a fixed amount of retries
-    /// before giving up and returning an error.
-    ///
-    /// TODO: Consider making the api more ergonomic. Strict and non-strict
-    /// failure can be made into separate error types so that the caller
-    /// does not need to check the boolean value to figure out if the
-    /// update succeeded or not.
-    pub fn transactional_update<F>(&mut self, mut update_fn: F) -> Result<bool, WaCustomError>
-    where
-        F: FnMut(&T) -> T,
-    {
-        let mut updated = false;
-        let mut tries = 0;
-
-        while !updated {
-            // TODO: consider using rcu_maybe to avoid unnecessary updates
-            // that will require changing update check semantics
-            updated = self.arcshift.rcu(|t| update_fn(t));
-
-            if !updated {
-                if tries >= self.max_retries {
-                    if !self.strict {
-                        return Ok(false);
-                    }
-
-                    return Err(WaCustomError::LockError(
-                        "Unable to update data inside ArcShift".to_string(),
-                    ));
-                }
-
-                // Apply backoff before the next retry attempt
-                backoff(tries);
-                tries += 1;
-            }
-        }
-
-        Ok(updated)
-    }
-}
-
+#[allow(unused)]
 #[derive(Debug, Clone)]
 pub struct SparseVector {
     pub vector_id: u32,
@@ -1446,6 +1156,7 @@ pub struct SparseVector {
 }
 
 impl SparseVector {
+    #[allow(unused)]
     pub fn new(vector_id: u32, entries: Vec<(u32, f32)>) -> Self {
         Self { vector_id, entries }
     }
@@ -1465,12 +1176,43 @@ pub enum SparseQueryVectorDimensionType {
 // using a cuckoo filter.
 #[derive(Debug, Clone)]
 pub struct SparseQueryVector {
-    pub vector_id: u32,
     pub entries: Vec<(u32, SparseQueryVectorDimensionType, f32)>,
 }
 
 impl SparseQueryVector {
-    pub fn new(vector_id: u32, entries: Vec<(u32, SparseQueryVectorDimensionType, f32)>) -> Self {
-        Self { vector_id, entries }
+    pub fn new(entries: Vec<(u32, SparseQueryVectorDimensionType, f32)>) -> Self {
+        Self { entries }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::distance::cosine::CosineSimilarity;
+
+    use super::MetricResult;
+
+    #[test]
+    fn test_metric_result_ordering() {
+        let mut metric_results = vec![
+            MetricResult::CosineSimilarity(CosineSimilarity(6.0)),
+            MetricResult::CosineSimilarity(CosineSimilarity(5.0)),
+            MetricResult::CosineSimilarity(CosineSimilarity(4.0)),
+            MetricResult::CosineSimilarity(CosineSimilarity(3.0)),
+            MetricResult::CosineSimilarity(CosineSimilarity(2.0)),
+            MetricResult::CosineSimilarity(CosineSimilarity(1.0)),
+        ];
+
+        let correctly_ordered_metric_results = vec![
+            MetricResult::CosineSimilarity(CosineSimilarity(1.0)),
+            MetricResult::CosineSimilarity(CosineSimilarity(2.0)),
+            MetricResult::CosineSimilarity(CosineSimilarity(3.0)),
+            MetricResult::CosineSimilarity(CosineSimilarity(4.0)),
+            MetricResult::CosineSimilarity(CosineSimilarity(5.0)),
+            MetricResult::CosineSimilarity(CosineSimilarity(6.0)),
+        ];
+
+        metric_results.sort();
+
+        assert_eq!(metric_results, correctly_ordered_metric_results);
     }
 }

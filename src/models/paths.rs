@@ -1,7 +1,4 @@
 use std::path::PathBuf;
-use std::{fs, hash::Hasher, path::Path, sync::Arc};
-
-use std::fs::create_dir_all;
 
 pub fn get_data_path() -> PathBuf {
     use std::env;

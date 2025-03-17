@@ -21,6 +21,7 @@ concurrency:
   cancel-in-progress: "${{ github.ref_name != 'main' }}"
 env:
   CARGO_INCREMENTAL: 0
+  ADMIN_PASSWORD: "test_admin_key"
 jobs:
   check:
     name: Check
@@ -105,7 +106,7 @@ jobs:
       - name: Build and start server with grpc-server feature
         run: |
           cargo build --features grpc-server
-          cargo run --features grpc-server &
+          cargo run --features grpc-server -- --admin-key $ADMIN_PASSWORD --skip-confirmation &
           sleep 5  # Wait for server to start
 
       - name: Run Python gRPC tests

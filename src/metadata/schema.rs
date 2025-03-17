@@ -90,7 +90,7 @@ impl MetadataField {
     pub fn value_id(&self, value: &FieldValue) -> Result<u16, Error> {
         self.value_index
             .get(value)
-            .map(|v| *v)
+            .copied()
             .ok_or(Error::InvalidFieldValue(format!(
                 "Invalid value {:?} for field {}",
                 value, self.name
@@ -268,7 +268,7 @@ impl MetadataSchema {
         self.fields
             .iter()
             .find(|field| field.name == name)
-            .ok_or(Error::InvalidField(format!("{name}")))
+            .ok_or(Error::InvalidField(name.to_string()))
     }
 }
 
@@ -361,19 +361,19 @@ mod tests {
             Err(Error::InvalidFieldValues(msg)) => {
                 assert_eq!("Field values must be homogeneous in type", msg)
             }
-            _ => assert!(false),
+            _ => panic!(),
         }
 
-        let values: HashSet<FieldValue> = (1..2000).map(|x| FieldValue::Int(x)).collect();
+        let values: HashSet<FieldValue> = (1..2000).map(FieldValue::Int).collect();
         match MetadataField::new("myfield".to_owned(), values) {
             Err(Error::InvalidFieldCardinality(msg)) => assert_eq!("Field = myfield", msg),
-            _ => assert!(false),
+            _ => panic!(),
         }
     }
 
     #[test]
     fn test_metadata_schema_new_valid() {
-        let age_values: HashSet<FieldValue> = (1..=10).map(|x| FieldValue::Int(x)).collect();
+        let age_values: HashSet<FieldValue> = (1..=10).map(FieldValue::Int).collect();
         let age = MetadataField::new("age".to_owned(), age_values).unwrap();
         let group_values: HashSet<FieldValue> = vec!["a", "b", "c"]
             .into_iter()
@@ -381,18 +381,8 @@ mod tests {
             .collect();
         let group = MetadataField::new("group".to_owned(), group_values).unwrap();
         let conditions = vec![
-            SupportedCondition::And(
-                vec!["age", "group"]
-                    .into_iter()
-                    .map(|s| String::from(s))
-                    .collect(),
-            ),
-            SupportedCondition::Or(
-                vec!["age", "group"]
-                    .into_iter()
-                    .map(|s| String::from(s))
-                    .collect(),
-            ),
+            SupportedCondition::And(vec!["age", "group"].into_iter().map(String::from).collect()),
+            SupportedCondition::Or(vec!["age", "group"].into_iter().map(String::from).collect()),
         ];
         let schema = MetadataSchema::new(vec![age, group], conditions);
         assert!(schema.is_ok());
@@ -400,17 +390,14 @@ mod tests {
 
     #[test]
     fn test_metadata_schema_new_invalid() {
-        let age_values: HashSet<FieldValue> = (1..=10).map(|x| FieldValue::Int(x)).collect();
+        let age_values: HashSet<FieldValue> = (1..=10).map(FieldValue::Int).collect();
         let age = MetadataField::new("age".to_owned(), age_values).unwrap();
         let conditions = vec![SupportedCondition::And(
-            vec!["age", "group"]
-                .into_iter()
-                .map(|s| String::from(s))
-                .collect(),
+            vec!["age", "group"].into_iter().map(String::from).collect(),
         )];
         match MetadataSchema::new(vec![age], conditions) {
-            Err(Error::InvalidMetadataSchema) => assert!(true),
-            _ => assert!(false),
+            Err(Error::InvalidMetadataSchema) => {}
+            _ => panic!(),
         }
     }
 
@@ -525,7 +512,7 @@ mod tests {
 
     #[test]
     fn test_weighted_dimensions() {
-        let age_values: HashSet<FieldValue> = (1..=10).map(|x| FieldValue::Int(x)).collect();
+        let age_values: HashSet<FieldValue> = (1..=10).map(FieldValue::Int).collect();
         let age = MetadataField::new("age".to_owned(), age_values).unwrap();
 
         let group_values: HashSet<FieldValue> = vec!["a", "b", "c"]
@@ -619,7 +606,7 @@ mod tests {
 
     #[test]
     fn test_weighted_dimensions_invalid() {
-        let age_values: HashSet<FieldValue> = (1..=10).map(|x| FieldValue::Int(x)).collect();
+        let age_values: HashSet<FieldValue> = (1..=10).map(FieldValue::Int).collect();
         let age = MetadataField::new("age".to_owned(), age_values).unwrap();
         let group_values: HashSet<FieldValue> = vec!["a", "b", "c"]
             .into_iter()
@@ -634,8 +621,8 @@ mod tests {
         fields.insert("age".to_owned(), FieldValue::Int(100));
         fields.insert("group".to_owned(), FieldValue::String("c".to_owned()));
         match schema.weighted_dimensions(&fields, 1024) {
-            Err(Error::InvalidFieldValue(_)) => assert!(true),
-            _ => assert!(false),
+            Err(Error::InvalidFieldValue(_)) => {}
+            _ => panic!(),
         }
     }
 }

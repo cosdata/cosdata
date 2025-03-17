@@ -6,7 +6,7 @@ use super::FieldValue;
 
 pub struct FieldValueVisitor;
 
-impl<'de> Visitor<'de> for FieldValueVisitor {
+impl Visitor<'_> for FieldValueVisitor {
     type Value = FieldValue;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {

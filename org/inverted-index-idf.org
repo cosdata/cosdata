@@ -1,0 +1,298 @@
+* Repurposing Inverted Index for TF-IDF and BM25 Logic
+
+** Overview
+This document describes how to adapt the existing inverted index implementation to efficiently support TF-IDF and BM25 scoring with large vocabulary sizes. It addresses the challenge of supporting up to 2^32 possible dimensions from hash functions while maintaining efficient storage and lookup.
+
+** Key Modifications for BM25 Support
+
+*** Type Definitions
+#+BEGIN_SRC rust
+// Term quotient (upper 16 bits of the hash)
+pub type TermQuotient = u16;
+
+// Quantized term frequency value
+pub type QuantizedFrequency = u8;
+
+// Collection of document IDs with their term frequencies
+pub type DocumentList = VersionedPagepool<PAGE_SIZE>;
+
+// Inner map from quantized frequencies to documents
+pub type TermFrequencyMap = TSHashTable<QuantizedFrequency, DocumentList>;
+
+// Outer map from term quotients to frequency maps
+pub type QuotientMap = TSHashTable<TermQuotient, TermFrequencyMap>;
+
+// Map for storing document frequencies
+pub type DocumentFrequencyMap = TSHashTable<TermQuotient, AtomicU64>;
+#+END_SRC
+
+*** Dimension Mapping Strategy
+To handle potentially 2^32 dimensions (from the hash function) in a more manageable structure:
+
+- The internal tree will be fixed at 2^16 (65,536) dimensions
+- For any hashed dimension (dim_hash):
+  - Storage dimension = dim_hash % 65536 (determines location in tree)
+  - Quotient = dim_hash / 65536 (distinguishes terms that map to same location)
+
+*** Modified InvertedIndexNodeData Structure
+#+BEGIN_SRC rust
+pub struct InvertedIndexNodeData {
+    // Map from term quotients to term frequency maps
+    pub map: QuotientMap,
+    
+    // Maximum quantized value based on quantization bits
+    pub max_key: QuantizedFrequency,
+    
+    // Global document count for IDF calculation
+    pub document_count: AtomicU64,
+    
+    // Document frequency for each term (quotient)
+    pub document_frequencies: DocumentFrequencyMap,
+}
+
+impl InvertedIndexNodeData {
+    pub fn new(quantization_bits: u8) -> Self {
+        Self {
+            map: QuotientMap::new(16),
+            max_key: ((1u32 << quantization_bits) - 1) as u8,
+            document_count: AtomicU64::new(0),
+            document_frequencies: DocumentFrequencyMap::new(16),
+        }
+    }
+    
+    // Get IDF score for a term (represented by quotient)
+    pub fn get_idf(&self, quotient: TermQuotient) -> f32 {
+        let doc_count = self.document_count.load(Ordering::Relaxed) as f32;
+        let doc_freq = self.document_frequencies.get(&quotient)
+            .map(|freq| freq.load(Ordering::Relaxed) as f32)
+            .unwrap_or(0.5); // Default to 0.5 if term not found
+            
+        // BM25 probabilistic IDF formula
+        ((doc_count - doc_freq + 0.5) / (doc_freq + 0.5)).ln() + 1.0
+    }
+}
+#+END_SRC
+
+*** Modified Insertion Logic
+#+BEGIN_SRC rust
+// Insert value into the modified structure
+pub fn insert(
+    &self,
+    hash_dim: u32,
+    value: f32,
+    vector_id: u32,
+    document_id: u32,
+    cache: &InvertedIndexCache,
+    version: Hash,
+    values_upper_bound: f32,
+) -> Result<(), BufIoError> {
+    // Split the hash dimension
+    let storage_dim = hash_dim % 65536;
+    let quotient = (hash_dim / 65536) as TermQuotient;
+    
+    // Find the node for the storage dimension
+    let path = calculate_path(storage_dim, self.root.dim_index);
+    let node = self.root.find_or_create_node(&path, version, /* ... */);
+    
+    // Get node data
+    let node_data = unsafe { &*node.data }.try_get_data(cache, node.dim_index)?;
+    
+    // Quantize the term frequency value
+    let quantized_value = node.quantize(value, values_upper_bound);
+    
+    // Check if this is first occurrence of term in document
+    let is_new_term_for_document = !node_data.document_has_term(document_id, quotient);
+    
+    // Get or create inner map for this quotient
+    node_data.map.modify_or_insert(
+        quotient,
+        |inner_map| {
+            // Update or insert quantized value in inner map
+            inner_map.modify_or_insert(
+                quantized_value,
+                |vector_list| {
+                    vector_list.push(version, vector_id);
+                },
+                || {
+                    let mut pool = DocumentList::new(version);
+                    pool.push(version, vector_id);
+                    pool
+                },
+            );
+        },
+        || {
+            // Create new inner map if quotient not found
+            let mut inner_map = TermFrequencyMap::new(8);
+            let mut pool = DocumentList::new(version);
+            pool.push(version, vector_id);
+            inner_map.insert(quantized_value, pool);
+            inner_map
+        },
+    );
+    
+    // Update document frequency if this is first occurrence of term in document
+    if is_new_term_for_document {
+        node_data.document_frequencies.modify_or_insert(
+            quotient,
+            |freq| { freq.fetch_add(1, Ordering::Relaxed); },
+            || AtomicU64::new(1),
+        );
+    }
+    
+    // Mark node as dirty
+    node.is_dirty.store(true, Ordering::Release);
+    Ok(())
+}
+#+END_SRC
+
+** Visual Representation of Nested Structure
+
+#+BEGIN_SRC
+Inverted Index Tree (65,536 dimensions)
+│
+├── dim_index: N (storage_dim = hash % 65536)
+│   │
+│   └── NodeData
+│       │
+│       ├── document_count: 10,000
+│       │
+│       ├── document_frequencies (DocumentFrequencyMap)
+│       │   ├── quotient 0: 500 docs
+│       │   ├── quotient 1: 1,200 docs
+│       │   ├── quotient 2: 86 docs 
+│       │   └── quotient M: ... docs
+│       │
+│       └── map (QuotientMap)
+│           │
+│           ├── quotient 0 (hash_dim = N + 0*65536)
+│           │   │ • IDF = log((10000-500+0.5)/(500+0.5)+1) = 3.04
+│           │   │
+│           │   └── TermFrequencyMap
+│           │       ├── quant_val 0: [vector_ids: 42, 101, 305]
+│           │       ├── quant_val 3: [vector_ids: 7, 19]
+│           │       └── quant_val 7: [vector_ids: 23, 89]
+│           │
+│           ├── quotient 1 (hash_dim = N + 1*65536)
+│           │   │ • IDF = log((10000-1200+0.5)/(1200+0.5)+1) = 2.13
+│           │   │
+│           │   └── TermFrequencyMap
+│           │       ├── quant_val 2: [vector_ids: 55, 89]
+│           │       └── quant_val 5: [vector_ids: 13, 21, 34]
+│           │
+│           └── quotient 2 (hash_dim = N + 2*65536)
+│               │ • IDF = log((10000-86+0.5)/(86+0.5)+1) = 4.76
+│               │
+│               └── TermFrequencyMap
+│                   ├── quant_val 1: [vector_ids: 42, 377]
+│                   └── quant_val 3: [vector_ids: 21, 34, 55]
+#+END_SRC
+
+The structure supports:
+1. Finding terms with the same hash % 65536 in the same node
+2. Distinguishing terms with different quotients in separate inner maps
+3. Storing document frequencies for IDF calculation
+4. Computing IDF on demand using BM25 formula
+
+** TF-IDF/BM25 Query Processing
+
+*** Search Process
+#+BEGIN_SRC rust
+// Pseudocode for BM25 search
+pub fn search_bm25(
+    &self,
+    query_terms: &[(u32, f32)], // (term_hash, term_freq) pairs
+    k1: f32,                     // BM25 parameter, typically 1.2-2.0
+    b: f32,                      // BM25 parameter, typically 0.75
+    top_k: usize,
+) -> Vec<(u32, f32)> {
+    let mut results_map: HashMap<u32, f32> = HashMap::new();
+    let avg_doc_len = self.get_avg_document_length();
+    
+    for (term_hash, query_tf) in query_terms {
+        // Split the hash dimension
+        let storage_dim = term_hash % 65536;
+        let quotient = (term_hash / 65536) as TermQuotient;
+        
+        // Find node for this storage dimension
+        if let Some(node) = self.find_node(storage_dim) {
+            // Get node data
+            if let Ok(node_data) = unsafe { &*node.data }.try_get_data(&self.cache, node.dim_index) {
+                // Get IDF for this term
+                let idf = node_data.get_idf(quotient);
+                
+                // Process documents containing this term
+                if let Some(inner_map) = node_data.map.get(&quotient) {
+                    for quantized_value in 0..=node.max_key {
+                        if let Some(vector_ids) = inner_map.get(&quantized_value) {
+                            // For each document containing this term
+                            for (doc_id, doc_info) in vector_ids.iter() {
+                                // Get document length
+                                let doc_len = self.get_document_length(doc_id);
+                                
+                                // Calculate BM25 term weight
+                                let term_freq = (quantized_value as f32 / node.max_key as f32) * 
+                                               doc_info.max_count as f32;
+                                
+                                let numerator = term_freq * (k1 + 1.0);
+                                let denominator = term_freq + k1 * (1.0 - b + b * (doc_len / avg_doc_len));
+                                let bm25_weight = idf * (numerator / denominator);
+                                
+                                // Accumulate score
+                                *results_map.entry(doc_id).or_insert(0.0) += bm25_weight;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Return top-k results
+    results_map
+        .into_iter()
+        .sorted_by(|(_, score1), (_, score2)| score2.partial_cmp(score1).unwrap())
+        .take(top_k)
+        .collect()
+}
+#+END_SRC
+
+*** Optimization Strategies
+- For high-value query terms (common in BM25):
+  - Process terms with high IDF first
+  - Use early termination for terms with low IDF
+- Apply dimension mapping to both indexed documents and queries
+- Cache IDF values for frequently used terms
+- Use the fixed sets for fast document lookup
+
+** Key Benefits
+
+*** Efficient Storage
+- Reduces tree size by limiting dimensions to 65,536
+- Still supports full 32-bit hash space through quotient mapping
+
+*** Fast IDF Calculation
+- Document frequencies stored with terms
+- IDF calculated on demand using BM25 formula
+- Supports dynamic updates as new documents are added
+
+*** Memory Efficiency
+- Hierarchical structure reduces redundancy
+- Lazy loading minimizes memory footprint
+- Quantization reduces storage requirements
+
+** Adapting Existing CodeBase
+
+*** Required Changes
+1. Modify InvertedIndexNodeData to include nested TSHashTable structure
+2. Update insert/search methods to handle dimension mapping
+3. Add document frequency tracking for IDF calculation
+4. Implement BM25 scoring formula
+
+*** Current vs. New Insert Path
+- Current: hash → tree dimension → quantized value → vector IDs
+- New: hash → (tree dimension + quotient) → quantized value → vector IDs
+
+** Conclusion
+This adaptation enables the inverted index to efficiently support TF-IDF and BM25 scoring while handling large vocabulary sizes. The dimension mapping strategy balances the trade-off between tree depth and storage efficiency, making it suitable for applications like text search and document retrieval.
+
+The nested structure allows efficient storage of term frequencies while maintaining the ability to calculate accurate IDF scores. This approach maintains the benefits of the original design (thread safety, versioning, persistence) while adding specific capabilities for text search applications.

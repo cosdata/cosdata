@@ -14,7 +14,7 @@ use tonic_reflection::server::{ServerReflection, ServerReflectionServer};
 fn reflection_service() -> ServerReflectionServer<impl ServerReflection> {
     tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(super::proto::FILE_DESCRIPTOR_SET)
-        .build()
+        .build_v1()
         .unwrap()
 }
 

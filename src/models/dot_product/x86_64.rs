@@ -1,3 +1,5 @@
+#![allow(clippy::missing_safety_doc)]
+
 use std::arch::x86_64::*;
 
 #[allow(dead_code)]
@@ -664,6 +666,10 @@ mod tests {
         _mm256_loadu_si256(v.as_ptr() as *const __m256i)
     }
 
+    fn scalar_combinations(data: &[u8]) -> u64 {
+        data.iter().map(|&byte| byte.count_ones() as u64).sum()
+    }
+
     #[test]
     fn test_count_ones_simple_cases() {
         unsafe {
@@ -808,53 +814,4 @@ mod tests {
             );
         }
     }
-}
-
-#[allow(dead_code)]
-fn scalar_combinations(data: &[u8]) -> u64 {
-    data.iter().map(|&byte| byte.count_ones() as u64).sum()
-}
-
-#[allow(dead_code)]
-fn generate_test_vectors(size: usize, pattern: u32) -> (Vec<Vec<u32>>, Vec<Vec<u32>>) {
-    let lsb = vec![pattern; size];
-    let msb = vec![pattern; size];
-    (vec![lsb.clone(), msb.clone()], vec![lsb, msb])
-}
-
-#[allow(dead_code)]
-fn count_combinations_scalar(a_vec: &[Vec<u8>], b_vec: &[Vec<u8>]) -> [u64; 16] {
-    let mut counts = [0u64; 16];
-
-    // Ensure vectors are not empty and have the same length
-    assert!(a_vec.len() == 2 && b_vec.len() == 2);
-    let len = a_vec[0].len();
-    assert!(len == a_vec[1].len() && len == b_vec[0].len() && len == b_vec[1].len());
-
-    // Process each element in the vectors
-    for i in 0..len {
-        // Process each bit position in the u8 values
-        for bit_pos in 0..8 {
-            // Process each bit from 0 to 7
-            let bit_mask = 1 << bit_pos;
-
-            // Extract bits for this position
-            let a_lsb = (a_vec[0][i] & bit_mask) >> bit_pos;
-            let a_msb = ((a_vec[1][i] & bit_mask) >> bit_pos) << 1;
-            let b_lsb = ((b_vec[0][i] & bit_mask) >> bit_pos) << 2;
-            let b_msb = ((b_vec[1][i] & bit_mask) >> bit_pos) << 3;
-
-            // Compute the 4-bit index
-            let index = (a_msb | a_lsb | b_lsb | b_msb) as usize;
-
-            // Ensure the index is within bounds
-            if index < 16 {
-                counts[index] += 1;
-            } else {
-                eprintln!("Index out of bounds: {}", index);
-            }
-        }
-    }
-
-    counts
 }

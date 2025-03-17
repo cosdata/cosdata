@@ -1,17 +1,15 @@
-use crate::{
-    models::{
-        buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
-        cache_loader::InvertedIndexCache,
-        fixedset::VersionedInvertedFixedSetIndex,
-        prob_lazy_load::lazy_item::{ProbLazyItem, ProbLazyItemState, ReadyState},
-        types::FileOffset,
-    },
-    storage::inverted_index_sparse_ann_basic::InvertedIndexSparseAnnNodeBasicTSHashmapData,
+use crate::models::{
+    buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
+    cache_loader::InvertedIndexCache,
+    fixedset::VersionedInvertedFixedSetIndex,
+    inverted_index::InvertedIndexNodeData,
+    prob_lazy_load::lazy_item::{ProbLazyItem, ProbLazyItemState, ReadyState},
+    types::FileOffset,
 };
 
 use super::InvertedIndexSerialize;
 
-impl InvertedIndexSerialize for *mut ProbLazyItem<InvertedIndexSparseAnnNodeBasicTSHashmapData> {
+impl InvertedIndexSerialize for *mut ProbLazyItem<InvertedIndexNodeData> {
     fn serialize(
         &self,
         dim_bufman: &BufferManager,
@@ -22,7 +20,7 @@ impl InvertedIndexSerialize for *mut ProbLazyItem<InvertedIndexSparseAnnNodeBasi
     ) -> Result<u32, BufIoError> {
         let lazy_item = unsafe { &**self };
         match lazy_item.unsafe_get_state() {
-            ProbLazyItemState::Pending(file_index) => Ok(file_index.get_offset().unwrap().0),
+            ProbLazyItemState::Pending(file_index) => Ok(file_index.offset.0),
             ProbLazyItemState::Ready(ReadyState {
                 data, file_offset, ..
             }) => {
@@ -62,7 +60,7 @@ impl InvertedIndexSerialize for *mut ProbLazyItem<VersionedInvertedFixedSetIndex
     ) -> Result<u32, BufIoError> {
         let lazy_item = unsafe { &**self };
         match lazy_item.unsafe_get_state() {
-            ProbLazyItemState::Pending(file_index) => Ok(file_index.get_offset().unwrap().0),
+            ProbLazyItemState::Pending(file_index) => Ok(file_index.offset.0),
             ProbLazyItemState::Ready(ReadyState {
                 data, file_offset, ..
             }) => {

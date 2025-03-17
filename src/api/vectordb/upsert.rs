@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 use actix_web::{web, HttpResponse};
 
 use crate::{
-    api_service::run_upload,
+    api_service::run_upload_dense_vectors,
     app_context::AppContext,
     models::rpc::{RPCResponseBody, UpsertVectors},
 };
@@ -14,7 +14,11 @@ pub(crate) async fn upsert(
     ctx: web::Data<AppContext>,
 ) -> HttpResponse {
     // Try to get the vector store from the environment
-    let collection = match ctx.ain_env.collections_map.get(&body.vector_db_name) {
+    let hnsw_index = match ctx
+        .ain_env
+        .collections_map
+        .get_hnsw_index(&body.vector_db_name)
+    {
         Some(store) => store,
         None => {
             // Vector store not found, return an error response
@@ -23,7 +27,7 @@ pub(crate) async fn upsert(
     }
     .clone();
 
-    if !collection
+    if !hnsw_index
         .current_open_transaction
         .load(Ordering::SeqCst)
         .is_null()
@@ -34,9 +38,9 @@ pub(crate) async fn upsert(
 
     // Call run_upload with the extracted parameters
     let res = web::block(move || {
-        run_upload(
+        run_upload_dense_vectors(
             ctx.into_inner(),
-            collection,
+            hnsw_index,
             body.vectors
                 .into_iter()
                 // @TODO(vineet): Add support for optional metadata fields

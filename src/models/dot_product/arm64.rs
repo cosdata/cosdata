@@ -1,9 +1,10 @@
 use std::arch::aarch64::*;
 
+#[allow(unused)]
 fn print_uint8x16_t(name: &str, value: uint8x16_t) {
     let mut array = [0u8; 32];
     unsafe {
-        vst1q_u8(array.as_mut_ptr() as *mut u8, value);
+        vst1q_u8(array.as_mut_ptr(), value);
     }
     print!("{} = [", name);
     for (i, &byte) in array.iter().enumerate() {

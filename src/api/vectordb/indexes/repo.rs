@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    api_service::{init_dense_index_for_collection, init_inverted_index_for_collection},
+    api_service::{init_hnsw_index_for_collection, init_inverted_index_for_collection},
     app_context::AppContext,
     models::types::{DistanceMetric, QuantizationMetric},
     quantization::StorageType,
@@ -44,7 +44,7 @@ pub(crate) async fn create_dense_index(
         };
     let DenseIndexParamsDto::Hnsw(hnsw_params_dto) = index_params;
     let hnsw_params = hnsw_params_dto.into_params(&ctx.config);
-    init_dense_index_for_collection(
+    init_hnsw_index_for_collection(
         ctx,
         &collection,
         range,
@@ -69,7 +69,7 @@ pub(crate) async fn create_sparse_index(
     sample_threshold: usize,
     early_terminate_threshold: f32,
 ) -> Result<(), IndexesError> {
-    if early_terminate_threshold < 0.0 || early_terminate_threshold > 1.0 {
+    if !(0.0..=1.0).contains(&early_terminate_threshold) {
         return Err(IndexesError::FailedToCreateIndex(
             "Invalid `early_terminate_threshold` value (must be between 0.0 and 1.0)".to_string(),
         ));

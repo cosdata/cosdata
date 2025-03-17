@@ -1,18 +1,13 @@
-use crate::{
-    models::{
-        atomic_array::AtomicArray,
-        buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
-        cache_loader::InvertedIndexCache,
-        types::FileOffset,
-    },
-    storage::inverted_index_sparse_ann_basic::InvertedIndexSparseAnnNodeBasicTSHashmap,
+use crate::models::{
+    atomic_array::AtomicArray,
+    buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
+    cache_loader::InvertedIndexCache,
+    types::FileOffset,
 };
 
 use super::InvertedIndexSerialize;
 
-impl<const N: usize> InvertedIndexSerialize
-    for AtomicArray<InvertedIndexSparseAnnNodeBasicTSHashmap, N>
-{
+impl<T: InvertedIndexSerialize, const N: usize> InvertedIndexSerialize for AtomicArray<T, N> {
     fn serialize(
         &self,
         dim_bufman: &BufferManager,

@@ -14,7 +14,11 @@ pub(crate) async fn fetch(
     ctx: web::Data<AppContext>,
 ) -> HttpResponse {
     // Try to get the vector store from the environment
-    let vec_store = match ctx.ain_env.collections_map.get(&body.vector_db_name) {
+    let hnsw_index = match ctx
+        .ain_env
+        .collections_map
+        .get_hnsw_index(&body.vector_db_name)
+    {
         Some(store) => store,
         None => {
             // Vector store not found, return an error response
@@ -23,14 +27,14 @@ pub(crate) async fn fetch(
     };
     let fvid = VectorId(body.vector_id);
 
-    let result = fetch_vector_neighbors(vec_store.clone(), fvid).await;
+    let result = fetch_vector_neighbors(hnsw_index.clone(), fvid).await;
 
     let mut xx: Vec<Option<RPCResponseBody>> = result
         .iter()
         .map(|res_item| {
             res_item.as_ref().map(|(vect, neig)| {
                 let response_data = RPCResponseBody::RespFetchNeighbors {
-                    neighbors: neig.iter().map(|(vid, x)| (vid.0, x.clone())).collect(),
+                    neighbors: neig.iter().map(|(vid, x)| (vid.0, *x)).collect(),
                     vector: DenseVector {
                         id: vect.clone(),
                         values: vec![],

@@ -1,12 +1,11 @@
 use super::common::WaCustomError;
-use super::paths::{get_config_path, get_data_path};
+use super::paths::get_data_path;
 use crate::metadata::MetadataSchema;
 use lmdb::{Database, Environment, Transaction, WriteFlags};
 use serde::{Deserialize, Serialize};
 use serde_cbor::to_vec;
 use siphasher::sip::SipHasher24;
 use std::fs::create_dir_all;
-use std::path::PathBuf;
 use std::{fs, hash::Hasher, path::Path, sync::Arc};
 
 #[derive(Deserialize, Clone, Serialize, Debug)]
@@ -70,15 +69,13 @@ impl Collection {
     pub fn get_hash(&self) -> u64 {
         let mut hasher = SipHasher24::new();
         hasher.write(self.name.as_bytes());
-        let hash = hasher.finish();
-        hash
+        hasher.finish()
     }
 
     /// computes the key used to store the collection in the database
     pub fn get_key(&self) -> [u8; 8] {
         let hash = self.get_hash();
-        let key = hash.to_le_bytes();
-        key
+        hash.to_le_bytes()
     }
 
     /// creates a path out of the collection name

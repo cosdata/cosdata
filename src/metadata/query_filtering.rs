@@ -133,7 +133,7 @@ mod tests {
 
     #[test]
     fn test_filter_encoded_dimensions() {
-        let age_values: HashSet<FieldValue> = (1..=10).map(|x| FieldValue::Int(x)).collect();
+        let age_values: HashSet<FieldValue> = (1..=10).map(FieldValue::Int).collect();
         let age = MetadataField::new("age".to_owned(), age_values).unwrap();
         let group_values: HashSet<FieldValue> = vec!["a", "b", "c"]
             .into_iter()
@@ -141,18 +141,8 @@ mod tests {
             .collect();
         let group = MetadataField::new("group".to_owned(), group_values).unwrap();
         let conditions = vec![
-            SupportedCondition::And(
-                vec!["age", "group"]
-                    .into_iter()
-                    .map(|s| String::from(s))
-                    .collect(),
-            ),
-            SupportedCondition::Or(
-                vec!["age", "group"]
-                    .into_iter()
-                    .map(|s| String::from(s))
-                    .collect(),
-            ),
+            SupportedCondition::And(vec!["age", "group"].into_iter().map(String::from).collect()),
+            SupportedCondition::Or(vec!["age", "group"].into_iter().map(String::from).collect()),
         ];
         let schema = MetadataSchema::new(vec![age, group], conditions).unwrap();
 

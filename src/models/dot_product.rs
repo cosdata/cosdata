@@ -49,8 +49,7 @@ fn dot_product_quaternary_scalar(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], res: u8) 
             let msbs = (x_msb & y_msb).count_ones();
             let mid = (mid1 ^ mid2).count_ones();
 
-            let result = (msbs << 2) + (carry << 2) + (mid << 1) + lsbs;
-            result
+            (msbs << 2) + (carry << 2) + (mid << 1) + lsbs
         })
         .sum();
 
@@ -75,11 +74,11 @@ fn dot_product_octal_scalar(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>], res: u8) -> f3
         .map(|(((&x_lsb, &x_mid), &x_msb), ((&y_lsb, &y_mid), &y_msb))| {
             let mut sum = 0u32;
             for bit in 0..8 {
-                let x = ((x_msb & (1 << bit)) >> bit) << 2
-                    | ((x_mid & (1 << bit)) >> bit) << 1
+                let x = (((x_msb & (1 << bit)) >> bit) << 2)
+                    | (((x_mid & (1 << bit)) >> bit) << 1)
                     | ((x_lsb & (1 << bit)) >> bit);
-                let y = ((y_msb & (1 << bit)) >> bit) << 2
-                    | ((y_mid & (1 << bit)) >> bit) << 1
+                let y = (((y_msb & (1 << bit)) >> bit) << 2)
+                    | (((y_mid & (1 << bit)) >> bit) << 1)
                     | ((y_lsb & (1 << bit)) >> bit);
                 sum += (x * y) as u32;
             }

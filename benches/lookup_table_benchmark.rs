@@ -3,7 +3,7 @@ use rand::Rng;
 
 fn shift_and_accumulate_u16(value: u16) -> u32 {
     let mut result: u32 = 0;
-    result += x_function(15 & (value as u32 >> 0));
+    result += x_function(15 & (value as u32));
     result += x_function(15 & (value as u32 >> 4));
     result += x_function(15 & (value as u32 >> 8));
     result += x_function(15 & (value as u32 >> 12));
