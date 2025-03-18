@@ -114,7 +114,6 @@ pub fn write_prop_metadata_to_file(
     ))
 }
 
-#[allow(unused)]
 pub fn read_prop_metadata_from_file(
     (offset, bytes_to_read): (FileOffset, BytesToRead),
     file: &mut File,

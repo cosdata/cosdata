@@ -254,7 +254,7 @@ impl ProbNode {
 
     /// See [`crate::models::serializer::dense::node`] for how its calculated
     pub fn get_serialized_size(neighbors_len: usize) -> usize {
-        neighbors_len * 19 + 121
+        neighbors_len * 19 + 129
     }
 }
 

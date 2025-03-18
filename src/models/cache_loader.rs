@@ -1,6 +1,6 @@
 use super::buffered_io::{BufIoError, BufferManager, BufferManagerFactory};
 use super::common::TSHashTable;
-use super::file_persist::read_prop_value_from_file;
+use super::file_persist::{read_prop_metadata_from_file, read_prop_value_from_file};
 use super::fixedset::VersionedInvertedFixedSetIndex;
 use super::inverted_index::InvertedIndexNodeData;
 use super::lru_cache::LRUCache;
@@ -93,6 +93,26 @@ impl HNSWIndexCache {
         let weak = Arc::downgrade(&prop);
         self.props_registry.insert(key, weak);
         Ok(prop)
+    }
+
+    /// Reads prop_metadata from the prop file
+    ///
+    /// @NOTE: Right now, every call reads from the prop file, there's
+    /// no caching implemented
+    ///
+    /// @TODO: Implement caching for prop_metadata as well
+    pub fn get_prop_metadata(
+        &self,
+        offset: FileOffset,
+        length: BytesToRead,
+    ) -> Result<Arc<NodePropMetadata>, BufIoError> {
+        let mut prop_file_guard = self.prop_file.write().unwrap();
+        let metadata = Arc::new(read_prop_metadata_from_file(
+            (offset, length),
+            &mut *prop_file_guard,
+        )?);
+        drop(prop_file_guard);
+        Ok(metadata)
     }
 
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
