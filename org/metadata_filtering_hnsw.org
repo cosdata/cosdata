@@ -237,23 +237,33 @@ CPU Requirements:
        + optional as it may be covered in (2)
 - [-] Implement metadata-aware insertion
   + [X] Modify the create collection API endpoint to accept metadata_schema in above format
-  + [ ] Include metadata fields in all "insertion" code paths
-    + Validate metadata fields based on the metadata_schema for the collection
-  + [ ] Implement the indexing pipeline for multiple phases
-  + [ ] Modify all "insertion" API endpoints to accept metadata fields
-    + Create collection
-    + Create dense index
-    + Create vector
-    + Update vector
-    + upsert
+  + [X] Implement the indexing pipeline for multiple phases
+  + [-] Modify all "insertion" API endpoints to accept metadata fields
+    + [X] Create collection =POST /collections=
+    + [ ] Create dense index =POST /collections/{collection_id}/indexes/dense=
+    + [X] Create vector =POST /collections/{collection_id}/vectors=
+    + [ ] Update vector by id =PUT /collections/{collection_id}/vectors=
+    + [ ] upsert
+    + [X] Create vector in transaction \\
+      =POST /collections/{collection_id}/transactions/{transaction_id}/vectors=
+    + [ ] Upsert vector in transaction \\
+      =POST /collections/{collection_id}/transactions/{transaction_id}/upsert=
 - [X] Implement query vector encoding core functionality as per the doc
   + Given the metadata filters and metadata_schema for the collection, extend the query vectors with +1/-1 values in the phantom dimensions.
     + We can start with individual fields and then add support for field combinations in a later phase.
-- [ ] Implement metadata-aware query processing
-  - Integrate query vector encoding core functionality
-    - Modify ~VectorANN~ and ~BatchVectorANN~ structs to include metadata filters
-    - Validation of metadata filters
-  - Modify the "search" API endpoints to add metadata filters
-    - search
-    - batch_search
+- [-] Implement metadata-aware query processing
+  - [X] Integrate query vector encoding core functionality
+  - [-] Modify the "search" API endpoints to add metadata filters
+    - [X] =GET /search=
+    - [X] =GET /batch_search=
+    - [ ] Search vector =POST /collections/{collection_id}/vectors/search=
+    - [ ] Batch search vector =POST /collections/{collection_id}/vectors/batch-search=
+    - [ ] Get vector by id =GET /collections/{collection_id}/vectors/{vector_id}=
+- [ ] Implement validation for various endpoints
+  - [ ] During collection creation
+    + Validate that the distance metric and metadata_schema are compatible (metadata filtering is only supported for cosine similarity)
+  - [ ] All insert/update vector endpoints
+    + Specified fields and their values are part of schema
+  - [ ] All query endpoints
+    + Specified fields and the conditionals are supported by the metadata schema
 - [ ] New APIs for updating the metadata_schema [not sure about the priority]
