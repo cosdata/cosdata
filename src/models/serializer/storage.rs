@@ -19,7 +19,7 @@ impl SimpleSerialize for Storage {
         match self {
             Self::UnsignedByte { mag, quant_vec } => {
                 bufman.update_u8_with_cursor(cursor, 0)?;
-                bufman.update_u32_with_cursor(cursor, *mag)?;
+                bufman.update_f32_with_cursor(cursor, *mag)?;
                 bufman.update_u32_with_cursor(cursor, quant_vec.len() as u32)?;
                 for el in quant_vec {
                     bufman.update_u8_with_cursor(cursor, *el)?;
@@ -75,7 +75,7 @@ impl SimpleSerialize for Storage {
 
         let storage = match variant_index {
             0 => {
-                let mag = bufman.read_u32_with_cursor(cursor)?;
+                let mag = bufman.read_f32_with_cursor(cursor)?;
                 let len = bufman.read_u32_with_cursor(cursor)? as usize;
                 let mut quant_vec = Vec::with_capacity(len);
 

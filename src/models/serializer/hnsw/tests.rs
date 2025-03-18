@@ -139,7 +139,7 @@ fn get_cache(
 fn create_prob_node(id: u64, prop_file: &RwLock<File>) -> ProbNode {
     let id = VectorId(id);
     let value = Arc::new(Storage::UnsignedByte {
-        mag: 10,
+        mag: 10.0,
         quant_vec: vec![1, 2, 3],
     });
     let mut prop_file_guard = prop_file.write().unwrap();
