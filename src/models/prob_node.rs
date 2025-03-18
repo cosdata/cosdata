@@ -2,7 +2,7 @@ use std::{
     ptr,
     sync::{
         atomic::{AtomicPtr, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, MutexGuard,
     },
 };
 
@@ -117,6 +117,10 @@ impl ProbNode {
         &self.prop.id
     }
 
+    pub fn lock_lowest_index(&self) -> MutexGuard<'_, (u8, MetricResult)> {
+        self.lowest_index.lock().unwrap()
+    }
+
     pub fn add_neighbor(
         &self,
         neighbor_id: u32,
@@ -126,7 +130,7 @@ impl ProbNode {
         dist_metric: DistanceMetric,
     ) -> Option<u8> {
         // First find an empty slot or the slot with lowest similarity
-        let mut lowest_idx_guard = self.lowest_index.lock().unwrap();
+        let mut lowest_idx_guard = self.lock_lowest_index();
         let (lowest_idx, lowest_sim) = *lowest_idx_guard;
 
         // If we didn't find an empty slot and new neighbor isn't better, return
@@ -148,7 +152,27 @@ impl ProbNode {
             },
         );
 
-        let ret = match result {
+        let mut new_lowest_idx = 0;
+        let mut new_lowest_sim = MetricResult::max(dist_metric);
+
+        for (idx, nbr) in self.neighbors.iter().enumerate() {
+            let nbr = unsafe { nbr.load(Ordering::Relaxed).as_ref() };
+            let Some((_, _, nbr_sim)) = nbr else {
+                new_lowest_sim = MetricResult::min(dist_metric);
+                new_lowest_idx = idx;
+                break;
+            };
+            if nbr_sim < &new_lowest_sim {
+                new_lowest_sim = *nbr_sim;
+                new_lowest_idx = idx;
+            }
+        }
+
+        *lowest_idx_guard = (new_lowest_idx as u8, new_lowest_sim);
+
+        drop(lowest_idx_guard);
+
+        match result {
             Ok(old_ptr) => {
                 // Successful update
                 unsafe {
@@ -169,30 +193,11 @@ impl ProbNode {
                 }
                 None
             }
-        };
-
-        let mut new_lowest_idx = 0;
-        let mut new_lowest_sim = MetricResult::max(dist_metric);
-
-        for (idx, nbr) in self.neighbors.iter().enumerate() {
-            let nbr = unsafe { nbr.load(Ordering::Relaxed).as_ref() };
-            let Some((_, _, nbr_sim)) = nbr else {
-                new_lowest_sim = MetricResult::min(dist_metric);
-                new_lowest_idx = idx;
-                break;
-            };
-            if nbr_sim < &new_lowest_sim {
-                new_lowest_sim = *nbr_sim;
-                new_lowest_idx = idx;
-            }
         }
-
-        *lowest_idx_guard = (new_lowest_idx as u8, new_lowest_sim);
-
-        ret
     }
 
     pub fn remove_neighbor_by_id(&self, id: u32) {
+        let _lock = self.lock_lowest_index();
         for neighbor in &self.neighbors {
             let res = neighbor.fetch_update(Ordering::Release, Ordering::Acquire, |nbr| {
                 if let Some((nbr_id, _, _)) = unsafe { nbr.as_ref() } {
@@ -214,6 +219,7 @@ impl ProbNode {
     }
 
     pub fn remove_neighbor(&self, index: u8, id: u32) {
+        let _lock = self.lock_lowest_index();
         let _ = self.neighbors[index as usize].fetch_update(
             Ordering::Release,
             Ordering::Acquire,
