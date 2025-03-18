@@ -4,7 +4,6 @@ use crate::models::{
     atomic_array::AtomicArray,
     buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
     cache_loader::InvertedIndexCache,
-    fixedset::VersionedInvertedFixedSetIndex,
     inverted_index::{InvertedIndexNode, InvertedIndexNodeData},
     prob_lazy_load::lazy_item::ProbLazyItem,
     types::FileOffset,
@@ -22,7 +21,6 @@ use super::InvertedIndexSerialize;
 //   quantization value *                            |
 //   4 bytes for pagepool offset +                   | qv * 4 + 5
 //   16 * 4 bytes for dimension offsets +            | qv * 4 + 69
-//   4 bytes of sets offset                          | qv * 4 + 73
 impl InvertedIndexSerialize for InvertedIndexNode {
     fn serialize(
         &self,
@@ -55,13 +53,6 @@ impl InvertedIndexSerialize for InvertedIndexNode {
                 data_file_parts,
                 cursor,
             )?;
-            self.fixed_sets.serialize(
-                dim_bufman,
-                data_bufmans,
-                data_file_idx,
-                data_file_parts,
-                cursor,
-            )?;
         } else if self.is_dirty.swap(false, Ordering::AcqRel) {
             dim_bufman.seek_with_cursor(cursor, self.file_offset.0 as u64 + 5)?;
             let data_file_idx = (self.dim_index % data_file_parts as u32) as u8;
@@ -73,13 +64,6 @@ impl InvertedIndexSerialize for InvertedIndexNode {
                 cursor,
             )?;
             self.children.serialize(
-                dim_bufman,
-                data_bufmans,
-                data_file_idx,
-                data_file_parts,
-                cursor,
-            )?;
-            self.fixed_sets.serialize(
                 dim_bufman,
                 data_bufmans,
                 data_file_idx,
@@ -123,14 +107,6 @@ impl InvertedIndexSerialize for InvertedIndexNode {
             data_file_parts,
             cache,
         )?;
-        let fixed_sets = <*mut ProbLazyItem<VersionedInvertedFixedSetIndex>>::deserialize(
-            dim_bufman,
-            data_bufmans,
-            FileOffset(file_offset.0 + 69 + qv * 4),
-            data_file_idx,
-            data_file_parts,
-            cache,
-        )?;
 
         Ok(Self {
             is_serialized: AtomicBool::new(true),
@@ -141,7 +117,6 @@ impl InvertedIndexSerialize for InvertedIndexNode {
             quantization_bits,
             data,
             children,
-            fixed_sets,
         })
     }
 }

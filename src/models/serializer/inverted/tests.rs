@@ -6,7 +6,6 @@ use tempfile::{tempdir, TempDir};
 use crate::models::{
     buffered_io::{BufferManager, BufferManagerFactory},
     cache_loader::InvertedIndexCache,
-    fixedset::VersionedInvertedFixedSetIndex,
     inverted_index::{InvertedIndexNode, InvertedIndexNodeData, InvertedIndexRoot},
     page::{Pagepool, VersionedPagepool},
     serializer::inverted::InvertedIndexSerialize,
@@ -81,16 +80,6 @@ fn get_random_versioned_pagepool<const LEN: usize>(
     pool
 }
 
-fn get_random_versioned_fixedset_index(
-    rng: &mut impl Rng,
-    version: Hash,
-) -> VersionedInvertedFixedSetIndex {
-    let sets = VersionedInvertedFixedSetIndex::new(6, version);
-    let count = rng.gen_range(20..50);
-    add_random_items_to_versioned_fixedset_index(rng, &sets, count, version);
-    sets
-}
-
 fn add_random_items_to_pagepool<const LEN: usize>(
     rng: &mut impl Rng,
     pool: &mut Pagepool<LEN>,
@@ -109,17 +98,6 @@ fn add_random_items_to_versioned_pagepool<const LEN: usize>(
 ) {
     for _ in 0..count {
         pool.push(version, rng.gen_range(0..u32::MAX));
-    }
-}
-
-fn add_random_items_to_versioned_fixedset_index(
-    rng: &mut impl Rng,
-    sets: &VersionedInvertedFixedSetIndex,
-    count: usize,
-    version: Hash,
-) {
-    for _ in 0..count {
-        sets.insert(version, rng.gen_range(0..64), rng.gen_range(0..u32::MAX));
     }
 }
 
@@ -415,127 +393,9 @@ fn test_inverted_index_data_incremental_serialization_with_new_entries() {
 }
 
 #[test]
-fn test_fixedset_serialization() {
-    let mut rng = rand::thread_rng();
-    let (dim_bufman, data_bufmans, cache, data_bufman, dim_cursor, data_cursor, _temp_dir) =
-        setup_test(0);
-    let sets = get_random_versioned_fixedset_index(&mut rng, 0.into());
-
-    let offset = sets
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
-        .unwrap();
-
-    data_bufman.close_cursor(dim_cursor).unwrap();
-
-    let deserialized = VersionedInvertedFixedSetIndex::deserialize(
-        &dim_bufman,
-        &data_bufmans,
-        FileOffset(offset),
-        0,
-        8,
-        &cache,
-    )
-    .unwrap();
-
-    assert_eq!(sets, deserialized);
-}
-
-#[test]
-fn test_fixedset_incremental_serialization() {
-    let mut rng = rand::thread_rng();
-    let (dim_bufman, data_bufmans, cache, data_bufman, _dim_cursor, data_cursor, _temp_dir) =
-        setup_test(0);
-    let sets = get_random_versioned_fixedset_index(&mut rng, 0.into());
-
-    let offset = sets
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
-        .unwrap();
-
-    add_random_items_to_versioned_fixedset_index(&mut rng, &sets, 20, 0.into());
-
-    data_bufman
-        .seek_with_cursor(data_cursor, offset as u64)
-        .unwrap();
-
-    let offset = sets
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
-        .unwrap();
-
-    data_bufman.close_cursor(data_cursor).unwrap();
-
-    let deserialized = VersionedInvertedFixedSetIndex::deserialize(
-        &dim_bufman,
-        &data_bufmans,
-        FileOffset(offset),
-        0,
-        8,
-        &cache,
-    )
-    .unwrap();
-
-    assert_eq!(sets, deserialized);
-}
-
-#[test]
-fn test_fixedset_incremental_serialization_with_multiple_versions() {
-    let mut rng = rand::thread_rng();
-    let (dim_bufman, data_bufmans, cache, data_bufman, _dim_cursor, data_cursor, _temp_dir) =
-        setup_test(0);
-    let sets = get_random_versioned_fixedset_index(&mut rng, 0.into());
-
-    let offset = sets
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
-        .unwrap();
-
-    add_random_items_to_versioned_fixedset_index(&mut rng, &sets, 20, 0.into());
-
-    data_bufman
-        .seek_with_cursor(data_cursor, offset as u64)
-        .unwrap();
-
-    let offset = sets
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
-        .unwrap();
-
-    add_random_items_to_versioned_fixedset_index(&mut rng, &sets, 20, 1.into());
-
-    data_bufman
-        .seek_with_cursor(data_cursor, offset as u64)
-        .unwrap();
-
-    let offset = sets
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
-        .unwrap();
-
-    add_random_items_to_versioned_fixedset_index(&mut rng, &sets, 20, 1.into());
-
-    data_bufman
-        .seek_with_cursor(data_cursor, offset as u64)
-        .unwrap();
-
-    let offset = sets
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
-        .unwrap();
-
-    data_bufman.close_cursor(data_cursor).unwrap();
-
-    let deserialized = VersionedInvertedFixedSetIndex::deserialize(
-        &dim_bufman,
-        &data_bufmans,
-        FileOffset(offset),
-        0,
-        8,
-        &cache,
-    )
-    .unwrap();
-
-    assert_eq!(sets, deserialized);
-}
-
-#[test]
 fn test_inverted_index_node_serialization() {
     let mut rng = rand::thread_rng();
-    let inverted_index_node = InvertedIndexNode::new(0, false, 6, 0.into(), FileOffset(0));
+    let inverted_index_node = InvertedIndexNode::new(0, false, 6, FileOffset(0));
     let (dim_bufman, data_bufmans, cache, _data_bufman, dim_cursor, _data_cursor, _temp_dir) =
         setup_test(0);
 
@@ -573,7 +433,7 @@ fn test_inverted_index_node_serialization() {
 #[test]
 fn test_inverted_index_node_incremental_serialization() {
     let mut rng = rand::thread_rng();
-    let inverted_index_node = InvertedIndexNode::new(0, false, 6, 0.into(), FileOffset(0));
+    let inverted_index_node = InvertedIndexNode::new(0, false, 6, FileOffset(0));
     let (dim_bufman, data_bufmans, cache, _data_bufman, dim_cursor, _data_cursor, _temp_dir) =
         setup_test(0);
 
@@ -627,7 +487,7 @@ fn test_inverted_index_node_incremental_serialization() {
 #[test]
 fn test_inverted_index_node_incremental_serialization_with_multiple_versions() {
     let mut rng = rand::thread_rng();
-    let inverted_index_node = InvertedIndexNode::new(0, false, 6, 0.into(), FileOffset(0));
+    let inverted_index_node = InvertedIndexNode::new(0, false, 6, FileOffset(0));
     let (dim_bufman, data_bufmans, cache, _data_bufman, dim_cursor, _data_cursor, _temp_dir) =
         setup_test(0);
 
@@ -714,7 +574,7 @@ fn test_inverted_index_node_incremental_serialization_with_multiple_versions() {
 fn test_inverted_index_root_serialization() {
     let temp_dir = tempdir().unwrap();
     let mut rng = rand::thread_rng();
-    let inverted_index = InvertedIndexRoot::new(temp_dir.as_ref().into(), 6, 0.into(), 8).unwrap();
+    let inverted_index = InvertedIndexRoot::new(temp_dir.as_ref().into(), 6, 8).unwrap();
 
     for _ in 0..100000 {
         inverted_index
@@ -741,7 +601,7 @@ fn test_inverted_index_root_serialization() {
 fn test_inverted_index_incremental_serialization() {
     let temp_dir = tempdir().unwrap();
     let mut rng = rand::thread_rng();
-    let inverted_index = InvertedIndexRoot::new(temp_dir.as_ref().into(), 6, 0.into(), 8).unwrap();
+    let inverted_index = InvertedIndexRoot::new(temp_dir.as_ref().into(), 6, 8).unwrap();
 
     for _ in 0..100000 {
         inverted_index
@@ -782,7 +642,7 @@ fn test_inverted_index_incremental_serialization() {
 fn test_inverted_index_incremental_serialization_with_multiple_versions() {
     let temp_dir = tempdir().unwrap();
     let mut rng = rand::thread_rng();
-    let inverted_index = InvertedIndexRoot::new(temp_dir.as_ref().into(), 6, 0.into(), 8).unwrap();
+    let inverted_index = InvertedIndexRoot::new(temp_dir.as_ref().into(), 6, 8).unwrap();
 
     for _ in 0..100000 {
         inverted_index
