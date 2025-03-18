@@ -81,8 +81,7 @@ pub fn create_inverted_index_and_query_vector(
     num_vectors: usize,
 ) -> (InvertedIndexRoot, SparseVector) {
     let tempdir = tempdir().unwrap();
-    let inverted_index =
-        InvertedIndexRoot::new(tempdir.as_ref().to_path_buf(), 6, 0.into(), 8).unwrap();
+    let inverted_index = InvertedIndexRoot::new(tempdir.as_ref().to_path_buf(), 6, 8).unwrap();
 
     let mut original_vectors: Vec<SparseVector> =
         generate_random_sparse_vectors(num_vectors, num_dimensions);
@@ -183,6 +182,7 @@ fn sparse_ann_query_tshashmap_benchmark(c: &mut Criterion) {
             b.iter(|| {
                 let _res = black_box(
                     sparse_ann_query_basic
+                        .clone()
                         .sequential_search(&inverted_index, 6, 5.0, 0.5, 100, Some(10))
                         .unwrap(),
                 );

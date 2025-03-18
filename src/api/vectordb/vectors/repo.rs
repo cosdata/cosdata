@@ -1,7 +1,11 @@
 use std::sync::{atomic::Ordering, Arc};
 
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
+
 use crate::{
-    api_service::run_upload_sparse_vectors_in_transaction,
+    api_service::{
+        ann_vector_query, batch_ann_vector_query, run_upload_sparse_vectors_in_transaction,
+    },
     distance::dotproduct::DotProductDistance,
     indexes::{
         hnsw::transaction::HNSWIndexTransaction,
@@ -28,9 +32,10 @@ use crate::{
 
 use super::{
     dtos::{
-        CreateDenseVectorDto, CreateSparseVectorDto, CreateVectorResponseDto,
-        FindSimilarDenseVectorsDto, FindSimilarSparseVectorsDto, FindSimilarVectorsResponseDto,
-        SimilarVector, UpdateVectorDto, UpdateVectorResponseDto,
+        BatchSearchDenseVectorsDto, BatchSearchSparseVectorsDto, CreateDenseVectorDto,
+        CreateSparseVectorDto, CreateVectorResponseDto, FindSimilarDenseVectorsDto,
+        FindSimilarSparseVectorsDto, FindSimilarVectorsResponseDto, SimilarVector, UpdateVectorDto,
+        UpdateVectorResponseDto,
     },
     error::VectorsError,
 };
@@ -195,6 +200,8 @@ pub(crate) async fn update_vector(
 }
 
 pub(crate) async fn find_similar_dense_vectors(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
     find_similar_vectors: FindSimilarDenseVectorsDto,
 ) -> Result<FindSimilarVectorsResponseDto, VectorsError> {
     if find_similar_vectors.vector.is_empty() {
@@ -202,10 +209,36 @@ pub(crate) async fn find_similar_dense_vectors(
             "Vector shouldn't be empty".to_string(),
         ));
     }
-    Ok(FindSimilarVectorsResponseDto::Dense(vec![SimilarVector {
-        id: find_similar_vectors.k,
-        score: find_similar_vectors.vector[0],
-    }]))
+
+    let hnsw_index = match ctx.ain_env.collections_map.get_hnsw_index(collection_id) {
+        Some(store) => store,
+        None => {
+            return Err(VectorsError::IndexNotFound);
+        }
+    };
+
+    let result = match ann_vector_query(
+        ctx,
+        hnsw_index,
+        find_similar_vectors.vector,
+        // @TODO(vineet): Add support for metadata filtering
+        None,
+        find_similar_vectors.k,
+    )
+    .await
+    {
+        Ok(results) => results,
+        Err(err) => return Err(VectorsError::FailedToFindSimilarVectors(err.to_string())),
+    };
+    Ok(FindSimilarVectorsResponseDto {
+        results: result
+            .into_iter()
+            .map(|(id, sim)| SimilarVector {
+                id,
+                score: sim.get_value(),
+            })
+            .collect(),
+    })
 }
 
 pub(crate) async fn find_similar_sparse_vectors(
@@ -222,38 +255,129 @@ pub(crate) async fn find_similar_sparse_vectors(
     // get inverted index for a collection
     let inverted_index = collections::service::get_inverted_index_by_id(ctx.clone(), collection_id)
         .await
-        .map_err(|e| VectorsError::FailedToUpdateVector(e.to_string()))?;
+        .map_err(|_| VectorsError::IndexNotFound)?;
 
-    // create a query to get similar sparse vectors
-    let sparse_vec = SparseVector {
-        vector_id: u32::MAX,
-        entries: find_similar_vectors
-            .values
-            .iter()
-            .map(|pair| (pair.0, pair.1))
-            .collect(),
-    };
-
-    let intermediate_results = SparseAnnQueryBasic::new(sparse_vec)
-        .sequential_search(
-            &inverted_index.root,
-            inverted_index.root.root.quantization_bits,
-            *inverted_index.values_upper_bound.read().unwrap(),
-            inverted_index.early_terminate_threshold,
-            ctx.config.sparse_raw_values_reranking_factor,
-            find_similar_vectors.top_k,
-        )
-        .map_err(|e| VectorsError::FailedToFindSimilarVectors(e.to_string()))?;
-
-    let results = finalize_sparse_ann_results(
+    let results = sparse_ann_vector_query(
+        ctx,
         inverted_index,
-        intermediate_results,
         &find_similar_vectors.values,
         find_similar_vectors.top_k,
     )
     .map_err(|e| VectorsError::FailedToFindSimilarVectors(e.to_string()))?;
 
-    Ok(FindSimilarVectorsResponseDto::Sparse(results))
+    Ok(FindSimilarVectorsResponseDto {
+        results: results
+            .into_iter()
+            .map(|(id, sim)| SimilarVector {
+                id,
+                score: sim.get_value(),
+            })
+            .collect(),
+    })
+}
+
+pub(crate) async fn batch_search_dense_vectors(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    batch_search_vectors: BatchSearchDenseVectorsDto,
+) -> Result<Vec<FindSimilarVectorsResponseDto>, VectorsError> {
+    let hnsw_index = ctx
+        .ain_env
+        .collections_map
+        .get_hnsw_index(collection_id)
+        .ok_or(VectorsError::IndexNotFound)?;
+
+    let results = batch_ann_vector_query(
+        ctx,
+        hnsw_index,
+        batch_search_vectors.vectors,
+        // @TODO(vineet): Add support for metadata filtering
+        None,
+        batch_search_vectors.k,
+    )
+    .await
+    .map_err(|err| VectorsError::FailedToFindSimilarVectors(err.to_string()))?;
+
+    Ok(results
+        .into_iter()
+        .map(|results| FindSimilarVectorsResponseDto {
+            results: results
+                .into_iter()
+                .map(|(id, sim)| SimilarVector {
+                    id,
+                    score: sim.get_value(),
+                })
+                .collect(),
+        })
+        .collect())
+}
+
+pub(crate) async fn batch_search_sparse_vectors(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    batch_search_vectors: BatchSearchSparseVectorsDto,
+) -> Result<Vec<FindSimilarVectorsResponseDto>, VectorsError> {
+    // get inverted index for a collection
+    let inverted_index = collections::service::get_inverted_index_by_id(ctx.clone(), collection_id)
+        .await
+        .map_err(|_| VectorsError::IndexNotFound)?;
+
+    let results = batch_sparse_ann_vector_query(
+        ctx,
+        inverted_index,
+        &batch_search_vectors.vectors,
+        batch_search_vectors.top_k,
+    )
+    .map_err(|e| VectorsError::FailedToFindSimilarVectors(e.to_string()))?;
+
+    Ok(results
+        .into_iter()
+        .map(|result| FindSimilarVectorsResponseDto {
+            results: result
+                .into_iter()
+                .map(|(id, sim)| SimilarVector {
+                    id,
+                    score: sim.get_value(),
+                })
+                .collect(),
+        })
+        .collect())
+}
+
+fn sparse_ann_vector_query(
+    ctx: Arc<AppContext>,
+    inverted_index: Arc<InvertedIndex>,
+    query: &[SparsePair],
+    top_k: Option<usize>,
+) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
+    // create a query to get similar sparse vectors
+    let sparse_vec = SparseVector {
+        vector_id: u32::MAX,
+        entries: query.iter().map(|pair| (pair.0, pair.1)).collect(),
+    };
+
+    let intermediate_results = SparseAnnQueryBasic::new(sparse_vec).sequential_search(
+        &inverted_index.root,
+        inverted_index.root.root.quantization_bits,
+        *inverted_index.values_upper_bound.read().unwrap(),
+        inverted_index.early_terminate_threshold,
+        ctx.config.sparse_raw_values_reranking_factor,
+        top_k,
+    )?;
+
+    finalize_sparse_ann_results(inverted_index, intermediate_results, query, top_k)
+}
+
+fn batch_sparse_ann_vector_query(
+    ctx: Arc<AppContext>,
+    inverted_index: Arc<InvertedIndex>,
+    queries: &[Vec<SparsePair>],
+    top_k: Option<usize>,
+) -> Result<Vec<Vec<(VectorId, MetricResult)>>, WaCustomError> {
+    queries
+        .into_par_iter()
+        .map(|query| sparse_ann_vector_query(ctx.clone(), inverted_index.clone(), query, top_k))
+        .collect()
 }
 
 fn finalize_sparse_ann_results(

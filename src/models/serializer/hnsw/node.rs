@@ -129,7 +129,10 @@ impl HNSWIndexSerialize for ProbNode {
             assert_eq!(current, start_offset + 47);
         }
 
-        neighbors.serialize(bufmans, version, cursor)?;
+        {
+            let _lock = self.lock_lowest_index();
+            neighbors.serialize(bufmans, version, cursor)?;
+        }
         self.versions.serialize(bufmans, version, cursor)?;
 
         Ok(start_offset as u32)

@@ -1,7 +1,6 @@
 use super::buffered_io::{BufIoError, BufferManager, BufferManagerFactory};
 use super::common::TSHashTable;
 use super::file_persist::{read_prop_metadata_from_file, read_prop_value_from_file};
-use super::fixedset::VersionedInvertedFixedSetIndex;
 use super::inverted_index::InvertedIndexNodeData;
 use super::lru_cache::LRUCache;
 use super::prob_lazy_load::lazy_item::{FileIndex, ProbLazyItem, ProbLazyItemState, ReadyState};
@@ -330,12 +329,10 @@ impl HNSWIndexCache {
 }
 
 pub struct InvertedIndexCache {
-    data_registry: LRUCache<u64, *mut ProbLazyItem<InvertedIndexNodeData>>,
-    sets_registry: LRUCache<u64, *mut ProbLazyItem<VersionedInvertedFixedSetIndex>>,
+    registry: LRUCache<u64, *mut ProbLazyItem<InvertedIndexNodeData>>,
     pub dim_bufman: Arc<BufferManager>,
     pub data_bufmans: Arc<BufferManagerFactory<u8>>,
     loading_data: TSHashTable<u64, Arc<Mutex<bool>>>,
-    loading_sets: TSHashTable<u64, Arc<Mutex<bool>>>,
     pub data_file_parts: u8,
 }
 
@@ -349,15 +346,12 @@ impl InvertedIndexCache {
         data_file_parts: u8,
     ) -> Self {
         let data_registry = LRUCache::with_prob_eviction(100_000_000, 0.03125);
-        let sets_registry = LRUCache::with_prob_eviction(100_000_000, 0.03125);
 
         Self {
-            data_registry,
-            sets_registry,
+            registry: data_registry,
             dim_bufman,
             data_bufmans,
             loading_data: TSHashTable::new(16),
-            loading_sets: TSHashTable::new(16),
             data_file_parts,
         }
     }
@@ -369,7 +363,7 @@ impl InvertedIndexCache {
     ) -> Result<*mut ProbLazyItem<InvertedIndexNodeData>, BufIoError> {
         let combined_index = Self::combine_index(file_offset, 0);
 
-        if let Some(item) = self.data_registry.get(&combined_index) {
+        if let Some(item) = self.registry.get(&combined_index) {
             return Ok(item);
         }
 
@@ -380,7 +374,7 @@ impl InvertedIndexCache {
 
         loop {
             // check again
-            if let Some(item) = self.data_registry.get(&combined_index) {
+            if let Some(item) = self.registry.get(&combined_index) {
                 return Ok(item);
             }
 
@@ -414,76 +408,10 @@ impl InvertedIndexCache {
 
         let item = ProbLazyItem::new_from_state(state, false);
 
-        self.data_registry.insert(combined_index, item);
+        self.registry.insert(combined_index, item);
 
         *load_complete = true;
         self.loading_data.delete(&combined_index);
-
-        Ok(item)
-    }
-
-    pub fn get_sets(
-        &self,
-        file_offset: FileOffset,
-        data_file_idx: u8,
-    ) -> Result<*mut ProbLazyItem<VersionedInvertedFixedSetIndex>, BufIoError> {
-        let combined_index = Self::combine_index(file_offset, 0);
-
-        if let Some(item) = self.sets_registry.get(&combined_index) {
-            return Ok(item);
-        }
-
-        let mut mutex = self
-            .loading_data
-            .get_or_create(combined_index, || Arc::new(Mutex::new(false)));
-        let mut load_complete = mutex.lock().unwrap();
-
-        loop {
-            // check again
-            if let Some(item) = self.sets_registry.get(&combined_index) {
-                return Ok(item);
-            }
-
-            // another thread loaded the data but its not in the registry (got evicted), retry
-            if *load_complete {
-                drop(load_complete);
-                mutex = self
-                    .loading_data
-                    .get_or_create(combined_index, || Arc::new(Mutex::new(false)));
-                load_complete = mutex.lock().unwrap();
-                continue;
-            }
-
-            break;
-        }
-
-        let dim_cursor = self.dim_bufman.open_cursor()?;
-        self.dim_bufman
-            .seek_with_cursor(dim_cursor, file_offset.0 as u64)?;
-        let data_offset = self.dim_bufman.read_u32_with_cursor(dim_cursor)?;
-        self.dim_bufman.close_cursor(dim_cursor)?;
-
-        let data = VersionedInvertedFixedSetIndex::deserialize(
-            &self.dim_bufman,
-            &self.data_bufmans,
-            FileOffset(data_offset),
-            data_file_idx,
-            self.data_file_parts,
-            self,
-        )?;
-        let state = ProbLazyItemState::Ready(ReadyState {
-            data,
-            file_offset,
-            version_id: 0.into(),
-            version_number: 0,
-        });
-
-        let item = ProbLazyItem::new_from_state(state, false);
-
-        self.sets_registry.insert(combined_index, item);
-
-        *load_complete = true;
-        self.loading_sets.delete(&combined_index);
 
         Ok(item)
     }

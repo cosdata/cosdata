@@ -63,12 +63,7 @@ impl InvertedIndex {
         early_terminate_threshold: f32,
         data_file_parts: u8,
     ) -> Result<Self, BufIoError> {
-        let root = InvertedIndexRoot::new(
-            root_path,
-            quantization_bits,
-            current_version,
-            data_file_parts,
-        )?;
+        let root = InvertedIndexRoot::new(root_path, quantization_bits, data_file_parts)?;
 
         Ok(Self {
             name,

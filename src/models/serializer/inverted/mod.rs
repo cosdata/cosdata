@@ -4,7 +4,6 @@ mod lazy_item;
 mod node;
 mod page;
 mod pagepool;
-mod versioned_fixedsets;
 mod versioned_pagepool;
 
 #[cfg(test)]

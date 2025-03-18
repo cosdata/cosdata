@@ -16,13 +16,14 @@ impl<const LEN: usize> InvertedIndexSerialize for Pagepool<LEN> {
         data_file_parts: u8,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
-        let total_items = self.inner.len();
+        let inner = self.inner.read().unwrap();
+        let total_items = inner.len();
         if total_items == 0 {
             return Ok(u32::MAX);
         }
         let bufman = data_bufmans.get(data_file_idx)?;
 
-        let start_offset = self.inner[0].serialize(
+        let start_offset = inner[0].serialize(
             dim_bufman,
             data_bufmans,
             data_file_idx,
@@ -32,7 +33,7 @@ impl<const LEN: usize> InvertedIndexSerialize for Pagepool<LEN> {
 
         let mut prev_offset = start_offset;
 
-        for item in self.inner.iter().skip(1) {
+        for item in inner.iter().skip(1) {
             let new_offset = item.serialize(
                 dim_bufman,
                 data_bufmans,
@@ -62,7 +63,7 @@ impl<const LEN: usize> InvertedIndexSerialize for Pagepool<LEN> {
         let bufman = data_bufmans.get(data_file_idx)?;
         let cursor = bufman.open_cursor()?;
 
-        let mut page_pool = Pagepool::<LEN>::default();
+        let page_pool = Pagepool::<LEN>::default();
         let mut current_page_offset = file_offset.0;
 
         loop {
@@ -76,7 +77,7 @@ impl<const LEN: usize> InvertedIndexSerialize for Pagepool<LEN> {
                 data_file_parts,
                 cache,
             )?;
-            page_pool.inner.push(page);
+            page_pool.inner.write().unwrap().push(page);
 
             if next_page_offset == u32::MAX {
                 break;

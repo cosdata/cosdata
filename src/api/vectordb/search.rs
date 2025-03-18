@@ -64,7 +64,7 @@ pub(crate) async fn batch_search(
     ctx: web::Data<AppContext>,
 ) -> HttpResponse {
     // Try to get the vector store from the environment
-    let vec_store = match ctx
+    let hnsw_index = match ctx
         .ain_env
         .collections_map
         .get_hnsw_index(&body.vector_db_name)
@@ -93,7 +93,7 @@ pub(crate) async fn batch_search(
 
     let results = match batch_ann_vector_query(
         ctx.into_inner(),
-        vec_store.clone(),
+        hnsw_index.clone(),
         body.vectors,
         metadata_filter,
         body.nn_count,

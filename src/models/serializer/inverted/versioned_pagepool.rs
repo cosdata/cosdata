@@ -81,14 +81,14 @@ impl<const LEN: usize> InvertedIndexSerialize for VersionedPagepool<LEN> {
         let pagepool_offset = bufman.read_u32_with_cursor(cursor)?;
         let next_offset = bufman.read_u32_with_cursor(cursor)?;
         bufman.close_cursor(cursor)?;
-        let pagepool = Pagepool::deserialize(
+        let pagepool = Arc::new(Pagepool::deserialize(
             dim_bufman,
             data_bufmans,
             FileOffset(pagepool_offset),
             data_file_idx,
             data_file_parts,
             cache,
-        )?;
+        )?);
         let next = if next_offset == u32::MAX {
             None
         } else {

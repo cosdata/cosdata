@@ -4,7 +4,7 @@ use crate::{app_context::AppContext, models::types::VectorId};
 
 use super::{
     dtos::{
-        CreateVectorDto, CreateVectorResponseDto, FindSimilarVectorsDto,
+        BatchSearchVectorsDto, CreateVectorDto, CreateVectorResponseDto, FindSimilarVectorsDto,
         FindSimilarVectorsResponseDto, UpdateVectorDto, UpdateVectorResponseDto,
     },
     error::VectorsError,
@@ -45,9 +45,26 @@ pub(crate) async fn find_similar_vectors(
     find_similar_vectors: FindSimilarVectorsDto,
 ) -> Result<FindSimilarVectorsResponseDto, VectorsError> {
     match find_similar_vectors {
-        FindSimilarVectorsDto::Dense(dto) => repo::find_similar_dense_vectors(dto).await,
+        FindSimilarVectorsDto::Dense(dto) => {
+            repo::find_similar_dense_vectors(ctx, collection_id, dto).await
+        }
         FindSimilarVectorsDto::Sparse(dto) => {
             repo::find_similar_sparse_vectors(ctx, collection_id, dto).await
+        }
+    }
+}
+
+pub(crate) async fn batch_search(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    batch_search_vectors: BatchSearchVectorsDto,
+) -> Result<Vec<FindSimilarVectorsResponseDto>, VectorsError> {
+    match batch_search_vectors {
+        BatchSearchVectorsDto::Dense(dto) => {
+            repo::batch_search_dense_vectors(ctx, collection_id, dto).await
+        }
+        BatchSearchVectorsDto::Sparse(dto) => {
+            repo::batch_search_sparse_vectors(ctx, collection_id, dto).await
         }
     }
 }

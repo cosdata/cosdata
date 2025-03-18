@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use crate::models::{
     buffered_io::BufIoError,
     cache_loader::{HNSWIndexCache, InvertedIndexCache},
-    fixedset::VersionedInvertedFixedSetIndex,
     inverted_index::InvertedIndexNodeData,
     prob_node::ProbNode,
     types::FileOffset,
@@ -342,25 +341,6 @@ impl ProbLazyItem<InvertedIndexNodeData> {
                 ProbLazyItemState::Pending(file_index) => {
                     let offset = file_index.offset;
                     (*(cache.get_data(offset, (dim % cache.data_file_parts as u32) as u8)?))
-                        .try_get_data(cache, dim)
-                }
-            }
-        }
-    }
-}
-
-impl ProbLazyItem<VersionedInvertedFixedSetIndex> {
-    pub fn try_get_data<'a>(
-        &self,
-        cache: &InvertedIndexCache,
-        dim: u32,
-    ) -> Result<&'a VersionedInvertedFixedSetIndex, BufIoError> {
-        unsafe {
-            match &*self.state.load(Ordering::Relaxed) {
-                ProbLazyItemState::Ready(state) => Ok(&state.data),
-                ProbLazyItemState::Pending(file_index) => {
-                    let offset = file_index.offset;
-                    (*(cache.get_sets(offset, (dim % cache.data_file_parts as u32) as u8)?))
                         .try_get_data(cache, dim)
                 }
             }
