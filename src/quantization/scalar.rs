@@ -22,7 +22,8 @@ impl Quantization for ScalarQuantization {
                             as u8
                     })
                     .collect();
-                let mag = quant_vec.iter().map(|&x| x as u32 * x as u32).sum();
+                let mag =
+                    (quant_vec.iter().map(|&x| x as u32 * x as u32).sum::<u32>() as f32).sqrt();
                 Ok(Storage::UnsignedByte { mag, quant_vec })
             }
             StorageType::SubByte(resolution) => {

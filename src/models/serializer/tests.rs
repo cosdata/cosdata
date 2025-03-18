@@ -10,7 +10,7 @@ use tempfile::TempDir;
 fn test_storage_serialization() {
     let storages = [
         Storage::UnsignedByte {
-            mag: 10,
+            mag: 10.0,
             quant_vec: vec![0, 1, 4],
         },
         Storage::SubByte {
