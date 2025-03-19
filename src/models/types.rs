@@ -83,7 +83,29 @@ pub struct Metadata {
 
 impl From<MetadataDimensions> for Metadata {
     fn from(dims: MetadataDimensions) -> Self {
-        // Euclidean norm
+        let total = dims.iter()
+            .map(|d| {
+                let x = *d as f32;
+                x * x
+            })
+            .sum::<f32>();
+        // @NOTE: As `MetadataDimensions` have high weight values, we
+        // need to handle overflow during intermediate addition when
+        // calculating the euclidean norm
+        let mag = total.min(f32::MAX).sqrt();
+        Self {
+            mag,
+            mbits: dims,
+        }
+    }
+}
+
+impl From<&QueryFilterDimensions> for Metadata {
+    fn from(dims: &QueryFilterDimensions) -> Self {
+        let dims_i32 = dims.iter().map(|d| *d as i32).collect::<Vec<i32>>();
+        // @NOTE: Unlike `MetadataDimensions`, `QueryFilterDimensions`
+        // will have -1, 0, 1 values so no need to worry about
+        // overflow during summation
         let mag = dims.iter()
             .map(|d| {
                 let x = *d as f32;
@@ -93,17 +115,8 @@ impl From<MetadataDimensions> for Metadata {
             .sqrt();
         Self {
             mag,
-            mbits: dims
+            mbits: dims_i32,
         }
-    }
-}
-
-impl From<&QueryFilterDimensions> for Metadata {
-    fn from(dims: &QueryFilterDimensions) -> Self {
-        // Convert QueryFilterDimensions to MetadataDimensions in
-        // order to reuse code
-        let dims: MetadataDimensions = dims.iter().map(|d| i32::from(*d)).collect();
-        Metadata::from(dims)
     }
 }
 

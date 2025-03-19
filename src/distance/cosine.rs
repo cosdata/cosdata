@@ -192,9 +192,12 @@ fn cosine_similarity_with_metadata(
     y_mag_vec: f32,
     y_mag_m: f32
 ) -> Result<CosineSimilarity, DistanceError> {
-    let norm_x = (x_mag_vec.powi(2) + x_mag_m.powi(2)).sqrt();
-    let norm_y = (y_mag_vec.powi(2) + y_mag_m.powi(2)).sqrt();
-    let denominator = norm_x * norm_y;
+    // @NOTE: Since norm/mag values for metadata can be large due to
+    // high weight values, we need to take care of overflow during
+    // intermediate addition
+    let norm_x = (x_mag_vec.powi(2) + x_mag_m.powi(2)).min(f32::MAX).sqrt();
+    let norm_y = (y_mag_vec.powi(2) + y_mag_m.powi(2)).min(f32::MAX).sqrt();
+    let denominator = (norm_x * norm_y).min(f32::MAX);
     if denominator == 0.0 {
         Err(DistanceError::CalculationError)
     } else {
