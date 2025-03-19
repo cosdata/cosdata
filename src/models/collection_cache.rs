@@ -9,7 +9,7 @@ use log::info;
 use crate::indexes::hnsw::HNSWIndex;
 use crate::indexes::inverted::InvertedIndex;
 use crate::models::common::WaCustomError;
-use crate::models::lru_cache::{LRUCache, EvictStrategy, ProbEviction};
+use crate::models::lru_cache::{LRUCache, EvictStrategy};
 use crate::models::types::AppEnv;
 
 #[allow(dead_code)]
@@ -30,10 +30,6 @@ impl CollectionNameKey {
         name.hash(&mut hasher);
         Self(hasher.finish())
     }
-
-    pub fn value(&self) -> u64 {
-        self.0
-    }
 }
 
 impl From<u64> for CollectionNameKey {
@@ -53,12 +49,12 @@ pub struct CollectionCacheManager {
     cache: Arc<LRUCache<CollectionNameKey, Arc<CollectionCacheEntry>>>,
     collections_path: Arc<Path>,
     name_to_key: Arc<dashmap::DashMap<String, CollectionNameKey>>,
-    key_to_name: Arc<dashmap::DashMap<u64, String>>,
     app_env: Arc<AppEnv>,
 }
 
 impl CollectionCacheManager {
 
+    #[allow(unused)]
     pub fn new(
         collections_path: Arc<Path>,
         max_collections: usize,
@@ -67,11 +63,8 @@ impl CollectionCacheManager {
     ) -> Self {
         // Create maps for name-key mapping
         let name_to_key = Arc::new(dashmap::DashMap::new());
-        let key_to_name = Arc::new(dashmap::DashMap::new());
 
-        // Create the probabilistic eviction strategy
-        let prob_f16 = half::f16::from_f32(eviction_probability);
-        let strategy = EvictStrategy::Probabilistic(ProbEviction::new(prob_f16));
+        let strategy = EvictStrategy::Immediate;
 
         // Create the LRUCache
         let cache = Arc::new(LRUCache::new(max_collections, strategy));
@@ -81,7 +74,6 @@ impl CollectionCacheManager {
             cache: cache.clone(),
             collections_path,
             name_to_key,
-            key_to_name,
             app_env,
         };
 
@@ -106,7 +98,6 @@ impl CollectionCacheManager {
             None => {
                 let new_key = CollectionNameKey::new(name);
                 self.name_to_key.insert(name.to_string(), new_key.clone());
-                self.key_to_name.insert(new_key.value(), name.to_string());
                 new_key
             }
         }
@@ -150,21 +141,8 @@ impl CollectionCacheManager {
     }
 
     pub fn unload_collection(&self, name: &str) -> Result<(), WaCustomError> {
-        // Get the key for this collection
-        let key_ref = match self.name_to_key.get(name) {
-            Some(key_ref) => key_ref.clone(),
-            None => return Err(WaCustomError::NotFound(format!("Collection '{}' not loaded", name)))
-        };
-
-        // Extract the u64 value
-        let key_u64 = key_ref.value();
-
         // Clean up mappings
         self.name_to_key.remove(name);
-        self.key_to_name.remove(&key_u64);
-
-        // We can't directly remove from the cache as there's no public remove method
-        // Instead, the collection will be evicted when needed
 
         // Log the unloading
         info!("Explicitly unloaded collection '{}'", name);
@@ -185,7 +163,6 @@ impl CollectionCacheManager {
         if self.cache.get(&key).is_none() {
             // Collection was evicted but mapping remains - clean up and load
             self.name_to_key.remove(name);
-            self.key_to_name.remove(&key.value());
             self.load_collection(name)?;
         }
 
@@ -235,7 +212,14 @@ impl CollectionCacheManager {
     // Gets a list of all currently loaded collections
     pub fn get_loaded_collections(&self) -> Vec<String> {
         self.name_to_key.iter()
-            .map(|entry| entry.key().clone())
+            .filter_map(|entry| {
+                let key = entry.value();
+                if self.cache.get(key).is_some() {
+                    Some(entry.key().clone())
+                } else {
+                    None
+                }
+            })
             .collect()
     }
 
@@ -262,14 +246,10 @@ impl CollectionCacheManager {
 
         for name in collection_names {
             if let Some(key) = self.name_to_key.get(&name) {
-                // Extract the actual u64 value
-                let key_value = key.value().0;
-
                 // Check if the collection is still in the cache
                 if self.cache.get(&key.clone()).is_none() {
                     // If not in cache, remove the mappings
                     self.name_to_key.remove(&name);
-                    self.key_to_name.remove(&key_value);
                     removed_count += 1;
                     info!("Cleaned up stale mapping for collection: {}", name);
                 }

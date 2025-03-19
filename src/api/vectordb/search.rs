@@ -1,5 +1,7 @@
 use actix_web::{web, HttpResponse};
 
+use crate::models::collection_cache::CollectionCacheExt;
+
 use crate::{
     api_service::{ann_vector_query, batch_ann_vector_query},
     app_context::AppContext,
@@ -11,6 +13,8 @@ pub(crate) async fn search(
     web::Json(body): web::Json<VectorANN>,
     ctx: web::Data<AppContext>,
 ) -> HttpResponse {
+    let _ = ctx.update_collection_for_query(&body.vector_db_name);
+
     // Try to get the vector store from the environment
     let hnsw_index = match ctx
         .ain_env
@@ -47,6 +51,8 @@ pub(crate) async fn batch_search(
     web::Json(body): web::Json<BatchVectorANN>,
     ctx: web::Data<AppContext>,
 ) -> HttpResponse {
+    let _ = ctx.update_collection_for_query(&body.vector_db_name);
+
     // Try to get the vector store from the environment
     let hnsw_index = match ctx
         .ain_env
