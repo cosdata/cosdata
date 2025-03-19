@@ -704,13 +704,13 @@ def process_vectors_batch(
 
     return vectors_inserted, current_transaction_id, vectors_in_current_transaction
 
-
 def run_matching_tests(test_vectors, vector_db_name, brute_force_results):
-    """Run matching accuracy tests"""
+    """Run matching accuracy tests and measure query latencies"""
     print("\nStarting similarity search tests...")
 
     total_recall = 0
     total_queries = 0
+    latencies = []
 
     for i, query_vec in enumerate(test_vectors):
         try:
@@ -719,9 +719,15 @@ def run_matching_tests(test_vectors, vector_db_name, brute_force_results):
                 for test_vec in brute_force_results
                 if query_vec["id"] == test_vec["query_id"]
             )
+            
+            # Measure query latency
+            query_start_time = time.time()
             idr, ann_response = ann_vector(
                 query_vec["id"], vector_db_name, query_vec["values"]
             )
+            query_end_time = time.time()
+            query_latency = (query_end_time - query_start_time) * 1000  # Convert to ms
+            latencies.append(query_latency)
 
             if (
                 "RespVectorKNN" in ann_response
@@ -729,6 +735,7 @@ def run_matching_tests(test_vectors, vector_db_name, brute_force_results):
             ):
                 query_id = test_vec["query_id"]
                 print(f"\nQuery {i + 1} (Vector ID: {query_id}):")
+                print(f"Query latency: {query_latency:.2f} ms")
 
                 server_top5 = [
                     match[0] for match in ann_response["RespVectorKNN"]["knn"][:5]
@@ -750,14 +757,31 @@ def run_matching_tests(test_vectors, vector_db_name, brute_force_results):
         except Exception as e:
             print(f"Error in query {i + 1}: {e}")
 
+    # Calculate and display latency statistics
+    if latencies:
+        latencies.sort()
+        avg_latency = sum(latencies) / len(latencies)
+        p50_latency = latencies[int(len(latencies) * 0.5)]
+        p90_latency = latencies[int(len(latencies) * 0.9)]
+        p95_latency = latencies[int(len(latencies) * 0.95)]
+        min_latency = min(latencies)
+        max_latency = max(latencies)
+        
+        print("\nLatency Statistics (ms):")
+        print(f"Average: {avg_latency:.2f}")
+        print(f"p50: {p50_latency:.2f}")
+        print(f"p90: {p90_latency:.2f}")
+        print(f"p95: {p95_latency:.2f}")
+        print(f"Min: {min_latency:.2f}")
+        print(f"Max: {max_latency:.2f}")
+
     if total_queries > 0:
         average_recall = total_recall / total_queries
         print(f"\nFinal Matching Results:")
         print(f"Average Recall@5: {average_recall:.2f}%")
     else:
         print("No valid queries completed")
-
-
+        
 def run_rps_tests(rps_test_vectors, vector_db_name, batch_size=100):
     """Run RPS (Requests Per Second) tests"""
     print(f"Using {len(rps_test_vectors)} different test vectors for RPS testing")
