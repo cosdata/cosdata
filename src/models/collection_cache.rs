@@ -9,7 +9,7 @@ use log::info;
 use crate::indexes::hnsw::HNSWIndex;
 use crate::indexes::inverted::InvertedIndex;
 use crate::models::common::WaCustomError;
-use crate::models::lru_cache::{LRUCache, EvictStrategy};
+use crate::models::lru_cache::{LRUCache, EvictStrategy, ProbEviction};
 use crate::models::types::AppEnv;
 
 #[allow(dead_code)]
@@ -64,7 +64,8 @@ impl CollectionCacheManager {
         // Create maps for name-key mapping
         let name_to_key = Arc::new(dashmap::DashMap::new());
 
-        let strategy = EvictStrategy::Immediate;
+        let prob_f16 = half::f16::from_f32(eviction_probability);
+        let strategy = EvictStrategy::Probabilistic(ProbEviction::new(prob_f16));
 
         // Create the LRUCache
         let cache = Arc::new(LRUCache::new(max_collections, strategy));
