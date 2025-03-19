@@ -12,6 +12,7 @@ pub enum CollectionsError {
     FailedToGetAppEnv,
     FailedToCreateCollection(String),
     WaCustomError(WaCustomError),
+    ServerError(String),
 }
 
 impl Display for CollectionsError {
@@ -23,6 +24,7 @@ impl Display for CollectionsError {
                 write!(f, "Failed to create collection due to {}", msg)
             }
             CollectionsError::WaCustomError(e) => write!(f, "LMDB database error: {e:?}"),
+            CollectionsError::ServerError(e) => write!(f, "Server error: {e}"),
         }
     }
 }
@@ -39,6 +41,7 @@ impl ResponseError for CollectionsError {
             CollectionsError::FailedToGetAppEnv => StatusCode::INTERNAL_SERVER_ERROR,
             CollectionsError::FailedToCreateCollection(_) => StatusCode::BAD_REQUEST,
             CollectionsError::WaCustomError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            CollectionsError::ServerError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }
