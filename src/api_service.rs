@@ -860,14 +860,13 @@ pub async fn ann_vector_query(
 
     let hnsw_params_guard = hnsw_index.hnsw_params.read().unwrap();
 
-    // @TODO(vineet): Remove unwrap
-    let coll = ctx.ain_env
-        .collections_map
-        .get_collection(&hnsw_index.name)
-        .expect("Couldn't get collection from ain_env");
-    let metadata_schema = coll.metadata_schema.as_ref().unwrap();
-
     let query_filter_dims = metadata_filter.map(|filter| {
+        // @TODO(vineet): Remove unwrap
+        let coll = ctx.ain_env
+            .collections_map
+            .get_collection(&hnsw_index.name)
+            .expect("Couldn't get collection from ain_env");
+        let metadata_schema = coll.metadata_schema.as_ref().unwrap();
         filter_encoded_dimensions(metadata_schema, &filter).unwrap()
     });
 
@@ -893,14 +892,13 @@ pub async fn batch_ann_vector_query(
     k: Option<usize>,
 ) -> Result<Vec<Vec<(VectorId, MetricResult)>>, WaCustomError> {
 
-    // @TODO(vineet): Remove unwrap
-    let coll = ctx.ain_env
-        .collections_map
-        .get_collection(&hnsw_index.name)
-        .expect("Couldn't get collection from ain_env");
-    let metadata_schema = coll.metadata_schema.as_ref().unwrap();
-
     let query_filter_dims = metadata_filter.map(|filter| {
+        // @TODO(vineet): Remove unwrap
+        let coll = ctx.ain_env
+            .collections_map
+            .get_collection(&hnsw_index.name)
+            .expect("Couldn't get collection from ain_env");
+        let metadata_schema = coll.metadata_schema.as_ref().unwrap();
         filter_encoded_dimensions(metadata_schema, &filter).unwrap()
     });
 

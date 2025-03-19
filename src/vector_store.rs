@@ -648,11 +648,11 @@ fn preprocess_embedding(
         .collections_map
         .get_collection(&hnsw_index.name)
         .expect("Couldn't get collection from ain_env");
-    // @TODO(vineet): Remove unwrap
-    let metadata_schema = coll.metadata_schema.as_ref().unwrap();
 
     match &raw_emb.raw_metadata {
         Some(metadata_fields) => {
+            // @TODO(vineet): Remove unwrap
+            let metadata_schema = coll.metadata_schema.as_ref().unwrap();
             let wdims = metadata_dimensions(metadata_schema, metadata_fields);
             let mut result = Vec::with_capacity(wdims.len());
             for (i, wdim) in wdims {
