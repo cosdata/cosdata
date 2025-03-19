@@ -11,6 +11,7 @@ use crate::models::common::WaCustomError;
 pub(crate) enum VectorsError {
     NotFound,
     FailedToGetAppEnv,
+    IndexNotFound,
     FailedToCreateVector(String),
     FailedToUpdateVector(String),
     FailedToFindSimilarVectors(String),
@@ -26,6 +27,7 @@ impl Display for VectorsError {
         match self {
             Self::NotFound => write!(f, "Vector Not Found!"),
             Self::FailedToGetAppEnv => write!(f, "Failed to get App Env!"),
+            Self::IndexNotFound => write!(f, "Index not found"),
             Self::FailedToCreateVector(msg) => {
                 write!(f, "Failed to create vector due to: {}", msg)
             }
@@ -62,6 +64,7 @@ impl ResponseError for VectorsError {
         match self {
             Self::NotFound => StatusCode::BAD_REQUEST,
             Self::FailedToGetAppEnv => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::IndexNotFound => StatusCode::NOT_FOUND,
             Self::FailedToCreateVector(_) => StatusCode::BAD_REQUEST,
             Self::NotImplemented => StatusCode::BAD_REQUEST,
             Self::DatabaseError(_) => StatusCode::INTERNAL_SERVER_ERROR,

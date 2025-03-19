@@ -8,7 +8,7 @@ use std::sync::{
 pub struct VersionedPagepool<const LEN: usize> {
     pub current_version: Hash,
     pub serialized_at: Arc<RwLock<Option<FileOffset>>>,
-    pub pagepool: Pagepool<LEN>,
+    pub pagepool: Arc<Pagepool<LEN>>,
     pub next: Arc<RwLock<Option<VersionedPagepool<LEN>>>>,
 }
 
@@ -27,19 +27,24 @@ impl<const LEN: usize> VersionedPagepool<LEN> {
         Self {
             current_version: version,
             serialized_at: Arc::new(RwLock::new(None)),
-            pagepool: Pagepool::default(),
+            pagepool: Arc::new(Pagepool::default()),
             next: Arc::new(RwLock::new(None)),
         }
     }
 
-    pub fn push(&mut self, version: Hash, vector_id: u32) {
+    pub fn push(&self, version: Hash, vector_id: u32) {
         if self.current_version != version {
+            let next_read_guard = self.next.read().unwrap();
+            if let Some(next) = &*next_read_guard {
+                return next.push(version, vector_id);
+            }
+            drop(next_read_guard);
             let mut next_write_guard = self.next.write().unwrap();
             if let Some(next) = &mut *next_write_guard {
                 return next.push(version, vector_id);
             }
 
-            let mut new_next = Self::new(version);
+            let new_next = Self::new(version);
             new_next.push(version, vector_id);
             *next_write_guard = Some(new_next);
             return;
@@ -50,6 +55,8 @@ impl<const LEN: usize> VersionedPagepool<LEN> {
     pub fn len(&self) -> usize {
         self.pagepool
             .inner
+            .read()
+            .unwrap()
             .iter()
             .map(|page| page.len)
             .sum::<usize>()
@@ -67,14 +74,22 @@ impl<const LEN: usize> VersionedPagepool<LEN> {
     }
 }
 
-#[derive(Default, Debug, Clone, PartialEq)]
+#[derive(Default, Debug)]
 pub struct Pagepool<const LEN: usize> {
-    pub inner: Vec<Page<LEN>>,
+    pub inner: RwLock<Vec<Page<LEN>>>,
+}
+
+#[cfg(test)]
+impl<const LEN: usize> PartialEq for Pagepool<LEN> {
+    fn eq(&self, other: &Self) -> bool {
+        *self.inner.read().unwrap() == *other.inner.read().unwrap()
+    }
 }
 
 impl<const LEN: usize> Pagepool<LEN> {
-    pub fn push(&mut self, data: u32) {
-        if let Some(last) = self.inner.last_mut() {
+    pub fn push(&self, data: u32) {
+        let mut inner = self.inner.write().unwrap();
+        if let Some(last) = inner.last_mut() {
             if !last.is_full() {
                 last.push(data);
                 return;
@@ -82,12 +97,16 @@ impl<const LEN: usize> Pagepool<LEN> {
         }
         let mut page = Page::<LEN>::new();
         page.push(data);
-        self.inner.push(page);
+        inner.push(page);
     }
 
     #[allow(unused)]
     pub fn contains(&self, data: u32) -> bool {
-        self.inner.iter().any(|p| p.data.contains(&data))
+        self.inner
+            .read()
+            .unwrap()
+            .iter()
+            .any(|p| p.data.contains(&data))
     }
 }
 

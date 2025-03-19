@@ -1,6 +1,5 @@
 use std::fmt;
 
-use crate::models::types::MetricResult;
 use serde::{
     de::{self, Visitor},
     Deserialize, Deserializer, Serialize,
@@ -119,7 +118,13 @@ pub(crate) struct UpdateVectorResponseDto {
 #[derive(Deserialize, Debug)]
 pub(crate) struct FindSimilarDenseVectorsDto {
     pub vector: Vec<f32>,
-    pub k: VectorId,
+    pub k: Option<usize>,
+}
+
+#[derive(Deserialize, Debug)]
+pub(crate) struct BatchSearchDenseVectorsDto {
+    pub vectors: Vec<Vec<f32>>,
+    pub k: Option<usize>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -129,10 +134,23 @@ pub(crate) struct FindSimilarSparseVectorsDto {
 }
 
 #[derive(Deserialize, Debug)]
-#[serde(rename_all = "lowercase")]
+pub(crate) struct BatchSearchSparseVectorsDto {
+    pub vectors: Vec<Vec<SparsePair>>,
+    pub top_k: Option<usize>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "lowercase", tag = "index_type")]
 pub(crate) enum FindSimilarVectorsDto {
     Dense(FindSimilarDenseVectorsDto),
     Sparse(FindSimilarSparseVectorsDto),
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "lowercase", tag = "index_type")]
+pub(crate) enum BatchSearchVectorsDto {
+    Dense(BatchSearchDenseVectorsDto),
+    Sparse(BatchSearchSparseVectorsDto),
 }
 
 #[derive(Serialize)]
@@ -142,7 +160,6 @@ pub(crate) struct SimilarVector {
 }
 
 #[derive(Serialize)]
-pub(crate) enum FindSimilarVectorsResponseDto {
-    Dense(Vec<SimilarVector>),
-    Sparse(Vec<(VectorId, MetricResult)>),
+pub(crate) struct FindSimilarVectorsResponseDto {
+    pub results: Vec<SimilarVector>,
 }

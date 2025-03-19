@@ -1,6 +1,8 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("cargo:rerun-if-changed=build.rs");
     #[cfg(feature = "grpc-server")]
     {
+        println!("cargo:rerun-if-changed=proto");
         let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
 
         let config = tonic_build::configure()

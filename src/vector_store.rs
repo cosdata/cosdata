@@ -1183,7 +1183,7 @@ fn traverse_find_nearest(
     ef: u32,
 ) -> Result<Vec<(SharedNode, MetricResult)>, WaCustomError> {
     let mut candidate_queue = BinaryHeap::new();
-    let mut results = BinaryHeap::new();
+    let mut results = Vec::new();
 
     let (start_version, _) = ProbLazyItem::get_latest_version(start_node, &hnsw_index.cache)?;
     let start_data = unsafe { &*start_version }.try_get_data(&hnsw_index.cache)?;
@@ -1203,6 +1203,7 @@ fn traverse_find_nearest(
             ProbLazyItem::get_latest_version(current_node, &hnsw_index.cache)?;
         let node = unsafe { &*current_version }.try_get_data(&hnsw_index.cache)?;
 
+        let _lock = node.lock_lowest_index();
         for neighbor in node
             .get_neighbors_raw()
             .iter()
@@ -1225,13 +1226,13 @@ fn traverse_find_nearest(
         }
     }
 
-    let results = results
-        .into_sorted_vec() // Convert BinaryHeap to a sorted Vec
-        .into_iter() // Iterate over the sorted Vec
-        .rev() // Reverse the order (to get descending order)
-        .map(|(dist, node)| (node, dist)) // Map to the desired tuple format
-        .take(if is_indexing { 64 } else { 100 }) // Limit the number of results
-        .collect::<Vec<_>>(); // Collect into a Vec
+    let final_len = if is_indexing { 64 } else { 100 };
+    if results.len() > final_len {
+        results.select_nth_unstable_by(final_len, |(a, _), (b, _)| b.cmp(a));
+        results.truncate(final_len);
+    }
 
-    Ok(results)
+    results.sort_unstable_by(|(a, _), (b, _)| b.cmp(a));
+
+    Ok(results.into_iter().map(|(sim, node)| (node, sim)).collect())
 }
