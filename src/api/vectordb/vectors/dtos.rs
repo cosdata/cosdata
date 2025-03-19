@@ -1,7 +1,6 @@
 use std::fmt;
 
 use crate::metadata::MetadataFields;
-use crate::models::types::MetricResult;
 
 use serde::{
     de::{self, Visitor},

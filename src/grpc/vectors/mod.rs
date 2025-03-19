@@ -47,7 +47,7 @@ impl VectorsService for VectorsServiceImpl {
                 // Prepare vector for insertion
                 // @TODO(vineet): Add support for optional metadata fields
                 let vec_to_insert = vec![(VectorId(dense.id), dense.values.clone(), None)];
-                let dense_index = self.context.ain_env.collections_map
+                let hnsw_index = self.context.ain_env.collections_map
                     .get_hnsw_index(&req.collection_id)
                     .ok_or_else(|| Status::failed_precondition(
                         "Dense index not initialized. Try recreating the collection with dense vectors enabled."
