@@ -247,7 +247,6 @@ pub enum DistanceMetric {
     DotProduct,
 }
 
-// @TODO(vineet): Consider metadata dimensions for CosineSimilarity
 impl DistanceFunction for DistanceMetric {
     type Item = MetricResult;
     fn calculate(&self, x: &VectorData, y: &VectorData) -> Result<Self::Item, DistanceError> {
