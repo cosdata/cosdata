@@ -187,8 +187,8 @@ pub async fn init_inverted_index_for_collection(
         collection.description.clone(),
         index_path.clone(),
         collection.sparse_vector.auto_create_index,
-        // @TODO(vineet): Fix the following after confirming that
-        // metadata schema is not required for inverted indexes
+        // @NOTE: Metadata filtering is currently only supported for
+        // HNSW/Dense index
         None,
         collection.config.max_vectors,
         lmdb,

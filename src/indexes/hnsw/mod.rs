@@ -28,7 +28,6 @@ pub struct HNSWIndex {
     pub name: String,
     pub root_vec: AtomicPtr<ProbLazyItem<ProbNode>>,
     pub levels_prob: Vec<(f64, u8)>,
-    // @TODO(vineet): Should this be with or without phantom dimensions
     pub dim: usize,
     pub lmdb: MetaDb,
     pub current_version: RwLock<Hash>,

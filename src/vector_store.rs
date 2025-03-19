@@ -596,7 +596,6 @@ fn metadata_dimensions(
     let mut result = vec![];
     // First add base dimensions
     result.push((0_u8, schema.base_dimensions()));
-    // @TODO(vineet): Replace with appropriate weight
     let wdims = schema.weighted_dimensions(fields, 64000).unwrap();
     for (i, wd) in wdims.into_iter().enumerate() {
         result.push(((i+1) as u8, wd));
