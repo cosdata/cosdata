@@ -13,8 +13,9 @@ use super::HNSWIndexSerialize;
 
 // @SERIALIZED_SIZE:
 //   Properties:
-//     1 byte for HNSW level +             | 1
-//     8 bytes for prop offset & length    | 1 + 8 = 9
+//     1 byte for HNSW level +                           | 1
+//     8 bytes for prop offset & length +                | 9
+//     8 bytes for prop metadata offset & length         | 9 + 8 = 17
 //
 //   Links:
 //     10 bytes for parent offset & version +           | 10
@@ -24,7 +25,7 @@ use super::HNSWIndexSerialize;
 //     neighbors length * 19 bytes for neighbor link +  | nb * 19 + 32
 //     8 * 10 bytes for version link                    | nb * 19 + 112
 //
-//   Total = nb * 19 + 121 (where `nb` is the neighbors count)
+//   Total = nb * 19 + 129 (where `nb` is the neighbors count)
 impl HNSWIndexSerialize for ProbNode {
     fn serialize(
         &self,
@@ -41,15 +42,24 @@ impl HNSWIndexSerialize for ProbNode {
 
         debug_assert_eq!(start_offset % size, 0, "offset: {}", start_offset);
 
-        let mut buf = Vec::with_capacity(39);
+        let mut buf = Vec::with_capacity(47);
 
         // Serialize basic fields
         buf.push(self.hnsw_level.0);
 
-        // Serialize prop
-        let (FileOffset(offset), BytesToRead(length)) = &self.prop.location;
+        // Serialize prop_value
+        let (FileOffset(offset), BytesToRead(length)) = &self.prop_value.location;
         buf.extend(offset.to_le_bytes());
         buf.extend(length.to_le_bytes());
+
+        // Serialize prop_metadata
+        if let Some(prop_metadata) = &self.prop_metadata {
+            let (FileOffset(offset), BytesToRead(length)) = prop_metadata.location;
+            buf.extend(offset.to_le_bytes());
+            buf.extend(length.to_le_bytes());
+        } else {
+            buf.extend([u8::MAX; 8]);
+        }
 
         let parent_ptr = self.get_parent();
 
@@ -116,8 +126,7 @@ impl HNSWIndexSerialize for ProbNode {
         #[cfg(debug_assertions)]
         {
             let current = bufman.cursor_position(cursor)?;
-
-            assert_eq!(current, start_offset + 39);
+            assert_eq!(current, start_offset + 47);
         }
 
         {
@@ -152,10 +161,22 @@ impl HNSWIndexSerialize for ProbNode {
         } else {
             debug_assert_ne!(hnsw_level.0, 0);
         }
-        // Read prop
+        // Read prop_value
         let prop_offset = FileOffset(bufman.read_u32_with_cursor(cursor)?);
         let prop_length = BytesToRead(bufman.read_u32_with_cursor(cursor)?);
         let prop = cache.get_prop(prop_offset, prop_length)?;
+
+        // Read prop_metadata
+        let metadata_offset = bufman.read_u32_with_cursor(cursor)?;
+        let metadata_length = bufman.read_u32_with_cursor(cursor)?;
+        let metadata = if metadata_offset != u32::MAX {
+            Some(cache.get_prop_metadata(
+                FileOffset(metadata_offset),
+                BytesToRead(metadata_length)
+            )?)
+        } else {
+            None
+        };
 
         let parent_offset = bufman.read_u32_with_cursor(cursor)?;
         let parent_version_number = bufman.read_u16_with_cursor(cursor)?;
@@ -222,7 +243,9 @@ impl HNSWIndexSerialize for ProbNode {
         };
 
         let neighbors_file_index = FileIndex {
-            offset: FileOffset(offset + 39),
+            // @NOTE: 47 = 17 (properties) + 10 (parent) + 10 (child)
+            // + 10 (root)
+            offset: FileOffset(offset + 47),
             version_number,
             version_id,
         };
@@ -238,7 +261,9 @@ impl HNSWIndexSerialize for ProbNode {
             )?;
 
         let versions_file_index = FileIndex {
-            offset: FileOffset(offset + 41 + neighbors.len() as u32 * 19),
+            // @NOTE: 49 = 17 (properties) + 10 (parent) + 10 (child)
+            // + 10 (root) + 2 (neighbors length)
+            offset: FileOffset(offset + 49 + neighbors.len() as u32 * 19),
             version_number,
             version_id,
         };
@@ -255,6 +280,7 @@ impl HNSWIndexSerialize for ProbNode {
         Ok(Self::new_with_neighbors_and_versions_and_root_version(
             hnsw_level,
             prop,
+            metadata,
             neighbors,
             parent,
             child,

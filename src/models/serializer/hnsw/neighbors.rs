@@ -33,7 +33,7 @@ impl HNSWIndexSerialize for Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]> {
         let bufman = bufmans.get(version)?;
         let start = bufman.cursor_position(cursor)?;
         debug_assert_eq!(
-            (start - 39) % (self.len() as u64 * 19 + 121),
+            (start - 47) % (self.len() as u64 * 19 + 129),
             0,
             "offset: {}",
             start

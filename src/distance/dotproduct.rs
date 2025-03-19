@@ -2,6 +2,7 @@ use super::{DistanceError, DistanceFunction};
 use crate::models::dot_product::{
     dot_product_binary, dot_product_f16, dot_product_octal, dot_product_quaternary, dot_product_u8,
 };
+use crate::models::types::VectorData;
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
 
@@ -10,8 +11,8 @@ pub struct DotProductDistance(pub f32);
 
 impl DistanceFunction for DotProductDistance {
     type Item = Self;
-    fn calculate(&self, x: &Storage, y: &Storage) -> Result<Self::Item, DistanceError> {
-        match (x, y) {
+    fn calculate(&self, x: &VectorData, y: &VectorData) -> Result<Self::Item, DistanceError> {
+        match (x.quantized_vec, y.quantized_vec) {
             (
                 Storage::UnsignedByte {
                     quant_vec: vec_x, ..

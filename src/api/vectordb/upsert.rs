@@ -43,7 +43,8 @@ pub(crate) async fn upsert(
             hnsw_index,
             body.vectors
                 .into_iter()
-                .map(|vec| (vec.id, vec.values))
+                // @TODO(vineet): Add support for optional metadata fields
+                .map(|vec| (vec.id, vec.values, None))
                 .collect(),
         )
     })

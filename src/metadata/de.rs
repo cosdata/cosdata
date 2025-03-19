@@ -2,7 +2,7 @@ use std::fmt;
 
 use serde::de::{self, Visitor};
 
-use super::{schema::SupportedCondition, FieldValue};
+use super::FieldValue;
 
 pub struct FieldValueVisitor;
 
@@ -64,14 +64,4 @@ impl Visitor<'_> for FieldValueVisitor {
     }
 
     // @TODO: May be add boolean as a variant in `FieldValue` enum?
-}
-
-pub struct SupportedConditionVisitor;
-
-impl Visitor<'_> for SupportedConditionVisitor {
-    type Value = SupportedCondition;
-
-    fn expecting(&self, _formatter: &mut fmt::Formatter) -> fmt::Result {
-        todo!()
-    }
 }

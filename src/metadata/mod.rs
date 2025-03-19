@@ -1,4 +1,5 @@
 use std::cmp::{Ord, PartialOrd};
+use std::collections::HashMap;
 use std::fmt;
 
 use de::FieldValueVisitor;
@@ -9,6 +10,7 @@ pub mod query_filtering;
 pub mod schema;
 
 pub use schema::MetadataSchema;
+pub use query_filtering::{Filter, Predicate, Operator, QueryFilterDimensions};
 
 #[derive(Debug, Clone)]
 pub enum Error {
@@ -17,6 +19,7 @@ pub enum Error {
     InvalidFieldValue(String),
     InvalidFieldValues(String),
     InvalidMetadataSchema,
+    UnsupportedFilter(String),
 }
 
 impl fmt::Display for Error {
@@ -27,6 +30,7 @@ impl fmt::Display for Error {
             Self::InvalidFieldValue(msg) => write!(f, "Invalid field value: {msg}"),
             Self::InvalidFieldValues(msg) => write!(f, "Invalid field values: {msg}"),
             Self::InvalidMetadataSchema => write!(f, "Invalid metadata schema"),
+            Self::UnsupportedFilter(msg) => write!(f, "Unsupported filter: {msg}"),
         }
     }
 }
@@ -60,11 +64,12 @@ fn decimal_to_binary_vec(num: u16, size: usize) -> Vec<u8> {
 
 type FieldName = String;
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 #[non_exhaustive]
 pub enum FieldValue {
     Int(i32),
     String(String),
+    // @TODO: Add support for float
 }
 
 impl FieldValue {
@@ -84,6 +89,8 @@ impl<'de> Deserialize<'de> for FieldValue {
         deserializer.deserialize_any(FieldValueVisitor)
     }
 }
+
+pub type MetadataFields = HashMap<FieldName, FieldValue>;
 
 #[cfg(test)]
 mod tests {

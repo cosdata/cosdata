@@ -1,5 +1,5 @@
 use super::{DistanceError, DistanceFunction};
-use crate::storage::Storage;
+use crate::{models::types::VectorData, storage::Storage};
 use half::f16;
 use serde::{Deserialize, Serialize};
 
@@ -8,8 +8,8 @@ pub struct EuclideanDistance(pub f32);
 
 impl DistanceFunction for EuclideanDistance {
     type Item = Self;
-    fn calculate(&self, x: &Storage, y: &Storage) -> Result<Self::Item, DistanceError> {
-        match (x, y) {
+    fn calculate(&self, x: &VectorData, y: &VectorData) -> Result<Self::Item, DistanceError> {
+        match (x.quantized_vec, y.quantized_vec) {
             (
                 Storage::UnsignedByte {
                     quant_vec: vec_x, ..

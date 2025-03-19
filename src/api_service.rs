@@ -8,6 +8,8 @@ use crate::indexes::inverted::transaction::InvertedIndexTransaction;
 use crate::indexes::inverted::types::{RawSparseVectorEmbedding, SparsePair};
 use crate::indexes::inverted::InvertedIndex;
 use crate::macros::key;
+use crate::metadata::query_filtering::filter_encoded_dimensions;
+use crate::metadata::{self, MetadataFields};
 use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::cache_loader::HNSWIndexCache;
 use crate::models::collection::Collection;
@@ -185,8 +187,8 @@ pub async fn init_inverted_index_for_collection(
         collection.description.clone(),
         index_path.clone(),
         collection.sparse_vector.auto_create_index,
-        // @TODO(vineet): Fix the following after confirming that
-        // metadata schema is not required for inverted indexes
+        // @NOTE: Metadata filtering is currently only supported for
+        // HNSW/Dense index
         None,
         collection.config.max_vectors,
         lmdb,
@@ -211,7 +213,7 @@ pub fn run_upload_dense_vectors_in_transaction(
     ctx: Arc<AppContext>,
     hnsw_index: Arc<HNSWIndex>,
     transaction: &HNSWIndexTransaction,
-    mut sample_points: Vec<(VectorId, Vec<f32>)>,
+    mut sample_points: Vec<(VectorId, Vec<f32>, Option<MetadataFields>)>,
 ) -> Result<(), WaCustomError> {
     let version = transaction.id;
     let version_number = transaction.version_number;
@@ -224,7 +226,7 @@ pub fn run_upload_dense_vectors_in_transaction(
             .fetch_add(sample_points.len(), Ordering::SeqCst);
 
         if collected_count < hnsw_index.sample_threshold {
-            for (_, values) in &sample_points {
+            for (_, values, _) in &sample_points {
                 for value in values {
                     let value = *value;
 
@@ -663,7 +665,7 @@ pub fn run_upload_sparse_vectors_in_transaction(
 pub fn run_upload_dense_vectors(
     ctx: Arc<AppContext>,
     hnsw_index: Arc<HNSWIndex>,
-    vecs: Vec<(VectorId, Vec<f32>)>,
+    vecs: Vec<(VectorId, Vec<f32>, Option<MetadataFields>)>,
 ) -> Result<(), WaCustomError> {
     let env = hnsw_index.lmdb.env.clone();
     let db = hnsw_index.lmdb.db.clone();
@@ -711,6 +713,7 @@ pub fn run_upload_dense_vectors(
     if index_before_insertion {
         index_embeddings(
             &ctx.config,
+            &ctx.ain_env,
             &hnsw_index,
             ctx.config.upload_process_batch_size,
             lazy_item_versions_table.clone(),
@@ -761,10 +764,11 @@ pub fn run_upload_dense_vectors(
     let bufman = hnsw_index.vec_raw_manager.get(current_version)?;
 
     vecs.into_par_iter()
-        .map(|(id, vec)| {
+        .map(|(id, vec, metadata)| {
             let vec_emb = RawDenseVectorEmbedding {
                 raw_vec: Arc::new(vec),
                 hash_vec: id,
+                raw_metadata: metadata,
             };
 
             insert_embedding(
@@ -801,6 +805,7 @@ pub fn run_upload_dense_vectors(
     if count_unindexed >= ctx.config.upload_threshold {
         index_embeddings(
             &ctx.config,
+            &ctx.ain_env,
             &hnsw_index,
             ctx.config.upload_process_batch_size,
             lazy_item_versions_table,
@@ -838,6 +843,7 @@ pub async fn ann_vector_query(
     ctx: Arc<AppContext>,
     hnsw_index: Arc<HNSWIndex>,
     query: Vec<f32>,
+    metadata_filter: Option<metadata::Filter>,
     k: Option<usize>,
 ) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
     let vec_hash = VectorId(u64::MAX - 1);
@@ -854,10 +860,21 @@ pub async fn ann_vector_query(
 
     let hnsw_params_guard = hnsw_index.hnsw_params.read().unwrap();
 
+    let query_filter_dims = metadata_filter.map(|filter| {
+        // @TODO(vineet): Remove unwrap
+        let coll = ctx.ain_env
+            .collections_map
+            .get_collection(&hnsw_index.name)
+            .expect("Couldn't get collection from ain_env");
+        let metadata_schema = coll.metadata_schema.as_ref().unwrap();
+        filter_encoded_dimensions(metadata_schema, &filter).unwrap()
+    });
+
     let results = ann_search(
         &ctx.config,
         hnsw_index.clone(),
         vec_emb,
+        query_filter_dims.as_ref(),
         hnsw_index.get_root_vec(),
         HNSWLevel(hnsw_params_guard.num_layers),
         &hnsw_params_guard,
@@ -871,8 +888,20 @@ pub async fn batch_ann_vector_query(
     ctx: Arc<AppContext>,
     hnsw_index: Arc<HNSWIndex>,
     queries: Vec<Vec<f32>>,
+    metadata_filter: Option<metadata::Filter>,
     k: Option<usize>,
 ) -> Result<Vec<Vec<(VectorId, MetricResult)>>, WaCustomError> {
+
+    let query_filter_dims = metadata_filter.map(|filter| {
+        // @TODO(vineet): Remove unwrap
+        let coll = ctx.ain_env
+            .collections_map
+            .get_collection(&hnsw_index.name)
+            .expect("Couldn't get collection from ain_env");
+        let metadata_schema = coll.metadata_schema.as_ref().unwrap();
+        filter_encoded_dimensions(metadata_schema, &filter).unwrap()
+    });
+
     queries
         .into_par_iter()
         .map(|query| {
@@ -893,6 +922,7 @@ pub async fn batch_ann_vector_query(
                 &ctx.config,
                 hnsw_index.clone(),
                 vec_emb,
+                query_filter_dims.as_ref(),
                 hnsw_index.get_root_vec(),
                 HNSWLevel(hnsw_params.num_layers),
                 &hnsw_params,
