@@ -153,6 +153,7 @@ pub fn ann_search(
     let z = match query_filter_dims.clone() {
         Some(qf_dims) => {
             let mut z_candidates: Vec<(SharedNode, MetricResult)> = vec![];
+            // @TODO: Can we compute the z_candidates in parallel?
             for qfd in qf_dims {
                 let mdims = Metadata::from(qfd);
                 let mut z_with_mdims = traverse_find_nearest(
@@ -160,7 +161,7 @@ pub fn ann_search(
                     &hnsw_index,
                     cur_entry,
                     &fvec,
-                    Some(Arc::new(mdims)),
+                    Some(&mdims),
                     &mut 0,
                     &mut skipm,
                     &hnsw_index.distance_metric.read().unwrap(),
@@ -197,16 +198,47 @@ pub fn ann_search(
     };
 
     let mut z = if z.is_empty() {
-        // @TODO: If not nearest node is found, and if
-        // `query_filter_dims` are passed, do we need to find the min
-        // distance for the entry?
-        let dist = hnsw_index
-            .distance_metric
-            .read()
-            .unwrap()
-            // @TODO: May be change here
-            .calculate(&fvec, &cur_node.prop_value.vec)?;
-
+        let dist = match query_filter_dims.clone() {
+            // In case of metadata filters in query, we calculate the
+            // distances between the cur_node and all query filter
+            // dimensions and take the minimum.
+            //
+            // @TODO: Not sure if this additional computation is
+            // required because eventually the same node is being
+            // returned. Also need to consider performing the
+            // following in parallel.
+            Some(qf_dims) => {
+                let cur_node_metadata = cur_node.prop_metadata.clone().map(|pm| pm.vec.clone());
+                let cur_node_data = VectorData {
+                    quantized_vec: &cur_node.prop_value.vec,
+                    metadata: cur_node_metadata.as_deref()
+                };
+                let mut dists = vec![];
+                for qfd in qf_dims {
+                    let fvec_metadata = Metadata::from(qfd);
+                    let fvec_data = VectorData {
+                        quantized_vec: &fvec,
+                        metadata: Some(&fvec_metadata),
+                    };
+                    let d = hnsw_index
+                        .distance_metric
+                        .read()
+                        .unwrap()
+                        .calculate(&fvec_data, &cur_node_data)?;
+                    dists.push(d)
+                }
+                dists.into_iter().min().unwrap()
+            },
+            None => {
+                let fvec_data = VectorData::without_metadata(&fvec);
+                let cur_node_data = VectorData::without_metadata(&cur_node.prop_value.vec);
+                hnsw_index
+                    .distance_metric
+                    .read()
+                    .unwrap()
+                    .calculate(&fvec_data, &cur_node_data)?
+            },
+        };
         vec![(cur_entry, dist)]
     } else {
         z
@@ -956,7 +988,7 @@ pub fn index_embedding(
         hnsw_index,
         cur_entry,
         &fvec,
-        mdims,
+        mdims.as_deref(),
         &mut 0,
         &mut skipm,
         &distance_metric,
@@ -965,12 +997,20 @@ pub fn index_embedding(
     )?;
 
     let z = if z.is_empty() {
+        let fvec_data = VectorData {
+            quantized_vec: &fvec,
+            metadata: mdims.as_deref(),
+        };
+        let cur_node_metadata = cur_node.prop_metadata.clone().map(|pm| pm.vec.clone());
+        let cur_node_data = VectorData {
+            quantized_vec: &cur_node.prop_value.vec,
+            metadata: cur_node_metadata.as_deref()
+        };
         let dist = hnsw_index
             .distance_metric
             .read()
             .unwrap()
-            .calculate(&fvec, &cur_node.prop_value.vec)?;
-
+            .calculate(&fvec_data, &cur_node_data)?;
         vec![(cur_entry, dist)]
     } else {
         z
@@ -1318,7 +1358,7 @@ fn traverse_find_nearest(
     hnsw_index: &HNSWIndex,
     start_node: SharedNode,
     fvec: &Storage,
-    mdims: Option<Arc<Metadata>>,
+    mdims: Option<&Metadata>,
     nodes_visited: &mut u32,
     skipm: &mut PerformantFixedSet,
     distance_metric: &DistanceMetric,
@@ -1330,7 +1370,18 @@ fn traverse_find_nearest(
 
     let (start_version, _) = ProbLazyItem::get_latest_version(start_node, &hnsw_index.cache)?;
     let start_data = unsafe { &*start_version }.try_get_data(&hnsw_index.cache)?;
-    let start_dist = distance_metric.calculate(&fvec, &start_data.prop_value.vec)?;
+
+    let fvec_data = VectorData {
+        quantized_vec: fvec,
+        metadata: mdims
+    };
+
+    let start_metadata = start_data.prop_metadata.clone().map(|pm| pm.vec.clone());
+    let start_vec_data = VectorData {
+        quantized_vec: &start_data.prop_value.vec,
+        metadata: start_metadata.as_deref(),
+    };
+    let start_dist = distance_metric.calculate(&fvec_data, &start_vec_data)?;
 
     let start_id = start_data.get_id().0 as u32;
     skipm.insert(start_id);
@@ -1363,7 +1414,12 @@ fn traverse_find_nearest(
 
             if !skipm.is_member(neighbor_id) {
                 let neighbor_data = unsafe { &*neighbor_node }.try_get_data(&hnsw_index.cache)?;
-                let dist = distance_metric.calculate(&fvec, &neighbor_data.prop_value.vec)?;
+                let neighbor_metadata = neighbor_data.prop_metadata.clone().map(|pm| pm.vec.clone());
+                let neighbor_vec_data = VectorData {
+                    quantized_vec: &neighbor_data.prop_value.vec,
+                    metadata: neighbor_metadata.as_deref(),
+                };
+                let dist = distance_metric.calculate(&fvec_data, &neighbor_vec_data)?;
                 // @TODO(vineet): neighbor_id should be a combination
                 // of VectorId and metadata Id. Also need to check if
                 // the neighbors code should be modified to have the

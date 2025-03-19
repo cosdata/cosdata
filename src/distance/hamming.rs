@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::{DistanceError, DistanceFunction};
-use crate::storage::Storage;
+use crate::{models::types::VectorData, storage::Storage};
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Serialize, PartialOrd)]
 pub struct HammingDistance(pub f32);
@@ -11,8 +11,8 @@ impl DistanceFunction for HammingDistance {
 
     // Implementation here
     #[allow(unused_variables)]
-    fn calculate(&self, x: &Storage, y: &Storage) -> Result<Self::Item, DistanceError> {
-        match (x, y) {
+    fn calculate(&self, x: &VectorData, y: &VectorData) -> Result<Self::Item, DistanceError> {
+        match (x.quantized_vec, y.quantized_vec) {
             (
                 Storage::UnsignedByte {
                     mag: mag_x,

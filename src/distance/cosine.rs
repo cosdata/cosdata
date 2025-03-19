@@ -2,10 +2,10 @@ use serde::{Deserialize, Serialize};
 
 use super::{DistanceError, DistanceFunction};
 use crate::{
-    models::dot_product::{
+    models::{dot_product::{
         dot_product_binary, dot_product_f16, dot_product_f32, dot_product_octal,
         dot_product_quaternary, dot_product_u8,
-    },
+    }, types::VectorData},
     storage::Storage,
 };
 
@@ -14,7 +14,7 @@ pub struct CosineDistance(pub f32);
 
 impl DistanceFunction for CosineDistance {
     type Item = Self;
-    fn calculate(&self, _x: &Storage, _y: &Storage) -> Result<Self::Item, DistanceError> {
+    fn calculate(&self, _x: &VectorData, _y: &VectorData) -> Result<Self::Item, DistanceError> {
         // TODO: Implement cosine distance
         unimplemented!("Cosine distance is not implemented yet");
     }
@@ -25,8 +25,8 @@ pub struct CosineSimilarity(pub f32);
 
 impl DistanceFunction for CosineSimilarity {
     type Item = Self;
-    fn calculate(&self, x: &Storage, y: &Storage) -> Result<Self::Item, DistanceError> {
-        match (x, y) {
+    fn calculate(&self, x: &VectorData, y: &VectorData) -> Result<Self::Item, DistanceError> {
+        match (x.quantized_vec, y.quantized_vec) {
             (
                 Storage::UnsignedByte {
                     mag: x_mag,

@@ -118,6 +118,7 @@ impl ProbNode {
         self.child.store(child, Ordering::Release);
     }
 
+    // @TODO: This should return a combined id
     pub fn get_id(&self) -> &VectorId {
         &self.prop_value.id
     }

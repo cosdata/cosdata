@@ -111,9 +111,24 @@ impl From<&QueryFilterDimensions> for Metadata {
 pub struct MetadataId(pub u8);
 
 pub struct NodePropMetadata {
+    #[allow(unused)]
     pub id: MetadataId,
     pub vec: Arc<Metadata>,
     pub location: PropPersistRef,
+}
+
+pub struct VectorData<'a> {
+    pub quantized_vec: &'a Storage,
+    pub metadata: Option<&'a Metadata>,
+}
+
+impl<'a> VectorData<'a> {
+    pub fn without_metadata(qvec: &'a Storage) -> Self {
+        Self {
+            quantized_vec: qvec,
+            metadata: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Hash)]
@@ -232,9 +247,10 @@ pub enum DistanceMetric {
     DotProduct,
 }
 
+// @TODO(vineet): Consider metadata dimensions for CosineSimilarity
 impl DistanceFunction for DistanceMetric {
     type Item = MetricResult;
-    fn calculate(&self, x: &Storage, y: &Storage) -> Result<Self::Item, DistanceError> {
+    fn calculate(&self, x: &VectorData, y: &VectorData) -> Result<Self::Item, DistanceError> {
         match self {
             Self::Cosine => {
                 let value = CosineSimilarity(0.0).calculate(x, y)?;
