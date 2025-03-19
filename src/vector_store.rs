@@ -144,8 +144,6 @@ pub fn ann_search(
     } else {
         hnsw_params.neighbors_count
     });
-    // @TODO(vineet): skipm should consider VectorId as well as
-    // MetadataId
     skipm.insert(vector_emb.hash_vec.0 as u32);
 
     let cur_node = unsafe { &*cur_entry }.try_get_data(&hnsw_index.cache)?;
@@ -169,9 +167,9 @@ pub fn ann_search(
                     hnsw_params.ef_search,
                 )?;
                 // @NOTE: We're considering nearest neighbors computed
-                // for all metadata dims.
-                //
-                // @TODO(vineet): Need to make sure dedup happens
+                // for all metadata dims. Here we're relying on
+                // `traverse_find_nearest` to deduplicate the results
+                // (thanks to the `skipm` argument)
                 z_candidates.append(&mut z_with_mdims);
             }
             // Sort candidates by distance (asc)
@@ -1420,10 +1418,6 @@ fn traverse_find_nearest(
                     metadata: neighbor_metadata.as_deref(),
                 };
                 let dist = distance_metric.calculate(&fvec_data, &neighbor_vec_data)?;
-                // @TODO(vineet): neighbor_id should be a combination
-                // of VectorId and metadata Id. Also need to check if
-                // the neighbors code should be modified to have the
-                // correct id during insertion instead
                 skipm.insert(neighbor_id);
                 candidate_queue.push((dist, neighbor_node));
             }

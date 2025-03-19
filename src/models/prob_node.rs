@@ -1,9 +1,8 @@
 use std::{
-    ptr,
-    sync::{
+    ptr, sync::{
         atomic::{AtomicPtr, Ordering},
         Arc, Mutex, MutexGuard,
-    },
+    }
 };
 
 use super::{
@@ -118,9 +117,15 @@ impl ProbNode {
         self.child.store(child, Ordering::Release);
     }
 
-    // @TODO: This should return a combined id
-    pub fn get_id(&self) -> &VectorId {
-        &self.prop_value.id
+    pub fn get_id(&self) -> VectorId {
+        match &self.prop_metadata {
+            Some(m_prop) => {
+                let metadata_id = (m_prop.id.0 as u64) << 56;
+                let vector_id = metadata_id | self.prop_value.id.0;
+                VectorId(vector_id)
+            }
+            None => self.prop_value.id.clone()
+        }
     }
 
     pub fn lock_lowest_index(&self) -> MutexGuard<'_, (u8, MetricResult)> {
