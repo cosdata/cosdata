@@ -202,7 +202,7 @@ Cosdata provides official client SDKs for easy integration:
 ### Python SDK
 Install using pip:
 ```python
-pip install cosdata
+pip install cosdata-client
 ```
 
 Example usage:
