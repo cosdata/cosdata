@@ -784,15 +784,16 @@ pub fn run_upload_dense_vectors(
         .begin_ro_txn()
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
-    let count_unindexed = txn
-        .get(*db, &"count_unindexed")
-        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))
-        .and_then(|bytes| {
+    let count_unindexed = match txn.get(*db, &"count_unindexed") {
+        Ok(bytes) => {
             let bytes = bytes.try_into().map_err(|e: TryFromSliceError| {
                 WaCustomError::DeserializationError(e.to_string())
             })?;
             Ok(u32::from_le_bytes(bytes))
-        })?;
+        },
+        Err(lmdb::Error::NotFound) => Ok(0),
+        Err(e) => Err(WaCustomError::DatabaseError(e.to_string()))
+    }?;
 
     txn.abort();
     let mut offset = 0;
