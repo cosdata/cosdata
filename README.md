@@ -55,23 +55,20 @@ This script will handle all dependencies and set up Cosdata automatically.
 ### 2. Install via Docker (Mac & Windows)
 For **Mac & Windows**, use our Docker-based installation:
 1. Ensure **Docker** is installed and running
-2. Build and run the Cosdata container:
+2. Pull the latest image from Ducker Hub:
+
+```bash
+docker pull cosdatateam/cosdata:latest
+```
+
+3. Run the container
 
   ```bash
-  # Clone the repository
-  git clone https://github.com/cosdata/cosdata.git
-  cd cosdata
-
-  # Build the image
-  docker build -t cosdata/cosdata:latest .
-
-  # Run the container
-  docker run -d \
-    --name cosdata-server \
-    -e COSDATA_ADMIN_KEY=your_admin_key \
-    -p 8443:8443 \
-    -p 50051:50051 \
-    cosdata/cosdata:latest
+  docker run -it \
+  --name cosdata-server \
+  -p 8443:8443 \
+  -p 50051:50051 \
+  cosdatateam/cosdata:latest
   ```
 
 The server will be available at `http://localhost:8443`.
