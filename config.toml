@@ -6,7 +6,7 @@ sparse_raw_values_reranking_factor = 5
 
 [server]
 host = "127.0.0.1"
-port= 8443
+port = 8443
 mode = "http"   # Options: "http" or "https"
 
 [thread_pool]
