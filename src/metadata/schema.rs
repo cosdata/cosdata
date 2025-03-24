@@ -295,6 +295,8 @@ pub type MetadataDimensions = Vec<i32>;
 
 #[cfg(test)]
 mod tests {
+    use serde_cbor::{from_slice, to_vec};
+
     use super::*;
 
     fn hashset(xs: Vec<&str>) -> HashSet<String> {
@@ -624,5 +626,37 @@ mod tests {
             Err(Error::InvalidFieldValue(_)) => {}
             _ => panic!(),
         }
+    }
+
+    /// Test serialization to and deserialization from cbor (as we've
+    /// implemented custom serializer and deserializer for `FieldValue`)
+    #[test]
+    fn test_cbor_serde() {
+        let age_values: HashSet<FieldValue> = (1..=10).map(FieldValue::Int).collect();
+        let age = MetadataField::new("age".to_owned(), age_values).unwrap();
+
+        let group_values: HashSet<FieldValue> = vec!["a", "b", "c"]
+            .into_iter()
+            .map(|x| FieldValue::String(String::from(x)))
+            .collect();
+        let group = MetadataField::new("group".to_owned(), group_values).unwrap();
+
+        let level_values: HashSet<FieldValue> = vec!["first", "second", "third"]
+            .into_iter()
+            .map(|x| FieldValue::String(String::from(x)))
+            .collect();
+        let level = MetadataField::new("level".to_owned(), level_values).unwrap();
+
+        let conditions = vec![
+            SupportedCondition::And(hashset(vec!["age", "group"])),
+            SupportedCondition::And(hashset(vec!["age", "level"])),
+        ];
+
+        let schema = MetadataSchema::new(vec![age, group, level], conditions).unwrap();
+
+        let slice = to_vec(&schema).unwrap();
+        let orig: MetadataSchema = from_slice(&slice).unwrap();
+
+        assert_eq!(schema.fields.len(), orig.fields.len());
     }
 }

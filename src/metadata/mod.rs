@@ -64,7 +64,7 @@ fn decimal_to_binary_vec(num: u16, size: usize) -> Vec<u8> {
 
 type FieldName = String;
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 #[non_exhaustive]
 pub enum FieldValue {
     Int(i32),
@@ -77,6 +77,17 @@ impl FieldValue {
         match self {
             Self::Int(_) => "int",
             Self::String(_) => "string",
+        }
+    }
+}
+
+impl Serialize for FieldValue {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer {
+        match self {
+            Self::Int(i) => serializer.serialize_i32(*i),
+            Self::String(s) => serializer.serialize_str(s),
         }
     }
 }
