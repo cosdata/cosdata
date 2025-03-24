@@ -3,6 +3,7 @@ name: Build and Push Docker image
 on:
   release:
     types: [published]
+  workflow_dispatch: # 👈 This allows manual triggering
 
 jobs:
   build-and-push:
