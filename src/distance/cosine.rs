@@ -55,14 +55,11 @@ impl DistanceFunction for CosineSimilarity {
         match &metadata {
             Some((x_mag, y_mag, m_dot_product)) => {
                 let m_cos_sim = cosine_similarity_from_dot_product(*m_dot_product, *x_mag, *y_mag)?;
-                let threshold: f32 = 0.1;
-                if m_cos_sim.0 + threshold < 1.0 {
+                let threshold: f32 = 0.99;
+                if m_cos_sim.0 < threshold {
                     // Not close enough to 1, so return
                     // CosineSimilarity of 0 as we don't want the
                     // vectors to match
-                    //
-                    // @TODO(vineet): Or should it be -1 for a
-                    // stronger mismatch?
                     return Ok(CosineSimilarity(0.0));
                 }
             }
