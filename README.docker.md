@@ -3,29 +3,37 @@
 ## Running the Container
 
 ```bash
-docker run -d \
+docker run -it \
   --name cosdata-server \
-  -e COSDATA_ADMIN_KEY=your_admin_key \
-  -v cosdata-data:/home/cosdata/data \
-  -p 8080:8080 \
+  -p 8443:8443 \
   -p 50051:50051 \
-  cosdata/cosdata:latest
+  cosdatateam/cosdata:latest
 ```
 
-## Environment Variables
-
-- `COSDATA_ADMIN_KEY` (required): Your admin key for Cosdata
-- `COSDATA_HOME`: Set to /home/cosdata by default
-- `PATH`: Includes /home/cosdata/bin
+When prompted, enter your admin key.
 
 ## Ports
 
-- 8080: HTTP API
+- 8443: HTTP API
 - 50051: gRPC service
 
-## Volumes
+## Environment Variables
 
-- `/home/cosdata/data`: Persistent data storage
+- `COSDATA_HOME`: Set to /opt/cosdata by default
+- `PATH`: Includes /opt/cosdata/bin
+
+## Data Storage
+
+By default, data is stored inside the container. For persistent storage, you can mount a volume:
+
+```bash
+docker run -it \
+  --name cosdata-server \
+  -v cosdata-data:/opt/cosdata/data \
+  -p 8443:8443 \
+  -p 50051:50051 \
+  cosdatateam/cosdata:latest
+```
 
 ## Health Check
 
