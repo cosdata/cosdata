@@ -449,9 +449,14 @@ pub fn insert_embedding(
 
     let mut txn = env
         .begin_rw_txn()
-        .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
+        .map_err(|e| {
+            log::error!("Failed to begin read-write lmdb transaction");
+            WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e))
+        })?;
 
-    let count_unindexed = match txn.get(*db, &"count_unindexed") {
+    let count_unindexed_key = key!(m:count_unindexed);
+
+    let count_unindexed = match txn.get(*db, &count_unindexed_key) {
         Ok(bytes) => {
             let bytes = bytes.try_into().map_err(|e: TryFromSliceError| {
                 WaCustomError::DeserializationError(e.to_string())
@@ -459,7 +464,10 @@ pub fn insert_embedding(
             u32::from_le_bytes(bytes)
         }
         Err(lmdb::Error::NotFound) => 0,
-        Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
+        Err(err) => {
+            log::error!("Error reading 'count_unindexed' from metadata in lmdb");
+            return Err(WaCustomError::DatabaseError(err.to_string()))
+        },
     };
 
     let offset = write_dense_embedding(bufman, emb)?;
@@ -473,8 +481,10 @@ pub fn insert_embedding(
     let embedding_key = key!(e:emb.hash_vec);
 
     txn.put(*db, &embedding_key, &offset_serialized, WriteFlags::empty())
-        .map_err(|e| WaCustomError::DatabaseError(format!("Failed to put data: {}", e)))?;
-    let count_unindexed_key = key!(m:count_unindexed);
+        .map_err(|e| {
+            log::error!("Error updating embedding key in lmdb");
+            WaCustomError::DatabaseError(format!("Failed to put data: {}", e))
+        })?;
 
     txn.put(
         *db,
@@ -483,10 +493,12 @@ pub fn insert_embedding(
         WriteFlags::empty(),
     )
     .map_err(|e| {
+        log::error!("Error updating 'count_unindexed' key of metadata in lmdb");
         WaCustomError::DatabaseError(format!("Failed to update `count_unindexed`: {}", e))
     })?;
 
     txn.commit().map_err(|e| {
+        log::error!("Failed to commit transaction in lmdb");
         WaCustomError::DatabaseError(format!("Failed to commit transaction: {}", e))
     })?;
 
@@ -506,9 +518,14 @@ pub fn index_embeddings(
 
     let txn = env
         .begin_ro_txn()
-        .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
+        .map_err(|e| {
+            log::error!("Failed to begin read-only lmdb transaction");
+            WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e))
+        })?;
 
-    let mut count_indexed = match txn.get(*db, &"count_indexed") {
+    let count_indexed_key = key!(m:count_indexed);
+
+    let mut count_indexed = match txn.get(*db, &count_indexed_key) {
         Ok(bytes) => {
             let bytes = bytes.try_into().map_err(|e: TryFromSliceError| {
                 WaCustomError::DeserializationError(e.to_string())
@@ -516,9 +533,14 @@ pub fn index_embeddings(
             u32::from_le_bytes(bytes)
         }
         Err(lmdb::Error::NotFound) => 0,
-        Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
+        Err(err) => {
+            log::error!("Error reading 'count_indexed' from metadata in lmdb");
+            return Err(WaCustomError::DatabaseError(err.to_string()))
+        },
     };
-    let mut count_unindexed = match txn.get(*db, &"count_unindexed") {
+
+    let count_unindexed_key = key!(m:count_unindexed);
+    let mut count_unindexed = match txn.get(*db, &count_unindexed_key) {
         Ok(bytes) => {
             let bytes = bytes.try_into().map_err(|e: TryFromSliceError| {
                 WaCustomError::DeserializationError(e.to_string())
@@ -526,19 +548,30 @@ pub fn index_embeddings(
             u32::from_le_bytes(bytes)
         }
         Err(lmdb::Error::NotFound) => 0,
-        Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
+        Err(err) => {
+            log::error!("Error reading 'count_unindexed' from metadata in lmdb");
+            return Err(WaCustomError::DatabaseError(err.to_string()))
+        },
     };
 
-    let embedding_offset = match txn.get(*db, &"next_embedding_offset") {
+    let next_embedding_offset_key = key!(m:next_embedding_offset);
+
+    let embedding_offset = match txn.get(*db, &next_embedding_offset_key) {
         Ok(bytes) => EmbeddingOffset::deserialize(bytes)
             .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?,
-        Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
+        Err(err) => {
+            log::error!("Error getting 'next_embedding_offset' key from metadata db");
+            return Err(WaCustomError::DatabaseError(err.to_string()))
+        },
     };
     let version = embedding_offset.version;
     let version_hash = hnsw_index
         .vcs
         .get_version_hash(&version, &txn)
-        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?
+        .map_err(|e| {
+            log::error!("Error getting version_hash from lmdb");
+            WaCustomError::DatabaseError(e.to_string())
+        })?
         .expect("Current version hash not found");
     let version_number = *version_hash.version as u16;
 
@@ -626,6 +659,7 @@ pub fn index_embeddings(
         count_unindexed -= batch_size;
 
         let mut txn = env.begin_rw_txn().map_err(|e| {
+            log::error!("Failed to begin read-write lmdb transation");
             WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e))
         })?;
 
@@ -634,7 +668,6 @@ pub fn index_embeddings(
             offset: next_offset,
         };
         let next_embedding_offset_serialized = next_embedding_offset.serialize();
-        let next_embedding_offset_key = key!(m:next_embedding_offset);
         let count_indexed_key = key!(m:count_indexed);
         let count_unindexed_key = key!(m:count_unindexed);
 
@@ -645,6 +678,7 @@ pub fn index_embeddings(
             WriteFlags::empty(),
         )
         .map_err(|e| {
+            log::error!("Error updating 'next_embedding_offset' in lmdb");
             WaCustomError::DatabaseError(format!("Failed to update `next_embedding_offset`: {}", e))
         })?;
 
@@ -655,6 +689,7 @@ pub fn index_embeddings(
             WriteFlags::empty(),
         )
         .map_err(|e| {
+            log::error!("Error updating 'count_indexed' in lmdb");
             WaCustomError::DatabaseError(format!("Failed to update `count_indexed`: {}", e))
         })?;
 
@@ -665,10 +700,12 @@ pub fn index_embeddings(
             WriteFlags::empty(),
         )
         .map_err(|e| {
+            log::error!("Error updating 'count_unindexed' in lmdb");
             WaCustomError::DatabaseError(format!("Failed to update `count_unindexed`: {}", e))
         })?;
 
         txn.commit().map_err(|e| {
+            log::error!("Failed to commit transaction in lmdb");
             WaCustomError::DatabaseError(format!("Failed to commit transaction: {}", e))
         })?;
 

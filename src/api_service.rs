@@ -669,10 +669,16 @@ pub fn run_upload_dense_vectors(
     let db = hnsw_index.lmdb.db.clone();
     let txn = env
         .begin_ro_txn()
-        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+        .map_err(|e| {
+            log::error!("Failed to begin read-only lmdb transaction");
+            WaCustomError::DatabaseError(e.to_string())
+        })?;
 
     // Check if the previous version is unindexed, and continue from where we left.
     let prev_version = hnsw_index.get_current_version();
+    let next_embedding_offset_key = key!(m:next_embedding_offset);
+    // @TODO: Using the `next_embedding_offset_key` below causes the
+    // `debug_assert_eq!` in the Ok arm to fail.
     let index_before_insertion = match txn.get(*db, &"next_embedding_offset") {
         Ok(bytes) => {
             let embedding_offset = EmbeddingOffset::deserialize(bytes)
@@ -692,6 +698,7 @@ pub fn run_upload_dense_vectors(
         }
         Err(lmdb::Error::NotFound) => false,
         Err(e) => {
+            log::error!("Error getting 'next_embedding_offset' key from metadata db");
             return Err(WaCustomError::DatabaseError(e.to_string()));
         }
     };
@@ -731,7 +738,10 @@ pub fn run_upload_dense_vectors(
     let (current_version, _) = hnsw_index
         .vcs
         .add_next_version("main")
-        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+        .map_err(|e| {
+            log::error!("Error adding next version for main branch in lmdb");
+            WaCustomError::DatabaseError(e.to_string())
+        })?;
     hnsw_index.set_current_version(current_version);
     update_current_version(&hnsw_index.lmdb, current_version)?;
 
@@ -744,18 +754,26 @@ pub fn run_upload_dense_vectors(
 
     let mut txn = env
         .begin_rw_txn()
-        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-    let next_embedding_offset_key = key!(m:next_embedding_offset);
+        .map_err(|e| {
+            log::error!("Failed to begin read-write lmdb transaction");
+            WaCustomError::DatabaseError(e.to_string())
+        })?;
     txn.put(
         *db,
         &next_embedding_offset_key,
         &new_offset_serialized,
         WriteFlags::empty(),
     )
-    .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+        .map_err(|e| {
+            log::error!("Error writing next_embedding_offset in metadata lmdb");
+            WaCustomError::DatabaseError(e.to_string())
+        })?;
 
     txn.commit()
-        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+        .map_err(|e| {
+            log::error!("Failed to commit transaction in lmdb");
+            WaCustomError::DatabaseError(e.to_string())
+        })?;
 
     // Insert vectors
     let bufman = hnsw_index.vec_raw_manager.get(current_version)?;
@@ -782,9 +800,14 @@ pub fn run_upload_dense_vectors(
 
     let txn = env
         .begin_ro_txn()
-        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+        .map_err(|e| {
+            log::error!("Failed to begin read-only lmdb transaction");
+            WaCustomError::DatabaseError(e.to_string())
+        })?;
 
-    let count_unindexed = match txn.get(*db, &"count_unindexed") {
+    let count_unindexed_key = key!(m:count_unindexed);
+
+    let count_unindexed = match txn.get(*db, &count_unindexed_key) {
         Ok(bytes) => {
             let bytes = bytes.try_into().map_err(|e: TryFromSliceError| {
                 WaCustomError::DeserializationError(e.to_string())
@@ -792,7 +815,10 @@ pub fn run_upload_dense_vectors(
             Ok(u32::from_le_bytes(bytes))
         },
         Err(lmdb::Error::NotFound) => Ok(0),
-        Err(e) => Err(WaCustomError::DatabaseError(e.to_string()))
+        Err(e) => {
+            log::error!("Error reading 'count_unindexed' from metadata in lmdb");
+            Err(WaCustomError::DatabaseError(e.to_string()))
+        }
     }?;
 
     txn.abort();
