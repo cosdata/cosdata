@@ -1329,7 +1329,7 @@ fn create_node_edges(
             current_node_link_with_dist.push(tag);
             current_node_link_with_dist.extend(value.to_le_bytes());
 
-            let neighbor_offset = (offset.0 + 41) + neighbor_idx as u32 * 19;
+            let neighbor_offset = (offset.0 + 49) + neighbor_idx as u32 * 19;
             bufman.seek_with_cursor(cursor, neighbor_offset as u64)?;
             bufman.update_with_cursor(cursor, &current_node_link_with_dist)?;
         }
