@@ -110,6 +110,7 @@ impl HNSWIndex {
     }
 
     // Get method
+    #[allow(unused)]
     pub fn get_current_version(&self) -> Hash {
         *self.current_version.read().unwrap()
     }
