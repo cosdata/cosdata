@@ -33,17 +33,21 @@ impl DistanceFunction for CosineSimilarity {
         // 2. allows dot product to be computed only once
         let metadata = match (x.metadata, y.metadata) {
             (Some(x_metadata), Some(y_metadata)) => {
-                // @NOTE: Here we are casting i32 to f32, which means
-                // truncation is possible, but it's not a concern in
-                // this case because metadata dims will either be 0,
-                // -1, 1 (query filter encoding) or high weight values
-                // (we need to make sure it's high enough to be
-                // effective but wouldn't result in truncation if
-                // casted to f32)
-                let x_mdims = x_metadata.mbits.iter().map(|i| *i as f32).collect::<Vec<f32>>();
-                let y_mdims = y_metadata.mbits.iter().map(|i| *i as f32).collect::<Vec<f32>>();
-                let m_dot_product: f32 = dot_product_f32(&x_mdims, &y_mdims);
-                Some((x_metadata.mag, y_metadata.mag, m_dot_product))
+                if x_metadata.mag == 0.0 || y_metadata.mag == 0.0 {
+                    None
+                } else {
+                    // @NOTE: Here we are casting i32 to f32, which means
+                    // truncation is possible, but it's not a concern in
+                    // this case because metadata dims will either be 0,
+                    // -1, 1 (query filter encoding) or high weight values
+                    // (we need to make sure it's high enough to be
+                    // effective but wouldn't result in truncation if
+                    // casted to f32)
+                    let x_mdims = x_metadata.mbits.iter().map(|i| *i as f32).collect::<Vec<f32>>();
+                    let y_mdims = y_metadata.mbits.iter().map(|i| *i as f32).collect::<Vec<f32>>();
+                    let m_dot_product: f32 = dot_product_f32(&x_mdims, &y_mdims);
+                    Some((x_metadata.mag, y_metadata.mag, m_dot_product))
+                }
             },
             _ => None
         };
