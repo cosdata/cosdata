@@ -75,7 +75,7 @@ impl StdHash for NodePropValue {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Metadata {
     pub mag: f32,
     pub mbits: Vec<i32>,
@@ -120,9 +120,10 @@ impl From<&QueryFilterDimensions> for Metadata {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetadataId(pub u8);
 
+#[derive(Debug)]
 pub struct NodePropMetadata {
     #[allow(unused)]
     pub id: MetadataId,
@@ -130,6 +131,7 @@ pub struct NodePropMetadata {
     pub location: PropPersistRef,
 }
 
+#[derive(Debug)]
 pub struct VectorData<'a> {
     pub quantized_vec: &'a Storage,
     pub metadata: Option<&'a Metadata>,
