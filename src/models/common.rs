@@ -351,6 +351,12 @@ impl From<BufIoError> for WaCustomError {
     }
 }
 
+impl From<lmdb::Error> for WaCustomError {
+    fn from(error: lmdb::Error) -> Self {
+        Self::DatabaseError(error.to_string())
+    }
+}
+
 #[allow(dead_code)]
 pub fn hash_float_vec(vec: Vec<f32>) -> Vec<u8> {
     // Create a new hasher instance
