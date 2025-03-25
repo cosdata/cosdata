@@ -12,7 +12,7 @@ use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::cache_loader::HNSWIndexCache;
 use crate::models::collection::Collection;
 use crate::models::common::*;
-use crate::models::embedding_persist::EmbeddingOffset;
+use crate::models::embedding_persist::{write_dense_embedding, EmbeddingOffset};
 use crate::models::meta_persist::{
     store_values_range, store_values_upper_bound, update_current_version,
 };
@@ -21,8 +21,7 @@ use crate::models::types::*;
 use crate::models::versioning::{Hash, VersionControl};
 use crate::quantization::{Quantization, StorageType};
 use crate::vector_store::*;
-use lmdb::Transaction;
-use lmdb::WriteFlags;
+use lmdb::{Transaction, WriteFlags};
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use std::array::TryFromSliceError;
 use std::fs;
@@ -665,132 +664,28 @@ pub fn run_upload_dense_vectors(
     hnsw_index: Arc<HNSWIndex>,
     vecs: Vec<(VectorId, Vec<f32>)>,
 ) -> Result<(), WaCustomError> {
-    let env = hnsw_index.lmdb.env.clone();
-    let db = hnsw_index.lmdb.db.clone();
-    let txn = env
-        .begin_ro_txn()
-        .map_err(|e| {
-            log::error!("Failed to begin read-only lmdb transaction");
-            WaCustomError::DatabaseError(e.to_string())
-        })?;
-
-    // Check if the previous version is unindexed, and continue from where we left.
-    let prev_version = hnsw_index.get_current_version();
-    let next_embedding_offset_key = key!(m:next_embedding_offset);
-    // @TODO: Using the `next_embedding_offset_key` below causes the
-    // `debug_assert_eq!` in the Ok arm to fail.
-    let index_before_insertion = match txn.get(*db, &"next_embedding_offset") {
-        Ok(bytes) => {
-            let embedding_offset = EmbeddingOffset::deserialize(bytes)
-                .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?;
-
-            debug_assert_eq!(
-                embedding_offset.version, prev_version,
-                "Last unindexed embedding's version must be the previous version of the collection"
-            );
-
-            let prev_bufman = hnsw_index.vec_raw_manager.get(prev_version)?;
-            let cursor = prev_bufman.open_cursor()?;
-            let prev_file_len = prev_bufman.file_size() as u32;
-            prev_bufman.close_cursor(cursor)?;
-
-            prev_file_len > embedding_offset.offset
-        }
-        Err(lmdb::Error::NotFound) => false,
-        Err(e) => {
-            log::error!("Error getting 'next_embedding_offset' key from metadata db");
-            return Err(WaCustomError::DatabaseError(e.to_string()));
-        }
-    };
-
-    txn.abort();
     let lazy_item_versions_table = Arc::new(TSHashTable::new(16));
 
-    let (node_size, level_0_node_size) = {
-        let hnsw_params = hnsw_index.hnsw_params.read().unwrap();
-        let node_size = ProbNode::get_serialized_size(hnsw_params.neighbors_count);
-        let level_0_node_size = ProbNode::get_serialized_size(hnsw_params.level_0_neighbors_count);
-        (node_size as u32, level_0_node_size as u32)
-    };
-    let mut offset = 0;
-    let mut level_0_offset = 0;
-
-    if index_before_insertion {
-        index_embeddings(
-            &ctx.config,
-            &hnsw_index,
-            ctx.config.upload_process_batch_size,
-            lazy_item_versions_table.clone(),
-            || {
-                let ret = offset;
-                offset += node_size;
-                ret
-            },
-            || {
-                let ret = level_0_offset;
-                level_0_offset += level_0_node_size;
-                ret
-            },
-        )?;
-    }
-
     // Add next version
-    let (current_version, _) = hnsw_index
-        .vcs
-        .add_next_version("main")
-        .map_err(|e| {
-            log::error!("Error adding next version for main branch in lmdb");
-            WaCustomError::DatabaseError(e.to_string())
-        })?;
+    let (current_version, _) = hnsw_index.vcs.add_next_version("main").map_err(|e| {
+        log::error!("Error adding next version for main branch in lmdb");
+        WaCustomError::DatabaseError(e.to_string())
+    })?;
     hnsw_index.set_current_version(current_version);
     update_current_version(&hnsw_index.lmdb, current_version)?;
 
-    // Update LMDB metadata
-    let new_offset = EmbeddingOffset {
-        version: current_version,
-        offset: 0,
-    };
-    let new_offset_serialized = new_offset.serialize();
-
-    let mut txn = env
-        .begin_rw_txn()
-        .map_err(|e| {
-            log::error!("Failed to begin read-write lmdb transaction");
-            WaCustomError::DatabaseError(e.to_string())
-        })?;
-    txn.put(
-        *db,
-        &next_embedding_offset_key,
-        &new_offset_serialized,
-        WriteFlags::empty(),
-    )
-        .map_err(|e| {
-            log::error!("Error writing next_embedding_offset in metadata lmdb");
-            WaCustomError::DatabaseError(e.to_string())
-        })?;
-
-    txn.commit()
-        .map_err(|e| {
-            log::error!("Failed to commit transaction in lmdb");
-            WaCustomError::DatabaseError(e.to_string())
-        })?;
-
-    // Insert vectors
     let bufman = hnsw_index.vec_raw_manager.get(current_version)?;
 
-    vecs.into_par_iter()
+    // Insert vectors
+    let vec_embs = vecs
+        .into_par_iter()
         .map(|(id, vec)| {
             let vec_emb = RawDenseVectorEmbedding {
                 raw_vec: Arc::new(vec),
                 hash_vec: id,
             };
 
-            insert_embedding(
-                bufman.clone(),
-                hnsw_index.clone(),
-                &vec_emb,
-                current_version,
-            )
+            Ok::<_, WaCustomError>((write_dense_embedding(bufman.clone(), &vec_emb)?, vec_emb))
         })
         .collect::<Result<Vec<_>, _>>()?;
     bufman.flush()?;
@@ -798,12 +693,7 @@ pub fn run_upload_dense_vectors(
     let env = hnsw_index.lmdb.env.clone();
     let db = hnsw_index.lmdb.db.clone();
 
-    let txn = env
-        .begin_ro_txn()
-        .map_err(|e| {
-            log::error!("Failed to begin read-only lmdb transaction");
-            WaCustomError::DatabaseError(e.to_string())
-        })?;
+    let mut txn = env.begin_rw_txn()?;
 
     let count_unindexed_key = key!(m:count_unindexed);
 
@@ -813,7 +703,7 @@ pub fn run_upload_dense_vectors(
                 WaCustomError::DeserializationError(e.to_string())
             })?;
             Ok(u32::from_le_bytes(bytes))
-        },
+        }
         Err(lmdb::Error::NotFound) => Ok(0),
         Err(e) => {
             log::error!("Error reading 'count_unindexed' from metadata in lmdb");
@@ -821,39 +711,76 @@ pub fn run_upload_dense_vectors(
         }
     }?;
 
-    txn.abort();
-    let mut offset = 0;
-    let mut level_0_offset = 0;
+    let mut new_count_unindexed = count_unindexed + vec_embs.len() as u32;
 
-    if count_unindexed >= ctx.config.upload_threshold {
+    for (offset, vec_emb) in vec_embs {
+        let offset = EmbeddingOffset {
+            offset,
+            version: current_version,
+        };
+        let offset_serialized = offset.serialize();
+        let embedding_key = key!(e:vec_emb.hash_vec);
+        txn.put(*db, &embedding_key, &offset_serialized, WriteFlags::empty())?;
+    }
+
+    // Indexing happens while the LMDB lock is held, making sure the vectors are not double indexed
+    if new_count_unindexed >= ctx.config.upload_threshold {
+        let last_indexed_version_key = key!(m:last_indexed_version);
+        let last_indexed_version = match txn.get(*db, &last_indexed_version_key) {
+            Ok(bytes) => {
+                let bytes = bytes.try_into().map_err(|e: TryFromSliceError| {
+                    WaCustomError::DeserializationError(e.to_string())
+                })?;
+                Ok(Some(Hash::from(u32::from_le_bytes(bytes))))
+            }
+            Err(lmdb::Error::NotFound) => Ok(None),
+            Err(e) => {
+                log::error!("Error reading 'count_unindexed' from metadata in lmdb");
+                Err(WaCustomError::DatabaseError(e.to_string()))
+            }
+        }?;
         index_embeddings(
             &ctx.config,
             &hnsw_index,
             ctx.config.upload_process_batch_size,
             lazy_item_versions_table,
-            || {
-                let ret = offset;
-                offset += node_size;
-                ret
-            },
-            || {
-                let ret = level_0_offset;
-                level_0_offset += level_0_node_size;
-                ret
-            },
+            last_indexed_version,
         )?;
+        txn.put(
+            *db,
+            &last_indexed_version_key,
+            &current_version.to_le_bytes(),
+            WriteFlags::empty(),
+        )?;
+        let count_indexed_key = key!(m:count_indexed);
+        let count_indexed = match txn.get(*db, &count_indexed_key) {
+            Ok(bytes) => {
+                let bytes = bytes.try_into().map_err(|e: TryFromSliceError| {
+                    WaCustomError::DeserializationError(e.to_string())
+                })?;
+                Ok(u32::from_le_bytes(bytes))
+            }
+            Err(lmdb::Error::NotFound) => Ok(0),
+            Err(e) => Err(e),
+        }?;
+        let new_count_indexed = count_indexed + new_count_unindexed;
+        txn.put(
+            *db,
+            &count_indexed_key,
+            &new_count_indexed.to_le_bytes(),
+            WriteFlags::empty(),
+        )?;
+        new_count_unindexed = 0;
     }
 
-    // for list in nodes_lists {
-    //     for node in list.into_inner().unwrap() {
-    //         write_node_to_file(
-    //             node as *const _ as *mut _,
-    //             &dense_index.index_manager,
-    //             &dense_index.level_0_index_manager,
-    //             current_version,
-    //         )?;
-    //     }
-    // }
+    txn.put(
+        *db,
+        &count_unindexed_key,
+        &new_count_unindexed.to_le_bytes(),
+        WriteFlags::empty(),
+    )?;
+
+    txn.commit()?;
 
     hnsw_index.vec_raw_manager.flush_all()?;
     hnsw_index.cache.flush_all()?;

@@ -478,6 +478,19 @@ impl VersionControl {
         versions.sort_unstable_by_key(|(_, v)| *v.version);
         Ok(versions)
     }
+
+    pub fn get_branch_versions_starting_from_exclusive(
+        &self,
+        branch_name: &str,
+        from_version: Hash,
+    ) -> lmdb::Result<Vec<(Hash, VersionHash)>> {
+        Ok(self
+            .get_branch_versions(branch_name)?
+            .into_iter()
+            .skip_while(|(hash, _)| hash != &from_version) // Skip until the starting version
+            .skip(1) // Skip the starting version itself
+            .collect())
+    }
 }
 
 #[cfg(test)]
