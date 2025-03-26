@@ -278,12 +278,12 @@ pub fn finalize_ann_results(
     let mut results = Vec::with_capacity(k.unwrap_or(filtered.len()));
     let mag_query = query.iter().map(|x| x * x).sum::<f32>().sqrt();
 
-    for (id, _) in filtered {
-        let raw = get_dense_embedding_by_id(hnsw_index.clone(), &id)?;
+    for (orig_id, _, _) in filtered {
+        let raw = get_dense_embedding_by_id(hnsw_index.clone(), &orig_id)?;
         let dp = dot_product_f32(query, &raw.raw_vec);
         let mag_raw = raw.raw_vec.iter().map(|x| x * x).sum::<f32>().sqrt();
         let cs = dp / (mag_query * mag_raw);
-        results.push((id, MetricResult::CosineSimilarity(CosineSimilarity(cs))));
+        results.push((orig_id, MetricResult::CosineSimilarity(CosineSimilarity(cs))));
     }
     results.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
     if let Some(k) = k {

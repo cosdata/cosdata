@@ -128,6 +128,23 @@ impl ProbNode {
         }
     }
 
+    /// Returns two ids for the same prob node (original id, node_id)
+    ///
+    /// In case of metadata fields, one vector can have multiple
+    /// replicas. In that case, original_id = user provided vector id
+    /// and node_id = internal node id computed from vector id and
+    /// metadata id
+    ///
+    /// In case there are no metadata fields, original_id will be the
+    /// same as node_id
+    pub fn get_ids(&self) -> (VectorId, VectorId) {
+        if self.prop_metadata.is_some() {
+            (self.prop_value.id.clone(), self.get_id())
+        } else {
+            (self.prop_value.id.clone(), self.prop_value.id.clone())
+        }
+    }
+
     pub fn lock_lowest_index(&self) -> MutexGuard<'_, (u8, MetricResult)> {
         self.lowest_index.lock().unwrap()
     }
