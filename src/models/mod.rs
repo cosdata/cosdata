@@ -21,6 +21,7 @@ pub mod prob_node;
 pub mod rpc;
 pub mod serializer;
 pub mod sparse_ann_query;
+pub mod tree_map;
 pub mod types;
 pub mod user;
 pub mod utils;

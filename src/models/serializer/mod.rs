@@ -5,13 +5,15 @@ pub mod inverted_idf;
 mod metric_distance;
 mod page;
 mod pagepool;
+mod quotients_map;
 mod storage;
+mod tree_map;
 mod versioned_pagepool;
 
 #[cfg(test)]
 mod tests;
 
-use super::buffered_io::{BufIoError, BufferManager};
+use super::buffered_io::{BufIoError, BufferManager, BufferManagerFactory};
 use super::types::FileOffset;
 
 #[allow(unused)]
@@ -20,33 +22,26 @@ trait SimpleSerialize: Sized {
     fn deserialize(bufman: &BufferManager, offset: FileOffset) -> Result<Self, BufIoError>;
 }
 
-impl SimpleSerialize for f32 {
-    fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
-        let offset = bufman.cursor_position(cursor)? as u32;
-        bufman.update_f32_with_cursor(cursor, *self)?;
-        Ok(offset)
-    }
+pub trait PartitionedSerialize: Sized {
+    fn serialize(
+        &self,
+        bufmans: &BufferManagerFactory<u8>,
+        file_parts: u8,
+        file_idx: u8,
+        cursor: u64,
+    ) -> Result<u32, BufIoError>;
 
     fn deserialize(
-        bufman: &BufferManager,
-        FileOffset(offset): FileOffset,
-    ) -> Result<Self, BufIoError>
-    where
-        Self: Sized,
-    {
-        let cursor = bufman.open_cursor()?;
-        bufman.seek_with_cursor(cursor, offset as u64)?;
-        let res = bufman.read_f32_with_cursor(cursor)?;
-        bufman.close_cursor(cursor)?;
-        Ok(res)
-    }
+        bufmans: &BufferManagerFactory<u8>,
+        file_parts: u8,
+        file_idx: u8,
+        file_offset: FileOffset,
+    ) -> Result<Self, BufIoError>;
 }
 
-impl SimpleSerialize for u32 {
+impl SimpleSerialize for u16 {
     fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
-        let offset = bufman.cursor_position(cursor)? as u32;
-        bufman.update_u32_with_cursor(cursor, *self)?;
-        Ok(offset)
+        Ok(bufman.write_to_end_of_file(cursor, &self.to_le_bytes())? as u32)
     }
 
     fn deserialize(
@@ -58,7 +53,7 @@ impl SimpleSerialize for u32 {
     {
         let cursor = bufman.open_cursor()?;
         bufman.seek_with_cursor(cursor, offset as u64)?;
-        let res = bufman.read_u32_with_cursor(cursor)?;
+        let res = bufman.read_u16_with_cursor(cursor)?;
         bufman.close_cursor(cursor)?;
         Ok(res)
     }
