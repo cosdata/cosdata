@@ -134,7 +134,7 @@ impl InvertedIndexIDFNodeData {
             .unwrap_or(0);
 
         // BM25 probabilistic IDF formula
-        (((global_document_count - doc_freq) as f32 + 0.5) / (doc_freq as f32 + 0.5)).ln() + 1.0
+        (((global_document_count - doc_freq) as f32 + 0.5) / (doc_freq as f32 + 0.5)).ln_1p()
     }
 }
 
