@@ -31,12 +31,10 @@ pub struct HNSWIndexData {
     pub sample_threshold: usize,
 }
 
-impl TryFrom<&HNSWIndex> for HNSWIndexData {
-    type Error = WaCustomError;
-
-    fn try_from(hnsw_index: &HNSWIndex) -> Result<Self, Self::Error> {
+impl From<&HNSWIndex> for HNSWIndexData {
+    fn from(hnsw_index: &HNSWIndex) -> Self {
         let offset = hnsw_index.root_vec_offset();
-        let hnsw_index_data = Self {
+        Self {
             name: hnsw_index.name.clone(),
             hnsw_params: hnsw_index.hnsw_params.read().unwrap().clone(),
             levels_prob: hnsw_index.levels_prob.clone(),
@@ -49,8 +47,7 @@ impl TryFrom<&HNSWIndex> for HNSWIndexData {
             lower_bound: None,
             upper_bound: None,
             sample_threshold: hnsw_index.sample_threshold,
-        };
-        Ok(hnsw_index_data)
+        }
     }
 }
 
@@ -77,11 +74,19 @@ impl HNSWIndexData {
     }
 
     /// loads HNSW index data for a collection
-    pub fn load(env: &Environment, db: Database, collection_id: &[u8; 8]) -> lmdb::Result<Self> {
+    pub fn load(
+        env: &Environment,
+        db: Database,
+        collection_id: &[u8; 8],
+    ) -> lmdb::Result<Option<Self>> {
         let txn = env.begin_ro_txn().unwrap();
-        let index = txn.get(db, collection_id)?;
+        let index = match txn.get(db, collection_id) {
+            Ok(bytes) => bytes,
+            Err(lmdb::Error::NotFound) => return Ok(None),
+            Err(err) => return Err(err),
+        };
         let index = from_slice(index).unwrap();
-        Ok(index)
+        Ok(Some(index))
     }
 
     /// persists HNSW index data for a collection
@@ -90,7 +95,7 @@ impl HNSWIndexData {
         db: Database,
         hnsw_index: &HNSWIndex,
     ) -> Result<(), WaCustomError> {
-        let data = Self::try_from(hnsw_index)?;
+        let data = Self::from(hnsw_index);
 
         // Compute SipHash of the collection name
         let key = data.get_key();

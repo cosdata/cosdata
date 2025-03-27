@@ -37,7 +37,7 @@ impl EmbeddingOffset {
 }
 
 pub fn write_dense_embedding(
-    bufman: Arc<BufferManager>,
+    bufman: &BufferManager,
     emb: &RawDenseVectorEmbedding,
 ) -> Result<u32, WaCustomError> {
     // TODO: select a better value for `N` (number of bytes to pre-allocate)
@@ -87,7 +87,7 @@ pub fn write_dense_embedding(
 ///   issues such as insufficient space in the buffer, invalid embedding data, or other
 ///   internal errors.
 pub fn write_sparse_embedding(
-    bufman: Arc<BufferManager>,
+    bufman: &BufferManager,
     emb: &RawSparseVectorEmbedding,
 ) -> Result<u32, WaCustomError> {
     // TODO: select a better value for `N` (number of bytes to pre-allocate)
@@ -238,7 +238,7 @@ mod tests {
         let tempfile = tempfile().unwrap();
 
         let bufman = Arc::new(BufferManager::new(tempfile, 8192).unwrap());
-        let offset = write_dense_embedding(bufman.clone(), &embedding).unwrap();
+        let offset = write_dense_embedding(&bufman, &embedding).unwrap();
 
         let (deserialized, _) = read_embedding(bufman.clone(), offset).unwrap();
 
@@ -254,7 +254,7 @@ mod tests {
         let bufman = Arc::new(BufferManager::new(tempfile, 8192).unwrap());
 
         for embedding in &embeddings {
-            write_dense_embedding(bufman.clone(), embedding).unwrap();
+            write_dense_embedding(&bufman, embedding).unwrap();
         }
 
         let mut offset = 0;

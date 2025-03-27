@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use crate::{
-    api_service::{init_hnsw_index_for_collection, init_inverted_index_for_collection},
+    api_service::{
+        init_hnsw_index_for_collection, init_inverted_index_for_collection,
+        init_inverted_index_idf_for_collection,
+    },
     app_context::AppContext,
     models::types::{DistanceMetric, QuantizationMetric},
     quantization::StorageType,
@@ -85,6 +88,36 @@ pub(crate) async fn create_sparse_index(
         &collection,
         quantization.into_bits(),
         sample_threshold,
+        early_terminate_threshold,
+    )
+    .await
+    .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;
+
+    Ok(())
+}
+
+pub(crate) async fn create_sparse_index_idf(
+    ctx: Arc<AppContext>,
+    collection_name: String,
+    _name: String,
+    quantization: SparseIndexQuantization,
+    early_terminate_threshold: f32,
+) -> Result<(), IndexesError> {
+    if !(0.0..=1.0).contains(&early_terminate_threshold) {
+        return Err(IndexesError::FailedToCreateIndex(
+            "Invalid `early_terminate_threshold` value (must be between 0.0 and 1.0)".to_string(),
+        ));
+    }
+    let collection = ctx
+        .ain_env
+        .collections_map
+        .get_collection(&collection_name)
+        .ok_or(IndexesError::CollectionNotFound)?;
+
+    init_inverted_index_idf_for_collection(
+        ctx,
+        &collection,
+        quantization.into_bits(),
         early_terminate_threshold,
     )
     .await

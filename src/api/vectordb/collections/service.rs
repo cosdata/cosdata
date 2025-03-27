@@ -1,10 +1,6 @@
 use std::sync::Arc;
 
-use crate::{
-    app_context::AppContext,
-    indexes::{hnsw::HNSWIndex, inverted::InvertedIndex},
-    models::collection::Collection,
-};
+use crate::{app_context::AppContext, indexes::hnsw::HNSWIndex, models::collection::Collection};
 
 use super::{
     dtos::{
@@ -54,18 +50,11 @@ pub(crate) async fn get_dense_index_by_id(
     ctx: Arc<AppContext>,
     collection_id: &str,
 ) -> Result<Arc<HNSWIndex>, CollectionsError> {
-    let index = repo::get_hnsw_index_by_name(ctx, collection_id).await?;
-    Ok(index)
-}
-
-/// gets inverted index by collection id
-///
-/// currently collection_id = collection.name
-pub(crate) async fn get_inverted_index_by_id(
-    ctx: Arc<AppContext>,
-    collection_id: &str,
-) -> Result<Arc<InvertedIndex>, CollectionsError> {
-    let index = repo::get_inverted_index_by_name(ctx, collection_id).await?;
+    let index = ctx
+        .ain_env
+        .collections_map
+        .get_hnsw_index(collection_id)
+        .ok_or(CollectionsError::NotFound)?;
     Ok(index)
 }
 

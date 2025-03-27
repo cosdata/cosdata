@@ -61,14 +61,14 @@ pub(crate) async fn create_vector_in_transaction(
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse, TransactionError> {
     let (collection_id, transaction_id) = params.into_inner();
-    let vector = service::create_vector_in_transaction(
+    service::create_vector_in_transaction(
         ctx.into_inner(),
         &collection_id,
         transaction_id.into(),
         create_vector_dto,
     )
     .await?;
-    Ok(HttpResponse::Ok().json(vector))
+    Ok(HttpResponse::Ok().finish())
 }
 
 pub(crate) async fn abort_transaction(

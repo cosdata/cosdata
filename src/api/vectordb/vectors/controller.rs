@@ -11,9 +11,8 @@ pub(crate) async fn create_vector(
     web::Json(create_vector_dto): web::Json<CreateVectorDto>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse> {
-    let vector =
-        service::create_vector(ctx.into_inner(), &collection_id, create_vector_dto).await?;
-    Ok(HttpResponse::Ok().json(vector))
+    service::create_vector(ctx.into_inner(), &collection_id, create_vector_dto).await?;
+    Ok(HttpResponse::Ok().finish())
 }
 
 pub(crate) async fn get_vector_by_id(

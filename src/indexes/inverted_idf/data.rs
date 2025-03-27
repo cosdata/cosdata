@@ -6,36 +6,32 @@ use siphasher::sip::SipHasher24;
 
 use crate::models::common::WaCustomError;
 
-use super::InvertedIndex;
+use super::InvertedIndexIDF;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct InvertedIndexData {
+pub struct InvertedIndexIDFData {
     pub name: String,
     pub description: Option<String>,
     pub auto_create_index: bool,
-    pub metadata_schema: Option<String>,
     pub max_vectors: Option<i32>,
     pub quantization_bits: u8,
-    pub sample_threshold: usize,
     pub early_terminate_threshold: f32,
 }
 
-impl From<&InvertedIndex> for InvertedIndexData {
-    fn from(inverted_index: &InvertedIndex) -> Self {
+impl From<&InvertedIndexIDF> for InvertedIndexIDFData {
+    fn from(inverted_index_idf: &InvertedIndexIDF) -> Self {
         Self {
-            name: inverted_index.name.clone(),
-            description: inverted_index.description.clone(),
-            auto_create_index: inverted_index.auto_create_index,
-            metadata_schema: inverted_index.metadata_schema.clone(),
-            max_vectors: inverted_index.max_vectors,
-            quantization_bits: inverted_index.root.root.quantization_bits,
-            sample_threshold: inverted_index.sample_threshold,
-            early_terminate_threshold: inverted_index.early_terminate_threshold,
+            name: inverted_index_idf.name.clone(),
+            description: inverted_index_idf.description.clone(),
+            auto_create_index: inverted_index_idf.auto_create_index,
+            max_vectors: inverted_index_idf.max_vectors,
+            quantization_bits: inverted_index_idf.root.root.quantization_bits,
+            early_terminate_threshold: inverted_index_idf.early_terminate_threshold,
         }
     }
 }
 
-impl InvertedIndexData {
+impl InvertedIndexIDFData {
     /// Computes the SipHash of a collection/index name
     pub fn get_hash_for_name(name: &str) -> u64 {
         // Compute SipHash of the collection name
@@ -47,14 +43,14 @@ impl InvertedIndexData {
 
     /// computes the key used to store an index in the database
     pub fn get_key_for_name(name: &str) -> [u8; 8] {
-        let hash = InvertedIndexData::get_hash_for_name(name);
+        let hash = Self::get_hash_for_name(name);
 
         hash.to_le_bytes()
     }
 
     /// computes the key used to store the collection in the database
     pub fn get_key(&self) -> [u8; 8] {
-        InvertedIndexData::get_key_for_name(&self.name)
+        Self::get_key_for_name(&self.name)
     }
 
     /// loads inverted index data for a collection
@@ -62,14 +58,14 @@ impl InvertedIndexData {
         env: &Environment,
         db: Database,
         collection_id: &[u8; 8],
-    ) -> lmdb::Result<Option<InvertedIndexData>> {
+    ) -> lmdb::Result<Option<Self>> {
         let txn = env.begin_ro_txn().unwrap();
         let index = match txn.get(db, collection_id) {
             Ok(bytes) => bytes,
             Err(lmdb::Error::NotFound) => return Ok(None),
             Err(err) => return Err(err),
         };
-        let index: InvertedIndexData = from_slice(index).unwrap();
+        let index: Self = from_slice(index).unwrap();
         Ok(Some(index))
     }
 
@@ -77,9 +73,9 @@ impl InvertedIndexData {
     pub fn persist(
         env: &Environment,
         db: Database,
-        inverted_index: &InvertedIndex,
+        inverted_index: &InvertedIndexIDF,
     ) -> Result<(), WaCustomError> {
-        let data = InvertedIndexData::from(inverted_index);
+        let data = Self::from(inverted_index);
 
         // Compute SipHash of the collection name
         let key = data.get_key();
@@ -103,9 +99,9 @@ impl InvertedIndexData {
     pub fn delete_index(
         env: &Environment,
         db: Database,
-        inverted_index: &InvertedIndex,
+        inverted_index: &InvertedIndexIDF,
     ) -> lmdb::Result<()> {
-        let key = InvertedIndexData::get_key_for_name(&inverted_index.name);
+        let key = Self::get_key_for_name(&inverted_index.name);
         let mut txn = env.begin_rw_txn()?;
         txn.del(db, &key, None)?;
         txn.commit()?;

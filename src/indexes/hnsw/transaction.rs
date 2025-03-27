@@ -62,7 +62,7 @@ impl HNSWIndexTransaction {
             thread::spawn(move || {
                 let mut offsets = Vec::new();
                 for raw_emb in rx {
-                    let offset = write_dense_embedding(bufman.clone(), &raw_emb)?;
+                    let offset = write_dense_embedding(&bufman, &raw_emb)?;
                     let embedding_key = key!(e:raw_emb.hash_vec);
                     offsets.push((embedding_key, offset));
                 }
