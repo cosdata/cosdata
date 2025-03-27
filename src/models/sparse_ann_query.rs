@@ -160,8 +160,11 @@ impl SparseAnnQueryBasic {
     ) -> Result<Vec<SparseAnnIDFResult>, BufIoError> {
         let mut results_map: FxHashMap<u32, f32> = FxHashMap::default();
         let max_key = ((1u32 << quantization_bits) - 1) as u8;
-        let early_terminate_value = ((1.0 - early_terminate_threshold) * max_key as f32) as u8;
         let one_quantized = (1u32 << quantization_bits) as f32;
+        let total_documents_count = index
+            .total_documents_count
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let max_idf = get_max_idf(total_documents_count);
 
         for (term_hash, _query_tf) in self.query_vector.entries {
             // Split the hash dimension
@@ -175,16 +178,14 @@ impl SparseAnnQueryBasic {
                     unsafe { &*node.data }.try_get_data(&index.cache, node.dim_index)
                 {
                     // Get IDF for this term
-                    let idf = node_data.get_idf(
-                        quotient,
-                        index
-                            .total_documents_count
-                            .load(std::sync::atomic::Ordering::Relaxed),
-                    );
+                    let idf = node_data.get_idf(quotient, total_documents_count);
+                    let idf_ratio = idf / max_idf;
+                    let early_terminate_value =
+                        (early_terminate_threshold * idf_ratio * max_key as f32) as u8;
 
                     // Process documents containing this term
                     if let Some(inner_map) = node_data.map.lookup(&quotient) {
-                        for quantized_value in 0..=early_terminate_value {
+                        for quantized_value in early_terminate_value..=max_key {
                             if let Some(vector_ids) =
                                 inner_map.frequency_map.lookup(&quantized_value)
                             {
@@ -224,4 +225,8 @@ impl SparseAnnQueryBasic {
         results.sort_unstable_by(|a, b| b.score.total_cmp(&a.score));
         Ok(results)
     }
+}
+
+fn get_max_idf(documents_count: u32) -> f32 {
+    (((documents_count - 1) as f32 + 0.5) / 1.5).ln_1p()
 }
