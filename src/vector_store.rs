@@ -12,7 +12,7 @@ use crate::indexes::inverted::types::RawSparseVectorEmbedding;
 use crate::indexes::inverted::InvertedIndex;
 use crate::macros::key;
 use crate::metadata;
-use crate::metadata::schema::MetadataDimensions;
+use crate::metadata::fields_to_dimensions;
 use crate::metadata::MetadataFields;
 use crate::metadata::MetadataSchema;
 use crate::models::buffered_io::*;
@@ -573,28 +573,114 @@ struct IndexableEmbedding {
     embedding: QuantizedDenseVectorEmbedding,
 }
 
-/// Computes and returns all metadata dimensions for the provided
-/// metadata `fields` based on the metadata `schema`
-///
-/// Note that the result includes base_dimensions as well as
-/// weighted_dimensions.
-fn metadata_dimensions(
+/// Computes "metadata replica sets" i.e. all metadata dimensions
+/// along with an id for the provided metadata `fields` and based on
+/// the metadata `schema`. If `fields` is None or an empty map, it
+/// will return a vector with a single item i.e. the base dimensions.
+fn metadata_replica_set(
     schema: &MetadataSchema,
-    fields: &MetadataFields
-) -> Vec<(u8, MetadataDimensions)> {
-    let mut result = vec![];
-    // First add base dimensions
-    result.push((0_u8, schema.base_dimensions()));
-    let wdims = schema.weighted_dimensions(fields, 64000).unwrap();
-    for (i, wd) in wdims.into_iter().enumerate() {
-        result.push(((i+1) as u8, wd));
-    }
-    result
+    fields: Option<&MetadataFields>,
+) -> Result<Vec<(MetadataId, Metadata)>, WaCustomError> {
+    let dims = fields_to_dimensions(schema, fields)
+        .map_err(WaCustomError::MetadataError)?;
+    let replicas = dims.into_iter()
+        .enumerate()
+        .map(|(i, d)| {
+            // @TODO(vineet): Need more clarity about how a metadata
+            // ids that are unique within a replica set (v/s unique
+            // across all vectors in a collections) will result in
+            // deterministic composite identifiers for the
+            // ProbNode. Ref:
+            // https://discord.com/channels/1250672673856421938/1335809236537446452/1348638117984206848
+            let mid = MetadataId(i as u8 + 1);
+            let metadata = Metadata::from(d);
+            (mid, metadata)
+        })
+        .collect();
+    Ok(replicas)
 }
 
-/// Converts raw embeddings into IndexableEmbedding i.e. ready to be
+/// Returns a vector of `NodePropMetadata` instances based on the
+/// collection `schema` and `metadata_fields` as per the following
+/// cases:
+///
+///   - If both `schema` and `metadata_fields` are not None, then it
+///     computes the metadata dimensions and returns
+///     `NodePropMetadata` instances based on those.
+///
+///   - If `metadata_fields` is None but `schema` is not None
+///     (i.e. the collection supports metadata filtering but the
+///     vector being inserted doesn't specify any fields), then a
+///     single `NodePropMetadata` is returned corresponding to the
+///     base dimensions.
+///
+///   - If schema is None, None is returned
+///
+/// Note that this function performs IO by writing metadata to the
+/// prop_file
+fn prop_metadata_replicas(
+    schema: Option<&MetadataSchema>,
+    metadata_fields: Option<&MetadataFields>,
+    prop_file: &RwLock<File>,
+) -> Result<Option<Vec<NodePropMetadata>>, WaCustomError> {
+    if schema.is_none() {
+        return Ok(None);
+    }
+
+    let replica_set = if metadata_fields.is_some() {
+        Some(metadata_replica_set(schema.unwrap(), metadata_fields)?)
+    } else {
+        // If the collection supports metadata schema and
+        // even if no metadata fields are specified with
+        // the input vector, we create one replica with
+        // base dimensions.
+        match schema {
+            Some(s) => {
+                let mrset = metadata_replica_set(s, None)?;
+                debug_assert_eq!(1, mrset.len());
+                Some(mrset)
+            },
+            // Following is unreachable as the case of schema being
+            // None has already been handled
+            None => None,
+        }
+    };
+
+    if let Some(replicas) = replica_set {
+        let mut result = Vec::with_capacity(replicas.len());
+        for (mid, m) in replicas {
+            let mvalue = Arc::new(m);
+
+            // Write metadata to the same prop file
+            let mut prop_file_guard = prop_file.write()
+                .map_err(|_| WaCustomError::LockError("Failed to acquire lock to write prop metadata".to_string()))?;
+            let location = write_prop_metadata_to_file(
+                &mid,
+                mvalue.clone(),
+                &mut *prop_file_guard
+            )?;
+            drop(prop_file_guard);
+
+            let prop_metadata = NodePropMetadata {
+                id: mid,
+                vec: mvalue,
+                location,
+            };
+            result.push(prop_metadata);
+        }
+        Ok(Some(result))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Converts raw embeddings into `IndexableEmbedding` i.e. ready to be
 /// indexed - with quantization performed and property values and
 /// metadata fields converted into appropriate types.
+///
+/// If metadata filtering is supported for the collection, then one
+/// input raw embedding may result in multiple `IndexableEmbedding`
+/// instances.
 fn preprocess_embedding(
     app_env: &AppEnv,
     hnsw_index: &HNSWIndex,
@@ -637,45 +723,24 @@ fn preprocess_embedding(
         .get_collection(&hnsw_index.name)
         .expect("Couldn't get collection from ain_env");
 
-    match &raw_emb.raw_metadata {
-        Some(metadata_fields) => {
-            // @TODO(vineet): Remove unwrap
-            let metadata_schema = coll.metadata_schema.as_ref().unwrap();
-            let wdims = metadata_dimensions(metadata_schema, metadata_fields);
-            let mut result = Vec::with_capacity(wdims.len());
-            for (i, wdim) in wdims {
-                let vec = Arc::new(Metadata::from(wdim));
-                // @TODO(vineet): Need more clarity about how a
-                // metadata ids that are unique within a replica set
-                // (v/s unique across all vectors in a collections)
-                // will result in deterministic composite identifiers
-                // for the ProbNode. Ref:
-                // https://discord.com/channels/1250672673856421938/1335809236537446452/1348638117984206848
-                let id = MetadataId(i + 1);
+    let metadata_replicas = prop_metadata_replicas(
+        coll.metadata_schema.as_ref(),
+        raw_emb.raw_metadata.as_ref(),
+        &hnsw_index.cache.prop_file,
+    ).unwrap();
 
-                // Write metadata to the same prop file
-                // @TODO(vineet): Remove unwrap
-                let mut prop_file_guard = hnsw_index.cache.prop_file.write().unwrap();
-                let location = write_prop_metadata_to_file(
-                    &id,
-                    vec.clone(),
-                    &mut *prop_file_guard
-                ).unwrap();
-                drop(prop_file_guard);
+    let mut embeddings: Vec<IndexableEmbedding> = vec![];
 
-                let prop_metadata = NodePropMetadata {
-                    id,
-                    vec,
-                    location,
-                };
+    match metadata_replicas {
+        Some(replicas) => {
+            for prop_metadata in replicas {
                 let emb = IndexableEmbedding {
                     prop_value: prop_value.clone(),
                     prop_metadata: Some(Arc::new(prop_metadata)),
                     embedding: embedding.clone()
                 };
-                result.push(emb);
+                embeddings.push(emb);
             }
-            result
         },
         None => {
             let emb = IndexableEmbedding {
@@ -683,9 +748,11 @@ fn preprocess_embedding(
                 prop_metadata: None,
                 embedding: embedding.clone(),
             };
-            vec![emb]
+            embeddings.push(emb);
         },
     }
+
+    embeddings
 }
 
 pub fn index_embeddings(

@@ -154,6 +154,10 @@ impl MetadataSchema {
         &self,
         input_fields: &'a MetadataFields
     ) -> Vec<HashMap<&'a str, &'a FieldValue>> {
+        // If no input fields are specified, return empty vector
+        if input_fields.is_empty() {
+            return vec![];
+        }
         let input_fields_set = input_fields
             .keys()
             .map(|n| n.as_ref())
@@ -510,6 +514,11 @@ mod tests {
         assert_eq!(ec1, cs[0]);
         assert_eq!(ec2, cs[1]);
         assert_eq!(ec3, cs[2]);
+
+        // When the input contains no fields
+        let fs = HashMap::new();
+        let cs = schema.input_field_combinations(&fs);
+        assert!(cs.is_empty());
     }
 
     #[test]
@@ -604,6 +613,11 @@ mod tests {
         for i in 0..wd.len() {
             assert!(wd[i] == exp_dim1 || wd[i] == exp_dim2 || wd[i] == exp_dim3);
         }
+
+        // Case 4: When no fields are specified in input vector
+        let fields = HashMap::new();
+        let wd = schema.weighted_dimensions(&fields, 1024).unwrap();
+        assert!(wd.is_empty())
     }
 
     #[test]

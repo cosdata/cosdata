@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use de::FieldValueVisitor;
+use schema::MetadataDimensions;
 use serde::{Deserialize, Deserializer, Serialize};
 
 pub mod de;
@@ -11,6 +12,8 @@ pub mod schema;
 
 pub use schema::MetadataSchema;
 pub use query_filtering::{Filter, Predicate, Operator, QueryFilterDimensions};
+
+const HIGH_WEIGHT: i32 = 64000;
 
 #[derive(Debug, Clone)]
 pub enum Error {
@@ -102,6 +105,24 @@ impl<'de> Deserialize<'de> for FieldValue {
 }
 
 pub type MetadataFields = HashMap<FieldName, FieldValue>;
+
+pub fn fields_to_dimensions(
+    schema: &MetadataSchema,
+    metadata_fields: Option<&MetadataFields>,
+) -> Result<Vec<MetadataDimensions>, Error> {
+    let mut result = vec![];
+    // First add base dimensions
+    result.push(schema.base_dimensions());
+
+    if let Some(fields) = metadata_fields {
+        let weighted_dims = schema.weighted_dimensions(fields, HIGH_WEIGHT)?;
+        for wd in weighted_dims.into_iter() {
+            result.push(wd);
+        }
+    }
+
+    Ok(result)
+}
 
 #[cfg(test)]
 mod tests {
