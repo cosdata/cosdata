@@ -18,6 +18,8 @@ pub struct Config {
     pub num_regions_to_load_on_restart: usize,
     pub inverted_index_data_file_parts: u8,
     pub sparse_raw_values_reranking_factor: usize,
+    #[serde(default)]
+    pub cache: CacheConfig,
 }
 
 #[derive(Deserialize, Clone)]
@@ -186,4 +188,32 @@ pub fn load_config() -> Result<Config, WaCustomError> {
 
     toml::from_str(&config_contents)
         .map_err(|e| WaCustomError::ConfigError(format!("Invalid config format: {}", e)))
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct CacheConfig {
+    // Maximum number of collections to keep in memory
+    #[serde(default = "default_max_collections")]
+    pub max_collections: usize,
+    // Probability factor for eviction (0.0-1.0)
+    #[serde(default = "default_eviction_probability")]
+    pub eviction_probability: f32,
+}
+
+fn default_max_collections() -> usize {
+    10
+}
+
+fn default_eviction_probability() -> f32 {
+    0.03125 // Similar to the existing LRUCache default
+}
+
+// Implement Default for CacheConfig
+impl Default for CacheConfig {
+    fn default() -> Self {
+        Self {
+            max_collections: default_max_collections(),
+            eviction_probability: default_eviction_probability(),
+        }
+    }
 }

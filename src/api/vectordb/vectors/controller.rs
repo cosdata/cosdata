@@ -4,6 +4,8 @@ use super::{
     dtos::{BatchSearchVectorsDto, CreateVectorDto, FindSimilarVectorsDto, UpdateVectorDto},
     service,
 };
+
+use crate::models::collection_cache::CollectionCacheExt;
 use crate::{app_context::AppContext, models::types::VectorId};
 
 pub(crate) async fn create_vector(
@@ -11,6 +13,8 @@ pub(crate) async fn create_vector(
     web::Json(create_vector_dto): web::Json<CreateVectorDto>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse> {
+    ctx.update_collection_for_transaction(&collection_id)
+        .map_err(|e| actix_web::error::ErrorInternalServerError(format!("Cache error: {}", e)))?;
     service::create_vector(ctx.into_inner(), &collection_id, create_vector_dto).await?;
     Ok(HttpResponse::Ok().finish())
 }
@@ -20,6 +24,10 @@ pub(crate) async fn get_vector_by_id(
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse> {
     let (collection_id, vector_id) = path.into_inner();
+
+    ctx.update_collection_for_query(&collection_id)
+        .map_err(|e| actix_web::error::ErrorInternalServerError(format!("Cache error: {}", e)))?;
+
     let vector =
         service::get_vector_by_id(ctx.into_inner(), &collection_id, VectorId(vector_id)).await?;
     Ok(HttpResponse::Ok().json(vector))

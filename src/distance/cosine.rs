@@ -38,9 +38,7 @@ impl DistanceFunction for CosineSimilarity {
                 },
             ) => {
                 let dot_product = dot_product_u8(x_vec, y_vec) as f32;
-                let x_mag = (*x_mag as f32).sqrt();
-                let y_mag = (*y_mag as f32).sqrt();
-                cosine_similarity_from_dot_product(dot_product, x_mag, y_mag)
+                cosine_similarity_from_dot_product(dot_product, *x_mag, *y_mag)
             }
             (
                 Storage::SubByte {

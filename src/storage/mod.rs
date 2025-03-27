@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 )]
 pub enum Storage {
     UnsignedByte {
-        mag: u32,
+        mag: f32,
         quant_vec: Vec<u8>,
     },
     SubByte {

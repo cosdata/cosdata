@@ -40,3 +40,27 @@ pub(crate) async fn delete_collection_by_id(
     let collection = service::delete_collection_by_id(ctx.into_inner(), &collection_id).await?;
     Ok(HttpResponse::Ok().json(collection))
 }
+
+pub(crate) async fn load_collection(
+    collection_id: web::Path<String>,
+    ctx: web::Data<AppContext>,
+) -> Result<HttpResponse> {
+    let collection = service::load_collection(ctx.into_inner(), &collection_id).await?;
+    Ok(HttpResponse::Ok().json(collection))
+}
+
+pub(crate) async fn unload_collection(
+    collection_id: web::Path<String>,
+    ctx: web::Data<AppContext>,
+) -> Result<HttpResponse> {
+    service::unload_collection(ctx.into_inner(), &collection_id).await?;
+    Ok(HttpResponse::Ok().json(format!(
+        "Collection '{}' successfully unloaded",
+        collection_id
+    )))
+}
+
+pub(crate) async fn get_loaded_collections(ctx: web::Data<AppContext>) -> Result<HttpResponse> {
+    let collections = service::get_loaded_collections(ctx.into_inner()).await?;
+    Ok(HttpResponse::Ok().json(collections))
+}

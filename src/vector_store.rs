@@ -26,10 +26,9 @@ use crate::models::types::*;
 use crate::models::versioning::Hash;
 use crate::quantization::{Quantization, StorageType};
 use crate::storage::Storage;
-use lmdb::{Transaction, WriteFlags};
+use lmdb::Transaction;
 use rand::Rng;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
-use std::array::TryFromSliceError;
 use std::collections::BinaryHeap;
 use std::fs::File;
 use std::ptr;
@@ -357,57 +356,69 @@ pub fn get_sparse_embedding_by_id(
 //     dense_index.storage_type.update_shared(storage_type);
 // }
 
-pub fn insert_embedding(
-    bufman: Arc<BufferManager>,
-    hnsw_index: Arc<HNSWIndex>,
-    emb: &RawDenseVectorEmbedding,
-    current_version: Hash,
+#[allow(clippy::too_many_arguments)]
+pub fn index_embeddings_batch(
+    config: &Config,
+    hnsw_index: &HNSWIndex,
+    embeddings: Vec<RawDenseVectorEmbedding>,
+    version: Hash,
+    version_number: u16,
+    lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16, u8), SharedNode>>,
+    hnsw_params: &HNSWHyperParams,
+    offset_fn: &mut impl FnMut() -> u32,
+    level_0_offset_fn: &mut impl FnMut() -> u32,
 ) -> Result<(), WaCustomError> {
-    let env = hnsw_index.lmdb.env.clone();
-    let db = hnsw_index.lmdb.db.clone();
+    let quantization = hnsw_index.quantization_metric.read().unwrap();
 
-    let mut txn = env
-        .begin_rw_txn()
-        .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
+    embeddings
+        .into_iter()
+        .map(|raw_emb| {
+            let max_level =
+                get_max_insert_level(rand::random::<f32>().into(), &hnsw_index.levels_prob);
+            let quantized_vec = Arc::new(quantization.quantize(
+                &raw_emb.raw_vec,
+                *hnsw_index.storage_type.read().unwrap(),
+                *hnsw_index.values_range.read().unwrap(),
+            )?);
+            let mut prop_file_guard = hnsw_index.cache.prop_file.write().unwrap();
+            let location = write_prop_to_file(
+                &raw_emb.hash_vec,
+                quantized_vec.clone(),
+                &mut prop_file_guard,
+            )?;
+            drop(prop_file_guard);
+            let prop = Arc::new(NodeProp {
+                id: raw_emb.hash_vec.clone(),
+                value: quantized_vec.clone(),
+                location,
+            });
+            let embedding = QuantizedDenseVectorEmbedding {
+                quantized_vec,
+                hash_vec: raw_emb.hash_vec,
+            };
 
-    let count_unindexed = match txn.get(*db, &"count_unindexed") {
-        Ok(bytes) => {
-            let bytes = bytes.try_into().map_err(|e: TryFromSliceError| {
-                WaCustomError::DeserializationError(e.to_string())
-            })?;
-            u32::from_le_bytes(bytes)
-        }
-        Err(lmdb::Error::NotFound) => 0,
-        Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
-    };
+            let root_entry = hnsw_index.get_root_vec();
+            let highest_level = HNSWLevel(hnsw_params.num_layers);
 
-    let offset = write_dense_embedding(&bufman, emb)?;
-
-    let offset = EmbeddingOffset {
-        version: current_version,
-        offset,
-    };
-    let offset_serialized = offset.serialize();
-
-    let embedding_key = key!(e:emb.hash_vec);
-
-    txn.put(*db, &embedding_key, &offset_serialized, WriteFlags::empty())
-        .map_err(|e| WaCustomError::DatabaseError(format!("Failed to put data: {}", e)))?;
-    let count_unindexed_key = key!(m:count_unindexed);
-
-    txn.put(
-        *db,
-        &count_unindexed_key,
-        &(count_unindexed + 1).to_le_bytes(),
-        WriteFlags::empty(),
-    )
-    .map_err(|e| {
-        WaCustomError::DatabaseError(format!("Failed to update `count_unindexed`: {}", e))
-    })?;
-
-    txn.commit().map_err(|e| {
-        WaCustomError::DatabaseError(format!("Failed to commit transaction: {}", e))
-    })?;
+            index_embedding(
+                config,
+                hnsw_index,
+                ptr::null_mut(),
+                embedding,
+                prop,
+                root_entry,
+                highest_level,
+                version,
+                version_number,
+                lazy_item_versions_table.clone(),
+                hnsw_params,
+                max_level,
+                offset_fn,
+                level_0_offset_fn,
+                *hnsw_index.distance_metric.read().unwrap(),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
     Ok(())
 }
@@ -417,205 +428,81 @@ pub fn index_embeddings(
     hnsw_index: &HNSWIndex,
     upload_process_batch_size: usize,
     lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16, u8), SharedNode>>,
-    mut offset_fn: impl FnMut() -> u32,
-    mut level_0_offset_fn: impl FnMut() -> u32,
+    last_indexed_version: Option<Hash>,
 ) -> Result<(), WaCustomError> {
-    let env = hnsw_index.lmdb.env.clone();
-    let db = hnsw_index.lmdb.db.clone();
-
-    let txn = env
-        .begin_ro_txn()
-        .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
-
-    let mut count_indexed = match txn.get(*db, &"count_indexed") {
-        Ok(bytes) => {
-            let bytes = bytes.try_into().map_err(|e: TryFromSliceError| {
-                WaCustomError::DeserializationError(e.to_string())
-            })?;
-            u32::from_le_bytes(bytes)
-        }
-        Err(lmdb::Error::NotFound) => 0,
-        Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
-    };
-    let mut count_unindexed = match txn.get(*db, &"count_unindexed") {
-        Ok(bytes) => {
-            let bytes = bytes.try_into().map_err(|e: TryFromSliceError| {
-                WaCustomError::DeserializationError(e.to_string())
-            })?;
-            u32::from_le_bytes(bytes)
-        }
-        Err(lmdb::Error::NotFound) => 0,
-        Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
-    };
-
-    let embedding_offset = match txn.get(*db, &"next_embedding_offset") {
-        Ok(bytes) => EmbeddingOffset::deserialize(bytes)
-            .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?,
-        Err(err) => return Err(WaCustomError::DatabaseError(err.to_string())),
-    };
-    let version = embedding_offset.version;
-    let version_hash = hnsw_index
-        .vcs
-        .get_version_hash(&version, &txn)
-        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?
-        .expect("Current version hash not found");
-    let version_number = *version_hash.version as u16;
-
-    txn.abort();
+    let versions = if let Some(last_indexed_version) = last_indexed_version {
+        hnsw_index
+            .vcs
+            .get_branch_versions_starting_from_exclusive("main", last_indexed_version)
+    } else {
+        hnsw_index.vcs.get_branch_versions("main")
+    }?;
 
     let hnsw_params_guard = hnsw_index.hnsw_params.read().unwrap();
 
-    let mut index = |embeddings: Vec<RawDenseVectorEmbedding>,
-                     next_offset: u32|
-     -> Result<(), WaCustomError> {
-        let quantization = hnsw_index.quantization_metric.read().unwrap();
+    let node_size = ProbNode::get_serialized_size(hnsw_params_guard.neighbors_count) as u32;
+    let level_0_node_size =
+        ProbNode::get_serialized_size(hnsw_params_guard.level_0_neighbors_count) as u32;
 
-        let results: Vec<()> = embeddings
-            .into_iter()
-            .map(|raw_emb| {
-                let iv =
-                    get_max_insert_level(rand::random::<f32>().into(), &hnsw_index.levels_prob);
-                let quantized_vec = Arc::new(
-                    quantization
-                        .quantize(
-                            &raw_emb.raw_vec,
-                            *hnsw_index.storage_type.read().unwrap(),
-                            *hnsw_index.values_range.read().unwrap(),
-                        )
-                        .expect("Quantization failed"),
-                );
-                let mut prop_file_guard = hnsw_index.cache.prop_file.write().unwrap();
-                let location = write_prop_to_file(
-                    &raw_emb.hash_vec,
-                    quantized_vec.clone(),
-                    &mut prop_file_guard,
-                )
-                .expect("failed to write prop");
-                drop(prop_file_guard);
-                let prop = Arc::new(NodeProp {
-                    id: raw_emb.hash_vec.clone(),
-                    value: quantized_vec.clone(),
-                    location,
-                });
-                let embedding = QuantizedDenseVectorEmbedding {
-                    quantized_vec,
-                    hash_vec: raw_emb.hash_vec,
-                };
+    for (version, version_info) in versions {
+        let bufman = hnsw_index.vec_raw_manager.get(version)?;
 
-                let current_level = HNSWLevel(iv);
+        let mut i = 0;
+        let cursor = bufman.open_cursor()?;
+        let file_len = bufman.file_size() as u32;
 
-                let mut current_entry = hnsw_index.get_root_vec();
+        let mut embeddings = Vec::new();
 
-                loop {
-                    let data = unsafe { &*current_entry }
-                        .try_get_data(&hnsw_index.cache)
-                        .expect("Unable to load data");
-                    if data.hnsw_level.0 > current_level.0 {
-                        current_entry = data.get_child();
-                    } else if data.hnsw_level == current_level {
-                        break;
-                    } else {
-                        panic!("missing node");
-                    }
-                }
+        let mut offset = 0;
+        let mut level_0_offset = 0;
 
-                index_embedding(
+        let mut offset_fn = || {
+            let ret = offset;
+            offset += node_size;
+            ret
+        };
+
+        let mut level_0_offset_fn = || {
+            let ret = level_0_offset;
+            level_0_offset += level_0_node_size;
+            ret
+        };
+
+        loop {
+            if i == file_len {
+                index_embeddings_batch(
                     config,
                     hnsw_index,
-                    ptr::null_mut(),
-                    embedding,
-                    prop,
-                    current_entry,
-                    current_level,
+                    embeddings,
                     version,
-                    version_number,
+                    *version_info.version as u16,
                     lazy_item_versions_table.clone(),
                     &hnsw_params_guard,
-                    2,
                     &mut offset_fn,
                     &mut level_0_offset_fn,
-                    *hnsw_index.distance_metric.read().unwrap(),
-                )
-                .expect("index_embedding failed");
-            })
-            .collect();
+                )?;
+                bufman.close_cursor(cursor)?;
+                break;
+            }
 
-        let batch_size = results.len() as u32;
-        count_indexed += batch_size;
-        count_unindexed -= batch_size;
+            let (embedding, next) = read_embedding(bufman.clone(), i)?;
+            embeddings.push(embedding);
+            i = next;
 
-        let mut txn = env.begin_rw_txn().map_err(|e| {
-            WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e))
-        })?;
-
-        let next_embedding_offset = EmbeddingOffset {
-            version,
-            offset: next_offset,
-        };
-        let next_embedding_offset_serialized = next_embedding_offset.serialize();
-        let next_embedding_offset_key = key!(m:next_embedding_offset);
-        let count_indexed_key = key!(m:count_indexed);
-        let count_unindexed_key = key!(m:count_unindexed);
-
-        txn.put(
-            *db,
-            &next_embedding_offset_key,
-            &next_embedding_offset_serialized,
-            WriteFlags::empty(),
-        )
-        .map_err(|e| {
-            WaCustomError::DatabaseError(format!("Failed to update `next_embedding_offset`: {}", e))
-        })?;
-
-        txn.put(
-            *db,
-            &count_indexed_key,
-            &count_indexed.to_le_bytes(),
-            WriteFlags::empty(),
-        )
-        .map_err(|e| {
-            WaCustomError::DatabaseError(format!("Failed to update `count_indexed`: {}", e))
-        })?;
-
-        txn.put(
-            *db,
-            &count_unindexed_key,
-            &count_unindexed.to_le_bytes(),
-            WriteFlags::empty(),
-        )
-        .map_err(|e| {
-            WaCustomError::DatabaseError(format!("Failed to update `count_unindexed`: {}", e))
-        })?;
-
-        txn.commit().map_err(|e| {
-            WaCustomError::DatabaseError(format!("Failed to commit transaction: {}", e))
-        })?;
-
-        Ok(())
-    };
-
-    let bufman = hnsw_index.vec_raw_manager.get(version)?;
-
-    let mut i = embedding_offset.offset;
-    let cursor = bufman.open_cursor()?;
-    let file_len = bufman.file_size() as u32;
-
-    let mut embeddings = Vec::new();
-
-    loop {
-        if i == file_len {
-            index(embeddings, i)?;
-            bufman.close_cursor(cursor)?;
-            break;
-        }
-
-        let (embedding, next) = read_embedding(bufman.clone(), i)?;
-        embeddings.push(embedding);
-        i = next;
-
-        if embeddings.len() == upload_process_batch_size {
-            index(embeddings, i)?;
-            embeddings = Vec::new();
+            if embeddings.len() == upload_process_batch_size {
+                index_embeddings_batch(
+                    config,
+                    hnsw_index,
+                    embeddings,
+                    version,
+                    *version_info.version as u16,
+                    lazy_item_versions_table.clone(),
+                    &hnsw_params_guard,
+                    &mut offset_fn,
+                    &mut level_0_offset_fn,
+                )?;
+                embeddings = Vec::new();
+            }
         }
     }
 
@@ -682,7 +569,7 @@ pub fn index_embeddings_in_transaction(
                 version_number,
                 transaction.lazy_item_versions_table.clone(),
                 &hnsw_params_guard,
-                max_level as u8, // Pass max_level to let index_embedding control node creation
+                max_level, // Pass max_level to let index_embedding control node creation
                 &mut || transaction.get_new_node_offset(),
                 &mut || transaction.get_new_level_0_node_offset(),
                 *hnsw_index.distance_metric.read().unwrap(),

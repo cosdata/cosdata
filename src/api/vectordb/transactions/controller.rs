@@ -1,5 +1,6 @@
 use actix_web::{web, HttpResponse};
 
+use crate::models::collection_cache::CollectionCacheExt;
 use crate::{
     api::vectordb::{indexes::dtos::IndexType, vectors::dtos::CreateDenseVectorDto},
     app_context::AppContext,
@@ -17,6 +18,10 @@ pub(crate) async fn create_transaction(
     web::Json(CreateTransactionDto { index_type }): web::Json<CreateTransactionDto>,
 ) -> Result<HttpResponse, TransactionError> {
     let collection_id = collection_id.into_inner();
+
+    ctx.update_collection_for_transaction(&collection_id)
+        .map_err(|e| TransactionError::FailedToCreateTransaction(format!("Cache error: {}", e)))?;
+
     let transaction = match index_type {
         IndexType::Dense => {
             service::create_dense_index_transaction(ctx.into_inner(), &collection_id).await?
@@ -34,6 +39,10 @@ pub(crate) async fn commit_transaction(
     web::Json(CommitTransactionDto { index_type }): web::Json<CommitTransactionDto>,
 ) -> Result<HttpResponse, TransactionError> {
     let (collection_id, transaction_id) = params.into_inner();
+
+    ctx.update_collection_for_transaction(&collection_id)
+        .map_err(|e| TransactionError::FailedToCommitTransaction(format!("Cache error: {}", e)))?;
+
     match index_type {
         IndexType::Dense => {
             service::commit_dense_index_transaction(
@@ -61,6 +70,9 @@ pub(crate) async fn create_vector_in_transaction(
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse, TransactionError> {
     let (collection_id, transaction_id) = params.into_inner();
+    ctx.update_collection_for_transaction(&collection_id)
+        .map_err(|e| TransactionError::FailedToCreateVector(format!("Cache error: {}", e)))?;
+
     service::create_vector_in_transaction(
         ctx.into_inner(),
         &collection_id,
@@ -77,6 +89,9 @@ pub(crate) async fn abort_transaction(
     web::Json(AbortTransactionDto { index_type }): web::Json<AbortTransactionDto>,
 ) -> Result<HttpResponse, TransactionError> {
     let (collection_id, transaction_id) = params.into_inner();
+
+    ctx.update_collection_for_transaction(&collection_id)
+        .map_err(|e| TransactionError::FailedToCommitTransaction(format!("Cache error: {}", e)))?;
     match index_type {
         IndexType::Dense => {
             service::abort_dense_index_transaction(
@@ -103,6 +118,10 @@ pub(crate) async fn delete_vector_by_id(
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse, TransactionError> {
     let (collection_id, transaction_id, vector_id) = path.into_inner();
+
+    ctx.update_collection_for_transaction(&collection_id)
+        .map_err(|e| TransactionError::FailedToDeleteVector(format!("Cache error: {}", e)))?;
+
     service::delete_vector_by_id(
         ctx.into_inner(),
         &collection_id,
@@ -119,6 +138,10 @@ pub(crate) async fn upsert(
     web::Json(upsert_dto): web::Json<UpsertDto>,
 ) -> Result<HttpResponse, TransactionError> {
     let (collection_id, transaction_id) = path.into_inner();
+
+    ctx.update_collection_for_transaction(&collection_id)
+        .map_err(|e| TransactionError::FailedToCreateVector(format!("Cache error: {}", e)))?;
+
     match upsert_dto {
         UpsertDto::Dense(vectors) => {
             service::upsert_dense_vectors(
