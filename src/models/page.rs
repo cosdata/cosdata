@@ -1,7 +1,10 @@
 use super::{types::FileOffset, versioning::Hash};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, RwLock,
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, RwLock,
+    },
+    vec::IntoIter,
 };
 
 #[derive(Debug, Clone)]
@@ -32,24 +35,24 @@ impl<const LEN: usize> VersionedPagepool<LEN> {
         }
     }
 
-    pub fn push(&self, version: Hash, vector_id: u32) {
+    pub fn push(&self, version: Hash, id: u32) {
         if self.current_version != version {
             let next_read_guard = self.next.read().unwrap();
             if let Some(next) = &*next_read_guard {
-                return next.push(version, vector_id);
+                return next.push(version, id);
             }
             drop(next_read_guard);
             let mut next_write_guard = self.next.write().unwrap();
             if let Some(next) = &mut *next_write_guard {
-                return next.push(version, vector_id);
+                return next.push(version, id);
             }
 
             let new_next = Self::new(version);
-            new_next.push(version, vector_id);
+            new_next.push(version, id);
             *next_write_guard = Some(new_next);
             return;
         }
-        self.pagepool.push(vector_id);
+        self.pagepool.push(id);
     }
 
     pub fn len(&self) -> usize {
@@ -71,6 +74,92 @@ impl<const LEN: usize> VersionedPagepool<LEN> {
     #[allow(unused)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    #[allow(unused)]
+    pub fn contains(&self, id: &u32) -> bool {
+        self.pagepool.contains(id)
+            || self
+                .next
+                .read()
+                .unwrap()
+                .as_ref()
+                .is_some_and(|pool| pool.contains(id))
+    }
+}
+
+pub struct VersionedPagepoolIter<const LEN: usize> {
+    current_pool: Option<Arc<VersionedPagepool<LEN>>>,
+    page_iter: Option<IntoIter<Page<LEN>>>,
+    data_iter: Option<std::array::IntoIter<u32, LEN>>,
+    current_page_len: usize,
+    current_page_idx: usize,
+}
+
+impl<const LEN: usize> Iterator for VersionedPagepoolIter<LEN> {
+    type Item = u32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            // If we have a `data_iter`, try getting the next `u32`
+            if let Some(ref mut data_iter) = self.data_iter {
+                if self.current_page_idx < self.current_page_len {
+                    if let Some(value) = data_iter.next() {
+                        self.current_page_idx += 1;
+                        return Some(value);
+                    }
+                }
+                // Exhausted this page, move to the next one
+                self.data_iter = None;
+            }
+
+            // If we have a `page_iter`, get the next page
+            if let Some(ref mut page_iter) = self.page_iter {
+                if let Some(page) = page_iter.next() {
+                    self.data_iter = Some(page.data.into_iter());
+                    self.current_page_len = page.len;
+                    self.current_page_idx = 0;
+                    continue;
+                }
+                // Exhausted all pages, move to the next VersionedPagepool
+                self.page_iter = None;
+            }
+
+            // If we have a `current_pool`, move to the next one
+            if let Some(pool) = self.current_pool.take() {
+                if let Ok(next_pool) = pool.next.read() {
+                    if let Some(ref next) = *next_pool {
+                        self.current_pool = Some(Arc::new(next.clone()));
+                        if let Ok(pages) = next.pagepool.inner.read() {
+                            self.page_iter = Some(pages.clone().into_iter());
+                        }
+                        continue;
+                    }
+                }
+            }
+
+            // No more data
+            return None;
+        }
+    }
+}
+
+impl<const LEN: usize> VersionedPagepool<LEN> {
+    pub fn iter(&self) -> VersionedPagepoolIter<LEN> {
+        let page_iter = self
+            .pagepool
+            .inner
+            .read()
+            .ok()
+            .map(|pages| pages.clone().into_iter());
+
+        VersionedPagepoolIter {
+            current_pool: Some(Arc::new(self.clone())),
+            page_iter,
+            data_iter: None,
+            current_page_len: 0,
+            current_page_idx: 0,
+        }
     }
 }
 
@@ -101,12 +190,12 @@ impl<const LEN: usize> Pagepool<LEN> {
     }
 
     #[allow(unused)]
-    pub fn contains(&self, data: u32) -> bool {
+    pub fn contains(&self, data: &u32) -> bool {
         self.inner
             .read()
             .unwrap()
             .iter()
-            .any(|p| p.data.contains(&data))
+            .any(|p| p.data.contains(data))
     }
 }
 

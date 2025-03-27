@@ -1,7 +1,12 @@
 pub mod hnsw;
 pub mod inverted;
+pub mod inverted_idf;
+
 mod metric_distance;
+mod page;
+mod pagepool;
 mod storage;
+mod versioned_pagepool;
 
 #[cfg(test)]
 mod tests;

@@ -4,7 +4,7 @@ use std::{
 };
 
 pub struct AtomicArray<T, const N: usize> {
-    items: [AtomicPtr<T>; N],
+    pub(crate) items: [AtomicPtr<T>; N],
 }
 
 #[cfg(test)]
@@ -32,16 +32,16 @@ impl<T: std::fmt::Debug, const N: usize> std::fmt::Debug for AtomicArray<T, N> {
 
 impl<T, const N: usize> Default for AtomicArray<T, N> {
     fn default() -> Self {
-        Self::new()
+        Self {
+            items: std::array::from_fn(|_| AtomicPtr::new(ptr::null_mut())),
+        }
     }
 }
 
 #[allow(unused)]
 impl<T, const N: usize> AtomicArray<T, N> {
     pub fn new() -> Self {
-        Self {
-            items: std::array::from_fn(|_| AtomicPtr::new(ptr::null_mut())),
-        }
+        Self::default()
     }
 
     pub fn push(&self, item: *mut T) {

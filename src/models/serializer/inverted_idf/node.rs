@@ -1,31 +1,34 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use crate::models::{
     atomic_array::AtomicArray,
     buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
-    cache_loader::InvertedIndexCache,
-    inverted_index::{InvertedIndexNode, InvertedIndexNodeData},
+    cache_loader::InvertedIndexIDFCache,
+    inverted_index_idf::{InvertedIndexIDFNode, InvertedIndexIDFNodeData},
     prob_lazy_load::lazy_item::ProbLazyItem,
     types::FileOffset,
 };
 
-use super::InvertedIndexSerialize;
+use super::{InvertedIndexIDFSerialize, INVERTED_INDEX_DATA_CHUNK_SIZE};
 
 // @SERIALIZED_SIZE:
 //
-//   qb = quantization bits (4, 5, 6)
-//   qv = quantization value = 2^qb (16, 32, 64)
-//
 //   4 byte for dim index +                          | 4
 //   1 byte for implicit flag & quantization         | 5
-//   quantization value *                            |
-//   4 bytes for pagepool offset +                   | qv * 4 + 5
-//   16 * 4 bytes for dimension offsets +            | qv * 4 + 69
-impl InvertedIndexSerialize for InvertedIndexNode {
+//   2 bytes for data map len +                      | 7
+//   INVERTED_INDEX_DATA_CHUNK_SIZE * (              |
+//     2 bytes for quotient +                        |
+//     4 bytes of pagepool                           |
+//   ) +                                             | INVERTED_INDEX_DATA_CHUNK_SIZE * 6 + 7
+//   4 byte for next data chunk                      | INVERTED_INDEX_DATA_CHUNK_SIZE * 6 + 11
+//   16 * 4 bytes for dimension offsets +            | INVERTED_INDEX_DATA_CHUNK_SIZE * 6 + 75
+impl InvertedIndexIDFSerialize for InvertedIndexIDFNode {
     fn serialize(
         &self,
         dim_bufman: &BufferManager,
         data_bufmans: &BufferManagerFactory<u8>,
+        offset_counter: &AtomicU32,
+        _: u8,
         _: u8,
         data_file_parts: u8,
         cursor: u64,
@@ -42,13 +45,21 @@ impl InvertedIndexSerialize for InvertedIndexNode {
             self.data.serialize(
                 dim_bufman,
                 data_bufmans,
+                offset_counter,
+                self.quantization_bits,
                 data_file_idx,
                 data_file_parts,
                 cursor,
             )?;
+            dim_bufman.seek_with_cursor(
+                cursor,
+                self.file_offset.0 as u64 + INVERTED_INDEX_DATA_CHUNK_SIZE as u64 * 6 + 11,
+            )?;
             self.children.serialize(
                 dim_bufman,
                 data_bufmans,
+                offset_counter,
+                self.quantization_bits,
                 data_file_idx,
                 data_file_parts,
                 cursor,
@@ -58,13 +69,21 @@ impl InvertedIndexSerialize for InvertedIndexNode {
             self.data.serialize(
                 dim_bufman,
                 data_bufmans,
+                offset_counter,
+                self.quantization_bits,
                 data_file_idx,
                 data_file_parts,
                 cursor,
             )?;
+            dim_bufman.seek_with_cursor(
+                cursor,
+                self.file_offset.0 as u64 + INVERTED_INDEX_DATA_CHUNK_SIZE as u64 * 6 + 11,
+            )?;
             self.children.serialize(
                 dim_bufman,
                 data_bufmans,
+                offset_counter,
+                self.quantization_bits,
                 data_file_idx,
                 data_file_parts,
                 cursor,
@@ -72,11 +91,13 @@ impl InvertedIndexSerialize for InvertedIndexNode {
         } else {
             dim_bufman.seek_with_cursor(
                 cursor,
-                self.file_offset.0 as u64 + 5 + (1u64 << (self.quantization_bits + 2)),
+                self.file_offset.0 as u64 + INVERTED_INDEX_DATA_CHUNK_SIZE as u64 * 6 + 11,
             )?;
             self.children.serialize(
                 dim_bufman,
                 data_bufmans,
+                offset_counter,
+                self.quantization_bits,
                 data_file_idx,
                 data_file_parts,
                 cursor,
@@ -90,8 +111,9 @@ impl InvertedIndexSerialize for InvertedIndexNode {
         data_bufmans: &BufferManagerFactory<u8>,
         file_offset: FileOffset,
         _: u8,
+        _: u8,
         data_file_parts: u8,
-        cache: &InvertedIndexCache,
+        cache: &InvertedIndexIDFCache,
     ) -> Result<Self, BufIoError> {
         let cursor = dim_bufman.open_cursor()?;
         dim_bufman.seek_with_cursor(cursor, file_offset.0 as u64)?;
@@ -99,13 +121,12 @@ impl InvertedIndexSerialize for InvertedIndexNode {
         let quantization_and_implicit = dim_bufman.read_u8_with_cursor(cursor)?;
         let implicit = (quantization_and_implicit & (1u8 << 7)) != 0;
         let quantization_bits = (quantization_and_implicit << 1) >> 1;
-        let qb = quantization_bits as u32;
-        let qv = 1u32 << qb;
         let data_file_idx = (dim_index % data_file_parts as u32) as u8;
-        let data = <*mut ProbLazyItem<InvertedIndexNodeData>>::deserialize(
+        let data = <*mut ProbLazyItem<InvertedIndexIDFNodeData>>::deserialize(
             dim_bufman,
             data_bufmans,
             FileOffset(file_offset.0 + 5),
+            quantization_bits,
             data_file_idx,
             data_file_parts,
             cache,
@@ -113,7 +134,8 @@ impl InvertedIndexSerialize for InvertedIndexNode {
         let children = AtomicArray::deserialize(
             dim_bufman,
             data_bufmans,
-            FileOffset(file_offset.0 + 5 + qv * 4),
+            FileOffset(file_offset.0 + INVERTED_INDEX_DATA_CHUNK_SIZE as u32 * 6 + 11),
+            quantization_bits,
             data_file_idx,
             data_file_parts,
             cache,

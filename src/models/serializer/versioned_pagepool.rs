@@ -1,42 +1,21 @@
 use std::sync::{Arc, RwLock};
 
 use crate::models::{
-    buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
-    cache_loader::InvertedIndexCache,
+    buffered_io::{BufIoError, BufferManager},
     page::{Pagepool, VersionedPagepool},
     types::FileOffset,
     versioning::Hash,
 };
 
-use super::InvertedIndexSerialize;
+use super::SimpleSerialize;
 
-impl<const LEN: usize> InvertedIndexSerialize for VersionedPagepool<LEN> {
-    fn serialize(
-        &self,
-        dim_bufman: &BufferManager,
-        data_bufmans: &BufferManagerFactory<u8>,
-        data_file_idx: u8,
-        data_file_parts: u8,
-        cursor: u64,
-    ) -> Result<u32, BufIoError> {
-        let bufman = data_bufmans.get(data_file_idx)?;
-        let pagepool_offset = self.pagepool.serialize(
-            dim_bufman,
-            data_bufmans,
-            data_file_idx,
-            data_file_parts,
-            cursor,
-        )?;
+impl<const LEN: usize> SimpleSerialize for VersionedPagepool<LEN> {
+    fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
+        let pagepool_offset = self.pagepool.serialize(bufman, cursor)?;
         let next_offset = {
             let next = self.next.read().map_err(|_| BufIoError::Locking)?;
             if let Some(next) = &*next {
-                next.serialize(
-                    dim_bufman,
-                    data_bufmans,
-                    data_file_idx,
-                    data_file_parts,
-                    cursor,
-                )?
+                next.serialize(bufman, cursor)?
             } else {
                 u32::MAX
             }
@@ -66,40 +45,18 @@ impl<const LEN: usize> InvertedIndexSerialize for VersionedPagepool<LEN> {
         Ok(offset)
     }
 
-    fn deserialize(
-        dim_bufman: &BufferManager,
-        data_bufmans: &BufferManagerFactory<u8>,
-        file_offset: FileOffset,
-        data_file_idx: u8,
-        data_file_parts: u8,
-        cache: &InvertedIndexCache,
-    ) -> Result<Self, BufIoError> {
-        let bufman = data_bufmans.get(data_file_idx)?;
+    fn deserialize(bufman: &BufferManager, file_offset: FileOffset) -> Result<Self, BufIoError> {
         let cursor = bufman.open_cursor()?;
         bufman.seek_with_cursor(cursor, file_offset.0 as u64)?;
         let current_version = Hash::from(bufman.read_u32_with_cursor(cursor)?);
         let pagepool_offset = bufman.read_u32_with_cursor(cursor)?;
         let next_offset = bufman.read_u32_with_cursor(cursor)?;
         bufman.close_cursor(cursor)?;
-        let pagepool = Arc::new(Pagepool::deserialize(
-            dim_bufman,
-            data_bufmans,
-            FileOffset(pagepool_offset),
-            data_file_idx,
-            data_file_parts,
-            cache,
-        )?);
+        let pagepool = Arc::new(Pagepool::deserialize(bufman, FileOffset(pagepool_offset))?);
         let next = if next_offset == u32::MAX {
             None
         } else {
-            Some(Self::deserialize(
-                dim_bufman,
-                data_bufmans,
-                FileOffset(next_offset),
-                data_file_idx,
-                data_file_parts,
-                cache,
-            )?)
+            Some(Self::deserialize(bufman, FileOffset(next_offset))?)
         };
         Ok(Self {
             current_version,

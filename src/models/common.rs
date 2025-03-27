@@ -351,6 +351,12 @@ impl From<BufIoError> for WaCustomError {
     }
 }
 
+impl From<lmdb::Error> for WaCustomError {
+    fn from(error: lmdb::Error) -> Self {
+        Self::DatabaseError(error.to_string())
+    }
+}
+
 #[allow(dead_code)]
 pub fn hash_float_vec(vec: Vec<f32>) -> Vec<u8> {
     // Create a new hasher instance
@@ -473,11 +479,13 @@ impl<K: Eq + Hash + Clone + PartialEq, V: Clone + PartialEq> PartialEq for TSHas
 }
 
 #[cfg(test)]
-impl<K: Eq + Hash + Clone + std::fmt::Debug, V: Clone + std::fmt::Debug> std::fmt::Debug
+impl<K: Eq + Hash + Clone + std::fmt::Debug + Ord, V: Clone + std::fmt::Debug> std::fmt::Debug
     for TSHashTable<K, V>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_map().entries(self.to_list()).finish()
+        let mut list = self.to_list();
+        list.sort_unstable_by_key(|(k, _)| k.clone());
+        f.debug_map().entries(list).finish()
     }
 }
 
@@ -650,5 +658,12 @@ impl<K: Eq + Hash, V> TSHashTable<K, V> {
             list.extend(map.into_iter());
         }
         list
+    }
+
+    pub fn for_each<F: FnMut(&K, &V)>(&self, mut f: F) {
+        for ht in &self.hash_table_list {
+            let ht = ht.lock().unwrap();
+            ht.iter().for_each(|(k, v)| f(k, v));
+        }
     }
 }
