@@ -177,6 +177,16 @@ def search_ann(coll_name, query_vec, metadata_filter):
     return resp.json()
 
 
+def get_vector_by_id(coll_id, vector_id):
+    url = f"{base_url}/collections/{coll_id}/vectors/{vector_id}"
+    headers = generate_headers()
+    resp = requests.get(url, headers=headers)
+    if resp.status_code != 200:
+        print("Response error:", resp.text)
+        resp.raise_for_status()
+    return resp.json()
+
+
 def nested_lookup(m, k1, k2):
     v1 = m.get(k1)
     if v1:
@@ -313,6 +323,9 @@ def main():
 
     print("Running search queries")
     check_search_results(vidx, vector_db_name)
+
+    # v = get_vector_by_id(coll_id, 1)
+    # print(v)
 
 
 if __name__ == '__main__':

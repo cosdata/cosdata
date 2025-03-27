@@ -161,8 +161,7 @@ pub(crate) async fn get_vector_by_id(
     Ok(CreateVectorResponseDto::Dense(CreateDenseVectorDto {
         id,
         values: (*embedding.raw_vec).clone(),
-        // @TODO(vineet): Add support for optional metadata dimensions
-        metadata: None,
+        metadata: embedding.raw_metadata,
     }))
 }
 

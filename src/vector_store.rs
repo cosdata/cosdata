@@ -294,6 +294,16 @@ pub fn finalize_ann_results(
 
 /// Retrieves a raw embedding vector from the vector store by its ID.
 ///
+/// Note the id to be passed to this function is the user specified
+/// identifier, which may not be the same as the id returned by
+/// `ProbNode.get_id` function. This difference was introduced with
+/// metadata filtering support. In case the collection supports
+/// metadata filtering, then for an input vector, multiple replica
+/// nodes may get created in the index, which have an internally
+/// computed node id that's different from the user specified vector
+/// id. The calling function is expected to always pass the user
+/// specified id.
+///
 /// This function performs the following steps to retrieve the embedding:
 /// 1. Begins a read-write transaction with the LMDB environment.
 /// 2. Retrieves the serialized offset of the embedding from the database using the provided `vector_id`.
