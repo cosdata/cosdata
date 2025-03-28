@@ -1,50 +1,59 @@
-* RBAC Implementation for Vector Database
-** Overview
-This document outlines the design specifications for implementing Role-Based Access Control (RBAC) in our vector database system using serialized Rust structs and LMDB key-value store.
+#+title: RBAC Implementation for Vector Database
+#+author: Nithin Mani
 
-** Logical Schema Design
-The logical schema represents the relationships between users, roles, permissions, and collections:
+* Overview
+The document outlines the updated design specifications for implementing Role-Based Access Control (RBAC) in our vector database system.
 
-*** Core Entities
-**** Users
+* Logical Schema Design
+
+** Core Entities
+*** Users
 - user_id (PK)
 - username
 - password_hash
-- other attributes
+- collection_roles (mappings to collections and roles)
 
-**** Roles
+*** Roles
 - role_id (PK)
 - role_name
-- description
+- permissions
 
-**** Permissions
-Enumerated permission types:
-- list_collections
-- create_collection
-- delete_collection
-- list_index
-- create_index
-- delete_index
-- upsert_vectors
-- delete_vectors
-- query_vectors
-- list_versions
-- set_current_version
-- get_current_version
-
-**** Collections
+*** Collections
 - collection_id (PK)
 - collection_name
 - other attributes
 
-*** Relationships
-**** User-Role (Many-to-Many)
-- Each user can have multiple roles
-- Each role can be assigned to multiple users
+*** Permissions List
+**** Collection Management
+- `list_collections`
+- `create_collection`
+- `update_collection`
+- `delete_collection`
 
-**** Role-Permission-Collection (Many-to-Many)
-- Roles can have different permissions on different collections
-- Same permission can be granted to multiple roles for the same collection
+**** Index Management
+- `list_index`
+- `create_index`
+- `delete_index`
+
+**** Vector Management
+- `upsert_vectors`
+- `delete_vectors`
+- `list_vectors`
+- `check_vector_existence`
+
+**** Querying
+- `query_dense_vectors`
+- `query_sparse_vectors`
+- `query_hybrid_vectors`
+
+**** Version Control
+- `list_versions`
+- `set_current_version`
+- `get_current_version`
+
+**** RBAC & Admin
+- `manage_permissions`
+
 
 ** Implementation Design
 
@@ -54,66 +63,71 @@ struct User {
    user_id: u32,
    username: String,
    password_hash: String,
-   roles: Vec<u32>,  // List of role_ids
-   // other attributes
+   collection_roles: Vec<(u32, u32)>,  // (collection_id, role_id)
 }
 
 struct Role {
    role_id: u32,
    role_name: String,
-   description: String,
-   permissions: Vec<(u32, Permission)>  // (collection_id, permission) pairs
+   permissions: Vec<Permission>,
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum Permission {
+   // Collection Management
    ListCollections,
    CreateCollection,
+   UpdateCollection,
    DeleteCollection,
+
+   // Index Management
    ListIndex,
    CreateIndex,
    DeleteIndex,
+
+   // Vector Management
    UpsertVectors,
    DeleteVectors,
-   QueryVectors,
+   ListVectors,
+   CheckVectorExistence,
+
+   // Querying
+   QueryDenseVectors,
+   QuerySparseVectors,
+   QueryHybridVectors,
+
+   // Version Control
    ListVersions,
    SetCurrentVersion,
    GetCurrentVersion,
+
+   // RBAC & Admin
+   ManagePermissions,
 }
 
 struct Collection {
    collection_id: u32,
    collection_name: String,
-   // other attributes
 }
 #+end_src
 
 *** Storage Strategy (LMDB)
-Since we lack a relational database, we'll use LMDB as a key-value store with the following key patterns:
+Updated key patterns for storage:
 
-| Data                         | Key Pattern                     | Value                                     |
-|------------------------------+--------------------------------+-------------------------------------------|
-| User objects                 | ~user:{user_id}~                | Serialized User struct                    |
-| Role objects                 | ~role:{role_id}~                | Serialized Role struct                    |
-| Collection objects           | *Reuse existing entries*        | Serialized Collection struct              |
-| User-Role mappings           | ~user_roles:{user_id}~          | List of role_ids                          |
-| Role-Permission-Collection   | ~role_permissions:{role_id}~    | List of (permission, collection_id) pairs |
-
-*** Default Administration
-- A default admin user will be created during system initialization
-- This admin user will have full permissions on all collections
-- Only the admin user can create other users initially
-- The admin user can assign appropriate roles to new users
+| Data                      | Key Pattern                   | Value                           |
+|---------------------------+-------------------------------+---------------------------------|
+| User objects              | ~user:{user_id}~              | Serialized User struct with collection_roles |
+| Role objects              | ~role:{role_id}~              | Serialized Role struct with permissions |
 
 *** Access Control Workflow
-1. Admin creates roles with specific permissions on collections
-2. Admin assigns roles to users
+1. Define roles with specific permissions
+2. Assign users to collections with specific roles
 3. When a user attempts an operation:
-  a. System retrieves user's roles
-  b. System checks if any role grants the required permission on the target collection
-  c. Access is granted only if a matching permission is found
+   a. Check user's role for the specific collection
+   b. Verify if the role has the required permission
+   c. Grant or deny access accordingly
 
 ** Implementation Considerations
-
 *** Serialization
 - Use serde with appropriate format (CBOR/bincode) for serializing structs
 - Handle serialization errors gracefully
@@ -131,5 +145,11 @@ Since we lack a relational database, we'll use LMDB as a key-value store with th
 - Implement proper error handling and rollback mechanisms
 
 *** Security Considerations
-- Store password hashes using strong cryptographic algorithms (e.g., sha256)
+- Store password hashes using strong cryptographic algorithms (e.g., SHA-256)
 - Implement proper authentication before authorization checks
+
+** Design Rationale
+- Embedded collection-role mappings in User struct
+- Direct permissions list in Role struct
+- Comprehensive permission enum covering all major database operations
+- Flexible and granular access control mechanism
