@@ -14,15 +14,14 @@ use transaction::HNSWIndexTransaction;
 use types::HNSWHyperParams;
 
 use crate::{
-    models::{
+    metadata::MetadataFields, models::{
         buffered_io::BufferManagerFactory,
         cache_loader::HNSWIndexCache,
         prob_lazy_load::lazy_item::{FileIndex, ProbLazyItem},
         prob_node::{ProbNode, SharedNode},
         types::{DistanceMetric, MetaDb, QuantizationMetric, VectorId},
         versioning::{Hash, VersionControl},
-    },
-    quantization::StorageType,
+    }, quantization::StorageType
 };
 
 pub struct HNSWIndex {
@@ -42,7 +41,7 @@ pub struct HNSWIndex {
     pub vec_raw_manager: BufferManagerFactory<Hash>,
     pub is_configured: AtomicBool,
     pub values_range: RwLock<(f32, f32)>,
-    pub vectors: RwLock<Vec<(VectorId, Vec<f32>)>>,
+    pub vectors: RwLock<Vec<(VectorId, Vec<f32>, Option<MetadataFields>)>>,
     pub sampling_data: SamplingData,
     pub vectors_collected: AtomicUsize,
     pub sample_threshold: usize,

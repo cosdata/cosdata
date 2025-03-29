@@ -1,7 +1,9 @@
 use std::cmp::{Ord, PartialOrd};
+use std::collections::HashMap;
 use std::fmt;
 
 use de::FieldValueVisitor;
+use schema::MetadataDimensions;
 use serde::{Deserialize, Deserializer, Serialize};
 
 pub mod de;
@@ -9,6 +11,9 @@ pub mod query_filtering;
 pub mod schema;
 
 pub use schema::MetadataSchema;
+pub use query_filtering::{Filter, Predicate, Operator, QueryFilterDimensions};
+
+const HIGH_WEIGHT: i32 = 64000;
 
 #[derive(Debug, Clone)]
 pub enum Error {
@@ -17,6 +22,7 @@ pub enum Error {
     InvalidFieldValue(String),
     InvalidFieldValues(String),
     InvalidMetadataSchema,
+    UnsupportedFilter(String),
 }
 
 impl fmt::Display for Error {
@@ -27,6 +33,7 @@ impl fmt::Display for Error {
             Self::InvalidFieldValue(msg) => write!(f, "Invalid field value: {msg}"),
             Self::InvalidFieldValues(msg) => write!(f, "Invalid field values: {msg}"),
             Self::InvalidMetadataSchema => write!(f, "Invalid metadata schema"),
+            Self::UnsupportedFilter(msg) => write!(f, "Unsupported filter: {msg}"),
         }
     }
 }
@@ -60,11 +67,12 @@ fn decimal_to_binary_vec(num: u16, size: usize) -> Vec<u8> {
 
 type FieldName = String;
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 #[non_exhaustive]
 pub enum FieldValue {
     Int(i32),
     String(String),
+    // @TODO: Add support for float
 }
 
 impl FieldValue {
@@ -76,6 +84,17 @@ impl FieldValue {
     }
 }
 
+impl Serialize for FieldValue {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer {
+        match self {
+            Self::Int(i) => serializer.serialize_i32(*i),
+            Self::String(s) => serializer.serialize_str(s),
+        }
+    }
+}
+
 impl<'de> Deserialize<'de> for FieldValue {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -83,6 +102,26 @@ impl<'de> Deserialize<'de> for FieldValue {
     {
         deserializer.deserialize_any(FieldValueVisitor)
     }
+}
+
+pub type MetadataFields = HashMap<FieldName, FieldValue>;
+
+pub fn fields_to_dimensions(
+    schema: &MetadataSchema,
+    metadata_fields: Option<&MetadataFields>,
+) -> Result<Vec<MetadataDimensions>, Error> {
+    let mut result = vec![];
+    // First add base dimensions
+    result.push(schema.base_dimensions());
+
+    if let Some(fields) = metadata_fields {
+        let weighted_dims = schema.weighted_dimensions(fields, HIGH_WEIGHT)?;
+        for wd in weighted_dims.into_iter() {
+            result.push(wd);
+        }
+    }
+
+    Ok(result)
 }
 
 #[cfg(test)]

@@ -384,27 +384,26 @@ pub fn remove_duplicates_and_filter(
     vec: Vec<(SharedNode, MetricResult)>,
     k: Option<usize>,
     cache: &HNSWIndexCache,
-) -> Vec<(VectorId, MetricResult)> {
+) -> Vec<(VectorId, VectorId, MetricResult)> {
     let mut seen = HashSet::new();
     let mut collected = vec
         .into_iter()
         .filter_map(|(lazy_item, similarity)| {
-            let id = unsafe { &*lazy_item }
+            let node = unsafe { &*lazy_item }
                 .try_get_data(cache)
-                .unwrap()
-                .get_id()
-                .clone();
-            if !seen.insert(id.clone()) {
+                .unwrap();
+            let (orig_id, replica_id) = node.get_ids();
+            if !seen.insert(orig_id.clone()) {
                 return None;
             }
-            if id.0 == u64::MAX {
+            if orig_id.0 == u64::MAX {
                 return None;
             }
-            Some((id, similarity))
+            Some((orig_id, replica_id, similarity))
         })
         .collect::<Vec<_>>();
 
-    collected.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+    collected.sort_unstable_by(|(_, _, a), (_, _, b)| b.cmp(a));
     if let Some(k) = k {
         collected.truncate(5 * k);
     }

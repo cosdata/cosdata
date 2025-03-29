@@ -1,6 +1,6 @@
 use super::buffered_io::{BufIoError, BufferManager, BufferManagerFactory};
 use super::common::TSHashTable;
-use super::file_persist::read_prop_from_file;
+use super::file_persist::{read_prop_metadata_from_file, read_prop_value_from_file};
 use super::inverted_index::InvertedIndexNodeData;
 use super::lru_cache::LRUCache;
 use super::prob_lazy_load::lazy_item::{FileIndex, ProbLazyItem, ProbLazyItemState, ReadyState};
@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex, RwLock, Weak};
 
 pub struct HNSWIndexCache {
     registry: LRUCache<u64, SharedNode>,
-    props_registry: DashMap<u64, Weak<NodeProp>>,
+    props_registry: DashMap<u64, Weak<NodePropValue>>,
     pub bufmans: Arc<BufferManagerFactory<Hash>>,
     pub level_0_bufmans: Arc<BufferManagerFactory<Hash>>,
     pub prop_file: RwLock<File>,
@@ -74,7 +74,7 @@ impl HNSWIndexCache {
         &self,
         offset: FileOffset,
         length: BytesToRead,
-    ) -> Result<Arc<NodeProp>, BufIoError> {
+    ) -> Result<Arc<NodePropValue>, BufIoError> {
         let key = Self::get_prop_key(offset, length);
         if let Some(prop) = self
             .props_registry
@@ -84,11 +84,34 @@ impl HNSWIndexCache {
             return Ok(prop);
         }
         let mut prop_file_guard = self.prop_file.write().unwrap();
-        let prop = Arc::new(read_prop_from_file((offset, length), &mut prop_file_guard)?);
+        let prop = Arc::new(read_prop_value_from_file(
+            (offset, length),
+            &mut *prop_file_guard,
+        )?);
         drop(prop_file_guard);
         let weak = Arc::downgrade(&prop);
         self.props_registry.insert(key, weak);
         Ok(prop)
+    }
+
+    /// Reads prop_metadata from the prop file
+    ///
+    /// @NOTE: Right now, every call reads from the prop file, there's
+    /// no caching implemented
+    ///
+    /// @TODO: Implement caching for prop_metadata as well
+    pub fn get_prop_metadata(
+        &self,
+        offset: FileOffset,
+        length: BytesToRead,
+    ) -> Result<Arc<NodePropMetadata>, BufIoError> {
+        let mut prop_file_guard = self.prop_file.write().unwrap();
+        let metadata = Arc::new(read_prop_metadata_from_file(
+            (offset, length),
+            &mut *prop_file_guard,
+        )?);
+        drop(prop_file_guard);
+        Ok(metadata)
     }
 
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
@@ -97,9 +120,9 @@ impl HNSWIndexCache {
         let combined_index =
             ((item_ref.get_file_index().offset.0 as u64) << 32) | (*version as u64);
         if let Some(node) = item_ref.get_lazy_data() {
-            let prop_key = Self::get_prop_key(node.prop.location.0, node.prop.location.1);
+            let prop_key = Self::get_prop_key(node.prop_value.location.0, node.prop_value.location.1);
             self.props_registry
-                .insert(prop_key, Arc::downgrade(&node.prop));
+                .insert(prop_key, Arc::downgrade(&node.prop_value));
         }
         self.registry.insert(combined_index, item);
     }

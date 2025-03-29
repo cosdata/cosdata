@@ -1,15 +1,14 @@
 use std::{
-    ptr,
-    sync::{
+    ptr, sync::{
         atomic::{AtomicPtr, Ordering},
         Arc, Mutex, MutexGuard,
-    },
+    }
 };
 
 use super::{
     cache_loader::HNSWIndexCache,
     prob_lazy_load::{lazy_item::ProbLazyItem, lazy_item_array::ProbLazyItemArray},
-    types::{DistanceMetric, HNSWLevel, MetricResult, NodeProp, VectorId},
+    types::{DistanceMetric, HNSWLevel, MetricResult, NodePropMetadata, NodePropValue, VectorId},
 };
 
 pub type SharedNode = *mut ProbLazyItem<ProbNode>;
@@ -17,7 +16,8 @@ pub type Neighbors = Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]>;
 
 pub struct ProbNode {
     pub hnsw_level: HNSWLevel,
-    pub prop: Arc<NodeProp>,
+    pub prop_value: Arc<NodePropValue>,
+    pub prop_metadata: Option<Arc<NodePropMetadata>>,
     // (neighbor_id, neighbor_node, distance)
     // even though `VectorId` is an u64 we don't need the full range here.
     neighbors: Neighbors,
@@ -34,7 +34,8 @@ unsafe impl Sync for ProbNode {}
 impl ProbNode {
     pub fn new(
         hnsw_level: HNSWLevel,
-        prop: Arc<NodeProp>,
+        prop_value: Arc<NodePropValue>,
+        prop_metadata: Option<Arc<NodePropMetadata>>,
         parent: SharedNode,
         child: SharedNode,
         neighbors_count: usize,
@@ -48,7 +49,8 @@ impl ProbNode {
 
         Self {
             hnsw_level,
-            prop,
+            prop_value,
+            prop_metadata,
             neighbors: neighbors.into_boxed_slice(),
             parent: AtomicPtr::new(parent),
             child: AtomicPtr::new(child),
@@ -61,7 +63,8 @@ impl ProbNode {
     #[allow(clippy::too_many_arguments)]
     pub fn new_with_neighbors_and_versions_and_root_version(
         hnsw_level: HNSWLevel,
-        prop: Arc<NodeProp>,
+        prop_value: Arc<NodePropValue>,
+        prop_metadata: Option<Arc<NodePropMetadata>>,
         neighbors: Neighbors,
         parent: SharedNode,
         child: SharedNode,
@@ -87,7 +90,8 @@ impl ProbNode {
 
         Self {
             hnsw_level,
-            prop,
+            prop_value,
+            prop_metadata,
             neighbors,
             parent: AtomicPtr::new(parent),
             child: AtomicPtr::new(child),
@@ -113,8 +117,32 @@ impl ProbNode {
         self.child.store(child, Ordering::Release);
     }
 
-    pub fn get_id(&self) -> &VectorId {
-        &self.prop.id
+    pub fn get_id(&self) -> VectorId {
+        match &self.prop_metadata {
+            Some(m_prop) => {
+                let metadata_id = (m_prop.id.0 as u64) << 56;
+                let vector_id = metadata_id | self.prop_value.id.0;
+                VectorId(vector_id)
+            }
+            None => self.prop_value.id.clone()
+        }
+    }
+
+    /// Returns two ids for the same prob node (original id, node_id)
+    ///
+    /// In case of metadata fields, one vector can have multiple
+    /// replicas. In that case, original_id = user provided vector id
+    /// and node_id = internal node id computed from vector id and
+    /// metadata id
+    ///
+    /// In case there are no metadata fields, original_id will be the
+    /// same as node_id
+    pub fn get_ids(&self) -> (VectorId, VectorId) {
+        if self.prop_metadata.is_some() {
+            (self.prop_value.id.clone(), self.get_id())
+        } else {
+            (self.prop_value.id.clone(), self.prop_value.id.clone())
+        }
     }
 
     pub fn lock_lowest_index(&self) -> MutexGuard<'_, (u8, MetricResult)> {
@@ -255,7 +283,7 @@ impl ProbNode {
 
     /// See [`crate::models::serializer::dense::node`] for how its calculated
     pub fn get_serialized_size(neighbors_len: usize) -> usize {
-        neighbors_len * 19 + 121
+        neighbors_len * 19 + 129
     }
 }
 

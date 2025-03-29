@@ -4,33 +4,55 @@
    - https://www.symas.com/lmdb
    - Rust [[https://docs.rs/lmdb/latest/lmdb/][crate]]
 ** Databases
-*** metadata
-**** Keys
-***** =current_version=
-      version hash
-***** =count_unindexed=
-      To keep track of no. of embeddings that have been written to the
-      ~vec_raw~ file but yet to be indexed
-***** =count_indexed=
-      No. of embeddings that have been indexed
-***** =next_file_offset=
-      File offset upto which embeddings have been written to the
-      ~vec_raw~ file. Value is serialized form of ~EmbeddingOffset~
-*** embeddings
-    - Raw vector embeddings are stored as key-value pairs
-    - Keys: Serialized ~VectorId~
-    - Values: Offset to locate where the raw vector is written in the
-      ~vec_raw~ file.
-**** Why are embeddings offsets stored in lmdb?
-     Purely in order to CRUD API to fetch vectors that are previously
-     created. Not used for indexing and search operations
-*** versions
-    - Key: u32 hash obtained by performing bitwise operations on
-      version and branch.
-      + The =current_version= key in ~metadata~ db is a reference to
-        one of the keys stored in this db.
-    - Value: branch (u64) and version (u32) and timestamp (u32)
-      serialized together (total size 16 bytes).
-*** branches
-    - Key: branch id as (le) bytes (u32)
-    - Value: serialized ~BranchInfo~ struct
+   - A different lmdb database is created for each collection and is
+     used for storing metadata for that collection
+   - In the same lmdb database, there are different kinds of keys,
+     which allows us to store different kinds of key-value mappings in
+     the same db.
+   - In code, a db is represented by struct
+     ~cosdata::types::models::MetaDb~. An instance of this struct is
+     associated with every instance of
+     ~cosdata::indexes::hnsw::HNSWIndex~.
+
+*** Different kinds of keys
+    Different kinds of keys are supported by prefixing the raw keys
+    with different characters as follows,
+
+    #+begin_src rust
+      let vector_id = VectorId(1);
+      let embedding_key = key!(e:vector_id);
+    #+end_src
+    In the above example, ~e~ is the prefix for embedding and
+    ~vector_id~ holds the value to be used as a key in the db. The
+    value against this key is the location/offset of data stored on
+    disk. In this way, the following keys are supported
+
+**** =v= for versions
+     - Key: u32 hash obtained by performing bitwise operations on
+       version and branch.
+       + The =current_version= key in ~metadata~ db is a reference to
+         one of the keys stored in this db.
+     - Value: branch (u64) and version (u32) and timestamp (u32)
+       serialized together (total size 16 bytes).
+
+**** =e= for embeddings
+     - Raw vector embeddings are stored as key-value pairs
+     - Keys: Serialized ~VectorId~
+     - Values: Offset to locate where the raw vector is written in the
+       ~vec_raw~ file.
+
+***** Why are embeddings offsets stored in lmdb?
+      Purely in order to CRUD API to fetch vectors that are previously
+      created. Not used for indexing and search operations
+
+**** =b= for branches
+     - Key: branch id as (le) bytes (u32)
+     - Value: serialized ~BranchInfo~ struct
+
+**** =m= for misc metadata
+     1. count_unindexed
+     2. count_indexed
+     3. current_version
+     4. last_indexed_version
+     5. values_range
+     6. values_upper_bound
