@@ -36,8 +36,29 @@ impl DistanceFunction for CosineSimilarity {
         // 2. allows dot product to be computed only once
         let metadata = match (x.metadata, y.metadata) {
             (Some(x_metadata), Some(y_metadata)) => {
-                if x_metadata.mag == 0.0 || y_metadata.mag == 0.0 {
-                    None
+                // @TODO(vineet): Check if the second case (x) is
+                // required. Can we assume that x is always either the
+                // query vector (in case of is_indexing = false) and
+                // vector to be inserted (in case of is_indexing =
+                // true)?
+                if y_metadata.mag == 0.0 || x_metadata.mag == 0.0 {
+                    if is_indexing {
+                        // When indexing, if the vector to be inserted
+                        // has metadata fields but other node
+                        // (existing) it's compared with is a base
+                        // replica (i.e. having base dimensions
+                        // resulting in mag = 0), then we fallback to
+                        // comparing the combined vector + metadata
+                        // dimensions.
+                        None
+                    } else {
+                        // When querying, if the query vector has
+                        // metadata fields but the existing node it's
+                        // compared against is a base replica, then we
+                        // directly know it's a mismatch. Hence return
+                        // early.
+                        return Ok(CosineSimilarity(0.0));
+                    }
                 } else {
                     // @NOTE: Here we are casting i32 to f32, which means
                     // truncation is possible, but it's not a concern in
