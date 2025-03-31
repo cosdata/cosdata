@@ -15,6 +15,7 @@ strongly doesn't match the particular vector.
 
 """
 
+import argparse
 import os
 import getpass
 import requests
@@ -289,43 +290,72 @@ def check_search_results(vector_index, vector_db_name):
         print("-" * 100)
 
 
-def main():
-    # Create database
-    vector_db_name = "testdb"
-    dimensions = 1024
-    # max_val = 1.0
-    # min_val = -1.0
-    # perturbation_degree = 0.95  # Degree of perturbation
-
-    print("Creating session")
-    session_response = create_session()
-
+def cmd_insert_and_check(ctx, args):
     metadata_schema = construct_metadata_schema()
-
+    db_name = ctx["vector_db_name"]
     print("Creating a new db/collection")
     create_collection_response = create_db(
-        name=vector_db_name,
+        name=db_name,
         description="Test collection for vector database",
-        dimension=dimensions,
+        dimension=ctx["dimensions"],
         metadata_schema=metadata_schema,
     )
     coll_id = create_collection_response["id"]
     print("  Create Collection(DB) Response:", create_collection_response)
 
     print("Creating index explicitly")
-    create_index_response = create_explicit_index(vector_db_name)
+    create_index_response = create_explicit_index(db_name)
     print("  Create index response:", create_index_response)
 
-    num_to_insert = 100
-    vectors = gen_vectors(num_to_insert, dimensions, metadata_schema)
+    num_to_insert = args.num_vecs
+    vectors = gen_vectors(num_to_insert, ctx["dimensions"], metadata_schema)
     print(f"Inserting {num_to_insert} vectors")
     vidx = insert_vectors(coll_id, vectors)
 
     print("Running search queries")
-    check_search_results(vidx, vector_db_name)
+    check_search_results(vidx, db_name)
 
-    # v = get_vector_by_id(coll_id, 1)
-    # print(v)
+
+def cmd_query(ctx, args):
+    vec_id = args.vector_id
+    result = get_vector_by_id(ctx["vector_db_name"], vec_id)
+    vec = result["Dense"]
+    values = vec["values"]
+    print("Vector metadata:", vec["metadata"])
+    metadata_filter = json.loads(args.metadata_filter) if args.metadata_filter else None
+    res = search_ann(ctx["vector_db_name"], values, metadata_filter)
+    print("Result:", res)
+
+
+def init_ctx():
+    print("Creating session")
+    token = create_session()
+    return {
+        "vector_db_name": "testdb",
+        "dimensions": 1024,
+        # "max_val": 1.0
+        # "min_val": -1.0
+        # perturbation_degree: 0.95,
+        "token": token,
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(required=True)
+
+    parser_insert = subparsers.add_parser('insert')
+    parser_insert.add_argument('-n', '--num-vecs', type=int, default=100)
+    parser_insert.set_defaults(func=cmd_insert_and_check)
+
+    parser_query = subparsers.add_parser('query')
+    parser_query.add_argument('vector_id', type=int)
+    parser_query.add_argument('-m', '--metadata-filter', type=str, default=None)
+    parser_query.set_defaults(func=cmd_query)
+
+    args = parser.parse_args()
+    ctx = init_ctx()
+    args.func(ctx, args)
 
 
 if __name__ == '__main__':
