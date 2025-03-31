@@ -218,7 +218,7 @@ pub fn ann_search(
                         .distance_metric
                         .read()
                         .unwrap()
-                        .calculate(&fvec_data, &cur_node_data)?;
+                        .calculate(&fvec_data, &cur_node_data, false)?;
                     dists.push(d)
                 }
                 dists.into_iter().min().unwrap()
@@ -230,8 +230,8 @@ pub fn ann_search(
                     .distance_metric
                     .read()
                     .unwrap()
-                    .calculate(&fvec_data, &cur_node_data)?
-            }
+                    .calculate(&fvec_data, &cur_node_data, false)?
+            },
         };
         vec![(cur_entry, dist)]
     } else {
@@ -885,7 +885,7 @@ pub fn index_embedding(
             .distance_metric
             .read()
             .unwrap()
-            .calculate(&fvec_data, &cur_node_data)?;
+            .calculate(&fvec_data, &cur_node_data, true)?;
         vec![(cur_entry, dist)]
     } else {
         z
@@ -1256,7 +1256,7 @@ fn traverse_find_nearest(
         quantized_vec: &start_data.prop_value.vec,
         metadata: start_metadata.as_deref(),
     };
-    let start_dist = distance_metric.calculate(&fvec_data, &start_vec_data)?;
+    let start_dist = distance_metric.calculate(&fvec_data, &start_vec_data, is_indexing)?;
 
     let start_id = start_data.get_id().0 as u32;
     skipm.insert(start_id);
@@ -1295,7 +1295,7 @@ fn traverse_find_nearest(
                     quantized_vec: &neighbor_data.prop_value.vec,
                     metadata: neighbor_metadata.as_deref(),
                 };
-                let dist = distance_metric.calculate(&fvec_data, &neighbor_vec_data)?;
+                let dist = distance_metric.calculate(&fvec_data, &neighbor_vec_data, is_indexing)?;
                 skipm.insert(neighbor_id);
                 candidate_queue.push((dist, neighbor_node));
             }

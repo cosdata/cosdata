@@ -17,7 +17,7 @@ pub struct CosineDistance(pub f32);
 
 impl DistanceFunction for CosineDistance {
     type Item = Self;
-    fn calculate(&self, _x: &VectorData, _y: &VectorData) -> Result<Self::Item, DistanceError> {
+    fn calculate(&self, _x: &VectorData, _y: &VectorData, _is_indexing: bool) -> Result<Self::Item, DistanceError> {
         // TODO: Implement cosine distance
         unimplemented!("Cosine distance is not implemented yet");
     }
@@ -28,7 +28,7 @@ pub struct CosineSimilarity(pub f32);
 
 impl DistanceFunction for CosineSimilarity {
     type Item = Self;
-    fn calculate(&self, x: &VectorData, y: &VectorData) -> Result<Self::Item, DistanceError> {
+    fn calculate(&self, x: &VectorData, y: &VectorData, is_indexing: bool) -> Result<Self::Item, DistanceError> {
         // Here we're adding metadata fields for both vectors into a
         // single tuple inside an Option that serves two purposes -
         // 1. makes it easy to test if both vectors contain metadata
@@ -63,18 +63,26 @@ impl DistanceFunction for CosineSimilarity {
             _ => None,
         };
 
-        // If metadata exists in both vectors, we first compute cosine
-        // similarity for metadata dimensions. Only if the metadata
-        // similarity is ~1 (consider a small epsilon for floating
-        // point rounding), compute full similarity.
-        if let Some((x_mag, y_mag, m_dot_product)) = &metadata {
-            let m_cos_sim = cosine_similarity_from_dot_product(*m_dot_product, *x_mag, *y_mag)?;
-            let threshold: f32 = 0.99;
-            if m_cos_sim.0 < threshold {
-                // Not close enough to 1, so return
-                // CosineSimilarity of 0 as we don't want the
-                // vectors to match
-                return Ok(CosineSimilarity(0.0));
+        // If not indexing (which means we're querying), we match
+        // metadata dimensions on priority and short circuit if
+        // there's no match
+        if !is_indexing {
+            // If metadata exists in both vectors, we first compute cosine
+            // similarity for metadata dimensions. Only if the metadata
+            // similarity is ~1 (consider a small epsilon for floating
+            // point rounding), compute full similarity.
+            match &metadata {
+                Some((x_mag, y_mag, m_dot_product)) => {
+                    let m_cos_sim = cosine_similarity_from_dot_product(*m_dot_product, *x_mag, *y_mag)?;
+                    let threshold: f32 = 0.99;
+                    if m_cos_sim.0 < threshold {
+                        // Not close enough to 1, so return
+                        // CosineSimilarity of 0 as we don't want the
+                        // vectors to match
+                        return Ok(CosineSimilarity(0.0));
+                    }
+                }
+                _ => { }
             }
         }
 
