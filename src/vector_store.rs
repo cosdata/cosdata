@@ -146,6 +146,7 @@ pub fn ann_search(
     skipm.insert(vector_emb.hash_vec.0 as u32);
 
     let cur_node = unsafe { &*cur_entry }.try_get_data(&hnsw_index.cache)?;
+    let cur_node_id = &cur_node.prop_value.id;
 
     let z = match query_filter_dims.clone() {
         Some(qf_dims) => {
@@ -207,6 +208,7 @@ pub fn ann_search(
             Some(qf_dims) => {
                 let cur_node_metadata = cur_node.prop_metadata.clone().map(|pm| pm.vec.clone());
                 let cur_node_data = VectorData {
+                    id: Some(cur_node_id),
                     quantized_vec: &cur_node.prop_value.vec,
                     metadata: cur_node_metadata.as_deref()
                 };
@@ -214,6 +216,7 @@ pub fn ann_search(
                 for qfd in qf_dims {
                     let fvec_metadata = Metadata::from(qfd);
                     let fvec_data = VectorData {
+                        id: None,
                         quantized_vec: &fvec,
                         metadata: Some(&fvec_metadata),
                     };
@@ -227,8 +230,8 @@ pub fn ann_search(
                 dists.into_iter().min().unwrap()
             },
             None => {
-                let fvec_data = VectorData::without_metadata(&fvec);
-                let cur_node_data = VectorData::without_metadata(&cur_node.prop_value.vec);
+                let fvec_data = VectorData::without_metadata(None, &fvec);
+                let cur_node_data = VectorData::without_metadata(Some(cur_node_id), &cur_node.prop_value.vec);
                 hnsw_index
                     .distance_metric
                     .read()
@@ -951,6 +954,8 @@ pub fn index_embedding(
     let cur_node = unsafe { &*ProbLazyItem::get_latest_version(cur_entry, &hnsw_index.cache)?.0 }
         .try_get_data(&hnsw_index.cache)?;
 
+    let cur_node_id = &cur_node.prop_value.id;
+
     let mdims = prop_metadata.clone().map(|pm| pm.vec.clone());
 
     let z = traverse_find_nearest(
@@ -968,11 +973,13 @@ pub fn index_embedding(
 
     let z = if z.is_empty() {
         let fvec_data = VectorData {
+            id: None,
             quantized_vec: &fvec,
             metadata: mdims.as_deref(),
         };
         let cur_node_metadata = cur_node.prop_metadata.clone().map(|pm| pm.vec.clone());
         let cur_node_data = VectorData {
+            id: Some(cur_node_id),
             quantized_vec: &cur_node.prop_value.vec,
             metadata: cur_node_metadata.as_deref()
         };
@@ -1342,12 +1349,14 @@ fn traverse_find_nearest(
     let start_data = unsafe { &*start_version }.try_get_data(&hnsw_index.cache)?;
 
     let fvec_data = VectorData {
+        id: None,
         quantized_vec: fvec,
         metadata: mdims
     };
 
     let start_metadata = start_data.prop_metadata.clone().map(|pm| pm.vec.clone());
     let start_vec_data = VectorData {
+        id: Some(&start_data.prop_value.id),
         quantized_vec: &start_data.prop_value.vec,
         metadata: start_metadata.as_deref(),
     };
@@ -1386,6 +1395,7 @@ fn traverse_find_nearest(
                 let neighbor_data = unsafe { &*neighbor_node }.try_get_data(&hnsw_index.cache)?;
                 let neighbor_metadata = neighbor_data.prop_metadata.clone().map(|pm| pm.vec.clone());
                 let neighbor_vec_data = VectorData {
+                    id: Some(&neighbor_data.prop_value.id),
                     quantized_vec: &neighbor_data.prop_value.vec,
                     metadata: neighbor_metadata.as_deref(),
                 };
@@ -1397,6 +1407,7 @@ fn traverse_find_nearest(
     }
 
     let final_len = if is_indexing { 64 } else { 100 };
+
     if results.len() > final_len {
         results.select_nth_unstable_by(final_len, |(a, _), (b, _)| b.cmp(a));
         results.truncate(final_len);
