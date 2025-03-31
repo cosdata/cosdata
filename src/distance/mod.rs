@@ -7,7 +7,7 @@ use crate::models::types::VectorData;
 
 pub trait DistanceFunction: std::fmt::Debug + Send + Sync {
     type Item;
-    fn calculate(&self, x: &VectorData, y: &VectorData) -> Result<Self::Item, DistanceError>;
+    fn calculate(&self, x: &VectorData, y: &VectorData, is_indexing: bool) -> Result<Self::Item, DistanceError>;
 }
 
 #[derive(Debug)]

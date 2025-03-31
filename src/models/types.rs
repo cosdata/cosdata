@@ -264,22 +264,22 @@ pub enum DistanceMetric {
 
 impl DistanceFunction for DistanceMetric {
     type Item = MetricResult;
-    fn calculate(&self, x: &VectorData, y: &VectorData) -> Result<Self::Item, DistanceError> {
+    fn calculate(&self, x: &VectorData, y: &VectorData, is_indexing: bool) -> Result<Self::Item, DistanceError> {
         match self {
             Self::Cosine => {
-                let value = CosineSimilarity(0.0).calculate(x, y)?;
+                let value = CosineSimilarity(0.0).calculate(x, y, is_indexing)?;
                 Ok(MetricResult::CosineSimilarity(value))
             }
             Self::Euclidean => {
-                let value = EuclideanDistance(0.0).calculate(x, y)?;
+                let value = EuclideanDistance(0.0).calculate(x, y, is_indexing)?;
                 Ok(MetricResult::EuclideanDistance(value))
             }
             Self::Hamming => {
-                let value = HammingDistance(0.0).calculate(x, y)?;
+                let value = HammingDistance(0.0).calculate(x, y, is_indexing)?;
                 Ok(MetricResult::HammingDistance(value))
             }
             Self::DotProduct => {
-                let value = DotProductDistance(0.0).calculate(x, y)?;
+                let value = DotProductDistance(0.0).calculate(x, y, is_indexing)?;
                 Ok(MetricResult::DotProductDistance(value))
             }
         }
