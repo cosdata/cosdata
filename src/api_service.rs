@@ -811,17 +811,28 @@ pub async fn ann_vector_query(
         hash_vec: vec_hash.clone(),
     };
 
-    let hnsw_params_guard = hnsw_index.hnsw_params.read().unwrap();
+    let hnsw_params_guard = hnsw_index.hnsw_params.read().map_err(|_| {
+        log::error!("Failed to acquire lock on hnsw_index.hnsw_params in ann_vector_query");
+        WaCustomError::LockError("Failed to acquire lock on HNSW hyperparams".to_string())
+    })?;
 
-    let query_filter_dims = metadata_filter.map(|filter| {
-        // @TODO(vineet): Remove unwrap
-        let coll = ctx.ain_env
-            .collections_map
-            .get_collection(&hnsw_index.name)
-            .expect("Couldn't get collection from ain_env");
-        let metadata_schema = coll.metadata_schema.as_ref().unwrap();
-        filter_encoded_dimensions(metadata_schema, &filter).unwrap()
-    });
+    let query_filter_dims = match metadata_filter {
+        Some(filter) => {
+            // @TODO(vineet): Remove unwrap
+            let coll = ctx.ain_env
+                .collections_map
+                .get_collection(&hnsw_index.name)
+                .expect("Couldn't get collection from ain_env");
+            let metadata_schema = coll.metadata_schema.as_ref().unwrap();
+            let dims = filter_encoded_dimensions(metadata_schema, &filter)
+                .map_err(|e| {
+                    log::error!("Invalid metadata filter in query: {e:?}");
+                    WaCustomError::InvalidParams
+                })?;
+            Some(dims)
+        },
+        None => None,
+    };
 
     let results = ann_search(
         &ctx.config,

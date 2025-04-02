@@ -43,17 +43,20 @@ pub(crate) async fn search(
         None => None,
     };
 
-    let result = match ann_vector_query(
+    let query_result = ann_vector_query(
         ctx.into_inner(),
         hnsw_index.clone(),
         body.vector,
         metadata_filter,
         body.nn_count,
-    )
-    .await
-    {
+    ).await;
+
+    let result = match query_result {
         Ok(result) => result,
-        Err(err) => return HttpResponse::InternalServerError().body(err.to_string()),
+        Err(err) => match err {
+            WaCustomError::InvalidParams => return HttpResponse::BadRequest().body(format!("Bad request")),
+            _ => return HttpResponse::InternalServerError().body(err.to_string()),
+        }
     };
 
     let response_data = RPCResponseBody::RespVectorKNN {
@@ -97,17 +100,20 @@ pub(crate) async fn batch_search(
         None => None,
     };
 
-    let results = match batch_ann_vector_query(
+    let query_results = batch_ann_vector_query(
         ctx.into_inner(),
         hnsw_index.clone(),
         body.vectors,
         metadata_filter,
         body.nn_count,
-    )
-    .await
-    {
-        Ok(result) => result,
-        Err(err) => return HttpResponse::InternalServerError().body(err.to_string()),
+    ).await;
+
+    let results = match query_results {
+        Ok(results) => results,
+        Err(err) => match err {
+            WaCustomError::InvalidParams => return HttpResponse::BadRequest().body(format!("Bad request")),
+            _ => return HttpResponse::InternalServerError().body(err.to_string()),
+        }
     };
 
     let response_data: Vec<_> = results
