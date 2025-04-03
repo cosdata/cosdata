@@ -158,11 +158,19 @@ impl MetadataSchema {
         if input_fields.is_empty() {
             return vec![];
         }
-        let input_fields_set = input_fields
-            .keys()
-            .map(|n| n.as_ref())
-            .collect::<HashSet<&str>>();
-        let mut combinations = HashSet::new();
+
+        let mut input_fields_set: HashSet<&str> = HashSet::new();
+        let mut combinations: HashSet<Vec<&str>> = HashSet::new();
+
+        // Create individual field combinations. This is an oxymoron
+        // but for the ease of deduplicating all combinations in a
+        // single place, we consider it as a combination that contains
+        // a single field.
+        for key in input_fields.keys() {
+            input_fields_set.insert(key.as_ref());
+            combinations.insert(vec![key.as_ref()]);
+        }
+
         for condition in &self.conditions {
             // @NOTE: We only consider `And` conditions, `Or` conditions
             // will be covered by the "all fields" combination, which will
@@ -234,31 +242,33 @@ impl MetadataSchema {
         weight: i32,
     ) -> Result<Vec<MetadataDimensions>, Error> {
         let field_combinations = self.input_field_combinations(&fields);
-        let mut cache: HashMap<&str, Vec<i32>> = HashMap::new();
+        // We cache the results of calling fn `decimal_to_binary_vec`
+        // as there's a chance it would get called multiple times for
+        // the same input
+        let mut cache: HashMap<(u16, usize), Vec<i32>> = HashMap::new();
         let mut result = Vec::with_capacity(field_combinations.len());
         for field_combination in field_combinations {
             let mut dims = vec![];
             for field in &self.fields {
-                if let Some(v) = cache.get(&field.name.as_ref()) {
-                    let mut field_dims = v.clone();
-                    dims.append(&mut field_dims);
-                } else {
-                    let field_dims = match field_combination.get(&field.name.as_ref()) {
-                        Some(value) => {
-                            let value_id = field.value_id(&value)?;
-                            decimal_to_binary_vec(value_id, field.num_dims as usize)
-                                .iter()
-                                .map(|x| (*x as i32) * weight)
-                                .collect::<Vec<i32>>()
+                let mut field_dims = match field_combination.get(&field.name.as_ref()) {
+                    Some(value) => {
+                        let value_id = field.value_id(&value)?;
+                        let size = field.num_dims as usize;
+                        match cache.get(&(value_id, size)) {
+                            Some(r) => r.clone(),
+                            None => {
+                                let dims = decimal_to_binary_vec(value_id, size)
+                                    .iter()
+                                    .map(|x| (*x as i32) * weight)
+                                    .collect::<Vec<i32>>();
+                                cache.insert((value_id, size), dims.clone());
+                                dims
+                            },
                         }
-                        None => {
-                            vec![0; field.num_dims as usize]
-                        }
-                    };
-                    let mut field_dims_clone = field_dims.clone();
-                    cache.insert(&field.name, field_dims);
-                    dims.append(&mut field_dims_clone);
-                }
+                    }
+                    None => vec![0; field.num_dims as usize],
+                };
+                dims.append(&mut field_dims);
             }
             result.push(dims);
         }
@@ -404,6 +414,27 @@ mod tests {
         }
     }
 
+    // Following fns that are prefixed with `ifc_` are test util for
+    // testing the fn `input_field_combinations`.
+
+    fn ifc_input(kvs: Vec<(&str, i32)>) -> MetadataFields {
+        kvs.into_iter()
+            .map(|(k, v)| (k.to_owned(), FieldValue::Int(v)))
+            .collect()
+    }
+
+    fn ifc_sort_result(result: &mut Vec<HashMap<&str, &FieldValue>>) {
+        result.sort_by_key(|c| {
+            c.values()
+                .map(|v| {
+                    match v {
+                        FieldValue::Int(i) => *i,
+                        FieldValue::String(_) => 0,
+                    }})
+                .sum::<i32>()
+        })
+    }
+
     #[test]
     fn test_input_field_combinations() {
         let a_values: HashSet<FieldValue> = (1..=10).map(|x| FieldValue::Int(x)).collect();
@@ -421,98 +452,112 @@ mod tests {
             SupportedCondition::Or(hashset(vec!["a", "b"])),
         ];
 
-        // Helper fn to create the MetadataFields hashmap from
-        // key-value tuples
-        let input_fields = |kvs: Vec<(&str, i32)>| {
-            kvs.into_iter()
-                .map(|(k, v)| (k.to_owned(), FieldValue::Int(v)))
-                .collect::<HashMap<String, FieldValue>>()
-        };
-
         let schema = MetadataSchema::new(vec![a, b, c], conditions).unwrap();
 
-        // As the input contains only a single field, only the
-        // following supported conditions are relevant to this vector:
+        // Test case 1: As the input contains only a single field,
+        // only the following replicas are relevant to this vector:
         //
         //  1. matches "a"
         //
         // Hence the result is 1 combination i.e. 1 replica
-        let fs = input_fields(vec![("a", 1)]);
+        let fs = ifc_input(vec![("a", 1)]);
         let cs = schema.input_field_combinations(&fs);
         assert_eq!(1, cs.len());
         let mut ec1 = HashMap::with_capacity(1);
         ec1.insert("a", &FieldValue::Int(1));
         assert_eq!(ec1, cs[0]);
 
-        // As the input contains only "a" and "b", only the following
-        // supported `AND` conditions are relevant to this vector
+        // Test case 2: As the input contains only "a" and "b", only
+        // the following replicas are relevant to this vector
         //
-        //   1. matches "a and b"
+        //   1. matches "a"
+        //   2. matches "b"
+        //   3. matches "a AND b"
         //
-        // Hence the result is 1 combination i.e. 1 replica. It is
-        // sufficient and it's also equivalent to the "all fields"
-        // replica to support individual field matches and OR
-        // conditions.
-        let fs = input_fields(vec![("a", 1), ("b", 2)]);
-        let cs = schema.input_field_combinations(&fs);
-        assert_eq!(1, cs.len());
+        // Hence the result is 3 combinations i.e. 3 replicas.
+        let fs = ifc_input(vec![("a", 1), ("b", 2)]);
+        let mut cs = schema.input_field_combinations(&fs);
+
+        // To make the order of returned combinations deterministic,
+        // sort them by sum of the field values.
+        ifc_sort_result(&mut cs);
+
+        assert_eq!(3, cs.len());
         let mut ec1 = HashMap::with_capacity(1);
         ec1.insert("a", &FieldValue::Int(1));
-        ec1.insert("b", &FieldValue::Int(2));
-        assert_eq!(ec1, cs[0]);
+        let mut ec2 = HashMap::with_capacity(1);
+        ec2.insert("b", &FieldValue::Int(2));
+        let mut ec3 = HashMap::with_capacity(2);
+        ec3.insert("a", &FieldValue::Int(1));
+        ec3.insert("b", &FieldValue::Int(2));
+        assert_eq!(vec![ec1, ec2, ec3], cs);
 
-        // The input contains fields "b" and "c" only. There is no
-        // supported `AND` condition that includes these 2 fields. But
-        // we need the "all fields" replica to support individual
-        // field matches and OR conditions.
+        // Test case 3: The input contains fields "b" and "c"
+        // only. There is no supported `AND` condition that includes
+        // these 2 fields. But we need the "all fields" replica is
+        // created any way. Hence the following replicas are relevant
+        // to this vector
         //
-        // Hence the result is 1 combination i.e. 1 replica
-        let fs = input_fields(vec![("b", 3), ("c", 2)]);
-        let cs = schema.input_field_combinations(&fs);
-        assert_eq!(1, cs.len());
-        let mut ec1 = HashMap::with_capacity(1);
-        ec1.insert("b", &FieldValue::Int(3));
-        ec1.insert("c", &FieldValue::Int(2));
-        assert_eq!(ec1, cs[0]);
-
-        // The input contains all 3 fields. So considering the
-        // supported conditions, 3 combinations or replicas are required
-        //
-        //   1. to match "a == x and b == y"
-        //   2. to match "a == x and c == z"
-        //   3. all fields replica for individual fields and OR queries
-        let fs = input_fields(vec![("a", 4), ("b", 5), ("c", 6)]);
+        //   1. matches "b"
+        //   2. matches "c"
+        //   3. matches "b AND c"
+        let fs = ifc_input(vec![("b", 3), ("c", 2)]);
         let mut cs = schema.input_field_combinations(&fs);
         // To make the order of returned combinations deterministic,
         // sort them by sum of the field values.
-        cs.sort_by_key(|c| {
-            c.values()
-                .map(|v| {
-                    match v {
-                        FieldValue::Int(i) => *i,
-                        FieldValue::String(_) => 0,
-                    }})
-                .sum::<i32>()});
+        ifc_sort_result(&mut cs);
         assert_eq!(3, cs.len());
+        let mut ec1 = HashMap::with_capacity(1);
+        ec1.insert("c", &FieldValue::Int(2));
+        let mut ec2 = HashMap::with_capacity(1);
+        ec2.insert("b", &FieldValue::Int(3));
+        let mut ec3 = HashMap::with_capacity(2);
+        ec3.insert("b", &FieldValue::Int(3));
+        ec3.insert("c", &FieldValue::Int(2));
+        assert_eq!(vec![ec1, ec2, ec3], cs);
+
+        // Test case 4: The input contains all 3 fields. So
+        // considering the supported conditions, 6 combinations or
+        // replicas are relevant to this vector
+        //
+        //   1. matches "a"
+        //   2. matches "b"
+        //   3. matches "c"
+        //   4. matches "a AND b"
+        //   5. to match "a AND c"
+        //   6. all fields replica
+        let fs = ifc_input(vec![("a", 4), ("b", 5), ("c", 6)]);
+        let mut cs = schema.input_field_combinations(&fs);
+        // To make the order of returned combinations deterministic,
+        // sort them by sum of the field values.
+        ifc_sort_result(&mut cs);
+        assert_eq!(6, cs.len());
 
         let mut ec1 = HashMap::new();
         ec1.insert("a", &FieldValue::Int(4));
-        ec1.insert("b", &FieldValue::Int(5));
 
         let mut ec2 = HashMap::new();
-        ec2.insert("a", &FieldValue::Int(4));
-        ec2.insert("c", &FieldValue::Int(6));
+        ec2.insert("b", &FieldValue::Int(5));
 
         let mut ec3 = HashMap::new();
-        ec3.insert("a", &FieldValue::Int(4));
-        ec3.insert("b", &FieldValue::Int(5));
         ec3.insert("c", &FieldValue::Int(6));
 
-        assert_eq!(ec1, cs[0]);
-        assert_eq!(ec2, cs[1]);
-        assert_eq!(ec3, cs[2]);
+        let mut ec4 = HashMap::new();
+        ec4.insert("a", &FieldValue::Int(4));
+        ec4.insert("b", &FieldValue::Int(5));
 
-        // When the input contains no fields
+        let mut ec5 = HashMap::new();
+        ec5.insert("a", &FieldValue::Int(4));
+        ec5.insert("c", &FieldValue::Int(6));
+
+        let mut ec6 = HashMap::new();
+        ec6.insert("a", &FieldValue::Int(4));
+        ec6.insert("b", &FieldValue::Int(5));
+        ec6.insert("c", &FieldValue::Int(6));
+
+        assert_eq!(vec![ec1, ec2, ec3, ec4, ec5, ec6], cs);
+
+        // Test case 5: When the input contains no fields
         let fs = HashMap::new();
         let cs = schema.input_field_combinations(&fs);
         assert!(cs.is_empty());
@@ -544,7 +589,7 @@ mod tests {
 
         // Case 1: When only "age" field is specified in input vector
 
-        let mut fields = HashMap::with_capacity(2);
+        let mut fields = HashMap::with_capacity(1);
         fields.insert("age".to_owned(), FieldValue::Int(5));
         let wd = schema.weighted_dimensions(&fields, 1024).unwrap();
         let exp_dim1 = vec![
@@ -561,23 +606,53 @@ mod tests {
         fields.insert("age".to_owned(), FieldValue::Int(5));
         fields.insert("group".to_owned(), FieldValue::String("a".to_owned()));
         let wd = schema.weighted_dimensions(&fields, 1024).unwrap();
-        let exp_dim1 = vec![
-            0, 1024, 0, 1024, // 5 (original value: 5)
-            0, 1024, // 1 (original value: a)
-            0, 0, // (not specified)
+        let exp = vec![
+            vec![
+                0, 1024, 0, 1024, // 5 (original value: 5)
+                0, 0,
+                0, 0,
+            ],
+            vec![
+                0, 0, 0, 0,
+                0, 1024, // 1 (original value: a)
+                0, 0,
+            ],
+            vec![
+                0, 1024, 0, 1024, // 5 (original value: 5)
+                0, 1024, // 1 (original value: a)
+                0, 0, // (not specified)
+            ],
         ];
-        assert_eq!(vec![exp_dim1], wd);
+        // Convert both to sets for comparing unordered values
+        let wd_set = wd.into_iter().collect::<HashSet<Vec<i32>>>();
+        let exp_set = exp.into_iter().collect::<HashSet<Vec<i32>>>();
+        assert_eq!(exp_set, wd_set);
 
         let mut fields = HashMap::with_capacity(2);
         fields.insert("age".to_owned(), FieldValue::Int(3));
         fields.insert("group".to_owned(), FieldValue::String("c".to_owned()));
         let wd = schema.weighted_dimensions(&fields, 1024).unwrap();
-        let exp_dim1 = vec![
-            0, 0, 1024, 1024, // 3 (original value: 3)
-            1024, 1024, // 3 (original value: c)
-            0, 0, // (not specified)
+        let exp = vec![
+            vec![
+                0, 0, 1024, 1024, // 3 (original value: 3)
+                0, 0,
+                0, 0,
+            ],
+            vec![
+                0, 0, 0, 0,
+                1024, 1024, // 3 (original value: c)
+                0, 0,
+            ],
+            vec![
+                0, 0, 1024, 1024, // 3 (original value: 3)
+                1024, 1024, // 3 (original value: c)
+                0, 0, // (not specified)
+            ]
         ];
-        assert_eq!(vec![exp_dim1], wd);
+        // Convert both to sets for comparing unordered values
+        let wd_set = wd.into_iter().collect::<HashSet<Vec<i32>>>();
+        let exp_set = exp.into_iter().collect::<HashSet<Vec<i32>>>();
+        assert_eq!(exp_set, wd_set);
 
         // Case 3: When all fields are specified in input vector
 
@@ -587,29 +662,48 @@ mod tests {
         fields.insert("level".to_owned(), FieldValue::String("third".to_owned()));
         let wd = schema.weighted_dimensions(&fields, 1024).unwrap();
 
-        // dimensions to support AND(age, group)
-        let exp_dim1 = vec![
-            0, 1024, 0, 1024, // 5 (original value: 5)
-            0, 1024, // 1 (original value: a)
-            0, 0,
+        let exp = vec![
+            // dimensions to support queries for individual field age
+            vec![
+                0, 1024, 0, 1024, // 5 (original value: 5)
+                0, 0,
+                0, 0,
+            ],
+            // dimensions to support queries for individual field group
+            vec![
+                0, 0, 0, 0,
+                0, 1024, // 0 (original value: a)
+                0, 0,
+            ],
+            // dimensions to support queries for individual field level
+            vec![
+                0, 0, 0, 0,
+                0, 0,
+                1024, 1024, // 3 (original value: third)
+            ],
+            // dimensions to support AND(age, group)
+            vec![
+                0, 1024, 0, 1024, // 5 (original value: 5)
+                0, 1024, // 1 (original value: a)
+                0, 0,
+            ],
+            // dimensions to support AND(age, level)
+            vec![
+                0, 1024, 0, 1024, // 5 (original value: 5)
+                0, 0,
+                1024, 1024, // 3 (original value: third)
+            ],
+            // all fields dimensions to support OR queries
+            vec![
+                0, 1024, 0, 1024, // 5 (original value: 5)
+                0, 1024, // 0 (original value: a)
+                1024, 1024, // 3 (original value: third)
+            ],
         ];
-
-        // dimensions to support AND(age, level)
-        let exp_dim2 = vec![
-            0, 1024, 0, 1024, // 5 (original value: 5)
-            0, 0,
-            1024, 1024, // 3 (original value: third)
-        ];
-
-        // all fields dimensions to support individual field and OR queries
-        let exp_dim3 = vec![
-            0, 1024, 0, 1024, // 5 (original value: 5)
-            0, 1024, // 0 (original value: a)
-            1024, 1024, // 3 (original value: third)
-        ];
-        for i in 0..wd.len() {
-            assert!(wd[i] == exp_dim1 || wd[i] == exp_dim2 || wd[i] == exp_dim3);
-        }
+        // Convert both to sets for comparing unordered values
+        let wd_set = wd.into_iter().collect::<HashSet<Vec<i32>>>();
+        let exp_set = exp.into_iter().collect::<HashSet<Vec<i32>>>();
+        assert_eq!(exp_set, wd_set);
 
         // Case 4: When no fields are specified in input vector
         let fields = HashMap::new();
