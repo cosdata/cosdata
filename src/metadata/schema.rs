@@ -187,18 +187,15 @@ impl MetadataSchema {
             }
         }
         // Add a combination for all fields in the schema. This is
-        // equivalent to a condition And(<all fields>). To get this,
-        // we compute the intersection of all fields supported by the
-        // schema with actual fields associated with the vector.
+        // equivalent to a condition And(<all fields>). Even thought
+        // it's named 'all_fields_combination', we only consider the
+        // fields that are present in the input.
         //
         // Note that it's possible that this combination has already
         // been considered before, but it will get deduped when
         // inserting into the HashSet of combinations.
-        let mut all_fields_combination = self.fields
+        let mut all_fields_combination = input_fields_set
             .iter()
-            .map(|f| f.name.as_ref())
-            .collect::<HashSet<&str>>()
-            .intersection(&input_fields_set)
             .map(|s| *s)
             .collect::<Vec<&str>>();
         all_fields_combination.sort();
