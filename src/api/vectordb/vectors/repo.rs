@@ -1,6 +1,6 @@
 use std::sync::{atomic::Ordering, Arc};
 
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use crate::{
     api_service::{
@@ -17,7 +17,7 @@ use crate::{
     models::{
         common::WaCustomError,
         rpc::DenseVector,
-        sparse_ann_query::{SparseAnnQueryBasic, SparseAnnResult},
+        sparse_ann_query::{SparseAnnIDFResult, SparseAnnQueryBasic, SparseAnnResult},
         types::{MetricResult, SparseVector, VectorId},
     },
     vector_store::get_sparse_embedding_by_id,
@@ -397,11 +397,27 @@ fn sparse_ann_vector_query(
         inverted_index.root.root.quantization_bits,
         *inverted_index.values_upper_bound.read().unwrap(),
         inverted_index.early_terminate_threshold,
-        ctx.config.sparse_raw_values_reranking_factor,
+        if ctx.config.rerank_sparse_with_raw_values {
+            ctx.config.sparse_raw_values_reranking_factor
+        } else {
+            1
+        },
         top_k,
     )?;
 
-    finalize_sparse_ann_results(inverted_index, intermediate_results, query, top_k)
+    if ctx.config.rerank_sparse_with_raw_values {
+        finalize_sparse_ann_results(inverted_index, intermediate_results, query, top_k)
+    } else {
+        Ok(intermediate_results
+            .into_iter()
+            .map(|result| {
+                (
+                    VectorId(result.vector_id as u64),
+                    MetricResult::DotProductDistance(DotProductDistance(result.similarity as f32)),
+                )
+            })
+            .collect())
+    }
 }
 
 fn sparse_idf_ann_vector_query(
@@ -416,23 +432,37 @@ fn sparse_idf_ann_vector_query(
         entries: query.iter().map(|pair| (pair.0, pair.1)).collect(),
     };
 
-    let results = SparseAnnQueryBasic::new(sparse_vec).search_bm25(
+    let (intermediate_results, idf_list) = SparseAnnQueryBasic::new(sparse_vec).search_bm25(
         &inverted_index_idf.root,
         inverted_index_idf.root.root.quantization_bits,
         inverted_index_idf.early_terminate_threshold,
-        ctx.config.sparse_raw_values_reranking_factor,
+        if ctx.config.rerank_sparse_with_raw_values {
+            ctx.config.sparse_raw_values_reranking_factor
+        } else {
+            1
+        },
         top_k,
     )?;
 
-    Ok(results
-        .into_iter()
-        .map(|result| {
-            (
-                VectorId(result.document_id as u64),
-                MetricResult::DotProductDistance(DotProductDistance(result.score)),
-            )
-        })
-        .collect())
+    if ctx.config.rerank_sparse_with_raw_values {
+        finalize_sparse_idf_ann_results(
+            inverted_index_idf,
+            intermediate_results,
+            idf_list,
+            query,
+            top_k,
+        )
+    } else {
+        Ok(intermediate_results
+            .into_iter()
+            .map(|result| {
+                (
+                    VectorId(result.document_id as u64),
+                    MetricResult::DotProductDistance(DotProductDistance(result.score)),
+                )
+            })
+            .collect())
+    }
 }
 
 fn batch_sparse_ann_vector_query(
@@ -442,7 +472,7 @@ fn batch_sparse_ann_vector_query(
     top_k: Option<usize>,
 ) -> Result<Vec<Vec<(VectorId, MetricResult)>>, WaCustomError> {
     queries
-        .into_par_iter()
+        .par_iter()
         .map(|query| sparse_ann_vector_query(ctx.clone(), inverted_index.clone(), query, top_k))
         .collect()
 }
@@ -454,7 +484,7 @@ fn batch_sparse_idf_ann_vector_query(
     top_k: Option<usize>,
 ) -> Result<Vec<Vec<(VectorId, MetricResult)>>, WaCustomError> {
     queries
-        .into_par_iter()
+        .par_iter()
         .map(|query| {
             sparse_idf_ann_vector_query(ctx.clone(), inverted_index_idf.clone(), query, top_k)
         })
@@ -471,7 +501,9 @@ fn finalize_sparse_ann_results(
 
     for result in intermediate_results {
         let id = VectorId(result.vector_id as u64);
-        let map = get_sparse_embedding_by_id(inverted_index.clone(), &id)?.into_map();
+        let map =
+            get_sparse_embedding_by_id(&inverted_index.lmdb, &inverted_index.vec_raw_manager, &id)?
+                .into_map();
         let mut dp = 0.0;
         for pair in query {
             if let Some(val) = map.get(&pair.0) {
@@ -479,6 +511,43 @@ fn finalize_sparse_ann_results(
             }
         }
         results.push((id, MetricResult::DotProductDistance(DotProductDistance(dp))));
+    }
+
+    results.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+    if let Some(k) = k {
+        results.truncate(k);
+    }
+
+    Ok(results)
+}
+
+fn finalize_sparse_idf_ann_results(
+    inverted_index_idf: Arc<InvertedIndexIDF>,
+    intermediate_results: Vec<SparseAnnIDFResult>,
+    idf_list: Vec<f32>,
+    query: &[SparsePair],
+    k: Option<usize>,
+) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
+    let mut results = Vec::with_capacity(k.unwrap_or(intermediate_results.len()));
+
+    for result in intermediate_results {
+        let id = VectorId(result.document_id as u64);
+        let map = get_sparse_embedding_by_id(
+            &inverted_index_idf.lmdb,
+            &inverted_index_idf.vec_raw_manager,
+            &id,
+        )?
+        .into_map();
+        let mut score = 0.0;
+        for (idx, pair) in query.iter().enumerate() {
+            if let Some(tf) = map.get(&pair.0) {
+                score += tf * idf_list[idx];
+            }
+        }
+        results.push((
+            id,
+            MetricResult::DotProductDistance(DotProductDistance(score)),
+        ));
     }
 
     results.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));

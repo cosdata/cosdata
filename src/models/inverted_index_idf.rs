@@ -2,7 +2,7 @@ use std::{
     fs::OpenOptions,
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering},
         Arc, RwLock,
     },
 };
@@ -48,7 +48,7 @@ impl TermInfo {
             serialized_at: RwLock::new(None),
             frequency_map: TSHashTable::new(16),
             sequence_idx,
-            documents_count: AtomicU32::new(0),
+            documents_count: AtomicU32::new(1),
         }
     }
 }
@@ -124,18 +124,6 @@ impl InvertedIndexIDFNodeData {
     pub fn new() -> Self {
         Self::default()
     }
-
-    // Get IDF score for a term (represented by quotient)
-    pub fn get_idf(&self, quotient: TermQuotient, global_document_count: u32) -> f32 {
-        let doc_freq = self
-            .map
-            .lookup(&quotient)
-            .map(|v| v.documents_count.load(Ordering::Relaxed))
-            .unwrap_or(0);
-
-        // BM25 probabilistic IDF formula
-        (((global_document_count - doc_freq) as f32 + 0.5) / (doc_freq as f32 + 0.5)).ln_1p()
-    }
 }
 
 pub struct InvertedIndexIDFNode {
@@ -179,6 +167,11 @@ pub struct InvertedIndexIDFRoot {
     pub cache: InvertedIndexIDFCache,
     // total number of documents in the index
     pub total_documents_count: AtomicU32,
+    // the max value of `documents_containing_term`, that any term have
+    pub most_common_term_documents_count: AtomicU32,
+    // the min value of `documents_containing_term`, that any term have, alongside with the no. of
+    // terms having this value for their `documents_containing_term` (used for updating)
+    pub least_common_term_documents_count: AtomicU64,
     pub data_file_parts: u8,
 }
 
@@ -188,6 +181,13 @@ impl PartialEq for InvertedIndexIDFRoot {
         self.root == other.root
             && self.total_documents_count.load(Ordering::Relaxed)
                 == other.total_documents_count.load(Ordering::Relaxed)
+            && self
+                .most_common_term_documents_count
+                .load(Ordering::Relaxed)
+                == other
+                    .most_common_term_documents_count
+                    .load(Ordering::Relaxed)
+            && self.data_file_parts == other.data_file_parts
     }
 }
 
@@ -199,6 +199,12 @@ impl std::fmt::Debug for InvertedIndexIDFRoot {
             .field(
                 "total_documents_count",
                 &self.total_documents_count.load(Ordering::Relaxed),
+            )
+            .field(
+                "most_common_term_documents_count",
+                &self
+                    .most_common_term_documents_count
+                    .load(Ordering::Relaxed),
             )
             .field("data_file_parts", &self.data_file_parts)
             .finish()
@@ -242,7 +248,7 @@ impl InvertedIndexIDFNode {
     pub fn find_or_create_node(&self, path: &[u8], mut offset_fn: impl FnMut() -> u32) -> &Self {
         let mut current_node = self;
         for &child_index in path {
-            let new_dim_index = (current_node.dim_index + 1u32) << (child_index * 2);
+            let new_dim_index = current_node.dim_index + (1u32 << (child_index * 2));
             if let Some(child) = current_node.children.get(child_index as usize) {
                 let res = unsafe { &*child };
                 current_node = res;
@@ -267,8 +273,9 @@ impl InvertedIndexIDFNode {
     }
 
     fn quantize(&self, value: f32) -> u8 {
-        ((value / 2.0) * (1u32 << self.quantization_bits) as f32)
-            .min(((1u32 << self.quantization_bits) - 1) as f32) as u8
+        (((value - 0.8) / 1.2) * (1u32 << self.quantization_bits) as f32)
+            .min(((1u32 << self.quantization_bits) - 1) as f32)
+            .max(0.0) as u8
     }
 
     /// Inserts a value into the index at the specified dimension index.
@@ -281,6 +288,8 @@ impl InvertedIndexIDFNode {
         document_id: u32,
         cache: &InvertedIndexIDFCache,
         version: Hash,
+        most_common_term_documents_count: &AtomicU32,
+        least_common_term_documents_count: &AtomicU64,
     ) -> Result<(), BufIoError> {
         // Get node data
         let data = unsafe { &*self.data }.try_get_data(cache, self.dim_index)?;
@@ -304,7 +313,34 @@ impl InvertedIndexIDFNode {
                     },
                 );
 
-                v.documents_count.fetch_add(1, Ordering::Relaxed);
+                let old_val = v.documents_count.fetch_add(1, Ordering::Relaxed);
+                let new_val = old_val + 1;
+                most_common_term_documents_count.fetch_max(new_val, Ordering::Relaxed);
+                let _ = least_common_term_documents_count.fetch_update(
+                    Ordering::Release,
+                    Ordering::Acquire,
+                    |val| {
+                        let min = (val >> 32) as u32;
+                        let count = val & (u32::MAX as u64); // must not be zero
+
+                        // the min matches the current new value, increment the count
+                        if min == new_val {
+                            Some(((min as u64) << 32) | (count + 1))
+                        // the min matches the old value, either update the min or decrement the count
+                        } else if min == old_val {
+                            // we're the only one, update the min
+                            if count == 1 {
+                                Some(((new_val as u64) << 32) | 1)
+                            // not alone, decrement the count
+                            } else {
+                                Some(((min as u64) << 32) | (count - 1))
+                            }
+                        // nothing matches, don't update
+                        } else {
+                            None
+                        }
+                    },
+                );
             },
             || {
                 // Create new inner map if quotient not found
@@ -313,11 +349,22 @@ impl InvertedIndexIDFNode {
                 let pool = DocumentIDList::new(version);
                 pool.push(version, document_id);
                 frequency_map.insert(quantized_value, pool);
+                most_common_term_documents_count.fetch_max(1, Ordering::Relaxed);
+                let _ = least_common_term_documents_count.fetch_update(
+                    Ordering::Release,
+                    Ordering::Acquire,
+                    |val| {
+                        let min = (val >> 32) as u32;
+                        let count = val & (u32::MAX as u64);
+                        let new_count = if min == 1 { count + 1 } else { 1 };
+                        Some((1 << 32) | new_count)
+                    },
+                );
                 Arc::new(TermInfo {
                     serialized_at: RwLock::new(None),
                     frequency_map,
                     sequence_idx,
-                    documents_count: AtomicU32::new(0),
+                    documents_count: AtomicU32::new(1),
                 })
             },
         );
@@ -347,7 +394,7 @@ impl InvertedIndexIDFRoot {
             .open(root_path.join("index-tree.dim"))?;
         let node_size = InvertedIndexIDFNode::get_serialized_size();
         let dim_bufman = Arc::new(BufferManager::new(dim_file, node_size as usize * 1000)?);
-        let offset_counter = AtomicU32::new(node_size + 4);
+        let offset_counter = AtomicU32::new(node_size + 16);
         let data_bufmans = Arc::new(BufferManagerFactory::new(
             root_path.clone().into(),
             |root, idx: &u8| root.join(format!("{}.idat", idx)),
@@ -362,9 +409,11 @@ impl InvertedIndexIDFRoot {
         );
 
         Ok(InvertedIndexIDFRoot {
-            root: InvertedIndexIDFNode::new(0, false, quantization_bits, FileOffset(4)),
+            root: InvertedIndexIDFNode::new(0, false, quantization_bits, FileOffset(16)),
             cache,
             total_documents_count: AtomicU32::new(0),
+            most_common_term_documents_count: AtomicU32::new(0),
+            least_common_term_documents_count: AtomicU64::new(1 << 32),
             data_file_parts,
         })
     }
@@ -373,17 +422,19 @@ impl InvertedIndexIDFRoot {
     /// Traverses the tree iteratively and returns a reference to the node.
     pub fn find_node(&self, dim_index: u32) -> Option<&InvertedIndexIDFNode> {
         let mut current_node = &self.root;
-        let path = calculate_path(dim_index, self.root.dim_index);
+        let path = calculate_path(dim_index, 0);
         for child_index in path {
             let child = current_node.children.get(child_index as usize)?;
             let node_res = unsafe { &*child };
             current_node = node_res;
         }
 
+        assert_eq!(current_node.dim_index, dim_index);
+
         Some(current_node)
     }
 
-    //Inserts vec_id, quantized value u8 at particular node based on path
+    // Inserts vec_id, quantized value u8 at particular node based on path
     pub fn insert(
         &self,
         hash_dim: u32,
@@ -392,18 +443,27 @@ impl InvertedIndexIDFRoot {
         version: Hash,
     ) -> Result<(), BufIoError> {
         // Split the hash dimension
-        let storage_dim = hash_dim % 65536;
-        let quotient = (hash_dim / 65536) as TermQuotient;
+        let storage_dim = hash_dim & (u16::MAX as u32);
+        let quotient = (hash_dim >> 16) as TermQuotient;
 
-        let path = calculate_path(storage_dim, self.root.dim_index);
+        let path = calculate_path(storage_dim, 0);
         let node = self.root.find_or_create_node(&path, || {
             self.cache.offset_counter.fetch_add(
                 InvertedIndexIDFNode::get_serialized_size(),
                 Ordering::Relaxed,
             )
         });
+        assert_eq!(node.dim_index, storage_dim);
         // value will be quantized while being inserted into the Node.
-        node.insert(quotient, value, document_id, &self.cache, version)
+        node.insert(
+            quotient,
+            value,
+            document_id,
+            &self.cache,
+            version,
+            &self.most_common_term_documents_count,
+            &self.least_common_term_documents_count,
+        )
     }
 
     pub fn serialize(&self) -> Result<(), BufIoError> {
@@ -411,6 +471,16 @@ impl InvertedIndexIDFRoot {
         self.cache
             .dim_bufman
             .update_u32_with_cursor(cursor, self.total_documents_count.load(Ordering::Relaxed))?;
+        self.cache.dim_bufman.update_u32_with_cursor(
+            cursor,
+            self.most_common_term_documents_count
+                .load(Ordering::Relaxed),
+        )?;
+        self.cache.dim_bufman.update_u64_with_cursor(
+            cursor,
+            self.least_common_term_documents_count
+                .load(Ordering::Relaxed),
+        )?;
         self.root.serialize(
             &self.cache.dim_bufman,
             &self.cache.data_bufmans,
@@ -453,7 +523,7 @@ impl InvertedIndexIDFRoot {
         let root = InvertedIndexIDFNode::deserialize(
             &cache.dim_bufman,
             &cache.data_bufmans,
-            FileOffset(4),
+            FileOffset(16),
             quantization_bits,
             0,
             data_file_parts,
@@ -461,12 +531,18 @@ impl InvertedIndexIDFRoot {
         )?;
         let cursor = cache.dim_bufman.open_cursor()?;
         let total_documents_count = AtomicU32::new(cache.dim_bufman.read_u32_with_cursor(cursor)?);
+        let most_common_term_documents_count =
+            AtomicU32::new(cache.dim_bufman.read_u32_with_cursor(cursor)?);
+        let least_common_term_documents_count =
+            AtomicU64::new(cache.dim_bufman.read_u64_with_cursor(cursor)?);
         cache.dim_bufman.close_cursor(cursor)?;
 
         Ok(Self {
             root,
             cache,
             total_documents_count,
+            most_common_term_documents_count,
+            least_common_term_documents_count,
             data_file_parts,
         })
     }

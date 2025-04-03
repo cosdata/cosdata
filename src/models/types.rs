@@ -691,11 +691,17 @@ impl CollectionsMap {
         config: &Config,
     ) -> Result<Option<InvertedIndexIDF>, WaCustomError> {
         let collection_path: Arc<Path> = root_path.join(&coll.name).into();
-        let index_path = collection_path.join("sparse_inverted_index");
+        let index_path = collection_path.join("sparse_inverted_index_idf");
 
-        if index_path.exists() {
+        if !index_path.exists() {
             return Ok(None);
         }
+
+        let vec_raw_manager = BufferManagerFactory::new(
+            index_path.clone().into(),
+            |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
+            8192,
+        );
 
         let db = Arc::new(
             self.lmdb_env
@@ -732,6 +738,7 @@ impl CollectionsMap {
             current_version: RwLock::new(current_version),
             current_open_transaction: AtomicPtr::new(ptr::null_mut()),
             vcs,
+            vec_raw_manager,
             early_terminate_threshold: inverted_index_data.early_terminate_threshold,
         };
 

@@ -153,56 +153,74 @@ impl SparseAnnQueryBasic {
         self,
         index: &InvertedIndexIDFRoot,
         quantization_bits: u8,
-        // TODO(a-rustacean): later
         early_terminate_threshold: f32,
         reranking_factor: usize,
         k: Option<usize>,
-    ) -> Result<Vec<SparseAnnIDFResult>, BufIoError> {
+    ) -> Result<(Vec<SparseAnnIDFResult>, Vec<f32>), BufIoError> {
         let mut results_map: FxHashMap<u32, f32> = FxHashMap::default();
         let max_key = ((1u32 << quantization_bits) - 1) as u8;
-        let one_quantized = (1u32 << quantization_bits) as f32;
         let total_documents_count = index
             .total_documents_count
             .load(std::sync::atomic::Ordering::Relaxed);
-        let max_idf = get_max_idf(total_documents_count);
+        let most_common_term_documents_count = index
+            .most_common_term_documents_count
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let least_common_term_documents_count = (index
+            .least_common_term_documents_count
+            .load(std::sync::atomic::Ordering::Relaxed)
+            >> 32) as u32;
+        let max_idf = get_idf(total_documents_count, least_common_term_documents_count);
+        let min_idf = get_idf(total_documents_count, most_common_term_documents_count);
+        let absolute_max_idf = get_idf(total_documents_count, 0);
+        let mut idf_list = Vec::with_capacity(self.query_vector.entries.len());
 
         for (term_hash, _query_tf) in self.query_vector.entries {
             // Split the hash dimension
-            let storage_dim = term_hash % 65536;
-            let quotient = (term_hash / 65536) as TermQuotient;
+            let storage_dim = term_hash & (u16::MAX as u32);
+            let quotient = (term_hash >> 16) as TermQuotient;
 
             // Find node for this storage dimension
-            if let Some(node) = index.find_node(storage_dim) {
+            let idf = if let Some(node) = index.find_node(storage_dim) {
                 // Get node data
-                if let Ok(node_data) =
-                    unsafe { &*node.data }.try_get_data(&index.cache, node.dim_index)
-                {
+                let node_data =
+                    unsafe { &*node.data }.try_get_data(&index.cache, node.dim_index)?;
+
+                // Process documents containing this term
+                if let Some(inner_map) = node_data.map.lookup(&quotient) {
+                    let documents_containing_term = inner_map
+                        .documents_count
+                        .load(std::sync::atomic::Ordering::Relaxed);
                     // Get IDF for this term
-                    let idf = node_data.get_idf(quotient, total_documents_count);
-                    let idf_ratio = idf / max_idf;
+                    let idf = get_idf(total_documents_count, documents_containing_term);
+                    let idf_fraction = ((idf - min_idf) / (max_idf - min_idf)).clamp(0.0, 1.0);
+                    // println!("idf_fraction: {idf_fraction}, idf: {idf}, doc_count: {documents_containing_term}, min_idf: {min_idf}, max_doc_count: {most_common_term_documents_count}, max_idf: {max_idf}, min_doc_count: {least_common_term_documents_count}");
                     let early_terminate_value =
-                        (early_terminate_threshold * idf_ratio * max_key as f32) as u8;
+                        (early_terminate_threshold * (1.0 - idf_fraction) * max_key as f32) as u8;
+                    // println!("early_terminate_value: {}", early_terminate_value);
+                    for quantized_value in early_terminate_value..=max_key {
+                        if let Some(vector_ids) = inner_map.frequency_map.lookup(&quantized_value) {
+                            // For each document containing this term
+                            for doc_id in vector_ids.iter() {
+                                // Calculate BM25 term weight
+                                let term_freq = ((quantized_value as f32)
+                                    * (1.2 / (1u32 << quantization_bits) as f32))
+                                    + 0.8;
+                                let bm25_weight = idf * term_freq;
 
-                    // Process documents containing this term
-                    if let Some(inner_map) = node_data.map.lookup(&quotient) {
-                        for quantized_value in early_terminate_value..=max_key {
-                            if let Some(vector_ids) =
-                                inner_map.frequency_map.lookup(&quantized_value)
-                            {
-                                // For each document containing this term
-                                for doc_id in vector_ids.iter() {
-                                    // Calculate BM25 term weight
-                                    let term_freq = quantized_value as f32 / one_quantized;
-                                    let bm25_weight = idf * term_freq;
-
-                                    // Accumulate score
-                                    *results_map.entry(doc_id).or_insert(0.0) += bm25_weight;
-                                }
+                                // Accumulate score
+                                *results_map.entry(doc_id).or_insert(0.0) += bm25_weight;
                             }
                         }
                     }
+                    idf
+                } else {
+                    absolute_max_idf
                 }
-            }
+            } else {
+                absolute_max_idf
+            };
+
+            idf_list.push(idf);
         }
 
         // Convert the heap to a vector and reverse it to get descending order
@@ -223,10 +241,12 @@ impl SparseAnnQueryBasic {
             }
         }
         results.sort_unstable_by(|a, b| b.score.total_cmp(&a.score));
-        Ok(results)
+        Ok((results, idf_list))
     }
 }
 
-fn get_max_idf(documents_count: u32) -> f32 {
-    (((documents_count - 1) as f32 + 0.5) / 1.5).ln_1p()
+fn get_idf(documents_count: u32, documents_containing_term: u32) -> f32 {
+    (((documents_count - documents_containing_term) as f32 + 0.5)
+        / (documents_containing_term as f32 + 0.5))
+        .ln_1p()
 }

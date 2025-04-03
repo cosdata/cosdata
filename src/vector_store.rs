@@ -9,7 +9,6 @@ use crate::indexes::hnsw::types::QuantizedDenseVectorEmbedding;
 use crate::indexes::hnsw::types::RawDenseVectorEmbedding;
 use crate::indexes::hnsw::HNSWIndex;
 use crate::indexes::inverted::types::RawSparseVectorEmbedding;
-use crate::indexes::inverted::InvertedIndex;
 use crate::macros::key;
 use crate::models::buffered_io::*;
 use crate::models::common::*;
@@ -293,11 +292,12 @@ pub fn get_dense_embedding_by_id(
 }
 
 pub fn get_sparse_embedding_by_id(
-    inverted_index: Arc<InvertedIndex>,
+    lmdb: &MetaDb,
+    vec_raw_manager: &BufferManagerFactory<Hash>,
     vector_id: &VectorId,
 ) -> Result<RawSparseVectorEmbedding, WaCustomError> {
-    let env = inverted_index.lmdb.env.clone();
-    let db = inverted_index.lmdb.db.clone();
+    let env = lmdb.env.clone();
+    let db = lmdb.db.clone();
 
     let txn = env
         .begin_ro_txn()
@@ -316,7 +316,7 @@ pub fn get_sparse_embedding_by_id(
 
     let offset = embedding_offset.offset;
     let current_version = embedding_offset.version;
-    let bufman = inverted_index.vec_raw_manager.get(current_version)?;
+    let bufman = vec_raw_manager.get(current_version)?;
     let (embedding, _next) = read_sparse_embedding(bufman.clone(), offset)?;
 
     Ok(embedding)

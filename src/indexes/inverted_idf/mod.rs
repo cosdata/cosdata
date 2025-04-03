@@ -10,7 +10,7 @@ use std::{
 use transaction::InvertedIndexIDFTransaction;
 
 use crate::models::{
-    buffered_io::BufIoError,
+    buffered_io::{BufIoError, BufferManagerFactory},
     inverted_index_idf::InvertedIndexIDFRoot,
     types::MetaDb,
     versioning::{Hash, VersionControl},
@@ -26,6 +26,7 @@ pub struct InvertedIndexIDF {
     pub current_version: RwLock<Hash>,
     pub current_open_transaction: AtomicPtr<InvertedIndexIDFTransaction>,
     pub vcs: VersionControl,
+    pub vec_raw_manager: BufferManagerFactory<Hash>,
     pub early_terminate_threshold: f32,
 }
 
@@ -43,6 +44,7 @@ impl InvertedIndexIDF {
         lmdb: MetaDb,
         current_version: Hash,
         vcs: VersionControl,
+        vec_raw_manager: BufferManagerFactory<Hash>,
         quantization_bits: u8,
         data_file_parts: u8,
         early_terminate_threshold: f32,
@@ -59,6 +61,7 @@ impl InvertedIndexIDF {
             current_version: RwLock::new(current_version),
             current_open_transaction: AtomicPtr::new(ptr::null_mut()),
             vcs,
+            vec_raw_manager,
             early_terminate_threshold,
         })
     }

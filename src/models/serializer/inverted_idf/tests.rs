@@ -1,7 +1,7 @@
 use std::{
     fs::OpenOptions,
     sync::{
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicU32, AtomicU64, Ordering},
         Arc, RwLock,
     },
 };
@@ -154,7 +154,7 @@ fn add_random_items_to_inverted_index_data(
                     serialized_at: RwLock::new(None),
                     frequency_map,
                     sequence_idx,
-                    documents_count: AtomicU32::new(0),
+                    documents_count: AtomicU32::new(1),
                 })
             },
         );
@@ -301,6 +301,8 @@ fn test_inverted_index_node_serialization() {
     let mut rng = rand::thread_rng();
     let inverted_index_node = InvertedIndexIDFNode::new(0, false, 6, FileOffset(0));
     let (dim_bufman, data_bufmans, cache, cursor, _temp_dir) = setup_test();
+    let most_common_term_documents_count = AtomicU32::new(0);
+    let least_common_term_documents_count = AtomicU64::new(1 << 32);
 
     for _ in 0..300 {
         inverted_index_node
@@ -310,6 +312,8 @@ fn test_inverted_index_node_serialization() {
                 rng.gen_range(0..u32::MAX),
                 &cache,
                 0.into(),
+                &most_common_term_documents_count,
+                &least_common_term_documents_count,
             )
             .unwrap();
     }
@@ -341,6 +345,8 @@ fn test_inverted_index_node_incremental_serialization() {
     let mut rng = rand::thread_rng();
     let inverted_index_node = InvertedIndexIDFNode::new(0, false, 6, FileOffset(0));
     let (dim_bufman, data_bufmans, cache, cursor, _temp_dir) = setup_test();
+    let most_common_term_documents_count = AtomicU32::new(0);
+    let least_common_term_documents_count = AtomicU64::new(1 << 32);
 
     for _ in 0..300 {
         inverted_index_node
@@ -350,6 +356,8 @@ fn test_inverted_index_node_incremental_serialization() {
                 rng.gen_range(0..u32::MAX),
                 &cache,
                 0.into(),
+                &most_common_term_documents_count,
+                &least_common_term_documents_count,
             )
             .unwrap();
     }
@@ -368,6 +376,8 @@ fn test_inverted_index_node_incremental_serialization() {
                 rng.gen_range(0..u32::MAX),
                 &cache,
                 0.into(),
+                &most_common_term_documents_count,
+                &least_common_term_documents_count,
             )
             .unwrap();
     }
@@ -397,6 +407,8 @@ fn test_inverted_index_node_incremental_serialization_with_multiple_versions() {
     let mut rng = rand::thread_rng();
     let inverted_index_node = InvertedIndexIDFNode::new(0, false, 6, FileOffset(0));
     let (dim_bufman, data_bufmans, cache, cursor, _temp_dir) = setup_test();
+    let most_common_term_documents_count = AtomicU32::new(0);
+    let least_common_term_documents_count = AtomicU64::new(1 << 32);
 
     for _ in 0..300 {
         inverted_index_node
@@ -406,6 +418,8 @@ fn test_inverted_index_node_incremental_serialization_with_multiple_versions() {
                 rng.gen_range(0..u32::MAX),
                 &cache,
                 0.into(),
+                &most_common_term_documents_count,
+                &least_common_term_documents_count,
             )
             .unwrap();
     }
@@ -424,6 +438,8 @@ fn test_inverted_index_node_incremental_serialization_with_multiple_versions() {
                 rng.gen_range(0..u32::MAX),
                 &cache,
                 0.into(),
+                &most_common_term_documents_count,
+                &least_common_term_documents_count,
             )
             .unwrap();
     }
@@ -440,6 +456,8 @@ fn test_inverted_index_node_incremental_serialization_with_multiple_versions() {
                 rng.gen_range(0..u32::MAX),
                 &cache,
                 1.into(),
+                &most_common_term_documents_count,
+                &least_common_term_documents_count,
             )
             .unwrap();
     }
@@ -456,6 +474,8 @@ fn test_inverted_index_node_incremental_serialization_with_multiple_versions() {
                 rng.gen_range(0..u32::MAX),
                 &cache,
                 1.into(),
+                &most_common_term_documents_count,
+                &least_common_term_documents_count,
             )
             .unwrap();
     }

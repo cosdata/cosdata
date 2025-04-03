@@ -147,7 +147,7 @@ impl InvertedIndexNode {
     pub fn find_or_create_node(&self, path: &[u8], mut offset_fn: impl FnMut() -> u32) -> &Self {
         let mut current_node = self;
         for &child_index in path {
-            let new_dim_index = (current_node.dim_index + 1u32) << (child_index * 2);
+            let new_dim_index = current_node.dim_index + (1u32 << (child_index * 2));
             if let Some(child) = current_node.children.get(child_index as usize) {
                 let res = unsafe { &*child };
                 current_node = res;
@@ -273,6 +273,7 @@ impl InvertedIndexRoot {
             self.offset_counter
                 .fetch_add(self.node_size, Ordering::Relaxed)
         });
+        assert_eq!(node.dim_index, dim_index);
         //value will be quantized while being inserted into the Node.
         node.insert(value, vector_id, &self.cache, version, values_upper_bound)
     }
