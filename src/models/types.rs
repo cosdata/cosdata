@@ -29,6 +29,7 @@ use crate::{
         inverted::{data::InvertedIndexData, InvertedIndex},
         inverted_idf::{data::InvertedIndexIDFData, InvertedIndexIDF},
     },
+    metadata::{schema::MetadataDimensions, QueryFilterDimensions},
     models::{
         buffered_io::BufIoError, common::*, meta_persist::retrieve_values_range, versioning::*,
     },
@@ -68,18 +69,88 @@ pub struct BytesToRead(pub u32);
 pub type PropPersistRef = (FileOffset, BytesToRead);
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct NodeProp {
+pub struct NodePropValue {
     pub id: VectorId,
-    pub value: Arc<Storage>,
+    pub vec: Arc<Storage>,
     pub location: PropPersistRef,
 }
 
-impl StdHash for NodeProp {
+impl StdHash for NodePropValue {
     fn hash<H>(&self, state: &mut H)
     where
         H: Hasher,
     {
         self.id.hash(state);
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Metadata {
+    pub mag: f32,
+    pub mbits: Vec<i32>,
+}
+
+impl From<MetadataDimensions> for Metadata {
+    fn from(dims: MetadataDimensions) -> Self {
+        let total = dims
+            .iter()
+            .map(|d| {
+                let x = *d as f32;
+                x * x
+            })
+            .sum::<f32>();
+        // @NOTE: As `MetadataDimensions` have high weight values, we
+        // need to handle overflow during intermediate addition when
+        // calculating the euclidean norm
+        let mag = total.min(f32::MAX).sqrt();
+        Self { mag, mbits: dims }
+    }
+}
+
+impl From<&QueryFilterDimensions> for Metadata {
+    fn from(dims: &QueryFilterDimensions) -> Self {
+        let dims_i32 = dims.iter().map(|d| *d as i32).collect::<Vec<i32>>();
+        // @NOTE: Unlike `MetadataDimensions`, `QueryFilterDimensions`
+        // will have -1, 0, 1 values so no need to worry about
+        // overflow during summation
+        let mag = dims
+            .iter()
+            .map(|d| {
+                let x = *d as f32;
+                x * x
+            })
+            .sum::<f32>()
+            .sqrt();
+        Self {
+            mag,
+            mbits: dims_i32,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetadataId(pub u8);
+
+#[derive(Debug)]
+pub struct NodePropMetadata {
+    #[allow(unused)]
+    pub id: MetadataId,
+    pub vec: Arc<Metadata>,
+    pub location: PropPersistRef,
+}
+
+#[derive(Debug)]
+pub struct VectorData<'a> {
+    pub quantized_vec: &'a Storage,
+    pub metadata: Option<&'a Metadata>,
+}
+
+impl<'a> VectorData<'a> {
+    pub fn without_metadata(qvec: &'a Storage) -> Self {
+        Self {
+            quantized_vec: qvec,
+            metadata: None,
+        }
     }
 }
 
@@ -195,7 +266,7 @@ pub enum DistanceMetric {
 
 impl DistanceFunction for DistanceMetric {
     type Item = MetricResult;
-    fn calculate(&self, x: &Storage, y: &Storage) -> Result<Self::Item, DistanceError> {
+    fn calculate(&self, x: &VectorData, y: &VectorData) -> Result<Self::Item, DistanceError> {
         match self {
             Self::Cosine => {
                 let value = CosineSimilarity(0.0).calculate(x, y)?;

@@ -14,6 +14,7 @@ use transaction::HNSWIndexTransaction;
 use types::HNSWHyperParams;
 
 use crate::{
+    metadata::MetadataFields,
     models::{
         buffered_io::BufferManagerFactory,
         cache_loader::HNSWIndexCache,
@@ -25,6 +26,7 @@ use crate::{
     quantization::StorageType,
 };
 
+#[allow(clippy::type_complexity)]
 pub struct HNSWIndex {
     pub name: String,
     pub root_vec: AtomicPtr<ProbLazyItem<ProbNode>>,
@@ -42,7 +44,7 @@ pub struct HNSWIndex {
     pub vec_raw_manager: BufferManagerFactory<Hash>,
     pub is_configured: AtomicBool,
     pub values_range: RwLock<(f32, f32)>,
-    pub vectors: RwLock<Vec<(VectorId, Vec<f32>)>>,
+    pub vectors: RwLock<Vec<(VectorId, Vec<f32>, Option<MetadataFields>)>>,
     pub sampling_data: SamplingData,
     pub vectors_collected: AtomicUsize,
     pub sample_threshold: usize,

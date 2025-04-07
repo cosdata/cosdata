@@ -5,7 +5,10 @@ use crate::models::collection_cache::CollectionCacheExt;
 use crate::{
     api_service::{ann_vector_query, batch_ann_vector_query},
     app_context::AppContext,
-    models::rpc::{BatchVectorANN, RPCResponseBody, VectorANN},
+    models::{
+        common::WaCustomError,
+        rpc::{BatchVectorANN, RPCResponseBody, VectorANN},
+    },
 };
 
 // Route: `/vectordb/search`
@@ -28,10 +31,22 @@ pub(crate) async fn search(
         }
     };
 
+    let metadata_filter = match body.filter {
+        Some(filter) => match filter.to_internal() {
+            Ok(mf) => Some(mf),
+            Err(WaCustomError::MetadataError(e)) => {
+                return HttpResponse::BadRequest().body(format!("Invalid metadata filter: {e}"))
+            }
+            Err(_) => return HttpResponse::InternalServerError().body("Metadata filter error"),
+        },
+        None => None,
+    };
+
     let result = match ann_vector_query(
         ctx.into_inner(),
         hnsw_index.clone(),
         body.vector,
+        metadata_filter,
         body.nn_count,
     )
     .await
@@ -66,10 +81,22 @@ pub(crate) async fn batch_search(
         }
     };
 
+    let metadata_filter = match body.filter {
+        Some(filter) => match filter.to_internal() {
+            Ok(mf) => Some(mf),
+            Err(WaCustomError::MetadataError(e)) => {
+                return HttpResponse::BadRequest().body(format!("Invalid metadata filter: {e}"))
+            }
+            Err(_) => return HttpResponse::InternalServerError().body("Metadata filter error"),
+        },
+        None => None,
+    };
+
     let results = match batch_ann_vector_query(
         ctx.into_inner(),
         hnsw_index.clone(),
         body.vectors,
+        metadata_filter,
         body.nn_count,
     )
     .await

@@ -2,15 +2,16 @@ use std::collections::HashMap;
 
 use super::{decimal_to_binary_vec, schema::MetadataSchema, Error, FieldName, FieldValue};
 
+#[derive(Debug, PartialEq)]
 pub enum Operator {
     Equal,
     NotEqual,
 }
 
 pub struct Predicate {
-    field_name: FieldName,
-    field_value: FieldValue,
-    operator: Operator,
+    pub field_name: FieldName,
+    pub field_value: FieldValue,
+    pub operator: Operator,
 }
 
 // @NOTE: Nested And/Or not supported for now
@@ -20,7 +21,7 @@ pub enum Filter {
     Or(Vec<Predicate>),
 }
 
-type QueryFilterDimensions = Vec<i8>;
+pub type QueryFilterDimensions = Vec<i8>;
 
 fn query_filter_encoding(value_id: u16, size: usize, operator: &Operator) -> QueryFilterDimensions {
     decimal_to_binary_vec(value_id, size)
@@ -155,7 +156,7 @@ mod tests {
         let qfed = filter_encoded_dimensions(&schema, &filter).unwrap();
         assert_eq!(
             vec![vec![
-                -1, 1, -1, 1, // 5 (original value: 6)
+                -1, 1, 1, -1, // 6 (original value: 6)
                 -1, -1
             ]],
             qfed
@@ -177,8 +178,8 @@ mod tests {
         let qfed = filter_encoded_dimensions(&schema, &filter).unwrap();
         assert_eq!(
             vec![vec![
-                -1, -1, -1, 1, // 1 (original value: 2)
-                1, -1 // !1 (original value: !b)
+                -1, -1, 1, -1, // 2 (original value: 2)
+                -1, 1 // !2 (original value: !b)
             ]],
             qfed
         );
@@ -200,12 +201,12 @@ mod tests {
         assert_eq!(
             vec![
                 vec![
-                    -1, -1, -1, 1, // 1 (original value: 2)
+                    -1, -1, 1, -1, // 2 (original value: 2)
                     -1, -1
                 ],
                 vec![
                     -1, -1, -1, -1,
-                    1, -1  // !1 (original value: !b)
+                    -1, 1  // !2 (original value: !b)
                 ]
             ],
             qfed

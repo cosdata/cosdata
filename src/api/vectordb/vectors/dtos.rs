@@ -1,5 +1,7 @@
 use std::fmt;
 
+use crate::metadata::MetadataFields;
+
 use serde::{
     de::{self, Visitor},
     Deserialize, Deserializer, Serialize,
@@ -11,6 +13,7 @@ use crate::{indexes::inverted::types::SparsePair, models::types::VectorId};
 pub(crate) struct CreateDenseVectorDto {
     pub id: VectorId,
     pub values: Vec<f32>,
+    pub metadata: Option<MetadataFields>,
 }
 
 #[derive(Serialize, Debug)]
@@ -93,6 +96,12 @@ impl<'de> Deserialize<'de> for CreateSparseVectorDto {
 #[derive(Deserialize, Serialize, Debug)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum CreateVectorDto {
+    Dense(CreateDenseVectorDto),
+    Sparse(CreateSparseVectorDto),
+}
+
+#[derive(Serialize)]
+pub(crate) enum CreateVectorResponseDto {
     Dense(CreateDenseVectorDto),
     Sparse(CreateSparseVectorDto),
 }

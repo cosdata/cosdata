@@ -4,8 +4,9 @@ use crate::{app_context::AppContext, models::types::VectorId};
 
 use super::{
     dtos::{
-        BatchSearchVectorsDto, CreateDenseVectorDto, CreateVectorDto, FindSimilarVectorsDto,
-        FindSimilarVectorsResponseDto, UpdateVectorDto, UpdateVectorResponseDto,
+        BatchSearchVectorsDto, CreateDenseVectorDto, CreateVectorDto, CreateVectorResponseDto,
+        FindSimilarVectorsDto, FindSimilarVectorsResponseDto, UpdateVectorDto,
+        UpdateVectorResponseDto,
     },
     error::VectorsError,
     repo,
@@ -15,7 +16,7 @@ pub(crate) async fn create_vector(
     ctx: Arc<AppContext>,
     collection_id: &str,
     create_vector_dto: CreateVectorDto,
-) -> Result<(), VectorsError> {
+) -> Result<CreateVectorResponseDto, VectorsError> {
     match create_vector_dto {
         CreateVectorDto::Dense(dto) => repo::create_dense_vector(ctx, collection_id, dto).await,
         CreateVectorDto::Sparse(dto) => repo::create_sparse_vector(ctx, collection_id, dto).await,

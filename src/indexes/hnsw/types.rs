@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{config_loader::Config, models::types::VectorId, storage::Storage};
+use crate::{
+    config_loader::Config, metadata::MetadataFields, models::types::VectorId, storage::Storage,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HNSWHyperParams {
@@ -39,4 +41,5 @@ pub struct QuantizedDenseVectorEmbedding {
 pub struct RawDenseVectorEmbedding {
     pub raw_vec: Arc<Vec<f32>>,
     pub hash_vec: VectorId,
+    pub raw_metadata: Option<MetadataFields>,
 }

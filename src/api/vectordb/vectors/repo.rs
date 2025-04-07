@@ -34,8 +34,9 @@ use crate::{
 use super::{
     dtos::{
         BatchSearchDenseVectorsDto, BatchSearchSparseVectorsDto, CreateDenseVectorDto,
-        CreateSparseVectorDto, FindSimilarDenseVectorsDto, FindSimilarSparseVectorsDto,
-        FindSimilarVectorsResponseDto, SimilarVector, UpdateVectorDto, UpdateVectorResponseDto,
+        CreateSparseVectorDto, CreateVectorResponseDto, FindSimilarDenseVectorsDto,
+        FindSimilarSparseVectorsDto, FindSimilarVectorsResponseDto, SimilarVector, UpdateVectorDto,
+        UpdateVectorResponseDto,
     },
     error::VectorsError,
 };
@@ -46,7 +47,7 @@ pub(crate) async fn create_sparse_vector(
     ctx: Arc<AppContext>,
     collection_id: &str,
     create_vector_dto: CreateSparseVectorDto,
-) -> Result<(), VectorsError> {
+) -> Result<CreateVectorResponseDto, VectorsError> {
     if let Some(inverted_index) = ctx
         .ain_env
         .collections_map
@@ -96,7 +97,10 @@ pub(crate) async fn create_sparse_vector(
         .map_err(VectorsError::WaCustom)?;
     }
 
-    Ok(())
+    Ok(CreateVectorResponseDto::Sparse(CreateSparseVectorDto {
+        id: create_vector_dto.id,
+        values: create_vector_dto.values,
+    }))
 }
 
 /// Creates a vector for dense index
@@ -105,7 +109,7 @@ pub(crate) async fn create_dense_vector(
     ctx: Arc<AppContext>,
     collection_id: &str,
     create_vector_dto: CreateDenseVectorDto,
-) -> Result<(), VectorsError> {
+) -> Result<CreateVectorResponseDto, VectorsError> {
     let hnsw_index = ctx
         .ain_env
         .collections_map
@@ -125,11 +129,19 @@ pub(crate) async fn create_dense_vector(
     run_upload_dense_vectors(
         ctx,
         hnsw_index,
-        vec![(create_vector_dto.id, create_vector_dto.values)],
+        vec![(
+            create_vector_dto.id.clone(),
+            create_vector_dto.values.clone(),
+            create_vector_dto.metadata.clone(),
+        )],
     )
     .map_err(VectorsError::WaCustom)?;
 
-    Ok(())
+    Ok(CreateVectorResponseDto::Dense(CreateDenseVectorDto {
+        id: create_vector_dto.id,
+        values: create_vector_dto.values,
+        metadata: create_vector_dto.metadata,
+    }))
 }
 
 pub(crate) async fn create_vector_in_transaction(
@@ -137,7 +149,7 @@ pub(crate) async fn create_vector_in_transaction(
     collection_id: &str,
     transaction: &HNSWIndexTransaction,
     create_vector_dto: CreateDenseVectorDto,
-) -> Result<(), VectorsError> {
+) -> Result<CreateVectorResponseDto, VectorsError> {
     let hnsw_index = ctx
         .ain_env
         .collections_map
@@ -148,11 +160,19 @@ pub(crate) async fn create_vector_in_transaction(
         ctx.clone(),
         hnsw_index,
         transaction,
-        vec![(create_vector_dto.id, create_vector_dto.values)],
+        vec![(
+            create_vector_dto.id.clone(),
+            create_vector_dto.values.clone(),
+            create_vector_dto.metadata.clone(),
+        )],
     )
     .map_err(VectorsError::WaCustom)?;
 
-    Ok(())
+    Ok(CreateVectorResponseDto::Dense(CreateDenseVectorDto {
+        id: create_vector_dto.id,
+        values: create_vector_dto.values,
+        metadata: create_vector_dto.metadata,
+    }))
 }
 
 pub(crate) async fn get_vector_by_id(
@@ -174,6 +194,7 @@ pub(crate) async fn get_vector_by_id(
     Ok(CreateDenseVectorDto {
         id,
         values: (*embedding.raw_vec).clone(),
+        metadata: embedding.raw_metadata,
     })
 }
 
@@ -200,7 +221,7 @@ pub(crate) async fn update_vector(
     run_upload_dense_vectors(
         ctx,
         hnsw_index,
-        vec![(vector_id.clone(), update_vector_dto.values.clone())],
+        vec![(vector_id.clone(), update_vector_dto.values.clone(), None)],
     )
     .map_err(VectorsError::WaCustom)?;
 
@@ -232,6 +253,8 @@ pub(crate) async fn find_similar_dense_vectors(
         ctx,
         hnsw_index,
         find_similar_vectors.vector,
+        // @TODO(vineet): Add support for metadata filtering
+        None,
         find_similar_vectors.k,
     )
     .await
@@ -325,6 +348,8 @@ pub(crate) async fn batch_search_dense_vectors(
         ctx,
         hnsw_index,
         batch_search_vectors.vectors,
+        // @TODO(vineet): Add support for metadata filtering
+        None,
         batch_search_vectors.k,
     )
     .await
@@ -553,7 +578,8 @@ pub(crate) async fn upsert_dense_vectors_in_transaction(
         transaction,
         vectors
             .into_iter()
-            .map(|vec| (vec.id, vec.values))
+            // @TODO(vineet): Add support for metadata fields
+            .map(|vec| (vec.id, vec.values, None))
             .collect(),
     )
     .map_err(VectorsError::WaCustom)?;
