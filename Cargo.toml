@@ -50,30 +50,37 @@ grpc-server = ["prost", "prost-types", "tonic", "tonic-reflection", "tonic-build
 [[bench]]
 name = "write_benchmark"
 harness = false
+path = "tests/benches/write_benchmark.rs"
 
 [[bench]]
 name = "write_concurrent_benchmark"
 harness = false
+path = "tests/benches/write_concurrent_benchmark.rs"
 
 [[bench]]
 name = "cosine_similarity_benchmark"
 harness = false
+path = "tests/benches/cosine_similarity_benchmark.rs"
 
 [[bench]]
 name = "dot_product_benchmark"
 harness = false
+path = "tests/benches/dot_product_benchmark.rs"
 
 [[bench]]
 name = "lookup_table_benchmark"
 harness = false
+path = "tests/benches/lookup_table_benchmark.rs"
 
 [[bench]]
 name = "lru_cache_benchmark"
 harness = false
+path = "tests/benches/lru_cache_benchmark.rs"
 
 [[bench]]
 name = "sparse_ann_query_benchmark"
 harness = false
+path = "tests/benches/sparse_ann_query_benchmark.rs"
 
 [build-dependencies]
 tonic-build = { version = "0.12.3", optional = true }
