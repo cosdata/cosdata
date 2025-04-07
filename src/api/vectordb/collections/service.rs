@@ -1,10 +1,6 @@
 use std::sync::Arc;
 
-use crate::{
-    app_context::AppContext,
-    indexes::{hnsw::HNSWIndex, inverted::InvertedIndex},
-    models::collection::Collection,
-};
+use crate::{app_context::AppContext, indexes::hnsw::HNSWIndex, models::collection::Collection};
 
 use super::{
     dtos::{
@@ -54,18 +50,11 @@ pub(crate) async fn get_dense_index_by_id(
     ctx: Arc<AppContext>,
     collection_id: &str,
 ) -> Result<Arc<HNSWIndex>, CollectionsError> {
-    let index = repo::get_hnsw_index_by_name(ctx, collection_id).await?;
-    Ok(index)
-}
-
-/// gets inverted index by collection id
-///
-/// currently collection_id = collection.name
-pub(crate) async fn get_inverted_index_by_id(
-    ctx: Arc<AppContext>,
-    collection_id: &str,
-) -> Result<Arc<InvertedIndex>, CollectionsError> {
-    let index = repo::get_inverted_index_by_name(ctx, collection_id).await?;
+    let index = ctx
+        .ain_env
+        .collections_map
+        .get_hnsw_index(collection_id)
+        .ok_or(CollectionsError::NotFound)?;
     Ok(index)
 }
 
@@ -88,7 +77,8 @@ pub(crate) async fn load_collection(
     let collection = repo::get_collection_by_name(ctx.clone(), collection_id).await?;
 
     // Then load it into the cache
-    ctx.collection_cache_manager.load_collection(collection_id)
+    ctx.collection_cache_manager
+        .load_collection(collection_id)
         .map_err(|e| CollectionsError::ServerError(format!("Failed to load collection: {}", e)))?;
 
     Ok(collection.as_ref().clone())
@@ -102,8 +92,11 @@ pub(crate) async fn unload_collection(
     let _ = repo::get_collection_by_name(ctx.clone(), collection_id).await?;
 
     // Then unload it from the cache
-    ctx.collection_cache_manager.unload_collection(collection_id)
-        .map_err(|e| CollectionsError::ServerError(format!("Failed to unload collection: {}", e)))?;
+    ctx.collection_cache_manager
+        .unload_collection(collection_id)
+        .map_err(|e| {
+            CollectionsError::ServerError(format!("Failed to unload collection: {}", e))
+        })?;
 
     Ok(())
 }

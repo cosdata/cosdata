@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{config_loader::Config, metadata::MetadataFields, models::types::VectorId, storage::Storage};
+use crate::{
+    config_loader::Config, metadata::MetadataFields, models::types::VectorId, storage::Storage,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HNSWHyperParams {

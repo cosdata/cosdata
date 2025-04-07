@@ -4,8 +4,9 @@ use crate::{app_context::AppContext, models::types::VectorId};
 
 use super::{
     dtos::{
-        BatchSearchVectorsDto, CreateVectorDto, CreateVectorResponseDto, FindSimilarVectorsDto,
-        FindSimilarVectorsResponseDto, UpdateVectorDto, UpdateVectorResponseDto,
+        BatchSearchVectorsDto, CreateDenseVectorDto, CreateVectorDto, CreateVectorResponseDto,
+        FindSimilarVectorsDto, FindSimilarVectorsResponseDto, UpdateVectorDto,
+        UpdateVectorResponseDto,
     },
     error::VectorsError,
     repo,
@@ -26,7 +27,7 @@ pub(crate) async fn get_vector_by_id(
     ctx: Arc<AppContext>,
     collection_id: &str,
     vector_id: VectorId,
-) -> Result<CreateVectorResponseDto, VectorsError> {
+) -> Result<CreateDenseVectorDto, VectorsError> {
     repo::get_vector_by_id(ctx, collection_id, vector_id).await
 }
 

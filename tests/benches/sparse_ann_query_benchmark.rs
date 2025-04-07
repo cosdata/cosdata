@@ -147,7 +147,7 @@ fn sparse_ann_query_tshashmap_benchmark(c: &mut Criterion) {
         .sample_size(10)
         .measurement_time(std::time::Duration::new(30, 0)); //Give enough time to measure
     let mut rng = rand::thread_rng();
-    println!("Creating Inverted Index [InvertedIndexSparseAnnBasicTSHashmap] and query vector.. ");
+    println!("Creating Inverted Index [InvertedIndexRoot] and query vector.. ");
 
     let (inverted_index, mut query_vector) =
         create_inverted_index_and_query_vector(NUM_OF_DIMENSIONS, NUM_OF_VECTORS + 1);

@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use super::{decimal_to_binary_vec, nearest_power_of_two, Error, FieldName, FieldValue, MetadataFields};
+use super::{
+    decimal_to_binary_vec, nearest_power_of_two, Error, FieldName, FieldValue, MetadataFields,
+};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,7 +154,7 @@ impl MetadataSchema {
     /// SupportedConditions defined in schema.
     fn input_field_combinations<'a>(
         &self,
-        input_fields: &'a MetadataFields
+        input_fields: &'a MetadataFields,
     ) -> Vec<HashMap<&'a str, &'a FieldValue>> {
         // If no input fields are specified, return empty vector
         if input_fields.is_empty() {
@@ -194,12 +196,13 @@ impl MetadataSchema {
         // Note that it's possible that this combination has already
         // been considered before, but it will get deduped when
         // inserting into the HashSet of combinations.
-        let mut all_fields_combination = self.fields
+        let mut all_fields_combination = self
+            .fields
             .iter()
             .map(|f| f.name.as_ref())
             .collect::<HashSet<&str>>()
             .intersection(&input_fields_set)
-            .map(|s| *s)
+            .copied()
             .collect::<Vec<&str>>();
         all_fields_combination.sort();
         combinations.insert(all_fields_combination);
@@ -236,7 +239,7 @@ impl MetadataSchema {
         fields: &HashMap<FieldName, FieldValue>,
         weight: i32,
     ) -> Result<Vec<MetadataDimensions>, Error> {
-        let field_combinations = self.input_field_combinations(&fields);
+        let field_combinations = self.input_field_combinations(fields);
         let mut cache: HashMap<&str, Vec<i32>> = HashMap::new();
         let mut result = Vec::with_capacity(field_combinations.len());
         for field_combination in field_combinations {
@@ -248,7 +251,7 @@ impl MetadataSchema {
                 } else {
                     let field_dims = match field_combination.get(&field.name.as_ref()) {
                         Some(value) => {
-                            let value_id = field.value_id(&value)?;
+                            let value_id = field.value_id(value)?;
                             decimal_to_binary_vec(value_id, field.num_dims as usize)
                                 .iter()
                                 .map(|x| (*x as i32) * weight)
@@ -305,8 +308,8 @@ mod tests {
 
     fn hashset(xs: Vec<&str>) -> HashSet<String> {
         xs.into_iter()
-            .map(|s| String::from(s))
-                .collect::<HashSet<String>>()
+            .map(String::from)
+            .collect::<HashSet<String>>()
     }
 
     #[test]
@@ -409,13 +412,13 @@ mod tests {
 
     #[test]
     fn test_input_field_combinations() {
-        let a_values: HashSet<FieldValue> = (1..=10).map(|x| FieldValue::Int(x)).collect();
+        let a_values: HashSet<FieldValue> = (1..=10).map(FieldValue::Int).collect();
         let a = MetadataField::new("a".to_owned(), a_values).unwrap();
 
-        let b_values: HashSet<FieldValue> = (1..=10).map(|x| FieldValue::Int(x)).collect();
+        let b_values: HashSet<FieldValue> = (1..=10).map(FieldValue::Int).collect();
         let b = MetadataField::new("b".to_owned(), b_values).unwrap();
 
-        let c_values: HashSet<FieldValue> = (1..=10).map(|x| FieldValue::Int(x)).collect();
+        let c_values: HashSet<FieldValue> = (1..=10).map(FieldValue::Int).collect();
         let c = MetadataField::new("c".to_owned(), c_values).unwrap();
 
         let conditions = vec![
@@ -490,12 +493,12 @@ mod tests {
         // sort them by sum of the field values.
         cs.sort_by_key(|c| {
             c.values()
-                .map(|v| {
-                    match v {
-                        FieldValue::Int(i) => *i,
-                        FieldValue::String(_) => 0,
-                    }})
-                .sum::<i32>()});
+                .map(|v| match v {
+                    FieldValue::Int(i) => *i,
+                    FieldValue::String(_) => 0,
+                })
+                .sum::<i32>()
+        });
         assert_eq!(3, cs.len());
 
         let mut ec1 = HashMap::new();
@@ -600,8 +603,7 @@ mod tests {
         // dimensions to support AND(age, level)
         let exp_dim2 = vec![
             0, 1024, 0, 1024, // 5 (original value: 5)
-            0, 0,
-            1024, 1024, // 3 (original value: third)
+            0, 0, 1024, 1024, // 3 (original value: third)
         ];
 
         // all fields dimensions to support individual field and OR queries
@@ -610,8 +612,8 @@ mod tests {
             0, 1024, // 0 (original value: a)
             1024, 1024, // 3 (original value: third)
         ];
-        for i in 0..wd.len() {
-            assert!(wd[i] == exp_dim1 || wd[i] == exp_dim2 || wd[i] == exp_dim3);
+        for dim in wd {
+            assert!(dim == exp_dim1 || dim == exp_dim2 || dim == exp_dim3);
         }
 
         // Case 4: When no fields are specified in input vector
@@ -629,9 +631,7 @@ mod tests {
             .map(|x| FieldValue::String(String::from(x)))
             .collect();
         let group = MetadataField::new("group".to_owned(), group_values).unwrap();
-        let conditions = vec![
-            SupportedCondition::And(hashset(vec!["age", "group"])),
-        ];
+        let conditions = vec![SupportedCondition::And(hashset(vec!["age", "group"]))];
         let schema = MetadataSchema::new(vec![age, group], conditions).unwrap();
         let mut fields = HashMap::with_capacity(2);
         fields.insert("age".to_owned(), FieldValue::Int(100));

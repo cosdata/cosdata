@@ -17,36 +17,12 @@ use super::{
     prob_lazy_load::lazy_item::ProbLazyItem,
     serializer::inverted::InvertedIndexSerialize,
     types::{FileOffset, SparseVector},
+    utils::calculate_path,
     versioning::Hash,
 };
 
 // Size of a page in the hash table
 pub const PAGE_SIZE: usize = 32;
-
-/// Returns the largest power of 4 that is less than or equal to `n`.
-/// Iteratively multiplies by 4 until the result exceeds `n`.
-pub fn largest_power_of_4_below(n: u32) -> (u8, u32) {
-    assert_ne!(n, 0, "Cannot find largest power of 4 below 0");
-    let msb_position = (31 - n.leading_zeros()) as u8;
-    let power = msb_position / 2;
-    let value = 1u32 << (power * 2);
-    (power, value)
-}
-
-/// Calculates the path from `current_dim_index` to `target_dim_index`.
-/// Decomposes the difference into powers of 4 and returns the indices.
-pub fn calculate_path(target_dim_index: u32, current_dim_index: u32) -> Vec<u8> {
-    let mut path = Vec::new();
-    let mut remaining = target_dim_index - current_dim_index;
-
-    while remaining > 0 {
-        let (child_index, pow_4) = largest_power_of_4_below(remaining);
-        path.push(child_index);
-        remaining -= pow_4;
-    }
-
-    path
-}
 
 #[cfg_attr(test, derive(PartialEq, Debug))]
 pub struct InvertedIndexNodeData {
@@ -90,7 +66,7 @@ impl PartialEq for InvertedIndexNode {
 #[cfg(test)]
 impl std::fmt::Debug for InvertedIndexNode {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("InvertedIndexSparseAnnNodeBasicTSHashmap")
+        f.debug_struct("InvertedIndexNode")
             .field("file_offset", &self.file_offset)
             .field("dim_index", &self.dim_index)
             .field("implicit", &self.implicit)
@@ -102,8 +78,8 @@ impl std::fmt::Debug for InvertedIndexNode {
 }
 
 pub struct InvertedIndexRoot {
-    pub root: Arc<InvertedIndexNode>,
-    pub cache: Arc<InvertedIndexCache>,
+    pub root: InvertedIndexNode,
+    pub cache: InvertedIndexCache,
     pub data_file_parts: u8,
     pub offset_counter: AtomicU32,
     pub node_size: u32,
@@ -122,7 +98,7 @@ impl PartialEq for InvertedIndexRoot {
 #[cfg(test)]
 impl std::fmt::Debug for InvertedIndexRoot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("InvertedIndexSparseAnnBasicTSHashmap")
+        f.debug_struct("InvertedIndexRoot")
             .field("root", &self.root)
             .field(
                 "offset_counter",
@@ -171,13 +147,13 @@ impl InvertedIndexNode {
     pub fn find_or_create_node(&self, path: &[u8], mut offset_fn: impl FnMut() -> u32) -> &Self {
         let mut current_node = self;
         for &child_index in path {
-            let new_dim_index = (current_node.dim_index + 1u32) << (child_index * 2);
+            let new_dim_index = current_node.dim_index + (1u32 << (child_index * 2));
             if let Some(child) = current_node.children.get(child_index as usize) {
                 let res = unsafe { &*child };
                 current_node = res;
                 continue;
             }
-            let (new_child, is_newly_created) =
+            let (new_child, _is_newly_created) =
                 current_node
                     .children
                     .get_or_insert(child_index as usize, || {
@@ -188,9 +164,6 @@ impl InvertedIndexNode {
                             FileOffset(offset_fn()),
                         )))
                     });
-            if is_newly_created {
-                self.is_dirty.store(true, Ordering::Release);
-            }
             let res = unsafe { &*new_child };
             current_node = res;
         }
@@ -261,19 +234,10 @@ impl InvertedIndexRoot {
             |root, idx: &u8| root.join(format!("{}.idat", idx)),
             8192,
         ));
-        let cache = Arc::new(InvertedIndexCache::new(
-            dim_bufman,
-            data_bufmans,
-            data_file_parts,
-        ));
+        let cache = InvertedIndexCache::new(dim_bufman, data_bufmans, data_file_parts);
 
         Ok(InvertedIndexRoot {
-            root: Arc::new(InvertedIndexNode::new(
-                0,
-                false,
-                quantization_bits,
-                FileOffset(0),
-            )),
+            root: InvertedIndexNode::new(0, false, quantization_bits, FileOffset(0)),
             cache,
             data_file_parts,
             offset_counter,
@@ -284,7 +248,7 @@ impl InvertedIndexRoot {
     /// Finds the node at a given dimension
     /// Traverses the tree iteratively and returns a reference to the node.
     pub fn find_node(&self, dim_index: u32) -> Option<&InvertedIndexNode> {
-        let mut current_node = &*self.root;
+        let mut current_node = &self.root;
         let path = calculate_path(dim_index, self.root.dim_index);
         for child_index in path {
             let child = current_node.children.get(child_index as usize)?;
@@ -309,6 +273,7 @@ impl InvertedIndexRoot {
             self.offset_counter
                 .fetch_add(self.node_size, Ordering::Relaxed)
         });
+        assert_eq!(node.dim_index, dim_index);
         //value will be quantized while being inserted into the Node.
         node.insert(value, vector_id, &self.cache, version, values_upper_bound)
     }
@@ -366,21 +331,17 @@ impl InvertedIndexRoot {
             |root, idx: &u8| root.join(format!("{}.idat", idx)),
             8192,
         ));
-        let cache = Arc::new(InvertedIndexCache::new(
-            dim_bufman,
-            data_bufmans,
-            data_file_parts,
-        ));
+        let cache = InvertedIndexCache::new(dim_bufman, data_bufmans, data_file_parts);
 
         Ok(Self {
-            root: Arc::new(InvertedIndexNode::deserialize(
+            root: InvertedIndexNode::deserialize(
                 &cache.dim_bufman,
                 &cache.data_bufmans,
                 FileOffset(0),
                 0,
                 data_file_parts,
                 &cache,
-            )?),
+            )?,
             cache,
             data_file_parts,
             offset_counter,

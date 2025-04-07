@@ -14,16 +14,19 @@ use transaction::HNSWIndexTransaction;
 use types::HNSWHyperParams;
 
 use crate::{
-    metadata::MetadataFields, models::{
+    metadata::MetadataFields,
+    models::{
         buffered_io::BufferManagerFactory,
         cache_loader::HNSWIndexCache,
         prob_lazy_load::lazy_item::{FileIndex, ProbLazyItem},
         prob_node::{ProbNode, SharedNode},
         types::{DistanceMetric, MetaDb, QuantizationMetric, VectorId},
         versioning::{Hash, VersionControl},
-    }, quantization::StorageType
+    },
+    quantization::StorageType,
 };
 
+#[allow(clippy::type_complexity)]
 pub struct HNSWIndex {
     pub name: String,
     pub root_vec: AtomicPtr<ProbLazyItem<ProbNode>>,

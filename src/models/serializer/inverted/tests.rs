@@ -7,7 +7,7 @@ use crate::models::{
     buffered_io::{BufferManager, BufferManagerFactory},
     cache_loader::InvertedIndexCache,
     inverted_index::{InvertedIndexNode, InvertedIndexNodeData, InvertedIndexRoot},
-    page::{Pagepool, VersionedPagepool},
+    page::VersionedPagepool,
     serializer::inverted::InvertedIndexSerialize,
     types::FileOffset,
     versioning::Hash,
@@ -16,19 +16,14 @@ use crate::models::{
 fn get_cache(
     dim_bufman: Arc<BufferManager>,
     data_bufmans: Arc<BufferManagerFactory<u8>>,
-) -> Arc<InvertedIndexCache> {
-    Arc::new(InvertedIndexCache::new(dim_bufman, data_bufmans, 8))
+) -> InvertedIndexCache {
+    InvertedIndexCache::new(dim_bufman, data_bufmans, 8)
 }
 
-#[allow(clippy::type_complexity)]
-fn setup_test(
-    idx: u8,
-) -> (
+fn setup_test() -> (
     Arc<BufferManager>,
     Arc<BufferManagerFactory<u8>>,
-    Arc<InvertedIndexCache>,
-    Arc<BufferManager>,
-    u64,
+    InvertedIndexCache,
     u64,
     TempDir,
 ) {
@@ -49,201 +44,29 @@ fn setup_test(
         InvertedIndexNode::get_serialized_size(6) as usize,
     ));
     let cache = get_cache(dim_bufman.clone(), data_bufmans.clone());
-    let dim_cursor = dim_bufman.open_cursor().unwrap();
-    let data_bufman = data_bufmans.get(idx).unwrap();
-    let data_cursor = data_bufman.open_cursor().unwrap();
-    (
-        dim_bufman,
-        data_bufmans,
-        cache,
-        data_bufman,
-        dim_cursor,
-        data_cursor,
-        dir,
-    )
-}
-
-fn get_random_pagepool<const LEN: usize>(rng: &mut impl Rng) -> Pagepool<LEN> {
-    let mut pool = Pagepool::default();
-    let count = rng.gen_range(20..50);
-    add_random_items_to_pagepool(rng, &mut pool, count);
-    pool
+    let cursor = dim_bufman.open_cursor().unwrap();
+    (dim_bufman, data_bufmans, cache, cursor, dir)
 }
 
 fn get_random_versioned_pagepool<const LEN: usize>(
     rng: &mut impl Rng,
     version: Hash,
 ) -> VersionedPagepool<LEN> {
-    let mut pool = VersionedPagepool::new(version);
+    let pool = VersionedPagepool::new(version);
     let count = rng.gen_range(20..50);
-    add_random_items_to_versioned_pagepool(rng, &mut pool, count, version);
+    add_random_items_to_versioned_pagepool(rng, &pool, count, version);
     pool
-}
-
-fn add_random_items_to_pagepool<const LEN: usize>(
-    rng: &mut impl Rng,
-    pool: &mut Pagepool<LEN>,
-    count: usize,
-) {
-    for _ in 0..count {
-        pool.push(rng.gen_range(0..u32::MAX));
-    }
 }
 
 fn add_random_items_to_versioned_pagepool<const LEN: usize>(
     rng: &mut impl Rng,
-    pool: &mut VersionedPagepool<LEN>,
+    pool: &VersionedPagepool<LEN>,
     count: usize,
     version: Hash,
 ) {
     for _ in 0..count {
         pool.push(version, rng.gen_range(0..u32::MAX));
     }
-}
-
-#[test]
-fn test_pagepool_serialization() {
-    let mut rng = rand::thread_rng();
-    let page_pool = get_random_pagepool(&mut rng);
-
-    let (dim_bufman, data_bufmans, cache, data_bufman, _dim_cursor, data_cursor, _temp_dir) =
-        setup_test(0);
-    let offset = page_pool
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
-        .unwrap();
-
-    data_bufman.close_cursor(data_cursor).unwrap();
-
-    let deserialized =
-        Pagepool::<10>::deserialize(&dim_bufman, &data_bufmans, FileOffset(offset), 0, 8, &cache)
-            .unwrap();
-
-    assert_eq!(page_pool, deserialized);
-}
-
-#[test]
-fn test_pagepool_incremental_serialization() {
-    let mut rng = rand::thread_rng();
-    let mut page_pool = get_random_pagepool(&mut rng);
-
-    let (dim_bufman, data_bufmans, cache, data_bufman, _dim_cursor, data_cursor, _temp_dir) =
-        setup_test(0);
-    let _offset = page_pool
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
-        .unwrap();
-
-    add_random_items_to_pagepool(&mut rng, &mut page_pool, 100);
-
-    let offset = page_pool
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
-        .unwrap();
-    data_bufman.close_cursor(data_cursor).unwrap();
-
-    let deserialized =
-        Pagepool::<10>::deserialize(&dim_bufman, &data_bufmans, FileOffset(offset), 0, 8, &cache)
-            .unwrap();
-
-    assert_eq!(page_pool, deserialized);
-}
-
-#[test]
-fn test_versioned_pagepool_serialization() {
-    let mut rng = rand::thread_rng();
-    let page_pool: VersionedPagepool<10> = get_random_versioned_pagepool(&mut rng, 0.into());
-
-    let (dim_bufman, data_bufmans, cache, data_bufman, _dim_cursor, data_cursor, _temp_dir) =
-        setup_test(0);
-    let offset = page_pool
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
-        .unwrap();
-
-    data_bufman.close_cursor(data_cursor).unwrap();
-
-    let deserialized = VersionedPagepool::<10>::deserialize(
-        &dim_bufman,
-        &data_bufmans,
-        FileOffset(offset),
-        0,
-        8,
-        &cache,
-    )
-    .unwrap();
-
-    assert_eq!(page_pool, deserialized);
-}
-
-#[test]
-fn test_versioned_pagepool_incremental_serialization() {
-    let mut rng = rand::thread_rng();
-    let mut page_pool = get_random_versioned_pagepool(&mut rng, 0.into());
-
-    let (dim_bufman, data_bufmans, cache, data_bufman, _dim_cursor, data_cursor, _temp_dir) =
-        setup_test(0);
-    let _offset = page_pool
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
-        .unwrap();
-
-    add_random_items_to_versioned_pagepool(&mut rng, &mut page_pool, 100, 0.into());
-
-    let offset = page_pool
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
-        .unwrap();
-    data_bufman.close_cursor(data_cursor).unwrap();
-
-    let deserialized = VersionedPagepool::<10>::deserialize(
-        &dim_bufman,
-        &data_bufmans,
-        FileOffset(offset),
-        0,
-        8,
-        &cache,
-    )
-    .unwrap();
-
-    assert_eq!(page_pool, deserialized);
-}
-
-#[test]
-fn test_versioned_pagepool_incremental_serialization2() {
-    let mut rng = rand::thread_rng();
-    let mut page_pool = get_random_versioned_pagepool(&mut rng, 0.into());
-
-    let (dim_bufman, data_bufmans, cache, data_bufman, _dim_cursor, data_cursor, _temp_dir) =
-        setup_test(0);
-    let _offset = page_pool
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
-        .unwrap();
-
-    add_random_items_to_versioned_pagepool(&mut rng, &mut page_pool, 100, 0.into());
-
-    let _offset = page_pool
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
-        .unwrap();
-
-    add_random_items_to_versioned_pagepool(&mut rng, &mut page_pool, 100, 1.into());
-
-    let _offset = page_pool
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
-        .unwrap();
-
-    add_random_items_to_versioned_pagepool(&mut rng, &mut page_pool, 100, 1.into());
-
-    let offset = page_pool
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, data_cursor)
-        .unwrap();
-    data_bufman.close_cursor(data_cursor).unwrap();
-
-    let deserialized = VersionedPagepool::<10>::deserialize(
-        &dim_bufman,
-        &data_bufmans,
-        FileOffset(offset),
-        0,
-        8,
-        &cache,
-    )
-    .unwrap();
-
-    assert_eq!(page_pool, deserialized);
 }
 
 #[test]
@@ -258,13 +81,12 @@ fn test_inverted_index_data_serialization() {
             .insert(i, get_random_versioned_pagepool(&mut rng, 0.into()));
     }
 
-    let (dim_bufman, data_bufmans, cache, _data_bufman, dim_cursor, _data_cursor, _temp_dir) =
-        setup_test(0);
-    dim_bufman.update_u8_with_cursor(dim_cursor, 6).unwrap();
+    let (dim_bufman, data_bufmans, cache, cursor, _temp_dir) = setup_test();
+    dim_bufman.update_u8_with_cursor(cursor, 6).unwrap();
     let offset = table
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, dim_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, cursor)
         .unwrap();
-    dim_bufman.close_cursor(dim_cursor).unwrap();
+    dim_bufman.close_cursor(cursor).unwrap();
 
     let deserialized = InvertedIndexNodeData::deserialize(
         &dim_bufman,
@@ -298,27 +120,23 @@ fn test_inverted_index_data_incremental_serialization_with_updated_values() {
             .insert(i, get_random_versioned_pagepool(&mut rng, 0.into()));
     }
 
-    let (dim_bufman, data_bufmans, cache, _data_bufman, dim_cursor, _data_cursor, _temp_dir) =
-        setup_test(0);
-    dim_bufman.update_u8_with_cursor(dim_cursor, 6).unwrap();
+    let (dim_bufman, data_bufmans, cache, cursor, _temp_dir) = setup_test();
+    dim_bufman.update_u8_with_cursor(cursor, 6).unwrap();
     let offset = table
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, dim_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, cursor)
         .unwrap();
 
     for i in (0..32).map(|x| x * 2) {
-        table.map.mutate(i, |pool| {
-            let mut pool = pool.unwrap();
-            add_random_items_to_versioned_pagepool(&mut rng, &mut pool, 100, 0.into());
-            Some(pool)
+        table.map.with_value(&i, |pool| {
+            let mut rng = rand::thread_rng();
+            add_random_items_to_versioned_pagepool(&mut rng, pool, 100, 0.into());
         });
     }
-    dim_bufman
-        .seek_with_cursor(dim_cursor, offset as u64)
-        .unwrap();
+    dim_bufman.seek_with_cursor(cursor, offset as u64).unwrap();
     let offset = table
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, dim_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, cursor)
         .unwrap();
-    dim_bufman.close_cursor(dim_cursor).unwrap();
+    dim_bufman.close_cursor(cursor).unwrap();
 
     let deserialized = InvertedIndexNodeData::deserialize(
         &dim_bufman,
@@ -352,11 +170,10 @@ fn test_inverted_index_data_incremental_serialization_with_new_entries() {
             .insert(i, get_random_versioned_pagepool(&mut rng, 0.into()));
     }
 
-    let (dim_bufman, data_bufmans, cache, _data_bufman, dim_cursor, _data_cursor, _temp_dir) =
-        setup_test(0);
-    dim_bufman.update_u8_with_cursor(dim_cursor, 6).unwrap();
+    let (dim_bufman, data_bufmans, cache, cursor, _temp_dir) = setup_test();
+    dim_bufman.update_u8_with_cursor(cursor, 6).unwrap();
     let offset = table
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, dim_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, cursor)
         .unwrap();
 
     for i in (0..32).map(|x| (x * 2) + 1) {
@@ -364,13 +181,11 @@ fn test_inverted_index_data_incremental_serialization_with_new_entries() {
             .map
             .insert(i, get_random_versioned_pagepool(&mut rng, 0.into()));
     }
-    dim_bufman
-        .seek_with_cursor(dim_cursor, offset as u64)
-        .unwrap();
+    dim_bufman.seek_with_cursor(cursor, offset as u64).unwrap();
     let offset = table
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, dim_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, cursor)
         .unwrap();
-    dim_bufman.close_cursor(dim_cursor).unwrap();
+    dim_bufman.close_cursor(cursor).unwrap();
 
     let deserialized = InvertedIndexNodeData::deserialize(
         &dim_bufman,
@@ -396,8 +211,7 @@ fn test_inverted_index_data_incremental_serialization_with_new_entries() {
 fn test_inverted_index_node_serialization() {
     let mut rng = rand::thread_rng();
     let inverted_index_node = InvertedIndexNode::new(0, false, 6, FileOffset(0));
-    let (dim_bufman, data_bufmans, cache, _data_bufman, dim_cursor, _data_cursor, _temp_dir) =
-        setup_test(0);
+    let (dim_bufman, data_bufmans, cache, cursor, _temp_dir) = setup_test();
 
     for _ in 0..300 {
         inverted_index_node
@@ -412,10 +226,10 @@ fn test_inverted_index_node_serialization() {
     }
 
     let offset = inverted_index_node
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, dim_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, cursor)
         .unwrap();
 
-    dim_bufman.close_cursor(dim_cursor).unwrap();
+    dim_bufman.close_cursor(cursor).unwrap();
 
     let deserialized = InvertedIndexNode::deserialize(
         &dim_bufman,
@@ -434,8 +248,7 @@ fn test_inverted_index_node_serialization() {
 fn test_inverted_index_node_incremental_serialization() {
     let mut rng = rand::thread_rng();
     let inverted_index_node = InvertedIndexNode::new(0, false, 6, FileOffset(0));
-    let (dim_bufman, data_bufmans, cache, _data_bufman, dim_cursor, _data_cursor, _temp_dir) =
-        setup_test(0);
+    let (dim_bufman, data_bufmans, cache, cursor, _temp_dir) = setup_test();
 
     for _ in 0..300 {
         inverted_index_node
@@ -450,7 +263,7 @@ fn test_inverted_index_node_incremental_serialization() {
     }
 
     let _offset = inverted_index_node
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, dim_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, cursor)
         .unwrap();
 
     for _ in 0..300 {
@@ -466,10 +279,10 @@ fn test_inverted_index_node_incremental_serialization() {
     }
 
     let offset = inverted_index_node
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, dim_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, cursor)
         .unwrap();
 
-    dim_bufman.close_cursor(dim_cursor).unwrap();
+    dim_bufman.close_cursor(cursor).unwrap();
 
     let deserialized = InvertedIndexNode::deserialize(
         &dim_bufman,
@@ -488,8 +301,7 @@ fn test_inverted_index_node_incremental_serialization() {
 fn test_inverted_index_node_incremental_serialization_with_multiple_versions() {
     let mut rng = rand::thread_rng();
     let inverted_index_node = InvertedIndexNode::new(0, false, 6, FileOffset(0));
-    let (dim_bufman, data_bufmans, cache, _data_bufman, dim_cursor, _data_cursor, _temp_dir) =
-        setup_test(0);
+    let (dim_bufman, data_bufmans, cache, cursor, _temp_dir) = setup_test();
 
     for _ in 0..300 {
         inverted_index_node
@@ -504,7 +316,7 @@ fn test_inverted_index_node_incremental_serialization_with_multiple_versions() {
     }
 
     let _offset = inverted_index_node
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, dim_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, cursor)
         .unwrap();
 
     for _ in 0..300 {
@@ -520,7 +332,7 @@ fn test_inverted_index_node_incremental_serialization_with_multiple_versions() {
     }
 
     let _offset = inverted_index_node
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, dim_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, cursor)
         .unwrap();
 
     for _ in 0..300 {
@@ -536,7 +348,7 @@ fn test_inverted_index_node_incremental_serialization_with_multiple_versions() {
     }
 
     let _offset = inverted_index_node
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, dim_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, cursor)
         .unwrap();
 
     for _ in 0..300 {
@@ -552,10 +364,10 @@ fn test_inverted_index_node_incremental_serialization_with_multiple_versions() {
     }
 
     let offset = inverted_index_node
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, dim_cursor)
+        .serialize(&dim_bufman, &data_bufmans, 0, 8, cursor)
         .unwrap();
 
-    dim_bufman.close_cursor(dim_cursor).unwrap();
+    dim_bufman.close_cursor(cursor).unwrap();
 
     let deserialized = InvertedIndexNode::deserialize(
         &dim_bufman,
@@ -598,7 +410,7 @@ fn test_inverted_index_root_serialization() {
 }
 
 #[test]
-fn test_inverted_index_incremental_serialization() {
+fn test_inverted_root_index_incremental_serialization() {
     let temp_dir = tempdir().unwrap();
     let mut rng = rand::thread_rng();
     let inverted_index = InvertedIndexRoot::new(temp_dir.as_ref().into(), 6, 8).unwrap();
@@ -639,7 +451,7 @@ fn test_inverted_index_incremental_serialization() {
 }
 
 #[test]
-fn test_inverted_index_incremental_serialization_with_multiple_versions() {
+fn test_inverted_index_root_incremental_serialization_with_multiple_versions() {
     let temp_dir = tempdir().unwrap();
     let mut rng = rand::thread_rng();
     let inverted_index = InvertedIndexRoot::new(temp_dir.as_ref().into(), 6, 8).unwrap();

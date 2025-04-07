@@ -1,8 +1,9 @@
 use std::{
-    ptr, sync::{
+    ptr,
+    sync::{
         atomic::{AtomicPtr, Ordering},
         Arc, Mutex, MutexGuard,
-    }
+    },
 };
 
 use super::{
@@ -124,7 +125,7 @@ impl ProbNode {
                 let vector_id = metadata_id | self.prop_value.id.0;
                 VectorId(vector_id)
             }
-            None => self.prop_value.id.clone()
+            None => self.prop_value.id.clone(),
         }
     }
 

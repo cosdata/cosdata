@@ -4,24 +4,15 @@ use std::sync::{
 };
 
 use crate::models::{
-    buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
-    cache_loader::InvertedIndexCache,
+    buffered_io::{BufIoError, BufferManager},
     page::Page,
     types::FileOffset,
 };
 
-use super::InvertedIndexSerialize;
+use super::SimpleSerialize;
 
-impl<const LEN: usize> InvertedIndexSerialize for Page<LEN> {
-    fn serialize(
-        &self,
-        _dim_bufman: &BufferManager,
-        data_bufmans: &BufferManagerFactory<u8>,
-        data_file_idx: u8,
-        _data_file_parts: u8,
-        cursor: u64,
-    ) -> Result<u32, BufIoError> {
-        let bufman = data_bufmans.get(data_file_idx)?;
+impl<const LEN: usize> SimpleSerialize for Page<LEN> {
+    fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
         if let Some(offset) = *self.serialized_at.read().map_err(|_| BufIoError::Locking)? {
             if !self.dirty.swap(false, Ordering::AcqRel) {
                 return Ok(offset.0);
@@ -48,6 +39,7 @@ impl<const LEN: usize> InvertedIndexSerialize for Page<LEN> {
             }
             return Ok(offset.0);
         }
+        self.dirty.store(false, Ordering::Release);
         let mut data = Vec::with_capacity(8 + LEN * 4);
         data.extend([u8::MAX; 4]);
         data.extend((self.len as u32).to_le_bytes());
@@ -59,15 +51,7 @@ impl<const LEN: usize> InvertedIndexSerialize for Page<LEN> {
         Ok(offset)
     }
 
-    fn deserialize(
-        _dim_bufman: &BufferManager,
-        data_bufmans: &BufferManagerFactory<u8>,
-        file_offset: FileOffset,
-        data_file_idx: u8,
-        _data_file_parts: u8,
-        _cache: &InvertedIndexCache,
-    ) -> Result<Self, BufIoError> {
-        let bufman = data_bufmans.get(data_file_idx)?;
+    fn deserialize(bufman: &BufferManager, file_offset: FileOffset) -> Result<Self, BufIoError> {
         let cursor = bufman.open_cursor()?;
         bufman.seek_with_cursor(cursor, file_offset.0 as u64 + 4)?;
         let len = bufman.read_u32_with_cursor(cursor)? as usize;

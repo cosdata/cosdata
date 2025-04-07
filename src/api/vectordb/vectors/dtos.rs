@@ -134,12 +134,14 @@ pub(crate) struct BatchSearchDenseVectorsDto {
 pub(crate) struct FindSimilarSparseVectorsDto {
     pub values: Vec<SparsePair>,
     pub top_k: Option<usize>,
+    pub early_terminate_threshold: Option<f32>,
 }
 
 #[derive(Deserialize, Debug)]
 pub(crate) struct BatchSearchSparseVectorsDto {
     pub vectors: Vec<Vec<SparsePair>>,
     pub top_k: Option<usize>,
+    pub early_terminate_threshold: Option<f32>,
 }
 
 #[derive(Deserialize, Debug)]

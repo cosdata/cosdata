@@ -170,10 +170,10 @@ impl HNSWIndexSerialize for ProbNode {
         let metadata_offset = bufman.read_u32_with_cursor(cursor)?;
         let metadata_length = bufman.read_u32_with_cursor(cursor)?;
         let metadata = if metadata_offset != u32::MAX {
-            Some(cache.get_prop_metadata(
-                FileOffset(metadata_offset),
-                BytesToRead(metadata_length)
-            )?)
+            Some(
+                cache
+                    .get_prop_metadata(FileOffset(metadata_offset), BytesToRead(metadata_length))?,
+            )
         } else {
             None
         };

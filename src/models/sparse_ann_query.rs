@@ -7,6 +7,7 @@ use crate::models::types::SparseVector;
 use std::cmp::Ordering;
 
 use super::inverted_index::InvertedIndexRoot;
+use super::inverted_index_idf::{InvertedIndexIDFRoot, TermQuotient};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SparseAnnResult {
@@ -14,17 +15,36 @@ pub struct SparseAnnResult {
     pub similarity: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SparseAnnIDFResult {
+    pub document_id: u32,
+    pub score: f32,
+}
+
 impl Eq for SparseAnnResult {}
+impl Eq for SparseAnnIDFResult {}
 
 impl PartialOrd for SparseAnnResult {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(other.similarity.cmp(&self.similarity))
+        Some(self.cmp(other))
     }
 }
 
 impl Ord for SparseAnnResult {
     fn cmp(&self, other: &Self) -> Ordering {
         other.similarity.cmp(&self.similarity)
+    }
+}
+
+impl PartialOrd for SparseAnnIDFResult {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for SparseAnnIDFResult {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other.score.total_cmp(&self.score)
     }
 }
 
@@ -70,20 +90,16 @@ impl SparseAnnQueryBasic {
                 // High quantized value
                 // Iterate through the full list of values for this dimension
                 for key in (0..=one_quantized).rev() {
-                    let mut current_versioned_pagepool = unsafe { &*node.data }
+                    let pagepool = unsafe { &*node.data }
                         .try_get_data(&index.cache, node.dim_index)?
                         .map
                         .lookup(&key);
-                    while let Some(versioned_pagepool) = current_versioned_pagepool {
-                        for x in versioned_pagepool.pagepool.inner.read().unwrap().iter() {
-                            for x in x.iter() {
-                                let vec_id = *x;
-                                let dot_product = dot_products.entry(vec_id).or_insert(0u32);
-                                *dot_product += quantized_query_value * key as u32;
-                            }
+                    if let Some(pagepool) = pagepool {
+                        for x in pagepool.iter() {
+                            let vec_id = x;
+                            let dot_product = dot_products.entry(vec_id).or_insert(0u32);
+                            *dot_product += quantized_query_value * key as u32;
                         }
-                        current_versioned_pagepool =
-                            versioned_pagepool.next.read().unwrap().clone();
                     }
                 }
             } else {
@@ -132,4 +148,58 @@ impl SparseAnnQueryBasic {
         }
         Ok(results)
     }
+
+    pub fn search_bm25(
+        self,
+        index: &InvertedIndexIDFRoot,
+        k: Option<usize>,
+    ) -> Result<Vec<SparseAnnIDFResult>, BufIoError> {
+        let mut results_map = FxHashMap::default();
+        let total_documents_count = index
+            .total_documents_count
+            .load(std::sync::atomic::Ordering::Relaxed);
+
+        for (term_hash, _query_tf) in self.query_vector.entries {
+            let storage_dim = term_hash & (u16::MAX as u32);
+            let quotient = (term_hash >> 16) as TermQuotient;
+
+            if let Some(node) = index.find_node(storage_dim) {
+                let data = unsafe { &*node.data }.try_get_data(&index.cache, node.dim_index)?;
+
+                if let Some(term) = data.map.lookup(&quotient) {
+                    let document_containing_term = term.documents.len() as u32;
+                    let idf = get_idf(total_documents_count, document_containing_term);
+
+                    for (doc_id, tf) in term.documents.iter() {
+                        let bm25_weight = tf * idf;
+                        *results_map.entry(*doc_id).or_insert(0.0) += bm25_weight;
+                    }
+                }
+            }
+        }
+
+        let mut results: Vec<SparseAnnIDFResult> = results_map
+            .into_iter()
+            .map(|(vector_id, score)| SparseAnnIDFResult {
+                document_id: vector_id,
+                score,
+            })
+            .collect();
+        if let Some(k) = k {
+            if results.len() > k {
+                // Use partial_sort for top K, faster than full sort
+                results.select_nth_unstable_by(k, |a, b| b.score.total_cmp(&a.score));
+                results.truncate(k);
+            }
+        }
+        results.sort_unstable_by(|a, b| b.score.total_cmp(&a.score));
+
+        Ok(results)
+    }
+}
+
+fn get_idf(documents_count: u32, documents_containing_term: u32) -> f32 {
+    (((documents_count - documents_containing_term) as f32 + 0.5)
+        / (documents_containing_term as f32 + 0.5))
+        .ln_1p()
 }

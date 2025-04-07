@@ -15,10 +15,8 @@ pub(crate) async fn create_vector(
 ) -> Result<HttpResponse> {
     ctx.update_collection_for_transaction(&collection_id)
         .map_err(|e| actix_web::error::ErrorInternalServerError(format!("Cache error: {}", e)))?;
-
-    let vector =
-        service::create_vector(ctx.into_inner(), &collection_id, create_vector_dto).await?;
-    Ok(HttpResponse::Ok().json(vector))
+    service::create_vector(ctx.into_inner(), &collection_id, create_vector_dto).await?;
+    Ok(HttpResponse::Ok().finish())
 }
 
 pub(crate) async fn get_vector_by_id(

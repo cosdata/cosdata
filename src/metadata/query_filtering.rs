@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use super::{decimal_to_binary_vec, schema::MetadataSchema, Error, FieldName, FieldValue};
 
+#[derive(Debug, PartialEq)]
 pub enum Operator {
     Equal,
     NotEqual,

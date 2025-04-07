@@ -2,10 +2,13 @@ use serde::{Deserialize, Serialize};
 
 use super::{DistanceError, DistanceFunction};
 use crate::{
-    models::{dot_product::{
-        dot_product_binary, dot_product_f16, dot_product_f32, dot_product_octal,
-        dot_product_quaternary, dot_product_u8,
-    }, types::VectorData},
+    models::{
+        dot_product::{
+            dot_product_binary, dot_product_f16, dot_product_f32, dot_product_octal,
+            dot_product_quaternary, dot_product_u8,
+        },
+        types::VectorData,
+    },
     storage::Storage,
 };
 
@@ -43,31 +46,36 @@ impl DistanceFunction for CosineSimilarity {
                     // (we need to make sure it's high enough to be
                     // effective but wouldn't result in truncation if
                     // casted to f32)
-                    let x_mdims = x_metadata.mbits.iter().map(|i| *i as f32).collect::<Vec<f32>>();
-                    let y_mdims = y_metadata.mbits.iter().map(|i| *i as f32).collect::<Vec<f32>>();
+                    let x_mdims = x_metadata
+                        .mbits
+                        .iter()
+                        .map(|i| *i as f32)
+                        .collect::<Vec<f32>>();
+                    let y_mdims = y_metadata
+                        .mbits
+                        .iter()
+                        .map(|i| *i as f32)
+                        .collect::<Vec<f32>>();
                     let m_dot_product: f32 = dot_product_f32(&x_mdims, &y_mdims);
                     Some((x_metadata.mag, y_metadata.mag, m_dot_product))
                 }
-            },
-            _ => None
+            }
+            _ => None,
         };
 
         // If metadata exists in both vectors, we first compute cosine
         // similarity for metadata dimensions. Only if the metadata
         // similarity is ~1 (consider a small epsilon for floating
         // point rounding), compute full similarity.
-        match &metadata {
-            Some((x_mag, y_mag, m_dot_product)) => {
-                let m_cos_sim = cosine_similarity_from_dot_product(*m_dot_product, *x_mag, *y_mag)?;
-                let threshold: f32 = 0.99;
-                if m_cos_sim.0 < threshold {
-                    // Not close enough to 1, so return
-                    // CosineSimilarity of 0 as we don't want the
-                    // vectors to match
-                    return Ok(CosineSimilarity(0.0));
-                }
+        if let Some((x_mag, y_mag, m_dot_product)) = &metadata {
+            let m_cos_sim = cosine_similarity_from_dot_product(*m_dot_product, *x_mag, *y_mag)?;
+            let threshold: f32 = 0.99;
+            if m_cos_sim.0 < threshold {
+                // Not close enough to 1, so return
+                // CosineSimilarity of 0 as we don't want the
+                // vectors to match
+                return Ok(CosineSimilarity(0.0));
             }
-            _ => { }
         }
 
         // Only if metadata vectors are close enough, we compute total
@@ -85,12 +93,15 @@ impl DistanceFunction for CosineSimilarity {
             ) => {
                 let dot_product = dot_product_u8(x_vec, y_vec) as f32;
                 match &metadata {
-                    Some((x_mmag, y_mmag, m_dot_product)) => {
-                        cosine_similarity_with_metadata(dot_product, *m_dot_product, *x_mag, *x_mmag, *y_mag, *y_mmag)
-                    },
-                    _ => {
-                        cosine_similarity_from_dot_product(dot_product, *x_mag, *y_mag)
-                    },
+                    Some((x_mmag, y_mmag, m_dot_product)) => cosine_similarity_with_metadata(
+                        dot_product,
+                        *m_dot_product,
+                        *x_mag,
+                        *x_mmag,
+                        *y_mag,
+                        *y_mmag,
+                    ),
+                    _ => cosine_similarity_from_dot_product(dot_product, *x_mag, *y_mag),
                 }
             }
             (
@@ -117,12 +128,15 @@ impl DistanceFunction for CosineSimilarity {
                     }
                 };
                 match &metadata {
-                    Some((x_mmag, y_mmag, m_dot_product)) => {
-                        cosine_similarity_with_metadata(dot_product, *m_dot_product, *x_mag, *x_mmag, *y_mag, *y_mmag)
-                    },
-                    _ => {
-                        cosine_similarity_from_dot_product(dot_product, *x_mag, *y_mag)
-                    },
+                    Some((x_mmag, y_mmag, m_dot_product)) => cosine_similarity_with_metadata(
+                        dot_product,
+                        *m_dot_product,
+                        *x_mag,
+                        *x_mmag,
+                        *y_mag,
+                        *y_mmag,
+                    ),
+                    _ => cosine_similarity_from_dot_product(dot_product, *x_mag, *y_mag),
                 }
             }
             (
@@ -137,12 +151,15 @@ impl DistanceFunction for CosineSimilarity {
             ) => {
                 let dot_product = dot_product_f16(x_vec, y_vec);
                 match &metadata {
-                    Some((x_mmag, y_mmag, m_dot_product)) => {
-                        cosine_similarity_with_metadata(dot_product, *m_dot_product, *x_mag, *x_mmag, *y_mag, *y_mmag)
-                    },
-                    _ => {
-                        cosine_similarity_from_dot_product(dot_product, *x_mag, *y_mag)
-                    },
+                    Some((x_mmag, y_mmag, m_dot_product)) => cosine_similarity_with_metadata(
+                        dot_product,
+                        *m_dot_product,
+                        *x_mag,
+                        *x_mmag,
+                        *y_mag,
+                        *y_mmag,
+                    ),
+                    _ => cosine_similarity_from_dot_product(dot_product, *x_mag, *y_mag),
                 }
             }
             (
@@ -157,12 +174,15 @@ impl DistanceFunction for CosineSimilarity {
             ) => {
                 let dot_product = dot_product_f32(x_vec, y_vec);
                 match &metadata {
-                    Some((x_mmag, y_mmag, m_dot_product)) => {
-                        cosine_similarity_with_metadata(dot_product, *m_dot_product, *x_mag, *x_mmag, *y_mag, *y_mmag)
-                    },
-                    _ => {
-                        cosine_similarity_from_dot_product(dot_product, *x_mag, *y_mag)
-                    },
+                    Some((x_mmag, y_mmag, m_dot_product)) => cosine_similarity_with_metadata(
+                        dot_product,
+                        *m_dot_product,
+                        *x_mag,
+                        *x_mmag,
+                        *y_mag,
+                        *y_mmag,
+                    ),
+                    _ => cosine_similarity_from_dot_product(dot_product, *x_mag, *y_mag),
                 }
             }
             _ => Err(DistanceError::StorageMismatch),
@@ -191,7 +211,7 @@ fn cosine_similarity_with_metadata(
     x_mag_vec: f32,
     x_mag_m: f32,
     y_mag_vec: f32,
-    y_mag_m: f32
+    y_mag_m: f32,
 ) -> Result<CosineSimilarity, DistanceError> {
     // @NOTE: Since norm/mag values for metadata can be large due to
     // high weight values, we need to take care of overflow during
