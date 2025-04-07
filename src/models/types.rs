@@ -677,7 +677,6 @@ impl CollectionsMap {
             sampling_data: crate::indexes::inverted::types::SamplingData::default(),
             sample_threshold: inverted_index_data.sample_threshold,
             vec_raw_manager,
-            early_terminate_threshold: inverted_index_data.early_terminate_threshold,
         };
 
         Ok(Some(inverted_index))
@@ -739,7 +738,6 @@ impl CollectionsMap {
             current_open_transaction: AtomicPtr::new(ptr::null_mut()),
             vcs,
             vec_raw_manager,
-            early_terminate_threshold: inverted_index_data.early_terminate_threshold,
         };
 
         Ok(Some(inverted_index))

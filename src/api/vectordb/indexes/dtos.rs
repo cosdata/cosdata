@@ -112,13 +112,11 @@ pub(crate) enum CreateSparseIndexDto {
     Splade {
         name: String,
         quantization: SparseIndexQuantization,
-        early_terminate_threshold: f32,
         sample_threshold: usize,
     },
     Idf {
         name: String,
         quantization: SparseIndexQuantization,
-        early_terminate_threshold: f32,
     },
 }
 
@@ -145,7 +143,6 @@ impl<'de> Deserialize<'de> for CreateSparseIndexDto {
             {
                 let mut name = None;
                 let mut quantization = None;
-                let mut early_terminate_threshold = None;
                 let mut sample_threshold = None;
                 let mut is_idf = false;
 
@@ -153,9 +150,6 @@ impl<'de> Deserialize<'de> for CreateSparseIndexDto {
                     match key.as_str() {
                         "name" => name = Some(map.next_value()?),
                         "quantization" => quantization = Some(map.next_value()?),
-                        "early_terminate_threshold" => {
-                            early_terminate_threshold = Some(map.next_value()?)
-                        }
                         "sample_threshold" => sample_threshold = Some(map.next_value()?),
                         "isIDF" => is_idf = map.next_value()?,
                         _ => {
@@ -180,16 +174,12 @@ impl<'de> Deserialize<'de> for CreateSparseIndexDto {
                         name,
                         quantization: quantization
                             .ok_or_else(|| Error::missing_field("quantization"))?,
-                        early_terminate_threshold: early_terminate_threshold
-                            .ok_or_else(|| Error::missing_field("early_terminate_threshold"))?,
                     })
                 } else {
                     Ok(CreateSparseIndexDto::Splade {
                         name,
                         quantization: quantization
                             .ok_or_else(|| Error::missing_field("quantization"))?,
-                        early_terminate_threshold: early_terminate_threshold
-                            .ok_or_else(|| Error::missing_field("early_terminate_threshold"))?,
                         sample_threshold: sample_threshold
                             .ok_or_else(|| Error::missing_field("sample_threshold"))?,
                     })

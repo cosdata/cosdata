@@ -8,6 +8,7 @@ use crate::{
         run_upload_sparse_idf_vectors_in_transaction, run_upload_sparse_vectors,
         run_upload_sparse_vectors_in_transaction,
     },
+    config_loader::Config,
     distance::dotproduct::DotProductDistance,
     indexes::{
         hnsw::{transaction::HNSWIndexTransaction, HNSWIndex},
@@ -17,7 +18,7 @@ use crate::{
     models::{
         common::WaCustomError,
         rpc::DenseVector,
-        sparse_ann_query::{SparseAnnIDFResult, SparseAnnQueryBasic, SparseAnnResult},
+        sparse_ann_query::{SparseAnnQueryBasic, SparseAnnResult},
         types::{MetricResult, SparseVector, VectorId},
     },
     vector_store::get_sparse_embedding_by_id,
@@ -254,6 +255,14 @@ pub(crate) async fn find_similar_sparse_vectors(
     collection_id: &str,
     find_similar_vectors: FindSimilarSparseVectorsDto,
 ) -> Result<FindSimilarVectorsResponseDto, VectorsError> {
+    if let Some(threshold) = find_similar_vectors.early_terminate_threshold {
+        if !(0.0..=1.0).contains(&threshold) {
+            return Err(VectorsError::FailedToFindSimilarVectors(
+                "Invalid `early_terminate_threshold` value (must be between 0.0 and 1.0)"
+                    .to_string(),
+            ));
+        }
+    }
     if find_similar_vectors.values.is_empty() {
         return Err(VectorsError::FailedToFindSimilarVectors(
             "Vector shouldn't be empty".to_string(),
@@ -266,10 +275,13 @@ pub(crate) async fn find_similar_sparse_vectors(
         .get_inverted_index(collection_id)
     {
         sparse_ann_vector_query(
-            ctx,
+            &ctx.config,
             inverted_index,
             &find_similar_vectors.values,
             find_similar_vectors.top_k,
+            find_similar_vectors
+                .early_terminate_threshold
+                .unwrap_or(ctx.config.search.early_terminate_threshold),
         )
         .map_err(|e| VectorsError::FailedToFindSimilarVectors(e.to_string()))?
     } else {
@@ -280,7 +292,6 @@ pub(crate) async fn find_similar_sparse_vectors(
             .ok_or(VectorsError::IndexNotFound)?;
 
         sparse_idf_ann_vector_query(
-            ctx,
             inverted_index_idf,
             &find_similar_vectors.values,
             find_similar_vectors.top_k,
@@ -338,16 +349,27 @@ pub(crate) async fn batch_search_sparse_vectors(
     collection_id: &str,
     batch_search_vectors: BatchSearchSparseVectorsDto,
 ) -> Result<Vec<FindSimilarVectorsResponseDto>, VectorsError> {
+    if let Some(threshold) = batch_search_vectors.early_terminate_threshold {
+        if !(0.0..=1.0).contains(&threshold) {
+            return Err(VectorsError::FailedToFindSimilarVectors(
+                "Invalid `early_terminate_threshold` value (must be between 0.0 and 1.0)"
+                    .to_string(),
+            ));
+        }
+    }
     let results = if let Some(inverted_index) = ctx
         .ain_env
         .collections_map
         .get_inverted_index(collection_id)
     {
         batch_sparse_ann_vector_query(
-            ctx,
+            &ctx.config,
             inverted_index,
             &batch_search_vectors.vectors,
             batch_search_vectors.top_k,
+            batch_search_vectors
+                .early_terminate_threshold
+                .unwrap_or(ctx.config.search.early_terminate_threshold),
         )
         .map_err(|e| VectorsError::FailedToFindSimilarVectors(e.to_string()))?
     } else {
@@ -358,7 +380,6 @@ pub(crate) async fn batch_search_sparse_vectors(
             .ok_or(VectorsError::IndexNotFound)?;
 
         batch_sparse_idf_ann_vector_query(
-            ctx,
             inverted_index_idf,
             &batch_search_vectors.vectors,
             batch_search_vectors.top_k,
@@ -381,10 +402,11 @@ pub(crate) async fn batch_search_sparse_vectors(
 }
 
 fn sparse_ann_vector_query(
-    ctx: Arc<AppContext>,
+    config: &Config,
     inverted_index: Arc<InvertedIndex>,
     query: &[SparsePair],
     top_k: Option<usize>,
+    early_terminate_threshold: f32,
 ) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
     // create a query to get similar sparse vectors
     let sparse_vec = SparseVector {
@@ -396,16 +418,16 @@ fn sparse_ann_vector_query(
         &inverted_index.root,
         inverted_index.root.root.quantization_bits,
         *inverted_index.values_upper_bound.read().unwrap(),
-        inverted_index.early_terminate_threshold,
-        if ctx.config.rerank_sparse_with_raw_values {
-            ctx.config.sparse_raw_values_reranking_factor
+        early_terminate_threshold,
+        if config.rerank_sparse_with_raw_values {
+            config.sparse_raw_values_reranking_factor
         } else {
             1
         },
         top_k,
     )?;
 
-    if ctx.config.rerank_sparse_with_raw_values {
+    if config.rerank_sparse_with_raw_values {
         finalize_sparse_ann_results(inverted_index, intermediate_results, query, top_k)
     } else {
         Ok(intermediate_results
@@ -421,7 +443,6 @@ fn sparse_ann_vector_query(
 }
 
 fn sparse_idf_ann_vector_query(
-    ctx: Arc<AppContext>,
     inverted_index_idf: Arc<InvertedIndexIDF>,
     query: &[SparsePair],
     top_k: Option<usize>,
@@ -432,62 +453,49 @@ fn sparse_idf_ann_vector_query(
         entries: query.iter().map(|pair| (pair.0, pair.1)).collect(),
     };
 
-    let (intermediate_results, idf_list) = SparseAnnQueryBasic::new(sparse_vec).search_bm25(
-        &inverted_index_idf.root,
-        inverted_index_idf.root.root.quantization_bits,
-        inverted_index_idf.early_terminate_threshold,
-        if ctx.config.rerank_sparse_with_raw_values {
-            ctx.config.sparse_raw_values_reranking_factor
-        } else {
-            1
-        },
-        top_k,
-    )?;
+    let results =
+        SparseAnnQueryBasic::new(sparse_vec).search_bm25(&inverted_index_idf.root, top_k)?;
 
-    if ctx.config.rerank_sparse_with_raw_values {
-        finalize_sparse_idf_ann_results(
-            inverted_index_idf,
-            intermediate_results,
-            idf_list,
-            query,
-            top_k,
-        )
-    } else {
-        Ok(intermediate_results
-            .into_iter()
-            .map(|result| {
-                (
-                    VectorId(result.document_id as u64),
-                    MetricResult::DotProductDistance(DotProductDistance(result.score)),
-                )
-            })
-            .collect())
-    }
+    Ok(results
+        .into_iter()
+        .map(|result| {
+            (
+                VectorId(result.document_id as u64),
+                MetricResult::DotProductDistance(DotProductDistance(result.score)),
+            )
+        })
+        .collect())
 }
 
 fn batch_sparse_ann_vector_query(
-    ctx: Arc<AppContext>,
+    config: &Config,
     inverted_index: Arc<InvertedIndex>,
     queries: &[Vec<SparsePair>],
     top_k: Option<usize>,
+    early_terminate_threshold: f32,
 ) -> Result<Vec<Vec<(VectorId, MetricResult)>>, WaCustomError> {
     queries
         .par_iter()
-        .map(|query| sparse_ann_vector_query(ctx.clone(), inverted_index.clone(), query, top_k))
+        .map(|query| {
+            sparse_ann_vector_query(
+                config,
+                inverted_index.clone(),
+                query,
+                top_k,
+                early_terminate_threshold,
+            )
+        })
         .collect()
 }
 
 fn batch_sparse_idf_ann_vector_query(
-    ctx: Arc<AppContext>,
     inverted_index_idf: Arc<InvertedIndexIDF>,
     queries: &[Vec<SparsePair>],
     top_k: Option<usize>,
 ) -> Result<Vec<Vec<(VectorId, MetricResult)>>, WaCustomError> {
     queries
         .par_iter()
-        .map(|query| {
-            sparse_idf_ann_vector_query(ctx.clone(), inverted_index_idf.clone(), query, top_k)
-        })
+        .map(|query| sparse_idf_ann_vector_query(inverted_index_idf.clone(), query, top_k))
         .collect()
 }
 
@@ -511,43 +519,6 @@ fn finalize_sparse_ann_results(
             }
         }
         results.push((id, MetricResult::DotProductDistance(DotProductDistance(dp))));
-    }
-
-    results.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
-    if let Some(k) = k {
-        results.truncate(k);
-    }
-
-    Ok(results)
-}
-
-fn finalize_sparse_idf_ann_results(
-    inverted_index_idf: Arc<InvertedIndexIDF>,
-    intermediate_results: Vec<SparseAnnIDFResult>,
-    idf_list: Vec<f32>,
-    query: &[SparsePair],
-    k: Option<usize>,
-) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
-    let mut results = Vec::with_capacity(k.unwrap_or(intermediate_results.len()));
-
-    for result in intermediate_results {
-        let id = VectorId(result.document_id as u64);
-        let map = get_sparse_embedding_by_id(
-            &inverted_index_idf.lmdb,
-            &inverted_index_idf.vec_raw_manager,
-            &id,
-        )?
-        .into_map();
-        let mut score = 0.0;
-        for (idx, pair) in query.iter().enumerate() {
-            if let Some(tf) = map.get(&pair.0) {
-                score += tf * idf_list[idx];
-            }
-        }
-        results.push((
-            id,
-            MetricResult::DotProductDistance(DotProductDistance(score)),
-        ));
     }
 
     results.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));

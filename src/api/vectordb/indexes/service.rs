@@ -33,7 +33,6 @@ pub(crate) async fn create_sparse_index(
         CreateSparseIndexDto::Splade {
             name,
             quantization,
-            early_terminate_threshold,
             sample_threshold,
         } => {
             repo::create_sparse_index(
@@ -42,21 +41,18 @@ pub(crate) async fn create_sparse_index(
                 name,
                 quantization,
                 sample_threshold,
-                early_terminate_threshold,
             )
             .await
         }
         CreateSparseIndexDto::Idf {
             name,
             quantization,
-            early_terminate_threshold,
         } => {
             repo::create_sparse_index_idf(
                 ctx,
                 collection_id,
                 name,
                 quantization,
-                early_terminate_threshold,
             )
             .await
         }

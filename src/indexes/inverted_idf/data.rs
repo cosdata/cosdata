@@ -15,7 +15,6 @@ pub struct InvertedIndexIDFData {
     pub auto_create_index: bool,
     pub max_vectors: Option<i32>,
     pub quantization_bits: u8,
-    pub early_terminate_threshold: f32,
 }
 
 impl From<&InvertedIndexIDF> for InvertedIndexIDFData {
@@ -26,7 +25,6 @@ impl From<&InvertedIndexIDF> for InvertedIndexIDFData {
             auto_create_index: inverted_index_idf.auto_create_index,
             max_vectors: inverted_index_idf.max_vectors,
             quantization_bits: inverted_index_idf.root.root.quantization_bits,
-            early_terminate_threshold: inverted_index_idf.early_terminate_threshold,
         }
     }
 }

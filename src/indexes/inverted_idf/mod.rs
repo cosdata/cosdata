@@ -27,7 +27,6 @@ pub struct InvertedIndexIDF {
     pub current_open_transaction: AtomicPtr<InvertedIndexIDFTransaction>,
     pub vcs: VersionControl,
     pub vec_raw_manager: BufferManagerFactory<Hash>,
-    pub early_terminate_threshold: f32,
 }
 
 unsafe impl Send for InvertedIndexIDF {}
@@ -47,7 +46,6 @@ impl InvertedIndexIDF {
         vec_raw_manager: BufferManagerFactory<Hash>,
         quantization_bits: u8,
         data_file_parts: u8,
-        early_terminate_threshold: f32,
     ) -> Result<Self, BufIoError> {
         let root = InvertedIndexIDFRoot::new(root_path, quantization_bits, data_file_parts)?;
 
@@ -62,7 +60,6 @@ impl InvertedIndexIDF {
             current_open_transaction: AtomicPtr::new(ptr::null_mut()),
             vcs,
             vec_raw_manager,
-            early_terminate_threshold,
         })
     }
 

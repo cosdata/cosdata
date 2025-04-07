@@ -179,6 +179,7 @@ pub struct Indexing {
 #[derive(Deserialize, Clone)]
 pub struct Search {
     pub shortlist_size: usize,
+    pub early_terminate_threshold: f32,
 }
 
 pub fn load_config() -> Result<Config, WaCustomError> {

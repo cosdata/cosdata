@@ -17,7 +17,6 @@ pub struct InvertedIndexData {
     pub max_vectors: Option<i32>,
     pub quantization_bits: u8,
     pub sample_threshold: usize,
-    pub early_terminate_threshold: f32,
 }
 
 impl From<&InvertedIndex> for InvertedIndexData {
@@ -30,7 +29,6 @@ impl From<&InvertedIndex> for InvertedIndexData {
             max_vectors: inverted_index.max_vectors,
             quantization_bits: inverted_index.root.root.quantization_bits,
             sample_threshold: inverted_index.sample_threshold,
-            early_terminate_threshold: inverted_index.early_terminate_threshold,
         }
     }
 }
