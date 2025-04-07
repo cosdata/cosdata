@@ -1,9 +1,14 @@
 use serde::{Deserialize, Serialize};
 
+use crate::metadata::gen_combinations;
+
 use super::{
     decimal_to_binary_vec, nearest_power_of_two, Error, FieldName, FieldValue, MetadataFields,
 };
-use std::collections::{HashMap, HashSet};
+use std::{
+    cmp::Reverse,
+    collections::{HashMap, HashSet},
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SupportedCondition {
@@ -98,6 +103,10 @@ impl MetadataField {
                 value, self.name
             )))
     }
+
+    pub fn max_cardinality(&self) -> u8 {
+        2u8.pow(self.num_dims as u32) - 1
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -130,6 +139,10 @@ impl MetadataSchema {
         }
     }
 
+    pub fn num_total_dims(&self) -> u8 {
+        self.fields.iter().map(|field| field.num_dims).sum()
+    }
+
     /// Return base dimensions for the MetadataSchema instance
     ///
     /// Base dimensions are to be used when there are no metadata
@@ -140,7 +153,7 @@ impl MetadataSchema {
         //
         // @TODO(vineet): Perhaps we should put a limit on max no. of
         // metadata fields supported
-        let sum: u8 = self.fields.iter().map(|field| field.num_dims).sum();
+        let sum: u8 = self.num_total_dims();
         vec![0; sum as usize]
     }
 
@@ -272,6 +285,123 @@ impl MetadataSchema {
             result.push(dims);
         }
         Ok(result)
+    }
+
+    pub fn pseudo_weighted_dimensions(&self, weight: i32) -> Vec<MetadataDimensions> {
+        // A hashmap of field names to the value_ids in asc
+        // order. Will be constructed when iterting through the fields
+        // for the first time.
+        let mut field_value_ids: HashMap<String, Vec<u16>> =
+            HashMap::with_capacity(self.fields.len());
+
+        // We first find all combinations of field values ids i.e. if
+        // there are 2 fields `foo`: [1, 2] and `bar`: [3, 4], then
+        // combinations will be a vector of items such as [1, 3], [1,
+        // 4], [2, 3], [2, 4]. Note that the order of value_ids in the
+        // inner vectors matter (same as the order of `self.fields`).
+        let mut combinations: Vec<Vec<u16>> = vec![];
+
+        let num_fields = self.fields.len();
+
+        // Compute combinations for individual fields i.e. for every
+        // field, only that field has non-zero value and the remaining
+        // are all zero.
+        for x in &self.fields {
+            let c = x.max_cardinality();
+            let vids = (1..=c).map(|i| i as u16).collect::<Vec<u16>>();
+            field_value_ids.insert(x.name.clone(), vids.clone());
+
+            let mut vs = Vec::with_capacity(num_fields);
+            for y in &self.fields {
+                if x.name == y.name {
+                    vs.push(vids.clone());
+                } else {
+                    vs.push(vec![0]);
+                }
+            }
+            let mut cs = gen_combinations(&vs);
+            combinations.append(&mut cs);
+        }
+
+        let mut is_all_and_supported = false;
+
+        // Compute combinations for supported `And` conditions
+        // i.e. only the fields that are part of a supported `And`
+        // condition will have non-zero values.
+        for condition in &self.conditions {
+            if let SupportedCondition::And(cond_fields) = condition {
+                let mut vs = Vec::with_capacity(num_fields);
+                for field in &self.fields {
+                    if cond_fields.contains(&field.name) {
+                        let vids = field_value_ids.get(&field.name).unwrap();
+                        vs.push(vids.clone());
+                    } else {
+                        vs.push(vec![0]);
+                    }
+                }
+                let mut cs = gen_combinations(&vs);
+                combinations.append(&mut cs);
+
+                // Check if the schema supports an `And` condition
+                // between all fields.
+                if cond_fields.len() == self.fields.len() {
+                    is_all_and_supported = true;
+                }
+            }
+        }
+
+        // Sort all combinations by the sum of the values. This is so
+        // that if the combination that has max value ids for every
+        // field exists, it ends up at the beginning of the vector
+        combinations.sort_by_cached_key(|c| Reverse(c.iter().copied().sum::<u16>()));
+
+        // Explicitly add combination for the max cardinality of each
+        // field. This is required only if `is_all_and_supported` is
+        // false. In other words, if `And` condition between all
+        // fields is supported, then this combination must have been
+        // already been added.
+        if !is_all_and_supported {
+            let mut combination = Vec::with_capacity(num_fields);
+            for field in &self.fields {
+                let vids = field_value_ids.get(&field.name).unwrap();
+                // @SAFETY: It's safe to use unwrap here as we know
+                // that `vids` won't be empty.
+                let max_val = *vids.as_slice().last().unwrap();
+                combination.push(max_val);
+            }
+            // Insert this combination at the beginning of the vector
+            combinations.insert(0, combination);
+        }
+
+        // Convert combinations of valid_ids into pseudo_dimensions
+        // (binary_vec with high weight values)
+        let mut pseudo_dimensions = Vec::with_capacity(combinations.len());
+        // We cache the results of calling fn `decimal_to_binary_vec`
+        // as there's a chance it would get called multiple times for
+        // the same input
+        let mut cache: HashMap<(u16, usize), Vec<i32>> = HashMap::new();
+
+        for combination in combinations {
+            let mut dims = Vec::with_capacity(num_fields);
+            for (i, value_id) in combination.iter().enumerate() {
+                let size = self.fields[i].num_dims as usize;
+                let mut field_dims = match cache.get(&(*value_id, size)) {
+                    Some(r) => r.clone(),
+                    None => {
+                        let r = decimal_to_binary_vec(*value_id, size)
+                            .iter()
+                            .map(|x| (*x as i32) * weight)
+                            .collect::<Vec<i32>>();
+                        cache.insert((*value_id, size), r.clone());
+                        r
+                    }
+                };
+                dims.append(&mut field_dims);
+            }
+            pseudo_dimensions.push(dims);
+        }
+
+        pseudo_dimensions
     }
 
     pub fn get_field(&self, name: &str) -> Result<&MetadataField, Error> {
@@ -750,5 +880,45 @@ mod tests {
         let orig: MetadataSchema = from_slice(&slice).unwrap();
 
         assert_eq!(schema.fields.len(), orig.fields.len());
+    }
+
+    #[test]
+    fn test_pseudo_weighted_dimensions() {
+        let age_values = (1..=2).map(FieldValue::Int).collect();
+        let age = MetadataField::new("age".to_owned(), age_values).unwrap();
+
+        let color_values: HashSet<FieldValue> = vec!["red", "yellow", "green"]
+            .into_iter()
+            .map(|x| FieldValue::String(String::from(x)))
+            .collect();
+        let color = MetadataField::new("color".to_owned(), color_values).unwrap();
+
+        let group_values: HashSet<FieldValue> = vec!["a", "b", "c", "d"]
+            .into_iter()
+            .map(|x| FieldValue::String(String::from(x)))
+            .collect();
+        let group = MetadataField::new("group".to_owned(), group_values).unwrap();
+
+        let conditions = vec![SupportedCondition::And(hashset(vec!["age", "color"]))];
+
+        let schema = MetadataSchema::new(vec![age, color, group], conditions).unwrap();
+
+        let pwd = schema.pseudo_weighted_dimensions(1024);
+
+        // Note that cardinality of age and color is 2 and 3
+        // respectively. But we're considering max_cardinality for the
+        // dimension size which happens to be 3 and 3. This is because
+        // the value 0 implicitly takes up one bit. So to represent 2
+        // age values, we need 3 bits and hence the max_cardinality is
+        // 3.
+        let exp_total = 23; // 13 (individual) + 9 (age x color) + 1 (all)
+        assert_eq!(exp_total, pwd.len());
+
+        let num_total_dims = schema.num_total_dims();
+        assert_eq!(7, num_total_dims);
+
+        // The max pseudo node is at the beginning of the returned
+        // vector
+        assert_eq!(vec![1024; num_total_dims as usize], pwd[0]);
     }
 }

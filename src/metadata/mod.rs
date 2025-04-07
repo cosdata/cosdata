@@ -136,8 +136,36 @@ pub fn fields_to_dimensions(
     Ok(result)
 }
 
+fn gen_combinations(vs: &Vec<Vec<u16>>) -> Vec<Vec<u16>> {
+    if vs.is_empty() {
+        return vec![];
+    }
+    // Start with a single empty combination
+    let mut combinations = vec![Vec::new()];
+    // For each vector in the input
+    for v in vs {
+        // Create new combinations by extending each existing combination
+        // with each element from the current vector
+        let mut new_combinations = Vec::new();
+        for combination in combinations {
+            for item in v {
+                // Create a new combination by cloning the existing
+                // one and adding the new item
+                let mut new_combination = combination.clone();
+                new_combination.push(*item);
+                new_combinations.push(new_combination);
+            }
+        }
+        // Replace the old combinations with the new ones
+        combinations = new_combinations;
+    }
+    combinations
+}
+
 #[cfg(test)]
 mod tests {
+
+    use std::collections::HashSet;
 
     use super::*;
 
@@ -155,5 +183,40 @@ mod tests {
     fn test_decimal_to_binary_vec() {
         assert_eq!(vec![0, 1, 1, 1], decimal_to_binary_vec(7, 4));
         assert_eq!(vec![0, 0, 1, 1], decimal_to_binary_vec(3, 4));
+    }
+
+    #[test]
+    fn test_gen_combinations() {
+        let vs = vec![vec![1, 2, 3], vec![4, 5]];
+        let cs = gen_combinations(&vs)
+            .into_iter()
+            .collect::<HashSet<Vec<u16>>>();
+        let expected: Vec<Vec<u16>> = vec![
+            vec![1, 4],
+            vec![1, 5],
+            vec![2, 4],
+            vec![2, 5],
+            vec![3, 4],
+            vec![3, 5],
+        ];
+        let e = expected.into_iter().collect::<HashSet<Vec<u16>>>();
+        assert_eq!(e, cs);
+
+        let vs = vec![vec![0], vec![1, 2], vec![4, 5]];
+        let cs = gen_combinations(&vs)
+            .into_iter()
+            .collect::<HashSet<Vec<u16>>>();
+        let expected: Vec<Vec<u16>> =
+            vec![vec![0, 1, 4], vec![0, 1, 5], vec![0, 2, 4], vec![0, 2, 5]];
+        let e = expected.into_iter().collect::<HashSet<Vec<u16>>>();
+        assert_eq!(e, cs);
+
+        let vs = vec![vec![0], vec![0], vec![4, 5]];
+        let cs = gen_combinations(&vs)
+            .into_iter()
+            .collect::<HashSet<Vec<u16>>>();
+        let expected: Vec<Vec<u16>> = vec![vec![0, 0, 4], vec![0, 0, 5]];
+        let e = expected.into_iter().collect::<HashSet<Vec<u16>>>();
+        assert_eq!(e, cs);
     }
 }
