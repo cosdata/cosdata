@@ -211,7 +211,6 @@ pub async fn init_inverted_index_for_collection(
 pub async fn init_inverted_index_idf_for_collection(
     ctx: Arc<AppContext>,
     collection: &Collection,
-    quantization_bits: u8,
 ) -> Result<Arc<InvertedIndexIDF>, WaCustomError> {
     let collection_name = &collection.name;
     let collection_path: Arc<Path> = collection.get_path();
@@ -242,7 +241,6 @@ pub async fn init_inverted_index_idf_for_collection(
         hash,
         vcs,
         vec_raw_manager,
-        quantization_bits,
         ctx.config.inverted_index_data_file_parts,
     )?);
 

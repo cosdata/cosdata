@@ -730,7 +730,6 @@ impl CollectionsMap {
             max_vectors: inverted_index_data.max_vectors,
             root: InvertedIndexIDFRoot::deserialize(
                 index_path,
-                inverted_index_data.quantization_bits,
                 config.inverted_index_data_file_parts,
             )?,
             lmdb,

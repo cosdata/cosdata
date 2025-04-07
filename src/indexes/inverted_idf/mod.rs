@@ -44,10 +44,9 @@ impl InvertedIndexIDF {
         current_version: Hash,
         vcs: VersionControl,
         vec_raw_manager: BufferManagerFactory<Hash>,
-        quantization_bits: u8,
         data_file_parts: u8,
     ) -> Result<Self, BufIoError> {
-        let root = InvertedIndexIDFRoot::new(root_path, quantization_bits, data_file_parts)?;
+        let root = InvertedIndexIDFRoot::new(root_path, data_file_parts)?;
 
         Ok(Self {
             name,

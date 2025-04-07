@@ -9,6 +9,7 @@ mod quotients_map;
 mod storage;
 mod tree_map;
 mod versioned_pagepool;
+mod versioned_vec;
 
 #[cfg(test)]
 mod tests;

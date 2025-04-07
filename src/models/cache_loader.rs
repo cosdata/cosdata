@@ -420,7 +420,6 @@ pub struct InvertedIndexIDFCache {
     pub offset_counter: AtomicU32,
     loading_data: TSHashTable<u64, Arc<Mutex<bool>>>,
     pub data_file_parts: u8,
-    pub quantization_bits: u8,
 }
 
 unsafe impl Send for InvertedIndexIDFCache {}
@@ -432,7 +431,6 @@ impl InvertedIndexIDFCache {
         data_bufmans: Arc<BufferManagerFactory<u8>>,
         offset_counter: AtomicU32,
         data_file_parts: u8,
-        quantization_bits: u8,
     ) -> Self {
         let data_registry = LRUCache::with_prob_eviction(100_000_000, 0.03125);
 
@@ -443,7 +441,6 @@ impl InvertedIndexIDFCache {
             offset_counter,
             loading_data: TSHashTable::new(16),
             data_file_parts,
-            quantization_bits,
         }
     }
 
@@ -486,7 +483,6 @@ impl InvertedIndexIDFCache {
             &self.dim_bufman,
             &self.data_bufmans,
             file_offset,
-            self.quantization_bits,
             data_file_idx,
             self.data_file_parts,
             self,
@@ -522,7 +518,6 @@ impl InvertedIndexIDFCache {
             &self.dim_bufman,
             &self.data_bufmans,
             file_offset,
-            self.quantization_bits,
             data_file_idx,
             self.data_file_parts,
             self,

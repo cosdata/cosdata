@@ -14,7 +14,6 @@ pub struct InvertedIndexIDFData {
     pub description: Option<String>,
     pub auto_create_index: bool,
     pub max_vectors: Option<i32>,
-    pub quantization_bits: u8,
 }
 
 impl From<&InvertedIndexIDF> for InvertedIndexIDFData {
@@ -24,7 +23,6 @@ impl From<&InvertedIndexIDF> for InvertedIndexIDFData {
             description: inverted_index_idf.description.clone(),
             auto_create_index: inverted_index_idf.auto_create_index,
             max_vectors: inverted_index_idf.max_vectors,
-            quantization_bits: inverted_index_idf.root.root.quantization_bits,
         }
     }
 }

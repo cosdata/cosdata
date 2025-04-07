@@ -116,7 +116,6 @@ pub(crate) enum CreateSparseIndexDto {
     },
     Idf {
         name: String,
-        quantization: SparseIndexQuantization,
     },
 }
 
@@ -170,11 +169,7 @@ impl<'de> Deserialize<'de> for CreateSparseIndexDto {
                 let name = name.ok_or_else(|| Error::missing_field("name"))?;
 
                 if is_idf {
-                    Ok(CreateSparseIndexDto::Idf {
-                        name,
-                        quantization: quantization
-                            .ok_or_else(|| Error::missing_field("quantization"))?,
-                    })
+                    Ok(CreateSparseIndexDto::Idf { name })
                 } else {
                     Ok(CreateSparseIndexDto::Splade {
                         name,

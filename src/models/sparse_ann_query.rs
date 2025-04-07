@@ -152,78 +152,32 @@ impl SparseAnnQueryBasic {
     pub fn search_bm25(
         self,
         index: &InvertedIndexIDFRoot,
-        quantization_bits: u8,
-        early_terminate_threshold: f32,
-        reranking_factor: usize,
         k: Option<usize>,
-    ) -> Result<(Vec<SparseAnnIDFResult>, Vec<f32>), BufIoError> {
-        let mut results_map: FxHashMap<u32, f32> = FxHashMap::default();
-        let max_key = ((1u32 << quantization_bits) - 1) as u8;
+    ) -> Result<Vec<SparseAnnIDFResult>, BufIoError> {
+        let mut results_map = FxHashMap::default();
         let total_documents_count = index
             .total_documents_count
             .load(std::sync::atomic::Ordering::Relaxed);
-        let most_common_term_documents_count = index
-            .most_common_term_documents_count
-            .load(std::sync::atomic::Ordering::Relaxed);
-        let least_common_term_documents_count = (index
-            .least_common_term_documents_count
-            .load(std::sync::atomic::Ordering::Relaxed)
-            >> 32) as u32;
-        let max_idf = get_idf(total_documents_count, least_common_term_documents_count);
-        let min_idf = get_idf(total_documents_count, most_common_term_documents_count);
-        let absolute_max_idf = get_idf(total_documents_count, 0);
-        let mut idf_list = Vec::with_capacity(self.query_vector.entries.len());
 
         for (term_hash, _query_tf) in self.query_vector.entries {
-            // Split the hash dimension
             let storage_dim = term_hash & (u16::MAX as u32);
             let quotient = (term_hash >> 16) as TermQuotient;
 
-            // Find node for this storage dimension
-            let idf = if let Some(node) = index.find_node(storage_dim) {
-                // Get node data
-                let node_data =
-                    unsafe { &*node.data }.try_get_data(&index.cache, node.dim_index)?;
+            if let Some(node) = index.find_node(storage_dim) {
+                let data = unsafe { &*node.data }.try_get_data(&index.cache, node.dim_index)?;
 
-                // Process documents containing this term
-                if let Some(inner_map) = node_data.map.lookup(&quotient) {
-                    let documents_containing_term = inner_map
-                        .documents_count
-                        .load(std::sync::atomic::Ordering::Relaxed);
-                    // Get IDF for this term
-                    let idf = get_idf(total_documents_count, documents_containing_term);
-                    let idf_fraction = ((idf - min_idf) / (max_idf - min_idf)).clamp(0.0, 1.0);
-                    // println!("idf_fraction: {idf_fraction}, idf: {idf}, doc_count: {documents_containing_term}, min_idf: {min_idf}, max_doc_count: {most_common_term_documents_count}, max_idf: {max_idf}, min_doc_count: {least_common_term_documents_count}");
-                    let early_terminate_value =
-                        (early_terminate_threshold * (1.0 - idf_fraction) * max_key as f32) as u8;
-                    // println!("early_terminate_value: {}", early_terminate_value);
-                    for quantized_value in early_terminate_value..=max_key {
-                        if let Some(vector_ids) = inner_map.frequency_map.lookup(&quantized_value) {
-                            // For each document containing this term
-                            for doc_id in vector_ids.iter() {
-                                // Calculate BM25 term weight
-                                let term_freq = ((quantized_value as f32)
-                                    * (1.2 / (1u32 << quantization_bits) as f32))
-                                    + 0.8;
-                                let bm25_weight = idf * term_freq;
+                if let Some(term) = data.map.lookup(&quotient) {
+                    let document_containing_term = term.documents.len() as u32;
+                    let idf = get_idf(total_documents_count, document_containing_term);
 
-                                // Accumulate score
-                                *results_map.entry(doc_id).or_insert(0.0) += bm25_weight;
-                            }
-                        }
+                    for (doc_id, tf) in term.documents.iter() {
+                        let bm25_weight = tf * idf;
+                        *results_map.entry(*doc_id).or_insert(0.0) += bm25_weight;
                     }
-                    idf
-                } else {
-                    absolute_max_idf
                 }
-            } else {
-                absolute_max_idf
-            };
-
-            idf_list.push(idf);
+            }
         }
 
-        // Convert the heap to a vector and reverse it to get descending order
         let mut results: Vec<SparseAnnIDFResult> = results_map
             .into_iter()
             .map(|(vector_id, score)| SparseAnnIDFResult {
@@ -232,16 +186,15 @@ impl SparseAnnQueryBasic {
             })
             .collect();
         if let Some(k) = k {
-            let k_with_reranking = k * reranking_factor;
-            if results.len() > k_with_reranking {
+            if results.len() > k {
                 // Use partial_sort for top K, faster than full sort
-                results
-                    .select_nth_unstable_by(k_with_reranking, |a, b| b.score.total_cmp(&a.score));
-                results.truncate(k_with_reranking);
+                results.select_nth_unstable_by(k, |a, b| b.score.total_cmp(&a.score));
+                results.truncate(k);
             }
         }
         results.sort_unstable_by(|a, b| b.score.total_cmp(&a.score));
-        Ok((results, idf_list))
+
+        Ok(results)
     }
 }
 
