@@ -48,14 +48,17 @@ pub(crate) async fn search(
         body.vector,
         metadata_filter,
         body.nn_count,
-    ).await;
+    )
+    .await;
 
     let result = match query_result {
         Ok(result) => result,
         Err(err) => match err {
-            WaCustomError::InvalidParams => return HttpResponse::BadRequest().body(format!("Bad request")),
+            WaCustomError::InvalidParams => {
+                return HttpResponse::BadRequest().body("Bad request".to_string())
+            }
             _ => return HttpResponse::InternalServerError().body(err.to_string()),
-        }
+        },
     };
 
     let response_data = RPCResponseBody::RespVectorKNN {
@@ -101,14 +104,17 @@ pub(crate) async fn batch_search(
         body.vectors,
         metadata_filter,
         body.nn_count,
-    ).await;
+    )
+    .await;
 
     let results = match query_results {
         Ok(results) => results,
         Err(err) => match err {
-            WaCustomError::InvalidParams => return HttpResponse::BadRequest().body(format!("Bad request")),
+            WaCustomError::InvalidParams => {
+                return HttpResponse::BadRequest().body("Bad request".to_string())
+            }
             _ => return HttpResponse::InternalServerError().body(err.to_string()),
-        }
+        },
     };
 
     let response_data: Vec<_> = results

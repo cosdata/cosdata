@@ -971,18 +971,18 @@ pub async fn ann_vector_query(
     let query_filter_dims = match metadata_filter {
         Some(filter) => {
             // @TODO(vineet): Remove unwrap
-            let coll = ctx.ain_env
+            let coll = ctx
+                .ain_env
                 .collections_map
                 .get_collection(&hnsw_index.name)
                 .expect("Couldn't get collection from ain_env");
             let metadata_schema = coll.metadata_schema.as_ref().unwrap();
-            let dims = filter_encoded_dimensions(metadata_schema, &filter)
-                .map_err(|e| {
-                    log::error!("Invalid metadata filter in query: {e:?}");
-                    WaCustomError::InvalidParams
-                })?;
+            let dims = filter_encoded_dimensions(metadata_schema, &filter).map_err(|e| {
+                log::error!("Invalid metadata filter in query: {e:?}");
+                WaCustomError::InvalidParams
+            })?;
             Some(dims)
-        },
+        }
         None => None,
     };
 

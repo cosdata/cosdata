@@ -204,10 +204,7 @@ impl MetadataSchema {
         // Note that it's possible that this combination has already
         // been considered before, but it will get deduped when
         // inserting into the HashSet of combinations.
-        let mut all_fields_combination = input_fields_set
-            .iter()
-            .map(|s| *s)
-            .collect::<Vec<&str>>();
+        let mut all_fields_combination = input_fields_set.iter().copied().collect::<Vec<&str>>();
         all_fields_combination.sort();
         combinations.insert(all_fields_combination);
 
@@ -243,7 +240,7 @@ impl MetadataSchema {
         fields: &HashMap<FieldName, FieldValue>,
         weight: i32,
     ) -> Result<Vec<MetadataDimensions>, Error> {
-        let field_combinations = self.input_field_combinations(&fields);
+        let field_combinations = self.input_field_combinations(fields);
         // We cache the results of calling fn `decimal_to_binary_vec`
         // as there's a chance it would get called multiple times for
         // the same input
@@ -254,7 +251,7 @@ impl MetadataSchema {
             for field in &self.fields {
                 let mut field_dims = match field_combination.get(&field.name.as_ref()) {
                     Some(value) => {
-                        let value_id = field.value_id(&value)?;
+                        let value_id = field.value_id(value)?;
                         let size = field.num_dims as usize;
                         match cache.get(&(value_id, size)) {
                             Some(r) => r.clone(),
@@ -265,7 +262,7 @@ impl MetadataSchema {
                                     .collect::<Vec<i32>>();
                                 cache.insert((value_id, size), dims.clone());
                                 dims
-                            },
+                            }
                         }
                     }
                     None => vec![0; field.num_dims as usize],
@@ -428,11 +425,10 @@ mod tests {
     fn ifc_sort_result(result: &mut Vec<HashMap<&str, &FieldValue>>) {
         result.sort_by_key(|c| {
             c.values()
-                .map(|v| {
-                    match v {
-                        FieldValue::Int(i) => *i,
-                        FieldValue::String(_) => 0,
-                    }})
+                .map(|v| match v {
+                    FieldValue::Int(i) => *i,
+                    FieldValue::String(_) => 0,
+                })
                 .sum::<i32>()
         })
     }
@@ -611,12 +607,10 @@ mod tests {
         let exp = vec![
             vec![
                 0, 1024, 0, 1024, // 5 (original value: 5)
-                0, 0,
-                0, 0,
+                0, 0, 0, 0,
             ],
             vec![
-                0, 0, 0, 0,
-                0, 1024, // 1 (original value: a)
+                0, 0, 0, 0, 0, 1024, // 1 (original value: a)
                 0, 0,
             ],
             vec![
@@ -637,19 +631,17 @@ mod tests {
         let exp = vec![
             vec![
                 0, 0, 1024, 1024, // 3 (original value: 3)
-                0, 0,
-                0, 0,
+                0, 0, 0, 0,
             ],
             vec![
-                0, 0, 0, 0,
-                1024, 1024, // 3 (original value: c)
+                0, 0, 0, 0, 1024, 1024, // 3 (original value: c)
                 0, 0,
             ],
             vec![
                 0, 0, 1024, 1024, // 3 (original value: 3)
                 1024, 1024, // 3 (original value: c)
                 0, 0, // (not specified)
-            ]
+            ],
         ];
         // Convert both to sets for comparing unordered values
         let wd_set = wd.into_iter().collect::<HashSet<Vec<i32>>>();
@@ -668,20 +660,16 @@ mod tests {
             // dimensions to support queries for individual field age
             vec![
                 0, 1024, 0, 1024, // 5 (original value: 5)
-                0, 0,
-                0, 0,
+                0, 0, 0, 0,
             ],
             // dimensions to support queries for individual field group
             vec![
-                0, 0, 0, 0,
-                0, 1024, // 0 (original value: a)
+                0, 0, 0, 0, 0, 1024, // 0 (original value: a)
                 0, 0,
             ],
             // dimensions to support queries for individual field level
             vec![
-                0, 0, 0, 0,
-                0, 0,
-                1024, 1024, // 3 (original value: third)
+                0, 0, 0, 0, 0, 0, 1024, 1024, // 3 (original value: third)
             ],
             // dimensions to support AND(age, group)
             vec![
@@ -692,8 +680,7 @@ mod tests {
             // dimensions to support AND(age, level)
             vec![
                 0, 1024, 0, 1024, // 5 (original value: 5)
-                0, 0,
-                1024, 1024, // 3 (original value: third)
+                0, 0, 1024, 1024, // 3 (original value: third)
             ],
             // all fields dimensions to support OR queries
             vec![

@@ -272,7 +272,12 @@ pub enum DistanceMetric {
 
 impl DistanceFunction for DistanceMetric {
     type Item = MetricResult;
-    fn calculate(&self, x: &VectorData, y: &VectorData, is_indexing: bool) -> Result<Self::Item, DistanceError> {
+    fn calculate(
+        &self,
+        x: &VectorData,
+        y: &VectorData,
+        is_indexing: bool,
+    ) -> Result<Self::Item, DistanceError> {
         match self {
             Self::Cosine => {
                 let value = CosineSimilarity(0.0).calculate(x, y, is_indexing)?;
