@@ -9,11 +9,13 @@ import vector_service_pb2 as vector_service
 import vector_service_pb2_grpc as vector_service_grpc
 
 # gRPC server address
-grpc_server_address = '[::1]:50051'
+grpc_server_address = "[::1]:50051"
+
 
 def create_grpc_channel():
     """Creates a gRPC channel."""
     return grpc.insecure_channel(grpc_server_address)
+
 
 def create_collection_with_metadata(stub):
     """Test creating collection with metadata schema"""
@@ -21,13 +23,10 @@ def create_collection_with_metadata(stub):
         name="test_metadata_collection",
         description="Test collection with metadata schema",
         dense_vector=vector_service.DenseVectorOptions(
-            dimension=128,
-            enabled=True,
-            auto_create_index=True
+            dimension=128, enabled=True, auto_create_index=True
         ),
         sparse_vector=vector_service.SparseVectorOptions(
-            enabled=False,
-            auto_create_index=False
+            enabled=False, auto_create_index=False
         ),
         metadata_schema=vector_service.MetadataSchema(
             fields=[
@@ -36,8 +35,8 @@ def create_collection_with_metadata(stub):
                     values=[
                         vector_service.FieldValue(string_value="electronics"),
                         vector_service.FieldValue(string_value="books"),
-                        vector_service.FieldValue(string_value="clothing")
-                    ]
+                        vector_service.FieldValue(string_value="clothing"),
+                    ],
                 ),
                 vector_service.MetadataField(
                     name="rating",
@@ -46,23 +45,23 @@ def create_collection_with_metadata(stub):
                         vector_service.FieldValue(int_value=2),
                         vector_service.FieldValue(int_value=3),
                         vector_service.FieldValue(int_value=4),
-                        vector_service.FieldValue(int_value=5)
-                    ]
-                )
+                        vector_service.FieldValue(int_value=5),
+                    ],
+                ),
             ],
             supported_conditions=[
                 vector_service.SupportedCondition(
                     op=vector_service.SupportedCondition.OperationType.AND,
-                    field_names=["category", "rating"]
+                    field_names=["category", "rating"],
                 )
-            ]
+            ],
         ),
         config=vector_service.CollectionConfig(
-            max_vectors=1000000,
-            replication_factor=1
-        )
+            max_vectors=1000000, replication_factor=1
+        ),
     )
     return stub.CreateCollection(request)
+
 
 def create_simple_collection(stub, name="test_collection", dimension=128):
     """Creates a simple collection without metadata schema"""
@@ -70,20 +69,17 @@ def create_simple_collection(stub, name="test_collection", dimension=128):
         name=name,
         description="Test collection via gRPC",
         dense_vector=vector_service.DenseVectorOptions(
-            dimension=dimension,
-            enabled=True,
-            auto_create_index=True
+            dimension=dimension, enabled=True, auto_create_index=True
         ),
         sparse_vector=vector_service.SparseVectorOptions(
-            enabled=False,
-            auto_create_index=False
+            enabled=False, auto_create_index=False
         ),
         config=vector_service.CollectionConfig(
-            max_vectors=1000000,
-            replication_factor=1
-        )
+            max_vectors=1000000, replication_factor=1
+        ),
     )
     return stub.CreateCollection(request)
+
 
 def get_collections(stub):
     """Gets all collections using the gRPC server."""
@@ -94,6 +90,7 @@ def get_collections(stub):
         print(f"Error getting collections: {e.details()}")
         raise
 
+
 def get_collection(stub, collection_id):
     """Gets a specific collection using the gRPC server."""
     try:
@@ -103,6 +100,7 @@ def get_collection(stub, collection_id):
         print(f"Error getting collection: {e.details()}")
         raise
 
+
 def delete_collection(stub, collection_id):
     """Deletes a collection using the gRPC server."""
     try:
@@ -111,6 +109,7 @@ def delete_collection(stub, collection_id):
     except grpc.RpcError as e:
         print(f"Error deleting collection: {e.details()}")
         raise
+
 
 def test_basic_collection_operations(stub):
     """Test basic collection operations without metadata"""
@@ -154,6 +153,7 @@ def test_basic_collection_operations(stub):
 
     return True
 
+
 def test_metadata_collection_operations(stub):
     """Test collection operations with metadata schema"""
     print("\n=== Testing Metadata Collection Operations ===")
@@ -185,6 +185,7 @@ def test_metadata_collection_operations(stub):
 
     return True
 
+
 def run_all_tests():
     """Run all gRPC tests"""
     print("Starting gRPC tests...")
@@ -203,6 +204,7 @@ def run_all_tests():
             print("\n❌ Metadata collection operations tests failed!")
         else:
             print("\n✅ Metadata collection operations tests passed!")
+
 
 if __name__ == "__main__":
     run_all_tests()
