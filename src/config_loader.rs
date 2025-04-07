@@ -18,6 +18,7 @@ pub struct Config {
     pub num_regions_to_load_on_restart: usize,
     pub inverted_index_data_file_parts: u8,
     pub sparse_raw_values_reranking_factor: usize,
+    pub rerank_sparse_with_raw_values: bool,
     #[serde(default)]
     pub cache: CacheConfig,
 }
@@ -178,6 +179,7 @@ pub struct Indexing {
 #[derive(Deserialize, Clone)]
 pub struct Search {
     pub shortlist_size: usize,
+    pub early_terminate_threshold: f32,
 }
 
 pub fn load_config() -> Result<Config, WaCustomError> {

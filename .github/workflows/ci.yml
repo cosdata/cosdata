@@ -101,7 +101,7 @@ jobs:
 
       - name: Generate Python gRPC code
         run: |
-          python -m grpc_tools.protoc -I./proto --python_out=. --grpc_python_out=. proto/vector_service.proto
+          python -m grpc_tools.protoc -I./proto --python_out=tests --grpc_python_out=tests proto/vector_service.proto
 
       - name: Build and start server with grpc-server feature
         run: |
@@ -111,7 +111,7 @@ jobs:
 
       - name: Run Python gRPC tests
         run: |
-          python test-grpc.py
+          python tests/test-grpc.py
   format:
     name: Format
     runs-on: ubuntu-latest

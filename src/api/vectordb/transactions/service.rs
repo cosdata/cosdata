@@ -1,9 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    api::vectordb::vectors::dtos::{
-        CreateDenseVectorDto, CreateSparseVectorDto, CreateVectorResponseDto,
-    },
+    api::vectordb::vectors::dtos::{CreateDenseVectorDto, CreateSparseVectorDto},
     app_context::AppContext,
     models::{rpc::DenseVector, versioning::Hash},
 };
@@ -45,7 +43,7 @@ pub(crate) async fn create_vector_in_transaction(
     collection_id: &str,
     transaction_id: Hash,
     create_vector_dto: CreateDenseVectorDto,
-) -> Result<CreateVectorResponseDto, TransactionError> {
+) -> Result<(), TransactionError> {
     repo::create_vector_in_transaction(ctx, collection_id, transaction_id, create_vector_dto).await
 }
 

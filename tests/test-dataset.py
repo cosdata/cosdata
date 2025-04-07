@@ -704,6 +704,7 @@ def process_vectors_batch(
 
     return vectors_inserted, current_transaction_id, vectors_in_current_transaction
 
+
 def run_matching_tests(test_vectors, vector_db_name, brute_force_results):
     """Run matching accuracy tests and measure query latencies"""
     print("\nStarting similarity search tests...")
@@ -719,7 +720,7 @@ def run_matching_tests(test_vectors, vector_db_name, brute_force_results):
                 for test_vec in brute_force_results
                 if query_vec["id"] == test_vec["query_id"]
             )
-            
+
             # Measure query latency
             query_start_time = time.time()
             idr, ann_response = ann_vector(
@@ -766,7 +767,7 @@ def run_matching_tests(test_vectors, vector_db_name, brute_force_results):
         p95_latency = latencies[int(len(latencies) * 0.95)]
         min_latency = min(latencies)
         max_latency = max(latencies)
-        
+
         print("\nLatency Statistics (ms):")
         print(f"Average: {avg_latency:.2f}")
         print(f"p50: {p50_latency:.2f}")
@@ -781,7 +782,8 @@ def run_matching_tests(test_vectors, vector_db_name, brute_force_results):
         print(f"Average Recall@5: {average_recall:.2f}%")
     else:
         print("No valid queries completed")
-        
+
+
 def run_rps_tests(rps_test_vectors, vector_db_name, batch_size=100):
     """Run RPS (Requests Per Second) tests"""
     print(f"Using {len(rps_test_vectors)} different test vectors for RPS testing")
@@ -823,7 +825,6 @@ def run_rps_tests(rps_test_vectors, vector_db_name, batch_size=100):
 
 
 if __name__ == "__main__":
-
     session_response = create_session()
     print("Session Response:", session_response)
 

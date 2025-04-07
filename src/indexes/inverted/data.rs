@@ -17,14 +17,11 @@ pub struct InvertedIndexData {
     pub max_vectors: Option<i32>,
     pub quantization_bits: u8,
     pub sample_threshold: usize,
-    pub early_terminate_threshold: f32,
 }
 
-impl TryFrom<&InvertedIndex> for InvertedIndexData {
-    type Error = WaCustomError;
-
-    fn try_from(inverted_index: &InvertedIndex) -> Result<Self, Self::Error> {
-        let inverted_index_data = Self {
+impl From<&InvertedIndex> for InvertedIndexData {
+    fn from(inverted_index: &InvertedIndex) -> Self {
+        Self {
             name: inverted_index.name.clone(),
             description: inverted_index.description.clone(),
             auto_create_index: inverted_index.auto_create_index,
@@ -32,9 +29,7 @@ impl TryFrom<&InvertedIndex> for InvertedIndexData {
             max_vectors: inverted_index.max_vectors,
             quantization_bits: inverted_index.root.root.quantization_bits,
             sample_threshold: inverted_index.sample_threshold,
-            early_terminate_threshold: inverted_index.early_terminate_threshold,
-        };
-        Ok(inverted_index_data)
+        }
     }
 }
 
@@ -65,11 +60,15 @@ impl InvertedIndexData {
         env: &Environment,
         db: Database,
         collection_id: &[u8; 8],
-    ) -> lmdb::Result<InvertedIndexData> {
+    ) -> lmdb::Result<Option<InvertedIndexData>> {
         let txn = env.begin_ro_txn().unwrap();
-        let index = txn.get(db, collection_id)?;
+        let index = match txn.get(db, collection_id) {
+            Ok(bytes) => bytes,
+            Err(lmdb::Error::NotFound) => return Ok(None),
+            Err(err) => return Err(err),
+        };
         let index: InvertedIndexData = from_slice(index).unwrap();
-        Ok(index)
+        Ok(Some(index))
     }
 
     /// persists inverted index data for a collection
@@ -78,7 +77,7 @@ impl InvertedIndexData {
         db: Database,
         inverted_index: &InvertedIndex,
     ) -> Result<(), WaCustomError> {
-        let data = InvertedIndexData::try_from(inverted_index)?;
+        let data = InvertedIndexData::from(inverted_index);
 
         // Compute SipHash of the collection name
         let key = data.get_key();

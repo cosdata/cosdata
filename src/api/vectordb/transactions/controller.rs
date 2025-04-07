@@ -1,10 +1,10 @@
 use actix_web::{web, HttpResponse};
 
+use crate::models::collection_cache::CollectionCacheExt;
 use crate::{
     api::vectordb::{indexes::dtos::IndexType, vectors::dtos::CreateDenseVectorDto},
     app_context::AppContext,
 };
-use crate::models::collection_cache::CollectionCacheExt;
 
 use super::{
     dtos::{AbortTransactionDto, CommitTransactionDto, CreateTransactionDto, UpsertDto},
@@ -70,18 +70,17 @@ pub(crate) async fn create_vector_in_transaction(
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse, TransactionError> {
     let (collection_id, transaction_id) = params.into_inner();
-
     ctx.update_collection_for_transaction(&collection_id)
         .map_err(|e| TransactionError::FailedToCreateVector(format!("Cache error: {}", e)))?;
 
-    let vector = service::create_vector_in_transaction(
+    service::create_vector_in_transaction(
         ctx.into_inner(),
         &collection_id,
         transaction_id.into(),
         create_vector_dto,
     )
     .await?;
-    Ok(HttpResponse::Ok().json(vector))
+    Ok(HttpResponse::Ok().finish())
 }
 
 pub(crate) async fn abort_transaction(

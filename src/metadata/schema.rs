@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use super::{decimal_to_binary_vec, nearest_power_of_two, Error, FieldName, FieldValue, MetadataFields};
+use super::{
+    decimal_to_binary_vec, nearest_power_of_two, Error, FieldName, FieldValue, MetadataFields,
+};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,7 +154,7 @@ impl MetadataSchema {
     /// SupportedConditions defined in schema.
     fn input_field_combinations<'a>(
         &self,
-        input_fields: &'a MetadataFields
+        input_fields: &'a MetadataFields,
     ) -> Vec<HashMap<&'a str, &'a FieldValue>> {
         // If no input fields are specified, return empty vector
         if input_fields.is_empty() {
@@ -312,8 +314,8 @@ mod tests {
 
     fn hashset(xs: Vec<&str>) -> HashSet<String> {
         xs.into_iter()
-            .map(|s| String::from(s))
-                .collect::<HashSet<String>>()
+            .map(String::from)
+            .collect::<HashSet<String>>()
     }
 
     #[test]
@@ -437,13 +439,13 @@ mod tests {
 
     #[test]
     fn test_input_field_combinations() {
-        let a_values: HashSet<FieldValue> = (1..=10).map(|x| FieldValue::Int(x)).collect();
+        let a_values: HashSet<FieldValue> = (1..=10).map(FieldValue::Int).collect();
         let a = MetadataField::new("a".to_owned(), a_values).unwrap();
 
-        let b_values: HashSet<FieldValue> = (1..=10).map(|x| FieldValue::Int(x)).collect();
+        let b_values: HashSet<FieldValue> = (1..=10).map(FieldValue::Int).collect();
         let b = MetadataField::new("b".to_owned(), b_values).unwrap();
 
-        let c_values: HashSet<FieldValue> = (1..=10).map(|x| FieldValue::Int(x)).collect();
+        let c_values: HashSet<FieldValue> = (1..=10).map(FieldValue::Int).collect();
         let c = MetadataField::new("c".to_owned(), c_values).unwrap();
 
         let conditions = vec![
@@ -720,9 +722,7 @@ mod tests {
             .map(|x| FieldValue::String(String::from(x)))
             .collect();
         let group = MetadataField::new("group".to_owned(), group_values).unwrap();
-        let conditions = vec![
-            SupportedCondition::And(hashset(vec!["age", "group"])),
-        ];
+        let conditions = vec![SupportedCondition::And(hashset(vec!["age", "group"]))];
         let schema = MetadataSchema::new(vec![age, group], conditions).unwrap();
         let mut fields = HashMap::with_capacity(2);
         fields.insert("age".to_owned(), FieldValue::Int(100));

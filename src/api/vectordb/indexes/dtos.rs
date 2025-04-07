@@ -107,13 +107,83 @@ pub(crate) struct CreateDenseIndexDto {
     pub index: DenseIndexParamsDto,
 }
 
-#[derive(Debug, Deserialize)]
-pub(crate) struct CreateSparseIndexDto {
-    pub name: String,
-    #[serde(default)]
-    pub quantization: SparseIndexQuantization,
-    pub early_terminate_threshold: f32,
-    pub sample_threshold: usize,
+#[derive(Debug)]
+pub(crate) enum CreateSparseIndexDto {
+    Splade {
+        name: String,
+        quantization: SparseIndexQuantization,
+        sample_threshold: usize,
+    },
+    Idf {
+        name: String,
+    },
+}
+
+impl<'de> Deserialize<'de> for CreateSparseIndexDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use serde::de::{Error, MapAccess, Visitor};
+        use std::fmt;
+
+        struct SparseIndexVisitor;
+
+        impl<'de> Visitor<'de> for SparseIndexVisitor {
+            type Value = CreateSparseIndexDto;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a valid sparse index object")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut name = None;
+                let mut quantization = None;
+                let mut sample_threshold = None;
+                let mut is_idf = false;
+
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "name" => name = Some(map.next_value()?),
+                        "quantization" => quantization = Some(map.next_value()?),
+                        "sample_threshold" => sample_threshold = Some(map.next_value()?),
+                        "isIDF" => is_idf = map.next_value()?,
+                        _ => {
+                            return Err(Error::unknown_field(
+                                &key,
+                                &[
+                                    "name",
+                                    "quantization",
+                                    "early_terminate_threshold",
+                                    "sample_threshold",
+                                    "isIDF",
+                                ],
+                            ))
+                        }
+                    }
+                }
+
+                let name = name.ok_or_else(|| Error::missing_field("name"))?;
+
+                if is_idf {
+                    Ok(CreateSparseIndexDto::Idf { name })
+                } else {
+                    Ok(CreateSparseIndexDto::Splade {
+                        name,
+                        quantization: quantization
+                            .ok_or_else(|| Error::missing_field("quantization"))?,
+                        sample_threshold: sample_threshold
+                            .ok_or_else(|| Error::missing_field("sample_threshold"))?,
+                    })
+                }
+            }
+        }
+
+        deserializer.deserialize_map(SparseIndexVisitor)
+    }
 }
 
 impl HNSWHyperParamsDto {

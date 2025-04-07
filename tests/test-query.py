@@ -58,7 +58,6 @@ def read_dataset_from_parquet(dataset_name, ids):
 
 
 if __name__ == "__main__":
-
     session_response = test_dataset.create_session()
     print("Session Response:", session_response)
 
@@ -70,7 +69,6 @@ if __name__ == "__main__":
         dataset_name
     )
     print(f"Loaded {len(brute_force_results)} pre-computed brute force results")
-
 
     # matches_test_vectors = []
 

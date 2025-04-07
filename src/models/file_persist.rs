@@ -2,7 +2,9 @@ use super::buffered_io::{BufIoError, BufferManagerFactory};
 use super::common::WaCustomError;
 use super::prob_node::SharedNode;
 use super::serializer::hnsw::HNSWIndexSerialize;
-use super::types::{BytesToRead, FileOffset, Metadata, MetadataId, NodePropMetadata, NodePropValue, VectorId};
+use super::types::{
+    BytesToRead, FileOffset, Metadata, MetadataId, NodePropMetadata, NodePropValue, VectorId,
+};
 use super::versioning::Hash;
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
@@ -92,11 +94,11 @@ struct NodePropMetadataSerde {
 pub fn write_prop_metadata_to_file(
     id: &MetadataId,
     vec: Arc<Metadata>,
-    mut file: &File,
+    file: &mut File,
 ) -> Result<(FileOffset, BytesToRead), WaCustomError> {
     let prop_metadata = NodePropMetadataSerde {
         id: id.clone(),
-        vec: vec.clone()
+        vec: vec.clone(),
     };
     let prop_bytes = serde_cbor::to_vec(&prop_metadata)
         .map_err(|e| WaCustomError::SerializationError(e.to_string()))?;
@@ -131,5 +133,3 @@ pub fn read_prop_metadata_from_file(
         location: (offset, bytes_to_read),
     })
 }
-
-

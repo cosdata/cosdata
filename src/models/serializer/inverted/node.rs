@@ -30,6 +30,7 @@ impl InvertedIndexSerialize for InvertedIndexNode {
         data_file_parts: u8,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
+        let data_file_idx = (self.dim_index % data_file_parts as u32) as u8;
         if !self.is_serialized.swap(true, Ordering::AcqRel) {
             dim_bufman.seek_with_cursor(cursor, self.file_offset.0 as u64)?;
             dim_bufman.update_u32_with_cursor(cursor, self.dim_index)?;
@@ -38,7 +39,6 @@ impl InvertedIndexSerialize for InvertedIndexNode {
                 quantization_and_implicit |= 1u8 << 7;
             }
             dim_bufman.update_u8_with_cursor(cursor, quantization_and_implicit)?;
-            let data_file_idx = (self.dim_index % data_file_parts as u32) as u8;
             self.data.serialize(
                 dim_bufman,
                 data_bufmans,
@@ -55,13 +55,24 @@ impl InvertedIndexSerialize for InvertedIndexNode {
             )?;
         } else if self.is_dirty.swap(false, Ordering::AcqRel) {
             dim_bufman.seek_with_cursor(cursor, self.file_offset.0 as u64 + 5)?;
-            let data_file_idx = (self.dim_index % data_file_parts as u32) as u8;
             self.data.serialize(
                 dim_bufman,
                 data_bufmans,
                 data_file_idx,
                 data_file_parts,
                 cursor,
+            )?;
+            self.children.serialize(
+                dim_bufman,
+                data_bufmans,
+                data_file_idx,
+                data_file_parts,
+                cursor,
+            )?;
+        } else {
+            dim_bufman.seek_with_cursor(
+                cursor,
+                self.file_offset.0 as u64 + 5 + (1u64 << (self.quantization_bits + 2)),
             )?;
             self.children.serialize(
                 dim_bufman,

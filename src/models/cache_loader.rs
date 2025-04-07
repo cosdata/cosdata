@@ -2,17 +2,20 @@ use super::buffered_io::{BufIoError, BufferManager, BufferManagerFactory};
 use super::common::TSHashTable;
 use super::file_persist::{read_prop_metadata_from_file, read_prop_value_from_file};
 use super::inverted_index::InvertedIndexNodeData;
+use super::inverted_index_idf::InvertedIndexIDFNodeData;
 use super::lru_cache::LRUCache;
 use super::prob_lazy_load::lazy_item::{FileIndex, ProbLazyItem, ProbLazyItemState, ReadyState};
 use super::prob_node::{ProbNode, SharedNode};
 use super::serializer::hnsw::HNSWIndexSerialize;
 use super::serializer::inverted::InvertedIndexSerialize;
+use super::serializer::inverted_idf::InvertedIndexIDFSerialize;
 use super::types::*;
 use super::versioning::Hash;
 use dashmap::DashMap;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::Write;
+use std::sync::atomic::AtomicU32;
 use std::sync::TryLockError;
 use std::sync::{Arc, Mutex, RwLock, Weak};
 
@@ -86,7 +89,7 @@ impl HNSWIndexCache {
         let mut prop_file_guard = self.prop_file.write().unwrap();
         let prop = Arc::new(read_prop_value_from_file(
             (offset, length),
-            &mut *prop_file_guard,
+            &mut prop_file_guard,
         )?);
         drop(prop_file_guard);
         let weak = Arc::downgrade(&prop);
@@ -108,7 +111,7 @@ impl HNSWIndexCache {
         let mut prop_file_guard = self.prop_file.write().unwrap();
         let metadata = Arc::new(read_prop_metadata_from_file(
             (offset, length),
-            &mut *prop_file_guard,
+            &mut prop_file_guard,
         )?);
         drop(prop_file_guard);
         Ok(metadata)
@@ -120,7 +123,8 @@ impl HNSWIndexCache {
         let combined_index =
             ((item_ref.get_file_index().offset.0 as u64) << 32) | (*version as u64);
         if let Some(node) = item_ref.get_lazy_data() {
-            let prop_key = Self::get_prop_key(node.prop_value.location.0, node.prop_value.location.1);
+            let prop_key =
+                Self::get_prop_key(node.prop_value.location.0, node.prop_value.location.1);
             self.props_registry
                 .insert(prop_key, Arc::downgrade(&node.prop_value));
         }
@@ -249,10 +253,6 @@ impl HNSWIndexCache {
         if region_start as u64 > file_size {
             return Ok(Vec::new());
         }
-        println!(
-            "Loading region: {}, version: {}, is_level_0: {}",
-            region_start, version_number, is_level_0
-        );
         let cap = ((file_size - region_start as u64) / node_size as u64).min(1000) as usize;
         let mut nodes = Vec::with_capacity(cap);
         for i in 0..1000 {
@@ -422,6 +422,118 @@ impl InvertedIndexCache {
 
     #[allow(unused)]
     pub fn load_item<T: InvertedIndexSerialize>(
+        &self,
+        file_offset: FileOffset,
+        data_file_idx: u8,
+    ) -> Result<T, BufIoError> {
+        T::deserialize(
+            &self.dim_bufman,
+            &self.data_bufmans,
+            file_offset,
+            data_file_idx,
+            self.data_file_parts,
+            self,
+        )
+    }
+}
+
+pub struct InvertedIndexIDFCache {
+    registry: LRUCache<u64, *mut ProbLazyItem<InvertedIndexIDFNodeData>>,
+    pub dim_bufman: Arc<BufferManager>,
+    pub data_bufmans: Arc<BufferManagerFactory<u8>>,
+    pub offset_counter: AtomicU32,
+    loading_data: TSHashTable<u64, Arc<Mutex<bool>>>,
+    pub data_file_parts: u8,
+}
+
+unsafe impl Send for InvertedIndexIDFCache {}
+unsafe impl Sync for InvertedIndexIDFCache {}
+
+impl InvertedIndexIDFCache {
+    pub fn new(
+        dim_bufman: Arc<BufferManager>,
+        data_bufmans: Arc<BufferManagerFactory<u8>>,
+        offset_counter: AtomicU32,
+        data_file_parts: u8,
+    ) -> Self {
+        let data_registry = LRUCache::with_prob_eviction(100_000_000, 0.03125);
+
+        Self {
+            registry: data_registry,
+            dim_bufman,
+            data_bufmans,
+            offset_counter,
+            loading_data: TSHashTable::new(16),
+            data_file_parts,
+        }
+    }
+
+    pub fn get_data(
+        &self,
+        file_offset: FileOffset,
+        data_file_idx: u8,
+    ) -> Result<*mut ProbLazyItem<InvertedIndexIDFNodeData>, BufIoError> {
+        let combined_index = Self::combine_index(file_offset, 0);
+
+        if let Some(item) = self.registry.get(&combined_index) {
+            return Ok(item);
+        }
+
+        let mut mutex = self
+            .loading_data
+            .get_or_create(combined_index, || Arc::new(Mutex::new(false)));
+        let mut load_complete = mutex.lock().unwrap();
+
+        loop {
+            // check again
+            if let Some(item) = self.registry.get(&combined_index) {
+                return Ok(item);
+            }
+
+            // another thread loaded the data but its not in the registry (got evicted), retry
+            if *load_complete {
+                drop(load_complete);
+                mutex = self
+                    .loading_data
+                    .get_or_create(combined_index, || Arc::new(Mutex::new(false)));
+                load_complete = mutex.lock().unwrap();
+                continue;
+            }
+
+            break;
+        }
+
+        let data = InvertedIndexIDFNodeData::deserialize(
+            &self.dim_bufman,
+            &self.data_bufmans,
+            file_offset,
+            data_file_idx,
+            self.data_file_parts,
+            self,
+        )?;
+        let state = ProbLazyItemState::Ready(ReadyState {
+            data,
+            file_offset,
+            version_id: 0.into(),
+            version_number: 0,
+        });
+
+        let item = ProbLazyItem::new_from_state(state, false);
+
+        self.registry.insert(combined_index, item);
+
+        *load_complete = true;
+        self.loading_data.delete(&combined_index);
+
+        Ok(item)
+    }
+
+    pub fn combine_index(file_offset: FileOffset, data_file_idx: u8) -> u64 {
+        ((data_file_idx as u64) << 32) | file_offset.0 as u64
+    }
+
+    #[allow(unused)]
+    pub fn load_item<T: InvertedIndexIDFSerialize>(
         &self,
         file_offset: FileOffset,
         data_file_idx: u8,

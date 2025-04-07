@@ -1,15 +1,15 @@
-use std::sync::Arc;
+use log::info;
+use rand::Rng;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
-use rand::Rng;
-use log::info;
 
 use crate::indexes::hnsw::HNSWIndex;
 use crate::indexes::inverted::InvertedIndex;
 use crate::models::common::WaCustomError;
-use crate::models::lru_cache::{LRUCache, EvictStrategy, ProbEviction};
+use crate::models::lru_cache::{EvictStrategy, LRUCache, ProbEviction};
 use crate::models::types::AppEnv;
 
 #[allow(dead_code)]
@@ -19,7 +19,6 @@ pub struct CollectionCacheEntry {
     pub inverted_index: Option<Arc<InvertedIndex>>,
     pub last_accessed: Instant,
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CollectionNameKey(u64);
@@ -38,9 +37,9 @@ impl From<u64> for CollectionNameKey {
     }
 }
 
-impl Into<u64> for CollectionNameKey {
-    fn into(self) -> u64 {
-        self.0
+impl From<CollectionNameKey> for u64 {
+    fn from(key: CollectionNameKey) -> u64 {
+        key.0
     }
 }
 
@@ -53,7 +52,6 @@ pub struct CollectionCacheManager {
 }
 
 impl CollectionCacheManager {
-
     #[allow(unused)]
     pub fn new(
         collections_path: Arc<Path>,
@@ -118,7 +116,10 @@ impl CollectionCacheManager {
         info!("Loading collection '{}' into cache", name);
         let collection_path = self.collections_path.join(name);
         if !collection_path.exists() {
-            return Err(WaCustomError::NotFound(format!("Collection '{}' not found", name)));
+            return Err(WaCustomError::NotFound(format!(
+                "Collection '{}' not found",
+                name
+            )));
         }
 
         // Load dense and inverted indexes
@@ -135,8 +136,11 @@ impl CollectionCacheManager {
 
         // Add to cache - this may trigger eviction if at capacity
         self.cache.insert(key, entry.clone());
-        info!("Added collection '{}' to cache. Current loaded collections count: {}",
-               name, self.name_to_key.len());
+        info!(
+            "Added collection '{}' to cache. Current loaded collections count: {}",
+            name,
+            self.name_to_key.len()
+        );
 
         Ok(entry)
     }
@@ -170,7 +174,11 @@ impl CollectionCacheManager {
         Ok(())
     }
 
-    pub fn probabilistic_update(&self, name: &str, probability: f32) -> Result<bool, WaCustomError> {
+    pub fn probabilistic_update(
+        &self,
+        name: &str,
+        probability: f32,
+    ) -> Result<bool, WaCustomError> {
         let mut rng = rand::thread_rng();
         if rng.gen::<f32>() < probability {
             self.update_collection_usage(name)?;
@@ -212,7 +220,8 @@ impl CollectionCacheManager {
 
     // Gets a list of all currently loaded collections
     pub fn get_loaded_collections(&self) -> Vec<String> {
-        self.name_to_key.iter()
+        self.name_to_key
+            .iter()
             .filter_map(|entry| {
                 let key = entry.value();
                 if self.cache.get(key).is_some() {
@@ -229,7 +238,7 @@ impl CollectionCacheManager {
     pub fn is_loaded(&self, name: &str) -> bool {
         if let Some(key_ref) = self.name_to_key.get(name) {
             let key = key_ref.value();
-            self.cache.get(&key).is_some()
+            self.cache.get(key).is_some()
         } else {
             false
         }
@@ -241,7 +250,9 @@ impl CollectionCacheManager {
         let mut removed_count = 0;
 
         // Create a list of collection names to avoid mutating during iteration
-        let collection_names: Vec<String> = self.name_to_key.iter()
+        let collection_names: Vec<String> = self
+            .name_to_key
+            .iter()
             .map(|entry| entry.key().clone())
             .collect();
 
@@ -257,7 +268,10 @@ impl CollectionCacheManager {
             }
         }
 
-        info!("Cleanup completed: removed {} stale mappings", removed_count);
+        info!(
+            "Cleanup completed: removed {} stale mappings",
+            removed_count
+        );
         Ok(removed_count)
     }
 }

@@ -1,5 +1,11 @@
-use super::{common::WaCustomError, types::{MetricResult, VectorId}};        
-use crate::{metadata, models::user::{AddUserResp, AuthResp, Statistics}};
+use super::{
+    common::WaCustomError,
+    types::{MetricResult, VectorId},
+};
+use crate::{
+    metadata,
+    models::user::{AddUserResp, AuthResp, Statistics},
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -129,7 +135,6 @@ pub enum ComparisonOperator {
 
     #[serde(rename = "$ne")]
     Ne(Single),
-
     // @NOTE: Only eq and neq are supported for now
 
     // #[serde(rename = "$gt")]
@@ -204,7 +209,7 @@ impl Filter {
                     }
                     Ok(metadata::Filter::And(preds))
                 }
-            },
+            }
             Self::Logical(LogicalOperator::And(filters)) => {
                 let mut preds = vec![];
                 for f in filters {
@@ -213,14 +218,16 @@ impl Filter {
                             for (key, cop) in column.iter() {
                                 preds.push(cop.to_predicate(key));
                             }
-                        },
+                        }
                         // @NOTE: Nested predicates are not
                         // supported.
-                        Filter::Logical(_) => return Err(filter_err("nested predicates not supported")),
+                        Filter::Logical(_) => {
+                            return Err(filter_err("nested predicates not supported"))
+                        }
                     }
                 }
                 Ok(metadata::Filter::And(preds))
-            },
+            }
             Self::Logical(LogicalOperator::Or(filters)) => {
                 let mut preds = vec![];
                 for f in filters {
@@ -230,20 +237,22 @@ impl Filter {
                                 // @NOTE: Mixing And and Or predicates
                                 // is not supported. Perhaps change
                                 // the error type to add a message
-                                return Err(filter_err("mixing and, or predicates not supported"))
+                                return Err(filter_err("mixing and, or predicates not supported"));
                             }
                             for (key, cop) in column.iter() {
                                 preds.push(cop.to_predicate(key));
                             }
-                        },
+                        }
                         // @NOTE: Nested predicates are not
                         // supported. Perhaps change the error type to
                         // add a message
-                        Filter::Logical(_) => return Err(filter_err("nested predicates not supported")),
+                        Filter::Logical(_) => {
+                            return Err(filter_err("nested predicates not supported"))
+                        }
                     }
                 }
                 Ok(metadata::Filter::Or(preds))
-            },
+            }
         }
     }
 }
@@ -261,18 +270,18 @@ mod tests {
         match filter {
             Filter::Comparison { column } => {
                 let foo = column.get("foo").unwrap();
-                match foo {
-                    ComparisonOperator::Eq(MetadataColumnValue::StringValue(x)) => assert_eq!("hello", x),
-                    _ => assert!(false),
-                }
+                assert_eq!(
+                    foo,
+                    &ComparisonOperator::Eq(MetadataColumnValue::StringValue("hello".to_string()))
+                );
 
                 let bar = column.get("bar").unwrap();
-                match bar {
-                    ComparisonOperator::Ne(MetadataColumnValue::IntValue(x)) => assert_eq!(1, *x),
-                    _ => assert!(false),
-                }
-            },
-            Filter::Logical(_) => assert!(false),
+                assert_eq!(
+                    bar,
+                    &ComparisonOperator::Ne(MetadataColumnValue::IntValue(1))
+                );
+            }
+            Filter::Logical(_) => panic!(),
         }
 
         let input = "{\"$and\":[{\"foo\":{\"$eq\":\"abc\"}},{\"bar\":{\"$ne\":\"def\"}}]}";
@@ -282,26 +291,30 @@ mod tests {
                 match &vec[0] {
                     Filter::Comparison { column } => {
                         let foo = column.get("foo").unwrap();
-                        match foo {
-                            ComparisonOperator::Eq(MetadataColumnValue::StringValue(x)) => assert_eq!("abc", x),
-                            _ => assert!(false),
-                        }
-                    },
-                    _ => assert!(false),
+                        assert_eq!(
+                            foo,
+                            &ComparisonOperator::Eq(MetadataColumnValue::StringValue(
+                                "abc".to_string()
+                            ))
+                        );
+                    }
+                    _ => panic!(),
                 }
 
                 match &vec[1] {
                     Filter::Comparison { column } => {
                         let bar = column.get("bar").unwrap();
-                        match bar {
-                            ComparisonOperator::Ne(MetadataColumnValue::StringValue(x)) => assert_eq!("def", x),
-                            _ => assert!(false),
-                        }
-                    },
-                    _ => assert!(false),
+                        assert_eq!(
+                            bar,
+                            &ComparisonOperator::Ne(MetadataColumnValue::StringValue(
+                                "def".to_string()
+                            ))
+                        );
+                    }
+                    _ => panic!(),
                 }
-            },
-            _ => assert!(false),
+            }
+            _ => panic!(),
         }
     }
 
@@ -309,25 +322,34 @@ mod tests {
     fn test_to_internal() {
         // Filter with a single column
         let mut column = HashMap::new();
-        column.insert("foo".to_string(), ComparisonOperator::Eq(MetadataColumnValue::StringValue("hello".to_string())));
+        column.insert(
+            "foo".to_string(),
+            ComparisonOperator::Eq(MetadataColumnValue::StringValue("hello".to_string())),
+        );
         let filter = Filter::Comparison { column };
         let internal = filter.to_internal().unwrap();
         match internal {
             metadata::Filter::Is(pred) => {
                 assert_eq!("foo", pred.field_name);
-                assert_eq!(metadata::FieldValue::String("hello".to_string()), pred.field_value);
-                match pred.operator {
-                    metadata::Operator::Equal => assert!(true),
-                    _ => assert!(false),
-                }
-            },
-            _ => assert!(false),
+                assert_eq!(
+                    pred.field_value,
+                    metadata::FieldValue::String("hello".to_string()),
+                );
+                assert_eq!(pred.operator, metadata::Operator::Equal);
+            }
+            _ => panic!(),
         }
 
         // Filter with multiple columns
         let mut column = HashMap::new();
-        column.insert("a".to_string(), ComparisonOperator::Eq(MetadataColumnValue::StringValue("hello".to_string())));
-        column.insert("b".to_string(), ComparisonOperator::Ne(MetadataColumnValue::IntValue(2)));
+        column.insert(
+            "a".to_string(),
+            ComparisonOperator::Eq(MetadataColumnValue::StringValue("hello".to_string())),
+        );
+        column.insert(
+            "b".to_string(),
+            ComparisonOperator::Ne(MetadataColumnValue::IntValue(2)),
+        );
         let filter = Filter::Comparison { column };
         let internal = filter.to_internal().unwrap();
         match internal {
@@ -335,29 +357,32 @@ mod tests {
                 assert_eq!(2, preds.len());
                 let p1 = preds.iter().find(|p| p.field_name == "a").unwrap();
                 assert_eq!("a", p1.field_name);
-                assert_eq!(metadata::FieldValue::String("hello".to_string()), p1.field_value);
-                match p1.operator {
-                    metadata::Operator::Equal => assert!(true),
-                    _ => assert!(false),
-                }
+                assert_eq!(
+                    p1.field_value,
+                    metadata::FieldValue::String("hello".to_string()),
+                );
+                assert_eq!(p1.operator, metadata::Operator::Equal);
 
                 let p2 = preds.iter().find(|p| p.field_name == "b").unwrap();
                 assert_eq!("b", p2.field_name);
-                assert_eq!(metadata::FieldValue::Int(2), p2.field_value);
-                match p2.operator {
-                    metadata::Operator::NotEqual => assert!(true),
-                    _ => assert!(false),
-                }
-            },
-            _ => assert!(false),
+                assert_eq!(p2.field_value, metadata::FieldValue::Int(2));
+                assert_eq!(p2.operator, metadata::Operator::NotEqual);
+            }
+            _ => panic!(),
         }
 
         // Filter with Logical::And + single column filters
         let mut c1 = HashMap::new();
-        c1.insert("a".to_string(), ComparisonOperator::Eq(MetadataColumnValue::StringValue("hello".to_string())));
+        c1.insert(
+            "a".to_string(),
+            ComparisonOperator::Eq(MetadataColumnValue::StringValue("hello".to_string())),
+        );
         let f1 = Filter::Comparison { column: c1 };
         let mut c2 = HashMap::new();
-        c2.insert("b".to_string(), ComparisonOperator::Ne(MetadataColumnValue::IntValue(2)));
+        c2.insert(
+            "b".to_string(),
+            ComparisonOperator::Ne(MetadataColumnValue::IntValue(2)),
+        );
         let f2 = Filter::Comparison { column: c2 };
         let filter = Filter::Logical(LogicalOperator::And(vec![f1, f2]));
         let internal = filter.to_internal().unwrap();
@@ -366,45 +391,60 @@ mod tests {
                 assert_eq!(2, preds.len());
                 let p1 = preds.iter().find(|p| p.field_name == "a").unwrap();
                 assert_eq!("a", p1.field_name);
-                assert_eq!(metadata::FieldValue::String("hello".to_string()), p1.field_value);
-                match p1.operator {
-                    metadata::Operator::Equal => assert!(true),
-                    _ => assert!(false),
-                }
+                assert_eq!(
+                    metadata::FieldValue::String("hello".to_string()),
+                    p1.field_value
+                );
+                assert_eq!(p1.operator, metadata::Operator::Equal);
 
                 let p2 = preds.iter().find(|p| p.field_name == "b").unwrap();
                 assert_eq!("b", p2.field_name);
                 assert_eq!(metadata::FieldValue::Int(2), p2.field_value);
-                match p2.operator {
-                    metadata::Operator::NotEqual => assert!(true),
-                    _ => assert!(false),
-                }
-            },
-            _ => assert!(false),
+                assert_eq!(p2.operator, metadata::Operator::NotEqual);
+            }
+            _ => panic!(),
         }
 
         // Filter with Logical::And + Multiple columns filters
         let mut c1 = HashMap::new();
-        c1.insert("a".to_string(), ComparisonOperator::Eq(MetadataColumnValue::StringValue("hello".to_string())));
-        c1.insert("b".to_string(), ComparisonOperator::Eq(MetadataColumnValue::StringValue("world".to_string())));
+        c1.insert(
+            "a".to_string(),
+            ComparisonOperator::Eq(MetadataColumnValue::StringValue("hello".to_string())),
+        );
+        c1.insert(
+            "b".to_string(),
+            ComparisonOperator::Eq(MetadataColumnValue::StringValue("world".to_string())),
+        );
         let f1 = Filter::Comparison { column: c1 };
         let mut c2 = HashMap::new();
-        c2.insert("c".to_string(), ComparisonOperator::Ne(MetadataColumnValue::IntValue(2)));
-        c2.insert("d".to_string(), ComparisonOperator::Eq(MetadataColumnValue::IntValue(10)));
+        c2.insert(
+            "c".to_string(),
+            ComparisonOperator::Ne(MetadataColumnValue::IntValue(2)),
+        );
+        c2.insert(
+            "d".to_string(),
+            ComparisonOperator::Eq(MetadataColumnValue::IntValue(10)),
+        );
         let f2 = Filter::Comparison { column: c2 };
         let filter = Filter::Logical(LogicalOperator::And(vec![f1, f2]));
         let internal = filter.to_internal().unwrap();
         match internal {
             metadata::Filter::And(preds) => assert_eq!(4, preds.len()),
-            _ => assert!(false),
+            _ => panic!(),
         }
 
         // Filter with Logical::Or + single column filters
         let mut c1 = HashMap::new();
-        c1.insert("a".to_string(), ComparisonOperator::Eq(MetadataColumnValue::StringValue("hello".to_string())));
+        c1.insert(
+            "a".to_string(),
+            ComparisonOperator::Eq(MetadataColumnValue::StringValue("hello".to_string())),
+        );
         let f1 = Filter::Comparison { column: c1 };
         let mut c2 = HashMap::new();
-        c2.insert("b".to_string(), ComparisonOperator::Ne(MetadataColumnValue::IntValue(2)));
+        c2.insert(
+            "b".to_string(),
+            ComparisonOperator::Ne(MetadataColumnValue::IntValue(2)),
+        );
         let f2 = Filter::Comparison { column: c2 };
         let filter = Filter::Logical(LogicalOperator::Or(vec![f1, f2]));
         let internal = filter.to_internal().unwrap();
@@ -413,43 +453,47 @@ mod tests {
                 assert_eq!(2, preds.len());
                 let p1 = preds.iter().find(|p| p.field_name == "a").unwrap();
                 assert_eq!("a", p1.field_name);
-                assert_eq!(metadata::FieldValue::String("hello".to_string()), p1.field_value);
-                match p1.operator {
-                    metadata::Operator::Equal => assert!(true),
-                    _ => assert!(false),
-                }
+                assert_eq!(
+                    metadata::FieldValue::String("hello".to_string()),
+                    p1.field_value
+                );
+                assert_eq!(p1.operator, metadata::Operator::Equal);
 
                 let p2 = preds.iter().find(|p| p.field_name == "b").unwrap();
                 assert_eq!("b", p2.field_name);
                 assert_eq!(metadata::FieldValue::Int(2), p2.field_value);
-                match p2.operator {
-                    metadata::Operator::NotEqual => assert!(true),
-                    _ => assert!(false),
-                }
-            },
-            _ => assert!(false),
+                assert_eq!(p2.operator, metadata::Operator::NotEqual);
+            }
+            _ => panic!(),
         }
 
         // Filter with Logical::Or + multiple columns filters (must fail)
         let mut c1 = HashMap::new();
-        c1.insert("a".to_string(), ComparisonOperator::Eq(MetadataColumnValue::StringValue("hello".to_string())));
-        c1.insert("b".to_string(), ComparisonOperator::Eq(MetadataColumnValue::StringValue("world".to_string())));
+        c1.insert(
+            "a".to_string(),
+            ComparisonOperator::Eq(MetadataColumnValue::StringValue("hello".to_string())),
+        );
+        c1.insert(
+            "b".to_string(),
+            ComparisonOperator::Eq(MetadataColumnValue::StringValue("world".to_string())),
+        );
         let f1 = Filter::Comparison { column: c1 };
         let mut c2 = HashMap::new();
-        c2.insert("c".to_string(), ComparisonOperator::Ne(MetadataColumnValue::IntValue(2)));
-        c2.insert("d".to_string(), ComparisonOperator::Eq(MetadataColumnValue::IntValue(10)));
+        c2.insert(
+            "c".to_string(),
+            ComparisonOperator::Ne(MetadataColumnValue::IntValue(2)),
+        );
+        c2.insert(
+            "d".to_string(),
+            ComparisonOperator::Eq(MetadataColumnValue::IntValue(10)),
+        );
         let f2 = Filter::Comparison { column: c2 };
         let filter = Filter::Logical(LogicalOperator::Or(vec![f1, f2]));
-        match filter.to_internal() {
-            Err(e) => {
-                match e {
-                    WaCustomError::MetadataError(metadata::Error::UnsupportedFilter(msg)) => {
-                        assert_eq!("mixing and, or predicates not supported", msg)
-                    }
-                    _ => assert!(false),
-                }
-            },
-            _ => assert!(false),
+        match filter.to_internal().err().unwrap() {
+            WaCustomError::MetadataError(metadata::Error::UnsupportedFilter(msg)) => {
+                assert_eq!("mixing and, or predicates not supported", msg)
+            }
+            _ => panic!(),
         }
     }
 }

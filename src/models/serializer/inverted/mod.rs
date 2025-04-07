@@ -2,9 +2,6 @@ mod atomic_array;
 mod data;
 mod lazy_item;
 mod node;
-mod page;
-mod pagepool;
-mod versioned_pagepool;
 
 #[cfg(test)]
 mod tests;
