@@ -111,7 +111,7 @@ jobs:
 
       - name: Run Python gRPC tests
         run: |
-          python test-grpc.py
+          python tests/test-grpc.py
   format:
     name: Format
     runs-on: ubuntu-latest
