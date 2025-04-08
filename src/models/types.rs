@@ -12,6 +12,7 @@ use super::{
     paths::get_data_path,
     prob_lazy_load::lazy_item::FileIndex,
     prob_node::ProbNode,
+    tree_map::TreeMap,
     versioning::VersionControl,
 };
 use crate::{
@@ -703,7 +704,7 @@ impl CollectionsMap {
 
         let vec_raw_manager = BufferManagerFactory::new(
             index_path.clone().into(),
-            |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
+            |root, ver: &u8| root.join(format!("{}.vec_raw", ver)),
             8192,
         );
 
@@ -747,6 +748,10 @@ impl CollectionsMap {
             vectors_collected: AtomicUsize::new(0),
             sampling_data: crate::indexes::inverted::types::SamplingData::default(),
             sample_threshold: inverted_index_data.sample_threshold,
+            vec_raw_map: TreeMap::deserialize(
+                &vec_raw_manager,
+                config.inverted_index_data_file_parts,
+            )?,
             vec_raw_manager,
         };
 
@@ -769,7 +774,7 @@ impl CollectionsMap {
 
         let vec_raw_manager = BufferManagerFactory::new(
             index_path.clone().into(),
-            |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
+            |root, ver: &u8| root.join(format!("{}.vec_raw", ver)),
             8192,
         );
 
@@ -807,6 +812,10 @@ impl CollectionsMap {
             current_version: RwLock::new(current_version),
             current_open_transaction: AtomicPtr::new(ptr::null_mut()),
             vcs,
+            vec_raw_map: TreeMap::deserialize(
+                &vec_raw_manager,
+                config.inverted_index_data_file_parts,
+            )?,
             vec_raw_manager,
         };
 

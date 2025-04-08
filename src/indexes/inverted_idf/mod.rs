@@ -12,9 +12,12 @@ use transaction::InvertedIndexIDFTransaction;
 use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
     inverted_index_idf::InvertedIndexIDFRoot,
+    tree_map::TreeMap,
     types::MetaDb,
     versioning::{Hash, VersionControl},
 };
+
+use super::inverted::types::RawSparseVectorEmbedding;
 
 pub struct InvertedIndexIDF {
     pub name: String,
@@ -26,7 +29,8 @@ pub struct InvertedIndexIDF {
     pub current_version: RwLock<Hash>,
     pub current_open_transaction: AtomicPtr<InvertedIndexIDFTransaction>,
     pub vcs: VersionControl,
-    pub vec_raw_manager: BufferManagerFactory<Hash>,
+    pub vec_raw_manager: BufferManagerFactory<u8>,
+    pub vec_raw_map: TreeMap<RawSparseVectorEmbedding>,
 }
 
 unsafe impl Send for InvertedIndexIDF {}
@@ -43,7 +47,7 @@ impl InvertedIndexIDF {
         lmdb: MetaDb,
         current_version: Hash,
         vcs: VersionControl,
-        vec_raw_manager: BufferManagerFactory<Hash>,
+        vec_raw_manager: BufferManagerFactory<u8>,
         data_file_parts: u8,
     ) -> Result<Self, BufIoError> {
         let root = InvertedIndexIDFRoot::new(root_path, data_file_parts)?;
@@ -59,6 +63,7 @@ impl InvertedIndexIDF {
             current_open_transaction: AtomicPtr::new(ptr::null_mut()),
             vcs,
             vec_raw_manager,
+            vec_raw_map: TreeMap::new(),
         })
     }
 

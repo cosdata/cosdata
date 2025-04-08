@@ -16,9 +16,7 @@ use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::cache_loader::HNSWIndexCache;
 use crate::models::collection::Collection;
 use crate::models::common::*;
-use crate::models::embedding_persist::{
-    write_dense_embedding, write_sparse_embedding, EmbeddingOffset,
-};
+use crate::models::embedding_persist::{write_dense_embedding, EmbeddingOffset};
 use crate::models::meta_persist::{
     store_values_range, store_values_upper_bound, update_current_version,
 };
@@ -180,7 +178,7 @@ pub async fn init_inverted_index_for_collection(
     // index_manager manages persisting index data on disk
     let vec_raw_manager = BufferManagerFactory::new(
         index_path.clone().into(),
-        |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
+        |root, ver: &u8| root.join(format!("{}.vec_raw", ver)),
         8192,
     );
 
@@ -229,7 +227,7 @@ pub async fn init_inverted_index_idf_for_collection(
 
     let vec_raw_manager = BufferManagerFactory::new(
         index_path.clone().into(),
-        |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
+        |root, ver: &u8| root.join(format!("{}.vec_raw", ver)),
         8192,
     );
 
@@ -482,46 +480,30 @@ pub fn run_upload_sparse_vectors(
     inverted_index.set_current_version(current_version);
     update_current_version(&inverted_index.lmdb, current_version)?;
 
-    // Insert vectors
-    let bufman = inverted_index.vec_raw_manager.get(current_version)?;
+    vecs.into_iter().try_for_each(|(id, vec)| {
+        vec.iter().try_for_each(|vec| {
+            // TODO (Question)
+            // should InvertedIndexRoot::insert params change
+            // to accept vector_id as  u64 ??
+            inverted_index.insert(vec.0, vec.1, id.0 as u32, current_version)
+        })?;
 
-    let vec_embs = vecs
-        .into_iter()
-        .map(|(id, vec)| {
-            vec.iter().try_for_each(|vec| {
-                // TODO (Question)
-                // should InvertedIndexRoot::insert params change
-                // to accept vector_id as  u64 ??
-                inverted_index.insert(vec.0, vec.1, id.0 as u32, current_version)
-            })?;
-
-            let vec_emb = RawSparseVectorEmbedding {
-                raw_vec: Arc::new(vec),
-                hash_vec: id,
-            };
-
-            let offset = write_sparse_embedding(&bufman, &vec_emb)?;
-            Ok::<_, WaCustomError>((offset, vec_emb))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    bufman.flush()?;
-
-    let env = inverted_index.lmdb.env.clone();
-    let db = inverted_index.lmdb.db.clone();
-    let mut txn = env.begin_rw_txn()?;
-
-    for (offset, vec_emb) in vec_embs {
-        let offset = EmbeddingOffset {
-            offset,
-            version: current_version,
+        let vec_emb = RawSparseVectorEmbedding {
+            raw_vec: Arc::new(vec),
+            hash_vec: id.clone(),
         };
-        let offset_serialized = offset.serialize();
-        let key = key!(e:vec_emb.hash_vec);
-        txn.put(*db, &key, &offset_serialized, WriteFlags::empty())?;
-    }
 
-    txn.commit()?;
+        inverted_index
+            .vec_raw_map
+            .insert(current_version, id.0, vec_emb);
 
+        Ok::<_, WaCustomError>(())
+    })?;
+
+    inverted_index.vec_raw_map.serialize(
+        &inverted_index.vec_raw_manager,
+        inverted_index.root.data_file_parts,
+    )?;
     inverted_index.vec_raw_manager.flush_all()?;
     inverted_index.root.cache.dim_bufman.flush()?;
     inverted_index.root.cache.data_bufmans.flush_all()?;
@@ -551,48 +533,31 @@ pub fn run_upload_sparse_idf_vectors(
     idf_inverted_index.set_current_version(current_version);
     update_current_version(&idf_inverted_index.lmdb, current_version)?;
 
-    let bufman = idf_inverted_index.vec_raw_manager.get(current_version)?;
+    vecs.into_iter().try_for_each(|(id, terms)| {
+        idf_inverted_index
+            .root
+            .total_documents_count
+            .fetch_add(1, Ordering::Relaxed);
+        terms.iter().try_for_each(|SparsePair(dim, value)| {
+            idf_inverted_index.insert(*dim, *value, id.0 as u32, current_version)
+        })?;
 
-    let vec_embs = vecs
-        .into_iter()
-        .map(|(id, terms)| {
-            idf_inverted_index
-                .root
-                .total_documents_count
-                .fetch_add(1, Ordering::Relaxed);
-            terms.iter().try_for_each(|SparsePair(dim, value)| {
-                idf_inverted_index.insert(*dim, *value, id.0 as u32, current_version)
-            })?;
-
-            let vec_emb = RawSparseVectorEmbedding {
-                raw_vec: Arc::new(terms),
-                hash_vec: id,
-            };
-
-            let offset = write_sparse_embedding(&bufman, &vec_emb)?;
-            Ok::<_, WaCustomError>((offset, vec_emb))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    bufman.flush()?;
-
-    let env = idf_inverted_index.lmdb.env.clone();
-    let db = idf_inverted_index.lmdb.db.clone();
-    let mut txn = env.begin_rw_txn()?;
-
-    for (offset, vec_emb) in vec_embs {
-        let offset = EmbeddingOffset {
-            offset,
-            version: current_version,
+        let vec_emb = RawSparseVectorEmbedding {
+            raw_vec: Arc::new(terms),
+            hash_vec: id.clone(),
         };
 
-        let offset_serialized = offset.serialize();
-        let key = key!(e:vec_emb.hash_vec);
-        txn.put(*db, &key, &offset_serialized, WriteFlags::empty())?;
-    }
+        idf_inverted_index
+            .vec_raw_map
+            .insert(current_version, id.0, vec_emb);
+        Ok::<_, WaCustomError>(())
+    })?;
 
-    txn.commit()?;
-
+    idf_inverted_index.vec_raw_map.serialize(
+        &idf_inverted_index.vec_raw_manager,
+        idf_inverted_index.root.data_file_parts,
+    )?;
+    idf_inverted_index.vec_raw_manager.flush_all()?;
     idf_inverted_index.root.cache.dim_bufman.flush()?;
     idf_inverted_index.root.cache.data_bufmans.flush_all()?;
 
@@ -778,9 +743,11 @@ pub fn run_upload_sparse_vectors_in_transaction(
             .try_for_each(|vec| inverted_index.insert(vec.0, vec.1, id.0 as u32, transaction.id))?;
         let vec_emb = RawSparseVectorEmbedding {
             raw_vec: Arc::new(vec),
-            hash_vec: id,
+            hash_vec: id.clone(),
         };
-        transaction.post_raw_embedding(vec_emb);
+        inverted_index
+            .vec_raw_map
+            .insert(transaction.id, id.0, vec_emb);
         Ok::<_, WaCustomError>(())
     })?;
 
@@ -803,9 +770,11 @@ pub fn run_upload_sparse_idf_vectors_in_transaction(
         })?;
         let vec_emb = RawSparseVectorEmbedding {
             raw_vec: Arc::new(terms),
-            hash_vec: id,
+            hash_vec: id.clone(),
         };
-        transaction.post_raw_embedding(vec_emb);
+        idf_inverted_index
+            .vec_raw_map
+            .insert(transaction.id, id.0, vec_emb);
         Ok::<_, WaCustomError>(())
     })?;
 

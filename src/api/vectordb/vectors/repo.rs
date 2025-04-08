@@ -21,7 +21,6 @@ use crate::{
         sparse_ann_query::{SparseAnnQueryBasic, SparseAnnResult},
         types::{MetricResult, SparseVector, VectorId},
     },
-    vector_store::get_sparse_embedding_by_id,
 };
 
 use crate::{
@@ -534,9 +533,12 @@ fn finalize_sparse_ann_results(
 
     for result in intermediate_results {
         let id = VectorId(result.vector_id as u64);
-        let map =
-            get_sparse_embedding_by_id(&inverted_index.lmdb, &inverted_index.vec_raw_manager, &id)?
-                .into_map();
+        let map = inverted_index
+            .vec_raw_map
+            .get_latest(id.0)
+            .ok_or_else(|| WaCustomError::NotFound(format!("Raw vec not found for id: {}", id)))?
+            .clone()
+            .into_map();
         let mut dp = 0.0;
         for pair in query {
             if let Some(val) = map.get(&pair.0) {

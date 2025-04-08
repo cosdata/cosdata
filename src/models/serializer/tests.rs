@@ -257,9 +257,9 @@ fn test_tree_map_serialization() {
     // edge case
     map.insert(0.into(), u64::MAX, rng.gen_range(0..u16::MAX));
 
-    let offset = map.serialize(&bufmans, 8, 0, 0).unwrap();
+    map.serialize(&bufmans, 8).unwrap();
 
-    let deserialized = TreeMap::<u16>::deserialize(&bufmans, 8, 0, FileOffset(offset)).unwrap();
+    let deserialized = TreeMap::<u16>::deserialize(&bufmans, 8).unwrap();
 
     assert_eq!(map, deserialized);
 }
@@ -282,21 +282,21 @@ fn test_tree_map_incremental_serialization() {
     // edge case
     map.insert(0.into(), u64::MAX, rng.gen_range(0..u16::MAX));
 
-    let _offset = map.serialize(&bufmans, 8, 0, 0).unwrap();
+    map.serialize(&bufmans, 8).unwrap();
 
     for i in 1000..2001 {
         map.insert(0.into(), i, rng.gen_range(0..u16::MAX));
     }
 
-    let _offset = map.serialize(&bufmans, 8, 0, 0).unwrap();
+    map.serialize(&bufmans, 8).unwrap();
 
     for i in 2001..3000 {
         map.insert(0.into(), i, rng.gen_range(0..u16::MAX));
     }
 
-    let offset = map.serialize(&bufmans, 8, 0, 0).unwrap();
+    map.serialize(&bufmans, 8).unwrap();
 
-    let deserialized = TreeMap::<u16>::deserialize(&bufmans, 8, 0, FileOffset(offset)).unwrap();
+    let deserialized = TreeMap::<u16>::deserialize(&bufmans, 8).unwrap();
 
     assert_eq!(map, deserialized);
 }
@@ -319,21 +319,21 @@ fn test_tree_map_incremental_serialization_with_multiple_versions() {
     // edge case
     map.insert(1.into(), u64::MAX, rng.gen_range(0..u16::MAX));
 
-    let _offset = map.serialize(&bufmans, 8, 0, 0).unwrap();
+    map.serialize(&bufmans, 8).unwrap();
 
     for i in 1000..2001 {
         map.insert(2.into(), i, rng.gen_range(0..u16::MAX));
     }
 
-    let _offset = map.serialize(&bufmans, 8, 0, 0).unwrap();
+    map.serialize(&bufmans, 8).unwrap();
 
     for i in 2001..3000 {
         map.insert(3.into(), i, rng.gen_range(0..u16::MAX));
     }
 
-    let offset = map.serialize(&bufmans, 8, 0, 0).unwrap();
+    map.serialize(&bufmans, 8).unwrap();
 
-    let deserialized = TreeMap::<u16>::deserialize(&bufmans, 8, 0, FileOffset(offset)).unwrap();
+    let deserialized = TreeMap::<u16>::deserialize(&bufmans, 8).unwrap();
 
     assert_eq!(map, deserialized);
 }

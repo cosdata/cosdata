@@ -6,7 +6,7 @@ use std::sync::{
 use crate::models::{
     atomic_array::AtomicArray,
     buffered_io::{BufIoError, BufferManagerFactory},
-    tree_map::{QuotientsMap, TreeMap, TreeMapNode},
+    tree_map::{QuotientsMap, TreeMapNode},
     types::FileOffset,
 };
 
@@ -121,29 +121,6 @@ impl<T: SimpleSerialize> PartitionedSerialize for TreeMapNode<T> {
             quotients,
             children,
             dirty: AtomicBool::new(false),
-        })
-    }
-}
-
-impl<T: SimpleSerialize> PartitionedSerialize for TreeMap<T> {
-    fn serialize(
-        &self,
-        bufmans: &BufferManagerFactory<u8>,
-        file_parts: u8,
-        _file_idx: u8,
-        cursor: u64,
-    ) -> Result<u32, BufIoError> {
-        self.root.serialize(bufmans, file_parts, 0, cursor)
-    }
-
-    fn deserialize(
-        bufmans: &BufferManagerFactory<u8>,
-        file_parts: u8,
-        _file_idx: u8,
-        file_offset: FileOffset,
-    ) -> Result<Self, BufIoError> {
-        Ok(Self {
-            root: TreeMapNode::deserialize(bufmans, file_parts, 0, file_offset)?,
         })
     }
 }

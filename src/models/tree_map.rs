@@ -11,7 +11,12 @@ use std::{
 };
 
 use super::{
-    atomic_array::AtomicArray, common::TSHashTable, types::FileOffset, utils::calculate_path,
+    atomic_array::AtomicArray,
+    buffered_io::{BufIoError, BufferManagerFactory},
+    common::TSHashTable,
+    serializer::{PartitionedSerialize, SimpleSerialize},
+    types::FileOffset,
+    utils::calculate_path,
     versioning::Hash,
 };
 
@@ -294,6 +299,36 @@ impl<T> TreeMap<T> {
         let path = calculate_path(node_pos, 0);
         let node = self.root.find_or_create_node(&path);
         node.get_versioned(key)
+    }
+}
+
+impl<T: SimpleSerialize> TreeMap<T> {
+    pub fn serialize(
+        &self,
+        bufmans: &BufferManagerFactory<u8>,
+        file_parts: u8,
+    ) -> Result<(), BufIoError> {
+        let bufman = bufmans.get(0)?;
+        let cursor = bufman.open_cursor()?;
+        bufman.update_u32_with_cursor(cursor, u32::MAX)?;
+        let offset = self.root.serialize(bufmans, file_parts, 0, 0)?;
+        bufman.seek_with_cursor(cursor, 0)?;
+        bufman.update_u32_with_cursor(cursor, offset)?;
+        bufman.close_cursor(cursor)?;
+        Ok(())
+    }
+
+    pub fn deserialize(
+        bufmans: &BufferManagerFactory<u8>,
+        file_parts: u8,
+    ) -> Result<Self, BufIoError> {
+        let bufman = bufmans.get(0)?;
+        let cursor = bufman.open_cursor()?;
+        let offset = bufman.read_u32_with_cursor(cursor)?;
+        bufman.close_cursor(cursor)?;
+        Ok(Self {
+            root: TreeMapNode::deserialize(bufmans, file_parts, 0, FileOffset(offset))?,
+        })
     }
 }
 
