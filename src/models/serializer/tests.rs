@@ -205,7 +205,11 @@ fn test_quotients_serialization() {
     let mut rng = rand::thread_rng();
     let quotients_map = QuotientsMap::new();
     for _ in 0..10000 {
-        quotients_map.insert(rng.gen_range(0..u64::MAX), rng.gen_range(0..u16::MAX));
+        quotients_map.insert(
+            0.into(),
+            rng.gen_range(0..u64::MAX),
+            rng.gen_range(0..u16::MAX),
+        );
     }
     let offset = quotients_map.serialize(&bufman, cursor).unwrap();
     let deserialized = QuotientsMap::deserialize(&bufman, FileOffset(offset)).unwrap();
@@ -219,15 +223,15 @@ fn test_quotients_incremental_serialization() {
     let mut rng = rand::thread_rng();
     let quotients_map = QuotientsMap::new();
     for i in 0..1000 {
-        quotients_map.insert(i, rng.gen_range(0..u16::MAX));
+        quotients_map.insert(0.into(), i, rng.gen_range(0..u16::MAX));
     }
     let _offset = quotients_map.serialize(&bufman, cursor).unwrap();
     for i in 1000..2001 {
-        quotients_map.insert(i, rng.gen_range(0..u16::MAX));
+        quotients_map.insert(0.into(), i, rng.gen_range(0..u16::MAX));
     }
     let _offset = quotients_map.serialize(&bufman, cursor).unwrap();
     for i in 2001..3000 {
-        quotients_map.insert(i, rng.gen_range(0..u16::MAX));
+        quotients_map.insert(0.into(), i, rng.gen_range(0..u16::MAX));
     }
     let offset = quotients_map.serialize(&bufman, cursor).unwrap();
     let deserialized = QuotientsMap::deserialize(&bufman, FileOffset(offset)).unwrap();
@@ -247,11 +251,11 @@ fn test_tree_map_serialization() {
     let map = TreeMap::new();
 
     for i in 0..1000 {
-        map.insert(i, rng.gen_range(0..u16::MAX));
+        map.insert(0.into(), i, rng.gen_range(0..u16::MAX));
     }
 
-    // special case
-    map.insert(u64::MAX, rng.gen_range(0..u16::MAX));
+    // edge case
+    map.insert(0.into(), u64::MAX, rng.gen_range(0..u16::MAX));
 
     let offset = map.serialize(&bufmans, 8, 0, 0).unwrap();
 
@@ -272,22 +276,59 @@ fn test_tree_map_incremental_serialization() {
     let map = TreeMap::new();
 
     for i in 0..1000 {
-        map.insert(i, rng.gen_range(0..u16::MAX));
+        map.insert(0.into(), i, rng.gen_range(0..u16::MAX));
     }
 
-    // special case
-    map.insert(u64::MAX, rng.gen_range(0..u16::MAX));
+    // edge case
+    map.insert(0.into(), u64::MAX, rng.gen_range(0..u16::MAX));
 
     let _offset = map.serialize(&bufmans, 8, 0, 0).unwrap();
 
     for i in 1000..2001 {
-        map.insert(i, rng.gen_range(0..u16::MAX));
+        map.insert(0.into(), i, rng.gen_range(0..u16::MAX));
     }
 
     let _offset = map.serialize(&bufmans, 8, 0, 0).unwrap();
 
     for i in 2001..3000 {
-        map.insert(i, rng.gen_range(0..u16::MAX));
+        map.insert(0.into(), i, rng.gen_range(0..u16::MAX));
+    }
+
+    let offset = map.serialize(&bufmans, 8, 0, 0).unwrap();
+
+    let deserialized = TreeMap::<u16>::deserialize(&bufmans, 8, 0, FileOffset(offset)).unwrap();
+
+    assert_eq!(map, deserialized);
+}
+
+#[test]
+fn test_tree_map_incremental_serialization_with_multiple_versions() {
+    let dir = tempdir().unwrap();
+    let bufmans = BufferManagerFactory::new(
+        dir.as_ref().into(),
+        |root, idx| root.join(format!("{}.tree-map", idx)),
+        8192,
+    );
+    let mut rng = rand::thread_rng();
+    let map = TreeMap::new();
+
+    for i in 0..1000 {
+        map.insert(0.into(), i, rng.gen_range(0..u16::MAX));
+    }
+
+    // edge case
+    map.insert(1.into(), u64::MAX, rng.gen_range(0..u16::MAX));
+
+    let _offset = map.serialize(&bufmans, 8, 0, 0).unwrap();
+
+    for i in 1000..2001 {
+        map.insert(2.into(), i, rng.gen_range(0..u16::MAX));
+    }
+
+    let _offset = map.serialize(&bufmans, 8, 0, 0).unwrap();
+
+    for i in 2001..3000 {
+        map.insert(3.into(), i, rng.gen_range(0..u16::MAX));
     }
 
     let offset = map.serialize(&bufmans, 8, 0, 0).unwrap();

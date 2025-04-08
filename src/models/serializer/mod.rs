@@ -8,6 +8,7 @@ mod pagepool;
 mod quotients_map;
 mod storage;
 mod tree_map;
+mod versioned_item;
 mod versioned_pagepool;
 mod versioned_vec;
 
