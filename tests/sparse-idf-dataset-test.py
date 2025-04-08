@@ -362,8 +362,13 @@ def get_query_vectors(dataset):
         with open(query_vectors_file, "rb") as f:
             return pickle.load(f)
     save_dir = f"{dataset_folder}/dataset"
+    if dataset == "msmarco":
+        split = "dev"
+    else:
+        split = "test"
     queries = bm25s.utils.beir.load_queries(dataset, save_dir=save_dir)
-    queries_lst = [(idx, v["text"]) for idx, (_, v) in enumerate(queries.items())]
+    qrels = bm25s.utils.beir.load_qrels(dataset, split=split, save_dir=save_dir)
+    queries_lst = [(idx, v["text"]) for idx, (k, v) in enumerate(queries.items()) if k in qrels]
     print(f"Processing {len(queries_lst)} queries...")
     queries = []
 
@@ -692,9 +697,7 @@ def run_recall_and_qps_and_latency_test(
     # Save detailed results
     detailed_results = {
         "avg_recall": avg_recall,
-        "search_time": search_time,
         "qps": qps,
-        "qps_duration": qps_duration,
         "p50_latency": p50_latency,
         "p95_latency": p95_latency,
     }
@@ -823,6 +826,9 @@ def main(dataset, num_queries=100, batch_size=100, top_k=10, k=1.5, b=0.75):
     if insertion_time is not None:
         result["insertion_time"] = insertion_time
 
+    result["corpus_size"] = len(vectors)
+    result["queries_size"] = len(all_query_vectors)
+
     return result
 
 
@@ -896,6 +902,8 @@ def main_non_it(dataset, num_queries=100, batch_size=100, top_k=10, k=1.5, b=0.7
     )
 
     result["insertion_time"] = insertion_time
+    result["corpus_size"] = len(vectors)
+    result["queries_size"] = len(all_query_vectors)
 
     return result
 
@@ -915,6 +923,7 @@ def main_non_it(dataset, num_queries=100, batch_size=100, top_k=10, k=1.5, b=0.7
 #     datasets = ["trec-covid", "fiqa", "arguana", "webis-touche2020", "quora", "scidocs", "scifact", "nq", "msmarco", "fever", "climate-fever"]
 #     results = []
 #     for dataset in datasets:
+#         time.sleep(5)
 #         server_proc = start_server()
 #         time.sleep(5)
 #         try:
@@ -926,8 +935,8 @@ def main_non_it(dataset, num_queries=100, batch_size=100, top_k=10, k=1.5, b=0.7
 #             continue
 #         results.append(result)
 #         with open("results.csv", "w", newline="") as csvfile:
-#             fieldnames = ["dataset", "insertion_time", "avg_recall", "search_time", "qps", "qps_duration", "p50_latency", "p95_latency"]
-#             labels = ["Dataset", "Insertion Time (seconds)", "Average Recall@10", "Search Time (seconds)", "QPS", "QPS Duration (seconds)", "p50 Latency (milliseconds)", "p95 Latency (milliseconds)"]
+#             fieldnames = ["dataset", "corpus_size", "queries_size", "insertion_time", "avg_recall", "qps", "p50_latency", "p95_latency"]
+#             labels = ["Dataset", "Corpus Size", "Queries Size", "Insertion Time (seconds)", "Average Recall@10", "QPS", "p50 Latency (milliseconds)", "p95 Latency (milliseconds)"]
 #             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
 #             writer.writerow({ fieldname: label for fieldname, label in zip(fieldnames, labels) })

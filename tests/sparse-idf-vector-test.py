@@ -73,8 +73,6 @@ def create_db(name, description=None, dimension=20000):
 def create_explicit_index(name):
     data = {
         "name": name,
-        "quantization": 64,
-        "sample_threshold": 20_000,
         "isIDF": True,
     }
     response = requests.post(
