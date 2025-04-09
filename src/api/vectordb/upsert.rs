@@ -5,6 +5,7 @@ use actix_web::{web, HttpResponse};
 use crate::{
     api_service::run_upload_dense_vectors,
     app_context::AppContext,
+    indexes::hnsw::types::DenseInputVector,
     models::rpc::{RPCResponseBody, UpsertVectors},
 };
 
@@ -44,7 +45,7 @@ pub(crate) async fn upsert(
             body.vectors
                 .into_iter()
                 // @TODO(vineet): Add support for optional metadata fields
-                .map(|vec| (vec.id, vec.values, None))
+                .map(|vec| DenseInputVector::new(vec.id, vec.values, None))
                 .collect(),
         )
     })
