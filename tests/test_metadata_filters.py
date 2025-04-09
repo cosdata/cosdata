@@ -80,7 +80,7 @@ def create_explicit_index(name):
         "index": {
             "type": "hnsw",
             "properties": {
-                "num_layers": 7,
+                "num_layers": 9,
                 "max_cache_size": 1000,
                 "ef_construction": 512,
                 "ef_search": 256,
