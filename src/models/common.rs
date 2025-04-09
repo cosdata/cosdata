@@ -408,6 +408,13 @@ pub fn remove_duplicates_and_filter(
     collected
 }
 
+/// Returns inverse of probabilities for every HNSW level
+///
+/// Note that the arg `num_levels` represents HNSW levels, hence level
+/// 0 gets implicitly added to the result i.e. if num_levels = 9, then
+/// the result will be a vector of size 10 with the last element
+/// corresponding to level 0, for which the inverse probability will
+/// be 0
 pub fn generate_level_probs(x: f64, num_levels: u8) -> Vec<(f64, u8)> {
     let mut result = Vec::new();
     for n in (0..=num_levels).rev() {
@@ -662,5 +669,30 @@ impl<K: Eq + Hash, V> TSHashTable<K, V> {
             let ht = ht.lock().unwrap();
             ht.iter().for_each(|(k, v)| f(k, v));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::generate_level_probs;
+
+    #[test]
+    // @NOTE: This test is added mainly for understanding the
+    // implementation
+    fn test_generate_level_probs() {
+        let lp = generate_level_probs(10.0, 9);
+        let expected = vec![
+            (0.999999999, 9),
+            (0.99999999, 8),
+            (0.9999999, 7),
+            (0.999999, 6),
+            (0.99999, 5),
+            (0.9999, 4),
+            (0.999, 3),
+            (0.99, 2),
+            (0.9, 1),
+            (0.0, 0),
+        ];
+        assert_eq!(expected, lp);
     }
 }
