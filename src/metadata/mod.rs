@@ -15,7 +15,7 @@ pub use schema::MetadataSchema;
 
 use crate::models::common::generate_level_probs;
 
-const HIGH_WEIGHT: i32 = 64000;
+pub const HIGH_WEIGHT: i32 = 1;
 
 #[derive(Debug, Clone)]
 pub enum Error {

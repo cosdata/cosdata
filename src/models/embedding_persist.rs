@@ -232,6 +232,7 @@ mod tests {
             raw_vec: Arc::new(raw_vec),
             hash_vec: VectorId(rng.gen()),
             raw_metadata: None,
+            is_pseudo: false,
         }
     }
 

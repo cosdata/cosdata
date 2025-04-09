@@ -11,7 +11,7 @@ use crate::indexes::inverted_idf::transaction::InvertedIndexIDFTransaction;
 use crate::indexes::inverted_idf::InvertedIndexIDF;
 use crate::macros::key;
 use crate::metadata::query_filtering::filter_encoded_dimensions;
-use crate::metadata::{self, MetadataFields};
+use crate::metadata::{self, pseudo_level_probs, MetadataFields};
 use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::cache_loader::HNSWIndexCache;
 use crate::models::collection::Collection;
@@ -127,7 +127,32 @@ pub async fn init_hnsw_index_for_collection(
     // -- TODO level entry ratio
     // ---------------------------
     let factor_levels = 4.0;
-    let lp = generate_level_probs(factor_levels, hnsw_params.num_layers);
+
+    // If metadata schema is supported, the level_probs needs to be
+    // adjusted to accomodate only pseudo nodes in the higher layers
+    let lp = match &collection.metadata_schema {
+        Some(metadata_schema) => {
+            // @TODO(vineet): Unnecessary computation of
+            // pseudo_weighted_dimensions. Just the no. of pseudo
+            // replicas should be sufficient.
+            let replica_dims = metadata_schema.pseudo_weighted_dimensions(1);
+            let plp = pseudo_level_probs(hnsw_params.num_layers, replica_dims.len() as u16);
+            // @TODO(vineet): Super hacky
+            let num_lower_layers = plp.iter().filter(|(p, _)| *p == 0.0).count() - 1;
+            let num_higher_layers = hnsw_params.num_layers - (num_lower_layers as u8);
+            let mut lp = vec![];
+            for i in 0..num_higher_layers {
+                // no actual replica nodes in higher layers
+                lp.push((1.0, hnsw_params.num_layers - i))
+            }
+            let mut lower_lp = generate_level_probs(factor_levels, num_lower_layers as u8);
+            lp.append(&mut lower_lp);
+            lp
+        },
+        None => generate_level_probs(factor_levels, hnsw_params.num_layers),
+    };
+
+    println!("----- lp = {lp:?}; num_layers = {}", hnsw_params.num_layers);
 
     let hnsw_index = Arc::new(HNSWIndex::new(
         collection_name.clone(),
@@ -151,6 +176,22 @@ pub async fn init_hnsw_index_for_collection(
     ctx.ain_env
         .collections_map
         .insert_hnsw_index(collection_name, hnsw_index.clone())?;
+
+    // If the collection has metadata schema, we create pseudo replica
+    // nodes to ensure that the query vectors with metadata dimensions
+    // are reachable from the root node.
+    if collection.metadata_schema.is_some() {
+        let num_dims = collection.dense_vector.dimension;
+        let pseudo_vals: Vec<f32> = vec![0.0;num_dims];
+        // The pseudo vector's id will be equal to the max number that
+        // can be represented with 56 bits. This is because of how we
+        // are calculating the combined id for nodes having metadata
+        // dims. See `ProbNode.get_id` implementation. Perhaps it'd be
+        // a good idea to derive this value from root.
+        let pseudo_vec_id = VectorId(u64::pow(2, 56) - 1);
+        let pseudo_vec = DenseInputVector::pseudo(pseudo_vec_id, pseudo_vals, None);
+        run_upload_dense_vectors(ctx, hnsw_index.clone(), vec![pseudo_vec])?;
+    }
 
     Ok(hnsw_index)
 }
@@ -832,6 +873,8 @@ pub fn run_upload_dense_vectors(
 
     let bufman = hnsw_index.vec_raw_manager.get(current_version)?;
 
+    let index_immediately = vecs[0].is_pseudo;
+
     // Insert vectors
     let vec_embs = vecs
         .into_par_iter()
@@ -876,7 +919,7 @@ pub fn run_upload_dense_vectors(
     }
 
     // Indexing happens while the LMDB lock is held, making sure the vectors are not double indexed
-    if new_count_unindexed >= ctx.config.upload_threshold {
+    if index_immediately || new_count_unindexed >= ctx.config.upload_threshold {
         let last_indexed_version_key = key!(m:last_indexed_version);
         let last_indexed_version = match txn.get(*db, &last_indexed_version_key) {
             Ok(bytes) => {
@@ -887,6 +930,7 @@ pub fn run_upload_dense_vectors(
             }
             Err(lmdb::Error::NotFound) => Ok(None),
             Err(e) => {
+                // @TODO(vineet): Fix key in log message
                 log::error!("Error reading 'count_unindexed' from metadata in lmdb");
                 Err(WaCustomError::DatabaseError(e.to_string()))
             }

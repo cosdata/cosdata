@@ -72,6 +72,7 @@ pub struct RawDenseVectorEmbedding {
     pub raw_vec: Arc<Vec<f32>>,
     pub hash_vec: VectorId,
     pub raw_metadata: Option<MetadataFields>,
+    pub is_pseudo: bool,
 }
 
 impl From<DenseInputVector> for RawDenseVectorEmbedding {
@@ -80,6 +81,7 @@ impl From<DenseInputVector> for RawDenseVectorEmbedding {
             raw_vec: Arc::new(source.vec),
             hash_vec: source.id,
             raw_metadata: source.metadata_fields,
+            is_pseudo: source.is_pseudo,
         }
     }
 }

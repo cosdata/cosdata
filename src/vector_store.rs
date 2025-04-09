@@ -12,8 +12,10 @@ use crate::indexes::inverted::types::RawSparseVectorEmbedding;
 use crate::macros::key;
 use crate::metadata;
 use crate::metadata::fields_to_dimensions;
+use crate::metadata::pseudo_level_probs;
 use crate::metadata::MetadataFields;
 use crate::metadata::MetadataSchema;
+use crate::metadata::HIGH_WEIGHT;
 use crate::models::buffered_io::*;
 use crate::models::common::*;
 use crate::models::dot_product::dot_product_f32;
@@ -144,9 +146,6 @@ pub fn ann_search(
     });
     skipm.insert(vector_emb.hash_vec.0 as u32);
 
-    let cur_node = unsafe { &*cur_entry }.try_get_data(&hnsw_index.cache)?;
-    let cur_node_id = &cur_node.prop_value.id;
-
     let z = match query_filter_dims {
         Some(qf_dims) => {
             let mut z_candidates: Vec<(SharedNode, MetricResult)> = vec![];
@@ -194,6 +193,8 @@ pub fn ann_search(
     };
 
     let mut z = if z.is_empty() {
+        let cur_node = unsafe { &*cur_entry }.try_get_data(&hnsw_index.cache)?;
+        let cur_node_id = &cur_node.prop_value.id;
         let dist = match query_filter_dims {
             // In case of metadata filters in query, we calculate the
             // distances between the cur_node and all query filter
@@ -476,8 +477,11 @@ pub fn index_embeddings_batch(
             )
         })
         .map(|emb| {
-            let max_level =
-                get_max_insert_level(rand::random::<f32>().into(), &hnsw_index.levels_prob);
+            // @TODO: Calculate max_level accordingly
+            let max_level = match emb.overridden_level_probs {
+                Some(lp) => get_max_insert_level(rand::random::<f32>().into(), &lp),
+                None => get_max_insert_level(rand::random::<f32>().into(), &hnsw_index.levels_prob),
+            };
             let root_entry = hnsw_index.get_root_vec();
             let highest_level = HNSWLevel(hnsw_params.num_layers);
 
@@ -513,6 +517,7 @@ struct IndexableEmbedding {
     prop_value: Arc<NodePropValue>,
     prop_metadata: Option<Arc<NodePropMetadata>>,
     embedding: QuantizedDenseVectorEmbedding,
+    overridden_level_probs: Option<Vec<(f64, u8)>>,
 }
 
 /// Computes "metadata replica sets" i.e. all metadata dimensions
@@ -615,6 +620,41 @@ fn prop_metadata_replicas(
     }
 }
 
+fn pseudo_metadata_replicas(
+    schema: &MetadataSchema,
+    prop_file: &RwLock<File>,
+) -> Result<Vec<NodePropMetadata>, WaCustomError> {
+    let dims = schema.pseudo_weighted_dimensions(HIGH_WEIGHT);
+    let replicas = dims
+        .into_iter()
+        .enumerate()
+        .map(|(i, d)| {
+            let mid = MetadataId(i as u8 + 1);
+            let metadata = Metadata::from(d);
+            (mid, metadata)
+        })
+        .collect::<Vec<(MetadataId, Metadata)>>();
+    // As pseudo_replicas will be created only at the time of index
+    // initialization, it's ok to hold a single rw lock for writing
+    // metadata for all replicas to the prop file
+    let mut prop_file_guard = prop_file.write().map_err(|_| {
+        WaCustomError::LockError("Failed to acquire lock to write prop metadata".to_string())
+    })?;
+    let mut result = Vec::with_capacity(replicas.len());
+    for (mid, m) in replicas {
+        let mvalue = Arc::new(m);
+        let location = write_prop_metadata_to_file(&mid, mvalue.clone(), &mut prop_file_guard)?;
+        let prop_metadata = NodePropMetadata {
+            id: mid,
+            vec: mvalue,
+            location,
+        };
+        result.push(prop_metadata);
+    }
+    drop(prop_file_guard);
+    Ok(result)
+}
+
 /// Converts raw embeddings into `IndexableEmbedding` i.e. ready to be
 /// indexed - with quantization performed and property values and
 /// metadata fields converted into appropriate types.
@@ -665,37 +705,66 @@ fn preprocess_embedding(
         .get_collection(&hnsw_index.name)
         .expect("Couldn't get collection from ain_env");
 
-    let metadata_replicas = prop_metadata_replicas(
-        coll.metadata_schema.as_ref(),
-        raw_emb.raw_metadata.as_ref(),
-        &hnsw_index.cache.prop_file,
-    )
-    .unwrap();
+    let metadata_schema = coll.metadata_schema.as_ref();
+    let prop_file = &hnsw_index.cache.prop_file;
 
-    let mut embeddings: Vec<IndexableEmbedding> = vec![];
-
-    match metadata_replicas {
-        Some(replicas) => {
-            for prop_metadata in replicas {
-                let emb = IndexableEmbedding {
-                    prop_value: prop_value.clone(),
-                    prop_metadata: Some(Arc::new(prop_metadata)),
-                    embedding: embedding.clone(),
-                };
-                embeddings.push(emb);
-            }
-        }
-        None => {
+    // @TODO(vineet): Remove unwraps
+    if raw_emb.is_pseudo {
+        let replicas = pseudo_metadata_replicas(metadata_schema.unwrap(), prop_file).unwrap();
+        // @TODO(vineet): This is hacky
+        let num_levels = hnsw_index.levels_prob.len() - 1;
+        let plp = pseudo_level_probs(num_levels as u8, replicas.len() as u16);
+        println!("----- pseudo_level_probs = {plp:?}");
+        let mut embeddings: Vec<IndexableEmbedding> = vec![];
+        let mut is_first_overrideen = false;
+        for prop_metadata in replicas {
+            let overridden_level_probs = if !is_first_overrideen {
+                is_first_overrideen = true;
+                plp.iter().map(|(_, lev)| (0.0, *lev)).collect::<Vec<(f64, u8)>>()
+            } else {
+                plp.clone()
+            };
+            // println!("----- {overridden_level_probs:?}");
             let emb = IndexableEmbedding {
-                prop_value,
-                prop_metadata: None,
+                prop_value: prop_value.clone(),
+                prop_metadata: Some(Arc::new(prop_metadata)),
                 embedding: embedding.clone(),
+                overridden_level_probs: Some(overridden_level_probs),
             };
             embeddings.push(emb);
         }
+        embeddings
+    } else {
+        let metadata_replicas = prop_metadata_replicas(
+            coll.metadata_schema.as_ref(),
+            raw_emb.raw_metadata.as_ref(),
+            &hnsw_index.cache.prop_file,
+        ).unwrap();
+        match metadata_replicas {
+            Some(replicas) => {
+                let mut embeddings: Vec<IndexableEmbedding> = vec![];
+                for prop_metadata in replicas {
+                    let emb = IndexableEmbedding {
+                        prop_value: prop_value.clone(),
+                        prop_metadata: Some(Arc::new(prop_metadata)),
+                        embedding: embedding.clone(),
+                        overridden_level_probs: None,
+                    };
+                    embeddings.push(emb);
+                }
+                embeddings
+            }
+            None => {
+                let emb = IndexableEmbedding {
+                    prop_value,
+                    prop_metadata: None,
+                    embedding: embedding.clone(),
+                    overridden_level_probs: None,
+                };
+                vec![emb]
+            }
+        }
     }
-
-    embeddings
 }
 
 pub fn index_embeddings(
@@ -805,6 +874,7 @@ pub fn index_embeddings_in_transaction(
                     hash_vec: id,
                     raw_vec: Arc::new(values),
                     raw_metadata: metadata,
+                    is_pseudo: false,
                 };
                 transaction.post_raw_embedding(raw_emb.clone());
                 raw_emb
