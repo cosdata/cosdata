@@ -357,8 +357,7 @@ def cmd_insert_and_check(ctx, args):
 
 def cmd_query(ctx, args):
     vec_id = args.vector_id
-    result = get_vector_by_id(ctx["vector_db_name"], vec_id)
-    vec = result["Dense"]
+    vec = get_vector_by_id(ctx["vector_db_name"], vec_id)
     values = vec["values"]
     print("Vector metadata:", vec["metadata"])
     metadata_filter = json.loads(args.metadata_filter) if args.metadata_filter else None
