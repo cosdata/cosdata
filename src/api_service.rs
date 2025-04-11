@@ -533,25 +533,8 @@ pub fn run_upload_sparse_idf_vectors(
     idf_inverted_index.set_current_version(current_version);
     update_current_version(&idf_inverted_index.lmdb, current_version)?;
 
-    vecs.into_iter().try_for_each(|(id, terms)| {
-        idf_inverted_index
-            .root
-            .total_documents_count
-            .fetch_add(1, Ordering::Relaxed);
-        terms.iter().try_for_each(|SparsePair(dim, value)| {
-            idf_inverted_index.insert(*dim, *value, id.0 as u32, current_version)
-        })?;
-
-        let vec_emb = RawSparseVectorEmbedding {
-            raw_vec: Arc::new(terms),
-            hash_vec: id.clone(),
-        };
-
-        idf_inverted_index
-            .vec_raw_map
-            .insert(current_version, id.0, vec_emb);
-        Ok::<_, WaCustomError>(())
-    })?;
+    vecs.into_iter()
+        .try_for_each(|(id, terms)| idf_inverted_index.insert(current_version, id, terms))?;
 
     idf_inverted_index.vec_raw_map.serialize(
         &idf_inverted_index.vec_raw_manager,
@@ -760,23 +743,9 @@ pub fn run_upload_sparse_idf_vectors_in_transaction(
     transaction: &InvertedIndexIDFTransaction,
     sample_points: Vec<(VectorId, Vec<SparsePair>)>,
 ) -> Result<(), WaCustomError> {
-    sample_points.into_par_iter().try_for_each(|(id, terms)| {
-        idf_inverted_index
-            .root
-            .total_documents_count
-            .fetch_add(1, Ordering::Relaxed);
-        terms.iter().try_for_each(|SparsePair(dim, value)| {
-            idf_inverted_index.insert(*dim, *value, id.0 as u32, transaction.id)
-        })?;
-        let vec_emb = RawSparseVectorEmbedding {
-            raw_vec: Arc::new(terms),
-            hash_vec: id.clone(),
-        };
-        idf_inverted_index
-            .vec_raw_map
-            .insert(transaction.id, id.0, vec_emb);
-        Ok::<_, WaCustomError>(())
-    })?;
+    sample_points
+        .into_par_iter()
+        .try_for_each(|(id, terms)| idf_inverted_index.insert(transaction.id, id, terms))?;
 
     Ok(())
 }

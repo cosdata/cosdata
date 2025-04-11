@@ -4,7 +4,10 @@ pub(crate) mod transaction;
 use std::{
     path::PathBuf,
     ptr,
-    sync::{atomic::AtomicPtr, RwLock},
+    sync::{
+        atomic::{AtomicPtr, AtomicU32, Ordering},
+        Arc, RwLock,
+    },
 };
 
 use transaction::InvertedIndexIDFTransaction;
@@ -13,11 +16,11 @@ use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
     inverted_index_idf::InvertedIndexIDFRoot,
     tree_map::TreeMap,
-    types::MetaDb,
+    types::{MetaDb, VectorId},
     versioning::{Hash, VersionControl},
 };
 
-use super::inverted::types::RawSparseVectorEmbedding;
+use super::inverted::types::{RawSparseVectorEmbedding, SparsePair};
 
 pub struct InvertedIndexIDF {
     pub name: String,
@@ -31,6 +34,7 @@ pub struct InvertedIndexIDF {
     pub vcs: VersionControl,
     pub vec_raw_manager: BufferManagerFactory<u8>,
     pub vec_raw_map: TreeMap<RawSparseVectorEmbedding>,
+    pub document_id_counter: AtomicU32,
 }
 
 unsafe impl Send for InvertedIndexIDF {}
@@ -64,17 +68,35 @@ impl InvertedIndexIDF {
             vcs,
             vec_raw_manager,
             vec_raw_map: TreeMap::new(),
+            document_id_counter: AtomicU32::new(0),
         })
     }
 
     pub fn insert(
         &self,
-        hash_dim: u32,
-        value: f32,
-        document_id: u32,
         version: Hash,
+        ext_id: VectorId,
+        terms: Vec<SparsePair>,
     ) -> Result<(), BufIoError> {
-        self.root.insert(hash_dim, value, document_id, version)
+        self.root
+            .total_documents_count
+            .fetch_add(1, Ordering::Relaxed);
+
+        let document_id = self.document_id_counter.fetch_add(1, Ordering::Relaxed);
+
+        for SparsePair(term_hash, tf) in &terms {
+            self.root.insert(*term_hash, *tf, document_id, version)?;
+        }
+
+        let vec_emb = RawSparseVectorEmbedding {
+            raw_vec: Arc::new(terms),
+            hash_vec: ext_id,
+        };
+
+        self.vec_raw_map
+            .insert(version, document_id as u64, vec_emb);
+
+        Ok(())
     }
 
     pub fn set_current_version(&self, version: Hash) {

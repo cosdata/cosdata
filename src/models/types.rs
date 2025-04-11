@@ -817,6 +817,7 @@ impl CollectionsMap {
                 config.inverted_index_data_file_parts,
             )?,
             vec_raw_manager,
+            document_id_counter: todo!(),
         };
 
         Ok(Some(inverted_index))

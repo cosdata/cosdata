@@ -484,7 +484,12 @@ fn sparse_idf_ann_vector_query(
         .into_iter()
         .map(|result| {
             (
-                VectorId(result.document_id as u64),
+                inverted_index_idf
+                    .vec_raw_map
+                    .get_latest(result.document_id as u64)
+                    .unwrap()
+                    .hash_vec
+                    .clone(),
                 MetricResult::DotProductDistance(DotProductDistance(result.score)),
             )
         })
