@@ -64,7 +64,7 @@ pub fn create_root_node(
         .collect::<Vec<f32>>();
     let vec_hash = VectorId(u64::MAX);
 
-    let vector_list = Arc::new(quantization_metric.quantize(&vec, storage_type, values_range)?);
+    let vector_list = Arc::new(quantization_metric.quantize(&vec, storage_type, values_range, false)?);
 
     let mut prop_file_guard = prop_file.write().unwrap();
     let location = write_prop_value_to_file(&vec_hash, vector_list.clone(), &mut prop_file_guard)?;
@@ -675,6 +675,7 @@ fn preprocess_embedding(
                 &raw_emb.raw_vec,
                 *hnsw_index.storage_type.read().unwrap(),
                 *hnsw_index.values_range.read().unwrap(),
+                raw_emb.is_pseudo,
             )
             .expect("Quantization failed"),
     );

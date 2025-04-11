@@ -997,6 +997,7 @@ pub async fn ann_vector_query(
         &query,
         *hnsw_index.storage_type.read().unwrap(),
         *hnsw_index.values_range.read().unwrap(),
+        false,
     )?;
 
     let vec_emb = QuantizedDenseVectorEmbedding {
@@ -1067,6 +1068,7 @@ pub async fn batch_ann_vector_query(
                 &query,
                 *hnsw_index.storage_type.read().unwrap(),
                 *hnsw_index.values_range.read().unwrap(),
+                false,
             )?;
 
             let vec_emb = QuantizedDenseVectorEmbedding {

@@ -350,10 +350,11 @@ impl Quantization for QuantizationMetric {
         vector: &[f32],
         storage_type: StorageType,
         range: (f32, f32),
+        is_pseudo: bool,
     ) -> Result<Storage, QuantizationError> {
         match self {
-            Self::Scalar => ScalarQuantization.quantize(vector, storage_type, range),
-            Self::Product(product) => product.quantize(vector, storage_type, range),
+            Self::Scalar => ScalarQuantization.quantize(vector, storage_type, range, is_pseudo),
+            Self::Product(product) => product.quantize(vector, storage_type, range, is_pseudo),
         }
     }
 
