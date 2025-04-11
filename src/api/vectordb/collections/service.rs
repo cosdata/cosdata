@@ -5,7 +5,7 @@ use crate::{app_context::AppContext, indexes::hnsw::HNSWIndex, models::collectio
 use super::{
     dtos::{
         CreateCollectionDto, CreateCollectionDtoResponse, GetCollectionsDto,
-        GetCollectionsResponseDto,
+        GetCollectionsResponseDto, ListCollectionsResponseDto
     },
     error::CollectionsError,
     repo,
@@ -106,4 +106,10 @@ pub(crate) async fn get_loaded_collections(
 ) -> Result<Vec<String>, CollectionsError> {
     // Just return the list of loaded collections directly
     Ok(ctx.collection_cache_manager.get_loaded_collections())
+}
+
+pub(crate) async fn list_collections(
+    ctx: Arc<AppContext>,
+) -> Result<ListCollectionsResponseDto, CollectionsError> {
+    repo::list_collections(ctx /*, query_params */).await
 }

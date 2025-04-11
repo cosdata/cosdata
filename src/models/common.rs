@@ -294,6 +294,7 @@ pub enum WaCustomError {
     MetadataError(metadata::Error),
     NotFound(String),
     ConfigError(String),
+    NotImplemented(String),
 }
 
 impl std::error::Error for WaCustomError {}
@@ -322,6 +323,7 @@ impl fmt::Display for WaCustomError {
             WaCustomError::MetadataError(err) => write!(f, "Metadata error: {}", err),
             WaCustomError::NotFound(msg) => write!(f, "{} Not Found!", msg),
             WaCustomError::ConfigError(msg) => write!(f, "{} Config file reading error: ", msg),
+            WaCustomError::NotImplemented(msg) => write!(f, "Not Implemented: {}", msg),
         }
     }
 }

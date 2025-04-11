@@ -168,7 +168,7 @@ def create_explicit_index(name):
         verify=False,
     )
 
-    if response.status_code not in [200, 204]:
+    if response.status_code not in [200, 201, 204]:
         raise Exception(
             f"Failed to create index: {response.status_code} ({response.text})"
         )
@@ -232,8 +232,8 @@ def abort_transaction(collection_name, transaction_id):
 
 
 def ann_vector(idd, vector_db_name, vector):
-    url = f"{base_url}/search"
-    data = {"vector_db_name": vector_db_name, "vector": vector, "nn_count": 5}
+    url = f"{base_url}/collections/{vector_db_name}/search/dense"
+    data = {"query_vector": vector, "top_k": 5}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
@@ -243,8 +243,8 @@ def ann_vector(idd, vector_db_name, vector):
     result = response.json()
 
     # Handle empty results gracefully
-    if not result.get("RespVectorKNN", {}).get("knn"):
-        return (idd, {"RespVectorKNN": {"knn": []}})
+    if not result.get("results"):
+        return (idd, {"results": []})
     return (idd, result)
 
 
@@ -325,8 +325,8 @@ def bruteforce_search(vectors, query, k=5):
 
 
 def batch_ann_search(vector_db_name, vectors):
-    url = f"{base_url}/batch-search"
-    data = {"vector_db_name": vector_db_name, "vectors": vectors, "nn_count": 5}
+    url = f"{base_url}/collections/{vector_db_name}/search/batch-dense"
+    data = {"query_vectors": vectors, "top_k": 5}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
@@ -730,16 +730,13 @@ def run_matching_tests(test_vectors, vector_db_name, brute_force_results):
             query_latency = (query_end_time - query_start_time) * 1000  # Convert to ms
             latencies.append(query_latency)
 
-            if (
-                "RespVectorKNN" in ann_response
-                and "knn" in ann_response["RespVectorKNN"]
-            ):
+            if "results" in ann_response:
                 query_id = test_vec["query_id"]
                 print(f"\nQuery {i + 1} (Vector ID: {query_id}):")
                 print(f"Query latency: {query_latency:.2f} ms")
 
                 server_top5 = [
-                    match[0] for match in ann_response["RespVectorKNN"]["knn"][:5]
+                    match["id"] for match in ann_response["results"][:5]
                 ]
                 print("Server top 5:", server_top5)
 

@@ -2,12 +2,11 @@ use std::sync::Arc;
 
 use crate::{
     app_context::AppContext,
-    indexes::hnsw::HNSWIndex,
     models::{collection::Collection, common::WaCustomError},
 };
 
 use super::{
-    dtos::{CreateCollectionDto, GetCollectionsDto, GetCollectionsResponseDto},
+    dtos::{CreateCollectionDto, GetCollectionsDto, GetCollectionsResponseDto, ListCollectionsResponseDto, CollectionSummaryDto},
     error::CollectionsError,
 };
 
@@ -116,23 +115,21 @@ pub(crate) async fn delete_collection_by_name(
     Ok(collection)
 }
 
-#[allow(dead_code)]
-/// deletes a dense index of a collection by name
-pub(crate) async fn delete_hnsw_index_by_name(
+pub(crate) async fn list_collections(
     ctx: Arc<AppContext>,
-    name: &str,
-) -> Result<Arc<HNSWIndex>, CollectionsError> {
-    // Try to get the dense index from the environment
-    let result = ctx
+) -> Result<ListCollectionsResponseDto, CollectionsError> {
+    // Iterate over collections stored in the AppContext map
+    let summaries: Vec<CollectionSummaryDto> = ctx
         .ain_env
         .collections_map
-        .remove_hnsw_index(name)
-        .map_err(CollectionsError::WaCustomError)?;
-    match result {
-        Some((_, index)) => Ok(index),
-        None => {
-            // dense index not found, return an error response
-            Err(CollectionsError::NotFound)
-        }
-    }
+        .iter_collections()
+        .map(|collection_arc| {
+            CollectionSummaryDto {
+                name: collection_arc.name.clone(),
+                description: collection_arc.description.clone(),
+            }
+        })
+        .collect();
+
+    Ok(ListCollectionsResponseDto { collections: summaries })
 }

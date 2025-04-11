@@ -13,7 +13,7 @@ import os
 
 import importlib.util
 
-spec = importlib.util.spec_from_file_location("test_dataset", "test-dataset.py")
+spec = importlib.util.spec_from_file_location("test_dataset", "tests/test-dataset.py")
 test_dataset = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(test_dataset)
 

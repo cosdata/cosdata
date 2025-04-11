@@ -2,6 +2,7 @@ use actix_web::{web, HttpResponse, Result};
 
 use crate::app_context::AppContext;
 
+use super::error::IndexesError;
 use super::{
     dtos::{CreateDenseIndexDto, CreateSparseIndexDto},
     service,
@@ -18,7 +19,7 @@ pub(crate) async fn create_dense_index(
         ctx.into_inner(),
     )
     .await?;
-    Ok(HttpResponse::Ok().json(serde_json::json!({})))
+    Ok(HttpResponse::Created().json(serde_json::json!({})))
 }
 
 pub(crate) async fn create_sparse_index(
@@ -32,5 +33,22 @@ pub(crate) async fn create_sparse_index(
         ctx.into_inner(),
     )
     .await?;
-    Ok(HttpResponse::Ok().json(serde_json::json!({})))
+    Ok(HttpResponse::Created().json(serde_json::json!({})))
+}
+
+pub(crate) async fn get_index(
+    collection_id: web::Path<String>,
+    ctx: web::Data<AppContext>,
+) -> Result<HttpResponse, IndexesError> {
+    let index_details = service::get_index(collection_id.into_inner(), ctx.into_inner()).await?;
+    Ok(HttpResponse::Ok().json(index_details))
+}
+
+pub(crate) async fn delete_index(
+    path: web::Path<(String, String)>,
+    ctx: web::Data<AppContext>,
+) -> Result<HttpResponse, IndexesError> {
+    let (collection_id, index_type) = path.into_inner();
+    service::delete_index(collection_id, index_type, ctx.into_inner()).await?;
+    Ok(HttpResponse::NoContent().finish())
 }

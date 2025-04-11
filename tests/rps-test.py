@@ -79,7 +79,9 @@ def create_explicit_index(name):
         verify=False,
     )
 
-    return response.json()
+    if response.status_code not in [200, 201, 204]: # Allow 201
+        raise Exception(f"Failed to create index: {response.status_code} ({response.text})")
+    return response.json() if response.status_code != 204 and response.text else {}
 
 
 # Function to create database (collection)
@@ -111,6 +113,8 @@ def create_transaction(collection_name):
     response = requests.post(
         url, data=json.dumps(data), headers=generate_headers(), verify=False
     )
+    if response.status_code != 200:
+        print(f"Error creating transaction: {response.status_code} ({response.text})")
     return response.json()
 
 
@@ -164,7 +168,7 @@ def commit_transaction(collection_name, transaction_id):
     if response.status_code not in [200, 204]:
         print(f"Error response: {response.text}")
         raise Exception(f"Failed to commit transaction: {response.status_code}")
-    return response.json() if response.text else None
+    return None
 
 
 def abort_transaction(collection_name, transaction_id):
@@ -175,28 +179,32 @@ def abort_transaction(collection_name, transaction_id):
     response = requests.post(
         url, data=json.dumps(data), headers=generate_headers(), verify=False
     )
-    return response.json()
+    if response.status_code not in [200, 204]:
+         print(f"Error aborting transaction: {response.status_code} ({response.text})")
+    return response.json() if response.status_code == 200 and response.text else None
 
 
 # Function to upsert vectors
 def upsert_vector(vector_db_name, vectors):
-    url = f"{base_url}/upsert"
-    data = {"vector_db_name": vector_db_name, "vectors": vectors}
+    url = f"{base_url}/collections/{vector_db_name}/vectors/upsert"
+    data = {"vectors": vectors}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
+    if response.status_code != 200:
+         print(f"Error upserting vector: {response.status_code} ({response.text})")
     return response.json()
 
 
 def batch_ann_search(vector_db_name, vectors):
-    url = f"{base_url}/batch-search"
-    data = {"vector_db_name": vector_db_name, "vectors": vectors, "nn_count": 5}
+    url = f"{base_url}/collections/{vector_db_name}/search/batch-dense"
+    data = {"query_vectors": vectors, "top_k": 5}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
     if response.status_code != 200:
         print(f"Error response: {response.text}")
-        raise Exception(f"Failed to search vector: {response.status_code}")
+        raise Exception(f"Failed to batch search vector: {response.status_code}")
     result = response.json()
     return result
 

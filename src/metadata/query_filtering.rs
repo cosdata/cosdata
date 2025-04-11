@@ -1,13 +1,15 @@
 use std::collections::HashMap;
 
+use serde::Deserialize;
 use super::{decimal_to_binary_vec, schema::MetadataSchema, Error, FieldName, FieldValue};
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 pub enum Operator {
     Equal,
     NotEqual,
 }
 
+#[derive(Clone, Debug, Deserialize)]
 pub struct Predicate {
     pub field_name: FieldName,
     pub field_value: FieldValue,
@@ -15,6 +17,7 @@ pub struct Predicate {
 }
 
 // @NOTE: Nested And/Or not supported for now
+#[derive(Clone, Debug, Deserialize)]
 pub enum Filter {
     Is(Predicate),
     And(Vec<Predicate>),

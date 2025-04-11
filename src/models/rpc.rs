@@ -29,7 +29,6 @@ pub struct AddUser {
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct VectorANN {
-    pub vector_db_name: String,
     pub vector: Vec<f32>,
     pub filter: Option<Filter>,
     pub nn_count: Option<usize>,
@@ -37,7 +36,6 @@ pub struct VectorANN {
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct BatchVectorANN {
-    pub vector_db_name: String,
     pub vectors: Vec<Vec<f32>>,
     pub filter: Option<Filter>,
     pub nn_count: Option<usize>,
@@ -51,7 +49,6 @@ pub struct FetchNeighbors {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UpsertVectors {
-    pub vector_db_name: String,
     pub vectors: Vec<DenseVector>,
 }
 
@@ -96,6 +93,7 @@ pub enum RPCResponseBody {
 pub struct DenseVector {
     pub id: VectorId,
     pub values: Vec<f32>,
+    pub metadata: Option<metadata::MetadataFields>
 }
 
 // #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -120,6 +118,7 @@ pub enum MetadataColumnValue {
 }
 
 impl MetadataColumnValue {
+    #[allow(dead_code)]
     fn to_fieldvalue(&self) -> metadata::FieldValue {
         match self {
             Self::StringValue(s) => metadata::FieldValue::String(s.to_owned()),
@@ -157,6 +156,7 @@ pub enum ComparisonOperator {
 }
 
 impl ComparisonOperator {
+    #[allow(dead_code)]
     fn to_predicate(&self, key: &str) -> metadata::Predicate {
         let (op, v) = match self {
             Self::Eq(v) => (metadata::Operator::Equal, v),
@@ -192,6 +192,7 @@ pub enum Filter {
 impl Filter {
     /// Converts the filter in request body to internal
     /// representation. Perhaps the two types can be unified later
+    #[allow(dead_code)]
     pub fn to_internal(&self) -> Result<metadata::Filter, WaCustomError> {
         let filter_err = |msg: &str| {
             WaCustomError::MetadataError(metadata::Error::UnsupportedFilter(msg.to_string()))

@@ -1,4 +1,6 @@
 use std::sync::Arc;
+use std::path::PathBuf;
+use std::fs;
 
 use crate::{
     api_service::{
@@ -6,7 +8,7 @@ use crate::{
         init_inverted_index_idf_for_collection,
     },
     app_context::AppContext,
-    models::types::{DistanceMetric, QuantizationMetric},
+    models::{types::{DistanceMetric, QuantizationMetric}},
     quantization::StorageType,
 };
 
@@ -28,6 +30,12 @@ pub(crate) async fn create_dense_index(
         .collections_map
         .get_collection(&collection_name)
         .ok_or(IndexesError::CollectionNotFound)?;
+
+    // Check if index already exists BEFORE initializing
+    if ctx.ain_env.collections_map.get_hnsw_index(&collection_name).is_some() {
+        return Err(IndexesError::IndexAlreadyExists("dense".to_string()));
+    }
+
     let (quantization_metric, storage_type, range, sample_threshold, is_configured) =
         match quantization {
             DenseIndexQuantizationDto::Auto { sample_threshold } => (
@@ -75,10 +83,17 @@ pub(crate) async fn create_sparse_index(
         .ain_env
         .collections_map
         .get_collection(&collection_name)
-        .ok_or(IndexesError::CollectionNotFound)?;
+        .ok_or_else(|| IndexesError::NotFound(format!("Collection '{}' not found", collection_name)))?;
+
+    let inverted_exists = ctx.ain_env.collections_map.get_inverted_index(&collection_name).is_some();
+    let idf_exists = ctx.ain_env.collections_map.get_idf_inverted_index(&collection_name).is_some();
+
+    if inverted_exists || idf_exists {
+         return Err(IndexesError::IndexAlreadyExists("sparse".to_string()));
+    }
 
     init_inverted_index_for_collection(
-        ctx,
+        ctx.clone(),
         &collection,
         quantization.into_bits(),
         sample_threshold,
@@ -114,6 +129,135 @@ pub(crate) async fn create_sparse_index_idf(
     )
     .await
     .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;
+
+    Ok(())
+}
+
+pub(crate) async fn get_index(
+    ctx: Arc<AppContext>,
+    collection_name: String,
+) -> Result<serde_json::Value, IndexesError> {
+    ctx.ain_env
+        .collections_map
+        .get_collection(&collection_name)
+        .ok_or_else(|| {
+            IndexesError::NotFound(format!("Collection '{}' not found", collection_name))
+        })?;
+
+    let mut indexes_array = Vec::new();
+
+    if let Some(hnsw) = ctx.ain_env.collections_map.get_hnsw_index(&collection_name) {
+        let distance_metric = *hnsw.distance_metric.read().unwrap();
+        let values_range = *hnsw.values_range.read().unwrap();
+        let hnsw_params = hnsw.hnsw_params.read().unwrap();
+        let storage_type = *hnsw.storage_type.read().unwrap();
+        let quantization = format!("{:?}", *hnsw.quantization_metric.read().unwrap());
+
+        indexes_array.push(serde_json::json!({
+            "type": "dense",
+            "name": hnsw.name,
+            "algorithm": "HNSW",
+            "distance_metric": format!("{:?}", distance_metric),
+            "quantization": {
+                "type": quantization,
+                "storage": format!("{:?}", storage_type),
+                 "range": { "min": values_range.0, "max": values_range.1 }
+            },
+            "params": {
+                "ef_construction": hnsw_params.ef_construction,
+                "ef_search": hnsw_params.ef_search,
+                "neighbors_count": hnsw_params.neighbors_count,
+                "level_0_neighbors_count": hnsw_params.level_0_neighbors_count,
+                "num_layers": hnsw_params.num_layers,
+            }
+        }));
+    }
+
+    if let Some(inverted) = ctx.ain_env.collections_map.get_inverted_index(&collection_name) {
+        let values_upper_bound = *inverted.values_upper_bound.read().unwrap();
+        indexes_array.push(serde_json::json!({
+            "type": "sparse",
+            "name": inverted.name,
+            "algorithm": "InvertedIndex",
+            "quantization_bits": inverted.root.root.quantization_bits,
+            "values_upper_bound": values_upper_bound,
+        }));
+    }
+
+    Ok(serde_json::json!({
+        "collection_name": collection_name,
+        "indexes": indexes_array
+    }))
+}
+
+pub(crate) async fn delete_index(
+    ctx: Arc<AppContext>,
+    collection_name: String,
+    index_type: String,
+) -> Result<(), IndexesError> {
+     let collection = ctx
+        .ain_env
+        .collections_map
+        .get_collection(&collection_name)
+        .ok_or_else(|| IndexesError::NotFound(format!("Collection '{}' not found", collection_name)))?;
+
+    let collection_path: PathBuf = collection.get_path().to_path_buf();
+
+    match index_type.as_str() {
+        "dense" => {
+            if ctx.ain_env.collections_map.get_hnsw_index(&collection_name).is_none() {
+                 return Err(IndexesError::NotFound(format!("Dense index does not exist for collection '{}'", collection_name)));
+            }
+            ctx.ain_env.collections_map.remove_hnsw_index(&collection_name)
+                 .map_err(|e| IndexesError::FailedToDeleteIndex(format!("Failed to remove dense index from map: {}", e)))?;
+
+             let index_path = collection_path.join("dense_hnsw");
+             if index_path.exists() {
+                 log::info!("Attempting to remove dense index directory: {:?}", index_path);
+                 fs::remove_dir_all(&index_path)
+                     .map_err(|e| IndexesError::FailedToDeleteIndex(format!("Failed to remove dense index directory '{}': {}", index_path.display(), e)))?;
+                 log::info!("Successfully removed dense index directory: {:?}", index_path);
+             } else {
+                  log::warn!("Dense index directory not found for removal: {:?}", index_path);
+             }
+             log::info!("Dense index removed successfully for collection '{}'", collection_name);
+        }
+        "sparse" => {
+             let exists_inverted = ctx.ain_env.collections_map.get_inverted_index(&collection_name).is_some();
+             let exists_idf = ctx.ain_env.collections_map.get_idf_inverted_index(&collection_name).is_some();
+
+             if !exists_inverted && !exists_idf {
+                 return Err(IndexesError::NotFound(format!("Sparse index does not exist for collection '{}'", collection_name)));
+             }
+
+             let mut deleted = false;
+
+             if exists_inverted {
+                 ctx.ain_env.collections_map.remove_inverted_index(&collection_name)
+                    .map_err(|e| IndexesError::FailedToDeleteIndex(format!("Failed to remove sparse inverted index from map: {}", e)))?;
+                let _ = collection_path.join("sparse_inverted_index");
+                 deleted = true;
+             }
+
+             if exists_idf {
+                 ctx.ain_env.collections_map.remove_idf_inverted_index(&collection_name)
+                     .map_err(|e| IndexesError::FailedToDeleteIndex(format!("Failed to remove sparse IDF index from map: {}", e)))?;
+                let _ = collection_path.join("sparse_inverted_index_idf");
+                 deleted = true;
+             }
+
+             if !deleted {
+                 log::error!("Existence check passed but failed to find sparse index for deletion in collection '{}'", collection_name);
+                 return Err(IndexesError::NotFound("Sparse index existed in check but failed to find for deletion.".to_string()));
+             }
+        }
+        _ => {
+            return Err(IndexesError::InvalidIndexType(index_type));
+        }
+    }
+
+    // TODO: Consider if associated LMDB entries specific to the index need cleanup.
+    // Currently, only the directory and the in-memory map entry are removed.
 
     Ok(())
 }
