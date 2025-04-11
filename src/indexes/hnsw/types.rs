@@ -35,8 +35,7 @@ pub struct DenseInputVector {
     id: VectorId,
     vec: Vec<f32>,
     metadata_fields: Option<MetadataFields>,
-    #[allow(unused)]
-    is_pseudo: bool,
+    pub is_pseudo: bool,
 }
 
 impl DenseInputVector {

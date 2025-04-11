@@ -29,7 +29,7 @@ use crate::{
         inverted::{data::InvertedIndexData, InvertedIndex},
         inverted_idf::{data::InvertedIndexIDFData, InvertedIndexIDF},
     },
-    metadata::{schema::MetadataDimensions, QueryFilterDimensions},
+    metadata::{schema::MetadataDimensions, QueryFilterDimensions, HIGH_WEIGHT},
     models::{
         buffered_io::BufIoError, common::*, meta_persist::retrieve_values_range, versioning::*,
     },
@@ -140,6 +140,13 @@ pub struct NodePropMetadata {
 }
 
 #[derive(Debug)]
+pub enum ReplicaNodeKind {
+    Pseudo,
+    Base,
+    Metadata,
+}
+
+#[derive(Debug)]
 pub struct VectorData<'a> {
     // Vector id (use specified one and not the internal replica
     // id). It's not being used any where but occasionally useful for
@@ -156,6 +163,38 @@ impl<'a> VectorData<'a> {
             id,
             quantized_vec: qvec,
             metadata: None,
+        }
+    }
+
+    pub fn replica_node_kind(&self) -> ReplicaNodeKind {
+        match self.metadata {
+            Some(m) => {
+                if m.mag == 0.0 {
+                    ReplicaNodeKind::Base
+                } else {
+                    let vec_mag = match self.quantized_vec {
+                        Storage::UnsignedByte { mag, .. } => mag,
+                        Storage::SubByte { mag, .. } => mag,
+                        Storage::HalfPrecisionFP { mag, .. } => mag,
+                        Storage::FullPrecisionFP { mag, .. } => mag,
+                    };
+                    if *vec_mag == 0.0 {
+                        ReplicaNodeKind::Pseudo
+                    } else {
+                        ReplicaNodeKind::Metadata
+                    }
+                }
+            },
+            None => ReplicaNodeKind::Base,
+        }
+    }
+
+    pub fn is_pseudo_root(&self) -> bool {
+        match self.metadata {
+            Some(m) => {
+                m.mbits == vec![HIGH_WEIGHT;m.mbits.len()]
+            },
+            None => false,
         }
     }
 }
