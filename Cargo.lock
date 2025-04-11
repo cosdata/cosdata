@@ -814,6 +814,7 @@ dependencies = [
  "rayon",
  "ring",
  "rkyv",
+ "rust-stemmers",
  "rustc-hash 2.1.1",
  "rustls",
  "rustls-pemfile",
@@ -828,6 +829,7 @@ dependencies = [
  "tonic",
  "tonic-build",
  "tonic-reflection",
+ "twox-hash",
 ]
 
 [[package]]
@@ -2283,6 +2285,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rust-stemmers"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e46a2036019fdb888131db7a4c847a1063a7493f971ed94ea82c67eada63ca54"
+dependencies = [
+ "serde",
+ "serde_derive",
+]
+
+[[package]]
 name = "rustc-demangle"
 version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2920,6 +2932,15 @@ name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
+
+[[package]]
+name = "twox-hash"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7b17f197b3050ba473acf9181f7b1d3b66d1cf7356c6cc57886662276e65908"
+dependencies = [
+ "rand",
+]
 
 [[package]]
 name = "typenum"

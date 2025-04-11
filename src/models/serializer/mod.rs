@@ -7,6 +7,7 @@ mod page;
 mod pagepool;
 mod quotients_map;
 mod sparse_embedding;
+mod sparse_idf_document;
 mod storage;
 mod tree_map;
 mod versioned_item;

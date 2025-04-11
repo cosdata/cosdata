@@ -2,7 +2,9 @@ use std::ptr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use self::vectors::dtos::{CreateDenseVectorDto, CreateSparseVectorDto};
+use self::vectors::dtos::{
+    CreateDenseVectorDto, CreateSparseIdfDocumentDto, CreateSparseVectorDto,
+};
 
 use super::{dtos::CreateTransactionResponseDto, error::TransactionError};
 use crate::indexes::hnsw::transaction::HNSWIndexTransaction;
@@ -450,61 +452,71 @@ pub(crate) async fn upsert_sparse_vectors(
     transaction_id: Hash,
     vectors: Vec<CreateSparseVectorDto>,
 ) -> Result<(), TransactionError> {
-    if let Some(inverted_index) = ctx
+    let inverted_index = ctx
         .ain_env
         .collections_map
         .get_inverted_index(collection_id)
-    {
-        let current_open_transaction = unsafe {
-            inverted_index
-                .current_open_transaction
-                .load(Ordering::SeqCst)
-                .as_ref()
-                .ok_or(TransactionError::NotFound)?
-        };
+        .ok_or(TransactionError::CollectionNotFound)?;
 
-        if current_open_transaction.id != transaction_id {
-            return Err(TransactionError::FailedToCreateVector(
-                "This is not the currently open transaction!".into(),
-            ));
-        }
+    let current_open_transaction = unsafe {
+        inverted_index
+            .current_open_transaction
+            .load(Ordering::SeqCst)
+            .as_ref()
+            .ok_or(TransactionError::NotFound)?
+    };
 
-        vectors::repo::upsert_sparse_vectors_in_transaction(
-            ctx,
-            inverted_index,
-            current_open_transaction,
-            vectors,
-        )
-        .await
-        .map_err(|e| TransactionError::FailedToCreateVector(e.to_string()))?;
-    } else {
-        let inverted_index_idf = ctx
-            .ain_env
-            .collections_map
-            .get_idf_inverted_index(collection_id)
-            .ok_or(TransactionError::CollectionNotFound)?;
-        let current_open_transaction = unsafe {
-            inverted_index_idf
-                .current_open_transaction
-                .load(Ordering::SeqCst)
-                .as_ref()
-                .ok_or(TransactionError::NotFound)?
-        };
-
-        if current_open_transaction.id != transaction_id {
-            return Err(TransactionError::FailedToCreateVector(
-                "This is not the currently open transaction!".into(),
-            ));
-        }
-
-        vectors::repo::upsert_sparse_idf_vectors_in_transaction(
-            inverted_index_idf,
-            current_open_transaction,
-            vectors,
-        )
-        .await
-        .map_err(|e| TransactionError::FailedToCreateVector(e.to_string()))?;
+    if current_open_transaction.id != transaction_id {
+        return Err(TransactionError::FailedToCreateVector(
+            "This is not the currently open transaction!".into(),
+        ));
     }
+
+    vectors::repo::upsert_sparse_vectors_in_transaction(
+        ctx,
+        inverted_index,
+        current_open_transaction,
+        vectors,
+    )
+    .await
+    .map_err(|e| TransactionError::FailedToCreateVector(e.to_string()))?;
+
+    Ok(())
+}
+
+pub(crate) async fn upsert_sparse_idf_documents(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    transaction_id: Hash,
+    documents: Vec<CreateSparseIdfDocumentDto>,
+) -> Result<(), TransactionError> {
+    let idf_inverted_index = ctx
+        .ain_env
+        .collections_map
+        .get_idf_inverted_index(collection_id)
+        .ok_or(TransactionError::CollectionNotFound)?;
+
+    let current_open_transaction = unsafe {
+        idf_inverted_index
+            .current_open_transaction
+            .load(Ordering::SeqCst)
+            .as_ref()
+            .ok_or(TransactionError::NotFound)?
+    };
+
+    if current_open_transaction.id != transaction_id {
+        return Err(TransactionError::FailedToCreateVector(
+            "This is not the currently open transaction!".into(),
+        ));
+    }
+
+    vectors::repo::upsert_sparse_idf_documents_in_transaction(
+        idf_inverted_index,
+        current_open_transaction,
+        documents,
+    )
+    .await
+    .map_err(|e| TransactionError::FailedToCreateVector(e.to_string()))?;
 
     Ok(())
 }

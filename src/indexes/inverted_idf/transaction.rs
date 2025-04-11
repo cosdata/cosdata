@@ -1,7 +1,8 @@
-use std::sync::Arc;
+use std::sync::{atomic::Ordering, Arc};
 
 use crate::models::{
     common::WaCustomError,
+    meta_persist::store_highest_internal_id,
     versioning::{Hash, Version},
 };
 
@@ -39,6 +40,12 @@ impl InvertedIndexIDFTransaction {
         self,
         idf_inverted_index: Arc<InvertedIndexIDF>,
     ) -> Result<(), WaCustomError> {
+        store_highest_internal_id(
+            &idf_inverted_index.lmdb,
+            idf_inverted_index
+                .document_id_counter
+                .load(Ordering::Relaxed),
+        )?;
         idf_inverted_index.vec_raw_map.serialize(
             &idf_inverted_index.vec_raw_manager,
             idf_inverted_index.root.data_file_parts,

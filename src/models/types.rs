@@ -6,8 +6,8 @@ use super::{
     inverted_index::InvertedIndexRoot,
     inverted_index_idf::InvertedIndexIDFRoot,
     meta_persist::{
-        lmdb_init_collections_db, lmdb_init_db, load_collections, retrieve_current_version,
-        retrieve_values_upper_bound,
+        lmdb_init_collections_db, lmdb_init_db, load_collections, retrieve_average_document_length,
+        retrieve_current_version, retrieve_highest_internal_id, retrieve_values_upper_bound,
     },
     paths::get_data_path,
     prob_lazy_load::lazy_item::FileIndex,
@@ -45,7 +45,6 @@ use lmdb::{Cursor, Database, DatabaseFlags, Environment, Transaction, WriteFlags
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher24;
-use std::hash::{Hash as StdHash, Hasher};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize};
@@ -56,6 +55,10 @@ use std::{
     fs::{create_dir_all, OpenOptions},
     ptr,
     str::FromStr,
+};
+use std::{
+    hash::{Hash as StdHash, Hasher},
+    sync::atomic::AtomicU32,
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -799,6 +802,8 @@ impl CollectionsMap {
             db,
         };
         let current_version = retrieve_current_version(&lmdb)?;
+        let average_document_length = retrieve_average_document_length(&lmdb)?;
+        let highest_internal_id = retrieve_highest_internal_id(&lmdb)?;
         let inverted_index = InvertedIndexIDF {
             name: coll.name.clone(),
             description: inverted_index_data.description,
@@ -817,7 +822,16 @@ impl CollectionsMap {
                 config.inverted_index_data_file_parts,
             )?,
             vec_raw_manager,
-            document_id_counter: todo!(),
+            average_document_length: RwLock::new(average_document_length.unwrap_or(1.0)),
+            is_configured: AtomicBool::new(average_document_length.is_some()),
+            documents: RwLock::new(Vec::new()),
+            documents_collected: AtomicUsize::new(0),
+            sampling_data: crate::indexes::inverted_idf::SamplingData::default(),
+            sample_threshold: inverted_index_data.sample_threshold,
+            store_raw_text: inverted_index_data.store_raw_text,
+            k1: inverted_index_data.k1,
+            b: inverted_index_data.b,
+            document_id_counter: AtomicU32::new(highest_internal_id.unwrap_or_default()),
         };
 
         Ok(Some(inverted_index))

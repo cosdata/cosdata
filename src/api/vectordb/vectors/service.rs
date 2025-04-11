@@ -20,6 +20,9 @@ pub(crate) async fn create_vector(
     match create_vector_dto {
         CreateVectorDto::Dense(dto) => repo::create_dense_vector(ctx, collection_id, dto).await,
         CreateVectorDto::Sparse(dto) => repo::create_sparse_vector(ctx, collection_id, dto).await,
+        CreateVectorDto::SparseIdf(dto) => {
+            repo::create_sparse_idf_document(ctx, collection_id, dto).await
+        }
     }
 }
 
@@ -52,6 +55,9 @@ pub(crate) async fn find_similar_vectors(
         FindSimilarVectorsDto::Sparse(dto) => {
             repo::find_similar_sparse_vectors(ctx, collection_id, dto).await
         }
+        FindSimilarVectorsDto::SparseIdf(dto) => {
+            repo::find_similar_sparse_idf_documents(ctx, collection_id, dto).await
+        }
     }
 }
 
@@ -66,6 +72,9 @@ pub(crate) async fn batch_search(
         }
         BatchSearchVectorsDto::Sparse(dto) => {
             repo::batch_search_sparse_vectors(ctx, collection_id, dto).await
+        }
+        BatchSearchVectorsDto::SparseIdf(dto) => {
+            repo::batch_search_sparse_idf_documents(ctx, collection_id, dto).await
         }
     }
 }

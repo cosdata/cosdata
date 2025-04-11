@@ -36,7 +36,6 @@ impl SimpleSerialize for RawSparseVectorEmbedding {
     fn deserialize(bufman: &BufferManager, offset: FileOffset) -> Result<Self, BufIoError> {
         let cursor = bufman.open_cursor()?;
         bufman.seek_with_cursor(cursor, offset.0 as u64)?;
-        bufman.close_cursor(cursor)?;
         let hash_vec = VectorId(bufman.read_u64_with_cursor(cursor)?);
         let len = {
             let first_byte = bufman.read_u8_with_cursor(cursor)?;
@@ -55,6 +54,7 @@ impl SimpleSerialize for RawSparseVectorEmbedding {
             let pair = SparsePair(dim, value);
             raw_vec.push(pair);
         }
+        bufman.close_cursor(cursor)?;
 
         Ok(Self {
             raw_vec: Arc::new(raw_vec),
