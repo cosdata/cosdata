@@ -43,7 +43,7 @@ impl<'de> Deserialize<'de> for UpsertDto {
         #[derive(Deserialize)]
         struct TypeProbe {
             index_type: String,
-            #[serde(default)]
+            #[serde(default, rename = "isIDF")]
             is_idf: bool,
         }
 

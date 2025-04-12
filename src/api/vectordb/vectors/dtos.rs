@@ -128,7 +128,7 @@ impl<'de> Deserialize<'de> for CreateVectorDto {
             #[serde(rename = "index_type")]
             index_type: String,
 
-            #[serde(default)]
+            #[serde(default, rename = "isIDF")]
             is_idf: bool,
 
             #[serde(flatten)]
@@ -231,7 +231,7 @@ impl<'de> Deserialize<'de> for FindSimilarVectorsDto {
         #[derive(Deserialize)]
         struct TypeProbe {
             index_type: String,
-            #[serde(default)]
+            #[serde(default, rename = "isIDF")]
             is_idf: bool,
         }
 
@@ -271,7 +271,7 @@ impl<'de> Deserialize<'de> for BatchSearchVectorsDto {
         #[derive(Deserialize)]
         struct TypeProbe {
             index_type: String,
-            #[serde(default)]
+            #[serde(default, rename = "isIDF")]
             is_idf: bool,
         }
 
