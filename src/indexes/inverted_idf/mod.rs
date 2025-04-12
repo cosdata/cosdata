@@ -140,6 +140,30 @@ const STOPWORDS: [&str; 35] = [
     "they", "this", "to", "was", "will", "with", "www",
 ];
 
+pub fn tokenize(text: &str) -> Vec<&str> {
+    let mut result = Vec::new();
+    let mut start = None;
+
+    for (i, c) in text.char_indices() {
+        if c.is_alphanumeric() || c == '_' {
+            if start.is_none() {
+                start = Some(i);
+            }
+        } else {
+            if let Some(s) = start {
+                result.push(&text[s..i]);
+                start = None;
+            }
+        }
+    }
+
+    if let Some(s) = start {
+        result.push(&text[s..]);
+    }
+
+    result
+}
+
 pub fn process_text(
     input: &str,
     max_token_len: usize,
@@ -154,22 +178,14 @@ pub fn process_text(
     let document_length = count_tokens(input, max_token_len);
 
     // Split input by whitespace to minimize unnecessary cloning.
-    for token in input.split_whitespace() {
-        // Remove all non-alphanumeric characters.
-        // This operation allocates a new String per token,
-        // but it is done only once per token.
-        let filtered: String = token.chars().filter(|c| c.is_alphanumeric()).collect();
-        if filtered.is_empty() {
-            continue;
-        }
-
-        if filtered.len() > max_token_len {
+    for token in tokenize(input) {
+        if token.len() > max_token_len {
             continue;
         }
 
         // Convert to lowercase.
         // Since to_lowercase allocates a new String, this is necessary for case insensitive matching.
-        let lower = filtered.to_lowercase();
+        let lower = token.to_lowercase();
 
         // Skip token if it is a stopword.
         if STOPWORDS.contains(&lower.as_str()) {
@@ -214,17 +230,12 @@ fn compute_bm25_term_frequency(
 pub fn count_tokens(input: &str, max_token_len: usize) -> u32 {
     let mut count = 0;
 
-    for token in input.split_whitespace() {
-        let filtered: String = token.chars().filter(|c| c.is_alphanumeric()).collect();
-        if filtered.is_empty() {
+    for token in tokenize(input) {
+        if token.len() > max_token_len {
             continue;
         }
 
-        if filtered.len() > max_token_len {
-            continue;
-        }
-
-        let lower = filtered.to_lowercase();
+        let lower = token.to_lowercase();
         if STOPWORDS.contains(&lower.as_str()) {
             continue;
         }
