@@ -72,10 +72,14 @@ def create_db(name, description=None, dimension=20000):
     return response.json()
 
 
-def create_explicit_index(name):
+def create_explicit_index(name, k, b):
     data = {
         "name": name,
         "isIDF": True,
+        "sample_threshold": 10000,
+        "store_raw_text": False,
+        "k1": k,
+        "b": b,
     }
     response = requests.post(
         f"{base_url}/collections/{name}/indexes/sparse",
@@ -199,13 +203,14 @@ def transform_sentence_to_vector(k, sentence, punctuations, stemmer, token_max_l
 
     return {
         "id": k,
+        "text": sentence,
         "indices": [term[0] for term in terms],
         "raw_term_frequencies": [term[1] for term in terms],
         "length": length,
     }
 
 
-def get_dataset(dataset):
+def get_dataset(dataset: str) -> tuple:
     """Generate raw dataset with just term frequencies"""
     dataset_folder = f"sparse_idf_dataset_{dataset}"
     raw_dataset_file = f"{dataset_folder}/raw_vectors.pkl"
@@ -337,6 +342,7 @@ def apply_bm25_to_vectors(dataset, vectors, corpus_stats, k=1.5, b=0.75):
             {
                 "id": vec["id"],
                 "indices": vec["indices"],
+                "text": vec["text"],
                 "values": server_values,  # Normalized term frequency for server
                 "brute_force_values": brute_force_values,  # TF-IDF for local calculation
                 "length": vec["length"],
@@ -368,7 +374,9 @@ def get_query_vectors(dataset):
         split = "test"
     queries = bm25s.utils.beir.load_queries(dataset, save_dir=save_dir)
     qrels = bm25s.utils.beir.load_qrels(dataset, split=split, save_dir=save_dir)
-    queries_lst = [(idx, v["text"]) for idx, (k, v) in enumerate(queries.items()) if k in qrels]
+    queries_lst = [
+        (idx, v["text"]) for idx, (k, v) in enumerate(queries.items()) if k in qrels
+    ]
     print(f"Processing {len(queries_lst)} queries...")
     queries = []
 
@@ -465,15 +473,12 @@ def upsert_in_transaction(vector_db_name, transaction_id, vectors):
     Upsert vectors to the API, excluding unnecessary fields
     """
     # Create a new list of vectors with only needed fields
-    filtered_vectors = [
-        {"id": vec["id"], "indices": vec["indices"], "values": vec["values"]}
-        for vec in vectors
-    ]
+    filtered_vectors = [{"id": vec["id"], "text": vec["text"]} for vec in vectors]
 
     url = (
         f"{base_url}/collections/{vector_db_name}/transactions/{transaction_id}/upsert"
     )
-    data = {"index_type": "sparse", "vectors": filtered_vectors}
+    data = {"index_type": "sparse", "isIDF": True, "documents": filtered_vectors}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
@@ -501,7 +506,8 @@ def search_sparse_vector(vector_db_name, vector, top_k):
     url = f"{base_url}/collections/{vector_db_name}/vectors/search"
     data = {
         "index_type": "sparse",
-        "values": vector["values"],
+        "isIDF": True,
+        "query": vector["text"],
         "top_k": top_k,
     }
     response = requests.post(
@@ -514,7 +520,8 @@ def batch_ann_search(vector_db_name, batch, top_k):
     url = f"{base_url}/collections/{vector_db_name}/vectors/batch-search"
     data = {
         "index_type": "sparse",
-        "vectors": batch,
+        "isIDF": True,
+        "queries": batch,
         "top_k": top_k,
     }
     response = requests.post(
@@ -566,10 +573,7 @@ def run_qps_tests(qps_test_vectors, vector_db_name, batch_size=100, top_k=10):
     with ThreadPoolExecutor(max_workers=8) as executor:
         futures = []
         for i in range(0, len(qps_test_vectors), batch_size):
-            batch = [
-                [[ind, 1.0] for ind in vector["indices"]]
-                for vector in qps_test_vectors[i : i + batch_size]
-            ]
+            batch = [vector["text"] for vector in qps_test_vectors[i : i + batch_size]]
 
             futures.append(
                 executor.submit(batch_ann_search, vector_db_name, batch, top_k)
@@ -623,8 +627,7 @@ def run_latency_test(vector_db_name, query_vectors, top_k):
             return resp, latency
 
         for query in query_vectors:
-            formatted_query = format_for_server_query(query)
-            futures.append(executor.submit(timed_query, formatted_query))
+            futures.append(executor.submit(timed_query, query))
 
         for future in as_completed(futures):
             try:
@@ -657,9 +660,8 @@ def run_recall_and_qps_and_latency_test(
 
     start_search = time.time()
     for query in tqdm(query_vectors):
-        formatted_query = format_for_server_query(query)
         try:
-            result = search_sparse_vector(vector_db_name, formatted_query, top_k)
+            result = search_sparse_vector(vector_db_name, query, top_k)
             server_results.append(result)
         except Exception as e:
             print(f"Search failed for query {query['id']}: {e}")
@@ -705,7 +707,7 @@ def run_recall_and_qps_and_latency_test(
     return detailed_results
 
 
-def create_db_and_upsert_vectors(vector_db_name, vectors, batch_size):
+def create_db_and_upsert_vectors(vector_db_name, vectors, batch_size, k, b):
     # Create collection
     try:
         print(f"Creating collection: {vector_db_name}")
@@ -713,7 +715,7 @@ def create_db_and_upsert_vectors(vector_db_name, vectors, batch_size):
         print("Collection created")
 
         # Create explicit index
-        create_explicit_index(vector_db_name)
+        create_explicit_index(vector_db_name, k, b)
         print("Explicit index created")
     except Exception as e:
         print(f"Collection may already exist: {e}")
@@ -811,7 +813,7 @@ def main(dataset, num_queries=100, batch_size=100, top_k=10, k=1.5, b=0.75):
 
     if insert_vectors:
         insertion_time = create_db_and_upsert_vectors(
-            vector_db_name, vectors, batch_size
+            vector_db_name, vectors, batch_size, k, b
         )
 
     result = run_recall_and_qps_and_latency_test(
