@@ -4,10 +4,15 @@ use serde::Serialize;
 use crate::models::buffered_io::BufIoError;
 
 use crate::models::types::SparseVector;
+use std::cell::UnsafeCell;
 use std::cmp::Ordering;
+use std::collections::BinaryHeap;
+use std::iter::Peekable;
 
 use super::inverted_index::InvertedIndexRoot;
-use super::inverted_index_idf::{InvertedIndexIDFRoot, TermQuotient};
+use super::inverted_index_idf::{
+    InvertedIndexIDFRoot, TermInfo, TermQuotient, UnsafeVersionedVecIter,
+};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SparseAnnResult {
@@ -154,47 +159,131 @@ impl SparseAnnQueryBasic {
         index: &InvertedIndexIDFRoot,
         k: Option<usize>,
     ) -> Result<Vec<SparseAnnIDFResult>, BufIoError> {
-        let mut results_map = FxHashMap::default();
-        let total_documents_count = index
+        const BUCKETS: usize = 512;
+        let documents_count = index
             .total_documents_count
             .load(std::sync::atomic::Ordering::Relaxed);
+        let mut heads = BinaryHeap::new();
 
-        for (term_hash, _query_tf) in self.query_vector.entries {
-            let storage_dim = term_hash & (u16::MAX as u32);
+        for (term_hash, _) in self.query_vector.entries {
+            let dim_index = term_hash & (u16::MAX as u32);
             let quotient = (term_hash >> 16) as TermQuotient;
-
-            if let Some(node) = index.find_node(storage_dim) {
+            if let Some(node) = index.find_node(dim_index) {
                 let data = unsafe { &*node.data }.try_get_data(&index.cache, node.dim_index)?;
-
                 if let Some(term) = data.map.lookup(&quotient) {
-                    let document_containing_term = term.documents.len() as u32;
-                    let idf = get_idf(total_documents_count, document_containing_term);
+                    let idf = get_idf(documents_count, term.documents.len() as u32);
 
-                    for (doc_id, tf) in term.documents.iter() {
-                        let bm25_weight = tf * idf;
-                        *results_map.entry(*doc_id).or_insert(0.0) += bm25_weight;
-                    }
+                    let head = PostingListHead::new(&term, idf);
+                    heads.push(head);
                 }
             }
         }
 
-        let mut results: Vec<SparseAnnIDFResult> = results_map
+        let mut buckets = [(u32::MAX, f32::NEG_INFINITY); BUCKETS];
+
+        while let Some(mut head) = heads.pop() {
+            let Some((doc_id, tf)) = head.pop().copied() else {
+                continue;
+            };
+
+            let mut score = tf * head.idf;
+
+            if head.peek().is_some() {
+                heads.push(head);
+            }
+
+            while let Some(head) = heads.peek() {
+                let Some((doc_id1, tf)) = head.peek() else {
+                    heads.pop();
+                    continue;
+                };
+                if doc_id1 != &doc_id {
+                    break;
+                }
+
+                score += tf * head.idf;
+                let mut head = heads.pop().unwrap();
+                head.pop();
+                if head.peek().is_some() {
+                    heads.push(head);
+                }
+            }
+
+            let index = doc_id as usize % BUCKETS;
+            if score > buckets[index].1 {
+                buckets[index] = (doc_id, score);
+            }
+        }
+
+        let mut results: Vec<_> = buckets
             .into_iter()
-            .map(|(vector_id, score)| SparseAnnIDFResult {
-                document_id: vector_id,
+            .filter(|bucket| bucket.0 != u32::MAX)
+            .map(|(id, score)| SparseAnnIDFResult {
+                document_id: id,
                 score,
             })
             .collect();
-        if let Some(k) = k {
-            if results.len() > k {
-                // Use partial_sort for top K, faster than full sort
-                results.select_nth_unstable_by(k, |a, b| b.score.total_cmp(&a.score));
-                results.truncate(k);
-            }
-        }
+
         results.sort_unstable_by(|a, b| b.score.total_cmp(&a.score));
+        if let Some(k) = k {
+            results.truncate(k);
+        }
 
         Ok(results)
+    }
+}
+
+struct PostingListHead {
+    iter: UnsafeCell<Peekable<UnsafeVersionedVecIter<'static, (u32, f32)>>>,
+    pub idf: f32,
+}
+
+impl PostingListHead {
+    pub fn new(term: &TermInfo, idf: f32) -> Self {
+        Self {
+            iter: UnsafeCell::new(term.documents.iter().peekable()),
+            idf,
+        }
+    }
+
+    pub fn pop(&mut self) -> Option<&(u32, f32)> {
+        self.iter.get_mut().next()
+    }
+
+    pub fn peek(&self) -> Option<&&(u32, f32)> {
+        unsafe { &mut *self.iter.get() }.peek()
+    }
+}
+
+impl Ord for PostingListHead {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let Some(s) = self.peek() else { unreachable!() };
+
+        let Some(o) = other.peek() else {
+            unreachable!()
+        };
+
+        o.0.cmp(&s.0)
+    }
+}
+
+impl PartialOrd for PostingListHead {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Eq for PostingListHead {}
+
+impl PartialEq for PostingListHead {
+    fn eq(&self, other: &Self) -> bool {
+        let Some(s) = self.peek() else { unreachable!() };
+
+        let Some(o) = other.peek() else {
+            unreachable!()
+        };
+
+        s.0.eq(&o.0)
     }
 }
 

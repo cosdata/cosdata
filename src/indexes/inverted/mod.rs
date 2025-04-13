@@ -12,11 +12,12 @@ use std::{
 };
 
 use transaction::InvertedIndexTransaction;
-use types::{SamplingData, SparsePair};
+use types::{RawSparseVectorEmbedding, SamplingData, SparsePair};
 
 use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
     inverted_index::InvertedIndexRoot,
+    tree_map::TreeMap,
     types::{MetaDb, VectorId},
     versioning::{Hash, VersionControl},
 };
@@ -38,7 +39,8 @@ pub struct InvertedIndex {
     pub vectors: RwLock<Vec<(VectorId, Vec<SparsePair>)>>,
     pub vectors_collected: AtomicUsize,
     pub sample_threshold: usize,
-    pub vec_raw_manager: BufferManagerFactory<Hash>,
+    pub vec_raw_manager: BufferManagerFactory<u8>,
+    pub vec_raw_map: TreeMap<RawSparseVectorEmbedding>,
 }
 
 unsafe impl Send for InvertedIndex {}
@@ -56,7 +58,7 @@ impl InvertedIndex {
         lmdb: MetaDb,
         current_version: Hash,
         vcs: VersionControl,
-        vec_raw_manager: BufferManagerFactory<Hash>,
+        vec_raw_manager: BufferManagerFactory<u8>,
         quantization_bits: u8,
         sample_threshold: usize,
         data_file_parts: u8,
@@ -81,6 +83,7 @@ impl InvertedIndex {
             vectors_collected: AtomicUsize::new(0),
             sample_threshold,
             vec_raw_manager,
+            vec_raw_map: TreeMap::new(),
         })
     }
 

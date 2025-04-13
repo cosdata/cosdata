@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use crate::{
-    api::vectordb::vectors::dtos::{CreateDenseVectorDto, CreateSparseVectorDto},
+    api::vectordb::vectors::dtos::{
+        CreateDenseVectorDto, CreateSparseIdfDocumentDto, CreateSparseVectorDto,
+    },
     app_context::AppContext,
     models::{rpc::DenseVector, versioning::Hash},
 };
@@ -88,4 +90,13 @@ pub(crate) async fn upsert_sparse_vectors(
     vectors: Vec<CreateSparseVectorDto>,
 ) -> Result<(), TransactionError> {
     repo::upsert_sparse_vectors(ctx, collection_id, transaction_id, vectors).await
+}
+
+pub(crate) async fn upsert_sparse_idf_documents(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    transaction_id: Hash,
+    documents: Vec<CreateSparseIdfDocumentDto>,
+) -> Result<(), TransactionError> {
+    repo::upsert_sparse_idf_documents(ctx, collection_id, transaction_id, documents).await
 }

@@ -8,7 +8,7 @@ use crate::indexes::inverted::transaction::InvertedIndexTransaction;
 use crate::indexes::inverted::types::{RawSparseVectorEmbedding, SparsePair};
 use crate::indexes::inverted::InvertedIndex;
 use crate::indexes::inverted_idf::transaction::InvertedIndexIDFTransaction;
-use crate::indexes::inverted_idf::InvertedIndexIDF;
+use crate::indexes::inverted_idf::{count_tokens, InvertedIndexIDF};
 use crate::macros::key;
 use crate::metadata::query_filtering::filter_encoded_dimensions;
 use crate::metadata::{self, MetadataFields};
@@ -16,9 +16,8 @@ use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::cache_loader::HNSWIndexCache;
 use crate::models::collection::Collection;
 use crate::models::common::*;
-use crate::models::embedding_persist::{
-    write_dense_embedding, write_sparse_embedding, EmbeddingOffset,
-};
+use crate::models::embedding_persist::{write_dense_embedding, EmbeddingOffset};
+use crate::models::meta_persist::{store_average_document_length, store_highest_internal_id};
 use crate::models::meta_persist::{
     store_values_range, store_values_upper_bound, update_current_version,
 };
@@ -180,7 +179,7 @@ pub async fn init_inverted_index_for_collection(
     // index_manager manages persisting index data on disk
     let vec_raw_manager = BufferManagerFactory::new(
         index_path.clone().into(),
-        |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
+        |root, ver: &u8| root.join(format!("{}.vec_raw", ver)),
         8192,
     );
 
@@ -213,6 +212,10 @@ pub async fn init_inverted_index_for_collection(
 pub async fn init_inverted_index_idf_for_collection(
     ctx: Arc<AppContext>,
     collection: &Collection,
+    sample_threshold: usize,
+    store_raw_text: bool,
+    k1: f32,
+    b: f32,
 ) -> Result<Arc<InvertedIndexIDF>, WaCustomError> {
     let collection_name = &collection.name;
     let collection_path: Arc<Path> = collection.get_path();
@@ -229,7 +232,7 @@ pub async fn init_inverted_index_idf_for_collection(
 
     let vec_raw_manager = BufferManagerFactory::new(
         index_path.clone().into(),
-        |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
+        |root, ver: &u8| root.join(format!("{}.vec_raw", ver)),
         8192,
     );
 
@@ -244,6 +247,10 @@ pub async fn init_inverted_index_idf_for_collection(
         vcs,
         vec_raw_manager,
         ctx.config.inverted_index_data_file_parts,
+        sample_threshold,
+        store_raw_text,
+        k1,
+        b,
     )?);
 
     ctx.ain_env
@@ -482,46 +489,30 @@ pub fn run_upload_sparse_vectors(
     inverted_index.set_current_version(current_version);
     update_current_version(&inverted_index.lmdb, current_version)?;
 
-    // Insert vectors
-    let bufman = inverted_index.vec_raw_manager.get(current_version)?;
+    vecs.into_iter().try_for_each(|(id, vec)| {
+        vec.iter().try_for_each(|vec| {
+            // TODO (Question)
+            // should InvertedIndexRoot::insert params change
+            // to accept vector_id as  u64 ??
+            inverted_index.insert(vec.0, vec.1, id.0 as u32, current_version)
+        })?;
 
-    let vec_embs = vecs
-        .into_iter()
-        .map(|(id, vec)| {
-            vec.iter().try_for_each(|vec| {
-                // TODO (Question)
-                // should InvertedIndexRoot::insert params change
-                // to accept vector_id as  u64 ??
-                inverted_index.insert(vec.0, vec.1, id.0 as u32, current_version)
-            })?;
-
-            let vec_emb = RawSparseVectorEmbedding {
-                raw_vec: Arc::new(vec),
-                hash_vec: id,
-            };
-
-            let offset = write_sparse_embedding(&bufman, &vec_emb)?;
-            Ok::<_, WaCustomError>((offset, vec_emb))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    bufman.flush()?;
-
-    let env = inverted_index.lmdb.env.clone();
-    let db = inverted_index.lmdb.db.clone();
-    let mut txn = env.begin_rw_txn()?;
-
-    for (offset, vec_emb) in vec_embs {
-        let offset = EmbeddingOffset {
-            offset,
-            version: current_version,
+        let vec_emb = RawSparseVectorEmbedding {
+            raw_vec: Arc::new(vec),
+            hash_vec: id.clone(),
         };
-        let offset_serialized = offset.serialize();
-        let key = key!(e:vec_emb.hash_vec);
-        txn.put(*db, &key, &offset_serialized, WriteFlags::empty())?;
-    }
 
-    txn.commit()?;
+        inverted_index
+            .vec_raw_map
+            .insert(current_version, id.0, vec_emb);
 
+        Ok::<_, WaCustomError>(())
+    })?;
+
+    inverted_index.vec_raw_map.serialize(
+        &inverted_index.vec_raw_manager,
+        inverted_index.root.data_file_parts,
+    )?;
     inverted_index.vec_raw_manager.flush_all()?;
     inverted_index.root.cache.dim_bufman.flush()?;
     inverted_index.root.cache.data_bufmans.flush_all()?;
@@ -530,9 +521,9 @@ pub fn run_upload_sparse_vectors(
 }
 
 /// uploads a sparse vector for inverted index
-pub fn run_upload_sparse_idf_vectors(
+pub fn run_upload_sparse_idf_documents(
     idf_inverted_index: Arc<InvertedIndexIDF>,
-    vecs: Vec<(VectorId, Vec<SparsePair>)>,
+    docs: Vec<(VectorId, String)>,
 ) -> Result<(), WaCustomError> {
     // Adding next version
     //
@@ -551,48 +542,20 @@ pub fn run_upload_sparse_idf_vectors(
     idf_inverted_index.set_current_version(current_version);
     update_current_version(&idf_inverted_index.lmdb, current_version)?;
 
-    let bufman = idf_inverted_index.vec_raw_manager.get(current_version)?;
+    docs.into_iter()
+        .try_for_each(|(id, terms)| idf_inverted_index.insert(current_version, id, terms))?;
 
-    let vec_embs = vecs
-        .into_iter()
-        .map(|(id, terms)| {
-            idf_inverted_index
-                .root
-                .total_documents_count
-                .fetch_add(1, Ordering::Relaxed);
-            terms.iter().try_for_each(|SparsePair(dim, value)| {
-                idf_inverted_index.insert(*dim, *value, id.0 as u32, current_version)
-            })?;
-
-            let vec_emb = RawSparseVectorEmbedding {
-                raw_vec: Arc::new(terms),
-                hash_vec: id,
-            };
-
-            let offset = write_sparse_embedding(&bufman, &vec_emb)?;
-            Ok::<_, WaCustomError>((offset, vec_emb))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    bufman.flush()?;
-
-    let env = idf_inverted_index.lmdb.env.clone();
-    let db = idf_inverted_index.lmdb.db.clone();
-    let mut txn = env.begin_rw_txn()?;
-
-    for (offset, vec_emb) in vec_embs {
-        let offset = EmbeddingOffset {
-            offset,
-            version: current_version,
-        };
-
-        let offset_serialized = offset.serialize();
-        let key = key!(e:vec_emb.hash_vec);
-        txn.put(*db, &key, &offset_serialized, WriteFlags::empty())?;
-    }
-
-    txn.commit()?;
-
+    store_highest_internal_id(
+        &idf_inverted_index.lmdb,
+        idf_inverted_index
+            .document_id_counter
+            .load(Ordering::Relaxed),
+    )?;
+    idf_inverted_index.vec_raw_map.serialize(
+        &idf_inverted_index.vec_raw_manager,
+        idf_inverted_index.root.data_file_parts,
+    )?;
+    idf_inverted_index.vec_raw_manager.flush_all()?;
     idf_inverted_index.root.cache.dim_bufman.flush()?;
     idf_inverted_index.root.cache.data_bufmans.flush_all()?;
 
@@ -778,9 +741,11 @@ pub fn run_upload_sparse_vectors_in_transaction(
             .try_for_each(|vec| inverted_index.insert(vec.0, vec.1, id.0 as u32, transaction.id))?;
         let vec_emb = RawSparseVectorEmbedding {
             raw_vec: Arc::new(vec),
-            hash_vec: id,
+            hash_vec: id.clone(),
         };
-        transaction.post_raw_embedding(vec_emb);
+        inverted_index
+            .vec_raw_map
+            .insert(transaction.id, id.0, vec_emb);
         Ok::<_, WaCustomError>(())
     })?;
 
@@ -788,26 +753,61 @@ pub fn run_upload_sparse_vectors_in_transaction(
 }
 
 /// uploads a vector embedding within a transaction
-pub fn run_upload_sparse_idf_vectors_in_transaction(
+pub fn run_upload_sparse_idf_documents_in_transaction(
     idf_inverted_index: Arc<InvertedIndexIDF>,
     transaction: &InvertedIndexIDFTransaction,
-    sample_points: Vec<(VectorId, Vec<SparsePair>)>,
+    mut sample_docs: Vec<(VectorId, String)>,
 ) -> Result<(), WaCustomError> {
-    sample_points.into_par_iter().try_for_each(|(id, terms)| {
-        idf_inverted_index
-            .root
-            .total_documents_count
-            .fetch_add(1, Ordering::Relaxed);
-        terms.iter().try_for_each(|SparsePair(dim, value)| {
-            idf_inverted_index.insert(*dim, *value, id.0 as u32, transaction.id)
-        })?;
-        let vec_emb = RawSparseVectorEmbedding {
-            raw_vec: Arc::new(terms),
-            hash_vec: id,
-        };
-        transaction.post_raw_embedding(vec_emb);
-        Ok::<_, WaCustomError>(())
-    })?;
+    if !idf_inverted_index.is_configured.load(Ordering::Acquire) {
+        let collected_count = idf_inverted_index
+            .documents_collected
+            .fetch_add(sample_docs.len(), Ordering::SeqCst);
+
+        if collected_count < idf_inverted_index.sample_threshold {
+            for (_, text) in &sample_docs {
+                let len = count_tokens(text, 40);
+                idf_inverted_index
+                    .sampling_data
+                    .total_documents_length
+                    .fetch_add(len as u64, Ordering::Relaxed);
+                idf_inverted_index
+                    .sampling_data
+                    .total_documents_count
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+
+            let mut documents = idf_inverted_index.documents.write().unwrap();
+            documents.extend(sample_docs);
+            if documents.len() < idf_inverted_index.sample_threshold {
+                return Ok(());
+            }
+
+            let total_documents_count = idf_inverted_index
+                .sampling_data
+                .total_documents_count
+                .load(Ordering::Relaxed);
+            let total_documents_length = idf_inverted_index
+                .sampling_data
+                .total_documents_length
+                .load(Ordering::Relaxed);
+
+            let avg_length = total_documents_length as f32 / total_documents_count as f32;
+            *idf_inverted_index.average_document_length.write().unwrap() = avg_length;
+            idf_inverted_index
+                .is_configured
+                .store(true, Ordering::Release);
+            store_average_document_length(&idf_inverted_index.lmdb, avg_length)?;
+            sample_docs = std::mem::take(&mut *documents);
+        } else {
+            while !idf_inverted_index.is_configured.load(Ordering::Relaxed) {
+                drop(idf_inverted_index.documents.read().unwrap());
+            }
+        }
+    }
+
+    sample_docs
+        .into_par_iter()
+        .try_for_each(|(id, text)| idf_inverted_index.insert(transaction.id, id, text))?;
 
     Ok(())
 }

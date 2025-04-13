@@ -161,6 +161,15 @@ pub(crate) async fn upsert(
             )
             .await?
         }
+        UpsertDto::SparseIdf(documents) => {
+            service::upsert_sparse_idf_documents(
+                ctx.into_inner(),
+                &collection_id,
+                transaction_id.into(),
+                documents,
+            )
+            .await?
+        }
     };
     Ok(HttpResponse::Ok().finish())
 }

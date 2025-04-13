@@ -30,8 +30,23 @@ pub(crate) async fn create_sparse_index(
     ctx: Arc<AppContext>,
 ) -> Result<(), IndexesError> {
     match create_index_dto {
-        CreateSparseIndexDto::Idf { name } => {
-            repo::create_sparse_index_idf(ctx, collection_id, name).await
+        CreateSparseIndexDto::Idf {
+            name,
+            sample_threshold,
+            store_raw_text,
+            k1,
+            b,
+        } => {
+            repo::create_sparse_index_idf(
+                ctx,
+                collection_id,
+                name,
+                sample_threshold,
+                store_raw_text,
+                k1,
+                b,
+            )
+            .await
         }
         CreateSparseIndexDto::Splade {
             name,

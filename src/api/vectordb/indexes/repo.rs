@@ -93,6 +93,10 @@ pub(crate) async fn create_sparse_index_idf(
     ctx: Arc<AppContext>,
     collection_name: String,
     _name: String,
+    sample_threshold: usize,
+    store_raw_text: bool,
+    k1: f32,
+    b: f32,
 ) -> Result<(), IndexesError> {
     let collection = ctx
         .ain_env
@@ -100,9 +104,16 @@ pub(crate) async fn create_sparse_index_idf(
         .get_collection(&collection_name)
         .ok_or(IndexesError::CollectionNotFound)?;
 
-    init_inverted_index_idf_for_collection(ctx, &collection)
-        .await
-        .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;
+    init_inverted_index_idf_for_collection(
+        ctx,
+        &collection,
+        sample_threshold,
+        store_raw_text,
+        k1,
+        b,
+    )
+    .await
+    .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;
 
     Ok(())
 }

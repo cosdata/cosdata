@@ -4,24 +4,22 @@ use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use crate::{
     api_service::{
-        ann_vector_query, batch_ann_vector_query, run_upload_sparse_idf_vectors,
-        run_upload_sparse_idf_vectors_in_transaction, run_upload_sparse_vectors,
+        ann_vector_query, batch_ann_vector_query, run_upload_sparse_idf_documents,
+        run_upload_sparse_idf_documents_in_transaction, run_upload_sparse_vectors,
         run_upload_sparse_vectors_in_transaction,
     },
     config_loader::Config,
-    distance::dotproduct::DotProductDistance,
     indexes::{
         hnsw::{transaction::HNSWIndexTransaction, HNSWIndex},
         inverted::{transaction::InvertedIndexTransaction, types::SparsePair, InvertedIndex},
-        inverted_idf::{transaction::InvertedIndexIDFTransaction, InvertedIndexIDF},
+        inverted_idf::{process_text, transaction::InvertedIndexIDFTransaction, InvertedIndexIDF},
     },
     models::{
         common::WaCustomError,
         rpc::DenseVector,
         sparse_ann_query::{SparseAnnQueryBasic, SparseAnnResult},
-        types::{MetricResult, SparseVector, VectorId},
+        types::{SparseVector, VectorId},
     },
-    vector_store::get_sparse_embedding_by_id,
 };
 
 use crate::{
@@ -33,8 +31,9 @@ use crate::{
 
 use super::{
     dtos::{
-        BatchSearchDenseVectorsDto, BatchSearchSparseVectorsDto, CreateDenseVectorDto,
-        CreateSparseVectorDto, CreateVectorResponseDto, FindSimilarDenseVectorsDto,
+        BatchSearchDenseVectorsDto, BatchSearchSparseIdfDocumentsDto, BatchSearchSparseVectorsDto,
+        CreateDenseVectorDto, CreateSparseIdfDocumentDto, CreateSparseVectorDto,
+        CreateVectorResponseDto, FindSimilarDenseVectorsDto, FindSimilarSparseIdfDocumentDto,
         FindSimilarSparseVectorsDto, FindSimilarVectorsResponseDto, SimilarVector, UpdateVectorDto,
         UpdateVectorResponseDto,
     },
@@ -48,59 +47,70 @@ pub(crate) async fn create_sparse_vector(
     collection_id: &str,
     create_vector_dto: CreateSparseVectorDto,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
-    if let Some(inverted_index) = ctx
+    let inverted_index = ctx
         .ain_env
         .collections_map
         .get_inverted_index(collection_id)
+        .ok_or(VectorsError::IndexNotFound)?;
+
+    if !inverted_index
+        .current_open_transaction
+        .load(Ordering::SeqCst)
+        .is_null()
     {
-        if !inverted_index
-            .current_open_transaction
-            .load(Ordering::SeqCst)
-            .is_null()
-        {
-            return Err(VectorsError::FailedToCreateVector(
-                "there is an ongoing transaction!".into(),
-            ));
-        }
-
-        run_upload_sparse_vectors(
-            inverted_index,
-            vec![(
-                create_vector_dto.id.clone(),
-                create_vector_dto.values.clone(),
-            )],
-        )
-        .map_err(VectorsError::WaCustom)?;
-    } else {
-        let inverted_index = ctx
-            .ain_env
-            .collections_map
-            .get_idf_inverted_index(collection_id)
-            .ok_or(VectorsError::IndexNotFound)?;
-        if !inverted_index
-            .current_open_transaction
-            .load(Ordering::SeqCst)
-            .is_null()
-        {
-            return Err(VectorsError::FailedToCreateVector(
-                "there is an ongoing transaction!".into(),
-            ));
-        }
-
-        run_upload_sparse_idf_vectors(
-            inverted_index,
-            vec![(
-                create_vector_dto.id.clone(),
-                create_vector_dto.values.clone(),
-            )],
-        )
-        .map_err(VectorsError::WaCustom)?;
+        return Err(VectorsError::FailedToCreateVector(
+            "there is an ongoing transaction!".into(),
+        ));
     }
+
+    run_upload_sparse_vectors(
+        inverted_index,
+        vec![(
+            create_vector_dto.id.clone(),
+            create_vector_dto.values.clone(),
+        )],
+    )
+    .map_err(VectorsError::WaCustom)?;
 
     Ok(CreateVectorResponseDto::Sparse(CreateSparseVectorDto {
         id: create_vector_dto.id,
         values: create_vector_dto.values,
     }))
+}
+
+/// Creates a sparse IDF document for inverted index
+///
+pub(crate) async fn create_sparse_idf_document(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    create_document_dto: CreateSparseIdfDocumentDto,
+) -> Result<CreateVectorResponseDto, VectorsError> {
+    let idf_inverted_index = ctx
+        .ain_env
+        .collections_map
+        .get_idf_inverted_index(collection_id)
+        .ok_or(VectorsError::IndexNotFound)?;
+
+    if !idf_inverted_index
+        .current_open_transaction
+        .load(Ordering::SeqCst)
+        .is_null()
+    {
+        return Err(VectorsError::FailedToCreateVector(
+            "there is an ongoing transaction!".into(),
+        ));
+    }
+
+    run_upload_sparse_idf_documents(
+        idf_inverted_index,
+        vec![(
+            create_document_dto.id.clone(),
+            create_document_dto.text.clone(),
+        )],
+    )
+    .map_err(VectorsError::WaCustom)?;
+
+    Ok(CreateVectorResponseDto::SparseIdf(create_document_dto))
 }
 
 /// Creates a vector for dense index
@@ -292,43 +302,59 @@ pub(crate) async fn find_similar_sparse_vectors(
         ));
     }
 
-    let results = if let Some(inverted_index) = ctx
+    let inverted_index = ctx
         .ain_env
         .collections_map
         .get_inverted_index(collection_id)
-    {
-        sparse_ann_vector_query(
-            &ctx.config,
-            inverted_index,
-            &find_similar_vectors.values,
-            find_similar_vectors.top_k,
-            find_similar_vectors
-                .early_terminate_threshold
-                .unwrap_or(ctx.config.search.early_terminate_threshold),
-        )
-        .map_err(|e| VectorsError::FailedToFindSimilarVectors(e.to_string()))?
-    } else {
-        let inverted_index_idf = ctx
-            .ain_env
-            .collections_map
-            .get_idf_inverted_index(collection_id)
-            .ok_or(VectorsError::IndexNotFound)?;
+        .ok_or(VectorsError::IndexNotFound)?;
 
-        sparse_idf_ann_vector_query(
-            inverted_index_idf,
-            &find_similar_vectors.values,
-            find_similar_vectors.top_k,
-        )
-        .map_err(|e| VectorsError::FailedToFindSimilarVectors(e.to_string()))?
-    };
+    let results = sparse_ann_vector_query(
+        &ctx.config,
+        inverted_index,
+        &find_similar_vectors.values,
+        find_similar_vectors.top_k,
+        find_similar_vectors
+            .early_terminate_threshold
+            .unwrap_or(ctx.config.search.early_terminate_threshold),
+    )
+    .map_err(|e| VectorsError::FailedToFindSimilarVectors(e.to_string()))?;
 
     Ok(FindSimilarVectorsResponseDto {
         results: results
             .into_iter()
-            .map(|(id, sim)| SimilarVector {
-                id,
-                score: sim.get_value(),
-            })
+            .map(|(id, score)| SimilarVector { id, score })
+            .collect(),
+    })
+}
+
+pub(crate) async fn find_similar_sparse_idf_documents(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    find_similar_vectors: FindSimilarSparseIdfDocumentDto,
+) -> Result<FindSimilarVectorsResponseDto, VectorsError> {
+    if find_similar_vectors.query.trim().is_empty() {
+        return Err(VectorsError::FailedToFindSimilarVectors(
+            "Query shouldn't be empty".to_string(),
+        ));
+    }
+
+    let idf_inverted_index = ctx
+        .ain_env
+        .collections_map
+        .get_idf_inverted_index(collection_id)
+        .ok_or(VectorsError::IndexNotFound)?;
+
+    let results = sparse_idf_ann_vector_query(
+        idf_inverted_index,
+        &find_similar_vectors.query,
+        find_similar_vectors.top_k,
+    )
+    .map_err(|e| VectorsError::FailedToFindSimilarVectors(e.to_string()))?;
+
+    Ok(FindSimilarVectorsResponseDto {
+        results: results
+            .into_iter()
+            .map(|(id, score)| SimilarVector { id, score })
             .collect(),
     })
 }
@@ -382,45 +408,58 @@ pub(crate) async fn batch_search_sparse_vectors(
             ));
         }
     }
-    let results = if let Some(inverted_index) = ctx
+    let inverted_index = ctx
         .ain_env
         .collections_map
         .get_inverted_index(collection_id)
-    {
-        batch_sparse_ann_vector_query(
-            &ctx.config,
-            inverted_index,
-            &batch_search_vectors.vectors,
-            batch_search_vectors.top_k,
-            batch_search_vectors
-                .early_terminate_threshold
-                .unwrap_or(ctx.config.search.early_terminate_threshold),
-        )
-        .map_err(|e| VectorsError::FailedToFindSimilarVectors(e.to_string()))?
-    } else {
-        let inverted_index_idf = ctx
-            .ain_env
-            .collections_map
-            .get_idf_inverted_index(collection_id)
-            .ok_or(VectorsError::IndexNotFound)?;
+        .ok_or(VectorsError::IndexNotFound)?;
 
-        batch_sparse_idf_ann_vector_query(
-            inverted_index_idf,
-            &batch_search_vectors.vectors,
-            batch_search_vectors.top_k,
-        )
-        .map_err(|e| VectorsError::FailedToFindSimilarVectors(e.to_string()))?
-    };
+    let results = batch_sparse_ann_vector_query(
+        &ctx.config,
+        inverted_index,
+        &batch_search_vectors.vectors,
+        batch_search_vectors.top_k,
+        batch_search_vectors
+            .early_terminate_threshold
+            .unwrap_or(ctx.config.search.early_terminate_threshold),
+    )
+    .map_err(|e| VectorsError::FailedToFindSimilarVectors(e.to_string()))?;
 
     Ok(results
         .into_iter()
         .map(|result| FindSimilarVectorsResponseDto {
             results: result
                 .into_iter()
-                .map(|(id, sim)| SimilarVector {
-                    id,
-                    score: sim.get_value(),
-                })
+                .map(|(id, score)| SimilarVector { id, score })
+                .collect(),
+        })
+        .collect())
+}
+
+pub(crate) async fn batch_search_sparse_idf_documents(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    batch_search_documents: BatchSearchSparseIdfDocumentsDto,
+) -> Result<Vec<FindSimilarVectorsResponseDto>, VectorsError> {
+    let idf_inverted_index = ctx
+        .ain_env
+        .collections_map
+        .get_idf_inverted_index(collection_id)
+        .ok_or(VectorsError::IndexNotFound)?;
+
+    let results = batch_sparse_idf_ann_vector_query(
+        idf_inverted_index,
+        &batch_search_documents.queries,
+        batch_search_documents.top_k,
+    )
+    .map_err(|e| VectorsError::FailedToFindSimilarVectors(e.to_string()))?;
+
+    Ok(results
+        .into_iter()
+        .map(|result| FindSimilarVectorsResponseDto {
+            results: result
+                .into_iter()
+                .map(|(id, score)| SimilarVector { id, score })
                 .collect(),
         })
         .collect())
@@ -432,7 +471,7 @@ fn sparse_ann_vector_query(
     query: &[SparsePair],
     top_k: Option<usize>,
     early_terminate_threshold: f32,
-) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
+) -> Result<Vec<(VectorId, f32)>, WaCustomError> {
     // create a query to get similar sparse vectors
     let sparse_vec = SparseVector {
         vector_id: u32::MAX,
@@ -457,25 +496,27 @@ fn sparse_ann_vector_query(
     } else {
         Ok(intermediate_results
             .into_iter()
-            .map(|result| {
-                (
-                    VectorId(result.vector_id as u64),
-                    MetricResult::DotProductDistance(DotProductDistance(result.similarity as f32)),
-                )
-            })
+            .map(|result| (VectorId(result.vector_id as u64), result.similarity as f32))
             .collect())
     }
 }
 
 fn sparse_idf_ann_vector_query(
     inverted_index_idf: Arc<InvertedIndexIDF>,
-    query: &[SparsePair],
+    query: &str,
     top_k: Option<usize>,
-) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
+) -> Result<Vec<(VectorId, f32)>, WaCustomError> {
+    let entries = process_text(
+        query,
+        40,
+        *inverted_index_idf.average_document_length.read().unwrap(),
+        inverted_index_idf.k1,
+        inverted_index_idf.b,
+    );
     // create a query to get similar sparse vectors
     let sparse_vec = SparseVector {
         vector_id: u32::MAX,
-        entries: query.iter().map(|pair| (pair.0, pair.1)).collect(),
+        entries,
     };
 
     let results =
@@ -485,8 +526,13 @@ fn sparse_idf_ann_vector_query(
         .into_iter()
         .map(|result| {
             (
-                VectorId(result.document_id as u64),
-                MetricResult::DotProductDistance(DotProductDistance(result.score)),
+                inverted_index_idf
+                    .vec_raw_map
+                    .get_latest(result.document_id as u64)
+                    .unwrap()
+                    .0
+                    .clone(),
+                result.score,
             )
         })
         .collect())
@@ -498,7 +544,7 @@ fn batch_sparse_ann_vector_query(
     queries: &[Vec<SparsePair>],
     top_k: Option<usize>,
     early_terminate_threshold: f32,
-) -> Result<Vec<Vec<(VectorId, MetricResult)>>, WaCustomError> {
+) -> Result<Vec<Vec<(VectorId, f32)>>, WaCustomError> {
     queries
         .par_iter()
         .map(|query| {
@@ -515,9 +561,9 @@ fn batch_sparse_ann_vector_query(
 
 fn batch_sparse_idf_ann_vector_query(
     inverted_index_idf: Arc<InvertedIndexIDF>,
-    queries: &[Vec<SparsePair>],
+    queries: &[String],
     top_k: Option<usize>,
-) -> Result<Vec<Vec<(VectorId, MetricResult)>>, WaCustomError> {
+) -> Result<Vec<Vec<(VectorId, f32)>>, WaCustomError> {
     queries
         .par_iter()
         .map(|query| sparse_idf_ann_vector_query(inverted_index_idf.clone(), query, top_k))
@@ -529,24 +575,27 @@ fn finalize_sparse_ann_results(
     intermediate_results: Vec<SparseAnnResult>,
     query: &[SparsePair],
     k: Option<usize>,
-) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
+) -> Result<Vec<(VectorId, f32)>, WaCustomError> {
     let mut results = Vec::with_capacity(k.unwrap_or(intermediate_results.len()));
 
     for result in intermediate_results {
         let id = VectorId(result.vector_id as u64);
-        let map =
-            get_sparse_embedding_by_id(&inverted_index.lmdb, &inverted_index.vec_raw_manager, &id)?
-                .into_map();
+        let map = inverted_index
+            .vec_raw_map
+            .get_latest(id.0)
+            .ok_or_else(|| WaCustomError::NotFound(format!("Raw vec not found for id: {}", id)))?
+            .clone()
+            .into_map();
         let mut dp = 0.0;
         for pair in query {
             if let Some(val) = map.get(&pair.0) {
                 dp += val * pair.1;
             }
         }
-        results.push((id, MetricResult::DotProductDistance(DotProductDistance(dp))));
+        results.push((id, dp));
     }
 
-    results.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+    results.sort_unstable_by(|(_, a), (_, b)| b.total_cmp(a));
     if let Some(k) = k {
         results.truncate(k);
     }
@@ -607,17 +656,17 @@ pub(crate) async fn upsert_sparse_vectors_in_transaction(
     Ok(())
 }
 
-pub(crate) async fn upsert_sparse_idf_vectors_in_transaction(
+pub(crate) async fn upsert_sparse_idf_documents_in_transaction(
     inverted_index: Arc<InvertedIndexIDF>,
     transaction: &InvertedIndexIDFTransaction,
-    vectors: Vec<CreateSparseVectorDto>,
+    documents: Vec<CreateSparseIdfDocumentDto>,
 ) -> Result<(), VectorsError> {
-    run_upload_sparse_idf_vectors_in_transaction(
+    run_upload_sparse_idf_documents_in_transaction(
         inverted_index,
         transaction,
-        vectors
+        documents
             .into_iter()
-            .map(|vec| (vec.id, vec.values))
+            .map(|doc| (doc.id, doc.text))
             .collect(),
     )
     .map_err(VectorsError::WaCustom)?;

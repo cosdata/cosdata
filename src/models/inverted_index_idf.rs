@@ -62,7 +62,7 @@ impl<T> UnsafeVersionedVec<T> {
         }
     }
 
-    pub fn iter(&self) -> UnsafeVersionedVecIter<'_, T> {
+    pub fn iter<'a>(&self) -> UnsafeVersionedVecIter<'a, T> {
         let vec_ref = unsafe { &*self.list.get() };
         let iter = vec_ref.iter();
         UnsafeVersionedVecIter {
@@ -84,6 +84,30 @@ impl<T> UnsafeVersionedVec<T> {
     #[allow(unused)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+}
+
+impl UnsafeVersionedVec<(u32, f32)> {
+    pub fn push_sorted(&self, version: Hash, value: (u32, f32)) {
+        if self.version == version {
+            let list = unsafe { &mut *self.list.get() };
+            let mut i = list.len();
+            while i > 0 && list[i - 1].0 > value.0 {
+                i -= 1;
+            }
+            list.insert(i, value);
+            return;
+        }
+
+        let next = unsafe { &mut *self.next.get() };
+
+        if let Some(next) = next {
+            next.push_sorted(version, value);
+        } else {
+            let new_next = Box::new(Self::new(version));
+            new_next.push_sorted(version, value);
+            *next = Some(new_next);
+        }
     }
 }
 
@@ -336,7 +360,7 @@ impl InvertedIndexIDFNode {
         data.map.modify_or_insert(
             quotient,
             |term| {
-                term.documents.push(version, (document_id, value));
+                term.documents.push_sorted(version, (document_id, value));
             },
             || {
                 // Create new inner map if quotient not found

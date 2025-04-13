@@ -2,13 +2,22 @@
 // This module is not used anywhere currently, once it being used, remove this attribute
 #![allow(unused)]
 
-use std::sync::{
-    atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering},
-    Arc, RwLock,
+use std::{
+    cell::UnsafeCell,
+    sync::{
+        atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering},
+        Arc, RwLock,
+    },
 };
 
 use super::{
-    atomic_array::AtomicArray, common::TSHashTable, types::FileOffset, utils::calculate_path,
+    atomic_array::AtomicArray,
+    buffered_io::{BufIoError, BufferManagerFactory},
+    common::TSHashTable,
+    serializer::{PartitionedSerialize, SimpleSerialize},
+    types::FileOffset,
+    utils::calculate_path,
+    versioning::Hash,
 };
 
 pub struct TreeMap<T> {
@@ -32,7 +41,14 @@ pub struct QuotientsMap<T> {
 
 pub struct Quotient<T> {
     pub sequence_idx: u64,
-    pub value: AtomicPtr<T>,
+    pub value: UnsafeVersionedItem<T>,
+}
+
+pub struct UnsafeVersionedItem<T> {
+    pub serialized_at: RwLock<Option<FileOffset>>,
+    pub version: Hash,
+    pub value: T,
+    pub next: UnsafeCell<Option<Box<Self>>>,
 }
 
 #[cfg(test)]
@@ -82,11 +98,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for QuotientsMap<T> {
 #[cfg(test)]
 impl<T: PartialEq> PartialEq for Quotient<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.sequence_idx == other.sequence_idx
-            && unsafe {
-                self.value.load(Ordering::Relaxed).as_ref()
-                    == other.value.load(Ordering::Relaxed).as_ref()
-            }
+        self.sequence_idx == other.sequence_idx && self.value == other.value
     }
 }
 
@@ -95,10 +107,61 @@ impl<T: std::fmt::Debug> std::fmt::Debug for Quotient<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Quotient")
             .field("sequence_idx", &self.sequence_idx)
-            .field("value", unsafe {
-                &self.value.load(Ordering::Relaxed).as_ref()
-            })
+            .field("value", &self.value)
             .finish()
+    }
+}
+
+#[cfg(test)]
+impl<T: PartialEq> PartialEq for UnsafeVersionedItem<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.version == other.version
+            && self.value == other.value
+            && unsafe { *self.next.get() == *other.next.get() }
+    }
+}
+
+#[cfg(test)]
+impl<T: std::fmt::Debug> std::fmt::Debug for UnsafeVersionedItem<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UnsafeVersionedItem")
+            .field("version", &self.version)
+            .field("value", &self.value)
+            .field("next", unsafe { &*self.next.get() })
+            .finish()
+    }
+}
+
+impl<T> UnsafeVersionedItem<T> {
+    pub fn new(version: Hash, value: T) -> Self {
+        Self {
+            serialized_at: RwLock::new(None),
+            version,
+            value,
+            next: UnsafeCell::new(None),
+        }
+    }
+
+    pub fn push(&self, version: Hash, value: T) {
+        self.push_inner(Box::new(Self::new(version, value)));
+    }
+
+    fn push_inner(&self, version: Box<Self>) {
+        if let Some(next) = unsafe { &*self.next.get() } {
+            return next.push_inner(version);
+        }
+
+        unsafe {
+            *self.next.get() = Some(version);
+        }
+    }
+
+    pub fn latest(&self) -> &T {
+        if let Some(next) = unsafe { &*self.next.get() } {
+            return next.latest();
+        }
+
+        &self.value
     }
 }
 
@@ -125,13 +188,17 @@ impl<T> TreeMapNode<T> {
         current
     }
 
-    pub fn set_data(&self, quotient: u64, value: T) {
-        self.quotients.insert(quotient, value);
+    pub fn insert(&self, version: Hash, quotient: u64, value: T) {
+        self.quotients.insert(version, quotient, value);
         self.dirty.store(true, Ordering::Release);
     }
 
-    pub fn get_data(&self, quotient: u64) -> Option<&T> {
-        self.quotients.get(quotient)
+    pub fn get_latest(&self, quotient: u64) -> Option<&T> {
+        self.quotients.get_latest(quotient)
+    }
+
+    pub fn get_versioned(&self, quotient: u64) -> Option<&UnsafeVersionedItem<T>> {
+        self.quotients.get_versioned(quotient)
     }
 }
 
@@ -151,26 +218,38 @@ impl<T> QuotientsMap<T> {
         Self::default()
     }
 
-    pub fn insert(&self, quotient: u64, value: T) {
-        let value_ptr = Box::into_raw(Box::new(value));
-        self.map.modify_or_insert(
+    pub fn insert(&self, version: Hash, quotient: u64, value: T) {
+        self.map.modify_or_insert_with_value(
             quotient,
-            |quotient| {
-                quotient.value.store(value_ptr, Ordering::Release);
+            value,
+            |value, quotient| {
+                quotient.value.push(version, value);
             },
-            || {
+            |value| {
                 Arc::new(Quotient {
                     sequence_idx: self.len.fetch_add(1, Ordering::Relaxed),
-                    value: AtomicPtr::new(value_ptr),
+                    value: UnsafeVersionedItem::new(version, value),
                 })
             },
         );
     }
 
-    fn get(&self, quotient: u64) -> Option<&T> {
-        self.map
-            .lookup(&quotient)
-            .and_then(|q| unsafe { q.value.load(Ordering::Acquire).as_ref() })
+    fn get_latest(&self, quotient: u64) -> Option<&T> {
+        self.map.lookup(&quotient).map(|q| {
+            // SAFETY: here we are changing the lifetime of the value by using
+            // `std::mem::transmute`, which by definition is not safe, but given our use of
+            // this value and how we destroy it, its actually safe in this context.
+            unsafe { std::mem::transmute(q.value.latest()) }
+        })
+    }
+
+    fn get_versioned(&self, quotient: u64) -> Option<&UnsafeVersionedItem<T>> {
+        self.map.lookup(&quotient).map(|q| {
+            // SAFETY: here we are changing the lifetime of the value by using
+            // `std::mem::transmute`, which by definition is not safe, but given our use of
+            // this value and how we destroy it, its actually safe in this context.
+            unsafe { std::mem::transmute(&q.value) }
+        })
     }
 }
 
@@ -201,17 +280,78 @@ impl<T> TreeMap<T> {
         Self::default()
     }
 
-    pub fn insert(&self, key: u64, value: T) {
-        let node_pos = (key % 65536) as u32; // its small enough to fit inside u16, but u32 is used to match the `calculate_path` function signature
+    pub fn insert(&self, version: Hash, key: u64, value: T) {
+        let node_pos = (key % 65536) as u32;
         let path = calculate_path(node_pos, 0);
         let node = self.root.find_or_create_node(&path);
-        node.set_data(key, value);
+        node.insert(version, key, value);
     }
 
-    pub fn get(&self, key: u64) -> Option<&T> {
-        let node_pos = (key % 65536) as u32; // its small enough to fit inside u16, but u32 is used to match the `calculate_path` function signature
+    pub fn get_latest(&self, key: u64) -> Option<&T> {
+        let node_pos = (key % 65536) as u32;
         let path = calculate_path(node_pos, 0);
         let node = self.root.find_or_create_node(&path);
-        node.get_data(key)
+        node.get_latest(key)
+    }
+
+    pub fn get_versioned(&self, key: u64) -> Option<&UnsafeVersionedItem<T>> {
+        let node_pos = (key % 65536) as u32;
+        let path = calculate_path(node_pos, 0);
+        let node = self.root.find_or_create_node(&path);
+        node.get_versioned(key)
+    }
+}
+
+impl<T: SimpleSerialize> TreeMap<T> {
+    pub fn serialize(
+        &self,
+        bufmans: &BufferManagerFactory<u8>,
+        file_parts: u8,
+    ) -> Result<(), BufIoError> {
+        let bufman = bufmans.get(0)?;
+        let cursor = bufman.open_cursor()?;
+        bufman.update_u32_with_cursor(cursor, u32::MAX)?;
+        let offset = self.root.serialize(bufmans, file_parts, 0, 0)?;
+        bufman.seek_with_cursor(cursor, 0)?;
+        bufman.update_u32_with_cursor(cursor, offset)?;
+        bufman.close_cursor(cursor)?;
+        Ok(())
+    }
+
+    pub fn deserialize(
+        bufmans: &BufferManagerFactory<u8>,
+        file_parts: u8,
+    ) -> Result<Self, BufIoError> {
+        let bufman = bufmans.get(0)?;
+        let cursor = bufman.open_cursor()?;
+        let offset = bufman.read_u32_with_cursor(cursor)?;
+        bufman.close_cursor(cursor)?;
+        Ok(Self {
+            root: TreeMapNode::deserialize(bufmans, file_parts, 0, FileOffset(offset))?,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tests_basic_usage() {
+        let map = TreeMap::new();
+        map.insert(0.into(), 65536, 0);
+        map.insert(0.into(), 0, 23);
+        assert_eq!(map.get_latest(0), Some(&23));
+        map.insert(1.into(), 0, 29);
+        assert_eq!(map.get_latest(0), Some(&29));
+        assert_eq!(
+            map.get_versioned(0),
+            Some(&UnsafeVersionedItem {
+                version: 0.into(),
+                serialized_at: RwLock::new(None),
+                value: 23,
+                next: UnsafeCell::new(Some(Box::new(UnsafeVersionedItem::new(1.into(), 29))))
+            })
+        );
     }
 }

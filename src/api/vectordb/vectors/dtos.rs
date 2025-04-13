@@ -22,6 +22,12 @@ pub(crate) struct CreateSparseVectorDto {
     pub values: Vec<SparsePair>,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub(crate) struct CreateSparseIdfDocumentDto {
+    pub id: VectorId,
+    pub text: String,
+}
+
 impl<'de> Deserialize<'de> for CreateSparseVectorDto {
     fn deserialize<D>(deserializer: D) -> Result<CreateSparseVectorDto, D::Error>
     where
@@ -93,17 +99,71 @@ impl<'de> Deserialize<'de> for CreateSparseVectorDto {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug)]
 pub(crate) enum CreateVectorDto {
     Dense(CreateDenseVectorDto),
     Sparse(CreateSparseVectorDto),
+    SparseIdf(CreateSparseIdfDocumentDto),
+}
+
+impl<'de> Deserialize<'de> for CreateVectorDto {
+    fn deserialize<D>(deserializer: D) -> Result<CreateVectorDto, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "snake_case")]
+        enum Field {
+            IndexType,
+            IsIdf,
+            Id,
+            Values,
+            Indices,
+            Text,
+            Metadata,
+        }
+
+        #[derive(Deserialize)]
+        struct RawMap {
+            #[serde(rename = "index_type")]
+            index_type: String,
+
+            #[serde(default, rename = "isIDF")]
+            is_idf: bool,
+
+            #[serde(flatten)]
+            rest: serde_json::Value,
+        }
+
+        let RawMap {
+            index_type,
+            is_idf,
+            rest,
+        } = RawMap::deserialize(deserializer)?;
+
+        match (index_type.as_str(), is_idf) {
+            ("dense", _) => {
+                let dense = serde_json::from_value(rest).map_err(de::Error::custom)?;
+                Ok(CreateVectorDto::Dense(dense))
+            }
+            ("sparse", true) => {
+                let sparse_idf = serde_json::from_value(rest).map_err(de::Error::custom)?;
+                Ok(CreateVectorDto::SparseIdf(sparse_idf))
+            }
+            ("sparse", false) => {
+                let sparse = serde_json::from_value(rest).map_err(de::Error::custom)?;
+                Ok(CreateVectorDto::Sparse(sparse))
+            }
+            (other, _) => Err(de::Error::unknown_variant(other, &["dense", "sparse"])),
+        }
+    }
 }
 
 #[derive(Serialize)]
 pub(crate) enum CreateVectorResponseDto {
     Dense(CreateDenseVectorDto),
     Sparse(CreateSparseVectorDto),
+    SparseIdf(CreateSparseIdfDocumentDto),
 }
 
 #[derive(Deserialize)]
@@ -138,6 +198,12 @@ pub(crate) struct FindSimilarSparseVectorsDto {
 }
 
 #[derive(Deserialize, Debug)]
+pub(crate) struct FindSimilarSparseIdfDocumentDto {
+    pub query: String,
+    pub top_k: Option<usize>,
+}
+
+#[derive(Deserialize, Debug)]
 pub(crate) struct BatchSearchSparseVectorsDto {
     pub vectors: Vec<Vec<SparsePair>>,
     pub top_k: Option<usize>,
@@ -145,17 +211,89 @@ pub(crate) struct BatchSearchSparseVectorsDto {
 }
 
 #[derive(Deserialize, Debug)]
-#[serde(rename_all = "lowercase", tag = "index_type")]
+pub(crate) struct BatchSearchSparseIdfDocumentsDto {
+    pub queries: Vec<String>,
+    pub top_k: Option<usize>,
+}
+
+#[derive(Debug)]
 pub(crate) enum FindSimilarVectorsDto {
     Dense(FindSimilarDenseVectorsDto),
     Sparse(FindSimilarSparseVectorsDto),
+    SparseIdf(FindSimilarSparseIdfDocumentDto),
 }
 
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "lowercase", tag = "index_type")]
+impl<'de> Deserialize<'de> for FindSimilarVectorsDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct TypeProbe {
+            index_type: String,
+            #[serde(default, rename = "isIDF")]
+            is_idf: bool,
+        }
+
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let probe: TypeProbe = serde_json::from_value(value.clone()).map_err(de::Error::custom)?;
+
+        match (probe.index_type.as_str(), probe.is_idf) {
+            ("dense", _) => {
+                let parsed = serde_json::from_value(value).map_err(de::Error::custom)?;
+                Ok(FindSimilarVectorsDto::Dense(parsed))
+            }
+            ("sparse", true) => {
+                let parsed = serde_json::from_value(value).map_err(de::Error::custom)?;
+                Ok(FindSimilarVectorsDto::SparseIdf(parsed))
+            }
+            ("sparse", false) => {
+                let parsed = serde_json::from_value(value).map_err(de::Error::custom)?;
+                Ok(FindSimilarVectorsDto::Sparse(parsed))
+            }
+            (other, _) => Err(de::Error::unknown_variant(other, &["dense", "sparse"])),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub(crate) enum BatchSearchVectorsDto {
     Dense(BatchSearchDenseVectorsDto),
     Sparse(BatchSearchSparseVectorsDto),
+    SparseIdf(BatchSearchSparseIdfDocumentsDto),
+}
+
+impl<'de> Deserialize<'de> for BatchSearchVectorsDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct TypeProbe {
+            index_type: String,
+            #[serde(default, rename = "isIDF")]
+            is_idf: bool,
+        }
+
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let probe: TypeProbe = serde_json::from_value(value.clone()).map_err(de::Error::custom)?;
+
+        match (probe.index_type.as_str(), probe.is_idf) {
+            ("dense", _) => {
+                let parsed = serde_json::from_value(value).map_err(de::Error::custom)?;
+                Ok(BatchSearchVectorsDto::Dense(parsed))
+            }
+            ("sparse", true) => {
+                let parsed = serde_json::from_value(value).map_err(de::Error::custom)?;
+                Ok(BatchSearchVectorsDto::SparseIdf(parsed))
+            }
+            ("sparse", false) => {
+                let parsed = serde_json::from_value(value).map_err(de::Error::custom)?;
+                Ok(BatchSearchVectorsDto::Sparse(parsed))
+            }
+            (other, _) => Err(de::Error::unknown_variant(other, &["dense", "sparse"])),
+        }
+    }
 }
 
 #[derive(Serialize)]

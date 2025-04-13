@@ -116,6 +116,10 @@ pub(crate) enum CreateSparseIndexDto {
     },
     Idf {
         name: String,
+        sample_threshold: usize,
+        store_raw_text: bool,
+        k1: f32,
+        b: f32,
     },
 }
 
@@ -143,6 +147,9 @@ impl<'de> Deserialize<'de> for CreateSparseIndexDto {
                 let mut name = None;
                 let mut quantization = None;
                 let mut sample_threshold = None;
+                let mut store_raw_text = false;
+                let mut k1 = None;
+                let mut b = None;
                 let mut is_idf = false;
 
                 while let Some(key) = map.next_key::<String>()? {
@@ -151,6 +158,9 @@ impl<'de> Deserialize<'de> for CreateSparseIndexDto {
                         "quantization" => quantization = Some(map.next_value()?),
                         "sample_threshold" => sample_threshold = Some(map.next_value()?),
                         "isIDF" => is_idf = map.next_value()?,
+                        "store_raw_text" => store_raw_text = map.next_value()?,
+                        "k1" => k1 = Some(map.next_value()?),
+                        "b" => b = Some(map.next_value()?),
                         _ => {
                             return Err(Error::unknown_field(
                                 &key,
@@ -160,6 +170,9 @@ impl<'de> Deserialize<'de> for CreateSparseIndexDto {
                                     "early_terminate_threshold",
                                     "sample_threshold",
                                     "isIDF",
+                                    "store_raw_text",
+                                    "k1",
+                                    "b",
                                 ],
                             ))
                         }
@@ -167,16 +180,23 @@ impl<'de> Deserialize<'de> for CreateSparseIndexDto {
                 }
 
                 let name = name.ok_or_else(|| Error::missing_field("name"))?;
+                let sample_threshold =
+                    sample_threshold.ok_or_else(|| Error::missing_field("sample_threshold"))?;
 
                 if is_idf {
-                    Ok(CreateSparseIndexDto::Idf { name })
+                    Ok(CreateSparseIndexDto::Idf {
+                        name,
+                        sample_threshold,
+                        store_raw_text,
+                        k1: k1.ok_or_else(|| Error::missing_field("k1"))?,
+                        b: b.ok_or_else(|| Error::missing_field("b"))?,
+                    })
                 } else {
                     Ok(CreateSparseIndexDto::Splade {
                         name,
                         quantization: quantization
                             .ok_or_else(|| Error::missing_field("quantization"))?,
-                        sample_threshold: sample_threshold
-                            .ok_or_else(|| Error::missing_field("sample_threshold"))?,
+                        sample_threshold,
                     })
                 }
             }

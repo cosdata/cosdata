@@ -8,7 +8,6 @@ use crate::indexes::hnsw::types::HNSWHyperParams;
 use crate::indexes::hnsw::types::QuantizedDenseVectorEmbedding;
 use crate::indexes::hnsw::types::RawDenseVectorEmbedding;
 use crate::indexes::hnsw::HNSWIndex;
-use crate::indexes::inverted::types::RawSparseVectorEmbedding;
 use crate::macros::key;
 use crate::metadata;
 use crate::metadata::fields_to_dimensions;
@@ -379,37 +378,6 @@ pub fn get_dense_embedding_by_id(
     let current_version = embedding_offset.version;
     let bufman = hnsw_index.vec_raw_manager.get(current_version)?;
     let (embedding, _next) = read_embedding(bufman.clone(), offset)?;
-
-    Ok(embedding)
-}
-
-pub fn get_sparse_embedding_by_id(
-    lmdb: &MetaDb,
-    vec_raw_manager: &BufferManagerFactory<Hash>,
-    vector_id: &VectorId,
-) -> Result<RawSparseVectorEmbedding, WaCustomError> {
-    let env = lmdb.env.clone();
-    let db = lmdb.db.clone();
-
-    let txn = env
-        .begin_ro_txn()
-        .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
-
-    let embedding_key = key!(e:vector_id);
-
-    let offset_serialized = txn.get(*db, &embedding_key).map_err(|e| {
-        WaCustomError::DatabaseError(format!("Failed to get serialized embedding offset: {}", e))
-    })?;
-
-    let embedding_offset = EmbeddingOffset::deserialize(offset_serialized)
-        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-
-    txn.abort();
-
-    let offset = embedding_offset.offset;
-    let current_version = embedding_offset.version;
-    let bufman = vec_raw_manager.get(current_version)?;
-    let (embedding, _next) = read_sparse_embedding(bufman.clone(), offset)?;
 
     Ok(embedding)
 }

@@ -14,6 +14,10 @@ pub struct InvertedIndexIDFData {
     pub description: Option<String>,
     pub auto_create_index: bool,
     pub max_vectors: Option<i32>,
+    pub sample_threshold: usize,
+    pub store_raw_text: bool,
+    pub k1: f32,
+    pub b: f32,
 }
 
 impl From<&InvertedIndexIDF> for InvertedIndexIDFData {
@@ -23,6 +27,10 @@ impl From<&InvertedIndexIDF> for InvertedIndexIDFData {
             description: inverted_index_idf.description.clone(),
             auto_create_index: inverted_index_idf.auto_create_index,
             max_vectors: inverted_index_idf.max_vectors,
+            sample_threshold: inverted_index_idf.sample_threshold,
+            store_raw_text: inverted_index_idf.store_raw_text,
+            k1: inverted_index_idf.k1,
+            b: inverted_index_idf.b,
         }
     }
 }

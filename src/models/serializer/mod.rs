@@ -6,8 +6,11 @@ mod metric_distance;
 mod page;
 mod pagepool;
 mod quotients_map;
+mod sparse_embedding;
+mod sparse_idf_document;
 mod storage;
 mod tree_map;
+mod versioned_item;
 mod versioned_pagepool;
 mod versioned_vec;
 
@@ -17,8 +20,7 @@ mod tests;
 use super::buffered_io::{BufIoError, BufferManager, BufferManagerFactory};
 use super::types::FileOffset;
 
-#[allow(unused)]
-trait SimpleSerialize: Sized {
+pub trait SimpleSerialize: Sized {
     fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError>;
     fn deserialize(bufman: &BufferManager, offset: FileOffset) -> Result<Self, BufIoError>;
 }

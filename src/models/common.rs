@@ -6,7 +6,7 @@ use crate::distance::DistanceError;
 use crate::metadata;
 use crate::quantization::QuantizationError;
 use sha2::{Digest, Sha256};
-use std::collections::hash_map::DefaultHasher;
+use std::collections::hash_map::{DefaultHasher, Entry};
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
@@ -567,6 +567,26 @@ impl<K: Eq + Hash, V> TSHashTable<K, V> {
         let index = self.hash_key(&k);
         let mut ht = self.hash_table_list[index].lock().unwrap();
         ht.entry(k).and_modify(modify).or_insert_with(insert);
+    }
+
+    // works exactly like `modify_or_insert`, but takes a value `T`, which is passed to both
+    // closures (only one actually runs, so only passed to one of them), which is not possible
+    // with `modify_or_insert` because of Rust's borrow checking rules
+    pub fn modify_or_insert_with_value<M, I, T>(&self, k: K, v: T, modify: M, insert: I)
+    where
+        M: FnOnce(T, &mut V),
+        I: FnOnce(T) -> V,
+    {
+        let index = self.hash_key(&k);
+        let mut ht = self.hash_table_list[index].lock().unwrap();
+        match ht.entry(k) {
+            Entry::Occupied(mut entry) => {
+                modify(v, entry.get_mut());
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(insert(v));
+            }
+        }
     }
 
     // This bool represents whether the key was found in the map or not.
