@@ -34,6 +34,7 @@ use crate::storage::Storage;
 use lmdb::Transaction;
 use rand::Rng;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::fs::File;
 use std::ptr;
@@ -170,11 +171,11 @@ pub fn ann_search(
                 // (thanks to the `skipm` argument)
                 z_candidates.append(&mut z_with_mdims);
             }
+
             // Sort candidates by distance (asc)
-            z_candidates.sort_by_key(|c| c.1);
+            z_candidates.sort_by_key(|c| Reverse(c.1));
             z_candidates
                 .into_iter()
-                .rev() // Reverse the order (to get descending order)
                 .take(100) // Limit the number of results
                 .collect::<Vec<_>>()
         }
