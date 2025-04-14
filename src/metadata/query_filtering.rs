@@ -34,7 +34,7 @@ fn query_filter_encoding(value_id: u16, size: usize, operator: &Operator) -> Que
                 if *x == 1 {
                     1
                 } else {
-                    -1
+                    0
                 }
             }
             Operator::NotEqual => {
@@ -74,7 +74,7 @@ fn and_predicates_to_dimensions(
                 result.append(&mut dims);
             }
             None => {
-                let mut dims = vec![-1; field.num_dims as usize];
+                let mut dims = vec![0; field.num_dims as usize];
                 result.append(&mut dims);
             }
         }
@@ -129,7 +129,7 @@ mod tests {
     fn test_query_filter_encoding() {
         // value 7 represented in 5 dimensions
         let e1 = query_filter_encoding(7, 5, &Operator::Equal);
-        assert_eq!(vec![-1, -1, 1, 1, 1], e1);
+        assert_eq!(vec![0, 0, 1, 1, 1], e1);
 
         let e2 = query_filter_encoding(7, 5, &Operator::NotEqual);
         assert_eq!(vec![1, 1, -1, -1, -1], e2);
@@ -159,8 +159,8 @@ mod tests {
         let qfed = filter_encoded_dimensions(&schema, &filter).unwrap();
         assert_eq!(
             vec![vec![
-                -1, 1, 1, -1, // 6 (original value: 6)
-                -1, -1
+                0, 1, 1, 0, // 6 (original value: 6)
+                0, 0
             ]],
             qfed
         );
@@ -181,7 +181,7 @@ mod tests {
         let qfed = filter_encoded_dimensions(&schema, &filter).unwrap();
         assert_eq!(
             vec![vec![
-                -1, -1, 1, -1, // 2 (original value: 2)
+                0, 0, 1, 0, // 2 (original value: 2)
                 -1, 1 // !2 (original value: !b)
             ]],
             qfed
@@ -204,11 +204,11 @@ mod tests {
         assert_eq!(
             vec![
                 vec![
-                    -1, -1, 1, -1, // 2 (original value: 2)
-                    -1, -1
+                    0, 0, 1, 0, // 2 (original value: 2)
+                    0, 0
                 ],
                 vec![
-                    -1, -1, -1, -1,
+                    0, 0, 0, 0,
                     -1, 1  // !2 (original value: !b)
                 ]
             ],
