@@ -55,20 +55,9 @@ def create_session():
     return token
 
 
-def create_db(name, description=None, dimension=1024, metadata_schema=None):
+def create_db(vcoll):
     url = f"{base_url}/collections"
-    data = {
-        "name": name,
-        "description": description,
-        "dense_vector": {
-            "enabled": True,
-            "auto_create_index": False,
-            "dimension": dimension,
-        },
-        "sparse_vector": {"enabled": False, "auto_create_index": False},
-        "metadata_schema": metadata_schema,
-        "config": {"max_vectors": None, "replication_factor": None},
-    }
+    data = vcoll.create_db_payload()
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
@@ -102,48 +91,16 @@ def create_explicit_index(name):
     return response.json()
 
 
-def construct_metadata_schema():
-    age = {
-        "name": "age",
-        "values": [x for x in range(25, 50)],
-    }
-    color = {
-        "name": "color",
-        "values": ["red", "blue", "green"]
-    }
-    fields = [age, color]
-    conds = [
-        {"op": "and", "field_names": ["age", "color"]},
-        {"op": "or", "field_names": ["age", "color"]},
-    ]
-    return {
-        "fields": fields,
-        "supported_conditions": conds,
-    }
-
-
 def prob(percent):
     assert percent <= 100
     return random.random() <= (percent / 100)
 
 
-def gen_metadata_fields(metadata_schema):
-    if metadata_schema is None:
-        return None
-    if prob(2):
-        return None
-    mfields = {}
-    for field in metadata_schema["fields"]:
-        # if prob(70):
-        mfields[field["name"]] = random.choice(field["values"])
-    return mfields
-
-
-def gen_vectors(num, num_dims, metadata_schema):
+def gen_vectors(num, vcoll):
     for i in range(num):
         vid = i + 1
-        values = np.random.uniform(-1, 1, num_dims).tolist()
-        metadata = gen_metadata_fields(metadata_schema)
+        values = np.random.uniform(-1, 1, vcoll.num_dimensions).tolist()
+        metadata = vcoll.gen_metadata_fields()
         yield {"id": vid, "values": values, "metadata": metadata}
 
 
@@ -212,94 +169,214 @@ def must_not_match(vec_id, results):
     return (f"must_not_match({vec_id})", vec_id not in matching_ids)
 
 
-def check_search_results(vector_index, vector_db_name):
-    max_queries_each = 5
-    queries_eq_age = []
-    queries_eq_color = []
-    queries_eq_age_color = []
-    queries_ne_age = []
-    queries_ne_color = []
-    queries_ne_age_color = []
-    for vec in vector_index.values():
-        m_age = nested_lookup(vec, "metadata", "age")
-        m_color = nested_lookup(vec, "metadata", "color")
-        qvec = vec["values"]
-        if m_age and m_color:
-            if len(queries_eq_age_color) <= max_queries_each:
-                queries_eq_age_color.append({
-                    "vec": qvec,
-                    "filter": {"age": {"$eq": m_age}, "color": {"$eq": m_color}},
-                    "test": partial(must_match, vec["id"])
-                })
-                continue
-            elif len(queries_ne_age_color) <= max_queries_each:
-                queries_ne_age_color.append({
-                    "vec": qvec,
-                    "filter": {"age": {"$ne": m_age}, "color": {"$ne": m_color}},
-                    "test": partial(must_not_match, vec["id"])
-                })
-                continue
-        if m_age:
-            if len(queries_eq_age) <= max_queries_each:
-                queries_eq_age.append({
-                    "vec": qvec,
-                    "filter": {"age": {"$eq": m_age}},
-                    "test": partial(must_match, vec["id"])
-                })
-                continue
-            elif len(queries_ne_age) <= max_queries_each:
-                queries_ne_age.append({
-                    "vec": qvec,
-                    "filter": {"age": {"$ne": m_age}},
-                    "test": partial(must_not_match, vec["id"])
-                })
-                continue
-        if m_color:
-            if len(queries_eq_color) <= max_queries_each:
-                queries_eq_color.append({
-                    "vec": qvec,
-                    "filter": {"color": {"$eq": m_color}},
-                    "test": partial(must_match, vec["id"])
-                })
-                continue
-            elif len(queries_ne_color) <= max_queries_each:
-                queries_ne_color.append({
-                    "vec": qvec,
-                    "filter": {"color": {"$ne": m_color}},
-                    "test": partial(must_not_match, vec["id"])
-                })
-                continue
-
-    queries = (
-        queries_eq_age +
-        queries_eq_color +
-        queries_eq_age_color +
-        queries_ne_age +
-        queries_ne_color +
-        queries_ne_age_color
-    )
-
-    for query in queries:
-        print("Filter:", query["filter"])
-        res = search_ann(vector_db_name, query["vec"], query["filter"])
+def search_and_compare(vector_db_name, test_cases):
+    for tc in test_cases:
+        print("Filter:", tc["filter"])
+        res = search_ann(vector_db_name, tc["vec"], tc["filter"])
         print("Result:", res)
-        test_func = query["test"]
+        test_func = tc["test"]
         (test_name, test_output) = test_func(res)
         test_result = "passed" if test_output else "failed"
         print(f"Test: {test_name} ({test_result})")
         print("-" * 100)
 
 
+class VectorCollection:
+    def __init__(self, name, description, num_dimensions, metadata_schema=None):
+        self.name = name
+        self.description = description
+        self.num_dimensions = num_dimensions
+        self.metadata_schema = metadata_schema
+
+    def create_db_payload(self):
+        return {
+            "name": self.name,
+            "description": self.description,
+            "dense_vector": {
+                "enabled": True,
+                "auto_create_index": False,
+                "dimension": self.num_dimensions,
+            },
+            "sparse_vector": {"enabled": False, "auto_create_index": False},
+            "metadata_schema": self.metadata_schema,
+            "config": {"max_vectors": None, "replication_factor": None},
+        }
+
+    def gen_metadata_fields(self):
+        if self.metadata_schema is None:
+            return None
+        if prob(2):
+            return None
+        mfields = {}
+        for field in self.metadata_schema["fields"]:
+            # if prob(70):
+            mfields[field["name"]] = random.choice(field["values"])
+        return mfields
+
+    def test_cases(self):
+        raise NotImplementedError
+
+
+class VecWithAgeColor(VectorCollection):
+
+    def __init__(self, name, num_dimensions):
+        age = {
+            "name": "age",
+            "values": [x for x in range(25, 50)],
+        }
+        color = {
+            "name": "color",
+            "values": ["red", "blue", "green"]
+        }
+        fields = [age, color]
+        conds = [
+            {"op": "and", "field_names": ["age", "color"]},
+            {"op": "or", "field_names": ["age", "color"]},
+        ]
+        metadata_schema = {
+            "fields": fields,
+            "supported_conditions": conds,
+        }
+        super().__init__(
+            name=name,
+            num_dimensions=num_dimensions,
+            description="vec with fields age, color",
+            metadata_schema=metadata_schema,
+        )
+
+    def test_cases(self, vector_index):
+        max_queries_each = 5
+        queries_eq_age = []
+        queries_eq_color = []
+        queries_eq_age_color = []
+        queries_ne_age = []
+        queries_ne_color = []
+        queries_ne_age_color = []
+        for vec in vector_index.values():
+            m_age = nested_lookup(vec, "metadata", "age")
+            m_color = nested_lookup(vec, "metadata", "color")
+            qvec = vec["values"]
+            if m_age and m_color:
+                if len(queries_eq_age_color) <= max_queries_each:
+                    queries_eq_age_color.append({
+                        "vec": qvec,
+                        "filter": {"age": {"$eq": m_age}, "color": {"$eq": m_color}},
+                        "test": partial(must_match, vec["id"])
+                    })
+                    continue
+                elif len(queries_ne_age_color) <= max_queries_each:
+                    queries_ne_age_color.append({
+                        "vec": qvec,
+                        "filter": {"age": {"$ne": m_age}, "color": {"$ne": m_color}},
+                        "test": partial(must_not_match, vec["id"])
+                    })
+                    continue
+            if m_age:
+                if len(queries_eq_age) <= max_queries_each:
+                    queries_eq_age.append({
+                        "vec": qvec,
+                        "filter": {"age": {"$eq": m_age}},
+                        "test": partial(must_match, vec["id"])
+                    })
+                    continue
+                elif len(queries_ne_age) <= max_queries_each:
+                    queries_ne_age.append({
+                        "vec": qvec,
+                        "filter": {"age": {"$ne": m_age}},
+                        "test": partial(must_not_match, vec["id"])
+                    })
+                    continue
+            if m_color:
+                if len(queries_eq_color) <= max_queries_each:
+                    queries_eq_color.append({
+                        "vec": qvec,
+                        "filter": {"color": {"$eq": m_color}},
+                        "test": partial(must_match, vec["id"])
+                    })
+                    continue
+                elif len(queries_ne_color) <= max_queries_each:
+                    queries_ne_color.append({
+                        "vec": qvec,
+                        "filter": {"color": {"$ne": m_color}},
+                        "test": partial(must_not_match, vec["id"])
+                    })
+                    continue
+        return (
+            queries_eq_age +
+            queries_eq_color +
+            queries_eq_age_color +
+            queries_ne_age +
+            queries_ne_color +
+            queries_ne_age_color
+        )
+
+
+class VecWithBinaryStatus(VectorCollection):
+
+    def __init__(self, name, num_dimensions):
+        status = {
+            "name": "status",
+            "values": ["todo", "done"],
+        }
+        fields = [status]
+        metadata_schema = {
+            "fields": fields,
+            "supported_conditions": [],
+        }
+        super().__init__(
+            name=name,
+            num_dimensions=num_dimensions,
+            description="vec with binary status",
+            metadata_schema=metadata_schema,
+        )
+
+    def test_cases(self, vector_index):
+        all_vecs = [x for x in vector_index.values()]
+        vecs = random.choices(all_vecs, k=5)
+        get_status = lambda x: nested_lookup(x, "metadata", "status")
+        return [
+            # With no filter
+            {
+                "vec": vecs[0]["values"],
+                "filter": None,
+                "test": partial(must_match, vecs[0]["id"])
+            },
+
+            # With filter status = todo
+            {
+                "vec": vecs[1]["values"],
+                "filter": {"status": {"$eq": get_status(vecs[1])}},
+                "test": partial(must_match, vecs[1]["id"])
+            },
+
+            # With filter status = done
+            {
+                "vec": vecs[2]["values"],
+                "filter": {"status": {"$eq": get_status(vecs[2])}},
+                "test": partial(must_match, vecs[2]["id"])
+            },
+
+            # With filter status != todo
+            {
+                "vec": vecs[3]["values"],
+                "filter": {"status": {"$ne": get_status(vecs[3])}},
+                "test": partial(must_not_match, vecs[3]["id"])
+            },
+
+            # With filter status != done
+            {
+                "vec": vecs[4]["values"],
+                "filter": {"status": {"$ne": get_status(vecs[4])}},
+                "test": partial(must_not_match, vecs[4]["id"])
+            },
+        ]
+
+
 def cmd_insert_and_check(ctx, args):
-    metadata_schema = construct_metadata_schema()
     db_name = ctx["vector_db_name"]
+    vcoll = VecWithBinaryStatus(db_name, args.num_dims)
     print("Creating a new db/collection")
-    create_collection_response = create_db(
-        name=db_name,
-        description="Test collection for vector database",
-        dimension=ctx["dimensions"],
-        metadata_schema=metadata_schema,
-    )
+    create_collection_response = create_db(vcoll)
     coll_id = create_collection_response["id"]
     print("  Create Collection(DB) Response:", create_collection_response)
 
@@ -308,12 +385,14 @@ def cmd_insert_and_check(ctx, args):
     print("  Create index response:", create_index_response)
 
     num_to_insert = args.num_vecs
-    vectors = gen_vectors(num_to_insert, ctx["dimensions"], metadata_schema)
+    vectors = gen_vectors(num_to_insert, vcoll)
     print(f"Inserting {num_to_insert} vectors")
     vidx = insert_vectors(coll_id, vectors)
 
+    tcs = vcoll.test_cases(vidx)
+
     print("Running search queries")
-    check_search_results(vidx, db_name)
+    search_and_compare(db_name, tcs)
 
 
 def cmd_query(ctx, args):
@@ -331,7 +410,6 @@ def init_ctx():
     token = create_session()
     return {
         "vector_db_name": "testdb",
-        "dimensions": 1024,
         # "max_val": 1.0
         # "min_val": -1.0
         # perturbation_degree: 0.95,
@@ -345,6 +423,7 @@ def main():
 
     parser_insert = subparsers.add_parser('insert')
     parser_insert.add_argument('-n', '--num-vecs', type=int, default=100)
+    parser_insert.add_argument('-d', '--num-dims', type=int, default=1024)
     parser_insert.set_defaults(func=cmd_insert_and_check)
 
     parser_query = subparsers.add_parser('query')
