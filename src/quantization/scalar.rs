@@ -20,8 +20,8 @@ impl Quantization for ScalarQuantization {
                     vector
                         .iter()
                         .map(|&x| {
-                            (((x.max(range.0).min(range.1) - range.0) / (range.1 - range.0)) * 255.0)
-                                as u8
+                            (((x.max(range.0).min(range.1) - range.0) / (range.1 - range.0))
+                                * 255.0) as u8
                         })
                         .collect()
                 } else {

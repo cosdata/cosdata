@@ -65,7 +65,8 @@ pub fn create_root_node(
         .collect::<Vec<f32>>();
     let vec_hash = VectorId(u64::MAX);
 
-    let vector_list = Arc::new(quantization_metric.quantize(&vec, storage_type, values_range, false)?);
+    let vector_list =
+        Arc::new(quantization_metric.quantize(&vec, storage_type, values_range, false)?);
 
     let mut prop_file_guard = prop_file.write().unwrap();
     let location = write_prop_value_to_file(&vec_hash, vector_list.clone(), &mut prop_file_guard)?;
@@ -722,7 +723,9 @@ fn preprocess_embedding(
         for prop_metadata in replicas {
             let overridden_level_probs = if !is_first_overrideen {
                 is_first_overrideen = true;
-                plp.iter().map(|(_, lev)| (0.0, *lev)).collect::<Vec<(f64, u8)>>()
+                plp.iter()
+                    .map(|(_, lev)| (0.0, *lev))
+                    .collect::<Vec<(f64, u8)>>()
             } else {
                 plp.clone()
             };
@@ -741,7 +744,8 @@ fn preprocess_embedding(
             coll.metadata_schema.as_ref(),
             raw_emb.raw_metadata.as_ref(),
             &hnsw_index.cache.prop_file,
-        ).unwrap();
+        )
+        .unwrap();
         match metadata_replicas {
             Some(replicas) => {
                 let mut embeddings: Vec<IndexableEmbedding> = vec![];

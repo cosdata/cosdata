@@ -184,16 +184,14 @@ impl<'a> VectorData<'a> {
                         ReplicaNodeKind::Metadata
                     }
                 }
-            },
+            }
             None => ReplicaNodeKind::Base,
         }
     }
 
     pub fn is_pseudo_root(&self) -> bool {
         match self.metadata {
-            Some(m) => {
-                m.mbits == vec![HIGH_WEIGHT;m.mbits.len()]
-            },
+            Some(m) => m.mbits == vec![HIGH_WEIGHT; m.mbits.len()],
             None => false,
         }
     }

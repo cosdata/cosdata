@@ -51,12 +51,12 @@ impl DistanceFunction for CosineSimilarity {
                 } else {
                     CosineSimilarity(0.0)
                 }
-            },
+            }
             (ReplicaNodeKind::Pseudo, ReplicaNodeKind::Base) => {
                 // A base node should never match an existing pseudo
                 // node
                 CosineSimilarity(0.0)
-            },
+            }
             (ReplicaNodeKind::Pseudo, ReplicaNodeKind::Metadata) => {
                 let x_metadata = x.metadata.unwrap();
                 let y_metadata = y.metadata.unwrap();
@@ -65,17 +65,17 @@ impl DistanceFunction for CosineSimilarity {
                 } else {
                     CosineSimilarity(0.0)
                 }
-            },
+            }
             (ReplicaNodeKind::Base, ReplicaNodeKind::Pseudo) => {
                 if y.is_pseudo_root() {
                     CosineSimilarity(1.0)
                 } else {
                     CosineSimilarity(-1.0)
                 }
-            },
+            }
             (ReplicaNodeKind::Base, ReplicaNodeKind::Base) => {
                 cosine_similarity(x.quantized_vec, y.quantized_vec, None)?
-            },
+            }
             (ReplicaNodeKind::Metadata, ReplicaNodeKind::Metadata) => {
                 let x_metadata = x.metadata.unwrap();
                 let y_metadata = y.metadata.unwrap();
@@ -84,19 +84,17 @@ impl DistanceFunction for CosineSimilarity {
                 } else {
                     CosineSimilarity(0.0)
                 }
-            },
-            (ReplicaNodeKind::Base, ReplicaNodeKind::Metadata) => {
-                CosineSimilarity(0.0)
-            },
+            }
+            (ReplicaNodeKind::Base, ReplicaNodeKind::Metadata) => CosineSimilarity(0.0),
             (ReplicaNodeKind::Metadata, ReplicaNodeKind::Pseudo) => {
                 // This case is not possible
                 unreachable!()
-            },
+            }
             (ReplicaNodeKind::Metadata, ReplicaNodeKind::Base) => {
                 // @TODO(vineet): This case is actually shouldn't be
                 // possible. Check why it's happening.
                 CosineSimilarity(0.0)
-            },
+            }
         };
         Ok(sim)
     }
@@ -107,7 +105,7 @@ impl DistanceFunction for CosineSimilarity {
 #[allow(unused)]
 fn metadata_dims_dot_product(
     x_metadata: &Metadata,
-    y_metadata: &Metadata
+    y_metadata: &Metadata,
 ) -> Option<(f32, f32, f32)> {
     if x_metadata.mag == 0.0 || y_metadata.mag == 0.0 {
         None
@@ -130,7 +128,7 @@ fn metadata_dims_dot_product(
 fn cosine_similarity(
     x_quantized: &Storage,
     y_quantized: &Storage,
-    m_dot_product: Option<(f32, f32, f32)>
+    m_dot_product: Option<(f32, f32, f32)>,
 ) -> Result<CosineSimilarity, DistanceError> {
     match (x_quantized, y_quantized) {
         (
