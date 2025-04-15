@@ -85,7 +85,9 @@ def create_explicit_index(name):
         verify=False,
     )
 
-    return response.json()
+    if response.status_code not in [200, 201, 204]:
+        raise Exception(f"Failed to create index: {response.status_code} ({response.text})")
+    return response.json() if response.status_code == 200 and response.text else {}
 
 
 # Function to create database (collection)
@@ -117,6 +119,8 @@ def create_transaction(collection_name):
     response = requests.post(
         url, data=json.dumps(data), headers=generate_headers(), verify=False
     )
+    if response.status_code != 200:
+        print(f"Error creating transaction: {response.status_code} ({response.text})")
     return response.json()
 
 
@@ -147,7 +151,7 @@ def upsert_in_transaction(collection_name, transaction_id, vectors):
     )
     print(f"Response Status: {response.status_code}")
     if response.status_code not in [200, 204]:
-        raise Exception(f"Failed to create vector: {response.status_code}")
+        raise Exception(f"Failed to upsert in transaction: {response.status_code} ({response.text})")
 
 
 def upsert_vectors_in_transaction(collection_name, transaction_id, vectors):
@@ -170,7 +174,7 @@ def commit_transaction(collection_name, transaction_id):
     if response.status_code not in [200, 204]:
         print(f"Error response: {response.text}")
         raise Exception(f"Failed to commit transaction: {response.status_code}")
-    return response.json() if response.text else None
+    return None
 
 
 def abort_transaction(collection_name, transaction_id):
@@ -181,16 +185,20 @@ def abort_transaction(collection_name, transaction_id):
     response = requests.post(
         url, data=json.dumps(data), headers=generate_headers(), verify=False
     )
-    return response.json()
+    if response.status_code not in [200, 204]:
+         print(f"Error aborting transaction: {response.status_code} ({response.text})")
+    return None
 
 
 # Function to upsert vectors
 def upsert_vector(vector_db_name, vectors):
-    url = f"{base_url}/upsert"
-    data = {"vector_db_name": vector_db_name, "vectors": vectors}
+    url = f"{base_url}/collections/{vector_db_name}/vectors/upsert"
+    data = {"vectors": vectors}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
+    if response.status_code != 200:
+         print(f"Error upserting vector: {response.status_code} ({response.text})")
     return response.json()
 
 
@@ -205,8 +213,8 @@ def ann_vector_old(idd, vector_db_name, vector):
 
 
 def ann_vector(idd, vector_db_name, vector):
-    url = f"{base_url}/search"
-    data = {"vector_db_name": vector_db_name, "vector": vector, "nn_count": 5}
+    url = f"{base_url}/collections/{vector_db_name}/search/dense"
+    data = {"query_vector": vector, "top_k": 5}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
@@ -214,20 +222,16 @@ def ann_vector(idd, vector_db_name, vector):
         print(f"Error response: {response.text}")
         raise Exception(f"Failed to search vector: {response.status_code}")
     result = response.json()
-
-    # Handle empty results gracefully
-    if not result.get("RespVectorKNN", {}).get("knn"):
-        return (idd, {"RespVectorKNN": {"knn": []}})
     return (idd, result)
 
 
 # Function to fetch vector
 def fetch_vector(vector_db_name, vector_id):
-    url = f"{base_url}/fetch"
-    data = {"vector_db_name": vector_db_name, "vector_id": vector_id}
-    response = requests.post(
-        url, headers=generate_headers(), data=json.dumps(data), verify=False
-    )
+    url = f"{base_url}/collections/{vector_db_name}/vectors/{vector_id}/neighbors"
+    response = requests.get(url, headers=generate_headers(), verify=False)
+    if response.status_code != 200:
+        print(f"Error fetching neighbors: {response.status_code} ({response.text})")
+        return []
     return response.json()
 
 
@@ -508,19 +512,15 @@ if __name__ == "__main__":
         for i, future in enumerate(as_completed(futures)):
             try:
                 ((idr, ann_response), (bruteforce_results)) = future.result()
-                if (
-                    "RespVectorKNN" in ann_response
-                    and "knn" in ann_response["RespVectorKNN"]
-                ):
-                    print(f"ANN Vector Response:")
+                # Check if the new 'results' key exists and is a list
+                if "results" in ann_response and isinstance(ann_response["results"], list):
                     print("  Server:")
-                    for j, match in enumerate(ann_response["RespVectorKNN"]["knn"][:5]):
-                        id = match[0]
-                        cs = match[1]["CosineSimilarity"]
-                        print(f"    {j + 1}: {id} ({cs})")
-                    best_matches_server.append(
-                        ann_response["RespVectorKNN"]["knn"][0][1]["CosineSimilarity"]
-                    )  # Collect the second item in the knn list
+                    for j, match in enumerate(ann_response["results"][:5]):
+                        id = match.get("id", {}).get("Int")
+                        score = match.get("score", 0.0)
+                        print(f"    {j + 1}: {id} ({score})")
+                    if ann_response["results"]:
+                         best_matches_server.append(ann_response["results"][0].get("score", 0.0))
 
                     print("  Brute force:")
                     for j, result in enumerate(bruteforce_results):

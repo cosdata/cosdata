@@ -110,7 +110,10 @@ def find_collection(id):
 
 def create_transaction(collection_name):
     url = f"{base_url}/collections/{collection_name}/transactions"
-    response = requests.post(url, headers=generate_headers(), verify=False)
+    data = {"index_type": "dense"}
+    response = requests.post(
+        url, headers=generate_headers(), data=json.dumps(data), verify=False
+    )
     return response.json()
 
 
@@ -133,7 +136,7 @@ def upsert_in_transaction(collection_name, transaction_id, vectors):
     url = (
         f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/upsert"
     )
-    data = {"vectors": vectors}
+    data = {"index_type": "dense", "vectors": vectors}
     print(f"Request URL: {url}")
     print(f"Request Vectors Count: {len(vectors)}")
     response = requests.post(
@@ -157,25 +160,31 @@ def commit_transaction(collection_name, transaction_id):
     url = (
         f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/commit"
     )
-    response = requests.post(url, headers=generate_headers(), verify=False)
+    data = {"index_type": "dense"}
+    response = requests.post(
+        url, headers=generate_headers(), data=json.dumps(data), verify=False
+    )
     if response.status_code not in [200, 204]:
         print(f"Error response: {response.text}")
         raise Exception(f"Failed to commit transaction: {response.status_code}")
-    return response.json() if response.text else None
+    return None
 
 
 def abort_transaction(collection_name, transaction_id):
     url = (
         f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/abort"
     )
-    response = requests.post(url, headers=generate_headers(), verify=False)
-    return response.json()
+    data = {"index_type": "dense"}
+    response = requests.post(
+        url, headers=generate_headers(), data=json.dumps(data), verify=False
+    )
+    return response.json() if response.status_code == 200 else None
 
 
 # Function to upsert vectors
 def upsert_vector(vector_db_name, vectors):
-    url = f"{base_url}/upsert"
-    data = {"vector_db_name": vector_db_name, "vectors": vectors}
+    url = f"{base_url}/collections/{vector_db_name}/vectors/upsert" # Corrected URL
+    data = {"vectors": vectors} # Corrected body
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
@@ -193,8 +202,8 @@ def ann_vector_old(idd, vector_db_name, vector):
 
 
 def ann_vector(idd, vector_db_name, vector):
-    url = f"{base_url}/search"
-    data = {"vector_db_name": vector_db_name, "vector": vector, "nn_count": 5}
+    url = f"{base_url}/collections/{vector_db_name}/search/dense"
+    data = {"query_vector": vector, "top_k": 5} # Corrected body
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
@@ -203,19 +212,16 @@ def ann_vector(idd, vector_db_name, vector):
         raise Exception(f"Failed to search vector: {response.status_code}")
     result = response.json()
 
-    # Handle empty results gracefully
-    if not result.get("RespVectorKNN", {}).get("knn"):
-        return (idd, {"RespVectorKNN": {"knn": []}})
     return (idd, result)
 
 
 # Function to fetch vector
 def fetch_vector(vector_db_name, vector_id):
-    url = f"{base_url}/fetch"
-    data = {"vector_db_name": vector_db_name, "vector_id": vector_id}
-    response = requests.post(
-        url, headers=generate_headers(), data=json.dumps(data), verify=False
-    )
+    url = f"{base_url}/collections/{vector_db_name}/vectors/{vector_id}/neighbors"
+    response = requests.get(url, headers=generate_headers(), verify=False)
+    if response.status_code != 200:
+         print(f"Error fetching neighbors: {response.status_code} ({response.text})")
+         return []
     return response.json()
 
 

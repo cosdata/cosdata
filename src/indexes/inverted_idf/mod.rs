@@ -1,5 +1,6 @@
 pub(crate) mod data;
 pub(crate) mod transaction;
+use lmdb::Transaction;
 
 use std::{
     hash::Hasher,
@@ -23,6 +24,7 @@ use crate::models::{
     types::{MetaDb, VectorId},
     versioning::{Hash, VersionControl},
 };
+use crate::macros::key;
 
 #[derive(Default)]
 pub struct SamplingData {
@@ -131,6 +133,33 @@ impl InvertedIndexIDF {
 
     pub fn set_current_version(&self, version: Hash) {
         *self.current_version.write().unwrap() = version;
+    }
+
+    pub fn contains_vector_id(&self, vector_id_u32: u32) -> bool {
+        let env = self.lmdb.env.clone();
+        let db = *self.lmdb.db;
+        let txn = match env.begin_ro_txn() {
+            Ok(txn) => txn,
+            Err(e) => {
+                log::error!("LMDB RO txn failed for IDF contains_vector_id check: {}", e);
+                return false;
+            }
+        };
+
+        let vector_id_obj = VectorId(vector_id_u32 as u64);
+        let embedding_key = key!(e: &vector_id_obj);
+
+        let found = match txn.get(db, &embedding_key) {
+            Ok(_) => true,
+            Err(lmdb::Error::NotFound) => false,
+            Err(e) => {
+                log::error!("LMDB error during IDF contains_vector_id get for {}: {}", vector_id_u32, e);
+                false
+            }
+        };
+
+        txn.abort();
+        found
     }
 }
 

@@ -98,7 +98,10 @@ def create_explicit_index(name):
         verify=False,
     )
 
-    return response.json()
+    if response.status_code not in [200, 201, 204]: # Allow 201
+        raise Exception(f"Failed to create index: {response.status_code} ({response.text})")
+    # Return empty dict for 201/204 as body is {} or empty
+    return response.json() if response.status_code == 200 and response.text else {}
 
 
 def construct_metadata_schema():
@@ -151,8 +154,12 @@ def insert_vectors(coll_id, vectors):
     url = f"{base_url}/collections/{coll_id}/vectors"
     headers = generate_headers()
     for vector in vectors:
-        data = {"dense": vector}
-        # print(data)
+        dense_data = {
+            "id": vector["id"],
+            "values": vector["values"],
+            "metadata": vector["metadata"]
+        }
+        data = {"dense": dense_data}
         resp = requests.post(url, headers=headers, json=data)
         if resp.status_code != 200:
             print("Response error:", resp.text)
@@ -162,13 +169,12 @@ def insert_vectors(coll_id, vectors):
 
 
 def search_ann(coll_name, query_vec, metadata_filter):
-    url = f"{base_url}/search"
+    url = f"{base_url}/collections/{coll_name}/search/dense"
     headers = generate_headers()
     data = {
-        "vector_db_name": coll_name,
-        "vector": query_vec,
+        "query_vector": query_vec,
         "filter": metadata_filter,
-        "nn_count": 5
+        "top_k": 5
     }
     resp = requests.post(url, headers=headers, json=data)
     if resp.status_code != 200:
@@ -197,8 +203,8 @@ def nested_lookup(m, k1, k2):
 
 
 def search_results_to_matching_ids(data):
-    matches = data["RespVectorKNN"]["knn"]
-    return set([x[0] for x in matches])
+    matches = data.get("results", [])
+    return set([m.get("id") for m in matches if m.get("id") is not None])
 
 
 def must_match(vec_id, results):
@@ -209,6 +215,27 @@ def must_match(vec_id, results):
 def must_not_match(vec_id, results):
     matching_ids = search_results_to_matching_ids(results)
     return (f"must_not_match({vec_id})", vec_id not in matching_ids)
+
+
+def make_predicate_json(field_name, operator_str, field_value):
+    """Creates the JSON dictionary for a Predicate."""
+    return {
+        "field_name": field_name,
+        "field_value": field_value,
+        "operator": operator_str
+    }
+
+def is_filter_json(field_name, operator_str, field_value):
+    """Creates the JSON dictionary for a Filter::Is variant."""
+    return {
+        "Is": make_predicate_json(field_name, operator_str, field_value)
+    }
+
+def and_filter_json(predicates_list):
+    """Creates the JSON dictionary for a Filter::And variant."""
+    return {
+        "And": predicates_list
+    }
 
 
 def check_search_results(vector_index, vector_db_name):
@@ -227,14 +254,20 @@ def check_search_results(vector_index, vector_db_name):
             if len(queries_eq_age_color) <= max_queries_each:
                 queries_eq_age_color.append({
                     "vec": qvec,
-                    "filter": {"age": {"$eq": m_age}, "color": {"$eq": m_color}},
+                    "filter": and_filter_json([
+                        make_predicate_json("age", "Equal", m_age),
+                        make_predicate_json("color", "Equal", m_color)
+                    ]),
                     "test": partial(must_match, vec["id"])
                 })
                 continue
             elif len(queries_ne_age_color) <= max_queries_each:
                 queries_ne_age_color.append({
                     "vec": qvec,
-                    "filter": {"age": {"$ne": m_age}, "color": {"$ne": m_color}},
+                    "filter": and_filter_json([
+                        make_predicate_json("age", "NotEqual", m_age),
+                        make_predicate_json("color", "NotEqual", m_color)
+                    ]),
                     "test": partial(must_not_match, vec["id"])
                 })
                 continue
@@ -242,14 +275,14 @@ def check_search_results(vector_index, vector_db_name):
             if len(queries_eq_age) <= max_queries_each:
                 queries_eq_age.append({
                     "vec": qvec,
-                    "filter": {"age": {"$eq": m_age}},
+                    "filter": is_filter_json("age", "Equal", m_age),
                     "test": partial(must_match, vec["id"])
                 })
                 continue
             elif len(queries_ne_age) <= max_queries_each:
                 queries_ne_age.append({
                     "vec": qvec,
-                    "filter": {"age": {"$ne": m_age}},
+                    "filter": is_filter_json("age", "NotEqual", m_age),
                     "test": partial(must_not_match, vec["id"])
                 })
                 continue
@@ -257,14 +290,14 @@ def check_search_results(vector_index, vector_db_name):
             if len(queries_eq_color) <= max_queries_each:
                 queries_eq_color.append({
                     "vec": qvec,
-                    "filter": {"color": {"$eq": m_color}},
+                    "filter": is_filter_json("color", "Equal", m_color),
                     "test": partial(must_match, vec["id"])
                 })
                 continue
             elif len(queries_ne_color) <= max_queries_each:
                 queries_ne_color.append({
                     "vec": qvec,
-                    "filter": {"color": {"$ne": m_color}},
+                    "filter": is_filter_json("color", "NotEqual", m_color),
                     "test": partial(must_not_match, vec["id"])
                 })
                 continue

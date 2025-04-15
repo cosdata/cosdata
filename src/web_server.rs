@@ -14,6 +14,7 @@ use rustls::{pki_types::PrivateKeyDer, ServerConfig};
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use serde::{Deserialize, Serialize};
 use std::{fs::File, io::BufReader};
+use crate::api::vectordb::search::search_module;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct MyObj {
@@ -58,18 +59,12 @@ pub async fn run_actix_server_with_context(ctx: Data<AppContext>) -> std::io::Re
                     ))
                     // vectors module must be registered before collections module
                     // as its scope path is more specific than collections module
+                    .service(search_module())
                     .service(indexes_module())
                     .service(vectors_module())
                     .service(transactions_module())
                     .service(version_module())
                     .service(collections_module())
-                    .service(web::resource("/upsert").route(web::post().to(api::vectordb::upsert)))
-                    .service(web::resource("/search").route(web::post().to(api::vectordb::search)))
-                    .service(
-                        web::resource("/batch-search")
-                            .route(web::post().to(api::vectordb::batch_search)),
-                    )
-                    .service(web::resource("/fetch").route(web::post().to(api::vectordb::fetch)))
                     .service(
                         web::scope("{database_name}/transactions")
                             .route(

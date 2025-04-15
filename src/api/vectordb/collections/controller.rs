@@ -2,6 +2,7 @@ use actix_web::{web, HttpResponse, Result};
 
 use crate::app_context::AppContext;
 
+use crate::api::vectordb::collections::error::CollectionsError;
 use super::{
     dtos::{CreateCollectionDto, GetCollectionsDto},
     service,
@@ -14,7 +15,7 @@ pub(crate) async fn create_collection(
     let create_collection_response_dto =
         service::create_collection(ctx.into_inner(), create_collection_dto).await?;
 
-    Ok(HttpResponse::Ok().json(create_collection_response_dto))
+    Ok(HttpResponse::Created().json(create_collection_response_dto))
 }
 
 pub(crate) async fn get_collections(
@@ -37,8 +38,8 @@ pub(crate) async fn delete_collection_by_id(
     collection_id: web::Path<String>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse> {
-    let collection = service::delete_collection_by_id(ctx.into_inner(), &collection_id).await?;
-    Ok(HttpResponse::Ok().json(collection))
+    service::delete_collection_by_id(ctx.into_inner(), &collection_id).await?;
+    Ok(HttpResponse::NoContent().finish())
 }
 
 pub(crate) async fn load_collection(
@@ -63,4 +64,11 @@ pub(crate) async fn unload_collection(
 pub(crate) async fn get_loaded_collections(ctx: web::Data<AppContext>) -> Result<HttpResponse> {
     let collections = service::get_loaded_collections(ctx.into_inner()).await?;
     Ok(HttpResponse::Ok().json(collections))
+}
+
+pub(crate) async fn list_collections(
+    ctx: web::Data<AppContext>,
+) -> Result<HttpResponse, CollectionsError> {
+    let response_dto = service::list_collections(ctx.into_inner()).await?;
+    Ok(HttpResponse::Ok().json(response_dto))
 }

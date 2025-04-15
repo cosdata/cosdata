@@ -135,3 +135,15 @@ mod tests {
         assert_eq!(vec!["myfield1", "myfield2"], cond.field_names);
     }
 }
+
+
+#[derive(Serialize, Debug)]
+pub(crate) struct CollectionSummaryDto {
+    pub name: String,
+    pub description: Option<String>,
+}
+
+#[derive(Serialize, Debug)]
+pub(crate) struct ListCollectionsResponseDto {
+    pub collections: Vec<CollectionSummaryDto>,
+}
