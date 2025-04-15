@@ -12,11 +12,12 @@ use std::{
     },
 };
 
-use rust_stemmers::{Algorithm, Stemmer};
 use rustc_hash::FxHashMap;
+use snowball_stemmer::Stemmer;
 use transaction::InvertedIndexIDFTransaction;
 use twox_hash::XxHash32;
 
+use crate::macros::key;
 use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
     inverted_index_idf::InvertedIndexIDFRoot,
@@ -24,7 +25,6 @@ use crate::models::{
     types::{MetaDb, VectorId},
     versioning::{Hash, VersionControl},
 };
-use crate::macros::key;
 
 #[derive(Default)]
 pub struct SamplingData {
@@ -153,7 +153,11 @@ impl InvertedIndexIDF {
             Ok(_) => true,
             Err(lmdb::Error::NotFound) => false,
             Err(e) => {
-                log::error!("LMDB error during IDF contains_vector_id get for {}: {}", vector_id_u32, e);
+                log::error!(
+                    "LMDB error during IDF contains_vector_id get for {}: {}",
+                    vector_id_u32,
+                    e
+                );
                 false
             }
         };
@@ -201,7 +205,7 @@ pub fn process_text(
     b: f32,
 ) -> Vec<(u32, f32)> {
     // Create an English stemmer.
-    let stemmer = Stemmer::create(Algorithm::English);
+    let stemmer = Stemmer::create();
     // Create a fast hash map for counting; FxHashMap is chosen for performance.
     let mut freq: FxHashMap<u32, u32> = FxHashMap::default();
     let document_length = count_tokens(input, max_token_len);
