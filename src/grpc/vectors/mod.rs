@@ -2,6 +2,7 @@
 // #[cfg(test)]
 // mod tests;
 
+use crate::indexes::hnsw::types::DenseInputVector;
 use crate::models::common::WaCustomError;
 use crate::models::types::VectorId;
 use crate::{app_context::AppContext, indexes::inverted::types::SparsePair};
@@ -46,7 +47,9 @@ impl VectorsService for VectorsServiceImpl {
 
                 // Prepare vector for insertion
                 // @TODO(vineet): Add support for optional metadata fields
-                let vec_to_insert = vec![(VectorId(dense.id), dense.values.clone(), None)];
+                let vec_to_insert = vec![
+                    DenseInputVector::new(VectorId(dense.id), dense.values.clone(), None)
+                ];
                 let hnsw_index = self.context.ain_env.collections_map
                     .get_hnsw_index(&req.collection_id)
                     .ok_or_else(|| Status::failed_precondition(
@@ -175,7 +178,9 @@ impl VectorsService for VectorsServiceImpl {
             .ok_or_else(|| Status::failed_precondition("Dense index not initialized"))?;
 
         // @TODO(vineet): Add support for optional metadata fields
-        let vec_to_update = vec![(VectorId(req.vector_id), req.values.clone(), None)];
+        let vec_to_update = vec![
+            DenseInputVector::new(VectorId(req.vector_id), req.values.clone(), None)
+        ];
         crate::api_service::run_upload_dense_vectors(
             self.context.clone(),
             hnsw_index.clone(),

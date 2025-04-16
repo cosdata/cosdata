@@ -7,7 +7,6 @@ use super::{
     service,
 };
 
-use crate::models::collection_cache::CollectionCacheExt;
 use crate::{
     api_service::run_upload_dense_vectors,
     app_context::AppContext,
@@ -17,6 +16,7 @@ use crate::{
         types::VectorId,
     },
 };
+use crate::{indexes::hnsw::types::DenseInputVector, models::collection_cache::CollectionCacheExt};
 pub(crate) async fn create_vector(
     collection_id: web::Path<String>,
     web::Json(create_vector_dto): web::Json<CreateVectorDto>,
@@ -95,10 +95,10 @@ pub(crate) async fn upsert_vectors(
         )));
     }
 
-    let vecs_to_upload: Vec<(VectorId, Vec<f32>, Option<crate::metadata::MetadataFields>)> = body
+    let vecs_to_upload = body
         .vectors
         .into_iter()
-        .map(|dense_vec| (dense_vec.id, dense_vec.values, dense_vec.metadata))
+        .map(|dense_vec| DenseInputVector::new(dense_vec.id, dense_vec.values, dense_vec.metadata))
         .collect();
 
     run_upload_dense_vectors(ctx.into_inner(), hnsw_index.clone(), vecs_to_upload)

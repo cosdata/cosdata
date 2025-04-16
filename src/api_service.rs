@@ -1,7 +1,7 @@
 use crate::app_context::AppContext;
 use crate::indexes::hnsw::transaction::HNSWIndexTransaction;
 use crate::indexes::hnsw::types::{
-    HNSWHyperParams, QuantizedDenseVectorEmbedding, RawDenseVectorEmbedding,
+    DenseInputVector, HNSWHyperParams, QuantizedDenseVectorEmbedding, RawDenseVectorEmbedding,
 };
 use crate::indexes::hnsw::HNSWIndex;
 use crate::indexes::inverted::transaction::InvertedIndexTransaction;
@@ -262,6 +262,8 @@ pub fn run_upload_dense_vectors_in_transaction(
     ctx: Arc<AppContext>,
     hnsw_index: Arc<HNSWIndex>,
     transaction: &HNSWIndexTransaction,
+    // @TODO(vineet): Use `DenseInputVector` struct here for
+    // consistency
     mut sample_points: Vec<(VectorId, Vec<f32>, Option<MetadataFields>)>,
 ) -> Result<(), WaCustomError> {
     let version = transaction.id;
@@ -809,7 +811,7 @@ pub fn run_upload_tf_idf_documents_in_transaction(
 pub fn run_upload_dense_vectors(
     ctx: Arc<AppContext>,
     hnsw_index: Arc<HNSWIndex>,
-    vecs: Vec<(VectorId, Vec<f32>, Option<MetadataFields>)>,
+    vecs: Vec<DenseInputVector>,
 ) -> Result<(), WaCustomError> {
     let lazy_item_versions_table = Arc::new(TSHashTable::new(16));
 
@@ -826,13 +828,8 @@ pub fn run_upload_dense_vectors(
     // Insert vectors
     let vec_embs = vecs
         .into_par_iter()
-        .map(|(id, vec, metadata)| {
-            let vec_emb = RawDenseVectorEmbedding {
-                raw_vec: Arc::new(vec),
-                hash_vec: id,
-                raw_metadata: metadata,
-            };
-
+        .map(|v| {
+            let vec_emb = RawDenseVectorEmbedding::from(v);
             Ok::<_, WaCustomError>((write_dense_embedding(&bufman, &vec_emb)?, vec_emb))
         })
         .collect::<Result<Vec<_>, _>>()?;

@@ -9,7 +9,7 @@ use crate::{
         run_upload_tf_idf_documents_in_transaction,
     },
     indexes::{
-        hnsw::{transaction::HNSWIndexTransaction, HNSWIndex},
+        hnsw::{transaction::HNSWIndexTransaction, types::DenseInputVector, HNSWIndex},
         inverted::{transaction::InvertedIndexTransaction, InvertedIndex},
         tf_idf::{transaction::TFIDFIndexTransaction, TFIDFIndex},
     },
@@ -125,16 +125,13 @@ pub(crate) async fn create_dense_vector(
         ));
     }
 
-    run_upload_dense_vectors(
-        ctx,
-        hnsw_index,
-        vec![(
-            create_vector_dto.id.clone(),
-            create_vector_dto.values.clone(),
-            create_vector_dto.metadata.clone(),
-        )],
-    )
-    .map_err(VectorsError::WaCustom)?;
+    let input_vec = DenseInputVector::new(
+        create_vector_dto.id.clone(),
+        create_vector_dto.values.clone(),
+        create_vector_dto.metadata.clone(),
+    );
+
+    run_upload_dense_vectors(ctx, hnsw_index, vec![input_vec]).map_err(VectorsError::WaCustom)?;
 
     Ok(CreateVectorResponseDto::Dense(CreateDenseVectorDto {
         id: create_vector_dto.id,
@@ -222,12 +219,10 @@ pub(crate) async fn update_vector(
         )));
     }
 
-    run_upload_dense_vectors(
-        ctx,
-        hnsw_index,
-        vec![(vector_id.clone(), update_vector_dto.values.clone(), None)],
-    )
-    .map_err(VectorsError::WaCustom)?;
+    let input_vec =
+        DenseInputVector::new(vector_id.clone(), update_vector_dto.values.clone(), None);
+
+    run_upload_dense_vectors(ctx, hnsw_index, vec![input_vec]).map_err(VectorsError::WaCustom)?;
 
     Ok(UpdateVectorResponseDto {
         id: vector_id,
