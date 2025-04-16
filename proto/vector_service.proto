@@ -102,7 +102,7 @@ message CreateCollectionRequest {
     optional string description = 2;
     DenseVectorOptions dense_vector = 3;
     SparseVectorOptions sparse_vector = 4;
-    TFIDFOptions tf_idf = 5;
+    TFIDFOptions tf_idf_options = 5;
     optional MetadataSchema metadata_schema = 6;
     CollectionConfig config = 7;
 }
