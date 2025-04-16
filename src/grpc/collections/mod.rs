@@ -39,7 +39,7 @@ impl CollectionsService for CollectionsServiceImpl {
         };
 
         let tf_idf_options = TFIDFOptions {
-            enabled: req.tf_idf.as_ref().is_some_and(|d| d.enabled),
+            enabled: req.tf_idf_options.as_ref().is_some_and(|d| d.enabled),
         };
 
         let config = CollectionConfig {
