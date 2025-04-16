@@ -44,13 +44,9 @@ impl DistanceFunction for CosineSimilarity {
         let y_kind = y.replica_node_kind();
         let sim = match (y_kind, x_kind) {
             (ReplicaNodeKind::Pseudo, ReplicaNodeKind::Pseudo) => {
-                let x_metadata = x.metadata.unwrap();
-                let y_metadata = y.metadata.unwrap();
-                if x_metadata.mbits == y_metadata.mbits {
-                    CosineSimilarity(1.0)
-                } else {
-                    CosineSimilarity(0.0)
-                }
+                // When matching two pseudo nodes, it's sufficient to
+                // consider the metadata dimensions
+                cosine_similarity_mdims(x.metadata.unwrap(), y.metadata.unwrap())?
             }
             (ReplicaNodeKind::Pseudo, ReplicaNodeKind::Base) => {
                 // A base node should never match an existing pseudo
@@ -60,29 +56,73 @@ impl DistanceFunction for CosineSimilarity {
             (ReplicaNodeKind::Pseudo, ReplicaNodeKind::Metadata) => {
                 let x_metadata = x.metadata.unwrap();
                 let y_metadata = y.metadata.unwrap();
+                // A metadata node should strongly match a pseudo node
+                // for the same combination (i.e. if metadata dims
+                // match exactly).
                 if x_metadata.mbits == y_metadata.mbits {
                     CosineSimilarity(1.0)
                 } else {
+                    // Otherwise it should strongly mismatch.
                     CosineSimilarity(0.0)
                 }
             }
             (ReplicaNodeKind::Base, ReplicaNodeKind::Pseudo) => {
-                if y.is_pseudo_root() {
-                    CosineSimilarity(1.0)
-                } else {
-                    CosineSimilarity(-1.0)
-                }
+                // Safe use of unwrap as all nodes including the root
+                // node are expected to have metadata dimensions if
+                // metadata filtering is supported (because pseudo
+                // nodes exist only in that case)
+                let x_metadata = x.metadata.unwrap();
+                let y_metadata = y.metadata.unwrap();
+                let x_mdims = x_metadata
+                    .mbits
+                    .iter()
+                    .map(|i| *i as f32)
+                    .collect::<Vec<f32>>();
+                let y_mdims = y_metadata
+                    .mbits
+                    .iter()
+                    .map(|i| *i as f32)
+                    .collect::<Vec<f32>>();
+                let m_dot_product: f32 = dot_product_f32(&x_mdims, &y_mdims);
+                cosine_similarity(
+                    x.quantized_vec,
+                    y.quantized_vec,
+                    Some((x_metadata.mag, y_metadata.mag, m_dot_product)),
+                )?
             }
             (ReplicaNodeKind::Base, ReplicaNodeKind::Base) => {
                 cosine_similarity(x.quantized_vec, y.quantized_vec, None)?
             }
             (ReplicaNodeKind::Metadata, ReplicaNodeKind::Metadata) => {
+                // Safe use of unwrap as metadata nodes will
+                // definitely have metadata dimensions
                 let x_metadata = x.metadata.unwrap();
                 let y_metadata = y.metadata.unwrap();
+                // If the metadata dims match exactly, it's sufficient
+                // to calculate similarity for the quantized vector
+                // values.
                 if x_metadata.mbits == y_metadata.mbits {
                     cosine_similarity(x.quantized_vec, y.quantized_vec, None)?
                 } else {
-                    CosineSimilarity(0.0)
+                    // Otherwise, we calculate the combined cosine
+                    // similarity for both quantized values and
+                    // metadata dims.
+                    let x_mdims = x_metadata
+                        .mbits
+                        .iter()
+                        .map(|i| *i as f32)
+                        .collect::<Vec<f32>>();
+                    let y_mdims = y_metadata
+                        .mbits
+                        .iter()
+                        .map(|i| *i as f32)
+                        .collect::<Vec<f32>>();
+                    let m_dot_product: f32 = dot_product_f32(&x_mdims, &y_mdims);
+                    cosine_similarity(
+                        x.quantized_vec,
+                        y.quantized_vec,
+                        Some((x_metadata.mag, y_metadata.mag, m_dot_product)),
+                    )?
                 }
             }
             (ReplicaNodeKind::Base, ReplicaNodeKind::Metadata) => CosineSimilarity(0.0),
@@ -97,31 +137,6 @@ impl DistanceFunction for CosineSimilarity {
             }
         };
         Ok(sim)
-    }
-}
-
-// @NOTE: Following function is not in use. It's kept for later
-// reference if required.
-#[allow(unused)]
-fn metadata_dims_dot_product(
-    x_metadata: &Metadata,
-    y_metadata: &Metadata,
-) -> Option<(f32, f32, f32)> {
-    if x_metadata.mag == 0.0 || y_metadata.mag == 0.0 {
-        None
-    } else {
-        let x_mdims = x_metadata
-            .mbits
-            .iter()
-            .map(|i| *i as f32)
-            .collect::<Vec<f32>>();
-        let y_mdims = y_metadata
-            .mbits
-            .iter()
-            .map(|i| *i as f32)
-            .collect::<Vec<f32>>();
-        let m_dot_product: f32 = dot_product_f32(&x_mdims, &y_mdims);
-        Some((x_metadata.mag, y_metadata.mag, m_dot_product))
     }
 }
 
@@ -239,6 +254,11 @@ fn cosine_similarity(
     }
 }
 
+// Calculates cosine similarity given dot product of the two vectors
+// and the individual maginitudes
+//
+// Returns `DistanceError` if either magnitude is 0, causes their
+// product (denominator) to be 0.
 fn cosine_similarity_from_dot_product(
     dot_product: f32,
     x_mag: f32,
@@ -251,6 +271,30 @@ fn cosine_similarity_from_dot_product(
     } else {
         Ok(CosineSimilarity(dot_product / denominator))
     }
+}
+
+// Calculates cosine similarity for metadata dimensions only
+//
+// Returns `DistanceError` if either maginitudes are equal to 0. This
+// means, care must be taken to ensure that this function is not used
+// when either of the vector is a base vector (having all 0 metadata
+// dims)
+fn cosine_similarity_mdims(
+    x_metadata: &Metadata,
+    y_metadata: &Metadata,
+) -> Result<CosineSimilarity, DistanceError> {
+    let x_mdims = x_metadata
+        .mbits
+        .iter()
+        .map(|i| *i as f32)
+        .collect::<Vec<f32>>();
+    let y_mdims = y_metadata
+        .mbits
+        .iter()
+        .map(|i| *i as f32)
+        .collect::<Vec<f32>>();
+    let m_dot_product: f32 = dot_product_f32(&x_mdims, &y_mdims);
+    cosine_similarity_from_dot_product(m_dot_product, x_metadata.mag, y_metadata.mag)
 }
 
 /// Calculates cosine similarity when vector data contains metadata
