@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     api::vectordb::vectors::dtos::{
-        CreateDenseVectorDto, CreateSparseIdfDocumentDto, CreateSparseVectorDto,
+        CreateDenseVectorDto, CreateSparseVectorDto, CreateTFIDFDocumentDto,
     },
     app_context::AppContext,
     models::{rpc::DenseVector, versioning::Hash},
@@ -21,7 +21,14 @@ pub(crate) async fn create_sparse_index_transaction(
     ctx: Arc<AppContext>,
     collection_id: &str,
 ) -> Result<CreateTransactionResponseDto, TransactionError> {
-    repo::create_inverted_index_transaction(ctx, collection_id).await
+    repo::create_sparse_index_transaction(ctx, collection_id).await
+}
+
+pub(crate) async fn create_tf_idf_index_transaction(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+) -> Result<CreateTransactionResponseDto, TransactionError> {
+    repo::create_tf_idf_index_transaction(ctx, collection_id).await
 }
 
 pub(crate) async fn commit_dense_index_transaction(
@@ -38,6 +45,14 @@ pub(crate) async fn commit_sparse_index_transaction(
     transaction_id: Hash,
 ) -> Result<(), TransactionError> {
     repo::commit_sparse_index_transaction(ctx, collection_id, transaction_id).await
+}
+
+pub(crate) async fn commit_tf_idf_index_transaction(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    transaction_id: Hash,
+) -> Result<(), TransactionError> {
+    repo::commit_tf_idf_index_transaction(ctx, collection_id, transaction_id).await
 }
 
 pub(crate) async fn create_vector_in_transaction(
@@ -63,6 +78,14 @@ pub(crate) async fn abort_sparse_index_transaction(
     transaction_id: Hash,
 ) -> Result<(), TransactionError> {
     repo::abort_sparse_index_transaction(ctx, collection_id, transaction_id).await
+}
+
+pub(crate) async fn abort_tf_idf_index_transaction(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    transaction_id: Hash,
+) -> Result<(), TransactionError> {
+    repo::abort_tf_idf_index_transaction(ctx, collection_id, transaction_id).await
 }
 
 pub(crate) async fn delete_vector_by_id(
@@ -92,11 +115,11 @@ pub(crate) async fn upsert_sparse_vectors(
     repo::upsert_sparse_vectors(ctx, collection_id, transaction_id, vectors).await
 }
 
-pub(crate) async fn upsert_sparse_idf_documents(
+pub(crate) async fn upsert_tf_idf_documents(
     ctx: Arc<AppContext>,
     collection_id: &str,
     transaction_id: Hash,
-    documents: Vec<CreateSparseIdfDocumentDto>,
+    documents: Vec<CreateTFIDFDocumentDto>,
 ) -> Result<(), TransactionError> {
-    repo::upsert_sparse_idf_documents(ctx, collection_id, transaction_id, documents).await
+    repo::upsert_tf_idf_documents(ctx, collection_id, transaction_id, documents).await
 }

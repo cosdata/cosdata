@@ -2,15 +2,15 @@ use std::sync::atomic::AtomicU32;
 
 use crate::models::{
     buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
-    cache_loader::InvertedIndexIDFCache,
-    inverted_index_idf::InvertedIndexIDFNodeData,
+    cache_loader::TFIDFIndexCache,
     prob_lazy_load::lazy_item::{ProbLazyItem, ProbLazyItemState, ReadyState},
+    tf_idf_index::TFIDFIndexNodeData,
     types::FileOffset,
 };
 
-use super::InvertedIndexIDFSerialize;
+use super::TFIDFIndexSerialize;
 
-impl InvertedIndexIDFSerialize for *mut ProbLazyItem<InvertedIndexIDFNodeData> {
+impl TFIDFIndexSerialize for *mut ProbLazyItem<TFIDFIndexNodeData> {
     fn serialize(
         &self,
         dim_bufman: &BufferManager,
@@ -46,7 +46,7 @@ impl InvertedIndexIDFSerialize for *mut ProbLazyItem<InvertedIndexIDFNodeData> {
         file_offset: FileOffset,
         data_file_idx: u8,
         _data_file_parts: u8,
-        cache: &InvertedIndexIDFCache,
+        cache: &TFIDFIndexCache,
     ) -> Result<Self, BufIoError> {
         cache.get_data(file_offset, data_file_idx)
     }

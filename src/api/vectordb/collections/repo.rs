@@ -6,7 +6,10 @@ use crate::{
 };
 
 use super::{
-    dtos::{CreateCollectionDto, GetCollectionsDto, GetCollectionsResponseDto, ListCollectionsResponseDto, CollectionSummaryDto},
+    dtos::{
+        CollectionSummaryDto, CreateCollectionDto, GetCollectionsDto, GetCollectionsResponseDto,
+        ListCollectionsResponseDto,
+    },
     error::CollectionsError,
 };
 
@@ -19,6 +22,7 @@ pub(crate) async fn create_collection(
         dense_vector,
         metadata_schema,
         sparse_vector,
+        tf_idf_options,
     }: CreateCollectionDto,
 ) -> Result<Collection, CollectionsError> {
     let env = &ctx.ain_env.persist;
@@ -39,6 +43,7 @@ pub(crate) async fn create_collection(
         description,
         dense_vector,
         sparse_vector,
+        tf_idf_options,
         metadata_schema,
         config,
     )
@@ -123,13 +128,13 @@ pub(crate) async fn list_collections(
         .ain_env
         .collections_map
         .iter_collections()
-        .map(|collection_arc| {
-            CollectionSummaryDto {
-                name: collection_arc.name.clone(),
-                description: collection_arc.description.clone(),
-            }
+        .map(|collection_arc| CollectionSummaryDto {
+            name: collection_arc.name.clone(),
+            description: collection_arc.description.clone(),
         })
         .collect();
 
-    Ok(ListCollectionsResponseDto { collections: summaries })
+    Ok(ListCollectionsResponseDto {
+        collections: summaries,
+    })
 }

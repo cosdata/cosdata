@@ -2,7 +2,7 @@ use std::{cell::UnsafeCell, sync::RwLock};
 
 use crate::models::{
     buffered_io::{BufIoError, BufferManager},
-    inverted_index_idf::UnsafeVersionedVec,
+    tf_idf_index::UnsafeVersionedVec,
     types::FileOffset,
     versioning::Hash,
 };

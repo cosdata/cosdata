@@ -1,14 +1,14 @@
 pub mod hnsw;
 pub mod inverted;
-pub mod inverted_idf;
+pub mod tf_idf;
 
 mod metric_distance;
 mod page;
 mod pagepool;
 mod quotients_map;
 mod sparse_embedding;
-mod sparse_idf_document;
 mod storage;
+mod tf_idf_document;
 mod tree_map;
 mod versioned_item;
 mod versioned_pagepool;

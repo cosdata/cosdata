@@ -2,11 +2,11 @@ use actix_web::{web, HttpResponse, Result};
 
 use crate::app_context::AppContext;
 
-use crate::api::vectordb::collections::error::CollectionsError;
 use super::{
     dtos::{CreateCollectionDto, GetCollectionsDto},
     service,
 };
+use crate::api::vectordb::collections::error::CollectionsError;
 
 pub(crate) async fn create_collection(
     web::Json(create_collection_dto): web::Json<CreateCollectionDto>,

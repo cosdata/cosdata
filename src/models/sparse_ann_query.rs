@@ -10,9 +10,7 @@ use std::collections::BinaryHeap;
 use std::iter::Peekable;
 
 use super::inverted_index::InvertedIndexRoot;
-use super::inverted_index_idf::{
-    InvertedIndexIDFRoot, TermInfo, TermQuotient, UnsafeVersionedVecIter,
-};
+use super::tf_idf_index::{TFIDFIndexRoot, TermInfo, TermQuotient, UnsafeVersionedVecIter};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SparseAnnResult {
@@ -156,7 +154,7 @@ impl SparseAnnQueryBasic {
 
     pub fn search_bm25(
         self,
-        index: &InvertedIndexIDFRoot,
+        index: &TFIDFIndexRoot,
         k: Option<usize>,
     ) -> Result<Vec<SparseAnnIDFResult>, BufIoError> {
         const BUCKETS: usize = 512;

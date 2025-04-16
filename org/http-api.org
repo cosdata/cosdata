@@ -7,11 +7,11 @@ create_collection:
   description: string (optional)
   dense_vector:
     enabled: boolean
-    auto_create_index: boolean
     dimension: integer
   sparse_vector:
     enabled: boolean
-    auto_create_index: boolean
+  tf_idf:
+    enabled: boolean
   metadata_schema: object (optional)
   config:
     max_vectors: integer (optional)
@@ -69,11 +69,11 @@ create_collection:
   description: "Collection of clothing item vectors and metadata"
   dense_vector:
     enabled: true
-    auto_create_index: true
     dimension: 512
   sparse_vector:
     enabled: true
-    auto_create_index: true
+  tf_idf:
+    enabled: false
   metadata_schema:
     product_id:
       type: "string"

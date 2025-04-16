@@ -93,7 +93,7 @@ pub enum RPCResponseBody {
 pub struct DenseVector {
     pub id: VectorId,
     pub values: Vec<f32>,
-    pub metadata: Option<metadata::MetadataFields>
+    pub metadata: Option<metadata::MetadataFields>,
 }
 
 // #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

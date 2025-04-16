@@ -2,6 +2,7 @@ use crate::api;
 use crate::api::auth::{auth_module, authentication_middleware::AuthenticationMiddleware};
 use crate::api::vectordb::collections::collections_module;
 use crate::api::vectordb::indexes::indexes_module;
+use crate::api::vectordb::search::search_module;
 use crate::api::vectordb::transactions::transactions_module;
 use crate::api::vectordb::vectors::vectors_module;
 use crate::api::vectordb::versions::version_module;
@@ -14,7 +15,6 @@ use rustls::{pki_types::PrivateKeyDer, ServerConfig};
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use serde::{Deserialize, Serialize};
 use std::{fs::File, io::BufReader};
-use crate::api::vectordb::search::search_module;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct MyObj {

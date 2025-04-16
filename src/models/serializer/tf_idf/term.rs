@@ -2,15 +2,15 @@ use std::sync::atomic::AtomicU32;
 
 use crate::models::{
     buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
-    cache_loader::InvertedIndexIDFCache,
-    inverted_index_idf::{TermInfo, UnsafeVersionedVec},
+    cache_loader::TFIDFIndexCache,
     serializer::SimpleSerialize,
+    tf_idf_index::{TermInfo, UnsafeVersionedVec},
     types::FileOffset,
 };
 
-use super::InvertedIndexIDFSerialize;
+use super::TFIDFIndexSerialize;
 
-impl InvertedIndexIDFSerialize for TermInfo {
+impl TFIDFIndexSerialize for TermInfo {
     fn serialize(
         &self,
         _dim_bufman: &BufferManager,
@@ -35,7 +35,7 @@ impl InvertedIndexIDFSerialize for TermInfo {
         file_offset: FileOffset,
         data_file_idx: u8,
         _data_file_parts: u8,
-        _cache: &InvertedIndexIDFCache,
+        _cache: &TFIDFIndexCache,
     ) -> Result<Self, BufIoError> {
         let data_bufman = data_bufmans.get(data_file_idx)?;
         let documents = UnsafeVersionedVec::deserialize(&data_bufman, file_offset)?;

@@ -11,30 +11,28 @@ use tempfile::{tempdir, TempDir};
 
 use crate::models::{
     buffered_io::{BufferManager, BufferManagerFactory},
-    cache_loader::InvertedIndexIDFCache,
-    inverted_index::InvertedIndexNode,
-    inverted_index_idf::{
-        InvertedIndexIDFNode, InvertedIndexIDFNodeData, InvertedIndexIDFRoot, TermInfo,
-        UnsafeVersionedVec,
+    cache_loader::TFIDFIndexCache,
+    serializer::tf_idf::TF_IDF_INDEX_DATA_CHUNK_SIZE,
+    tf_idf_index::{
+        TFIDFIndexNode, TFIDFIndexNodeData, TFIDFIndexRoot, TermInfo, UnsafeVersionedVec,
     },
-    serializer::inverted_idf::INVERTED_INDEX_DATA_CHUNK_SIZE,
     types::FileOffset,
     versioning::Hash,
 };
 
-use super::InvertedIndexIDFSerialize;
+use super::TFIDFIndexSerialize;
 
 fn get_cache(
     dim_bufman: Arc<BufferManager>,
     data_bufmans: Arc<BufferManagerFactory<u8>>,
-) -> InvertedIndexIDFCache {
-    InvertedIndexIDFCache::new(dim_bufman, data_bufmans, AtomicU32::new(0), 8)
+) -> TFIDFIndexCache {
+    TFIDFIndexCache::new(dim_bufman, data_bufmans, AtomicU32::new(0), 8)
 }
 
 fn setup_test() -> (
     Arc<BufferManager>,
     Arc<BufferManagerFactory<u8>>,
-    InvertedIndexIDFCache,
+    TFIDFIndexCache,
     u64,
     TempDir,
 ) {
@@ -47,16 +45,12 @@ fn setup_test() -> (
         .open(dir.as_ref().join("index-tree.idim"))
         .unwrap();
     let dim_bufman = Arc::new(
-        BufferManager::new(
-            dim_file,
-            InvertedIndexIDFNode::get_serialized_size() as usize,
-        )
-        .unwrap(),
+        BufferManager::new(dim_file, TFIDFIndexNode::get_serialized_size() as usize).unwrap(),
     );
     let data_bufmans = Arc::new(BufferManagerFactory::new(
         dir.as_ref().into(),
         |root, idx: &u8| root.join(format!("{}.idat", idx)),
-        InvertedIndexNode::get_serialized_size(6) as usize,
+        TFIDFIndexNode::get_serialized_size() as usize,
     ));
     let cache = get_cache(dim_bufman.clone(), data_bufmans.clone());
     let cursor = dim_bufman.open_cursor().unwrap();
@@ -79,16 +73,16 @@ fn add_random_items_to_term_info(rng: &mut impl Rng, term: &TermInfo, count: usi
     }
 }
 
-fn get_random_inverted_index_data(rng: &mut impl Rng, version: Hash) -> InvertedIndexIDFNodeData {
-    let data = InvertedIndexIDFNodeData::new();
+fn get_random_tf_idf_index_data(rng: &mut impl Rng, version: Hash) -> TFIDFIndexNodeData {
+    let data = TFIDFIndexNodeData::new();
     let count = rng.gen_range(1000..2000);
-    add_random_items_to_inverted_index_data(rng, &data, count, version);
+    add_random_items_to_tf_idf_index_data(rng, &data, count, version);
     data
 }
 
-fn add_random_items_to_inverted_index_data(
+fn add_random_items_to_tf_idf_index_data(
     rng: &mut impl Rng,
-    data: &InvertedIndexIDFNodeData,
+    data: &TFIDFIndexNodeData,
     count: usize,
     version: Hash,
 ) {
@@ -169,13 +163,13 @@ fn test_term_info_incremental_serialization_with_updated_values() {
 }
 
 #[test]
-fn test_inverted_index_data_serialization() {
+fn test_tf_idf_index_data_serialization() {
     let (dim_bufman, data_bufmans, cache, cursor, _temp) = setup_test();
     let mut rng = rand::thread_rng();
 
-    let data = get_random_inverted_index_data(&mut rng, 0.into());
+    let data = get_random_tf_idf_index_data(&mut rng, 0.into());
 
-    let offset_counter = AtomicU32::new(INVERTED_INDEX_DATA_CHUNK_SIZE as u32 * 6 + 6);
+    let offset_counter = AtomicU32::new(TF_IDF_INDEX_DATA_CHUNK_SIZE as u32 * 6 + 6);
 
     let offset = data
         .serialize(&dim_bufman, &data_bufmans, &offset_counter, 0, 8, cursor)
@@ -183,7 +177,7 @@ fn test_inverted_index_data_serialization() {
 
     dim_bufman.close_cursor(cursor).unwrap();
 
-    let deserialized = InvertedIndexIDFNodeData::deserialize(
+    let deserialized = TFIDFIndexNodeData::deserialize(
         &dim_bufman,
         &data_bufmans,
         FileOffset(offset),
@@ -197,13 +191,13 @@ fn test_inverted_index_data_serialization() {
 }
 
 #[test]
-fn test_inverted_index_data_incremental_serialization() {
+fn test_tf_idf_index_data_incremental_serialization() {
     let (dim_bufman, data_bufmans, cache, cursor, _temp) = setup_test();
     let mut rng = rand::thread_rng();
 
-    let data = get_random_inverted_index_data(&mut rng, 0.into());
+    let data = get_random_tf_idf_index_data(&mut rng, 0.into());
 
-    let offset_counter = AtomicU32::new(INVERTED_INDEX_DATA_CHUNK_SIZE as u32 * 6 + 6);
+    let offset_counter = AtomicU32::new(TF_IDF_INDEX_DATA_CHUNK_SIZE as u32 * 6 + 6);
 
     let offset = data
         .serialize(&dim_bufman, &data_bufmans, &offset_counter, 0, 8, cursor)
@@ -211,7 +205,7 @@ fn test_inverted_index_data_incremental_serialization() {
 
     let count = rng.gen_range(1000..2000);
 
-    add_random_items_to_inverted_index_data(&mut rng, &data, count, 1.into());
+    add_random_items_to_tf_idf_index_data(&mut rng, &data, count, 1.into());
 
     dim_bufman.seek_with_cursor(cursor, offset as u64).unwrap();
 
@@ -221,7 +215,7 @@ fn test_inverted_index_data_incremental_serialization() {
 
     dim_bufman.close_cursor(cursor).unwrap();
 
-    let deserialized = InvertedIndexIDFNodeData::deserialize(
+    let deserialized = TFIDFIndexNodeData::deserialize(
         &dim_bufman,
         &data_bufmans,
         FileOffset(offset),
@@ -235,13 +229,13 @@ fn test_inverted_index_data_incremental_serialization() {
 }
 
 #[test]
-fn test_inverted_index_node_serialization() {
+fn test_tf_idf_index_node_serialization() {
     let mut rng = rand::thread_rng();
-    let inverted_index_node = InvertedIndexIDFNode::new(0, FileOffset(0));
+    let tf_idf_index_node = TFIDFIndexNode::new(0, FileOffset(0));
     let (dim_bufman, data_bufmans, cache, cursor, _temp_dir) = setup_test();
 
     for _ in 0..300 {
-        inverted_index_node
+        tf_idf_index_node
             .insert(
                 rng.gen_range(0..10000),
                 rng.gen_range(0.0..1.0),
@@ -252,35 +246,29 @@ fn test_inverted_index_node_serialization() {
             .unwrap();
     }
 
-    let offset_counter = AtomicU32::new(InvertedIndexIDFNode::get_serialized_size());
+    let offset_counter = AtomicU32::new(TFIDFIndexNode::get_serialized_size());
 
-    let offset = inverted_index_node
+    let offset = tf_idf_index_node
         .serialize(&dim_bufman, &data_bufmans, &offset_counter, 0, 8, cursor)
         .unwrap();
 
     dim_bufman.close_cursor(cursor).unwrap();
 
-    let deserialized = InvertedIndexIDFNode::deserialize(
-        &dim_bufman,
-        &data_bufmans,
-        FileOffset(offset),
-        0,
-        8,
-        &cache,
-    )
-    .unwrap();
+    let deserialized =
+        TFIDFIndexNode::deserialize(&dim_bufman, &data_bufmans, FileOffset(offset), 0, 8, &cache)
+            .unwrap();
 
-    assert_eq!(inverted_index_node, deserialized);
+    assert_eq!(tf_idf_index_node, deserialized);
 }
 
 #[test]
-fn test_inverted_index_node_incremental_serialization() {
+fn test_tf_idf_index_node_incremental_serialization() {
     let mut rng = rand::thread_rng();
-    let inverted_index_node = InvertedIndexIDFNode::new(0, FileOffset(0));
+    let tf_idf_index_node = TFIDFIndexNode::new(0, FileOffset(0));
     let (dim_bufman, data_bufmans, cache, cursor, _temp_dir) = setup_test();
 
     for _ in 0..300 {
-        inverted_index_node
+        tf_idf_index_node
             .insert(
                 rng.gen_range(0..10000),
                 rng.gen_range(0.0..1.0),
@@ -291,14 +279,14 @@ fn test_inverted_index_node_incremental_serialization() {
             .unwrap();
     }
 
-    let offset_counter = AtomicU32::new(InvertedIndexIDFNode::get_serialized_size());
+    let offset_counter = AtomicU32::new(TFIDFIndexNode::get_serialized_size());
 
-    let _offset = inverted_index_node
+    let _offset = tf_idf_index_node
         .serialize(&dim_bufman, &data_bufmans, &offset_counter, 0, 8, cursor)
         .unwrap();
 
     for _ in 0..300 {
-        inverted_index_node
+        tf_idf_index_node
             .insert(
                 rng.gen_range(0..10000),
                 rng.gen_range(0.0..1.0),
@@ -309,12 +297,12 @@ fn test_inverted_index_node_incremental_serialization() {
             .unwrap();
     }
 
-    let _offset = inverted_index_node
+    let _offset = tf_idf_index_node
         .serialize(&dim_bufman, &data_bufmans, &offset_counter, 0, 8, cursor)
         .unwrap();
 
     for _ in 0..300 {
-        inverted_index_node
+        tf_idf_index_node
             .insert(
                 rng.gen_range(0..10000),
                 rng.gen_range(0.0..1.0),
@@ -325,12 +313,12 @@ fn test_inverted_index_node_incremental_serialization() {
             .unwrap();
     }
 
-    let _offset = inverted_index_node
+    let _offset = tf_idf_index_node
         .serialize(&dim_bufman, &data_bufmans, &offset_counter, 0, 8, cursor)
         .unwrap();
 
     for _ in 0..300 {
-        inverted_index_node
+        tf_idf_index_node
             .insert(
                 rng.gen_range(0..10000),
                 rng.gen_range(0.0..1.0),
@@ -341,33 +329,27 @@ fn test_inverted_index_node_incremental_serialization() {
             .unwrap();
     }
 
-    let offset = inverted_index_node
+    let offset = tf_idf_index_node
         .serialize(&dim_bufman, &data_bufmans, &offset_counter, 0, 8, cursor)
         .unwrap();
 
     dim_bufman.close_cursor(cursor).unwrap();
 
-    let deserialized = InvertedIndexIDFNode::deserialize(
-        &dim_bufman,
-        &data_bufmans,
-        FileOffset(offset),
-        0,
-        8,
-        &cache,
-    )
-    .unwrap();
+    let deserialized =
+        TFIDFIndexNode::deserialize(&dim_bufman, &data_bufmans, FileOffset(offset), 0, 8, &cache)
+            .unwrap();
 
-    assert_eq!(inverted_index_node, deserialized);
+    assert_eq!(tf_idf_index_node, deserialized);
 }
 
 #[test]
-fn test_inverted_index_root_serialization() {
+fn test_tf_idf_index_root_serialization() {
     let temp_dir = tempdir().unwrap();
     let mut rng = rand::thread_rng();
-    let inverted_index = InvertedIndexIDFRoot::new(temp_dir.as_ref().into(), 8).unwrap();
+    let tf_idf_index = TFIDFIndexRoot::new(temp_dir.as_ref().into(), 8).unwrap();
 
     for _ in 0..1000 {
-        inverted_index
+        tf_idf_index
             .insert(
                 rng.gen_range(0..10000000),
                 rng.gen_range(0.0..1.0),
@@ -377,23 +359,23 @@ fn test_inverted_index_root_serialization() {
             .unwrap();
     }
 
-    inverted_index.serialize().unwrap();
-    inverted_index.cache.dim_bufman.flush().unwrap();
-    inverted_index.cache.data_bufmans.flush_all().unwrap();
+    tf_idf_index.serialize().unwrap();
+    tf_idf_index.cache.dim_bufman.flush().unwrap();
+    tf_idf_index.cache.data_bufmans.flush_all().unwrap();
 
-    let deserialized = InvertedIndexIDFRoot::deserialize(temp_dir.as_ref().into(), 8).unwrap();
+    let deserialized = TFIDFIndexRoot::deserialize(temp_dir.as_ref().into(), 8).unwrap();
 
-    assert_eq!(inverted_index, deserialized);
+    assert_eq!(tf_idf_index, deserialized);
 }
 
 #[test]
-fn test_inverted_index_root_incremental_serialization() {
+fn test_tf_idf_index_root_incremental_serialization() {
     let temp_dir = tempdir().unwrap();
     let mut rng = rand::thread_rng();
-    let inverted_index = InvertedIndexIDFRoot::new(temp_dir.as_ref().into(), 8).unwrap();
+    let tf_idf_index = TFIDFIndexRoot::new(temp_dir.as_ref().into(), 8).unwrap();
 
     for _ in 0..100 {
-        inverted_index
+        tf_idf_index
             .insert(
                 rng.gen_range(0..10000000),
                 rng.gen_range(0.0..1.0),
@@ -403,10 +385,10 @@ fn test_inverted_index_root_incremental_serialization() {
             .unwrap();
     }
 
-    inverted_index.serialize().unwrap();
+    tf_idf_index.serialize().unwrap();
 
     for _ in 0..100 {
-        inverted_index
+        tf_idf_index
             .insert(
                 rng.gen_range(0..10000000),
                 rng.gen_range(0.0..1.0),
@@ -416,10 +398,10 @@ fn test_inverted_index_root_incremental_serialization() {
             .unwrap();
     }
 
-    inverted_index.serialize().unwrap();
+    tf_idf_index.serialize().unwrap();
 
     for _ in 0..100 {
-        inverted_index
+        tf_idf_index
             .insert(
                 rng.gen_range(0..10000000),
                 rng.gen_range(0.0..1.0),
@@ -429,10 +411,10 @@ fn test_inverted_index_root_incremental_serialization() {
             .unwrap();
     }
 
-    inverted_index.serialize().unwrap();
+    tf_idf_index.serialize().unwrap();
 
     for _ in 0..100 {
-        inverted_index
+        tf_idf_index
             .insert(
                 rng.gen_range(0..10000000),
                 rng.gen_range(0.0..1.0),
@@ -442,10 +424,10 @@ fn test_inverted_index_root_incremental_serialization() {
             .unwrap();
     }
 
-    inverted_index.serialize().unwrap();
+    tf_idf_index.serialize().unwrap();
 
     for _ in 0..100 {
-        inverted_index
+        tf_idf_index
             .insert(
                 rng.gen_range(0..10000000),
                 rng.gen_range(0.0..1.0),
@@ -455,10 +437,10 @@ fn test_inverted_index_root_incremental_serialization() {
             .unwrap();
     }
 
-    inverted_index.serialize().unwrap();
+    tf_idf_index.serialize().unwrap();
 
     for _ in 0..100 {
-        inverted_index
+        tf_idf_index
             .insert(
                 rng.gen_range(0..10000000),
                 rng.gen_range(0.0..1.0),
@@ -468,12 +450,12 @@ fn test_inverted_index_root_incremental_serialization() {
             .unwrap();
     }
 
-    inverted_index.serialize().unwrap();
+    tf_idf_index.serialize().unwrap();
 
-    inverted_index.cache.dim_bufman.flush().unwrap();
-    inverted_index.cache.data_bufmans.flush_all().unwrap();
+    tf_idf_index.cache.dim_bufman.flush().unwrap();
+    tf_idf_index.cache.data_bufmans.flush_all().unwrap();
 
-    let deserialized = InvertedIndexIDFRoot::deserialize(temp_dir.as_ref().into(), 8).unwrap();
+    let deserialized = TFIDFIndexRoot::deserialize(temp_dir.as_ref().into(), 8).unwrap();
 
-    assert_eq!(inverted_index, deserialized);
+    assert_eq!(tf_idf_index, deserialized);
 }

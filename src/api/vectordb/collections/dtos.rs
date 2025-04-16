@@ -1,5 +1,7 @@
 use crate::metadata;
-use crate::models::collection::{CollectionConfig, DenseVectorOptions, SparseVectorOptions};
+use crate::models::collection::{
+    CollectionConfig, DenseVectorOptions, SparseVectorOptions, TFIDFOptions,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
@@ -73,6 +75,7 @@ pub(crate) struct CreateCollectionDto {
     pub description: Option<String>,
     pub dense_vector: DenseVectorOptions,
     pub sparse_vector: SparseVectorOptions,
+    pub tf_idf_options: TFIDFOptions,
     pub metadata_schema: Option<MetadataSchemaParam>, //object (optional)
     pub config: CollectionConfig,
 }
@@ -135,7 +138,6 @@ mod tests {
         assert_eq!(vec!["myfield1", "myfield2"], cond.field_names);
     }
 }
-
 
 #[derive(Serialize, Debug)]
 pub(crate) struct CollectionSummaryDto {

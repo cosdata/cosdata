@@ -4,8 +4,8 @@ use crate::{app_context::AppContext, models::types::VectorId};
 
 use super::{
     dtos::{
-        CreateDenseVectorDto, CreateVectorDto, CreateVectorResponseDto, UpdateVectorDto,
-        UpdateVectorResponseDto, SimilarVector
+        CreateDenseVectorDto, CreateVectorDto, CreateVectorResponseDto, SimilarVector,
+        UpdateVectorDto, UpdateVectorResponseDto,
     },
     error::VectorsError,
     repo,
@@ -19,9 +19,7 @@ pub(crate) async fn create_vector(
     match create_vector_dto {
         CreateVectorDto::Dense(dto) => repo::create_dense_vector(ctx, collection_id, dto).await,
         CreateVectorDto::Sparse(dto) => repo::create_sparse_vector(ctx, collection_id, dto).await,
-        CreateVectorDto::SparseIdf(dto) => {
-            repo::create_sparse_idf_document(ctx, collection_id, dto).await
-        }
+        CreateVectorDto::TfIdf(dto) => repo::create_tf_idf_document(ctx, collection_id, dto).await,
     }
 }
 
@@ -42,7 +40,6 @@ pub(crate) async fn update_vector_by_id(
     repo::update_vector(ctx, collection_id, vector_id, update_vector_dto).await
 }
 
-
 pub(crate) async fn delete_vector_by_id(
     ctx: Arc<AppContext>,
     collection_id: &str,
@@ -58,7 +55,6 @@ pub(crate) async fn check_vector_existence(
 ) -> Result<bool, VectorsError> {
     repo::check_vector_existence(ctx, collection_id, vector_id).await
 }
-
 
 pub(crate) async fn fetch_vector_neighbors(
     ctx: Arc<AppContext>,

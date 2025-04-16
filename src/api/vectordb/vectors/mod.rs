@@ -19,8 +19,14 @@ pub(crate) fn vectors_module() -> Scope {
             "/{vector_id}",
             web::delete().to(controller::delete_vector_by_id),
         )
-        .route("/{vector_id}", web::head().to(controller::check_vector_existence))
-        .route("/{vector_id}/neighbors", web::get().to(controller::fetch_vector_neighbors))
-        // .route("/search", web::post().to(controller::find_similar_vectors)) // Moved to search module
-        // .route("/batch-search", web::post().to(controller::batch_search)) // Moved to search module
+        .route(
+            "/{vector_id}",
+            web::head().to(controller::check_vector_existence),
+        )
+        .route(
+            "/{vector_id}/neighbors",
+            web::get().to(controller::fetch_vector_neighbors),
+        )
+    // .route("/search", web::post().to(controller::find_similar_vectors)) // Moved to search module
+    // .route("/batch-search", web::post().to(controller::batch_search)) // Moved to search module
 }

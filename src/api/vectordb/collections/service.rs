@@ -5,7 +5,7 @@ use crate::{app_context::AppContext, indexes::hnsw::HNSWIndex, models::collectio
 use super::{
     dtos::{
         CreateCollectionDto, CreateCollectionDtoResponse, GetCollectionsDto,
-        GetCollectionsResponseDto, ListCollectionsResponseDto
+        GetCollectionsResponseDto, ListCollectionsResponseDto,
     },
     error::CollectionsError,
     repo,

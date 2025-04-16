@@ -3,16 +3,16 @@ use std::sync::{
     Arc, RwLock,
 };
 
-use super::{InvertedIndexIDFSerialize, INVERTED_INDEX_DATA_CHUNK_SIZE};
+use super::{TFIDFIndexSerialize, TF_IDF_INDEX_DATA_CHUNK_SIZE};
 use crate::models::{
     buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
-    cache_loader::InvertedIndexIDFCache,
+    cache_loader::TFIDFIndexCache,
     common::TSHashTable,
-    inverted_index_idf::{InvertedIndexIDFNodeData, TermInfo},
+    tf_idf_index::{TFIDFIndexNodeData, TermInfo},
     types::FileOffset,
 };
 
-impl InvertedIndexIDFSerialize for InvertedIndexIDFNodeData {
+impl TFIDFIndexSerialize for TFIDFIndexNodeData {
     fn serialize(
         &self,
         dim_bufman: &BufferManager,
@@ -30,11 +30,11 @@ impl InvertedIndexIDFSerialize for InvertedIndexIDFNodeData {
         list.sort_unstable_by_key(|(_, v)| v.sequence_idx);
         dim_bufman.update_u16_with_cursor(cursor, map_len)?;
 
-        let total_chunks = list.len().div_ceil(INVERTED_INDEX_DATA_CHUNK_SIZE);
+        let total_chunks = list.len().div_ceil(TF_IDF_INDEX_DATA_CHUNK_SIZE);
 
         for chunk_idx in 0..total_chunks {
-            for i in (chunk_idx * INVERTED_INDEX_DATA_CHUNK_SIZE)
-                ..((chunk_idx + 1) * INVERTED_INDEX_DATA_CHUNK_SIZE)
+            for i in (chunk_idx * TF_IDF_INDEX_DATA_CHUNK_SIZE)
+                ..((chunk_idx + 1) * TF_IDF_INDEX_DATA_CHUNK_SIZE)
             {
                 let current_offset = dim_bufman.cursor_position(cursor)?;
                 if *num_entries_serialized > i as u16 {
@@ -63,14 +63,14 @@ impl InvertedIndexIDFSerialize for InvertedIndexIDFNodeData {
                     dim_bufman.update_with_cursor(cursor, &[u8::MAX; 6])?;
                 }
             }
-            if *num_entries_serialized > ((chunk_idx + 1) * INVERTED_INDEX_DATA_CHUNK_SIZE) as u16 {
+            if *num_entries_serialized > ((chunk_idx + 1) * TF_IDF_INDEX_DATA_CHUNK_SIZE) as u16 {
                 let offset = dim_bufman.read_u32_with_cursor(cursor)?;
                 dim_bufman.seek_with_cursor(cursor, offset as u64)?;
             } else if chunk_idx == total_chunks - 1 {
                 dim_bufman.update_with_cursor(cursor, &[u8::MAX; 4])?;
             } else {
                 let offset = offset_counter.fetch_add(
-                    (6 * INVERTED_INDEX_DATA_CHUNK_SIZE + 4) as u32,
+                    (6 * TF_IDF_INDEX_DATA_CHUNK_SIZE + 4) as u32,
                     Ordering::Relaxed,
                 );
                 dim_bufman.update_u32_with_cursor(cursor, offset)?;
@@ -89,18 +89,18 @@ impl InvertedIndexIDFSerialize for InvertedIndexIDFNodeData {
         file_offset: FileOffset,
         data_file_idx: u8,
         data_file_parts: u8,
-        cache: &InvertedIndexIDFCache,
+        cache: &TFIDFIndexCache,
     ) -> Result<Self, BufIoError> {
         let cursor = dim_bufman.open_cursor()?;
         dim_bufman.seek_with_cursor(cursor, file_offset.0 as u64)?;
         let map_len = dim_bufman.read_u16_with_cursor(cursor)? as usize;
         let map = TSHashTable::new(16);
 
-        let total_chunks = map_len.div_ceil(INVERTED_INDEX_DATA_CHUNK_SIZE);
+        let total_chunks = map_len.div_ceil(TF_IDF_INDEX_DATA_CHUNK_SIZE);
 
         for chunk_idx in 0..total_chunks {
-            for i in (chunk_idx * INVERTED_INDEX_DATA_CHUNK_SIZE)
-                ..((chunk_idx + 1) * INVERTED_INDEX_DATA_CHUNK_SIZE)
+            for i in (chunk_idx * TF_IDF_INDEX_DATA_CHUNK_SIZE)
+                ..((chunk_idx + 1) * TF_IDF_INDEX_DATA_CHUNK_SIZE)
             {
                 if i == map_len {
                     break;

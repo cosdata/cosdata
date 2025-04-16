@@ -11,14 +11,17 @@ use std::{fs, hash::Hasher, path::Path, sync::Arc};
 #[derive(Deserialize, Clone, Serialize, Debug)]
 pub struct DenseVectorOptions {
     pub enabled: bool,
-    pub auto_create_index: bool,
     pub dimension: usize,
 }
 
 #[derive(Deserialize, Clone, Serialize, Debug)]
 pub struct SparseVectorOptions {
     pub enabled: bool,
-    pub auto_create_index: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TFIDFOptions {
+    pub enabled: bool,
 }
 
 #[derive(Deserialize, Clone, Serialize, Debug)]
@@ -33,6 +36,7 @@ pub struct Collection {
     pub description: Option<String>,
     pub dense_vector: DenseVectorOptions,
     pub sparse_vector: SparseVectorOptions,
+    pub tf_idf_options: TFIDFOptions,
     pub metadata_schema: Option<MetadataSchema>,
     pub config: CollectionConfig,
 }
@@ -43,6 +47,7 @@ impl Collection {
         description: Option<String>,
         dense_vector_options: DenseVectorOptions,
         sparse_vector_options: SparseVectorOptions,
+        tf_idf_options: TFIDFOptions,
         metadata_schema: Option<MetadataSchema>,
         config: CollectionConfig,
     ) -> Result<Self, WaCustomError> {
@@ -55,6 +60,7 @@ impl Collection {
             description,
             dense_vector: dense_vector_options,
             sparse_vector: sparse_vector_options,
+            tf_idf_options,
             metadata_schema,
             config,
         };

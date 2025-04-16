@@ -2,13 +2,13 @@ use super::buffered_io::{BufIoError, BufferManager, BufferManagerFactory};
 use super::common::TSHashTable;
 use super::file_persist::{read_prop_metadata_from_file, read_prop_value_from_file};
 use super::inverted_index::InvertedIndexNodeData;
-use super::inverted_index_idf::InvertedIndexIDFNodeData;
 use super::lru_cache::LRUCache;
 use super::prob_lazy_load::lazy_item::{FileIndex, ProbLazyItem, ProbLazyItemState, ReadyState};
 use super::prob_node::{ProbNode, SharedNode};
 use super::serializer::hnsw::HNSWIndexSerialize;
 use super::serializer::inverted::InvertedIndexSerialize;
-use super::serializer::inverted_idf::InvertedIndexIDFSerialize;
+use super::serializer::tf_idf::TFIDFIndexSerialize;
+use super::tf_idf_index::TFIDFIndexNodeData;
 use super::types::*;
 use super::versioning::Hash;
 use dashmap::DashMap;
@@ -437,8 +437,8 @@ impl InvertedIndexCache {
     }
 }
 
-pub struct InvertedIndexIDFCache {
-    registry: LRUCache<u64, *mut ProbLazyItem<InvertedIndexIDFNodeData>>,
+pub struct TFIDFIndexCache {
+    registry: LRUCache<u64, *mut ProbLazyItem<TFIDFIndexNodeData>>,
     pub dim_bufman: Arc<BufferManager>,
     pub data_bufmans: Arc<BufferManagerFactory<u8>>,
     pub offset_counter: AtomicU32,
@@ -446,10 +446,10 @@ pub struct InvertedIndexIDFCache {
     pub data_file_parts: u8,
 }
 
-unsafe impl Send for InvertedIndexIDFCache {}
-unsafe impl Sync for InvertedIndexIDFCache {}
+unsafe impl Send for TFIDFIndexCache {}
+unsafe impl Sync for TFIDFIndexCache {}
 
-impl InvertedIndexIDFCache {
+impl TFIDFIndexCache {
     pub fn new(
         dim_bufman: Arc<BufferManager>,
         data_bufmans: Arc<BufferManagerFactory<u8>>,
@@ -472,7 +472,7 @@ impl InvertedIndexIDFCache {
         &self,
         file_offset: FileOffset,
         data_file_idx: u8,
-    ) -> Result<*mut ProbLazyItem<InvertedIndexIDFNodeData>, BufIoError> {
+    ) -> Result<*mut ProbLazyItem<TFIDFIndexNodeData>, BufIoError> {
         let combined_index = Self::combine_index(file_offset, 0);
 
         if let Some(item) = self.registry.get(&combined_index) {
@@ -503,7 +503,7 @@ impl InvertedIndexIDFCache {
             break;
         }
 
-        let data = InvertedIndexIDFNodeData::deserialize(
+        let data = TFIDFIndexNodeData::deserialize(
             &self.dim_bufman,
             &self.data_bufmans,
             file_offset,
@@ -533,7 +533,7 @@ impl InvertedIndexIDFCache {
     }
 
     #[allow(unused)]
-    pub fn load_item<T: InvertedIndexIDFSerialize>(
+    pub fn load_item<T: TFIDFIndexSerialize>(
         &self,
         file_offset: FileOffset,
         data_file_idx: u8,

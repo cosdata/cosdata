@@ -12,10 +12,10 @@ use std::{
 use super::{
     atomic_array::AtomicArray,
     buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
-    cache_loader::InvertedIndexIDFCache,
+    cache_loader::TFIDFIndexCache,
     common::TSHashTable,
     prob_lazy_load::lazy_item::ProbLazyItem,
-    serializer::inverted_idf::{InvertedIndexIDFSerialize, INVERTED_INDEX_DATA_CHUNK_SIZE},
+    serializer::tf_idf::{TFIDFIndexSerialize, TF_IDF_INDEX_DATA_CHUNK_SIZE},
     types::FileOffset,
     utils::calculate_path,
     versioning::Hash,
@@ -186,7 +186,7 @@ impl std::fmt::Debug for TermInfo {
     }
 }
 
-pub struct InvertedIndexIDFNodeData {
+pub struct TFIDFIndexNodeData {
     // Map from term quotients to TermInfo
     pub map: QuotientMap,
     pub map_len: AtomicU16,
@@ -194,7 +194,7 @@ pub struct InvertedIndexIDFNodeData {
 }
 
 #[cfg(test)]
-impl PartialEq for InvertedIndexIDFNodeData {
+impl PartialEq for TFIDFIndexNodeData {
     fn eq(&self, other: &Self) -> bool {
         self.map == other.map
             && self.map_len.load(Ordering::Relaxed) == other.map_len.load(Ordering::Relaxed)
@@ -204,9 +204,9 @@ impl PartialEq for InvertedIndexIDFNodeData {
 }
 
 #[cfg(test)]
-impl std::fmt::Debug for InvertedIndexIDFNodeData {
+impl std::fmt::Debug for TFIDFIndexNodeData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("InvertedIndexIDFNodeData")
+        f.debug_struct("TFIDFIndexNodeData")
             .field("map", &self.map)
             .field("map_len", &self.map_len.load(Ordering::Relaxed))
             .field(
@@ -217,7 +217,7 @@ impl std::fmt::Debug for InvertedIndexIDFNodeData {
     }
 }
 
-impl Default for InvertedIndexIDFNodeData {
+impl Default for TFIDFIndexNodeData {
     fn default() -> Self {
         Self {
             map: QuotientMap::new(16),
@@ -227,23 +227,23 @@ impl Default for InvertedIndexIDFNodeData {
     }
 }
 
-impl InvertedIndexIDFNodeData {
+impl TFIDFIndexNodeData {
     pub fn new() -> Self {
         Self::default()
     }
 }
 
-pub struct InvertedIndexIDFNode {
+pub struct TFIDFIndexNode {
     pub is_serialized: AtomicBool,
     pub is_dirty: AtomicBool,
     pub file_offset: FileOffset,
     pub dim_index: u32,
-    pub data: *mut ProbLazyItem<InvertedIndexIDFNodeData>,
-    pub children: AtomicArray<InvertedIndexIDFNode, 16>,
+    pub data: *mut ProbLazyItem<TFIDFIndexNodeData>,
+    pub children: AtomicArray<TFIDFIndexNode, 16>,
 }
 
 #[cfg(test)]
-impl PartialEq for InvertedIndexIDFNode {
+impl PartialEq for TFIDFIndexNode {
     fn eq(&self, other: &Self) -> bool {
         self.file_offset == other.file_offset
             && self.dim_index == other.dim_index
@@ -253,9 +253,9 @@ impl PartialEq for InvertedIndexIDFNode {
 }
 
 #[cfg(test)]
-impl std::fmt::Debug for InvertedIndexIDFNode {
+impl std::fmt::Debug for TFIDFIndexNode {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("InvertedIndexIDFNode")
+        f.debug_struct("TFIDFIndexNode")
             .field("file_offset", &self.file_offset)
             .field("dim_index", &self.dim_index)
             .field("children", &self.children)
@@ -263,16 +263,16 @@ impl std::fmt::Debug for InvertedIndexIDFNode {
     }
 }
 
-pub struct InvertedIndexIDFRoot {
-    pub root: InvertedIndexIDFNode,
-    pub cache: InvertedIndexIDFCache,
+pub struct TFIDFIndexRoot {
+    pub root: TFIDFIndexNode,
+    pub cache: TFIDFIndexCache,
     // total number of documents in the index
     pub total_documents_count: AtomicU32,
     pub data_file_parts: u8,
 }
 
 #[cfg(test)]
-impl PartialEq for InvertedIndexIDFRoot {
+impl PartialEq for TFIDFIndexRoot {
     fn eq(&self, other: &Self) -> bool {
         self.root == other.root
             && self.total_documents_count.load(Ordering::Relaxed)
@@ -282,9 +282,9 @@ impl PartialEq for InvertedIndexIDFRoot {
 }
 
 #[cfg(test)]
-impl std::fmt::Debug for InvertedIndexIDFRoot {
+impl std::fmt::Debug for TFIDFIndexRoot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("InvertedIndexIDFRoot")
+        f.debug_struct("TFIDFIndexRoot")
             .field("root", &self.root)
             .field(
                 "total_documents_count",
@@ -295,15 +295,15 @@ impl std::fmt::Debug for InvertedIndexIDFRoot {
     }
 }
 
-unsafe impl Send for InvertedIndexIDFNode {}
-unsafe impl Sync for InvertedIndexIDFNode {}
-unsafe impl Send for InvertedIndexIDFRoot {}
-unsafe impl Sync for InvertedIndexIDFRoot {}
+unsafe impl Send for TFIDFIndexNode {}
+unsafe impl Sync for TFIDFIndexNode {}
+unsafe impl Send for TFIDFIndexRoot {}
+unsafe impl Sync for TFIDFIndexRoot {}
 
-impl InvertedIndexIDFNode {
+impl TFIDFIndexNode {
     pub fn new(dim_index: u32, file_offset: FileOffset) -> Self {
         let data = ProbLazyItem::new(
-            InvertedIndexIDFNodeData::new(),
+            TFIDFIndexNodeData::new(),
             0.into(),
             0,
             false,
@@ -351,7 +351,7 @@ impl InvertedIndexIDFNode {
         quotient: TermQuotient,
         value: f32,
         document_id: u32,
-        cache: &InvertedIndexIDFCache,
+        cache: &TFIDFIndexCache,
         version: Hash,
     ) -> Result<(), BufIoError> {
         // Get node data
@@ -379,13 +379,13 @@ impl InvertedIndexIDFNode {
         Ok(())
     }
 
-    /// See [`crate::models::serializer::inverted_idf::node`] for how its calculated
+    /// See [`crate::models::serializer::tf_idf::node`] for how its calculated
     pub fn get_serialized_size() -> u32 {
-        INVERTED_INDEX_DATA_CHUNK_SIZE as u32 * 6 + 74
+        TF_IDF_INDEX_DATA_CHUNK_SIZE as u32 * 6 + 74
     }
 }
 
-impl InvertedIndexIDFRoot {
+impl TFIDFIndexRoot {
     pub fn new(root_path: PathBuf, data_file_parts: u8) -> Result<Self, BufIoError> {
         let dim_file = OpenOptions::new()
             .read(true)
@@ -393,7 +393,7 @@ impl InvertedIndexIDFRoot {
             .create(true)
             .truncate(false)
             .open(root_path.join("index-tree.dim"))?;
-        let node_size = InvertedIndexIDFNode::get_serialized_size();
+        let node_size = TFIDFIndexNode::get_serialized_size();
         let dim_bufman = Arc::new(BufferManager::new(dim_file, node_size as usize * 1000)?);
         let offset_counter = AtomicU32::new(node_size + 4);
         let data_bufmans = Arc::new(BufferManagerFactory::new(
@@ -401,11 +401,10 @@ impl InvertedIndexIDFRoot {
             |root, idx: &u8| root.join(format!("{}.idat", idx)),
             8192,
         ));
-        let cache =
-            InvertedIndexIDFCache::new(dim_bufman, data_bufmans, offset_counter, data_file_parts);
+        let cache = TFIDFIndexCache::new(dim_bufman, data_bufmans, offset_counter, data_file_parts);
 
-        Ok(InvertedIndexIDFRoot {
-            root: InvertedIndexIDFNode::new(0, FileOffset(4)),
+        Ok(TFIDFIndexRoot {
+            root: TFIDFIndexNode::new(0, FileOffset(4)),
             cache,
             total_documents_count: AtomicU32::new(0),
             data_file_parts,
@@ -414,7 +413,7 @@ impl InvertedIndexIDFRoot {
 
     /// Finds the node at a given dimension
     /// Traverses the tree iteratively and returns a reference to the node.
-    pub fn find_node(&self, dim_index: u32) -> Option<&InvertedIndexIDFNode> {
+    pub fn find_node(&self, dim_index: u32) -> Option<&TFIDFIndexNode> {
         let mut current_node = &self.root;
         let path = calculate_path(dim_index, 0);
         for child_index in path {
@@ -442,10 +441,9 @@ impl InvertedIndexIDFRoot {
 
         let path = calculate_path(storage_dim, 0);
         let node = self.root.find_or_create_node(&path, || {
-            self.cache.offset_counter.fetch_add(
-                InvertedIndexIDFNode::get_serialized_size(),
-                Ordering::Relaxed,
-            )
+            self.cache
+                .offset_counter
+                .fetch_add(TFIDFIndexNode::get_serialized_size(), Ordering::Relaxed)
         });
         debug_assert_eq!(node.dim_index, storage_dim);
         // value will be quantized while being inserted into the Node.
@@ -476,7 +474,7 @@ impl InvertedIndexIDFRoot {
             .create(true)
             .truncate(false)
             .open(root_path.join("index-tree.dim"))?;
-        let node_size = InvertedIndexIDFNode::get_serialized_size();
+        let node_size = TFIDFIndexNode::get_serialized_size();
         let dim_bufman = Arc::new(BufferManager::new(dim_file, node_size as usize * 1000)?);
         let offset_counter = AtomicU32::new(dim_bufman.file_size() as u32);
         let data_bufmans = Arc::new(BufferManagerFactory::new(
@@ -484,9 +482,8 @@ impl InvertedIndexIDFRoot {
             |root, idx: &u8| root.join(format!("{}.idat", idx)),
             8192,
         ));
-        let cache =
-            InvertedIndexIDFCache::new(dim_bufman, data_bufmans, offset_counter, data_file_parts);
-        let root = InvertedIndexIDFNode::deserialize(
+        let cache = TFIDFIndexCache::new(dim_bufman, data_bufmans, offset_counter, data_file_parts);
+        let root = TFIDFIndexNode::deserialize(
             &cache.dim_bufman,
             &cache.data_bufmans,
             FileOffset(4),

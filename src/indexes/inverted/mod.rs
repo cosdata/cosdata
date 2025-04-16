@@ -1,8 +1,8 @@
 pub(crate) mod data;
 pub(crate) mod transaction;
 pub(crate) mod types;
-use lmdb::Transaction;
 use crate::macros::key;
+use lmdb::Transaction;
 
 use std::{
     path::PathBuf,
@@ -27,7 +27,6 @@ use crate::models::{
 pub struct InvertedIndex {
     pub name: String,
     pub description: Option<String>,
-    pub auto_create_index: bool,
     pub metadata_schema: Option<String>, //object (optional)
     pub max_vectors: Option<i32>,
     pub root: InvertedIndexRoot,
@@ -54,7 +53,6 @@ impl InvertedIndex {
         name: String,
         description: Option<String>,
         root_path: PathBuf,
-        auto_create_index: bool,
         metadata_schema: Option<String>,
         max_vectors: Option<i32>,
         lmdb: MetaDb,
@@ -69,7 +67,6 @@ impl InvertedIndex {
 
         Ok(Self {
             name,
-            auto_create_index,
             description,
             max_vectors,
             metadata_schema,
@@ -116,7 +113,10 @@ impl InvertedIndex {
         let txn = match env.begin_ro_txn() {
             Ok(txn) => txn,
             Err(e) => {
-                log::error!("LMDB RO txn failed for sparse contains_vector_id check: {}", e);
+                log::error!(
+                    "LMDB RO txn failed for sparse contains_vector_id check: {}",
+                    e
+                );
                 return false;
             }
         };
@@ -128,7 +128,11 @@ impl InvertedIndex {
             Ok(_) => true,
             Err(lmdb::Error::NotFound) => false,
             Err(e) => {
-                log::error!("LMDB error during sparse contains_vector_id get for {}: {}", vector_id_u32, e);
+                log::error!(
+                    "LMDB error during sparse contains_vector_id get for {}: {}",
+                    vector_id_u32,
+                    e
+                );
                 false
             }
         };

@@ -6,13 +6,12 @@ use siphasher::sip::SipHasher24;
 
 use crate::models::common::WaCustomError;
 
-use super::InvertedIndexIDF;
+use super::TFIDFIndex;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct InvertedIndexIDFData {
+pub struct TFIDFIndexData {
     pub name: String,
     pub description: Option<String>,
-    pub auto_create_index: bool,
     pub max_vectors: Option<i32>,
     pub sample_threshold: usize,
     pub store_raw_text: bool,
@@ -20,22 +19,21 @@ pub struct InvertedIndexIDFData {
     pub b: f32,
 }
 
-impl From<&InvertedIndexIDF> for InvertedIndexIDFData {
-    fn from(inverted_index_idf: &InvertedIndexIDF) -> Self {
+impl From<&TFIDFIndex> for TFIDFIndexData {
+    fn from(tf_idf_index: &TFIDFIndex) -> Self {
         Self {
-            name: inverted_index_idf.name.clone(),
-            description: inverted_index_idf.description.clone(),
-            auto_create_index: inverted_index_idf.auto_create_index,
-            max_vectors: inverted_index_idf.max_vectors,
-            sample_threshold: inverted_index_idf.sample_threshold,
-            store_raw_text: inverted_index_idf.store_raw_text,
-            k1: inverted_index_idf.k1,
-            b: inverted_index_idf.b,
+            name: tf_idf_index.name.clone(),
+            description: tf_idf_index.description.clone(),
+            max_vectors: tf_idf_index.max_vectors,
+            sample_threshold: tf_idf_index.sample_threshold,
+            store_raw_text: tf_idf_index.store_raw_text,
+            k1: tf_idf_index.k1,
+            b: tf_idf_index.b,
         }
     }
 }
 
-impl InvertedIndexIDFData {
+impl TFIDFIndexData {
     /// Computes the SipHash of a collection/index name
     pub fn get_hash_for_name(name: &str) -> u64 {
         // Compute SipHash of the collection name
@@ -57,7 +55,7 @@ impl InvertedIndexIDFData {
         Self::get_key_for_name(&self.name)
     }
 
-    /// loads inverted index data for a collection
+    /// loads TF-IDF index data for a collection
     pub fn load(
         env: &Environment,
         db: Database,
@@ -73,13 +71,13 @@ impl InvertedIndexIDFData {
         Ok(Some(index))
     }
 
-    /// persists inverted index data for a collection
+    /// persists TF-IDF index data for a collection
     pub fn persist(
         env: &Environment,
         db: Database,
-        inverted_index: &InvertedIndexIDF,
+        tf_idf_index: &TFIDFIndex,
     ) -> Result<(), WaCustomError> {
-        let data = Self::from(inverted_index);
+        let data = Self::from(tf_idf_index);
 
         // Compute SipHash of the collection name
         let key = data.get_key();
@@ -99,13 +97,13 @@ impl InvertedIndexIDFData {
         Ok(())
     }
 
-    /// deletes inverted index for a collection
+    /// deletes TF-IDF index for a collection
     pub fn delete_index(
         env: &Environment,
         db: Database,
-        inverted_index: &InvertedIndexIDF,
+        tf_idf_index: &TFIDFIndex,
     ) -> lmdb::Result<()> {
-        let key = Self::get_key_for_name(&inverted_index.name);
+        let key = Self::get_key_for_name(&tf_idf_index.name);
         let mut txn = env.begin_rw_txn()?;
         txn.del(db, &key, None)?;
         txn.commit()?;
