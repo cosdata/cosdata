@@ -12,9 +12,8 @@ import requests
 import json
 from typing import List, Tuple, Dict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import csv
-import subprocess
-import signal
+# import subprocess
+# import signal
 
 # Suppress only the single InsecureRequestWarning from urllib3 needed for this script
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -144,10 +143,10 @@ def create_db(name: str, description: str | None = None):
         "description": description,
         "dense_vector": {
             "enabled": False,
-            "auto_create_index": False,
             "dimension": 1,
         },
-        "sparse_vector": {"enabled": True, "auto_create_index": False},
+        "sparse_vector": {"enabled": False},
+        "tf_idf_options": {"enabled": True},
         "metadata_schema": None,
         "config": {"max_vectors": None, "replication_factor": None},
     }
@@ -160,14 +159,13 @@ def create_db(name: str, description: str | None = None):
 def create_index(name: str, k1: float, b: float):
     data = {
         "name": name,
-        "isIDF": True,
         "sample_threshold": 1000,
         "store_raw_text": False,
         "k1": k1,
         "b": b,
     }
     response = requests.post(
-        f"{BASE_URL}/collections/{name}/indexes/sparse",
+        f"{BASE_URL}/collections/{name}/indexes/tf-idf",
         headers=generate_headers(),
         data=json.dumps(data),
         verify=False,
@@ -177,7 +175,7 @@ def create_index(name: str, k1: float, b: float):
 
 def create_transaction(collection_name: str) -> str:
     url = f"{BASE_URL}/collections/{collection_name}/transactions"
-    data = {"index_type": "sparse"}
+    data = {"index_type": "tf_idf"}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
@@ -189,7 +187,8 @@ def upsert_vectors(collection_name: str, txn_id: str, documents: List[Document])
     documents = [{"id": document[0], "text": document[1]} for document in documents]
 
     url = f"{BASE_URL}/collections/{collection_name}/transactions/{txn_id}/upsert"
-    data = {"index_type": "sparse", "isIDF": True, "documents": documents}
+    data = {"index_type": "tf_idf", "documents": documents}
+    print(data)
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
@@ -222,7 +221,7 @@ def index(
 
 def commit_transaction(collection_name: str, txn_id: str):
     url = f"{BASE_URL}/collections/{collection_name}/transactions/{txn_id}/commit"
-    data = {"index_type": "sparse"}
+    data = {"index_type": "tf_idf"}
     response = requests.post(
         url, data=json.dumps(data), headers=generate_headers(), verify=False
     )
@@ -234,13 +233,12 @@ def commit_transaction(collection_name: str, txn_id: str):
 def search_document(
     collection_name: str, query: str, top_k: int
 ) -> List[Tuple[int, float]]:
-    url = f"{BASE_URL}/collections/{collection_name}/vectors/search"
+    url = f"{BASE_URL}/collections/{collection_name}/search/tf-idf"
     data = {
-        "index_type": "sparse",
-        "isIDF": True,
         "query": query,
         "top_k": top_k,
     }
+    print(data)
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
@@ -262,10 +260,8 @@ def search_documents(
 
 
 def batch_search_documents(collection_name: str, queries: List[str], top_k: int):
-    url = f"{BASE_URL}/collections/{collection_name}/vectors/batch-search"
+    url = f"{BASE_URL}/collections/{collection_name}/search/batch-tf-idf"
     data = {
-        "index_type": "sparse",
-        "isIDF": True,
         "queries": queries,
         "top_k": top_k,
     }
@@ -433,53 +429,55 @@ def main(
         "p95_latency": p95_latency,
     }
 
-def start_server():
-    # Run the shell command to clean, build, and run the server with taskset
-    cmd = 'rm -rf data && cargo b -r && taskset 0xFF ./target/release/cosdata --admin-key "" --confirmed'
-    return subprocess.Popen(cmd, shell=True, preexec_fn=os.setsid)
+
+# def start_server():
+#     # Run the shell command to clean, build, and run the server with taskset
+#     cmd = 'rm -rf data && cargo b -r && taskset 0xFF ./target/release/cosdata --admin-key "" --confirmed'
+#     return subprocess.Popen(cmd, shell=True, preexec_fn=os.setsid)
 
 
-def stop_server(process):
-    # Kill the entire process group
-    os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+# def stop_server(process):
+#     # Kill the entire process group
+#     os.killpg(os.getpgid(process.pid), signal.SIGTERM)
 
-def get_memory_usage_gb():
-    result = subprocess.run(['ps', '-p', str(find_pid_by_name("cosdata")), '-o', 'rss='],
-                            stdout=subprocess.PIPE, text=True)
-    return int(result.stdout.strip()) / (1024 * 1024)
+# def get_memory_usage_gb():
+#     result = subprocess.run(['ps', '-p', str(find_pid_by_name("cosdata")), '-o', 'rss='],
+#                             stdout=subprocess.PIPE, text=True)
+#     return int(result.stdout.strip()) / (1024 * 1024)
 
-def find_pid_by_name(name):
-    result = subprocess.run(['ps', 'aux'], stdout=subprocess.PIPE, text=True)
-    lines = result.stdout.splitlines()
+# def find_pid_by_name(name):
+#     result = subprocess.run(['ps', 'aux'], stdout=subprocess.PIPE, text=True)
+#     lines = result.stdout.splitlines()
 
-    for line in lines:
-        if name in line and 'grep' not in line:
-            parts = line.split()
-            pid = int(parts[1])
-            return pid
-    return None
+#     for line in lines:
+#         if name in line and 'grep' not in line:
+#             parts = line.split()
+#             pid = int(parts[1])
+#             return pid
+#     return None
 
 if __name__ == "__main__":
-    datasets = ["trec-covid", "fiqa", "arguana", "webis-touche2020", "quora", "scidocs", "scifact", "nq", "msmarco", "fever", "climate-fever"]
-    results = []
-    for dataset in datasets:
-        time.sleep(5)
-        server_proc = start_server()
-        time.sleep(5)
-        try:
-            result = main(dataset)
-            memory_usage = get_memory_usage_gb()
-            result["memory_usage"] = memory_usage
-        except Exception as e:
-            print(f"Error with dataset {dataset}: {e}")
-            stop_server(server_proc)
-            continue
-        results.append(result)
-        with open("results.csv", "w", newline="") as csvfile:
-            fieldnames = ["dataset", "corpus_size", "queries_size", "insertion_time", "recall", "ndcg", "qps", "p50_latency", "p95_latency", "memory_usage"]
-            labels = ["Dataset", "Corpus Size", "Queries Size", "Insertion Time (seconds)", "Recall@10", "NDCG@10", "QPS", "p50 Latency (milliseconds)", "p95 Latency (milliseconds)", "Memory Usage (GB)"]
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+    main(dataset="arguana")
+    # datasets = ["trec-covid", "fiqa", "arguana", "webis-touche2020", "quora", "scidocs", "scifact", "nq", "msmarco", "fever", "climate-fever"]
+    # results = []
+    # for dataset in datasets:
+    #     time.sleep(5)
+    #     server_proc = start_server()
+    #     time.sleep(5)
+    #     try:
+    #         result = main(dataset)
+    #         memory_usage = get_memory_usage_gb()
+    #         result["memory_usage"] = memory_usage
+    #     except Exception as e:
+    #         print(f"Error with dataset {dataset}: {e}")
+    #         stop_server(server_proc)
+    #         continue
+    #     results.append(result)
+    #     with open("results.csv", "w", newline="") as csvfile:
+    #         fieldnames = ["dataset", "corpus_size", "queries_size", "insertion_time", "recall", "ndcg", "qps", "p50_latency", "p95_latency", "memory_usage"]
+    #         labels = ["Dataset", "Corpus Size", "Queries Size", "Insertion Time (seconds)", "Recall@10", "NDCG@10", "QPS", "p50 Latency (milliseconds)", "p95 Latency (milliseconds)", "Memory Usage (GB)"]
+    #         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
-            writer.writerow({ fieldname: label for fieldname, label in zip(fieldnames, labels) })
-            writer.writerows(results)
-        stop_server(server_proc)
+    #         writer.writerow({ fieldname: label for fieldname, label in zip(fieldnames, labels) })
+    #         writer.writerows(results)
+    #     stop_server(server_proc)

@@ -22,12 +22,9 @@ def create_collection_with_metadata(stub):
     request = vector_service.CreateCollectionRequest(
         name="test_metadata_collection",
         description="Test collection with metadata schema",
-        dense_vector=vector_service.DenseVectorOptions(
-            dimension=128, enabled=True, auto_create_index=True
-        ),
-        sparse_vector=vector_service.SparseVectorOptions(
-            enabled=False, auto_create_index=False
-        ),
+        dense_vector=vector_service.DenseVectorOptions(dimension=128, enabled=True),
+        sparse_vector=vector_service.SparseVectorOptions(enabled=False),
+        tf_idf_options=vector_service.TFIDFOptions(enabled=False),
         metadata_schema=vector_service.MetadataSchema(
             fields=[
                 vector_service.MetadataField(
@@ -69,11 +66,9 @@ def create_simple_collection(stub, name="test_collection", dimension=128):
         name=name,
         description="Test collection via gRPC",
         dense_vector=vector_service.DenseVectorOptions(
-            dimension=dimension, enabled=True, auto_create_index=True
+            dimension=dimension, enabled=True
         ),
-        sparse_vector=vector_service.SparseVectorOptions(
-            enabled=False, auto_create_index=False
-        ),
+        sparse_vector=vector_service.SparseVectorOptions(enabled=False),
         config=vector_service.CollectionConfig(
             max_vectors=1000000, replication_factor=1
         ),

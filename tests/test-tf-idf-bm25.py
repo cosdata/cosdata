@@ -59,10 +59,10 @@ def create_db(name, description=None, dimension=20000):
         "description": description,
         "dense_vector": {
             "enabled": False,
-            "auto_create_index": False,
             "dimension": dimension,
         },
-        "sparse_vector": {"enabled": True, "auto_create_index": False},
+        "sparse_vector": {"enabled": False},
+        "tf_idf_options": {"enabled": True},
         "metadata_schema": None,
         "config": {"max_vectors": None, "replication_factor": None},
     }
@@ -75,14 +75,13 @@ def create_db(name, description=None, dimension=20000):
 def create_explicit_index(name, k, b):
     data = {
         "name": name,
-        "isIDF": True,
-        "sample_threshold": 10000,
+        "sample_threshold": 1000,
         "store_raw_text": False,
         "k1": k,
         "b": b,
     }
     response = requests.post(
-        f"{base_url}/collections/{name}/indexes/sparse",
+        f"{base_url}/collections/{name}/indexes/tf-idf",
         headers=generate_headers(),
         data=json.dumps(data),
         verify=False,
@@ -451,17 +450,9 @@ def compute_brute_force_results(dataset, vectors, query_vectors, top_k=10):
     return results
 
 
-def format_for_server_query(vector):
-    """Format a vector for server query"""
-    return {
-        "id": vector["id"],
-        "values": [[ind, 1.0] for ind in vector["indices"]],
-    }
-
-
 def create_transaction(collection_name):
     url = f"{base_url}/collections/{collection_name}/transactions"
-    data = {"index_type": "sparse"}
+    data = {"index_type": "tf_idf"}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
@@ -478,7 +469,7 @@ def upsert_in_transaction(vector_db_name, transaction_id, vectors):
     url = (
         f"{base_url}/collections/{vector_db_name}/transactions/{transaction_id}/upsert"
     )
-    data = {"index_type": "sparse", "isIDF": True, "documents": filtered_vectors}
+    data = {"index_type": "tf_idf", "documents": filtered_vectors}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
@@ -492,7 +483,7 @@ def commit_transaction(collection_name, transaction_id):
     url = (
         f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/commit"
     )
-    data = {"index_type": "sparse"}
+    data = {"index_type": "tf_idf"}
     response = requests.post(
         url, data=json.dumps(data), headers=generate_headers(), verify=False
     )
@@ -503,10 +494,8 @@ def commit_transaction(collection_name, transaction_id):
 
 
 def search_sparse_vector(vector_db_name, vector, top_k):
-    url = f"{base_url}/collections/{vector_db_name}/vectors/search"
+    url = f"{base_url}/collections/{vector_db_name}/search/tf-idf"
     data = {
-        "index_type": "sparse",
-        "isIDF": True,
         "query": vector["text"],
         "top_k": top_k,
     }
@@ -517,10 +506,8 @@ def search_sparse_vector(vector_db_name, vector, top_k):
 
 
 def batch_ann_search(vector_db_name, batch, top_k):
-    url = f"{base_url}/collections/{vector_db_name}/vectors/batch-search"
+    url = f"{base_url}/collections/{vector_db_name}/search/batch-tf-idf"
     data = {
-        "index_type": "sparse",
-        "isIDF": True,
         "queries": batch,
         "top_k": top_k,
     }
@@ -665,7 +652,7 @@ def run_recall_and_qps_and_latency_test(
             server_results.append(result)
         except Exception as e:
             print(f"Search failed for query {query['id']}: {e}")
-            server_results.append({"Sparse": []})
+            server_results.append({"results": []})
 
     search_time = time.time() - start_search
     print(
@@ -921,29 +908,27 @@ def main_non_it(dataset, num_queries=100, batch_size=100, top_k=10, k=1.5, b=0.7
 #     os.killpg(os.getpgid(process.pid), signal.SIGTERM)
 
 
-# if __name__ == "__main__":
-#     datasets = ["trec-covid", "fiqa", "arguana", "webis-touche2020", "quora", "scidocs", "scifact", "nq", "msmarco", "fever", "climate-fever"]
-#     results = []
-#     for dataset in datasets:
-#         time.sleep(5)
-#         server_proc = start_server()
-#         time.sleep(5)
-#         try:
-#             result = main_non_it(dataset)
-#             result["dataset"] = dataset
-#         except Exception as e:
-#             print(f"Error with dataset {dataset}: {e}")
-#             stop_server(server_proc)
-#             continue
-#         results.append(result)
-#         with open("results.csv", "w", newline="") as csvfile:
-#             fieldnames = ["dataset", "corpus_size", "queries_size", "insertion_time", "avg_recall", "qps", "p50_latency", "p95_latency"]
-#             labels = ["Dataset", "Corpus Size", "Queries Size", "Insertion Time (seconds)", "Average Recall@10", "QPS", "p50 Latency (milliseconds)", "p95 Latency (milliseconds)"]
-#             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-
-#             writer.writerow({ fieldname: label for fieldname, label in zip(fieldnames, labels) })
-#             writer.writerows(results)
-#         stop_server(server_proc)
-
 if __name__ == "__main__":
-    main(dataset="scidocs")
+    main(dataset="arguana")
+    # datasets = ["trec-covid", "fiqa", "arguana", "webis-touche2020", "quora", "scidocs", "scifact", "nq", "msmarco", "fever", "climate-fever"]
+    # results = []
+    # for dataset in datasets:
+    #     time.sleep(5)
+    #     server_proc = start_server()
+    #     time.sleep(5)
+    #     try:
+    #         result = main_non_it(dataset)
+    #         result["dataset"] = dataset
+    #     except Exception as e:
+    #         print(f"Error with dataset {dataset}: {e}")
+    #         stop_server(server_proc)
+    #         continue
+    #     results.append(result)
+    #     with open("results.csv", "w", newline="") as csvfile:
+    #         fieldnames = ["dataset", "corpus_size", "queries_size", "insertion_time", "avg_recall", "qps", "p50_latency", "p95_latency"]
+    #         labels = ["Dataset", "Corpus Size", "Queries Size", "Insertion Time (seconds)", "Average Recall@10", "QPS", "p50 Latency (milliseconds)", "p95 Latency (milliseconds)"]
+    #         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
+    #         writer.writerow({ fieldname: label for fieldname, label in zip(fieldnames, labels) })
+    #         writer.writerows(results)
+    #     stop_server(server_proc)

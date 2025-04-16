@@ -6,7 +6,6 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib3
 import os
-import math
 import random
 import getpass
 
@@ -120,10 +119,10 @@ def create_db(name, description=None, dimension=1024):
         "description": description,
         "dense_vector": {
             "enabled": True,
-            "auto_create_index": False,
             "dimension": dimension,
         },
-        "sparse_vector": {"enabled": False, "auto_create_index": False},
+        "sparse_vector": {"enabled": False},
+        "tf_idf_options": {"enabled": False},
         "metadata_schema": None,
         "config": {"max_vectors": None, "replication_factor": None},
     }
@@ -267,32 +266,6 @@ def cosine_similarity(vec1, vec2):
     return dot_prod / (magnitude_vec1 * magnitude_vec2)
 
 
-def cosine_similarity(vec1, vec2):
-    # Convert inputs to numpy arrays
-    vec1 = np.asarray(vec1)
-    vec2 = np.asarray(vec2)
-
-    # Check if vectors have the same length
-    if vec1.shape != vec2.shape:
-        raise ValueError("Vectors must have the same length")
-
-    # Calculate magnitudes
-    magnitude1 = np.linalg.norm(vec1)
-    magnitude2 = np.linalg.norm(vec2)
-
-    # Check for zero vectors
-    if magnitude1 == 0 or magnitude2 == 0:
-        raise ValueError("Cannot compute cosine similarity for zero vectors")
-
-    # Calculate dot product
-    dot_product = np.dot(vec1, vec2)
-
-    # Calculate cosine similarity
-    cosine_sim = dot_product / (magnitude1 * magnitude2)
-
-    return cosine_sim
-
-
 def bruteforce_search(vectors, query, k=5):
     """Debug version of bruteforce search"""
     similarities = []
@@ -307,7 +280,7 @@ def bruteforce_search(vectors, query, k=5):
     for vector in vectors:
         similarity = cosine_similarity(query["values"], vector["values"])
         if similarity > 0.999:  # Check for very high similarities
-            print(f"High similarity found:")
+            print("High similarity found:")
             print(f"Vector ID: {vector['id']}")
             print(f"Similarity: {similarity}")
             print(f"First 5 values of this vector: {vector['values'][:5]}")
@@ -408,10 +381,9 @@ def read_dataset_from_parquet(dataset_name):
     df = pd.concat(dfs, ignore_index=True)
 
     print("Pre-processing ...")
-    size = metadata["size"]
     dataset = (
         df[[metadata["id"], metadata["embeddings"]]].values.tolist()
-        if metadata["id"] != None
+        if metadata["id"] is not None
         else list(enumerate(row[0] for row in df[[metadata["embeddings"]]].values))
     )
 
@@ -617,7 +589,7 @@ def process_parquet_files(
     end_time = time.time()
     total_time = end_time - start_time
 
-    print(f"\nProcessing complete!")
+    print("\nProcessing complete!")
     print(f"Total files processed: {file_count}")
     print(f"Total vectors inserted: {total_vectors_inserted}")
     print(f"Total time: {total_time:.2f} seconds")
@@ -735,9 +707,7 @@ def run_matching_tests(test_vectors, vector_db_name, brute_force_results):
                 print(f"\nQuery {i + 1} (Vector ID: {query_id}):")
                 print(f"Query latency: {query_latency:.2f} ms")
 
-                server_top5 = [
-                    match["id"] for match in ann_response["results"][:5]
-                ]
+                server_top5 = [match["id"] for match in ann_response["results"][:5]]
                 print("Server top 5:", server_top5)
 
                 brute_force_top5 = [test_vec[f"top{j}_id"] for j in range(1, 6)]
@@ -775,7 +745,7 @@ def run_matching_tests(test_vectors, vector_db_name, brute_force_results):
 
     if total_queries > 0:
         average_recall = total_recall / total_queries
-        print(f"\nFinal Matching Results:")
+        print("\nFinal Matching Results:")
         print(f"Average Recall@5: {average_recall:.2f}%")
     else:
         print("No valid queries completed")

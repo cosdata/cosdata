@@ -56,10 +56,10 @@ def create_db(name, description=None, dimension=20000):
         "description": description,
         "dense_vector": {
             "enabled": False,
-            "auto_create_index": False,
             "dimension": dimension,
         },
-        "sparse_vector": {"enabled": True, "auto_create_index": False},
+        "sparse_vector": {"enabled": True},
+        "tf_idf_options": {"enabled": False},
         "metadata_schema": None,
         "config": {"max_vectors": None, "replication_factor": None},
     }
@@ -124,10 +124,9 @@ def commit_transaction(collection_name, transaction_id):
 def search_sparse_vector(
     vector_db_name, vector, top_k=10, early_terminate_threshold=0.0
 ):
-    url = f"{base_url}/collections/{vector_db_name}/vectors/search"
+    url = f"{base_url}/collections/{vector_db_name}/search/sparse"
     data = {
-        "index_type": "sparse",
-        "values": vector["values"],
+        "query_terms": vector["values"],
         "top_k": top_k,
         "early_terminate_threshold": early_terminate_threshold,
     }
@@ -138,10 +137,9 @@ def search_sparse_vector(
 
 
 def batch_ann_search(vector_db_name, batch, top_k=10, early_terminate_threshold=0.0):
-    url = f"{base_url}/collections/{vector_db_name}/vectors/batch-search"
+    url = f"{base_url}/collections/{vector_db_name}/search/batch-sparse"
     data = {
-        "index_type": "sparse",
-        "vectors": batch,
+        "query_terms_list": batch,
         "top_k": top_k,
         "early_terminate_threshold": early_terminate_threshold,
     }
@@ -428,7 +426,7 @@ def main():
             server_results.append(result)
         except Exception as e:
             print(f"Search failed for query {query['id']}: {e}")
-            server_results.append({"Sparse": []})
+            server_results.append({"results": []})
 
     search_time = time.time() - start_search
     print(f"Average search time: {search_time / num_queries:.4f} seconds per query")

@@ -45,10 +45,10 @@ def create_db(name, description=None, dimension=1024):
         "description": description,
         "dense_vector": {
             "enabled": True,
-            "auto_create_index": False,
             "dimension": dimension,
         },
-        "sparse_vector": {"enabled": False, "auto_create_index": False},
+        "sparse_vector": {"enabled": False},
+        "tf_idf_options": {"enabled": False},
         "metadata_schema": None,
         "config": {"max_vectors": None, "replication_factor": None},
     }
@@ -183,27 +183,17 @@ def abort_transaction(collection_name, transaction_id):
 
 # Function to upsert vectors
 def upsert_vector(vector_db_name, vectors):
-    url = f"{base_url}/collections/{vector_db_name}/vectors/upsert" # Corrected URL
-    data = {"vectors": vectors} # Corrected body
+    url = f"{base_url}/collections/{vector_db_name}/vectors/upsert"  # Corrected URL
+    data = {"vectors": vectors}  # Corrected body
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
     return response.json()
 
 
-# Function to search vector
-def ann_vector_old(idd, vector_db_name, vector):
-    url = f"{base_url}/search"
-    data = {"vector_db_name": vector_db_name, "vector": vector}
-    response = requests.post(
-        url, headers=generate_headers(), data=json.dumps(data), verify=False
-    )
-    return (idd, response.json())
-
-
 def ann_vector(idd, vector_db_name, vector):
     url = f"{base_url}/collections/{vector_db_name}/search/dense"
-    data = {"query_vector": vector, "top_k": 5} # Corrected body
+    data = {"query_vector": vector, "top_k": 5}  # Corrected body
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
@@ -220,8 +210,8 @@ def fetch_vector(vector_db_name, vector_id):
     url = f"{base_url}/collections/{vector_db_name}/vectors/{vector_id}/neighbors"
     response = requests.get(url, headers=generate_headers(), verify=False)
     if response.status_code != 200:
-         print(f"Error fetching neighbors: {response.status_code} ({response.text})")
-         return []
+        print(f"Error fetching neighbors: {response.status_code} ({response.text})")
+        return []
     return response.json()
 
 
@@ -336,32 +326,6 @@ def process_base_vector_batch(
         raise
 
 
-def cosine_similarity(vec1, vec2):
-    # Convert inputs to numpy arrays
-    vec1 = np.asarray(vec1)
-    vec2 = np.asarray(vec2)
-
-    # Check if vectors have the same length
-    if vec1.shape != vec2.shape:
-        raise ValueError("Vectors must have the same length")
-
-    # Calculate magnitudes
-    magnitude1 = np.linalg.norm(vec1)
-    magnitude2 = np.linalg.norm(vec2)
-
-    # Check for zero vectors
-    if magnitude1 == 0 or magnitude2 == 0:
-        raise ValueError("Cannot compute cosine similarity for zero vectors")
-
-    # Calculate dot product
-    dot_product = np.dot(vec1, vec2)
-
-    # Calculate cosine similarity
-    cosine_sim = dot_product / (magnitude1 * magnitude2)
-
-    return cosine_sim
-
-
 def bruteforce_search(vectors, query, k=5):
     similarities = []
     for vector in vectors:
@@ -412,7 +376,7 @@ if __name__ == "__main__":
         dimension=dimensions,
     )
     print("Create Collection(DB) Response:", create_collection_response)
-    # create_explicit_index(vector_db_name)
+    create_explicit_index(vector_db_name)
 
     vectors = generate_vectors(
         txn_count, batch_count, batch_size, dimensions, perturbation_degree

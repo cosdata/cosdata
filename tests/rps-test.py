@@ -46,10 +46,10 @@ def create_db(name, description=None, dimension=1024):
         "description": description,
         "dense_vector": {
             "enabled": True,
-            "auto_create_index": False,
             "dimension": dimension,
         },
-        "sparse_vector": {"enabled": False, "auto_create_index": False},
+        "sparse_vector": {"enabled": False},
+        "tf_idf_options": {"enabled": False},
         "metadata_schema": None,
         "config": {"max_vectors": None, "replication_factor": None},
     }
@@ -61,15 +61,19 @@ def create_db(name, description=None, dimension=1024):
 
 def create_explicit_index(name):
     data = {
-        "collection_name": name,
         "name": name,
         "distance_metric_type": "cosine",
-        "quantization": "scalar",
-        "data_type": "u8",
-        "index_type": "hnsw",
-        "params": {
-            "num_layers": 5,
-            "max_cache_size": 1000,
+        "quantization": {"type": "auto", "properties": {"sample_threshold": 100}},
+        "index": {
+            "type": "hnsw",
+            "properties": {
+                "num_layers": 5,
+                "max_cache_size": 1000,
+                "ef_contruction": 64,
+                "ef_search": 32,
+                "neighbors_count": 32,
+                "level_0_neighbors_count": 64,
+            },
         },
     }
     response = requests.post(
@@ -79,8 +83,10 @@ def create_explicit_index(name):
         verify=False,
     )
 
-    if response.status_code not in [200, 201, 204]: # Allow 201
-        raise Exception(f"Failed to create index: {response.status_code} ({response.text})")
+    if response.status_code not in [200, 201, 204]:  # Allow 201
+        raise Exception(
+            f"Failed to create index: {response.status_code} ({response.text})"
+        )
     return response.json() if response.status_code != 204 and response.text else {}
 
 
@@ -180,7 +186,7 @@ def abort_transaction(collection_name, transaction_id):
         url, data=json.dumps(data), headers=generate_headers(), verify=False
     )
     if response.status_code not in [200, 204]:
-         print(f"Error aborting transaction: {response.status_code} ({response.text})")
+        print(f"Error aborting transaction: {response.status_code} ({response.text})")
     return response.json() if response.status_code == 200 and response.text else None
 
 
@@ -192,7 +198,7 @@ def upsert_vector(vector_db_name, vectors):
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
     if response.status_code != 200:
-         print(f"Error upserting vector: {response.status_code} ({response.text})")
+        print(f"Error upserting vector: {response.status_code} ({response.text})")
     return response.json()
 
 
@@ -271,32 +277,6 @@ def generate_perturbation(base_vector, idd, perturbation_degree, dimensions):
     #     shortlisted_vectors.append(perturbed_vector)
 
 
-def cosine_similarity(vec1, vec2):
-    # Convert inputs to numpy arrays
-    vec1 = np.asarray(vec1)
-    vec2 = np.asarray(vec2)
-
-    # Check if vectors have the same length
-    if vec1.shape != vec2.shape:
-        raise ValueError("Vectors must have the same length")
-
-    # Calculate magnitudes
-    magnitude1 = np.linalg.norm(vec1)
-    magnitude2 = np.linalg.norm(vec2)
-
-    # Check for zero vectors
-    if magnitude1 == 0 or magnitude2 == 0:
-        raise ValueError("Cannot compute cosine similarity for zero vectors")
-
-    # Calculate dot product
-    dot_product = np.dot(vec1, vec2)
-
-    # Calculate cosine similarity
-    cosine_sim = dot_product / (magnitude1 * magnitude2)
-
-    return cosine_sim
-
-
 def bruteforce_search(vectors, query, k=5):
     similarities = []
     for vector in vectors:
@@ -319,12 +299,6 @@ def generate_vectors(
     # Shuffle the vectors
     np.random.shuffle(vectors)
     return vectors
-
-
-def search(vectors, vector_db_name, query):
-    ann_response = ann_vector(query["id"], vector_db_name, query["values"])
-    bruteforce_result = bruteforce_search(vectors, query, 5)
-    return (ann_response, bruteforce_result)
 
 
 if __name__ == "__main__":
@@ -351,7 +325,7 @@ if __name__ == "__main__":
         dimension=dimensions,
     )
     print("Create Collection(DB) Response:", create_collection_response)
-    # create_explicit_index(vector_db_name)
+    create_explicit_index(vector_db_name)
 
     vectors = generate_vectors(
         txn_count, batch_count, batch_size, dimensions, perturbation_degree
