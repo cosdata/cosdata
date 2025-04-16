@@ -53,6 +53,7 @@ pub fn create_root_node(
     values_range: (f32, f32),
     hnsw_params: &HNSWHyperParams,
     distance_metric: DistanceMetric,
+    metadata_schema: Option<&MetadataSchema>,
 ) -> Result<SharedNode, WaCustomError> {
     let vec = (0..dim)
         .map(|_| {
@@ -68,7 +69,6 @@ pub fn create_root_node(
 
     let mut prop_file_guard = prop_file.write().unwrap();
     let location = write_prop_value_to_file(&vec_hash, vector_list.clone(), &mut prop_file_guard)?;
-    drop(prop_file_guard);
 
     let prop_value = Arc::new(NodePropValue {
         id: vec_hash,
@@ -76,7 +76,23 @@ pub fn create_root_node(
         location,
     });
 
-    let prop_metadata = None;
+    let prop_metadata = match metadata_schema {
+        Some(schema) => {
+            let mbits = schema.base_dimensions();
+            let metadata = Arc::new(Metadata { mag: 0.0, mbits });
+            let mid = MetadataId(1);
+            let location =
+                write_prop_metadata_to_file(&mid, metadata.clone(), &mut prop_file_guard)?;
+            Some(Arc::new(NodePropMetadata {
+                id: mid,
+                vec: metadata,
+                location,
+            }))
+        }
+        None => None,
+    };
+
+    drop(prop_file_guard);
 
     let mut root = ProbLazyItem::new(
         ProbNode::new(

@@ -117,6 +117,7 @@ pub async fn init_hnsw_index_for_collection(
         values_range,
         &hnsw_params,
         *distance_metric.read().unwrap(),
+        collection.metadata_schema.as_ref(),
     )?;
 
     index_manager.flush_all()?;
