@@ -173,6 +173,7 @@ pub fn ann_search(
                     &hnsw_index,
                     cur_entry,
                     &fvec,
+                    None,
                     Some(&mdims),
                     &mut 0,
                     &mut skipm,
@@ -199,6 +200,7 @@ pub fn ann_search(
             &hnsw_index,
             cur_entry,
             &fvec,
+            None,
             None,
             &mut 0,
             &mut skipm,
@@ -959,6 +961,7 @@ pub fn index_embedding(
         hnsw_index,
         cur_entry,
         &fvec,
+        Some(&prop_value.id),
         mdims.as_deref(),
         &mut 0,
         &mut skipm,
@@ -1331,6 +1334,7 @@ fn traverse_find_nearest(
     hnsw_index: &HNSWIndex,
     start_node: SharedNode,
     fvec: &Storage,
+    fvec_id: Option<&VectorId>,
     mdims: Option<&Metadata>,
     nodes_visited: &mut u32,
     skipm: &mut PerformantFixedSet,
@@ -1345,7 +1349,7 @@ fn traverse_find_nearest(
     let start_data = unsafe { &*start_version }.try_get_data(&hnsw_index.cache)?;
 
     let fvec_data = VectorData {
-        id: None,
+        id: fvec_id,
         quantized_vec: fvec,
         metadata: mdims,
     };
