@@ -176,16 +176,15 @@ impl<'a> VectorData<'a> {
                 if m.mag == 0.0 {
                     ReplicaNodeKind::Base
                 } else {
-                    let vec_mag = match self.quantized_vec {
-                        Storage::UnsignedByte { mag, .. } => mag,
-                        Storage::SubByte { mag, .. } => mag,
-                        Storage::HalfPrecisionFP { mag, .. } => mag,
-                        Storage::FullPrecisionFP { mag, .. } => mag,
-                    };
-                    if *vec_mag == 0.0 {
-                        ReplicaNodeKind::Pseudo
-                    } else {
-                        ReplicaNodeKind::Metadata
+                    match self.id {
+                        Some(id) => {
+                            if id.0 == u64::pow(2, 56) - 1 {
+                                ReplicaNodeKind::Pseudo
+                            } else {
+                                ReplicaNodeKind::Metadata
+                            }
+                        }
+                        None => ReplicaNodeKind::Metadata,
                     }
                 }
             }

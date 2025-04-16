@@ -128,7 +128,7 @@ pub async fn init_hnsw_index_for_collection(
     let factor_levels = 4.0;
 
     // If metadata schema is supported, the level_probs needs to be
-    // adjusted to accomodate only pseudo nodes in the higher layers
+    // adjusted to accommodate only pseudo nodes in the higher layers
     let lp = match &collection.metadata_schema {
         Some(metadata_schema) => {
             // @TODO(vineet): Unnecessary computation of
@@ -181,7 +181,7 @@ pub async fn init_hnsw_index_for_collection(
     // are reachable from the root node.
     if collection.metadata_schema.is_some() {
         let num_dims = collection.dense_vector.dimension;
-        let pseudo_vals: Vec<f32> = vec![0.0; num_dims];
+        let pseudo_vals: Vec<f32> = vec![1.0; num_dims];
         // The pseudo vector's id will be equal to the max number that
         // can be represented with 56 bits. This is because of how we
         // are calculating the combined id for nodes having metadata
