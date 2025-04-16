@@ -10,7 +10,7 @@ create_collection:
     dimension: integer
   sparse_vector:
     enabled: boolean
-  tf_idf:
+  tf_idf_options:
     enabled: boolean
   metadata_schema: object (optional)
   config:
