@@ -217,24 +217,25 @@ pub fn ann_search(
                         quantized_vec: &fvec,
                         metadata: Some(&fvec_metadata),
                     };
-                    let d = hnsw_index
-                        .distance_metric
-                        .read()
-                        .unwrap()
-                        .calculate(&fvec_data, &cur_node_data, false)?;
+                    let d = hnsw_index.distance_metric.read().unwrap().calculate(
+                        &fvec_data,
+                        &cur_node_data,
+                        false,
+                    )?;
                     dists.push(d)
                 }
                 dists.into_iter().min().unwrap()
             }
             None => {
                 let fvec_data = VectorData::without_metadata(None, &fvec);
-                let cur_node_data = VectorData::without_metadata(Some(cur_node_id), &cur_node.prop_value.vec);
-                hnsw_index
-                    .distance_metric
-                    .read()
-                    .unwrap()
-                    .calculate(&fvec_data, &cur_node_data, false)?
-            },
+                let cur_node_data =
+                    VectorData::without_metadata(Some(cur_node_id), &cur_node.prop_value.vec);
+                hnsw_index.distance_metric.read().unwrap().calculate(
+                    &fvec_data,
+                    &cur_node_data,
+                    false,
+                )?
+            }
         };
         vec![(cur_entry, dist)]
     } else {
@@ -888,11 +889,11 @@ pub fn index_embedding(
             quantized_vec: &cur_node.prop_value.vec,
             metadata: cur_node_metadata.as_deref(),
         };
-        let dist = hnsw_index
-            .distance_metric
-            .read()
-            .unwrap()
-            .calculate(&fvec_data, &cur_node_data, true)?;
+        let dist = hnsw_index.distance_metric.read().unwrap().calculate(
+            &fvec_data,
+            &cur_node_data,
+            true,
+        )?;
         vec![(cur_entry, dist)]
     } else {
         z
@@ -1305,7 +1306,8 @@ fn traverse_find_nearest(
                     quantized_vec: &neighbor_data.prop_value.vec,
                     metadata: neighbor_metadata.as_deref(),
                 };
-                let dist = distance_metric.calculate(&fvec_data, &neighbor_vec_data, is_indexing)?;
+                let dist =
+                    distance_metric.calculate(&fvec_data, &neighbor_vec_data, is_indexing)?;
                 skipm.insert(neighbor_id);
                 candidate_queue.push((dist, neighbor_node));
             }
