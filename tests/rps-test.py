@@ -69,7 +69,7 @@ def create_explicit_index(name):
             "properties": {
                 "num_layers": 5,
                 "max_cache_size": 1000,
-                "ef_contruction": 64,
+                "ef_construction": 64,
                 "ef_search": 32,
                 "neighbors_count": 32,
                 "level_0_neighbors_count": 64,
