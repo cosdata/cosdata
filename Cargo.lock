@@ -814,7 +814,6 @@ dependencies = [
  "rayon",
  "ring",
  "rkyv",
- "rust-stemmers",
  "rustc-hash 2.1.1",
  "rustls",
  "rustls-pemfile",
@@ -823,6 +822,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "siphasher",
+ "snowball-stemmer",
  "tempfile",
  "tokio",
  "toml",
@@ -2285,16 +2285,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rust-stemmers"
-version = "1.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e46a2036019fdb888131db7a4c847a1063a7493f971ed94ea82c67eada63ca54"
-dependencies = [
- "serde",
- "serde_derive",
-]
-
-[[package]]
 name = "rustc-demangle"
 version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2541,6 +2531,11 @@ name = "smallvec"
 version = "1.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7fcf8323ef1faaee30a44a340193b1ac6814fd9b7b4e88e9d4519a3e4abe1cfd"
+
+[[package]]
+name = "snowball-stemmer"
+version = "0.1.0"
+source = "git+https://github.com/cosdata/snowball-stemmer.git#dcbd7da7b3ad86cd8ba240b91747dadb58aa77f9"
 
 [[package]]
 name = "socket2"

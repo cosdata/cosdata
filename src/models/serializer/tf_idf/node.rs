@@ -3,13 +3,13 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use crate::models::{
     atomic_array::AtomicArray,
     buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
-    cache_loader::InvertedIndexIDFCache,
-    inverted_index_idf::{InvertedIndexIDFNode, InvertedIndexIDFNodeData},
+    cache_loader::TFIDFIndexCache,
     prob_lazy_load::lazy_item::ProbLazyItem,
+    tf_idf_index::{TFIDFIndexNode, TFIDFIndexNodeData},
     types::FileOffset,
 };
 
-use super::{InvertedIndexIDFSerialize, INVERTED_INDEX_DATA_CHUNK_SIZE};
+use super::{TFIDFIndexSerialize, TF_IDF_INDEX_DATA_CHUNK_SIZE};
 
 // @SERIALIZED_SIZE:
 //
@@ -21,7 +21,7 @@ use super::{InvertedIndexIDFSerialize, INVERTED_INDEX_DATA_CHUNK_SIZE};
 //   ) +                                             | INVERTED_INDEX_DATA_CHUNK_SIZE * 6 + 6
 //   4 byte for next data chunk                      | INVERTED_INDEX_DATA_CHUNK_SIZE * 6 + 10
 //   16 * 4 bytes for dimension offsets +            | INVERTED_INDEX_DATA_CHUNK_SIZE * 6 + 74
-impl InvertedIndexIDFSerialize for InvertedIndexIDFNode {
+impl TFIDFIndexSerialize for TFIDFIndexNode {
     fn serialize(
         &self,
         dim_bufman: &BufferManager,
@@ -45,7 +45,7 @@ impl InvertedIndexIDFSerialize for InvertedIndexIDFNode {
             )?;
             dim_bufman.seek_with_cursor(
                 cursor,
-                self.file_offset.0 as u64 + INVERTED_INDEX_DATA_CHUNK_SIZE as u64 * 6 + 10,
+                self.file_offset.0 as u64 + TF_IDF_INDEX_DATA_CHUNK_SIZE as u64 * 6 + 10,
             )?;
             self.children.serialize(
                 dim_bufman,
@@ -67,7 +67,7 @@ impl InvertedIndexIDFSerialize for InvertedIndexIDFNode {
             )?;
             dim_bufman.seek_with_cursor(
                 cursor,
-                self.file_offset.0 as u64 + INVERTED_INDEX_DATA_CHUNK_SIZE as u64 * 6 + 10,
+                self.file_offset.0 as u64 + TF_IDF_INDEX_DATA_CHUNK_SIZE as u64 * 6 + 10,
             )?;
             self.children.serialize(
                 dim_bufman,
@@ -80,7 +80,7 @@ impl InvertedIndexIDFSerialize for InvertedIndexIDFNode {
         } else {
             dim_bufman.seek_with_cursor(
                 cursor,
-                self.file_offset.0 as u64 + INVERTED_INDEX_DATA_CHUNK_SIZE as u64 * 6 + 10,
+                self.file_offset.0 as u64 + TF_IDF_INDEX_DATA_CHUNK_SIZE as u64 * 6 + 10,
             )?;
             self.children.serialize(
                 dim_bufman,
@@ -100,13 +100,13 @@ impl InvertedIndexIDFSerialize for InvertedIndexIDFNode {
         file_offset: FileOffset,
         _: u8,
         data_file_parts: u8,
-        cache: &InvertedIndexIDFCache,
+        cache: &TFIDFIndexCache,
     ) -> Result<Self, BufIoError> {
         let cursor = dim_bufman.open_cursor()?;
         dim_bufman.seek_with_cursor(cursor, file_offset.0 as u64)?;
         let dim_index = dim_bufman.read_u32_with_cursor(cursor)?;
         let data_file_idx = (dim_index % data_file_parts as u32) as u8;
-        let data = <*mut ProbLazyItem<InvertedIndexIDFNodeData>>::deserialize(
+        let data = <*mut ProbLazyItem<TFIDFIndexNodeData>>::deserialize(
             dim_bufman,
             data_bufmans,
             FileOffset(file_offset.0 + 4),
@@ -117,7 +117,7 @@ impl InvertedIndexIDFSerialize for InvertedIndexIDFNode {
         let children = AtomicArray::deserialize(
             dim_bufman,
             data_bufmans,
-            FileOffset(file_offset.0 + INVERTED_INDEX_DATA_CHUNK_SIZE as u32 * 6 + 10),
+            FileOffset(file_offset.0 + TF_IDF_INDEX_DATA_CHUNK_SIZE as u32 * 6 + 10),
             data_file_idx,
             data_file_parts,
             cache,

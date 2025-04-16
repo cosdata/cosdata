@@ -35,7 +35,7 @@ prost = { version = "0.13.4", optional = true}
 prost-types = {version = "0.13.4", optional = true}
 tonic-reflection = { version = "0.12.3", optional = true }
 clap = { version = "4.5.31", features = ["derive"] }
-rust-stemmers = "1.2.0"
+snowball-stemmer = { git = "https://github.com/cosdata/snowball-stemmer.git" }
 twox-hash = "2.1.0"
 
 [dev-dependencies]

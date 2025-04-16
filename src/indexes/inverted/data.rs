@@ -12,7 +12,6 @@ use super::InvertedIndex;
 pub struct InvertedIndexData {
     pub name: String,
     pub description: Option<String>,
-    pub auto_create_index: bool,
     pub metadata_schema: Option<String>,
     pub max_vectors: Option<i32>,
     pub quantization_bits: u8,
@@ -24,7 +23,6 @@ impl From<&InvertedIndex> for InvertedIndexData {
         Self {
             name: inverted_index.name.clone(),
             description: inverted_index.description.clone(),
-            auto_create_index: inverted_index.auto_create_index,
             metadata_schema: inverted_index.metadata_schema.clone(),
             max_vectors: inverted_index.max_vectors,
             quantization_bits: inverted_index.root.root.quantization_bits,

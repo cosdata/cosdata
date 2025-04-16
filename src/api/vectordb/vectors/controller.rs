@@ -58,7 +58,6 @@ pub(crate) async fn update_vector_by_id(
     Ok(HttpResponse::Ok().json(vector))
 }
 
-
 pub(crate) async fn delete_vector_by_id(
     path: web::Path<(String, u64)>,
     ctx: web::Data<AppContext>,
@@ -76,7 +75,9 @@ pub(crate) async fn upsert_vectors(
     let collection_name = collection_id.into_inner();
 
     ctx.update_collection_for_transaction(&collection_name)
-         .map_err(|e| VectorsError::WaCustom(WaCustomError::DatabaseError(format!("Cache error: {}", e))))?;
+        .map_err(|e| {
+            VectorsError::WaCustom(WaCustomError::DatabaseError(format!("Cache error: {}", e)))
+        })?;
 
     let hnsw_index = ctx
         .ain_env
@@ -90,7 +91,7 @@ pub(crate) async fn upsert_vectors(
         .is_null()
     {
         return Err(VectorsError::WaCustom(WaCustomError::LockError(
-            "Cannot upsert vectors while a transaction is open".to_string()
+            "Cannot upsert vectors while a transaction is open".to_string(),
         )));
     }
 
@@ -113,13 +114,12 @@ pub(crate) async fn check_vector_existence(
     let (collection_id, vector_id_u64) = path.into_inner();
 
     ctx.update_collection_for_query(&collection_id)
-         .map_err(|e| VectorsError::WaCustom(WaCustomError::DatabaseError(format!("Cache error: {}", e))))?;
+        .map_err(|e| {
+            VectorsError::WaCustom(WaCustomError::DatabaseError(format!("Cache error: {}", e)))
+        })?;
 
-    let exists = service::check_vector_existence(
-        ctx.into_inner(),
-        &collection_id,
-        vector_id_u64
-    ).await?;
+    let exists =
+        service::check_vector_existence(ctx.into_inner(), &collection_id, vector_id_u64).await?;
 
     if exists {
         // Return 200 OK for HEAD if resource exists
@@ -136,10 +136,12 @@ pub(crate) async fn fetch_vector_neighbors(
 ) -> Result<HttpResponse, VectorsError> {
     let (collection_id, vector_id_u64) = path.into_inner();
     ctx.update_collection_for_query(&collection_id)
-        .map_err(|e| VectorsError::WaCustom(WaCustomError::DatabaseError(format!("Cache error: {}", e))))?;
+        .map_err(|e| {
+            VectorsError::WaCustom(WaCustomError::DatabaseError(format!("Cache error: {}", e)))
+        })?;
 
-    let neighbors = service::fetch_vector_neighbors(
-        ctx.into_inner(), &collection_id, VectorId(vector_id_u64)
-    ).await?;
+    let neighbors =
+        service::fetch_vector_neighbors(ctx.into_inner(), &collection_id, VectorId(vector_id_u64))
+            .await?;
     Ok(HttpResponse::Ok().json(neighbors))
 }

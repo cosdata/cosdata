@@ -4,20 +4,16 @@ use lmdb::Transaction;
 
 use crate::{
     api_service::{
-        run_upload_sparse_idf_documents, run_upload_sparse_idf_documents_in_transaction,
-        run_upload_sparse_vectors, run_upload_sparse_vectors_in_transaction,
-        fetch_vector_neighbors as api_fetch_neighbors,
+        fetch_vector_neighbors as api_fetch_neighbors, run_upload_sparse_vectors,
+        run_upload_sparse_vectors_in_transaction, run_upload_tf_idf_documents,
+        run_upload_tf_idf_documents_in_transaction,
     },
     indexes::{
         hnsw::{transaction::HNSWIndexTransaction, HNSWIndex},
         inverted::{transaction::InvertedIndexTransaction, InvertedIndex},
-        inverted_idf::{ transaction::InvertedIndexIDFTransaction, InvertedIndexIDF},
+        tf_idf::{transaction::TFIDFIndexTransaction, TFIDFIndex},
     },
-    models::{
-        common::WaCustomError,
-        rpc::DenseVector,
-        types::VectorId,
-    },
+    models::{common::WaCustomError, rpc::DenseVector, types::VectorId},
 };
 
 use crate::{
@@ -29,13 +25,13 @@ use crate::{
 
 use super::{
     dtos::{
-        CreateDenseVectorDto, CreateSparseIdfDocumentDto, CreateSparseVectorDto,
+        CreateDenseVectorDto, CreateSparseVectorDto, CreateTFIDFDocumentDto,
         CreateVectorResponseDto, SimilarVector, UpdateVectorDto, UpdateVectorResponseDto,
     },
     error::VectorsError,
 };
-/// Creates a sparse vector for inverted index
-///
+
+// Creates a sparse vector for inverted index
 pub(crate) async fn create_sparse_vector(
     ctx: Arc<AppContext>,
     collection_id: &str,
@@ -72,20 +68,19 @@ pub(crate) async fn create_sparse_vector(
     }))
 }
 
-/// Creates a sparse IDF document for inverted index
-///
-pub(crate) async fn create_sparse_idf_document(
+// Creates a document for TF-IDF index
+pub(crate) async fn create_tf_idf_document(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    create_document_dto: CreateSparseIdfDocumentDto,
+    create_document_dto: CreateTFIDFDocumentDto,
 ) -> Result<CreateVectorResponseDto, VectorsError> {
-    let idf_inverted_index = ctx
+    let tf_idf_index = ctx
         .ain_env
         .collections_map
-        .get_idf_inverted_index(collection_id)
+        .get_tf_idf_index(collection_id)
         .ok_or(VectorsError::IndexNotFound)?;
 
-    if !idf_inverted_index
+    if !tf_idf_index
         .current_open_transaction
         .load(Ordering::SeqCst)
         .is_null()
@@ -95,8 +90,8 @@ pub(crate) async fn create_sparse_idf_document(
         ));
     }
 
-    run_upload_sparse_idf_documents(
-        idf_inverted_index,
+    run_upload_tf_idf_documents(
+        tf_idf_index,
         vec![(
             create_document_dto.id.clone(),
             create_document_dto.text.clone(),
@@ -104,7 +99,7 @@ pub(crate) async fn create_sparse_idf_document(
     )
     .map_err(VectorsError::WaCustom)?;
 
-    Ok(CreateVectorResponseDto::SparseIdf(create_document_dto))
+    Ok(CreateVectorResponseDto::TfIdf(create_document_dto))
 }
 
 /// Creates a vector for dense index
@@ -210,7 +205,12 @@ pub(crate) async fn update_vector(
 ) -> Result<UpdateVectorResponseDto, VectorsError> {
     let hnsw_index = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
         .await
-        .map_err(|e| VectorsError::FailedToUpdateVector(format!("Failed to get dense index for update: {}", e)))?;
+        .map_err(|e| {
+            VectorsError::FailedToUpdateVector(format!(
+                "Failed to get dense index for update: {}",
+                e
+            ))
+        })?;
 
     if !hnsw_index
         .current_open_transaction
@@ -218,7 +218,7 @@ pub(crate) async fn update_vector(
         .is_null()
     {
         return Err(VectorsError::WaCustom(WaCustomError::LockError(
-            "Cannot update vector while transaction is open".to_string()
+            "Cannot update vector while transaction is open".to_string(),
         )));
     }
 
@@ -240,7 +240,11 @@ pub(crate) async fn delete_vector_by_id(
     collection_id: &str,
     _vector_id: u64,
 ) -> Result<(), VectorsError> {
-    log::error!("Vector deletion (ID: {}) for collection '{}' is not implemented in the core index logic.", _vector_id, collection_id);
+    log::error!(
+        "Vector deletion (ID: {}) for collection '{}' is not implemented in the core index logic.",
+        _vector_id,
+        collection_id
+    );
     Err(VectorsError::NotImplemented)
 }
 
@@ -285,13 +289,13 @@ pub(crate) async fn upsert_sparse_vectors_in_transaction(
     Ok(())
 }
 
-pub(crate) async fn upsert_sparse_idf_documents_in_transaction(
-    inverted_index: Arc<InvertedIndexIDF>,
-    transaction: &InvertedIndexIDFTransaction,
-    documents: Vec<CreateSparseIdfDocumentDto>,
+pub(crate) async fn upsert_tf_idf_documents_in_transaction(
+    tf_idf_index: Arc<TFIDFIndex>,
+    transaction: &TFIDFIndexTransaction,
+    documents: Vec<CreateTFIDFDocumentDto>,
 ) -> Result<(), VectorsError> {
-    run_upload_sparse_idf_documents_in_transaction(
-        inverted_index,
+    run_upload_tf_idf_documents_in_transaction(
+        tf_idf_index,
         transaction,
         documents
             .into_iter()
@@ -303,14 +307,22 @@ pub(crate) async fn upsert_sparse_idf_documents_in_transaction(
     Ok(())
 }
 
-
 pub(crate) async fn check_vector_existence(
     ctx: Arc<AppContext>,
     collection_id: &str,
     vector_id: u64,
 ) -> Result<bool, VectorsError> {
-    if ctx.ain_env.collections_map.get_collection(collection_id).is_none() {
-        log::debug!("Collection '{}' not found during existence check for vector {}", collection_id, vector_id);
+    if ctx
+        .ain_env
+        .collections_map
+        .get_collection(collection_id)
+        .is_none()
+    {
+        log::debug!(
+            "Collection '{}' not found during existence check for vector {}",
+            collection_id,
+            vector_id
+        );
         return Ok(false);
     }
 
@@ -318,7 +330,9 @@ pub(crate) async fn check_vector_existence(
     if let Some(hnsw_index) = ctx.ain_env.collections_map.get_hnsw_index(collection_id) {
         let env = hnsw_index.lmdb.env.clone();
         let db = *hnsw_index.lmdb.db;
-        let txn = env.begin_ro_txn().map_err(|e| VectorsError::DatabaseError(format!("LMDB RO txn failed for dense check: {}", e)))?;
+        let txn = env.begin_ro_txn().map_err(|e| {
+            VectorsError::DatabaseError(format!("LMDB RO txn failed for dense check: {}", e))
+        })?;
         let key = crate::macros::key!(e: &vector_id_obj);
 
         match txn.get(db, &key) {
@@ -331,27 +345,36 @@ pub(crate) async fn check_vector_existence(
             }
             Err(e) => {
                 txn.abort();
-                log::error!("LMDB error checking dense vector existence for {}: {}", vector_id, e);
-                return Err(VectorsError::DatabaseError(format!("Dense existence check failed: {}", e)));
+                log::error!(
+                    "LMDB error checking dense vector existence for {}: {}",
+                    vector_id,
+                    e
+                );
+                return Err(VectorsError::DatabaseError(format!(
+                    "Dense existence check failed: {}",
+                    e
+                )));
             }
         }
     }
 
-    if let Some(inverted_index) = ctx.ain_env.collections_map.get_inverted_index(collection_id) {
+    if let Some(inverted_index) = ctx
+        .ain_env
+        .collections_map
+        .get_inverted_index(collection_id)
+    {
         if inverted_index.contains_vector_id(vector_id as u32) {
-             return Ok(true);
+            return Ok(true);
         }
     }
 
-     if let Some(idf_index) = ctx.ain_env.collections_map.get_idf_inverted_index(collection_id) {
+    if let Some(idf_index) = ctx.ain_env.collections_map.get_tf_idf_index(collection_id) {
         if idf_index.contains_vector_id(vector_id as u32) {
-             return Ok(true);
+            return Ok(true);
         }
     }
     Ok(false)
 }
-
-
 
 pub(crate) async fn fetch_vector_neighbors(
     ctx: Arc<AppContext>,
@@ -361,7 +384,6 @@ pub(crate) async fn fetch_vector_neighbors(
     let hnsw_index = collections::service::get_dense_index_by_id(ctx.clone(), collection_id)
         .await
         .map_err(|_| VectorsError::IndexNotFound)?;
-
 
     let results = api_fetch_neighbors(hnsw_index.clone(), vector_id.clone()).await;
     let neighbors: Vec<SimilarVector> = results
@@ -377,11 +399,11 @@ pub(crate) async fn fetch_vector_neighbors(
         })
         .collect();
 
-     if neighbors.is_empty() {
-         if !check_vector_existence(ctx, collection_id, vector_id.0).await? {
-             return Err(VectorsError::NotFound);
-         }
-     }
+    if neighbors.is_empty() {
+        if !check_vector_existence(ctx, collection_id, vector_id.0).await? {
+            return Err(VectorsError::NotFound);
+        }
+    }
 
     Ok(neighbors)
 }

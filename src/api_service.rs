@@ -7,8 +7,7 @@ use crate::indexes::hnsw::HNSWIndex;
 use crate::indexes::inverted::transaction::InvertedIndexTransaction;
 use crate::indexes::inverted::types::{RawSparseVectorEmbedding, SparsePair};
 use crate::indexes::inverted::InvertedIndex;
-use crate::indexes::inverted_idf::transaction::InvertedIndexIDFTransaction;
-use crate::indexes::inverted_idf::{count_tokens, InvertedIndexIDF};
+use crate::indexes::tf_idf::{count_tokens, transaction::TFIDFIndexTransaction, TFIDFIndex};
 use crate::macros::key;
 use crate::metadata::query_filtering::filter_encoded_dimensions;
 use crate::metadata::{self, MetadataFields};
@@ -187,7 +186,6 @@ pub async fn init_inverted_index_for_collection(
         collection_name.clone(),
         collection.description.clone(),
         index_path.clone(),
-        collection.sparse_vector.auto_create_index,
         // @NOTE: Metadata filtering is currently only supported for
         // HNSW/Dense index
         None,
@@ -209,17 +207,17 @@ pub async fn init_inverted_index_for_collection(
 }
 
 /// creates an inverted index for a collection
-pub async fn init_inverted_index_idf_for_collection(
+pub async fn init_tf_idf_index_for_collection(
     ctx: Arc<AppContext>,
     collection: &Collection,
     sample_threshold: usize,
     store_raw_text: bool,
     k1: f32,
     b: f32,
-) -> Result<Arc<InvertedIndexIDF>, WaCustomError> {
+) -> Result<Arc<TFIDFIndex>, WaCustomError> {
     let collection_name = &collection.name;
     let collection_path: Arc<Path> = collection.get_path();
-    let index_path = collection_path.join("sparse_inverted_index_idf");
+    let index_path = collection_path.join("tf_idf_index");
     fs::create_dir_all(&index_path).map_err(|e| WaCustomError::FsError(e.to_string()))?;
 
     let env = ctx.ain_env.persist.clone();
@@ -236,11 +234,10 @@ pub async fn init_inverted_index_idf_for_collection(
         8192,
     );
 
-    let index = Arc::new(InvertedIndexIDF::new(
+    let index = Arc::new(TFIDFIndex::new(
         collection_name.clone(),
         collection.description.clone(),
         index_path.clone(),
-        collection.sparse_vector.auto_create_index,
         collection.config.max_vectors,
         lmdb,
         hash,
@@ -255,7 +252,7 @@ pub async fn init_inverted_index_idf_for_collection(
 
     ctx.ain_env
         .collections_map
-        .insert_inverted_index_idf(collection_name, index.clone())?;
+        .insert_tf_idf_index(collection_name, index.clone())?;
     update_current_version(&index.lmdb, hash)?;
     Ok(index)
 }
@@ -521,8 +518,8 @@ pub fn run_upload_sparse_vectors(
 }
 
 /// uploads a sparse vector for inverted index
-pub fn run_upload_sparse_idf_documents(
-    idf_inverted_index: Arc<InvertedIndexIDF>,
+pub fn run_upload_tf_idf_documents(
+    tf_idf_index: Arc<TFIDFIndex>,
     docs: Vec<(VectorId, String)>,
 ) -> Result<(), WaCustomError> {
     // Adding next version
@@ -535,29 +532,27 @@ pub fn run_upload_sparse_idf_documents(
     //
     // means we are storing each embedding in a new file (or list embeddings that come in one transaction)?
     // the list of embedding that come in one transaction are stored in a new file
-    let (current_version, _) = idf_inverted_index
+    let (current_version, _) = tf_idf_index
         .vcs
         .add_next_version("main")
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-    idf_inverted_index.set_current_version(current_version);
-    update_current_version(&idf_inverted_index.lmdb, current_version)?;
+    tf_idf_index.set_current_version(current_version);
+    update_current_version(&tf_idf_index.lmdb, current_version)?;
 
     docs.into_iter()
-        .try_for_each(|(id, terms)| idf_inverted_index.insert(current_version, id, terms))?;
+        .try_for_each(|(id, terms)| tf_idf_index.insert(current_version, id, terms))?;
 
     store_highest_internal_id(
-        &idf_inverted_index.lmdb,
-        idf_inverted_index
-            .document_id_counter
-            .load(Ordering::Relaxed),
+        &tf_idf_index.lmdb,
+        tf_idf_index.document_id_counter.load(Ordering::Relaxed),
     )?;
-    idf_inverted_index.vec_raw_map.serialize(
-        &idf_inverted_index.vec_raw_manager,
-        idf_inverted_index.root.data_file_parts,
+    tf_idf_index.vec_raw_map.serialize(
+        &tf_idf_index.vec_raw_manager,
+        tf_idf_index.root.data_file_parts,
     )?;
-    idf_inverted_index.vec_raw_manager.flush_all()?;
-    idf_inverted_index.root.cache.dim_bufman.flush()?;
-    idf_inverted_index.root.cache.data_bufmans.flush_all()?;
+    tf_idf_index.vec_raw_manager.flush_all()?;
+    tf_idf_index.root.cache.dim_bufman.flush()?;
+    tf_idf_index.root.cache.data_bufmans.flush_all()?;
 
     Ok(())
 }
@@ -753,61 +748,59 @@ pub fn run_upload_sparse_vectors_in_transaction(
 }
 
 /// uploads a vector embedding within a transaction
-pub fn run_upload_sparse_idf_documents_in_transaction(
-    idf_inverted_index: Arc<InvertedIndexIDF>,
-    transaction: &InvertedIndexIDFTransaction,
+pub fn run_upload_tf_idf_documents_in_transaction(
+    tf_idf_index: Arc<TFIDFIndex>,
+    transaction: &TFIDFIndexTransaction,
     mut sample_docs: Vec<(VectorId, String)>,
 ) -> Result<(), WaCustomError> {
-    if !idf_inverted_index.is_configured.load(Ordering::Acquire) {
-        let collected_count = idf_inverted_index
+    if !tf_idf_index.is_configured.load(Ordering::Acquire) {
+        let collected_count = tf_idf_index
             .documents_collected
             .fetch_add(sample_docs.len(), Ordering::SeqCst);
 
-        if collected_count < idf_inverted_index.sample_threshold {
+        if collected_count < tf_idf_index.sample_threshold {
             for (_, text) in &sample_docs {
                 let len = count_tokens(text, 40);
-                idf_inverted_index
+                tf_idf_index
                     .sampling_data
                     .total_documents_length
                     .fetch_add(len as u64, Ordering::Relaxed);
-                idf_inverted_index
+                tf_idf_index
                     .sampling_data
                     .total_documents_count
                     .fetch_add(1, Ordering::Relaxed);
             }
 
-            let mut documents = idf_inverted_index.documents.write().unwrap();
+            let mut documents = tf_idf_index.documents.write().unwrap();
             documents.extend(sample_docs);
-            if documents.len() < idf_inverted_index.sample_threshold {
+            if documents.len() < tf_idf_index.sample_threshold {
                 return Ok(());
             }
 
-            let total_documents_count = idf_inverted_index
+            let total_documents_count = tf_idf_index
                 .sampling_data
                 .total_documents_count
                 .load(Ordering::Relaxed);
-            let total_documents_length = idf_inverted_index
+            let total_documents_length = tf_idf_index
                 .sampling_data
                 .total_documents_length
                 .load(Ordering::Relaxed);
 
             let avg_length = total_documents_length as f32 / total_documents_count as f32;
-            *idf_inverted_index.average_document_length.write().unwrap() = avg_length;
-            idf_inverted_index
-                .is_configured
-                .store(true, Ordering::Release);
-            store_average_document_length(&idf_inverted_index.lmdb, avg_length)?;
+            *tf_idf_index.average_document_length.write().unwrap() = avg_length;
+            tf_idf_index.is_configured.store(true, Ordering::Release);
+            store_average_document_length(&tf_idf_index.lmdb, avg_length)?;
             sample_docs = std::mem::take(&mut *documents);
         } else {
-            while !idf_inverted_index.is_configured.load(Ordering::Relaxed) {
-                drop(idf_inverted_index.documents.read().unwrap());
+            while !tf_idf_index.is_configured.load(Ordering::Relaxed) {
+                drop(tf_idf_index.documents.read().unwrap());
             }
         }
     }
 
     sample_docs
         .into_par_iter()
-        .try_for_each(|(id, text)| idf_inverted_index.insert(transaction.id, id, text))?;
+        .try_for_each(|(id, text)| tf_idf_index.insert(transaction.id, id, text))?;
 
     Ok(())
 }

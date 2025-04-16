@@ -12,19 +12,19 @@ use std::{
     },
 };
 
-use rust_stemmers::{Algorithm, Stemmer};
 use rustc_hash::FxHashMap;
-use transaction::InvertedIndexIDFTransaction;
+use snowball_stemmer::Stemmer;
+use transaction::TFIDFIndexTransaction;
 use twox_hash::XxHash32;
 
+use crate::macros::key;
 use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
-    inverted_index_idf::InvertedIndexIDFRoot,
+    tf_idf_index::TFIDFIndexRoot,
     tree_map::TreeMap,
     types::{MetaDb, VectorId},
     versioning::{Hash, VersionControl},
 };
-use crate::macros::key;
 
 #[derive(Default)]
 pub struct SamplingData {
@@ -32,15 +32,14 @@ pub struct SamplingData {
     pub total_documents_count: AtomicU32,
 }
 
-pub struct InvertedIndexIDF {
+pub struct TFIDFIndex {
     pub name: String,
     pub description: Option<String>,
-    pub auto_create_index: bool,
     pub max_vectors: Option<i32>,
-    pub root: InvertedIndexIDFRoot,
+    pub root: TFIDFIndexRoot,
     pub lmdb: MetaDb,
     pub current_version: RwLock<Hash>,
-    pub current_open_transaction: AtomicPtr<InvertedIndexIDFTransaction>,
+    pub current_open_transaction: AtomicPtr<TFIDFIndexTransaction>,
     pub vcs: VersionControl,
     pub average_document_length: RwLock<f32>,
     pub is_configured: AtomicBool,
@@ -56,16 +55,15 @@ pub struct InvertedIndexIDF {
     pub b: f32,
 }
 
-unsafe impl Send for InvertedIndexIDF {}
-unsafe impl Sync for InvertedIndexIDF {}
+unsafe impl Send for TFIDFIndex {}
+unsafe impl Sync for TFIDFIndex {}
 
-impl InvertedIndexIDF {
+impl TFIDFIndex {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: String,
         description: Option<String>,
         root_path: PathBuf,
-        auto_create_index: bool,
         max_vectors: Option<i32>,
         lmdb: MetaDb,
         current_version: Hash,
@@ -77,11 +75,10 @@ impl InvertedIndexIDF {
         k1: f32,
         b: f32,
     ) -> Result<Self, BufIoError> {
-        let root = InvertedIndexIDFRoot::new(root_path, data_file_parts)?;
+        let root = TFIDFIndexRoot::new(root_path, data_file_parts)?;
 
         Ok(Self {
             name,
-            auto_create_index,
             description,
             max_vectors,
             root,
@@ -153,7 +150,11 @@ impl InvertedIndexIDF {
             Ok(_) => true,
             Err(lmdb::Error::NotFound) => false,
             Err(e) => {
-                log::error!("LMDB error during IDF contains_vector_id get for {}: {}", vector_id_u32, e);
+                log::error!(
+                    "LMDB error during IDF contains_vector_id get for {}: {}",
+                    vector_id_u32,
+                    e
+                );
                 false
             }
         };
@@ -178,11 +179,9 @@ pub fn tokenize(text: &str) -> Vec<&str> {
             if start.is_none() {
                 start = Some(i);
             }
-        } else {
-            if let Some(s) = start {
-                result.push(&text[s..i]);
-                start = None;
-            }
+        } else if let Some(s) = start {
+            result.push(&text[s..i]);
+            start = None;
         }
     }
 
@@ -201,7 +200,7 @@ pub fn process_text(
     b: f32,
 ) -> Vec<(u32, f32)> {
     // Create an English stemmer.
-    let stemmer = Stemmer::create(Algorithm::English);
+    let stemmer = Stemmer::create();
     // Create a fast hash map for counting; FxHashMap is chosen for performance.
     let mut freq: FxHashMap<u32, u32> = FxHashMap::default();
     let document_length = count_tokens(input, max_token_len);

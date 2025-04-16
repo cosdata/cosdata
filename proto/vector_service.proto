@@ -82,12 +82,14 @@ service CollectionsService {
 message DenseVectorOptions {
     uint32 dimension = 1;
     bool enabled = 2;
-    bool auto_create_index = 3;
 }
 
 message SparseVectorOptions {
     bool enabled = 1;
-    bool auto_create_index = 2;
+}
+
+message TFIDFOptions {
+    bool enabled = 1;
 }
 
 message CollectionConfig {
@@ -100,8 +102,9 @@ message CreateCollectionRequest {
     optional string description = 2;
     DenseVectorOptions dense_vector = 3;
     SparseVectorOptions sparse_vector = 4;
-    optional MetadataSchema metadata_schema = 5;
-    CollectionConfig config = 6;
+    TFIDFOptions tf_idf_options = 5;
+    optional MetadataSchema metadata_schema = 6;
+    CollectionConfig config = 7;
 }
 
 message CreateCollectionResponse {

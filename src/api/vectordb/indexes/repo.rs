@@ -1,19 +1,19 @@
-use std::sync::Arc;
-use std::path::PathBuf;
 use std::fs;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::{
     api_service::{
         init_hnsw_index_for_collection, init_inverted_index_for_collection,
-        init_inverted_index_idf_for_collection,
+        init_tf_idf_index_for_collection,
     },
     app_context::AppContext,
-    models::{types::{DistanceMetric, QuantizationMetric}},
+    models::types::{DistanceMetric, QuantizationMetric},
     quantization::StorageType,
 };
 
 use super::{
-    dtos::{DenseIndexParamsDto, DenseIndexQuantizationDto, SparseIndexQuantization},
+    dtos::{DenseIndexParamsDto, DenseIndexQuantizationDto, IndexType, SparseIndexQuantization},
     error::IndexesError,
 };
 
@@ -32,7 +32,12 @@ pub(crate) async fn create_dense_index(
         .ok_or(IndexesError::CollectionNotFound)?;
 
     // Check if index already exists BEFORE initializing
-    if ctx.ain_env.collections_map.get_hnsw_index(&collection_name).is_some() {
+    if ctx
+        .ain_env
+        .collections_map
+        .get_hnsw_index(&collection_name)
+        .is_some()
+    {
         return Err(IndexesError::IndexAlreadyExists("dense".to_string()));
     }
 
@@ -83,13 +88,17 @@ pub(crate) async fn create_sparse_index(
         .ain_env
         .collections_map
         .get_collection(&collection_name)
-        .ok_or_else(|| IndexesError::NotFound(format!("Collection '{}' not found", collection_name)))?;
+        .ok_or_else(|| {
+            IndexesError::NotFound(format!("Collection '{}' not found", collection_name))
+        })?;
 
-    let inverted_exists = ctx.ain_env.collections_map.get_inverted_index(&collection_name).is_some();
-    let idf_exists = ctx.ain_env.collections_map.get_idf_inverted_index(&collection_name).is_some();
-
-    if inverted_exists || idf_exists {
-         return Err(IndexesError::IndexAlreadyExists("sparse".to_string()));
+    if ctx
+        .ain_env
+        .collections_map
+        .get_inverted_index(&collection_name)
+        .is_some()
+    {
+        return Err(IndexesError::IndexAlreadyExists("sparse".to_string()));
     }
 
     init_inverted_index_for_collection(
@@ -104,7 +113,7 @@ pub(crate) async fn create_sparse_index(
     Ok(())
 }
 
-pub(crate) async fn create_sparse_index_idf(
+pub(crate) async fn create_tf_idf_index(
     ctx: Arc<AppContext>,
     collection_name: String,
     _name: String,
@@ -119,16 +128,18 @@ pub(crate) async fn create_sparse_index_idf(
         .get_collection(&collection_name)
         .ok_or(IndexesError::CollectionNotFound)?;
 
-    init_inverted_index_idf_for_collection(
-        ctx,
-        &collection,
-        sample_threshold,
-        store_raw_text,
-        k1,
-        b,
-    )
-    .await
-    .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;
+    if ctx
+        .ain_env
+        .collections_map
+        .get_tf_idf_index(&collection_name)
+        .is_some()
+    {
+        return Err(IndexesError::IndexAlreadyExists("tf_idf".to_string()));
+    }
+
+    init_tf_idf_index_for_collection(ctx, &collection, sample_threshold, store_raw_text, k1, b)
+        .await
+        .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;
 
     Ok(())
 }
@@ -173,7 +184,11 @@ pub(crate) async fn get_index(
         }));
     }
 
-    if let Some(inverted) = ctx.ain_env.collections_map.get_inverted_index(&collection_name) {
+    if let Some(inverted) = ctx
+        .ain_env
+        .collections_map
+        .get_inverted_index(&collection_name)
+    {
         let values_upper_bound = *inverted.values_upper_bound.read().unwrap();
         indexes_array.push(serde_json::json!({
             "type": "sparse",
@@ -193,66 +208,168 @@ pub(crate) async fn get_index(
 pub(crate) async fn delete_index(
     ctx: Arc<AppContext>,
     collection_name: String,
-    index_type: String,
+    index_type: IndexType,
 ) -> Result<(), IndexesError> {
-     let collection = ctx
+    let collection = ctx
         .ain_env
         .collections_map
         .get_collection(&collection_name)
-        .ok_or_else(|| IndexesError::NotFound(format!("Collection '{}' not found", collection_name)))?;
+        .ok_or_else(|| {
+            IndexesError::NotFound(format!("Collection '{}' not found", collection_name))
+        })?;
 
     let collection_path: PathBuf = collection.get_path().to_path_buf();
 
-    match index_type.as_str() {
-        "dense" => {
-            if ctx.ain_env.collections_map.get_hnsw_index(&collection_name).is_none() {
-                 return Err(IndexesError::NotFound(format!("Dense index does not exist for collection '{}'", collection_name)));
+    match index_type {
+        IndexType::Dense => {
+            if ctx
+                .ain_env
+                .collections_map
+                .get_hnsw_index(&collection_name)
+                .is_none()
+            {
+                return Err(IndexesError::NotFound(format!(
+                    "Dense index does not exist for collection '{}'",
+                    collection_name
+                )));
             }
-            ctx.ain_env.collections_map.remove_hnsw_index(&collection_name)
-                 .map_err(|e| IndexesError::FailedToDeleteIndex(format!("Failed to remove dense index from map: {}", e)))?;
+            ctx.ain_env
+                .collections_map
+                .remove_hnsw_index(&collection_name)
+                .map_err(|e| {
+                    IndexesError::FailedToDeleteIndex(format!(
+                        "Failed to remove dense index from map: {}",
+                        e
+                    ))
+                })?;
 
-             let index_path = collection_path.join("dense_hnsw");
-             if index_path.exists() {
-                 log::info!("Attempting to remove dense index directory: {:?}", index_path);
-                 fs::remove_dir_all(&index_path)
-                     .map_err(|e| IndexesError::FailedToDeleteIndex(format!("Failed to remove dense index directory '{}': {}", index_path.display(), e)))?;
-                 log::info!("Successfully removed dense index directory: {:?}", index_path);
-             } else {
-                  log::warn!("Dense index directory not found for removal: {:?}", index_path);
-             }
-             log::info!("Dense index removed successfully for collection '{}'", collection_name);
+            let index_path = collection_path.join("dense_hnsw");
+            if index_path.exists() {
+                log::info!(
+                    "Attempting to remove dense index directory: {:?}",
+                    index_path
+                );
+                fs::remove_dir_all(&index_path).map_err(|e| {
+                    IndexesError::FailedToDeleteIndex(format!(
+                        "Failed to remove dense index directory '{}': {}",
+                        index_path.display(),
+                        e
+                    ))
+                })?;
+                log::info!(
+                    "Successfully removed dense index directory: {:?}",
+                    index_path
+                );
+            } else {
+                log::warn!(
+                    "Dense index directory not found for removal: {:?}",
+                    index_path
+                );
+            }
+            log::info!(
+                "Dense index removed successfully for collection '{}'",
+                collection_name
+            );
         }
-        "sparse" => {
-             let exists_inverted = ctx.ain_env.collections_map.get_inverted_index(&collection_name).is_some();
-             let exists_idf = ctx.ain_env.collections_map.get_idf_inverted_index(&collection_name).is_some();
+        IndexType::Sparse => {
+            if ctx
+                .ain_env
+                .collections_map
+                .get_inverted_index(&collection_name)
+                .is_none()
+            {
+                return Err(IndexesError::NotFound(format!(
+                    "Sparse index does not exist for collection '{}'",
+                    collection_name
+                )));
+            }
+            ctx.ain_env
+                .collections_map
+                .remove_inverted_index(&collection_name)
+                .map_err(|e| {
+                    IndexesError::FailedToDeleteIndex(format!(
+                        "Failed to remove sparse index from map: {}",
+                        e
+                    ))
+                })?;
 
-             if !exists_inverted && !exists_idf {
-                 return Err(IndexesError::NotFound(format!("Sparse index does not exist for collection '{}'", collection_name)));
-             }
-
-             let mut deleted = false;
-
-             if exists_inverted {
-                 ctx.ain_env.collections_map.remove_inverted_index(&collection_name)
-                    .map_err(|e| IndexesError::FailedToDeleteIndex(format!("Failed to remove sparse inverted index from map: {}", e)))?;
-                let _ = collection_path.join("sparse_inverted_index");
-                 deleted = true;
-             }
-
-             if exists_idf {
-                 ctx.ain_env.collections_map.remove_idf_inverted_index(&collection_name)
-                     .map_err(|e| IndexesError::FailedToDeleteIndex(format!("Failed to remove sparse IDF index from map: {}", e)))?;
-                let _ = collection_path.join("sparse_inverted_index_idf");
-                 deleted = true;
-             }
-
-             if !deleted {
-                 log::error!("Existence check passed but failed to find sparse index for deletion in collection '{}'", collection_name);
-                 return Err(IndexesError::NotFound("Sparse index existed in check but failed to find for deletion.".to_string()));
-             }
+            let index_path = collection_path.join("sparse_inverted_index");
+            if index_path.exists() {
+                log::info!(
+                    "Attempting to remove sparse index directory: {:?}",
+                    index_path
+                );
+                fs::remove_dir_all(&index_path).map_err(|e| {
+                    IndexesError::FailedToDeleteIndex(format!(
+                        "Failed to remove sparse index directory '{}': {}",
+                        index_path.display(),
+                        e
+                    ))
+                })?;
+                log::info!(
+                    "Successfully removed sparse index directory: {:?}",
+                    index_path
+                );
+            } else {
+                log::warn!(
+                    "Sparse index directory not found for removal: {:?}",
+                    index_path
+                );
+            }
+            log::info!(
+                "Sparse index removed successfully for collection '{}'",
+                collection_name
+            );
         }
-        _ => {
-            return Err(IndexesError::InvalidIndexType(index_type));
+        IndexType::TfIdf => {
+            if ctx
+                .ain_env
+                .collections_map
+                .get_tf_idf_index(&collection_name)
+                .is_none()
+            {
+                return Err(IndexesError::NotFound(format!(
+                    "TF-IDF index does not exist for collection '{}'",
+                    collection_name
+                )));
+            }
+            ctx.ain_env
+                .collections_map
+                .remove_tf_idf_index(&collection_name)
+                .map_err(|e| {
+                    IndexesError::FailedToDeleteIndex(format!(
+                        "Failed to remove TF-IDF index from map: {}",
+                        e
+                    ))
+                })?;
+
+            let index_path = collection_path.join("tf_idf_index");
+            if index_path.exists() {
+                log::info!(
+                    "Attempting to remove TF-IDF index directory: {:?}",
+                    index_path
+                );
+                fs::remove_dir_all(&index_path).map_err(|e| {
+                    IndexesError::FailedToDeleteIndex(format!(
+                        "Failed to remove TF-IDF index directory '{}': {}",
+                        index_path.display(),
+                        e
+                    ))
+                })?;
+                log::info!(
+                    "Successfully removed TF-IDF index directory: {:?}",
+                    index_path
+                );
+            } else {
+                log::warn!(
+                    "TF-IDF index directory not found for removal: {:?}",
+                    index_path
+                );
+            }
+            log::info!(
+                "TF-IDF index removed successfully for collection '{}'",
+                collection_name
+            );
         }
     }
 

@@ -1,12 +1,14 @@
-use serde::{Deserialize, Serialize};
+use crate::indexes::inverted::types::SparsePair;
 use crate::metadata::query_filtering::Filter;
 use crate::models::types::VectorId;
-use crate::indexes::inverted::types::SparsePair;
+use serde::{Deserialize, Serialize};
 
-
-fn default_top_k() -> usize { 10 }
-fn default_fusion_constant_k() -> f32 { 60.0 }
-
+fn default_top_k() -> usize {
+    10
+}
+fn default_fusion_constant_k() -> f32 {
+    60.0
+}
 
 #[derive(Deserialize, Debug)]
 pub(crate) struct DenseSearchRequestDto {
@@ -46,7 +48,6 @@ pub(crate) struct HybridSearchRequestDto {
     pub fusion_constant_k: f32,
 }
 
-
 #[derive(Serialize, Debug, Clone)]
 pub(crate) struct SearchResultItemDto {
     pub id: VectorId,
@@ -61,13 +62,13 @@ pub(crate) struct SearchResponseDto {
 pub(crate) type BatchSearchResponseDto = Vec<SearchResponseDto>;
 
 #[derive(Deserialize, Debug)]
-pub(crate) struct FindSimilarSparseIdfDocumentDto {
+pub(crate) struct FindSimilarTFIDFDocumentDto {
     pub query: String,
     pub top_k: Option<usize>,
 }
 
 #[derive(Deserialize, Debug)]
-pub(crate) struct BatchSearchSparseIdfDocumentsDto {
+pub(crate) struct BatchSearchTFIDFDocumentsDto {
     pub queries: Vec<String>,
     pub top_k: Option<usize>,
 }

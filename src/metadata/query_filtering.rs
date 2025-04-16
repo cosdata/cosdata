@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use serde::Deserialize;
 use super::{decimal_to_binary_vec, schema::MetadataSchema, Error, FieldName, FieldValue};
+use serde::Deserialize;
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub enum Operator {

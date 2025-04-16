@@ -29,6 +29,9 @@ pub(crate) async fn create_transaction(
         IndexType::Sparse => {
             service::create_sparse_index_transaction(ctx.into_inner(), &collection_id).await?
         }
+        IndexType::TfIdf => {
+            service::create_tf_idf_index_transaction(ctx.into_inner(), &collection_id).await?
+        }
     };
     Ok(HttpResponse::Ok().json(transaction))
 }
@@ -54,6 +57,14 @@ pub(crate) async fn commit_transaction(
         }
         IndexType::Sparse => {
             service::commit_sparse_index_transaction(
+                ctx.into_inner(),
+                &collection_id,
+                transaction_id.into(),
+            )
+            .await?
+        }
+        IndexType::TfIdf => {
+            service::commit_tf_idf_index_transaction(
                 ctx.into_inner(),
                 &collection_id,
                 transaction_id.into(),
@@ -109,6 +120,14 @@ pub(crate) async fn abort_transaction(
             )
             .await?
         }
+        IndexType::TfIdf => {
+            service::abort_tf_idf_index_transaction(
+                ctx.into_inner(),
+                &collection_id,
+                transaction_id.into(),
+            )
+            .await?
+        }
     };
     Ok(HttpResponse::NoContent().finish())
 }
@@ -143,7 +162,7 @@ pub(crate) async fn upsert(
         .map_err(|e| TransactionError::FailedToCreateVector(format!("Cache error: {}", e)))?;
 
     match upsert_dto {
-        UpsertDto::Dense(vectors) => {
+        UpsertDto::Dense { vectors } => {
             service::upsert_dense_vectors(
                 ctx.into_inner(),
                 &collection_id,
@@ -152,7 +171,7 @@ pub(crate) async fn upsert(
             )
             .await?
         }
-        UpsertDto::Sparse(vectors) => {
+        UpsertDto::Sparse { vectors } => {
             service::upsert_sparse_vectors(
                 ctx.into_inner(),
                 &collection_id,
@@ -161,8 +180,8 @@ pub(crate) async fn upsert(
             )
             .await?
         }
-        UpsertDto::SparseIdf(documents) => {
-            service::upsert_sparse_idf_documents(
+        UpsertDto::TfIdf { documents } => {
+            service::upsert_tf_idf_documents(
                 ctx.into_inner(),
                 &collection_id,
                 transaction_id.into(),

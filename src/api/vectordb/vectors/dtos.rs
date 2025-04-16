@@ -23,7 +23,7 @@ pub(crate) struct CreateSparseVectorDto {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub(crate) struct CreateSparseIdfDocumentDto {
+pub(crate) struct CreateTFIDFDocumentDto {
     pub id: VectorId,
     pub text: String,
 }
@@ -99,71 +99,19 @@ impl<'de> Deserialize<'de> for CreateSparseVectorDto {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize)]
+#[serde(tag = "index_type", rename_all = "snake_case")]
 pub(crate) enum CreateVectorDto {
     Dense(CreateDenseVectorDto),
     Sparse(CreateSparseVectorDto),
-    SparseIdf(CreateSparseIdfDocumentDto),
-}
-
-impl<'de> Deserialize<'de> for CreateVectorDto {
-    fn deserialize<D>(deserializer: D) -> Result<CreateVectorDto, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(field_identifier, rename_all = "snake_case")]
-        enum Field {
-            IndexType,
-            IsIdf,
-            Id,
-            Values,
-            Indices,
-            Text,
-            Metadata,
-        }
-
-        #[derive(Deserialize)]
-        struct RawMap {
-            #[serde(rename = "index_type")]
-            index_type: String,
-
-            #[serde(default, rename = "isIDF")]
-            is_idf: bool,
-
-            #[serde(flatten)]
-            rest: serde_json::Value,
-        }
-
-        let RawMap {
-            index_type,
-            is_idf,
-            rest,
-        } = RawMap::deserialize(deserializer)?;
-
-        match (index_type.as_str(), is_idf) {
-            ("dense", _) => {
-                let dense = serde_json::from_value(rest).map_err(de::Error::custom)?;
-                Ok(CreateVectorDto::Dense(dense))
-            }
-            ("sparse", true) => {
-                let sparse_idf = serde_json::from_value(rest).map_err(de::Error::custom)?;
-                Ok(CreateVectorDto::SparseIdf(sparse_idf))
-            }
-            ("sparse", false) => {
-                let sparse = serde_json::from_value(rest).map_err(de::Error::custom)?;
-                Ok(CreateVectorDto::Sparse(sparse))
-            }
-            (other, _) => Err(de::Error::unknown_variant(other, &["dense", "sparse"])),
-        }
-    }
+    TfIdf(CreateTFIDFDocumentDto),
 }
 
 #[derive(Serialize)]
 pub(crate) enum CreateVectorResponseDto {
     Dense(CreateDenseVectorDto),
     Sparse(CreateSparseVectorDto),
-    SparseIdf(CreateSparseIdfDocumentDto),
+    TfIdf(CreateTFIDFDocumentDto),
 }
 
 #[derive(Deserialize)]

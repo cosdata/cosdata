@@ -6,10 +6,11 @@ use crate::{
 };
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum IndexType {
     Dense,
     Sparse,
+    TfIdf,
 }
 
 #[derive(Debug, Default)]
@@ -107,103 +108,20 @@ pub(crate) struct CreateDenseIndexDto {
     pub index: DenseIndexParamsDto,
 }
 
-#[derive(Debug)]
-pub(crate) enum CreateSparseIndexDto {
-    Splade {
-        name: String,
-        quantization: SparseIndexQuantization,
-        sample_threshold: usize,
-    },
-    Idf {
-        name: String,
-        sample_threshold: usize,
-        store_raw_text: bool,
-        k1: f32,
-        b: f32,
-    },
+#[derive(Debug, Deserialize)]
+pub(crate) struct CreateSparseIndexDto {
+    pub name: String,
+    pub quantization: SparseIndexQuantization,
+    pub sample_threshold: usize,
 }
 
-impl<'de> Deserialize<'de> for CreateSparseIndexDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        use serde::de::{Error, MapAccess, Visitor};
-        use std::fmt;
-
-        struct SparseIndexVisitor;
-
-        impl<'de> Visitor<'de> for SparseIndexVisitor {
-            type Value = CreateSparseIndexDto;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a valid sparse index object")
-            }
-
-            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-            where
-                A: MapAccess<'de>,
-            {
-                let mut name = None;
-                let mut quantization = None;
-                let mut sample_threshold = None;
-                let mut store_raw_text = false;
-                let mut k1 = None;
-                let mut b = None;
-                let mut is_idf = false;
-
-                while let Some(key) = map.next_key::<String>()? {
-                    match key.as_str() {
-                        "name" => name = Some(map.next_value()?),
-                        "quantization" => quantization = Some(map.next_value()?),
-                        "sample_threshold" => sample_threshold = Some(map.next_value()?),
-                        "isIDF" => is_idf = map.next_value()?,
-                        "store_raw_text" => store_raw_text = map.next_value()?,
-                        "k1" => k1 = Some(map.next_value()?),
-                        "b" => b = Some(map.next_value()?),
-                        _ => {
-                            return Err(Error::unknown_field(
-                                &key,
-                                &[
-                                    "name",
-                                    "quantization",
-                                    "early_terminate_threshold",
-                                    "sample_threshold",
-                                    "isIDF",
-                                    "store_raw_text",
-                                    "k1",
-                                    "b",
-                                ],
-                            ))
-                        }
-                    }
-                }
-
-                let name = name.ok_or_else(|| Error::missing_field("name"))?;
-                let sample_threshold =
-                    sample_threshold.ok_or_else(|| Error::missing_field("sample_threshold"))?;
-
-                if is_idf {
-                    Ok(CreateSparseIndexDto::Idf {
-                        name,
-                        sample_threshold,
-                        store_raw_text,
-                        k1: k1.ok_or_else(|| Error::missing_field("k1"))?,
-                        b: b.ok_or_else(|| Error::missing_field("b"))?,
-                    })
-                } else {
-                    Ok(CreateSparseIndexDto::Splade {
-                        name,
-                        quantization: quantization
-                            .ok_or_else(|| Error::missing_field("quantization"))?,
-                        sample_threshold,
-                    })
-                }
-            }
-        }
-
-        deserializer.deserialize_map(SparseIndexVisitor)
-    }
+#[derive(Debug, Deserialize)]
+pub(crate) struct CreateTFIDFIndexDto {
+    pub name: String,
+    pub sample_threshold: usize,
+    pub store_raw_text: bool,
+    pub k1: f32,
+    pub b: f32,
 }
 
 impl HNSWHyperParamsDto {

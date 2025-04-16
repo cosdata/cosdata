@@ -3,13 +3,13 @@ use std::sync::atomic::AtomicU32;
 use crate::models::{
     atomic_array::AtomicArray,
     buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
-    cache_loader::InvertedIndexIDFCache,
+    cache_loader::TFIDFIndexCache,
     types::FileOffset,
 };
 
-use super::InvertedIndexIDFSerialize;
+use super::TFIDFIndexSerialize;
 
-impl<T: InvertedIndexIDFSerialize, const N: usize> InvertedIndexIDFSerialize for AtomicArray<T, N> {
+impl<T: TFIDFIndexSerialize, const N: usize> TFIDFIndexSerialize for AtomicArray<T, N> {
     fn serialize(
         &self,
         dim_bufman: &BufferManager,
@@ -53,7 +53,7 @@ impl<T: InvertedIndexIDFSerialize, const N: usize> InvertedIndexIDFSerialize for
         file_offset: FileOffset,
         data_file_idx: u8,
         data_file_parts: u8,
-        cache: &InvertedIndexIDFCache,
+        cache: &TFIDFIndexCache,
     ) -> Result<Self, BufIoError> {
         let cursor = dim_bufman.open_cursor()?;
 
@@ -66,7 +66,7 @@ impl<T: InvertedIndexIDFSerialize, const N: usize> InvertedIndexIDFSerialize for
             if offset == u32::MAX {
                 continue;
             }
-            let item = Box::into_raw(Box::new(InvertedIndexIDFSerialize::deserialize(
+            let item = Box::into_raw(Box::new(TFIDFIndexSerialize::deserialize(
                 dim_bufman,
                 data_bufmans,
                 FileOffset(offset),

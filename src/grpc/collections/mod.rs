@@ -4,7 +4,7 @@ use tonic::{Request, Response, Status};
 use crate::app_context::AppContext;
 use crate::metadata::schema::MetadataSchema;
 use crate::models::collection::{
-    Collection, CollectionConfig, DenseVectorOptions, SparseVectorOptions,
+    Collection, CollectionConfig, DenseVectorOptions, SparseVectorOptions, TFIDFOptions,
 };
 
 crate::cfg_grpc! {
@@ -32,12 +32,14 @@ impl CollectionsService for CollectionsServiceImpl {
         let dense_vector = DenseVectorOptions {
             dimension: req.dense_vector.as_ref().map_or(0, |d| d.dimension as usize),
             enabled: req.dense_vector.as_ref().is_some_and(|d| d.enabled),
-            auto_create_index: req.dense_vector.as_ref().is_some_and(|d| d.auto_create_index),
         };
 
         let sparse_vector = SparseVectorOptions {
             enabled: req.sparse_vector.as_ref().is_some_and(|d| d.enabled),
-            auto_create_index: req.sparse_vector.as_ref().is_some_and(|d| d.auto_create_index),
+        };
+
+        let tf_idf_options = TFIDFOptions {
+            enabled: req.tf_idf_options.as_ref().is_some_and(|d| d.enabled),
         };
 
         let config = CollectionConfig {
@@ -57,6 +59,7 @@ impl CollectionsService for CollectionsServiceImpl {
             req.description.clone(),
             dense_vector,
             sparse_vector,
+            tf_idf_options,
             metadata_schema,
             config,
         ).map_err(Status::from)?;

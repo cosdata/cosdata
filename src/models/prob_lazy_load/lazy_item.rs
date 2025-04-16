@@ -9,10 +9,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::models::{
     buffered_io::BufIoError,
-    cache_loader::{HNSWIndexCache, InvertedIndexCache, InvertedIndexIDFCache},
+    cache_loader::{HNSWIndexCache, InvertedIndexCache, TFIDFIndexCache},
     inverted_index::InvertedIndexNodeData,
-    inverted_index_idf::InvertedIndexIDFNodeData,
     prob_node::ProbNode,
+    tf_idf_index::TFIDFIndexNodeData,
     types::FileOffset,
     versioning::Hash,
 };
@@ -349,12 +349,12 @@ impl ProbLazyItem<InvertedIndexNodeData> {
     }
 }
 
-impl ProbLazyItem<InvertedIndexIDFNodeData> {
+impl ProbLazyItem<TFIDFIndexNodeData> {
     pub fn try_get_data<'a>(
         &self,
-        cache: &InvertedIndexIDFCache,
+        cache: &TFIDFIndexCache,
         dim: u32,
-    ) -> Result<&'a InvertedIndexIDFNodeData, BufIoError> {
+    ) -> Result<&'a TFIDFIndexNodeData, BufIoError> {
         unsafe {
             match &*self.state.load(Ordering::Relaxed) {
                 ProbLazyItemState::Ready(state) => Ok(&state.data),
