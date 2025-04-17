@@ -151,8 +151,6 @@ pub async fn init_hnsw_index_for_collection(
         None => generate_level_probs(factor_levels, hnsw_params.num_layers),
     };
 
-    println!("----- lp = {lp:?}; num_layers = {}", hnsw_params.num_layers);
-
     let hnsw_index = Arc::new(HNSWIndex::new(
         collection_name.clone(),
         root,

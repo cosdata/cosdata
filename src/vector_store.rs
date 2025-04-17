@@ -701,7 +701,6 @@ fn preprocess_embedding(
         // @TODO(vineet): This is hacky
         let num_levels = hnsw_index.levels_prob.len() - 1;
         let plp = pseudo_level_probs(num_levels as u8, replicas.len() as u16);
-        println!("----- pseudo_level_probs = {plp:?}");
         let mut embeddings: Vec<IndexableEmbedding> = vec![];
         let mut is_first_overrideen = false;
         for prop_metadata in replicas {
@@ -713,7 +712,6 @@ fn preprocess_embedding(
             } else {
                 plp.clone()
             };
-            // println!("----- {overridden_level_probs:?}");
             let emb = IndexableEmbedding {
                 prop_value: prop_value.clone(),
                 prop_metadata: Some(Arc::new(prop_metadata)),
@@ -1391,6 +1389,11 @@ fn traverse_find_nearest(
                 }
             };
 
+            // @TODO(vineet): The problem seems to be that neighbor_id
+            // is always the same when indexing pseudo node
+            // replicas. This is because the ids of base node and the
+            // pseudo node are > u32::MAX, whereas neighbor_id is of
+            // type u32. Hence they get truncated to u32::MAX - 1.
             if !skipm.is_member(neighbor_id) {
                 let neighbor_data = unsafe { &*neighbor_node }.try_get_data(&hnsw_index.cache)?;
                 let neighbor_metadata =
