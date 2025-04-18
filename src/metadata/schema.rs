@@ -399,6 +399,21 @@ impl MetadataSchema {
             .find(|field| field.name == name)
             .ok_or(Error::InvalidField(name.to_string()))
     }
+
+    /// Returns the max no. of replica nodes that will be created per
+    /// vector inserted into the index.
+    pub fn max_num_replicas(&self) -> u8 {
+        // Base replica + 1 replica for every field
+        let mut total: u8 = 1 + self.fields.len() as u8;
+        // 1 replica for every 'And' condition
+        for condition in &self.conditions {
+            match condition {
+                SupportedCondition::And(_) => total += 1,
+                SupportedCondition::Or(_) => { },
+            }
+        }
+        total
+    }
 }
 
 pub type MetadataDimensions = Vec<i32>;
@@ -899,5 +914,27 @@ mod tests {
         // [1, 1]
         // [1, 0]
         // [0, 1]
+    }
+
+    #[test]
+    fn test_max_num_replicas() {
+        let age_values: HashSet<FieldValue> = (1..=10).map(FieldValue::Int).collect();
+        let age = MetadataField::new("age".to_owned(), age_values).unwrap();
+        let group_values: HashSet<FieldValue> = vec!["a", "b", "c"]
+            .into_iter()
+            .map(|x| FieldValue::String(String::from(x)))
+            .collect();
+        let group = MetadataField::new("group".to_owned(), group_values).unwrap();
+        let level_values: HashSet<FieldValue> = vec!["first", "second", "third"]
+            .into_iter()
+            .map(|x| FieldValue::String(String::from(x)))
+            .collect();
+        let level = MetadataField::new("level".to_owned(), level_values).unwrap();
+        let conditions = vec![
+            SupportedCondition::And(hashset(vec!["age", "group"])),
+            SupportedCondition::And(hashset(vec!["age", "level"])),
+        ];
+        let schema = MetadataSchema::new(vec![age, group, level], conditions).unwrap();
+        assert_eq!(6, schema.max_num_replicas());
     }
 }
