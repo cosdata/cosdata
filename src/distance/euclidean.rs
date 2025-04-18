@@ -8,7 +8,12 @@ pub struct EuclideanDistance(pub f32);
 
 impl DistanceFunction for EuclideanDistance {
     type Item = Self;
-    fn calculate(&self, x: &VectorData, y: &VectorData) -> Result<Self::Item, DistanceError> {
+    fn calculate(
+        &self,
+        x: &VectorData,
+        y: &VectorData,
+        _is_indexing: bool,
+    ) -> Result<Self::Item, DistanceError> {
         match (x.quantized_vec, y.quantized_vec) {
             (
                 Storage::UnsignedByte {

@@ -30,7 +30,7 @@ use crate::{
         inverted::{data::InvertedIndexData, InvertedIndex},
         tf_idf::{data::TFIDFIndexData, TFIDFIndex},
     },
-    metadata::{schema::MetadataDimensions, QueryFilterDimensions},
+    metadata::{schema::MetadataDimensions, QueryFilterDimensions, HIGH_WEIGHT},
     models::{
         buffered_io::BufIoError, common::*, meta_persist::retrieve_values_range, versioning::*,
     },
@@ -144,16 +144,58 @@ pub struct NodePropMetadata {
 }
 
 #[derive(Debug)]
+pub enum ReplicaNodeKind {
+    Pseudo,
+    Base,
+    Metadata,
+}
+
+#[derive(Debug)]
 pub struct VectorData<'a> {
+    // Vector id (use specified one and not the internal replica
+    // id). It's not being used any where but occasionally useful for
+    // debugging. In case it's a query vector, `id` expected to be
+    // None.
+    pub id: Option<&'a VectorId>,
     pub quantized_vec: &'a Storage,
     pub metadata: Option<&'a Metadata>,
 }
 
 impl<'a> VectorData<'a> {
-    pub fn without_metadata(qvec: &'a Storage) -> Self {
+    pub fn without_metadata(id: Option<&'a VectorId>, qvec: &'a Storage) -> Self {
         Self {
+            id,
             quantized_vec: qvec,
             metadata: None,
+        }
+    }
+
+    pub fn replica_node_kind(&self) -> ReplicaNodeKind {
+        match self.metadata {
+            Some(m) => {
+                if m.mag == 0.0 {
+                    ReplicaNodeKind::Base
+                } else {
+                    match self.id {
+                        Some(id) => {
+                            if id.0 == u64::pow(2, 56) - 1 {
+                                ReplicaNodeKind::Pseudo
+                            } else {
+                                ReplicaNodeKind::Metadata
+                            }
+                        }
+                        None => ReplicaNodeKind::Metadata,
+                    }
+                }
+            }
+            None => ReplicaNodeKind::Base,
+        }
+    }
+
+    pub fn is_pseudo_root(&self) -> bool {
+        match self.metadata {
+            Some(m) => m.mbits == vec![HIGH_WEIGHT; m.mbits.len()],
+            None => false,
         }
     }
 }
@@ -270,22 +312,27 @@ pub enum DistanceMetric {
 
 impl DistanceFunction for DistanceMetric {
     type Item = MetricResult;
-    fn calculate(&self, x: &VectorData, y: &VectorData) -> Result<Self::Item, DistanceError> {
+    fn calculate(
+        &self,
+        x: &VectorData,
+        y: &VectorData,
+        is_indexing: bool,
+    ) -> Result<Self::Item, DistanceError> {
         match self {
             Self::Cosine => {
-                let value = CosineSimilarity(0.0).calculate(x, y)?;
+                let value = CosineSimilarity(0.0).calculate(x, y, is_indexing)?;
                 Ok(MetricResult::CosineSimilarity(value))
             }
             Self::Euclidean => {
-                let value = EuclideanDistance(0.0).calculate(x, y)?;
+                let value = EuclideanDistance(0.0).calculate(x, y, is_indexing)?;
                 Ok(MetricResult::EuclideanDistance(value))
             }
             Self::Hamming => {
-                let value = HammingDistance(0.0).calculate(x, y)?;
+                let value = HammingDistance(0.0).calculate(x, y, is_indexing)?;
                 Ok(MetricResult::HammingDistance(value))
             }
             Self::DotProduct => {
-                let value = DotProductDistance(0.0).calculate(x, y)?;
+                let value = DotProductDistance(0.0).calculate(x, y, is_indexing)?;
                 Ok(MetricResult::DotProductDistance(value))
             }
         }

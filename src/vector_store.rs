@@ -11,8 +11,10 @@ use crate::indexes::hnsw::HNSWIndex;
 use crate::macros::key;
 use crate::metadata;
 use crate::metadata::fields_to_dimensions;
+use crate::metadata::pseudo_level_probs;
 use crate::metadata::MetadataFields;
 use crate::metadata::MetadataSchema;
+use crate::metadata::HIGH_WEIGHT;
 use crate::models::buffered_io::*;
 use crate::models::common::*;
 use crate::models::dot_product::dot_product_f32;
@@ -31,6 +33,7 @@ use crate::storage::Storage;
 use lmdb::Transaction;
 use rand::Rng;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::fs::File;
 use std::ptr;
@@ -50,6 +53,7 @@ pub fn create_root_node(
     values_range: (f32, f32),
     hnsw_params: &HNSWHyperParams,
     distance_metric: DistanceMetric,
+    metadata_schema: Option<&MetadataSchema>,
 ) -> Result<SharedNode, WaCustomError> {
     let vec = (0..dim)
         .map(|_| {
@@ -65,7 +69,6 @@ pub fn create_root_node(
 
     let mut prop_file_guard = prop_file.write().unwrap();
     let location = write_prop_value_to_file(&vec_hash, vector_list.clone(), &mut prop_file_guard)?;
-    drop(prop_file_guard);
 
     let prop_value = Arc::new(NodePropValue {
         id: vec_hash,
@@ -73,7 +76,23 @@ pub fn create_root_node(
         location,
     });
 
-    let prop_metadata = None;
+    let prop_metadata = match metadata_schema {
+        Some(schema) => {
+            let mbits = schema.base_dimensions();
+            let metadata = Arc::new(Metadata { mag: 0.0, mbits });
+            let mid = MetadataId(1);
+            let location =
+                write_prop_metadata_to_file(&mid, metadata.clone(), &mut prop_file_guard)?;
+            Some(Arc::new(NodePropMetadata {
+                id: mid,
+                vec: metadata,
+                location,
+            }))
+        }
+        None => None,
+    };
+
+    drop(prop_file_guard);
 
     let mut root = ProbLazyItem::new(
         ProbNode::new(
@@ -143,8 +162,6 @@ pub fn ann_search(
     });
     skipm.insert(vector_emb.hash_vec.0 as u32);
 
-    let cur_node = unsafe { &*cur_entry }.try_get_data(&hnsw_index.cache)?;
-
     let z = match query_filter_dims {
         Some(qf_dims) => {
             let mut z_candidates: Vec<(SharedNode, MetricResult)> = vec![];
@@ -156,6 +173,7 @@ pub fn ann_search(
                     &hnsw_index,
                     cur_entry,
                     &fvec,
+                    None,
                     Some(&mdims),
                     &mut 0,
                     &mut skipm,
@@ -169,11 +187,11 @@ pub fn ann_search(
                 // (thanks to the `skipm` argument)
                 z_candidates.append(&mut z_with_mdims);
             }
+
             // Sort candidates by distance (asc)
-            z_candidates.sort_by_key(|c| c.1);
+            z_candidates.sort_by_key(|c| Reverse(c.1));
             z_candidates
                 .into_iter()
-                .rev() // Reverse the order (to get descending order)
                 .take(100) // Limit the number of results
                 .collect::<Vec<_>>()
         }
@@ -182,6 +200,7 @@ pub fn ann_search(
             &hnsw_index,
             cur_entry,
             &fvec,
+            None,
             None,
             &mut 0,
             &mut skipm,
@@ -192,6 +211,8 @@ pub fn ann_search(
     };
 
     let mut z = if z.is_empty() {
+        let cur_node = unsafe { &*cur_entry }.try_get_data(&hnsw_index.cache)?;
+        let cur_node_id = &cur_node.prop_value.id;
         let dist = match query_filter_dims {
             // In case of metadata filters in query, we calculate the
             // distances between the cur_node and all query filter
@@ -204,6 +225,7 @@ pub fn ann_search(
             Some(qf_dims) => {
                 let cur_node_metadata = cur_node.prop_metadata.clone().map(|pm| pm.vec.clone());
                 let cur_node_data = VectorData {
+                    id: Some(cur_node_id),
                     quantized_vec: &cur_node.prop_value.vec,
                     metadata: cur_node_metadata.as_deref(),
                 };
@@ -211,26 +233,28 @@ pub fn ann_search(
                 for qfd in qf_dims {
                     let fvec_metadata = Metadata::from(qfd);
                     let fvec_data = VectorData {
+                        id: None,
                         quantized_vec: &fvec,
                         metadata: Some(&fvec_metadata),
                     };
-                    let d = hnsw_index
-                        .distance_metric
-                        .read()
-                        .unwrap()
-                        .calculate(&fvec_data, &cur_node_data)?;
+                    let d = hnsw_index.distance_metric.read().unwrap().calculate(
+                        &fvec_data,
+                        &cur_node_data,
+                        false,
+                    )?;
                     dists.push(d)
                 }
                 dists.into_iter().min().unwrap()
             }
             None => {
-                let fvec_data = VectorData::without_metadata(&fvec);
-                let cur_node_data = VectorData::without_metadata(&cur_node.prop_value.vec);
-                hnsw_index
-                    .distance_metric
-                    .read()
-                    .unwrap()
-                    .calculate(&fvec_data, &cur_node_data)?
+                let fvec_data = VectorData::without_metadata(None, &fvec);
+                let cur_node_data =
+                    VectorData::without_metadata(Some(cur_node_id), &cur_node.prop_value.vec);
+                hnsw_index.distance_metric.read().unwrap().calculate(
+                    &fvec_data,
+                    &cur_node_data,
+                    false,
+                )?
             }
         };
         vec![(cur_entry, dist)]
@@ -440,8 +464,11 @@ pub fn index_embeddings_batch(
             )
         })
         .map(|emb| {
-            let max_level =
-                get_max_insert_level(rand::random::<f32>().into(), &hnsw_index.levels_prob);
+            // @TODO: Calculate max_level accordingly
+            let max_level = match emb.overridden_level_probs {
+                Some(lp) => get_max_insert_level(rand::random::<f32>().into(), &lp),
+                None => get_max_insert_level(rand::random::<f32>().into(), &hnsw_index.levels_prob),
+            };
             let root_entry = hnsw_index.get_root_vec();
             let highest_level = HNSWLevel(hnsw_params.num_layers);
 
@@ -477,6 +504,7 @@ struct IndexableEmbedding {
     prop_value: Arc<NodePropValue>,
     prop_metadata: Option<Arc<NodePropMetadata>>,
     embedding: QuantizedDenseVectorEmbedding,
+    overridden_level_probs: Option<Vec<(f64, u8)>>,
 }
 
 /// Computes "metadata replica sets" i.e. all metadata dimensions
@@ -579,6 +607,41 @@ fn prop_metadata_replicas(
     }
 }
 
+fn pseudo_metadata_replicas(
+    schema: &MetadataSchema,
+    prop_file: &RwLock<File>,
+) -> Result<Vec<NodePropMetadata>, WaCustomError> {
+    let dims = schema.pseudo_weighted_dimensions(HIGH_WEIGHT);
+    let replicas = dims
+        .into_iter()
+        .enumerate()
+        .map(|(i, d)| {
+            let mid = MetadataId(i as u8 + 1);
+            let metadata = Metadata::from(d);
+            (mid, metadata)
+        })
+        .collect::<Vec<(MetadataId, Metadata)>>();
+    // As pseudo_replicas will be created only at the time of index
+    // initialization, it's ok to hold a single rw lock for writing
+    // metadata for all replicas to the prop file
+    let mut prop_file_guard = prop_file.write().map_err(|_| {
+        WaCustomError::LockError("Failed to acquire lock to write prop metadata".to_string())
+    })?;
+    let mut result = Vec::with_capacity(replicas.len());
+    for (mid, m) in replicas {
+        let mvalue = Arc::new(m);
+        let location = write_prop_metadata_to_file(&mid, mvalue.clone(), &mut prop_file_guard)?;
+        let prop_metadata = NodePropMetadata {
+            id: mid,
+            vec: mvalue,
+            location,
+        };
+        result.push(prop_metadata);
+    }
+    drop(prop_file_guard);
+    Ok(result)
+}
+
 /// Converts raw embeddings into `IndexableEmbedding` i.e. ready to be
 /// indexed - with quantization performed and property values and
 /// metadata fields converted into appropriate types.
@@ -629,37 +692,67 @@ fn preprocess_embedding(
         .get_collection(&hnsw_index.name)
         .expect("Couldn't get collection from ain_env");
 
-    let metadata_replicas = prop_metadata_replicas(
-        coll.metadata_schema.as_ref(),
-        raw_emb.raw_metadata.as_ref(),
-        &hnsw_index.cache.prop_file,
-    )
-    .unwrap();
+    let metadata_schema = coll.metadata_schema.as_ref();
+    let prop_file = &hnsw_index.cache.prop_file;
 
-    let mut embeddings: Vec<IndexableEmbedding> = vec![];
-
-    match metadata_replicas {
-        Some(replicas) => {
-            for prop_metadata in replicas {
-                let emb = IndexableEmbedding {
-                    prop_value: prop_value.clone(),
-                    prop_metadata: Some(Arc::new(prop_metadata)),
-                    embedding: embedding.clone(),
-                };
-                embeddings.push(emb);
-            }
-        }
-        None => {
+    // @TODO(vineet): Remove unwraps
+    if raw_emb.is_pseudo {
+        let replicas = pseudo_metadata_replicas(metadata_schema.unwrap(), prop_file).unwrap();
+        // @TODO(vineet): This is hacky
+        let num_levels = hnsw_index.levels_prob.len() - 1;
+        let plp = pseudo_level_probs(num_levels as u8, replicas.len() as u16);
+        let mut embeddings: Vec<IndexableEmbedding> = vec![];
+        let mut is_first_overrideen = false;
+        for prop_metadata in replicas {
+            let overridden_level_probs = if !is_first_overrideen {
+                is_first_overrideen = true;
+                plp.iter()
+                    .map(|(_, lev)| (0.0, *lev))
+                    .collect::<Vec<(f64, u8)>>()
+            } else {
+                plp.clone()
+            };
             let emb = IndexableEmbedding {
-                prop_value,
-                prop_metadata: None,
+                prop_value: prop_value.clone(),
+                prop_metadata: Some(Arc::new(prop_metadata)),
                 embedding: embedding.clone(),
+                overridden_level_probs: Some(overridden_level_probs),
             };
             embeddings.push(emb);
         }
+        embeddings
+    } else {
+        let metadata_replicas = prop_metadata_replicas(
+            coll.metadata_schema.as_ref(),
+            raw_emb.raw_metadata.as_ref(),
+            &hnsw_index.cache.prop_file,
+        )
+        .unwrap();
+        match metadata_replicas {
+            Some(replicas) => {
+                let mut embeddings: Vec<IndexableEmbedding> = vec![];
+                for prop_metadata in replicas {
+                    let emb = IndexableEmbedding {
+                        prop_value: prop_value.clone(),
+                        prop_metadata: Some(Arc::new(prop_metadata)),
+                        embedding: embedding.clone(),
+                        overridden_level_probs: None,
+                    };
+                    embeddings.push(emb);
+                }
+                embeddings
+            }
+            None => {
+                let emb = IndexableEmbedding {
+                    prop_value,
+                    prop_metadata: None,
+                    embedding: embedding.clone(),
+                    overridden_level_probs: None,
+                };
+                vec![emb]
+            }
+        }
     }
-
-    embeddings
 }
 
 pub fn index_embeddings(
@@ -769,6 +862,7 @@ pub fn index_embeddings_in_transaction(
                     hash_vec: id,
                     raw_vec: Arc::new(values),
                     raw_metadata: metadata,
+                    is_pseudo: false,
                 };
                 transaction.post_raw_embedding(raw_emb.clone());
                 raw_emb
@@ -856,6 +950,8 @@ pub fn index_embedding(
     let cur_node = unsafe { &*ProbLazyItem::get_latest_version(cur_entry, &hnsw_index.cache)?.0 }
         .try_get_data(&hnsw_index.cache)?;
 
+    let cur_node_id = &cur_node.prop_value.id;
+
     let mdims = prop_metadata.clone().map(|pm| pm.vec.clone());
 
     let z = traverse_find_nearest(
@@ -863,6 +959,7 @@ pub fn index_embedding(
         hnsw_index,
         cur_entry,
         &fvec,
+        Some(&prop_value.id),
         mdims.as_deref(),
         &mut 0,
         &mut skipm,
@@ -873,19 +970,21 @@ pub fn index_embedding(
 
     let z = if z.is_empty() {
         let fvec_data = VectorData {
+            id: None,
             quantized_vec: &fvec,
             metadata: mdims.as_deref(),
         };
         let cur_node_metadata = cur_node.prop_metadata.clone().map(|pm| pm.vec.clone());
         let cur_node_data = VectorData {
+            id: Some(cur_node_id),
             quantized_vec: &cur_node.prop_value.vec,
             metadata: cur_node_metadata.as_deref(),
         };
-        let dist = hnsw_index
-            .distance_metric
-            .read()
-            .unwrap()
-            .calculate(&fvec_data, &cur_node_data)?;
+        let dist = hnsw_index.distance_metric.read().unwrap().calculate(
+            &fvec_data,
+            &cur_node_data,
+            true,
+        )?;
         vec![(cur_entry, dist)]
     } else {
         z
@@ -1233,6 +1332,7 @@ fn traverse_find_nearest(
     hnsw_index: &HNSWIndex,
     start_node: SharedNode,
     fvec: &Storage,
+    fvec_id: Option<&VectorId>,
     mdims: Option<&Metadata>,
     nodes_visited: &mut u32,
     skipm: &mut PerformantFixedSet,
@@ -1247,16 +1347,18 @@ fn traverse_find_nearest(
     let start_data = unsafe { &*start_version }.try_get_data(&hnsw_index.cache)?;
 
     let fvec_data = VectorData {
+        id: fvec_id,
         quantized_vec: fvec,
         metadata: mdims,
     };
 
     let start_metadata = start_data.prop_metadata.clone().map(|pm| pm.vec.clone());
     let start_vec_data = VectorData {
+        id: Some(&start_data.prop_value.id),
         quantized_vec: &start_data.prop_value.vec,
         metadata: start_metadata.as_deref(),
     };
-    let start_dist = distance_metric.calculate(&fvec_data, &start_vec_data)?;
+    let start_dist = distance_metric.calculate(&fvec_data, &start_vec_data, is_indexing)?;
 
     let start_id = start_data.get_id().0 as u32;
     skipm.insert(start_id);
@@ -1287,15 +1389,22 @@ fn traverse_find_nearest(
                 }
             };
 
+            // @TODO(vineet): The problem seems to be that neighbor_id
+            // is always the same when indexing pseudo node
+            // replicas. This is because the ids of base node and the
+            // pseudo node are > u32::MAX, whereas neighbor_id is of
+            // type u32. Hence they get truncated to u32::MAX - 1.
             if !skipm.is_member(neighbor_id) {
                 let neighbor_data = unsafe { &*neighbor_node }.try_get_data(&hnsw_index.cache)?;
                 let neighbor_metadata =
                     neighbor_data.prop_metadata.clone().map(|pm| pm.vec.clone());
                 let neighbor_vec_data = VectorData {
+                    id: Some(&neighbor_data.prop_value.id),
                     quantized_vec: &neighbor_data.prop_value.vec,
                     metadata: neighbor_metadata.as_deref(),
                 };
-                let dist = distance_metric.calculate(&fvec_data, &neighbor_vec_data)?;
+                let dist =
+                    distance_metric.calculate(&fvec_data, &neighbor_vec_data, is_indexing)?;
                 skipm.insert(neighbor_id);
                 candidate_queue.push((dist, neighbor_node));
             }
@@ -1303,6 +1412,7 @@ fn traverse_find_nearest(
     }
 
     let final_len = if is_indexing { 64 } else { 100 };
+
     if results.len() > final_len {
         results.select_nth_unstable_by(final_len, |(a, _), (b, _)| b.cmp(a));
         results.truncate(final_len);

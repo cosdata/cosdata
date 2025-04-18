@@ -7,7 +7,7 @@ use crate::{
             dot_product_binary, dot_product_f16, dot_product_f32, dot_product_octal,
             dot_product_quaternary, dot_product_u8,
         },
-        types::VectorData,
+        types::{Metadata, ReplicaNodeKind, VectorData},
     },
     storage::Storage,
 };
@@ -17,7 +17,12 @@ pub struct CosineDistance(pub f32);
 
 impl DistanceFunction for CosineDistance {
     type Item = Self;
-    fn calculate(&self, _x: &VectorData, _y: &VectorData) -> Result<Self::Item, DistanceError> {
+    fn calculate(
+        &self,
+        _x: &VectorData,
+        _y: &VectorData,
+        _is_indexing: bool,
+    ) -> Result<Self::Item, DistanceError> {
         // TODO: Implement cosine distance
         unimplemented!("Cosine distance is not implemented yet");
     }
@@ -28,24 +33,80 @@ pub struct CosineSimilarity(pub f32);
 
 impl DistanceFunction for CosineSimilarity {
     type Item = Self;
-    fn calculate(&self, x: &VectorData, y: &VectorData) -> Result<Self::Item, DistanceError> {
-        // Here we're adding metadata fields for both vectors into a
-        // single tuple inside an Option that serves two purposes -
-        // 1. makes it easy to test if both vectors contain metadata
-        //    multiple times
-        // 2. allows dot product to be computed only once
-        let metadata = match (x.metadata, y.metadata) {
-            (Some(x_metadata), Some(y_metadata)) => {
-                if x_metadata.mag == 0.0 || y_metadata.mag == 0.0 {
-                    None
+    fn calculate(
+        &self,
+        x: &VectorData,
+        y: &VectorData,
+        // @TODO(vineet): Check if is_index can be removed now
+        _is_indexing: bool,
+    ) -> Result<Self::Item, DistanceError> {
+        let x_kind = x.replica_node_kind();
+        let y_kind = y.replica_node_kind();
+        let sim = match (y_kind, x_kind) {
+            (ReplicaNodeKind::Pseudo, ReplicaNodeKind::Pseudo) => {
+                // When matching two pseudo nodes, it's sufficient to
+                // consider the metadata dimensions
+                cosine_similarity_mdims(x.metadata.unwrap(), y.metadata.unwrap())?
+            }
+            (ReplicaNodeKind::Pseudo, ReplicaNodeKind::Base) => {
+                // A base node should never match an existing pseudo
+                // node
+                CosineSimilarity(0.0)
+            }
+            (ReplicaNodeKind::Pseudo, ReplicaNodeKind::Metadata) => {
+                let x_metadata = x.metadata.unwrap();
+                let y_metadata = y.metadata.unwrap();
+                // A metadata node should strongly match a pseudo node
+                // for the same combination (i.e. if metadata dims
+                // match exactly).
+                if x_metadata.mbits == y_metadata.mbits {
+                    CosineSimilarity(1.0)
                 } else {
-                    // @NOTE: Here we are casting i32 to f32, which means
-                    // truncation is possible, but it's not a concern in
-                    // this case because metadata dims will either be 0,
-                    // -1, 1 (query filter encoding) or high weight values
-                    // (we need to make sure it's high enough to be
-                    // effective but wouldn't result in truncation if
-                    // casted to f32)
+                    // Otherwise it should strongly mismatch.
+                    CosineSimilarity(0.0)
+                }
+            }
+            (ReplicaNodeKind::Base, ReplicaNodeKind::Pseudo) => {
+                // Safe use of unwrap as all nodes including the root
+                // node are expected to have metadata dimensions if
+                // metadata filtering is supported (because pseudo
+                // nodes exist only in that case)
+                let x_metadata = x.metadata.unwrap();
+                let y_metadata = y.metadata.unwrap();
+                let x_mdims = x_metadata
+                    .mbits
+                    .iter()
+                    .map(|i| *i as f32)
+                    .collect::<Vec<f32>>();
+                let y_mdims = y_metadata
+                    .mbits
+                    .iter()
+                    .map(|i| *i as f32)
+                    .collect::<Vec<f32>>();
+                let m_dot_product: f32 = dot_product_f32(&x_mdims, &y_mdims);
+                cosine_similarity(
+                    x.quantized_vec,
+                    y.quantized_vec,
+                    Some((x_metadata.mag, y_metadata.mag, m_dot_product)),
+                )?
+            }
+            (ReplicaNodeKind::Base, ReplicaNodeKind::Base) => {
+                cosine_similarity(x.quantized_vec, y.quantized_vec, None)?
+            }
+            (ReplicaNodeKind::Metadata, ReplicaNodeKind::Metadata) => {
+                // Safe use of unwrap as metadata nodes will
+                // definitely have metadata dimensions
+                let x_metadata = x.metadata.unwrap();
+                let y_metadata = y.metadata.unwrap();
+                // If the metadata dims match exactly, it's sufficient
+                // to calculate similarity for the quantized vector
+                // values.
+                if x_metadata.mbits == y_metadata.mbits {
+                    cosine_similarity(x.quantized_vec, y.quantized_vec, None)?
+                } else {
+                    // Otherwise, we calculate the combined cosine
+                    // similarity for both quantized values and
+                    // metadata dims.
                     let x_mdims = x_metadata
                         .mbits
                         .iter()
@@ -57,139 +118,147 @@ impl DistanceFunction for CosineSimilarity {
                         .map(|i| *i as f32)
                         .collect::<Vec<f32>>();
                     let m_dot_product: f32 = dot_product_f32(&x_mdims, &y_mdims);
-                    Some((x_metadata.mag, y_metadata.mag, m_dot_product))
+                    cosine_similarity(
+                        x.quantized_vec,
+                        y.quantized_vec,
+                        Some((x_metadata.mag, y_metadata.mag, m_dot_product)),
+                    )?
                 }
             }
-            _ => None,
+            (ReplicaNodeKind::Base, ReplicaNodeKind::Metadata) => CosineSimilarity(0.0),
+            (ReplicaNodeKind::Metadata, ReplicaNodeKind::Pseudo) => {
+                // This case is not possible
+                unreachable!()
+            }
+            (ReplicaNodeKind::Metadata, ReplicaNodeKind::Base) => {
+                // @TODO(vineet): This case is actually shouldn't be
+                // possible. Check why it's happening.
+                CosineSimilarity(0.0)
+            }
         };
-
-        // If metadata exists in both vectors, we first compute cosine
-        // similarity for metadata dimensions. Only if the metadata
-        // similarity is ~1 (consider a small epsilon for floating
-        // point rounding), compute full similarity.
-        if let Some((x_mag, y_mag, m_dot_product)) = &metadata {
-            let m_cos_sim = cosine_similarity_from_dot_product(*m_dot_product, *x_mag, *y_mag)?;
-            let threshold: f32 = 0.99;
-            if m_cos_sim.0 < threshold {
-                // Not close enough to 1, so return
-                // CosineSimilarity of 0 as we don't want the
-                // vectors to match
-                return Ok(CosineSimilarity(0.0));
-            }
-        }
-
-        // Only if metadata vectors are close enough, we compute total
-        // cosine similarity
-        match (x.quantized_vec, y.quantized_vec) {
-            (
-                Storage::UnsignedByte {
-                    mag: x_mag,
-                    quant_vec: x_vec,
-                },
-                Storage::UnsignedByte {
-                    mag: y_mag,
-                    quant_vec: y_vec,
-                },
-            ) => {
-                let dot_product = dot_product_u8(x_vec, y_vec) as f32;
-                match &metadata {
-                    Some((x_mmag, y_mmag, m_dot_product)) => cosine_similarity_with_metadata(
-                        dot_product,
-                        *m_dot_product,
-                        *x_mag,
-                        *x_mmag,
-                        *y_mag,
-                        *y_mmag,
-                    ),
-                    _ => cosine_similarity_from_dot_product(dot_product, *x_mag, *y_mag),
-                }
-            }
-            (
-                Storage::SubByte {
-                    mag: x_mag,
-                    quant_vec: x_vec,
-                    resolution: x_res,
-                },
-                Storage::SubByte {
-                    mag: y_mag,
-                    quant_vec: y_vec,
-                    resolution: y_res,
-                },
-            ) => {
-                if x_res != y_res {
-                    return Err(DistanceError::StorageMismatch);
-                }
-                let dot_product = match *x_res {
-                    1 => dot_product_binary(x_vec, y_vec, *x_res),
-                    2 => dot_product_quaternary(x_vec, y_vec, *x_res),
-                    3 => dot_product_octal(x_vec, y_vec, *x_res),
-                    _ => {
-                        return Err(DistanceError::CalculationError);
-                    }
-                };
-                match &metadata {
-                    Some((x_mmag, y_mmag, m_dot_product)) => cosine_similarity_with_metadata(
-                        dot_product,
-                        *m_dot_product,
-                        *x_mag,
-                        *x_mmag,
-                        *y_mag,
-                        *y_mmag,
-                    ),
-                    _ => cosine_similarity_from_dot_product(dot_product, *x_mag, *y_mag),
-                }
-            }
-            (
-                Storage::HalfPrecisionFP {
-                    mag: x_mag,
-                    quant_vec: x_vec,
-                },
-                Storage::HalfPrecisionFP {
-                    mag: y_mag,
-                    quant_vec: y_vec,
-                },
-            ) => {
-                let dot_product = dot_product_f16(x_vec, y_vec);
-                match &metadata {
-                    Some((x_mmag, y_mmag, m_dot_product)) => cosine_similarity_with_metadata(
-                        dot_product,
-                        *m_dot_product,
-                        *x_mag,
-                        *x_mmag,
-                        *y_mag,
-                        *y_mmag,
-                    ),
-                    _ => cosine_similarity_from_dot_product(dot_product, *x_mag, *y_mag),
-                }
-            }
-            (
-                Storage::FullPrecisionFP {
-                    mag: x_mag,
-                    vec: x_vec,
-                },
-                Storage::FullPrecisionFP {
-                    mag: y_mag,
-                    vec: y_vec,
-                },
-            ) => {
-                let dot_product = dot_product_f32(x_vec, y_vec);
-                match &metadata {
-                    Some((x_mmag, y_mmag, m_dot_product)) => cosine_similarity_with_metadata(
-                        dot_product,
-                        *m_dot_product,
-                        *x_mag,
-                        *x_mmag,
-                        *y_mag,
-                        *y_mmag,
-                    ),
-                    _ => cosine_similarity_from_dot_product(dot_product, *x_mag, *y_mag),
-                }
-            }
-            _ => Err(DistanceError::StorageMismatch),
-        }
+        Ok(sim)
     }
 }
 
+fn cosine_similarity(
+    x_quantized: &Storage,
+    y_quantized: &Storage,
+    m_dot_product: Option<(f32, f32, f32)>,
+) -> Result<CosineSimilarity, DistanceError> {
+    match (x_quantized, y_quantized) {
+        (
+            Storage::UnsignedByte {
+                mag: x_mag,
+                quant_vec: x_vec,
+            },
+            Storage::UnsignedByte {
+                mag: y_mag,
+                quant_vec: y_vec,
+            },
+        ) => {
+            let dot_product = dot_product_u8(x_vec, y_vec) as f32;
+            match &m_dot_product {
+                Some((x_mmag, y_mmag, m_dot_product)) => cosine_similarity_with_metadata(
+                    dot_product,
+                    *m_dot_product,
+                    *x_mag,
+                    *x_mmag,
+                    *y_mag,
+                    *y_mmag,
+                ),
+                _ => cosine_similarity_from_dot_product(dot_product, *x_mag, *y_mag),
+            }
+        }
+        (
+            Storage::SubByte {
+                mag: x_mag,
+                quant_vec: x_vec,
+                resolution: x_res,
+            },
+            Storage::SubByte {
+                mag: y_mag,
+                quant_vec: y_vec,
+                resolution: y_res,
+            },
+        ) => {
+            if x_res != y_res {
+                return Err(DistanceError::StorageMismatch);
+            }
+            let dot_product = match *x_res {
+                1 => dot_product_binary(x_vec, y_vec, *x_res),
+                2 => dot_product_quaternary(x_vec, y_vec, *x_res),
+                3 => dot_product_octal(x_vec, y_vec, *x_res),
+                _ => {
+                    return Err(DistanceError::CalculationError);
+                }
+            };
+            match &m_dot_product {
+                Some((x_mmag, y_mmag, m_dot_product)) => cosine_similarity_with_metadata(
+                    dot_product,
+                    *m_dot_product,
+                    *x_mag,
+                    *x_mmag,
+                    *y_mag,
+                    *y_mmag,
+                ),
+                _ => cosine_similarity_from_dot_product(dot_product, *x_mag, *y_mag),
+            }
+        }
+        (
+            Storage::HalfPrecisionFP {
+                mag: x_mag,
+                quant_vec: x_vec,
+            },
+            Storage::HalfPrecisionFP {
+                mag: y_mag,
+                quant_vec: y_vec,
+            },
+        ) => {
+            let dot_product = dot_product_f16(x_vec, y_vec);
+            match &m_dot_product {
+                Some((x_mmag, y_mmag, m_dot_product)) => cosine_similarity_with_metadata(
+                    dot_product,
+                    *m_dot_product,
+                    *x_mag,
+                    *x_mmag,
+                    *y_mag,
+                    *y_mmag,
+                ),
+                _ => cosine_similarity_from_dot_product(dot_product, *x_mag, *y_mag),
+            }
+        }
+        (
+            Storage::FullPrecisionFP {
+                mag: x_mag,
+                vec: x_vec,
+            },
+            Storage::FullPrecisionFP {
+                mag: y_mag,
+                vec: y_vec,
+            },
+        ) => {
+            let dot_product = dot_product_f32(x_vec, y_vec);
+            match &m_dot_product {
+                Some((x_mmag, y_mmag, m_dot_product)) => cosine_similarity_with_metadata(
+                    dot_product,
+                    *m_dot_product,
+                    *x_mag,
+                    *x_mmag,
+                    *y_mag,
+                    *y_mmag,
+                ),
+                _ => cosine_similarity_from_dot_product(dot_product, *x_mag, *y_mag),
+            }
+        }
+        _ => Err(DistanceError::StorageMismatch),
+    }
+}
+
+// Calculates cosine similarity given dot product of the two vectors
+// and the individual maginitudes
+//
+// Returns `DistanceError` if either magnitude is 0, causes their
+// product (denominator) to be 0.
 fn cosine_similarity_from_dot_product(
     dot_product: f32,
     x_mag: f32,
@@ -202,6 +271,30 @@ fn cosine_similarity_from_dot_product(
     } else {
         Ok(CosineSimilarity(dot_product / denominator))
     }
+}
+
+// Calculates cosine similarity for metadata dimensions only
+//
+// Returns `DistanceError` if either maginitudes are equal to 0. This
+// means, care must be taken to ensure that this function is not used
+// when either of the vector is a base vector (having all 0 metadata
+// dims)
+fn cosine_similarity_mdims(
+    x_metadata: &Metadata,
+    y_metadata: &Metadata,
+) -> Result<CosineSimilarity, DistanceError> {
+    let x_mdims = x_metadata
+        .mbits
+        .iter()
+        .map(|i| *i as f32)
+        .collect::<Vec<f32>>();
+    let y_mdims = y_metadata
+        .mbits
+        .iter()
+        .map(|i| *i as f32)
+        .collect::<Vec<f32>>();
+    let m_dot_product: f32 = dot_product_f32(&x_mdims, &y_mdims);
+    cosine_similarity_from_dot_product(m_dot_product, x_metadata.mag, y_metadata.mag)
 }
 
 /// Calculates cosine similarity when vector data contains metadata

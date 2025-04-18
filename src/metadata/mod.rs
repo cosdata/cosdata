@@ -13,7 +13,9 @@ pub mod schema;
 pub use query_filtering::{Filter, Operator, Predicate, QueryFilterDimensions};
 pub use schema::MetadataSchema;
 
-const HIGH_WEIGHT: i32 = 64000;
+use crate::models::common::generate_level_probs;
+
+pub const HIGH_WEIGHT: i32 = 1;
 
 #[derive(Debug, Clone)]
 pub enum Error {
@@ -136,8 +138,77 @@ pub fn fields_to_dimensions(
     Ok(result)
 }
 
+fn gen_combinations(vs: &Vec<Vec<u16>>) -> Vec<Vec<u16>> {
+    if vs.is_empty() {
+        return vec![];
+    }
+    // Start with a single empty combination
+    let mut combinations = vec![Vec::new()];
+    // For each vector in the input
+    for v in vs {
+        // Create new combinations by extending each existing combination
+        // with each element from the current vector
+        let mut new_combinations = Vec::new();
+        for combination in combinations {
+            for item in v {
+                // Create a new combination by cloning the existing
+                // one and adding the new item
+                let mut new_combination = combination.clone();
+                new_combination.push(*item);
+                new_combinations.push(new_combination);
+            }
+        }
+        // Replace the old combinations with the new ones
+        combinations = new_combinations;
+    }
+    combinations
+}
+
+/// Calculates level probs for pseudo replica nodes that are added at
+/// the time of index creation for collections that have metadata
+/// schema.
+///
+/// Similar to the `generate_level_probs` fn, the `num_levels` arg
+/// represents no. of HNSW levels, hence the result includes an
+/// additional level 0.
+///
+/// The caller must ensure that `num_pseudo_nodes` is not equal to 0,
+/// otherwise this fn will panic.
+pub fn pseudo_level_probs(num_levels: u8, num_pseudo_nodes: u16) -> Vec<(f64, u8)> {
+    // @NOTE: It's ok to case u32 to u8 below as log to the base 10 of
+    // u16::MAX is only 4.
+    let mut num_higher_levels = (num_pseudo_nodes.ilog10() + 1) as u8;
+    // Find lower levels, handling the case where `num_higher_levels`
+    // happens to be greater than `num_levels`. In that case, all
+    // levels are considered lower.
+    let diff = num_levels.overflowing_sub(num_higher_levels);
+    let num_lower_levels = match diff {
+        (d, false) => d,
+        (_, true) => {
+            num_higher_levels = 0;
+            num_levels
+        }
+    };
+    let mut result = Vec::with_capacity(num_levels as usize);
+    if num_higher_levels > 0 {
+        let higher_probs = generate_level_probs(10.0, num_higher_levels);
+        for (prob, level) in higher_probs {
+            if level == 0 {
+                continue;
+            }
+            result.push((prob, num_lower_levels + level));
+        }
+    }
+    for i in (0..=num_lower_levels).rev() {
+        result.push((0.0, i));
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
+
+    use std::collections::HashSet;
 
     use super::*;
 
@@ -155,5 +226,58 @@ mod tests {
     fn test_decimal_to_binary_vec() {
         assert_eq!(vec![0, 1, 1, 1], decimal_to_binary_vec(7, 4));
         assert_eq!(vec![0, 0, 1, 1], decimal_to_binary_vec(3, 4));
+    }
+
+    #[test]
+    fn test_gen_combinations() {
+        let vs = vec![vec![1, 2, 3], vec![4, 5]];
+        let cs = gen_combinations(&vs)
+            .into_iter()
+            .collect::<HashSet<Vec<u16>>>();
+        let expected: Vec<Vec<u16>> = vec![
+            vec![1, 4],
+            vec![1, 5],
+            vec![2, 4],
+            vec![2, 5],
+            vec![3, 4],
+            vec![3, 5],
+        ];
+        let e = expected.into_iter().collect::<HashSet<Vec<u16>>>();
+        assert_eq!(e, cs);
+
+        let vs = vec![vec![0], vec![1, 2], vec![4, 5]];
+        let cs = gen_combinations(&vs)
+            .into_iter()
+            .collect::<HashSet<Vec<u16>>>();
+        let expected: Vec<Vec<u16>> =
+            vec![vec![0, 1, 4], vec![0, 1, 5], vec![0, 2, 4], vec![0, 2, 5]];
+        let e = expected.into_iter().collect::<HashSet<Vec<u16>>>();
+        assert_eq!(e, cs);
+
+        let vs = vec![vec![0], vec![0], vec![4, 5]];
+        let cs = gen_combinations(&vs)
+            .into_iter()
+            .collect::<HashSet<Vec<u16>>>();
+        let expected: Vec<Vec<u16>> = vec![vec![0, 0, 4], vec![0, 0, 5]];
+        let e = expected.into_iter().collect::<HashSet<Vec<u16>>>();
+        assert_eq!(e, cs);
+    }
+
+    #[test]
+    fn test_pseudo_level_probs() {
+        let lp = pseudo_level_probs(9, 128);
+        let expected = vec![
+            (0.999, 9),
+            (0.99, 8),
+            (0.9, 7),
+            (0.0, 6),
+            (0.0, 5),
+            (0.0, 4),
+            (0.0, 3),
+            (0.0, 2),
+            (0.0, 1),
+            (0.0, 0),
+        ];
+        assert_eq!(expected, lp);
     }
 }

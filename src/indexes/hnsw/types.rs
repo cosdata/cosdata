@@ -29,6 +29,35 @@ impl HNSWHyperParams {
     }
 }
 
+/// A representation of vector that can be passed as input to the
+/// functions that insert and index vectors in the collection
+pub struct DenseInputVector {
+    id: VectorId,
+    vec: Vec<f32>,
+    metadata_fields: Option<MetadataFields>,
+    pub is_pseudo: bool,
+}
+
+impl DenseInputVector {
+    pub fn new(id: VectorId, vec: Vec<f32>, metadata_fields: Option<MetadataFields>) -> Self {
+        Self {
+            id,
+            vec,
+            metadata_fields,
+            is_pseudo: false,
+        }
+    }
+
+    pub fn pseudo(id: VectorId, vec: Vec<f32>, metadata_fields: Option<MetadataFields>) -> Self {
+        Self {
+            id,
+            vec,
+            metadata_fields,
+            is_pseudo: true,
+        }
+    }
+}
+
 // Quantized vector embedding
 #[derive(Debug, Clone, PartialEq)]
 pub struct QuantizedDenseVectorEmbedding {
@@ -42,4 +71,16 @@ pub struct RawDenseVectorEmbedding {
     pub raw_vec: Arc<Vec<f32>>,
     pub hash_vec: VectorId,
     pub raw_metadata: Option<MetadataFields>,
+    pub is_pseudo: bool,
+}
+
+impl From<DenseInputVector> for RawDenseVectorEmbedding {
+    fn from(source: DenseInputVector) -> Self {
+        Self {
+            raw_vec: Arc::new(source.vec),
+            hash_vec: source.id,
+            raw_metadata: source.metadata_fields,
+            is_pseudo: source.is_pseudo,
+        }
+    }
 }

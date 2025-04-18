@@ -11,7 +11,12 @@ impl DistanceFunction for HammingDistance {
 
     // Implementation here
     #[allow(unused_variables)]
-    fn calculate(&self, x: &VectorData, y: &VectorData) -> Result<Self::Item, DistanceError> {
+    fn calculate(
+        &self,
+        x: &VectorData,
+        y: &VectorData,
+        _is_indexing: bool,
+    ) -> Result<Self::Item, DistanceError> {
         match (x.quantized_vec, y.quantized_vec) {
             (
                 Storage::UnsignedByte {
