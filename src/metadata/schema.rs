@@ -209,17 +209,6 @@ impl MetadataSchema {
                 }
             }
         }
-        // Add a combination for all fields in the schema. This is
-        // equivalent to a condition And(<all fields>). Even thought
-        // it's named 'all_fields_combination', we only consider the
-        // fields that are present in the input.
-        //
-        // Note that it's possible that this combination has already
-        // been considered before, but it will get deduped when
-        // inserting into the HashSet of combinations.
-        let mut all_fields_combination = input_fields_set.iter().copied().collect::<Vec<&str>>();
-        all_fields_combination.sort();
-        combinations.insert(all_fields_combination);
 
         let mut result = vec![];
         for combination in combinations {
@@ -413,25 +402,6 @@ impl MetadataSchema {
 }
 
 pub type MetadataDimensions = Vec<i32>;
-
-// Functionality to be implemented
-//
-// 1. Json representation of MetadataSchema
-//
-// 2. Deserializing from Json
-//
-// 3. Binary representation of MetadataScheme to store in lmdb (bincode?)
-//
-// 4. Serializing to the above binary representation
-//
-// 5. [✓] Validation of MetadataSchema to ensure that `conditions` vector
-//    contains valid fields
-//
-// 6. [✓] Converting MetadataSchema to `MetadataDimensions` base
-//    vector (without high weight values)
-//
-// 7. [✓] Given `MetadataSchema` and metadata names + values, create
-//    `MetadataDimensions` with high weight values
 
 #[cfg(test)]
 mod tests {
@@ -628,24 +598,20 @@ mod tests {
         //
         //   1. matches "b"
         //   2. matches "c"
-        //   3. matches "b AND c"
         let fs = ifc_input(vec![("b", 3), ("c", 2)]);
         let mut cs = schema.input_field_combinations(&fs);
         // To make the order of returned combinations deterministic,
         // sort them by sum of the field values.
         ifc_sort_result(&mut cs);
-        assert_eq!(3, cs.len());
+        assert_eq!(2, cs.len());
         let mut ec1 = HashMap::with_capacity(1);
         ec1.insert("c", &FieldValue::Int(2));
         let mut ec2 = HashMap::with_capacity(1);
         ec2.insert("b", &FieldValue::Int(3));
-        let mut ec3 = HashMap::with_capacity(2);
-        ec3.insert("b", &FieldValue::Int(3));
-        ec3.insert("c", &FieldValue::Int(2));
-        assert_eq!(vec![ec1, ec2, ec3], cs);
+        assert_eq!(vec![ec1, ec2], cs);
 
         // Test case 4: The input contains all 3 fields. So
-        // considering the supported conditions, 6 combinations or
+        // considering the supported conditions, 5 combinations or
         // replicas are relevant to this vector
         //
         //   1. matches "a"
@@ -653,13 +619,12 @@ mod tests {
         //   3. matches "c"
         //   4. matches "a AND b"
         //   5. to match "a AND c"
-        //   6. all fields replica
         let fs = ifc_input(vec![("a", 4), ("b", 5), ("c", 6)]);
         let mut cs = schema.input_field_combinations(&fs);
         // To make the order of returned combinations deterministic,
         // sort them by sum of the field values.
         ifc_sort_result(&mut cs);
-        assert_eq!(6, cs.len());
+        assert_eq!(5, cs.len());
 
         let mut ec1 = HashMap::new();
         ec1.insert("a", &FieldValue::Int(4));
@@ -678,12 +643,7 @@ mod tests {
         ec5.insert("a", &FieldValue::Int(4));
         ec5.insert("c", &FieldValue::Int(6));
 
-        let mut ec6 = HashMap::new();
-        ec6.insert("a", &FieldValue::Int(4));
-        ec6.insert("b", &FieldValue::Int(5));
-        ec6.insert("c", &FieldValue::Int(6));
-
-        assert_eq!(vec![ec1, ec2, ec3, ec4, ec5, ec6], cs);
+        assert_eq!(vec![ec1, ec2, ec3, ec4, ec5], cs);
 
         // Test case 5: When the input contains no fields
         let fs = HashMap::new();
@@ -819,12 +779,6 @@ mod tests {
             vec![
                 0, 1024, 0, 1024, // 5 (original value: 5)
                 0, 0, // no high weights
-                1024, 1024, // 3 (original value: third)
-            ],
-            // all fields dimensions to support OR queries
-            vec![
-                0, 1024, 0, 1024, // 5 (original value: 5)
-                0, 1024, // 0 (original value: a)
                 1024, 1024, // 3 (original value: third)
             ],
         ];
