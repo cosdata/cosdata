@@ -23,6 +23,23 @@ impl SupportedCondition {
             Self::Or(s) => s.iter().map(|x| x.as_ref()).collect(),
         }
     }
+
+    /// Returns a tuple that can be used to compare instances of
+    /// this struct.
+    ///
+    /// This is done because this struct uses HashSet, so it can't
+    /// derive from the Hash trait. The use case for comparing
+    /// `SupportedCondition` instances is rare, so `BTreeSet` seems to
+    /// be an overkill.
+    fn comparable_encoding(&self) -> (&str, Vec<&str>) {
+        let mut field_names = self.field_names().into_iter().collect::<Vec<&str>>();
+        field_names.sort();
+        let kind = match self {
+            Self::And(_) => "and",
+            Self::Or(_) => "or",
+        };
+        (kind, field_names)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,6 +138,9 @@ impl MetadataSchema {
     /// Also checks that the MetadataSchema is valid i.e. the field
     /// names in `conditions` are subset of field names defined in the
     /// schema
+    ///
+    /// In case there duplicate conditions are specified, it takes
+    /// care of deduplicating them.
     pub fn new(
         fields: Vec<MetadataField>,
         conditions: Vec<SupportedCondition>,
@@ -129,14 +149,24 @@ impl MetadataSchema {
             .iter()
             .map(|f| f.name.as_ref())
             .collect::<HashSet<&str>>();
-        let conditions_are_valid = conditions
-            .iter()
-            .all(|c| c.field_names().is_subset(&field_names));
-        if conditions_are_valid {
-            Ok(Self { fields, conditions })
-        } else {
-            Err(Error::InvalidMetadataSchema)
+
+        let mut encoded_conds: HashSet<(&str, Vec<&str>)> = HashSet::new();
+        let mut deduped_conditions = vec![];
+        for condition in &conditions {
+            if !condition.field_names().is_subset(&field_names) {
+                return Err(Error::InvalidMetadataSchema);
+            }
+            let cond_enc = condition.comparable_encoding();
+            if !encoded_conds.contains(&cond_enc) {
+                deduped_conditions.push(condition.clone());
+            }
+            encoded_conds.insert(cond_enc);
         }
+
+        Ok(Self {
+            fields,
+            conditions: deduped_conditions,
+        })
     }
 
     pub fn num_total_dims(&self) -> u8 {
@@ -409,7 +439,7 @@ impl MetadataSchema {
         for condition in &self.conditions {
             match condition {
                 SupportedCondition::And(_) => total += 1,
-                SupportedCondition::Or(_) => { },
+                SupportedCondition::Or(_) => {}
             }
         }
         total
@@ -516,7 +546,7 @@ mod tests {
     }
 
     #[test]
-    fn test_metadata_schema_new_invalid() {
+    fn test_metadata_schema_new_invalid_fields_in_conds() {
         let age_values: HashSet<FieldValue> = (1..=10).map(FieldValue::Int).collect();
         let age = MetadataField::new("age".to_owned(), age_values).unwrap();
         let conditions = vec![SupportedCondition::And(
@@ -526,6 +556,25 @@ mod tests {
             Err(Error::InvalidMetadataSchema) => {}
             _ => panic!(),
         }
+    }
+
+    #[test]
+    fn test_metadata_schema_new_duplicate_conds() {
+        let age_values: HashSet<FieldValue> = (1..=10).map(FieldValue::Int).collect();
+        let age = MetadataField::new("age".to_owned(), age_values).unwrap();
+        let group_values: HashSet<FieldValue> = vec!["a", "b", "c"]
+            .into_iter()
+            .map(|x| FieldValue::String(String::from(x)))
+            .collect();
+        let group = MetadataField::new("group".to_owned(), group_values).unwrap();
+        let conditions = vec![
+            SupportedCondition::And(vec!["age", "group"].into_iter().map(String::from).collect()),
+            SupportedCondition::Or(vec!["age", "group"].into_iter().map(String::from).collect()),
+            SupportedCondition::And(vec!["age", "group"].into_iter().map(String::from).collect()),
+        ];
+        let schema = MetadataSchema::new(vec![age, group], conditions).unwrap();
+        // Assert that conditions are deduplicated
+        assert_eq!(2, schema.conditions.len());
     }
 
     // Following fns that are prefixed with `ifc_` are test util for
