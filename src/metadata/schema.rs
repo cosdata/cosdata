@@ -23,6 +23,23 @@ impl SupportedCondition {
             Self::Or(s) => s.iter().map(|x| x.as_ref()).collect(),
         }
     }
+
+    /// Returns a tuple that can be used to compare instances of
+    /// this struct.
+    ///
+    /// This is done because this struct uses HashSet, so it can't
+    /// derive from the Hash trait. The use case for comparing
+    /// `SupportedCondition` instances is rare, so `BTreeSet` seems to
+    /// be an overkill.
+    fn comparable_encoding(&self) -> (&str, Vec<&str>) {
+        let mut field_names = self.field_names().into_iter().collect::<Vec<&str>>();
+        field_names.sort();
+        let kind = match self {
+            Self::And(_) => "and",
+            Self::Or(_) => "or",
+        };
+        (kind, field_names)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,6 +138,9 @@ impl MetadataSchema {
     /// Also checks that the MetadataSchema is valid i.e. the field
     /// names in `conditions` are subset of field names defined in the
     /// schema
+    ///
+    /// In case there duplicate conditions are specified, it takes
+    /// care of deduplicating them.
     pub fn new(
         fields: Vec<MetadataField>,
         conditions: Vec<SupportedCondition>,
@@ -129,14 +149,24 @@ impl MetadataSchema {
             .iter()
             .map(|f| f.name.as_ref())
             .collect::<HashSet<&str>>();
-        let conditions_are_valid = conditions
-            .iter()
-            .all(|c| c.field_names().is_subset(&field_names));
-        if conditions_are_valid {
-            Ok(Self { fields, conditions })
-        } else {
-            Err(Error::InvalidMetadataSchema)
+
+        let mut encoded_conds: HashSet<(&str, Vec<&str>)> = HashSet::new();
+        let mut deduped_conditions = vec![];
+        for condition in &conditions {
+            if !condition.field_names().is_subset(&field_names) {
+                return Err(Error::InvalidMetadataSchema);
+            }
+            let cond_enc = condition.comparable_encoding();
+            if !encoded_conds.contains(&cond_enc) {
+                deduped_conditions.push(condition.clone());
+            }
+            encoded_conds.insert(cond_enc);
         }
+
+        Ok(Self {
+            fields,
+            conditions: deduped_conditions,
+        })
     }
 
     pub fn num_total_dims(&self) -> u8 {
@@ -209,17 +239,6 @@ impl MetadataSchema {
                 }
             }
         }
-        // Add a combination for all fields in the schema. This is
-        // equivalent to a condition And(<all fields>). Even thought
-        // it's named 'all_fields_combination', we only consider the
-        // fields that are present in the input.
-        //
-        // Note that it's possible that this combination has already
-        // been considered before, but it will get deduped when
-        // inserting into the HashSet of combinations.
-        let mut all_fields_combination = input_fields_set.iter().copied().collect::<Vec<&str>>();
-        all_fields_combination.sort();
-        combinations.insert(all_fields_combination);
 
         let mut result = vec![];
         for combination in combinations {
@@ -410,28 +429,24 @@ impl MetadataSchema {
             .find(|field| field.name == name)
             .ok_or(Error::InvalidField(name.to_string()))
     }
+
+    /// Returns the max no. of replica nodes that will be created per
+    /// vector inserted into the index.
+    pub fn max_num_replicas(&self) -> u8 {
+        // Base replica + 1 replica for every field
+        let mut total: u8 = 1 + self.fields.len() as u8;
+        // 1 replica for every 'And' condition
+        for condition in &self.conditions {
+            match condition {
+                SupportedCondition::And(_) => total += 1,
+                SupportedCondition::Or(_) => {}
+            }
+        }
+        total
+    }
 }
 
 pub type MetadataDimensions = Vec<i32>;
-
-// Functionality to be implemented
-//
-// 1. Json representation of MetadataSchema
-//
-// 2. Deserializing from Json
-//
-// 3. Binary representation of MetadataScheme to store in lmdb (bincode?)
-//
-// 4. Serializing to the above binary representation
-//
-// 5. [✓] Validation of MetadataSchema to ensure that `conditions` vector
-//    contains valid fields
-//
-// 6. [✓] Converting MetadataSchema to `MetadataDimensions` base
-//    vector (without high weight values)
-//
-// 7. [✓] Given `MetadataSchema` and metadata names + values, create
-//    `MetadataDimensions` with high weight values
 
 #[cfg(test)]
 mod tests {
@@ -531,7 +546,7 @@ mod tests {
     }
 
     #[test]
-    fn test_metadata_schema_new_invalid() {
+    fn test_metadata_schema_new_invalid_fields_in_conds() {
         let age_values: HashSet<FieldValue> = (1..=10).map(FieldValue::Int).collect();
         let age = MetadataField::new("age".to_owned(), age_values).unwrap();
         let conditions = vec![SupportedCondition::And(
@@ -541,6 +556,25 @@ mod tests {
             Err(Error::InvalidMetadataSchema) => {}
             _ => panic!(),
         }
+    }
+
+    #[test]
+    fn test_metadata_schema_new_duplicate_conds() {
+        let age_values: HashSet<FieldValue> = (1..=10).map(FieldValue::Int).collect();
+        let age = MetadataField::new("age".to_owned(), age_values).unwrap();
+        let group_values: HashSet<FieldValue> = vec!["a", "b", "c"]
+            .into_iter()
+            .map(|x| FieldValue::String(String::from(x)))
+            .collect();
+        let group = MetadataField::new("group".to_owned(), group_values).unwrap();
+        let conditions = vec![
+            SupportedCondition::And(vec!["age", "group"].into_iter().map(String::from).collect()),
+            SupportedCondition::Or(vec!["age", "group"].into_iter().map(String::from).collect()),
+            SupportedCondition::And(vec!["age", "group"].into_iter().map(String::from).collect()),
+        ];
+        let schema = MetadataSchema::new(vec![age, group], conditions).unwrap();
+        // Assert that conditions are deduplicated
+        assert_eq!(2, schema.conditions.len());
     }
 
     // Following fns that are prefixed with `ifc_` are test util for
@@ -628,24 +662,20 @@ mod tests {
         //
         //   1. matches "b"
         //   2. matches "c"
-        //   3. matches "b AND c"
         let fs = ifc_input(vec![("b", 3), ("c", 2)]);
         let mut cs = schema.input_field_combinations(&fs);
         // To make the order of returned combinations deterministic,
         // sort them by sum of the field values.
         ifc_sort_result(&mut cs);
-        assert_eq!(3, cs.len());
+        assert_eq!(2, cs.len());
         let mut ec1 = HashMap::with_capacity(1);
         ec1.insert("c", &FieldValue::Int(2));
         let mut ec2 = HashMap::with_capacity(1);
         ec2.insert("b", &FieldValue::Int(3));
-        let mut ec3 = HashMap::with_capacity(2);
-        ec3.insert("b", &FieldValue::Int(3));
-        ec3.insert("c", &FieldValue::Int(2));
-        assert_eq!(vec![ec1, ec2, ec3], cs);
+        assert_eq!(vec![ec1, ec2], cs);
 
         // Test case 4: The input contains all 3 fields. So
-        // considering the supported conditions, 6 combinations or
+        // considering the supported conditions, 5 combinations or
         // replicas are relevant to this vector
         //
         //   1. matches "a"
@@ -653,13 +683,12 @@ mod tests {
         //   3. matches "c"
         //   4. matches "a AND b"
         //   5. to match "a AND c"
-        //   6. all fields replica
         let fs = ifc_input(vec![("a", 4), ("b", 5), ("c", 6)]);
         let mut cs = schema.input_field_combinations(&fs);
         // To make the order of returned combinations deterministic,
         // sort them by sum of the field values.
         ifc_sort_result(&mut cs);
-        assert_eq!(6, cs.len());
+        assert_eq!(5, cs.len());
 
         let mut ec1 = HashMap::new();
         ec1.insert("a", &FieldValue::Int(4));
@@ -678,12 +707,7 @@ mod tests {
         ec5.insert("a", &FieldValue::Int(4));
         ec5.insert("c", &FieldValue::Int(6));
 
-        let mut ec6 = HashMap::new();
-        ec6.insert("a", &FieldValue::Int(4));
-        ec6.insert("b", &FieldValue::Int(5));
-        ec6.insert("c", &FieldValue::Int(6));
-
-        assert_eq!(vec![ec1, ec2, ec3, ec4, ec5, ec6], cs);
+        assert_eq!(vec![ec1, ec2, ec3, ec4, ec5], cs);
 
         // Test case 5: When the input contains no fields
         let fs = HashMap::new();
@@ -821,12 +845,6 @@ mod tests {
                 0, 0, // no high weights
                 1024, 1024, // 3 (original value: third)
             ],
-            // all fields dimensions to support OR queries
-            vec![
-                0, 1024, 0, 1024, // 5 (original value: 5)
-                0, 1024, // 0 (original value: a)
-                1024, 1024, // 3 (original value: third)
-            ],
         ];
         // Convert both to sets for comparing unordered values
         let wd_set = wd.into_iter().collect::<HashSet<Vec<i32>>>();
@@ -945,5 +963,27 @@ mod tests {
         // [1, 1]
         // [1, 0]
         // [0, 1]
+    }
+
+    #[test]
+    fn test_max_num_replicas() {
+        let age_values: HashSet<FieldValue> = (1..=10).map(FieldValue::Int).collect();
+        let age = MetadataField::new("age".to_owned(), age_values).unwrap();
+        let group_values: HashSet<FieldValue> = vec!["a", "b", "c"]
+            .into_iter()
+            .map(|x| FieldValue::String(String::from(x)))
+            .collect();
+        let group = MetadataField::new("group".to_owned(), group_values).unwrap();
+        let level_values: HashSet<FieldValue> = vec!["first", "second", "third"]
+            .into_iter()
+            .map(|x| FieldValue::String(String::from(x)))
+            .collect();
+        let level = MetadataField::new("level".to_owned(), level_values).unwrap();
+        let conditions = vec![
+            SupportedCondition::And(hashset(vec!["age", "group"])),
+            SupportedCondition::And(hashset(vec!["age", "level"])),
+        ];
+        let schema = MetadataSchema::new(vec![age, group, level], conditions).unwrap();
+        assert_eq!(6, schema.max_num_replicas());
     }
 }

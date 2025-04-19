@@ -112,11 +112,6 @@ pub fn filter_encoded_dimensions(
     }
 }
 
-// Functionality to be implemented
-//
-// 1. [✓] Given `MetadataSchema` and metadata filter, return Equality and
-//    Inequality filter encoding to be appended to the query vector
-
 #[cfg(test)]
 mod tests {
 
