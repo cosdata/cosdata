@@ -6,6 +6,10 @@ use crate::metadata::schema::MetadataSchema;
 use crate::models::collection::{
     Collection, CollectionConfig, DenseVectorOptions, SparseVectorOptions, TFIDFOptions,
 };
+use crate::models::common::WaCustomError;
+use crate::models::meta_persist::update_current_version;
+use crate::models::types::MetaDb;
+use crate::models::versioning::VersionControl;
 
 crate::cfg_grpc! {
 use super::proto::collections_service_server::CollectionsService;
@@ -43,9 +47,16 @@ impl CollectionsService for CollectionsServiceImpl {
         };
 
         let config = CollectionConfig {
-            max_vectors: req.config.as_ref().and_then(|c| c.max_vectors.map(|v| v as i32)),
-            replication_factor: req.config.as_ref().and_then(|c| c.replication_factor.map(|v| v as i32)),
+            max_vectors: req.config.as_ref().and_then(|c| c.max_vectors),
+            replication_factor: req.config.as_ref().and_then(|c| c.replication_factor),
         };
+
+        let env = &self.context.ain_env.persist;
+
+        let lmdb = MetaDb::from_env(env.clone(), &req.name)
+            .map_err(|e| Status::from(WaCustomError::from(e)))?;
+    let (vcs, hash) = VersionControl::new(env.clone(), lmdb.db.clone())
+            .map_err(|e| Status::from(WaCustomError::from(e)))?;
 
         // Convert metadata schema if present
         let metadata_schema: Option<MetadataSchema> = req.metadata_schema
@@ -54,7 +65,7 @@ impl CollectionsService for CollectionsServiceImpl {
             .map_err(|e| Status::invalid_argument(format!("Invalid metadata schema: {}", e)))?;
 
         // Create new collection
-        let collection = Collection::new(
+        let collection = Arc::new(Collection::new(
             req.name.clone(),
             req.description.clone(),
             dense_vector,
@@ -62,17 +73,25 @@ impl CollectionsService for CollectionsServiceImpl {
             tf_idf_options,
             metadata_schema,
             config,
-        ).map_err(Status::from)?;
+            lmdb,
+            hash,
+            vcs,
+        ).map_err(Status::from)?);
 
         // Store collection
         self.context.ain_env.collections_map
-            .insert_collection(Arc::new(collection.clone()))
+            .insert_collection(collection.clone())
             .map_err(Status::from)?;
+    // persisting collection after creation
+    collection
+        .persist(env, self.context.ain_env.collections_map.lmdb_collections_db)
+        .map_err(Status::from)?;
+    update_current_version(&collection.lmdb, hash).map_err(Status::from)?;
 
         Ok(Response::new(CreateCollectionResponse {
-            id: collection.name.clone(),
-            name: collection.name,
-            description: collection.description,
+            id: collection.meta.name.clone(),
+            name: collection.meta.name.clone(),
+            description: collection.meta.description.clone(),
         }))
     }
 
@@ -84,7 +103,7 @@ impl CollectionsService for CollectionsServiceImpl {
             .iter_collections()
             .map(|entry| ProtoCollection {
                 name: entry.key().clone(),
-                description: entry.value().description.clone(),
+                description: entry.value().meta.description.clone(),
             })
             .collect();
 
@@ -100,8 +119,8 @@ impl CollectionsService for CollectionsServiceImpl {
             .ok_or_else(|| Status::not_found("Collection not found"))?;
 
         Ok(Response::new(ProtoCollection {
-            name: collection.name.clone(),
-            description: collection.description.clone(),
+            name: collection.meta.name.clone(),
+            description: collection.meta.description.clone(),
         }))
     }
 

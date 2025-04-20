@@ -106,22 +106,41 @@ def gen_vectors(num, vcoll):
         yield {"id": vid, "values": values, "metadata": metadata}
 
 
+def create_transaction(collection_name: str) -> str:
+    url = f"{base_url}/collections/{collection_name}/transactions"
+    response = requests.post(
+        url, headers=generate_headers(), verify=False
+    )
+    result = response.json()
+    return result["transaction_id"]
+
+def commit_transaction(collection_name: str, txn_id: str):
+    url = f"{base_url}/collections/{collection_name}/transactions/{txn_id}/commit"
+    response = requests.post(
+        url, headers=generate_headers(), verify=False
+    )
+    if response.status_code not in [200, 204]:
+        print(f"Error response: {response.text}")
+        raise Exception(f"Failed to commit transaction: {response.status_code}")
+
 def insert_vectors(coll_id, vectors):
     vec_index = {}
-    url = f"{base_url}/collections/{coll_id}/vectors"
     headers = generate_headers()
+    txn_id = create_transaction(coll_id)
+    url = f"{base_url}/collections/{coll_id}/transactions/{txn_id}/vectors"
     for vector in vectors:
         data = {
-            "index_type": "dense",
             "id": vector["id"],
-            "values": vector["values"],
+            "dense_values": vector["values"],
             "metadata": vector["metadata"],
         }
+        print(data)
         resp = requests.post(url, headers=headers, json=data)
         if resp.status_code != 200:
             print("Response error:", resp.text)
             resp.raise_for_status()
         vec_index[vector["id"]] = vector
+    commit_transaction(coll_id, txn_id)
     return vec_index
 
 

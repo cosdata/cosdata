@@ -3,6 +3,7 @@ pub mod buffered_io;
 pub mod cache_loader;
 pub mod collection;
 pub mod collection_cache;
+pub mod collection_transaction;
 pub mod common;
 pub mod crypto;
 pub mod dot_product;

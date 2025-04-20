@@ -1,12 +1,11 @@
-use crate::app_context::AppContext;
 use crate::config_loader::Config;
 use crate::config_loader::VectorsIndexingMode;
 use crate::distance::cosine::CosineSimilarity;
 use crate::distance::DistanceFunction;
-use crate::indexes::hnsw::transaction::HNSWIndexTransaction;
 use crate::indexes::hnsw::types::HNSWHyperParams;
 use crate::indexes::hnsw::types::QuantizedDenseVectorEmbedding;
 use crate::indexes::hnsw::types::RawDenseVectorEmbedding;
+use crate::indexes::hnsw::DenseInputEmbedding;
 use crate::indexes::hnsw::HNSWIndex;
 use crate::macros::key;
 use crate::metadata;
@@ -16,6 +15,8 @@ use crate::metadata::MetadataFields;
 use crate::metadata::MetadataSchema;
 use crate::metadata::HIGH_WEIGHT;
 use crate::models::buffered_io::*;
+use crate::models::collection::Collection;
+use crate::models::collection_transaction::CollectionTransaction;
 use crate::models::common::*;
 use crate::models::dot_product::dot_product_f32;
 use crate::models::embedding_persist::*;
@@ -281,16 +282,9 @@ pub fn ann_search(
     Ok(z)
 }
 
-#[allow(clippy::type_complexity)]
-pub fn vector_fetch(
-    _hnsw_index: Arc<HNSWIndex>,
-    _vector_id: VectorId,
-) -> Result<Vec<Option<(VectorId, Vec<(VectorId, MetricResult)>)>>, WaCustomError> {
-    Ok(Vec::new())
-}
-
 pub fn finalize_ann_results(
-    hnsw_index: Arc<HNSWIndex>,
+    collection: &Collection,
+    hnsw_index: &HNSWIndex,
     results: Vec<(SharedNode, MetricResult)>,
     query: &[f32],
     k: Option<usize>,
@@ -300,7 +294,7 @@ pub fn finalize_ann_results(
     let mag_query = query.iter().map(|x| x * x).sum::<f32>().sqrt();
 
     for (orig_id, _, _) in filtered {
-        let raw = get_dense_embedding_by_id(hnsw_index.clone(), &orig_id)?;
+        let raw = get_dense_embedding_by_id(collection, hnsw_index, &orig_id)?;
         let dp = dot_product_f32(query, &raw.raw_vec);
         let mag_raw = raw.raw_vec.iter().map(|x| x * x).sum::<f32>().sqrt();
         let cs = dp / (mag_query * mag_raw);
@@ -377,11 +371,12 @@ pub fn finalize_ann_results(
 /// Ensure that the buffer manager and the database are correctly initialized and configured before calling this function.
 /// The function assumes the existence of methods and types like `EmbeddingOffset::deserialize`, `BufferManagerFactory::new`, and `read_embedding` which should be implemented correctly.
 pub fn get_dense_embedding_by_id(
-    hnsw_index: Arc<HNSWIndex>,
+    collection: &Collection,
+    hnsw_index: &HNSWIndex,
     vector_id: &VectorId,
 ) -> Result<RawDenseVectorEmbedding, WaCustomError> {
-    let env = hnsw_index.lmdb.env.clone();
-    let db = hnsw_index.lmdb.db.clone();
+    let env = collection.lmdb.env.clone();
+    let db = collection.lmdb.db.clone();
 
     let txn = env
         .begin_ro_txn()
@@ -404,95 +399,6 @@ pub fn get_dense_embedding_by_id(
     let (embedding, _next) = read_embedding(bufman.clone(), offset)?;
 
     Ok(embedding)
-}
-
-// fn auto_config_storage_type(dense_index: Arc<DenseIndex>, vectors: &[&[f32]]) {
-//     let threshold = 0.0;
-//     let iterations = 32;
-
-//     let vec = concat_vectors(vectors);
-
-//     // First iteration with k = 16
-//     let initial_centroids_16 = generate_initial_centroids(&vec, 16);
-//     let (_, counts_16) = kmeans(&vec, &initial_centroids_16, iterations);
-//     let storage_type = if should_continue(&counts_16, threshold, 8) {
-//         // Second iteration with k = 8
-//         let initial_centroids_8 = generate_initial_centroids(&vec, 8);
-//         let (_, counts_8) = kmeans(&vec, &initial_centroids_8, iterations);
-//         if should_continue(&counts_8, threshold, 4) {
-//             // Third iteration with k = 4
-//             let initial_centroids_4 = generate_initial_centroids(&vec, 4);
-//             let (_, counts_4) = kmeans(&vec, &initial_centroids_4, iterations);
-
-//             if should_continue(&counts_4, threshold, 2) {
-//                 StorageType::SubByte(1)
-//             } else {
-//                 StorageType::SubByte(2)
-//             }
-//         } else {
-//             // StorageType::SubByte(3)
-//             StorageType::UnsignedByte
-//         }
-//     } else {
-//         StorageType::UnsignedByte
-//     };
-
-//     dense_index.storage_type.update_shared(storage_type);
-// }
-
-#[allow(clippy::too_many_arguments)]
-pub fn index_embeddings_batch(
-    config: &Config,
-    app_env: &AppEnv,
-    hnsw_index: &HNSWIndex,
-    embeddings: Vec<RawDenseVectorEmbedding>,
-    version: Hash,
-    version_number: u16,
-    lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16, u8), SharedNode>>,
-    hnsw_params: &HNSWHyperParams,
-    offset_fn: &mut impl FnMut() -> u32,
-    level_0_offset_fn: &mut impl FnMut() -> u32,
-) -> Result<(), WaCustomError> {
-    embeddings
-        .into_iter()
-        .flat_map(|raw_emb| {
-            preprocess_embedding(
-                app_env,
-                hnsw_index,
-                &hnsw_index.quantization_metric,
-                &raw_emb,
-            )
-        })
-        .map(|emb| {
-            // @TODO: Calculate max_level accordingly
-            let max_level = match emb.overridden_level_probs {
-                Some(lp) => get_max_insert_level(rand::random::<f32>().into(), &lp),
-                None => get_max_insert_level(rand::random::<f32>().into(), &hnsw_index.levels_prob),
-            };
-            let root_entry = hnsw_index.get_root_vec();
-            let highest_level = HNSWLevel(hnsw_params.num_layers);
-
-            index_embedding(
-                config,
-                hnsw_index,
-                ptr::null_mut(),
-                emb.embedding,
-                emb.prop_value,
-                emb.prop_metadata,
-                root_entry,
-                highest_level,
-                version,
-                version_number,
-                lazy_item_versions_table.clone(),
-                hnsw_params,
-                max_level,
-                offset_fn,
-                level_0_offset_fn,
-                *hnsw_index.distance_metric.read().unwrap(),
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(())
 }
 
 /// Intermediate representation of the embedding in a form that's
@@ -650,7 +556,7 @@ fn pseudo_metadata_replicas(
 /// input raw embedding may result in multiple `IndexableEmbedding`
 /// instances.
 fn preprocess_embedding(
-    app_env: &AppEnv,
+    collection: &Collection,
     hnsw_index: &HNSWIndex,
     quantization_metric: &RwLock<QuantizationMetric>,
     raw_emb: &RawDenseVectorEmbedding,
@@ -687,12 +593,7 @@ fn preprocess_embedding(
         hash_vec: raw_emb.hash_vec.clone(),
     };
 
-    let coll = app_env
-        .collections_map
-        .get_collection(&hnsw_index.name)
-        .expect("Couldn't get collection from ain_env");
-
-    let metadata_schema = coll.metadata_schema.as_ref();
+    let metadata_schema = collection.meta.metadata_schema.as_ref();
     let prop_file = &hnsw_index.cache.prop_file;
 
     // @TODO(vineet): Remove unwraps
@@ -723,7 +624,7 @@ fn preprocess_embedding(
         embeddings
     } else {
         let metadata_replicas = prop_metadata_replicas(
-            coll.metadata_schema.as_ref(),
+            collection.meta.metadata_schema.as_ref(),
             raw_emb.raw_metadata.as_ref(),
             &hnsw_index.cache.prop_file,
         )
@@ -755,121 +656,31 @@ fn preprocess_embedding(
     }
 }
 
-pub fn index_embeddings(
-    config: &Config,
-    app_env: &AppEnv,
-    hnsw_index: &HNSWIndex,
-    upload_process_batch_size: usize,
-    lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16, u8), SharedNode>>,
-    last_indexed_version: Option<Hash>,
-) -> Result<(), WaCustomError> {
-    let versions = if let Some(last_indexed_version) = last_indexed_version {
-        hnsw_index
-            .vcs
-            .get_branch_versions_starting_from_exclusive("main", last_indexed_version)
-    } else {
-        hnsw_index.vcs.get_branch_versions("main")
-    }?;
-
-    let hnsw_params_guard = hnsw_index.hnsw_params.read().unwrap();
-
-    let node_size = ProbNode::get_serialized_size(hnsw_params_guard.neighbors_count) as u32;
-    let level_0_node_size =
-        ProbNode::get_serialized_size(hnsw_params_guard.level_0_neighbors_count) as u32;
-
-    for (version, version_info) in versions {
-        let bufman = hnsw_index.vec_raw_manager.get(version)?;
-
-        let mut i = 0;
-        let cursor = bufman.open_cursor()?;
-        let file_len = bufman.file_size() as u32;
-
-        let mut embeddings = Vec::new();
-
-        let mut offset = 0;
-        let mut level_0_offset = 0;
-
-        let mut offset_fn = || {
-            let ret = offset;
-            offset += node_size;
-            ret
-        };
-
-        let mut level_0_offset_fn = || {
-            let ret = level_0_offset;
-            level_0_offset += level_0_node_size;
-            ret
-        };
-
-        loop {
-            if i == file_len {
-                index_embeddings_batch(
-                    config,
-                    app_env,
-                    hnsw_index,
-                    embeddings,
-                    version,
-                    *version_info.version as u16,
-                    lazy_item_versions_table.clone(),
-                    &hnsw_params_guard,
-                    &mut offset_fn,
-                    &mut level_0_offset_fn,
-                )?;
-                bufman.close_cursor(cursor)?;
-                break;
-            }
-
-            let (embedding, next) = read_embedding(bufman.clone(), i)?;
-            embeddings.push(embedding);
-            i = next;
-
-            if embeddings.len() == upload_process_batch_size {
-                index_embeddings_batch(
-                    config,
-                    app_env,
-                    hnsw_index,
-                    embeddings,
-                    version,
-                    *version_info.version as u16,
-                    lazy_item_versions_table.clone(),
-                    &hnsw_params_guard,
-                    &mut offset_fn,
-                    &mut level_0_offset_fn,
-                )?;
-                embeddings = Vec::new();
-            }
-        }
-    }
-
-    Ok(())
-}
-
 pub fn index_embeddings_in_transaction(
-    ctx: Arc<AppContext>,
+    config: &Config,
+    collection: &Collection,
     hnsw_index: &HNSWIndex,
-    version: Hash,
-    version_number: u16,
-    transaction: &HNSWIndexTransaction,
-    vecs: Vec<(VectorId, Vec<f32>, Option<MetadataFields>)>,
+    transaction: &CollectionTransaction,
+    vecs: Vec<DenseInputEmbedding>,
 ) -> Result<(), WaCustomError> {
     let hnsw_params_guard = hnsw_index.hnsw_params.read().unwrap();
-    let index = |vecs: Vec<(VectorId, Vec<f32>, Option<MetadataFields>)>| {
+    let index = |vecs: Vec<DenseInputEmbedding>| {
         let embeddings = vecs
             .into_iter()
             .map(|vec| {
-                let (id, values, metadata) = vec;
+                let DenseInputEmbedding(id, values, metadata, is_pseudo) = vec;
                 let raw_emb = RawDenseVectorEmbedding {
                     hash_vec: id,
                     raw_vec: Arc::new(values),
                     raw_metadata: metadata,
-                    is_pseudo: false,
+                    is_pseudo,
                 };
-                transaction.post_raw_embedding(raw_emb.clone());
+                transaction.post_raw_dense_embedding(raw_emb.clone());
                 raw_emb
             })
             .flat_map(|emb| {
                 preprocess_embedding(
-                    &ctx.ain_env,
+                    collection,
                     hnsw_index,
                     &hnsw_index.quantization_metric,
                     &emb,
@@ -884,7 +695,7 @@ pub fn index_embeddings_in_transaction(
             let highest_level = HNSWLevel(hnsw_params_guard.num_layers);
 
             index_embedding(
-                &ctx.config,
+                config,
                 hnsw_index,
                 ptr::null_mut(),
                 emb.embedding,
@@ -892,8 +703,8 @@ pub fn index_embeddings_in_transaction(
                 emb.prop_metadata,
                 root_entry,
                 highest_level,
-                version,
-                version_number,
+                transaction.id,
+                transaction.version_number,
                 transaction.lazy_item_versions_table.clone(),
                 &hnsw_params_guard,
                 max_level, // Pass max_level to let index_embedding control node creation
@@ -905,7 +716,7 @@ pub fn index_embeddings_in_transaction(
         Ok::<_, WaCustomError>(())
     };
 
-    match ctx.config.indexing.mode {
+    match config.indexing.mode {
         VectorsIndexingMode::Sequential => {
             index(vecs)?;
         }

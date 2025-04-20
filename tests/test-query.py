@@ -4,7 +4,7 @@
 import pandas as pd
 
 # import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 import urllib3
 import os
 # import math
@@ -40,10 +40,9 @@ def read_dataset_from_parquet(dataset_name, ids):
     df = pd.concat(dfs, ignore_index=True)
 
     print("Pre-processing ...")
-    size = metadata["size"]
     dataset = (
         df[[metadata["id"], metadata["embeddings"]]].values.tolist()
-        if metadata["id"] != None
+        if metadata["id"] is not None
         else list(enumerate(row[0] for row in df[[metadata["embeddings"]]].values))
     )
 

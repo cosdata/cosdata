@@ -1,30 +1,34 @@
-pub(crate) mod data;
-pub(crate) mod transaction;
-use lmdb::Transaction;
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use std::{
     hash::Hasher,
     path::PathBuf,
-    ptr,
     sync::{
-        atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
         RwLock,
     },
 };
 
 use rustc_hash::FxHashMap;
 use snowball_stemmer::Stemmer;
-use transaction::TFIDFIndexTransaction;
 use twox_hash::XxHash32;
 
-use crate::macros::key;
-use crate::models::{
-    buffered_io::{BufIoError, BufferManagerFactory},
-    tf_idf_index::TFIDFIndexRoot,
-    tree_map::TreeMap,
-    types::{MetaDb, VectorId},
-    versioning::{Hash, VersionControl},
+use crate::{
+    config_loader::Config,
+    models::{
+        buffered_io::{BufIoError, BufferManagerFactory},
+        collection::Collection,
+        collection_transaction::CollectionTransaction,
+        common::WaCustomError,
+        meta_persist::{store_average_document_length, store_highest_internal_id},
+        tf_idf_index::TFIDFIndexRoot,
+        tree_map::TreeMap,
+        types::{MetaDb, VectorId},
+        versioning::Hash,
+    },
 };
+
+use super::IndexOps;
 
 #[derive(Default)]
 pub struct SamplingData {
@@ -32,18 +36,20 @@ pub struct SamplingData {
     pub total_documents_count: AtomicU32,
 }
 
+pub struct TFIDFInputEmbedding(pub VectorId, pub String);
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct TFIDFIndexData {
+    pub sample_threshold: usize,
+    pub store_raw_text: bool,
+    pub k1: f32,
+    pub b: f32,
+}
 pub struct TFIDFIndex {
-    pub name: String,
-    pub description: Option<String>,
-    pub max_vectors: Option<i32>,
     pub root: TFIDFIndexRoot,
-    pub lmdb: MetaDb,
-    pub current_version: RwLock<Hash>,
-    pub current_open_transaction: AtomicPtr<TFIDFIndexTransaction>,
-    pub vcs: VersionControl,
     pub average_document_length: RwLock<f32>,
     pub is_configured: AtomicBool,
-    pub documents: RwLock<Vec<(VectorId, String)>>,
+    pub documents: RwLock<Vec<TFIDFInputEmbedding>>,
     pub documents_collected: AtomicUsize,
     pub sampling_data: SamplingData,
     pub sample_threshold: usize,
@@ -59,15 +65,8 @@ unsafe impl Send for TFIDFIndex {}
 unsafe impl Sync for TFIDFIndex {}
 
 impl TFIDFIndex {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
-        name: String,
-        description: Option<String>,
         root_path: PathBuf,
-        max_vectors: Option<i32>,
-        lmdb: MetaDb,
-        current_version: Hash,
-        vcs: VersionControl,
         vec_raw_manager: BufferManagerFactory<u8>,
         data_file_parts: u8,
         sample_threshold: usize,
@@ -78,14 +77,7 @@ impl TFIDFIndex {
         let root = TFIDFIndexRoot::new(root_path, data_file_parts)?;
 
         Ok(Self {
-            name,
-            description,
-            max_vectors,
             root,
-            lmdb,
-            current_version: RwLock::new(current_version),
-            current_open_transaction: AtomicPtr::new(ptr::null_mut()),
-            vcs,
             average_document_length: RwLock::new(1.0),
             is_configured: AtomicBool::new(false),
             sampling_data: SamplingData::default(),
@@ -127,40 +119,92 @@ impl TFIDFIndex {
 
         Ok(())
     }
+}
 
-    pub fn set_current_version(&self, version: Hash) {
-        *self.current_version.write().unwrap() = version;
+impl IndexOps for TFIDFIndex {
+    type InputEmbedding = TFIDFInputEmbedding;
+    type Data = TFIDFIndexData;
+
+    fn index_embeddings(
+        &self,
+        _collection: &Collection,
+        embeddings: Vec<Self::InputEmbedding>,
+        transaction: &CollectionTransaction,
+        _config: &Config,
+    ) -> Result<(), WaCustomError> {
+        embeddings
+            .into_par_iter()
+            .try_for_each(|TFIDFInputEmbedding(id, text)| self.insert(transaction.id, id, text))?;
+        Ok(())
     }
 
-    pub fn contains_vector_id(&self, vector_id_u32: u32) -> bool {
-        let env = self.lmdb.env.clone();
-        let db = *self.lmdb.db;
-        let txn = match env.begin_ro_txn() {
-            Ok(txn) => txn,
-            Err(e) => {
-                log::error!("LMDB RO txn failed for IDF contains_vector_id check: {}", e);
-                return false;
-            }
-        };
+    fn sample_embedding(&self, embedding: &Self::InputEmbedding) {
+        let len = count_tokens(&embedding.1, 40);
+        self.sampling_data
+            .total_documents_length
+            .fetch_add(len as u64, Ordering::Relaxed);
+        self.sampling_data
+            .total_documents_count
+            .fetch_add(1, Ordering::Relaxed);
+    }
 
-        let vector_id_obj = VectorId(vector_id_u32 as u64);
-        let embedding_key = key!(e: &vector_id_obj);
+    fn finalize_sampling(
+        &self,
+        lmdb: &MetaDb,
+        _config: &Config,
+        _embeddings: &[Self::InputEmbedding],
+    ) -> Result<(), WaCustomError> {
+        let total_documents_count = self
+            .sampling_data
+            .total_documents_count
+            .load(Ordering::Relaxed);
+        let total_documents_length = self
+            .sampling_data
+            .total_documents_length
+            .load(Ordering::Relaxed);
 
-        let found = match txn.get(db, &embedding_key) {
-            Ok(_) => true,
-            Err(lmdb::Error::NotFound) => false,
-            Err(e) => {
-                log::error!(
-                    "LMDB error during IDF contains_vector_id get for {}: {}",
-                    vector_id_u32,
-                    e
-                );
-                false
-            }
-        };
+        let avg_length = total_documents_length as f32 / total_documents_count as f32;
+        *self.average_document_length.write().unwrap() = avg_length;
+        self.is_configured.store(true, Ordering::Release);
+        store_average_document_length(lmdb, avg_length)?;
+        Ok(())
+    }
 
-        txn.abort();
-        found
+    fn embeddings_collected(&self) -> &RwLock<Vec<Self::InputEmbedding>> {
+        &self.documents
+    }
+
+    fn increment_collected_count(&self, count: usize) -> usize {
+        self.documents_collected.fetch_add(count, Ordering::SeqCst)
+    }
+
+    fn sample_threshold(&self) -> usize {
+        self.sample_threshold
+    }
+
+    fn is_configured(&self) -> bool {
+        self.is_configured.load(Ordering::Acquire)
+    }
+
+    fn flush(&self, collection: &Collection) -> Result<(), WaCustomError> {
+        store_highest_internal_id(
+            &collection.lmdb,
+            self.document_id_counter.load(Ordering::Relaxed),
+        )?;
+        self.vec_raw_map
+            .serialize(&self.vec_raw_manager, self.root.data_file_parts)?;
+        self.root.serialize()?;
+        self.root.cache.flush_all()?;
+        Ok(())
+    }
+
+    fn get_data(&self) -> Self::Data {
+        Self::Data {
+            sample_threshold: self.sample_threshold,
+            store_raw_text: self.store_raw_text,
+            k1: self.k1,
+            b: self.b,
+        }
     }
 }
 

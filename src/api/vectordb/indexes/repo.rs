@@ -32,12 +32,7 @@ pub(crate) async fn create_dense_index(
         .ok_or(IndexesError::CollectionNotFound)?;
 
     // Check if index already exists BEFORE initializing
-    if ctx
-        .ain_env
-        .collections_map
-        .get_hnsw_index(&collection_name)
-        .is_some()
-    {
+    if collection.get_hnsw_index().is_some() {
         return Err(IndexesError::IndexAlreadyExists("dense".to_string()));
     }
 
@@ -62,7 +57,7 @@ pub(crate) async fn create_dense_index(
     let hnsw_params = hnsw_params_dto.into_params(&ctx.config);
     init_hnsw_index_for_collection(
         ctx,
-        &collection,
+        collection,
         range,
         hnsw_params,
         quantization_metric,
@@ -92,12 +87,7 @@ pub(crate) async fn create_sparse_index(
             IndexesError::NotFound(format!("Collection '{}' not found", collection_name))
         })?;
 
-    if ctx
-        .ain_env
-        .collections_map
-        .get_inverted_index(&collection_name)
-        .is_some()
-    {
+    if collection.get_inverted_index().is_some() {
         return Err(IndexesError::IndexAlreadyExists("sparse".to_string()));
     }
 
@@ -128,12 +118,7 @@ pub(crate) async fn create_tf_idf_index(
         .get_collection(&collection_name)
         .ok_or(IndexesError::CollectionNotFound)?;
 
-    if ctx
-        .ain_env
-        .collections_map
-        .get_tf_idf_index(&collection_name)
-        .is_some()
-    {
+    if collection.get_tf_idf_index().is_some() {
         return Err(IndexesError::IndexAlreadyExists("tf_idf".to_string()));
     }
 
@@ -148,7 +133,8 @@ pub(crate) async fn get_index(
     ctx: Arc<AppContext>,
     collection_name: String,
 ) -> Result<serde_json::Value, IndexesError> {
-    ctx.ain_env
+    let collection = ctx
+        .ain_env
         .collections_map
         .get_collection(&collection_name)
         .ok_or_else(|| {
@@ -157,7 +143,7 @@ pub(crate) async fn get_index(
 
     let mut indexes_array = Vec::new();
 
-    if let Some(hnsw) = ctx.ain_env.collections_map.get_hnsw_index(&collection_name) {
+    if let Some(hnsw) = collection.get_hnsw_index() {
         let distance_metric = *hnsw.distance_metric.read().unwrap();
         let values_range = *hnsw.values_range.read().unwrap();
         let hnsw_params = hnsw.hnsw_params.read().unwrap();
@@ -166,13 +152,13 @@ pub(crate) async fn get_index(
 
         indexes_array.push(serde_json::json!({
             "type": "dense",
-            "name": hnsw.name,
+            "name": collection_name,
             "algorithm": "HNSW",
             "distance_metric": format!("{:?}", distance_metric),
             "quantization": {
                 "type": quantization,
                 "storage": format!("{:?}", storage_type),
-                 "range": { "min": values_range.0, "max": values_range.1 }
+                "range": { "min": values_range.0, "max": values_range.1 }
             },
             "params": {
                 "ef_construction": hnsw_params.ef_construction,
@@ -184,15 +170,11 @@ pub(crate) async fn get_index(
         }));
     }
 
-    if let Some(inverted) = ctx
-        .ain_env
-        .collections_map
-        .get_inverted_index(&collection_name)
-    {
+    if let Some(inverted) = collection.get_inverted_index() {
         let values_upper_bound = *inverted.values_upper_bound.read().unwrap();
         indexes_array.push(serde_json::json!({
             "type": "sparse",
-            "name": inverted.name,
+            "name": collection_name,
             "algorithm": "InvertedIndex",
             "quantization_bits": inverted.root.root.quantization_bits,
             "values_upper_bound": values_upper_bound,
@@ -222,12 +204,7 @@ pub(crate) async fn delete_index(
 
     match index_type {
         IndexType::Dense => {
-            if ctx
-                .ain_env
-                .collections_map
-                .get_hnsw_index(&collection_name)
-                .is_none()
-            {
+            if collection.get_hnsw_index().is_none() {
                 return Err(IndexesError::NotFound(format!(
                     "Dense index does not exist for collection '{}'",
                     collection_name
@@ -272,12 +249,7 @@ pub(crate) async fn delete_index(
             );
         }
         IndexType::Sparse => {
-            if ctx
-                .ain_env
-                .collections_map
-                .get_inverted_index(&collection_name)
-                .is_none()
-            {
+            if collection.get_inverted_index().is_none() {
                 return Err(IndexesError::NotFound(format!(
                     "Sparse index does not exist for collection '{}'",
                     collection_name
@@ -322,12 +294,7 @@ pub(crate) async fn delete_index(
             );
         }
         IndexType::TfIdf => {
-            if ctx
-                .ain_env
-                .collections_map
-                .get_tf_idf_index(&collection_name)
-                .is_none()
-            {
+            if collection.get_tf_idf_index().is_none() {
                 return Err(IndexesError::NotFound(format!(
                     "TF-IDF index does not exist for collection '{}'",
                     collection_name

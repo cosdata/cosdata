@@ -5,7 +5,7 @@ use crate::models::versioning::*;
 use lmdb::{Cursor, Database, DatabaseFlags, Environment, Transaction, WriteFlags};
 use serde_cbor::from_slice;
 
-use super::collection::Collection;
+use super::collection::CollectionMetadata;
 
 /// updates the current version of a collection
 pub fn update_current_version(lmdb: &MetaDb, version_hash: Hash) -> Result<(), WaCustomError> {
@@ -215,12 +215,15 @@ pub fn lmdb_init_db(env: &Environment, name: &str) -> lmdb::Result<Database> {
     env.create_db(Some(name), DatabaseFlags::empty())
 }
 
-pub(crate) fn load_collections(env: &Environment, db: Database) -> lmdb::Result<Vec<Collection>> {
+pub(crate) fn load_collections(
+    env: &Environment,
+    db: Database,
+) -> lmdb::Result<Vec<CollectionMetadata>> {
     let mut collections = Vec::new();
     let txn = env.begin_ro_txn().unwrap();
     let mut cursor = txn.open_ro_cursor(db).unwrap();
     for (_k, v) in cursor.iter() {
-        let col: Collection = from_slice(v).unwrap();
+        let col: CollectionMetadata = from_slice(v).unwrap();
         collections.push(col);
     }
     Ok(collections)

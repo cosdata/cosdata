@@ -452,9 +452,8 @@ def compute_brute_force_results(dataset, vectors, query_vectors, top_k=10):
 
 def create_transaction(collection_name):
     url = f"{base_url}/collections/{collection_name}/transactions"
-    data = {"index_type": "tf_idf"}
     response = requests.post(
-        url, headers=generate_headers(), data=json.dumps(data), verify=False
+        url, headers=generate_headers(), verify=False
     )
     return response.json()
 
@@ -469,7 +468,7 @@ def upsert_in_transaction(vector_db_name, transaction_id, vectors):
     url = (
         f"{base_url}/collections/{vector_db_name}/transactions/{transaction_id}/upsert"
     )
-    data = {"index_type": "tf_idf", "documents": filtered_vectors}
+    data = {"vectors": filtered_vectors}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
@@ -483,9 +482,8 @@ def commit_transaction(collection_name, transaction_id):
     url = (
         f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/commit"
     )
-    data = {"index_type": "tf_idf"}
     response = requests.post(
-        url, data=json.dumps(data), headers=generate_headers(), verify=False
+        url, headers=generate_headers(), verify=False
     )
     if response.status_code not in [200, 204]:
         print(f"Error response: {response.text}")

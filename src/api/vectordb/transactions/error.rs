@@ -10,6 +10,7 @@ use actix_web::{
 pub(crate) enum TransactionError {
     NotFound,
     CollectionNotFound,
+    IndexNotFound,
     OnGoingTransaction,
     FailedToGetAppEnv,
     FailedToCreateTransaction(String),
@@ -24,6 +25,7 @@ impl Display for TransactionError {
         match self {
             Self::NotFound => write!(f, "Transaction Not Found!"),
             Self::CollectionNotFound => write!(f, "Collection not found!"),
+            Self::IndexNotFound => write!(f, "Index not found!"),
             Self::FailedToGetAppEnv => write!(f, "Failed to get App Env!"),
             Self::OnGoingTransaction => write!(f, "There is an on-going transaction!"),
             Self::FailedToCreateTransaction(msg) => {
@@ -55,6 +57,7 @@ impl ResponseError for TransactionError {
         match self {
             Self::NotFound => StatusCode::BAD_REQUEST,
             Self::CollectionNotFound => StatusCode::BAD_REQUEST,
+            Self::IndexNotFound => StatusCode::BAD_REQUEST,
             Self::FailedToGetAppEnv => StatusCode::INTERNAL_SERVER_ERROR,
             Self::FailedToCreateTransaction(_) => StatusCode::BAD_REQUEST,
             Self::FailedToCommitTransaction(_) => StatusCode::BAD_REQUEST,

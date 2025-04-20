@@ -193,7 +193,12 @@ impl CollectionCacheManager {
         info!("Loading dense index for collection: {}", name);
 
         // First check if the index exists in the AppEnv
-        if let Some(index) = self.app_env.collections_map.get_hnsw_index(name) {
+        if let Some(index) = self
+            .app_env
+            .collections_map
+            .get_collection(name)
+            .and_then(|collection| collection.get_hnsw_index())
+        {
             info!("Found HNSW index for '{}' in memory", name);
             return Ok(Some(index));
         }
@@ -208,7 +213,12 @@ impl CollectionCacheManager {
         info!("Loading inverted index for collection: {}", name);
 
         // First check if the index exists in the AppEnv
-        if let Some(index) = self.app_env.collections_map.get_inverted_index(name) {
+        if let Some(index) = self
+            .app_env
+            .collections_map
+            .get_collection(name)
+            .and_then(|collection| collection.get_inverted_index())
+        {
             info!("Found inverted index for '{}' in memory", name);
             return Ok(Some(index));
         }

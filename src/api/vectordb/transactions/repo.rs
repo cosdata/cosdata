@@ -1,45 +1,36 @@
-use std::ptr;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use self::vectors::dtos::{CreateDenseVectorDto, CreateSparseVectorDto, CreateTFIDFDocumentDto};
+use self::vectors::dtos::CreateVectorDto;
 
 use super::{dtos::CreateTransactionResponseDto, error::TransactionError};
-use crate::indexes::hnsw::transaction::HNSWIndexTransaction;
-use crate::indexes::inverted::transaction::InvertedIndexTransaction;
-use crate::indexes::tf_idf::transaction::TFIDFIndexTransaction;
+use crate::models::collection_transaction::CollectionTransaction;
 use crate::models::meta_persist::update_current_version;
-use crate::models::rpc::DenseVector;
 use crate::models::versioning::Hash;
 use crate::{api::vectordb::vectors, app_context::AppContext};
 use chrono::Utc;
 
-// creates a transaction for a specific dense index
-pub(crate) async fn create_dense_index_transaction(
+// creates a transaction for a specific collection
+pub(crate) async fn create_transaction(
     ctx: Arc<AppContext>,
     collection_id: &str,
 ) -> Result<CreateTransactionResponseDto, TransactionError> {
-    let hnsw_index = ctx
+    let collection = ctx
         .ain_env
         .collections_map
-        .get_hnsw_index(collection_id)
+        .get_collection(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
 
-    if !hnsw_index
-        .current_open_transaction
-        .load(Ordering::SeqCst)
-        .is_null()
-    {
+    let mut current_open_transaction_guard = collection.current_open_transaction.write().unwrap();
+
+    if current_open_transaction_guard.is_some() {
         return Err(TransactionError::OnGoingTransaction);
     }
 
-    let transaction = HNSWIndexTransaction::new(hnsw_index.clone())
+    let transaction = CollectionTransaction::new(collection.clone())
         .map_err(|err| TransactionError::FailedToCreateTransaction(err.to_string()))?;
     let transaction_id = transaction.id;
 
-    hnsw_index
-        .current_open_transaction
-        .store(Box::into_raw(Box::new(transaction)), Ordering::SeqCst);
+    *current_open_transaction_guard = Some(transaction);
 
     Ok(CreateTransactionResponseDto {
         transaction_id: transaction_id.to_string(),
@@ -47,94 +38,23 @@ pub(crate) async fn create_dense_index_transaction(
     })
 }
 
-// creates a transaction for a specific sparse index
-pub(crate) async fn create_sparse_index_transaction(
-    ctx: Arc<AppContext>,
-    collection_id: &str,
-) -> Result<CreateTransactionResponseDto, TransactionError> {
-    let inverted_index = ctx
-        .ain_env
-        .collections_map
-        .get_inverted_index(collection_id)
-        .ok_or(TransactionError::CollectionNotFound)?;
-
-    if !inverted_index
-        .current_open_transaction
-        .load(Ordering::SeqCst)
-        .is_null()
-    {
-        return Err(TransactionError::OnGoingTransaction);
-    }
-
-    let transaction = InvertedIndexTransaction::new(inverted_index.clone())
-        .map_err(|err| TransactionError::FailedToCreateTransaction(err.to_string()))?;
-    let transaction_id = transaction.id;
-
-    inverted_index
-        .current_open_transaction
-        .store(Box::into_raw(Box::new(transaction)), Ordering::SeqCst);
-
-    Ok(CreateTransactionResponseDto {
-        transaction_id: transaction_id.to_string(),
-        created_at: Utc::now(),
-    })
-}
-
-// creates a transaction for a specific TF-IDF index
-pub(crate) async fn create_tf_idf_index_transaction(
-    ctx: Arc<AppContext>,
-    collection_id: &str,
-) -> Result<CreateTransactionResponseDto, TransactionError> {
-    let tf_idf_index = ctx
-        .ain_env
-        .collections_map
-        .get_tf_idf_index(collection_id)
-        .ok_or(TransactionError::CollectionNotFound)?;
-
-    if !tf_idf_index
-        .current_open_transaction
-        .load(Ordering::SeqCst)
-        .is_null()
-    {
-        return Err(TransactionError::OnGoingTransaction);
-    }
-
-    let transaction = TFIDFIndexTransaction::new(tf_idf_index.clone())
-        .map_err(|err| TransactionError::FailedToCreateTransaction(err.to_string()))?;
-    let transaction_id = transaction.id;
-
-    tf_idf_index
-        .current_open_transaction
-        .store(Box::into_raw(Box::new(transaction)), Ordering::SeqCst);
-
-    Ok(CreateTransactionResponseDto {
-        transaction_id: transaction_id.to_string(),
-        created_at: Utc::now(),
-    })
-}
-
-// commits a transaction for a specific dense index
-pub(crate) async fn commit_dense_index_transaction(
+// commits a transaction for a specific collection
+pub(crate) async fn commit_transaction(
     ctx: Arc<AppContext>,
     collection_id: &str,
     transaction_id: Hash,
 ) -> Result<(), TransactionError> {
-    let hnsw_index = ctx
+    let collection = ctx
         .ain_env
         .collections_map
-        .get_hnsw_index(collection_id)
+        .get_collection(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
 
-    let mut current_version = hnsw_index.current_version.write().unwrap();
+    let mut current_version_guard = collection.current_version.write().unwrap();
 
-    let current_open_transaction = unsafe {
-        let ptr = hnsw_index.current_open_transaction.load(Ordering::SeqCst);
-
-        if ptr.is_null() {
-            return Err(TransactionError::NotFound);
-        }
-
-        ptr::read(ptr)
+    let mut current_open_transaction_guard = collection.current_open_transaction.write().unwrap();
+    let Some(current_open_transaction) = current_open_transaction_guard.take() else {
+        return Err(TransactionError::NotFound);
     };
     let current_transaction_id = current_open_transaction.id;
 
@@ -142,121 +62,18 @@ pub(crate) async fn commit_dense_index_transaction(
         return Err(TransactionError::NotFound);
     }
 
-    let version_number = current_open_transaction.version_number as u32;
+    let version_number = current_open_transaction.version_number;
 
     current_open_transaction
-        .pre_commit(hnsw_index.clone())
+        .pre_commit(&collection, &ctx.config)
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
 
-    *current_version = current_transaction_id;
-    hnsw_index
+    *current_version_guard = current_transaction_id;
+    collection
         .vcs
         .set_branch_version("main", version_number.into(), current_transaction_id)
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
-    hnsw_index
-        .current_open_transaction
-        .store(ptr::null_mut(), Ordering::SeqCst);
-    update_current_version(&hnsw_index.lmdb, current_transaction_id)
-        .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
-
-    Ok(())
-}
-
-// commits a transaction for a specific sparse index
-pub(crate) async fn commit_sparse_index_transaction(
-    ctx: Arc<AppContext>,
-    collection_id: &str,
-    transaction_id: Hash,
-) -> Result<(), TransactionError> {
-    let inverted_index = ctx
-        .ain_env
-        .collections_map
-        .get_inverted_index(collection_id)
-        .ok_or(TransactionError::CollectionNotFound)?;
-
-    let mut current_version = inverted_index.current_version.write().unwrap();
-
-    let current_open_transaction = unsafe {
-        let ptr = inverted_index
-            .current_open_transaction
-            .load(Ordering::SeqCst);
-
-        if ptr.is_null() {
-            return Err(TransactionError::NotFound);
-        }
-
-        ptr::read(ptr)
-    };
-    let current_transaction_id = current_open_transaction.id;
-
-    if current_transaction_id != transaction_id {
-        return Err(TransactionError::NotFound);
-    }
-
-    let version_number = current_open_transaction.version_number as u32;
-
-    current_open_transaction
-        .pre_commit(&inverted_index)
-        .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
-
-    *current_version = current_transaction_id;
-    inverted_index
-        .vcs
-        .set_branch_version("main", version_number.into(), current_transaction_id)
-        .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
-    inverted_index
-        .current_open_transaction
-        .store(ptr::null_mut(), Ordering::SeqCst);
-    update_current_version(&inverted_index.lmdb, current_transaction_id)
-        .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
-
-    Ok(())
-}
-
-// commits a transaction for a specific TF-IDF index
-pub(crate) async fn commit_tf_idf_index_transaction(
-    ctx: Arc<AppContext>,
-    collection_id: &str,
-    transaction_id: Hash,
-) -> Result<(), TransactionError> {
-    let tf_idf_index = ctx
-        .ain_env
-        .collections_map
-        .get_tf_idf_index(collection_id)
-        .ok_or(TransactionError::CollectionNotFound)?;
-
-    let mut current_version = tf_idf_index.current_version.write().unwrap();
-
-    let current_open_transaction = unsafe {
-        let ptr = tf_idf_index.current_open_transaction.load(Ordering::SeqCst);
-
-        if ptr.is_null() {
-            return Err(TransactionError::NotFound);
-        }
-
-        ptr::read(ptr)
-    };
-    let current_transaction_id = current_open_transaction.id;
-
-    if current_transaction_id != transaction_id {
-        return Err(TransactionError::NotFound);
-    }
-
-    let version_number = current_open_transaction.version_number as u32;
-
-    current_open_transaction
-        .pre_commit(&tf_idf_index)
-        .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
-
-    *current_version = current_transaction_id;
-    tf_idf_index
-        .vcs
-        .set_branch_version("main", version_number.into(), current_transaction_id)
-        .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
-    tf_idf_index
-        .current_open_transaction
-        .store(ptr::null_mut(), Ordering::SeqCst);
-    update_current_version(&tf_idf_index.lmdb, current_transaction_id)
+    update_current_version(&collection.lmdb, current_transaction_id)
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
 
     Ok(())
@@ -266,20 +83,17 @@ pub(crate) async fn create_vector_in_transaction(
     ctx: Arc<AppContext>,
     collection_id: &str,
     transaction_id: Hash,
-    create_vector_dto: CreateDenseVectorDto,
+    create_vector_dto: CreateVectorDto,
 ) -> Result<(), TransactionError> {
-    let hnsw_index = ctx
+    let collection = ctx
         .ain_env
         .collections_map
-        .get_hnsw_index(collection_id)
+        .get_collection(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
 
-    let current_open_transaction = unsafe {
-        hnsw_index
-            .current_open_transaction
-            .load(Ordering::SeqCst)
-            .as_ref()
-            .ok_or(TransactionError::NotFound)?
+    let current_open_transaction_guard = collection.current_open_transaction.read().unwrap();
+    let Some(current_open_transaction) = &*current_open_transaction_guard else {
+        return Err(TransactionError::NotFound);
     };
 
     if current_open_transaction.id != transaction_id {
@@ -290,7 +104,7 @@ pub(crate) async fn create_vector_in_transaction(
 
     vectors::repo::create_vector_in_transaction(
         ctx,
-        collection_id,
+        &collection,
         current_open_transaction,
         create_vector_dto,
     )
@@ -300,26 +114,21 @@ pub(crate) async fn create_vector_in_transaction(
     Ok(())
 }
 
-// aborts the currently open transaction of a dense index
-pub(crate) async fn abort_dense_index_transaction(
+// aborts the currently open transaction of a ollection
+pub(crate) async fn abort_transaction(
     ctx: Arc<AppContext>,
     collection_id: &str,
     transaction_id: Hash,
 ) -> Result<(), TransactionError> {
-    let hnsw_index = ctx
+    let collection = ctx
         .ain_env
         .collections_map
-        .get_hnsw_index(collection_id)
+        .get_collection(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
 
-    let current_open_transaction = unsafe {
-        let ptr = hnsw_index.current_open_transaction.load(Ordering::SeqCst);
-
-        if ptr.is_null() {
-            return Err(TransactionError::NotFound);
-        }
-
-        ptr::read(ptr)
+    let mut current_open_transaction_guard = collection.current_open_transaction.write().unwrap();
+    let Some(current_open_transaction) = current_open_transaction_guard.take() else {
+        return Err(TransactionError::NotFound);
     };
     let current_transaction_id = current_open_transaction.id;
 
@@ -328,127 +137,36 @@ pub(crate) async fn abort_dense_index_transaction(
     }
 
     current_open_transaction
-        .pre_commit(hnsw_index.clone())
+        .pre_commit(&collection, &ctx.config)
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
-
-    hnsw_index
-        .current_open_transaction
-        .store(ptr::null_mut(), Ordering::SeqCst);
-
-    Ok(())
-}
-
-// aborts the currently open transaction of a specific sparse index
-pub(crate) async fn abort_sparse_index_transaction(
-    ctx: Arc<AppContext>,
-    collection_id: &str,
-    transaction_id: Hash,
-) -> Result<(), TransactionError> {
-    let inverted_index = ctx
-        .ain_env
-        .collections_map
-        .get_inverted_index(collection_id)
-        .ok_or(TransactionError::CollectionNotFound)?;
-
-    let current_open_transaction = unsafe {
-        let ptr = inverted_index
-            .current_open_transaction
-            .load(Ordering::SeqCst);
-
-        if ptr.is_null() {
-            return Err(TransactionError::NotFound);
-        }
-
-        ptr::read(ptr)
-    };
-    let current_transaction_id = current_open_transaction.id;
-
-    if current_transaction_id != transaction_id {
-        return Err(TransactionError::NotFound);
-    }
-
-    current_open_transaction
-        .pre_commit(&inverted_index)
-        .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
-
-    inverted_index
-        .current_open_transaction
-        .store(ptr::null_mut(), Ordering::SeqCst);
-
-    Ok(())
-}
-
-// aborts the currently open transaction of a specific TF-IDF index
-pub(crate) async fn abort_tf_idf_index_transaction(
-    ctx: Arc<AppContext>,
-    collection_id: &str,
-    transaction_id: Hash,
-) -> Result<(), TransactionError> {
-    let tf_idf_index = ctx
-        .ain_env
-        .collections_map
-        .get_tf_idf_index(collection_id)
-        .ok_or(TransactionError::CollectionNotFound)?;
-
-    let current_open_transaction = unsafe {
-        let ptr = tf_idf_index.current_open_transaction.load(Ordering::SeqCst);
-
-        if ptr.is_null() {
-            return Err(TransactionError::NotFound);
-        }
-
-        ptr::read(ptr)
-    };
-    let current_transaction_id = current_open_transaction.id;
-
-    if current_transaction_id != transaction_id {
-        return Err(TransactionError::NotFound);
-    }
-
-    current_open_transaction
-        .pre_commit(&tf_idf_index)
-        .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
-
-    tf_idf_index
-        .current_open_transaction
-        .store(ptr::null_mut(), Ordering::SeqCst);
 
     Ok(())
 }
 
 pub(crate) async fn delete_vector_by_id(
-    ctx: Arc<AppContext>,
-    collection_id: &str,
+    _ctx: Arc<AppContext>,
+    _collection_id: &str,
     _transaction_id: Hash,
     _vector_id: u32,
 ) -> Result<(), TransactionError> {
-    let _hnsw_index = ctx
-        .ain_env
-        .collections_map
-        .get_hnsw_index(collection_id)
-        .ok_or(TransactionError::CollectionNotFound)?;
-
     unimplemented!();
 }
 
-pub(crate) async fn upsert_dense_vectors(
+pub(crate) async fn upsert_vectors(
     ctx: Arc<AppContext>,
     collection_id: &str,
     transaction_id: Hash,
-    vectors: Vec<DenseVector>,
+    vectors: Vec<CreateVectorDto>,
 ) -> Result<(), TransactionError> {
-    let hnsw_index = ctx
+    let collection = ctx
         .ain_env
         .collections_map
-        .get_hnsw_index(collection_id)
+        .get_collection(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
 
-    let current_open_transaction = unsafe {
-        hnsw_index
-            .current_open_transaction
-            .load(Ordering::SeqCst)
-            .as_ref()
-            .ok_or(TransactionError::NotFound)?
+    let current_open_transaction_guard = collection.current_open_transaction.read().unwrap();
+    let Some(current_open_transaction) = &*current_open_transaction_guard else {
+        return Err(TransactionError::NotFound);
     };
 
     if current_open_transaction.id != transaction_id {
@@ -457,86 +175,11 @@ pub(crate) async fn upsert_dense_vectors(
         ));
     }
 
-    vectors::repo::upsert_dense_vectors_in_transaction(
+    vectors::repo::upsert_vectors_in_transaction(
         ctx,
-        hnsw_index,
+        &collection,
         current_open_transaction,
         vectors,
-    )
-    .await
-    .map_err(|e| TransactionError::FailedToCreateVector(e.to_string()))?;
-
-    Ok(())
-}
-
-pub(crate) async fn upsert_sparse_vectors(
-    ctx: Arc<AppContext>,
-    collection_id: &str,
-    transaction_id: Hash,
-    vectors: Vec<CreateSparseVectorDto>,
-) -> Result<(), TransactionError> {
-    let inverted_index = ctx
-        .ain_env
-        .collections_map
-        .get_inverted_index(collection_id)
-        .ok_or(TransactionError::CollectionNotFound)?;
-
-    let current_open_transaction = unsafe {
-        inverted_index
-            .current_open_transaction
-            .load(Ordering::SeqCst)
-            .as_ref()
-            .ok_or(TransactionError::NotFound)?
-    };
-
-    if current_open_transaction.id != transaction_id {
-        return Err(TransactionError::FailedToCreateVector(
-            "This is not the currently open transaction!".into(),
-        ));
-    }
-
-    vectors::repo::upsert_sparse_vectors_in_transaction(
-        ctx,
-        inverted_index,
-        current_open_transaction,
-        vectors,
-    )
-    .await
-    .map_err(|e| TransactionError::FailedToCreateVector(e.to_string()))?;
-
-    Ok(())
-}
-
-pub(crate) async fn upsert_tf_idf_documents(
-    ctx: Arc<AppContext>,
-    collection_id: &str,
-    transaction_id: Hash,
-    documents: Vec<CreateTFIDFDocumentDto>,
-) -> Result<(), TransactionError> {
-    let tf_idf_index = ctx
-        .ain_env
-        .collections_map
-        .get_tf_idf_index(collection_id)
-        .ok_or(TransactionError::CollectionNotFound)?;
-
-    let current_open_transaction = unsafe {
-        tf_idf_index
-            .current_open_transaction
-            .load(Ordering::SeqCst)
-            .as_ref()
-            .ok_or(TransactionError::NotFound)?
-    };
-
-    if current_open_transaction.id != transaction_id {
-        return Err(TransactionError::FailedToCreateVector(
-            "This is not the currently open transaction!".into(),
-        ));
-    }
-
-    vectors::repo::upsert_tf_idf_documents_in_transaction(
-        tf_idf_index,
-        current_open_transaction,
-        documents,
     )
     .await
     .map_err(|e| TransactionError::FailedToCreateVector(e.to_string()))?;

@@ -1,7 +1,7 @@
 use super::{
     buffered_io::BufferManagerFactory,
     cache_loader::HNSWIndexCache,
-    collection::Collection,
+    collection::{Collection, CollectionMetadata},
     crypto::{DoubleSHA256Hash, SingleSHA256Hash},
     inverted_index::InvertedIndexRoot,
     meta_persist::{
@@ -25,11 +25,7 @@ use crate::{
         hamming::HammingDistance,
         DistanceError, DistanceFunction,
     },
-    indexes::{
-        hnsw::{data::HNSWIndexData, HNSWIndex},
-        inverted::{data::InvertedIndexData, InvertedIndex},
-        tf_idf::{data::TFIDFIndexData, TFIDFIndex},
-    },
+    indexes::{hnsw::HNSWIndex, inverted::InvertedIndex, tf_idf::TFIDFIndex, IndexOps},
     metadata::{schema::MetadataDimensions, QueryFilterDimensions, HIGH_WEIGHT},
     models::{
         buffered_io::BufIoError, common::*, meta_persist::retrieve_values_range, versioning::*,
@@ -47,13 +43,12 @@ use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher24;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use std::{
     fmt,
     fs::{create_dir_all, OpenOptions},
-    ptr,
     str::FromStr,
 };
 use std::{
@@ -388,10 +383,6 @@ impl MetaDb {
 }
 
 pub struct CollectionsMap {
-    /// holds an in-memory map of all dense indexes for all collections
-    inner_hnsw_indexes: DashMap<String, Arc<HNSWIndex>>,
-    inner_inverted_indexes: DashMap<String, Arc<InvertedIndex>>,
-    inner_tf_idf_indexes: DashMap<String, Arc<TFIDFIndex>>,
     inner_collections: DashMap<String, Arc<Collection>>,
     lmdb_env: Arc<Environment>,
     // made it public temporarily
@@ -409,9 +400,6 @@ impl CollectionsMap {
         let inverted_index_db = lmdb_init_db(&env, "inverted_indexes")?;
         let tf_idf_index_db = lmdb_init_db(&env, "tf_idf_indexes")?;
         let res = Self {
-            inner_hnsw_indexes: DashMap::new(),
-            inner_inverted_indexes: DashMap::new(),
-            inner_tf_idf_indexes: DashMap::new(),
             inner_collections: DashMap::new(),
             lmdb_env: env,
             lmdb_collections_db: collections_db,
@@ -433,45 +421,51 @@ impl CollectionsMap {
         )
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
-        let root_path = get_data_path().join("collections");
-
-        for coll in collections {
-            let coll = Arc::new(coll);
-            collections_map
-                .inner_collections
-                .insert(coll.name.clone(), coll.clone());
+        for collection_meta in collections {
+            let lmdb = MetaDb::from_env(collections_map.lmdb_env.clone(), &collection_meta.name)?;
+            let current_version = retrieve_current_version(&lmdb)?;
+            let vcs = VersionControl::from_existing(lmdb.env.clone(), lmdb.db.clone());
 
             // if collection has dense index load it from the lmdb
-            if coll.dense_vector.enabled {
-                if let Some(hnsw_index) =
-                    collections_map.load_hnsw_index(&coll, &root_path, config)?
-                {
-                    collections_map
-                        .inner_hnsw_indexes
-                        .insert(coll.name.clone(), Arc::new(hnsw_index));
-                }
-            }
+            let hnsw_index = if collection_meta.dense_vector.enabled {
+                collections_map
+                    .load_hnsw_index(&collection_meta, &lmdb, &vcs, config)?
+                    .map(Arc::new)
+            } else {
+                None
+            };
 
             // if collection has inverted index load it from the lmdb
-            if coll.sparse_vector.enabled {
-                if let Some(inverted_index) =
-                    collections_map.load_inverted_index(&coll, &root_path, config)?
-                {
-                    collections_map
-                        .inner_inverted_indexes
-                        .insert(coll.name.clone(), Arc::new(inverted_index));
-                }
-            }
+            let inverted_index = if collection_meta.sparse_vector.enabled {
+                collections_map
+                    .load_inverted_index(&collection_meta, &lmdb, config)?
+                    .map(Arc::new)
+            } else {
+                None
+            };
 
-            if coll.tf_idf_options.enabled {
-                if let Some(tf_idf_index) =
-                    collections_map.load_tf_idf_index(&coll, &root_path, config)?
-                {
-                    collections_map
-                        .inner_tf_idf_indexes
-                        .insert(coll.name.clone(), Arc::new(tf_idf_index));
-                }
-            }
+            let tf_idf_index = if collection_meta.tf_idf_options.enabled {
+                collections_map
+                    .load_tf_idf_index(&collection_meta, &lmdb, config)?
+                    .map(Arc::new)
+            } else {
+                None
+            };
+
+            let collection = Collection {
+                meta: collection_meta,
+                lmdb,
+                current_version: RwLock::new(current_version),
+                current_open_transaction: RwLock::new(None),
+                vcs,
+                hnsw_index: RwLock::new(hnsw_index),
+                inverted_index: RwLock::new(inverted_index),
+                tf_idf_index: RwLock::new(tf_idf_index),
+            };
+
+            collections_map
+                .inner_collections
+                .insert(collection.meta.name.clone(), Arc::new(collection));
         }
         Ok(collections_map)
     }
@@ -482,11 +476,12 @@ impl CollectionsMap {
     /// memory, which also ends up warming the cache (NodeRegistry)
     fn load_hnsw_index(
         &self,
-        coll: &Collection,
-        _root_path: &Path,
+        collection_meta: &CollectionMetadata,
+        lmdb: &MetaDb,
+        vcs: &VersionControl,
         config: &Config,
     ) -> Result<Option<HNSWIndex>, WaCustomError> {
-        let collection_path: Arc<Path> = get_collections_path().join(&coll.name).into();
+        let collection_path: Arc<Path> = get_collections_path().join(&collection_meta.name).into();
         let index_path = collection_path.join("dense_hnsw");
 
         // Check if the path exists before proceeding
@@ -494,8 +489,11 @@ impl CollectionsMap {
             return Ok(None);
         }
 
-        let Some(hnsw_index_data) =
-            HNSWIndexData::load(&self.lmdb_env, self.lmdb_hnsw_index_db, &coll.get_key())?
+        let Some(hnsw_index_data) = HNSWIndex::load_data(
+            &self.lmdb_env,
+            self.lmdb_hnsw_index_db,
+            &collection_meta.name,
+        )?
         else {
             return Ok(None);
         };
@@ -546,12 +544,6 @@ impl CollectionsMap {
             distance_metric.clone(),
         );
 
-        let db = Arc::new(
-            self.lmdb_env
-                .create_db(Some(&coll.name), DatabaseFlags::empty())
-                .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?,
-        );
-
         let FileIndex {
             offset: root_offset,
             version_number: root_version_number,
@@ -589,8 +581,6 @@ impl CollectionsMap {
         }
 
         let root = region[root_index];
-
-        let vcs = VersionControl::from_existing(self.lmdb_env.clone(), db.clone());
 
         let versions_result = vcs.get_branch_versions("main");
         let mut versions = match versions_result {
@@ -632,7 +622,7 @@ impl CollectionsMap {
                 }
                 regions_to_load.push((
                     region_start,
-                    *version_hash.version as u16,
+                    *version_hash.version,
                     version_id,
                     node_size as u32,
                     false,
@@ -658,7 +648,7 @@ impl CollectionsMap {
                 let region_start = (level_0_bufman_size * i) as u32;
                 regions_to_load.push((
                     region_start,
-                    *version_hash.version as u16,
+                    *version_hash.version,
                     version_id,
                     level_0_node_size as u32,
                     true,
@@ -693,23 +683,7 @@ impl CollectionsMap {
         let load_time = load_start.elapsed();
         println!("Loaded regions in: {:?}", load_time);
 
-        let lmdb = MetaDb {
-            env: self.lmdb_env.clone(),
-            db,
-        };
-
-        let current_version_result = retrieve_current_version(&lmdb);
-        let current_version = match current_version_result {
-            Ok(cv) => cv,
-            Err(e) => {
-                return Err(WaCustomError::DatabaseError(format!(
-                    "Failed to retrieve current version: {}",
-                    e
-                )));
-            }
-        };
-
-        let values_range_result = retrieve_values_range(&lmdb);
+        let values_range_result = retrieve_values_range(lmdb);
         let values_range = match values_range_result {
             Ok(vr) => vr,
             Err(e) => {
@@ -720,16 +694,12 @@ impl CollectionsMap {
             }
         };
         let hnsw_index = HNSWIndex::new(
-            coll.name.clone(),
             root,
             hnsw_index_data.levels_prob,
             hnsw_index_data.dim,
-            lmdb,
-            current_version,
             hnsw_index_data.quantization_metric,
             distance_metric,
             hnsw_index_data.storage_type,
-            vcs,
             hnsw_index_data.hnsw_params,
             cache,
             vec_raw_manager,
@@ -744,11 +714,11 @@ impl CollectionsMap {
     /// loads and initiates the inverted index of a collection from lmdb
     fn load_inverted_index(
         &self,
-        coll: &Collection,
-        root_path: &Path,
+        collection_meta: &CollectionMetadata,
+        lmdb: &MetaDb,
         config: &Config,
     ) -> Result<Option<InvertedIndex>, WaCustomError> {
-        let collection_path: Arc<Path> = root_path.join(&coll.name).into();
+        let collection_path: Arc<Path> = get_collections_path().join(&collection_meta.name).into();
         let index_path = collection_path.join("sparse_inverted_index");
 
         if !index_path.exists() {
@@ -761,39 +731,22 @@ impl CollectionsMap {
             8192,
         );
 
-        let db = Arc::new(
-            self.lmdb_env
-                .create_db(Some(&coll.name), DatabaseFlags::empty())
-                .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?,
-        );
-
-        let Some(inverted_index_data) =
-            InvertedIndexData::load(&self.lmdb_env, self.lmdb_inverted_index_db, &coll.get_key())?
+        let Some(inverted_index_data) = InvertedIndex::load_data(
+            &self.lmdb_env,
+            self.lmdb_inverted_index_db,
+            &collection_meta.name,
+        )?
         else {
             return Ok(None);
         };
 
-        let vcs = VersionControl::from_existing(self.lmdb_env.clone(), db.clone());
-        let lmdb = MetaDb {
-            env: self.lmdb_env.clone(),
-            db,
-        };
-        let current_version = retrieve_current_version(&lmdb)?;
-        let values_upper_bound = retrieve_values_upper_bound(&lmdb)?;
+        let values_upper_bound = retrieve_values_upper_bound(lmdb)?;
         let inverted_index = InvertedIndex {
-            name: coll.name.clone(),
-            description: inverted_index_data.description,
-            metadata_schema: inverted_index_data.metadata_schema,
-            max_vectors: inverted_index_data.max_vectors,
             root: InvertedIndexRoot::deserialize(
                 index_path,
                 inverted_index_data.quantization_bits,
                 config.inverted_index_data_file_parts,
             )?,
-            lmdb,
-            current_version: RwLock::new(current_version),
-            current_open_transaction: AtomicPtr::new(ptr::null_mut()),
-            vcs,
             values_upper_bound: RwLock::new(values_upper_bound.unwrap_or(1.0)),
             is_configured: AtomicBool::new(values_upper_bound.is_some()),
             vectors: RwLock::new(Vec::new()),
@@ -813,11 +766,11 @@ impl CollectionsMap {
     /// loads and initiates the TF-IDF index of a collection from lmdb
     fn load_tf_idf_index(
         &self,
-        coll: &Collection,
-        root_path: &Path,
+        collection_meta: &CollectionMetadata,
+        lmdb: &MetaDb,
         config: &Config,
     ) -> Result<Option<TFIDFIndex>, WaCustomError> {
-        let collection_path: Arc<Path> = root_path.join(&coll.name).into();
+        let collection_path: Arc<Path> = get_collections_path().join(&collection_meta.name).into();
         let index_path = collection_path.join("tf_idf_index");
 
         if !index_path.exists() {
@@ -830,35 +783,19 @@ impl CollectionsMap {
             8192,
         );
 
-        let db = Arc::new(
-            self.lmdb_env
-                .create_db(Some(&coll.name), DatabaseFlags::empty())
-                .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?,
-        );
-
-        let Some(inverted_index_data) =
-            TFIDFIndexData::load(&self.lmdb_env, self.lmdb_tf_idf_index_db, &coll.get_key())?
+        let Some(inverted_index_data) = TFIDFIndex::load_data(
+            &self.lmdb_env,
+            self.lmdb_tf_idf_index_db,
+            &collection_meta.name,
+        )?
         else {
             return Ok(None);
         };
 
-        let vcs = VersionControl::from_existing(self.lmdb_env.clone(), db.clone());
-        let lmdb = MetaDb {
-            env: self.lmdb_env.clone(),
-            db,
-        };
-        let current_version = retrieve_current_version(&lmdb)?;
-        let average_document_length = retrieve_average_document_length(&lmdb)?;
-        let highest_internal_id = retrieve_highest_internal_id(&lmdb)?;
+        let average_document_length = retrieve_average_document_length(lmdb)?;
+        let highest_internal_id = retrieve_highest_internal_id(lmdb)?;
         let inverted_index = TFIDFIndex {
-            name: coll.name.clone(),
-            description: inverted_index_data.description,
-            max_vectors: inverted_index_data.max_vectors,
             root: TFIDFIndexRoot::deserialize(index_path, config.inverted_index_data_file_parts)?,
-            lmdb,
-            current_version: RwLock::new(current_version),
-            current_open_transaction: AtomicPtr::new(ptr::null_mut()),
-            vcs,
             vec_raw_map: TreeMap::deserialize(
                 &vec_raw_manager,
                 config.inverted_index_data_file_parts,
@@ -881,34 +818,43 @@ impl CollectionsMap {
 
     pub fn insert_hnsw_index(
         &self,
-        name: &str,
+        collection: &Collection,
         hnsw_index: Arc<HNSWIndex>,
     ) -> Result<(), WaCustomError> {
-        HNSWIndexData::persist(&self.lmdb_env, self.lmdb_hnsw_index_db, &hnsw_index)?;
-        self.inner_hnsw_indexes
-            .insert(name.to_owned(), hnsw_index.clone());
+        hnsw_index.persist(
+            &collection.meta.name,
+            &self.lmdb_env,
+            self.lmdb_hnsw_index_db,
+        )?;
+        *collection.hnsw_index.write().unwrap() = Some(hnsw_index);
         Ok(())
     }
 
     pub fn insert_inverted_index(
         &self,
-        name: &str,
-        index: Arc<InvertedIndex>,
+        collection: &Collection,
+        inverted_index: Arc<InvertedIndex>,
     ) -> Result<(), WaCustomError> {
-        InvertedIndexData::persist(&self.lmdb_env, self.lmdb_inverted_index_db, &index)?;
-        self.inner_inverted_indexes
-            .insert(name.to_owned(), index.clone());
+        inverted_index.persist(
+            &collection.meta.name,
+            &self.lmdb_env,
+            self.lmdb_inverted_index_db,
+        )?;
+        *collection.inverted_index.write().unwrap() = Some(inverted_index);
         Ok(())
     }
 
     pub fn insert_tf_idf_index(
         &self,
-        name: &str,
-        index: Arc<TFIDFIndex>,
+        collection: &Collection,
+        tf_idf_index: Arc<TFIDFIndex>,
     ) -> Result<(), WaCustomError> {
-        TFIDFIndexData::persist(&self.lmdb_env, self.lmdb_tf_idf_index_db, &index)?;
-        self.inner_tf_idf_indexes
-            .insert(name.to_owned(), index.clone());
+        tf_idf_index.persist(
+            &collection.meta.name,
+            &self.lmdb_env,
+            self.lmdb_tf_idf_index_db,
+        )?;
+        *collection.tf_idf_index.write().unwrap() = Some(tf_idf_index);
         Ok(())
     }
 
@@ -916,64 +862,8 @@ impl CollectionsMap {
     #[allow(dead_code)]
     pub fn insert_collection(&self, collection: Arc<Collection>) -> Result<(), WaCustomError> {
         self.inner_collections
-            .insert(collection.name.to_owned(), collection);
+            .insert(collection.meta.name.to_owned(), collection);
         Ok(())
-    }
-
-    /// Returns the `HNSWIndex` by collection's name
-    ///
-    /// If not found, None is returned
-    ///
-    /// Note that it tried to look up the DenseIndex in the DashMap
-    /// only and doesn't check LMDB. This is because of the assumption
-    /// that at startup, all DenseIndexes will be loaded from LMDB
-    /// into the in-memory DashMap and when a new DenseIndex is
-    /// added, it will be written to the DashMap as well.
-    ///
-    /// @TODO: As a future improvement, we can fallback to checking if
-    /// the DenseIndex exists in LMDB and caching it. But it's not
-    /// required for the current use case.
-    #[allow(dead_code)]
-    pub fn get_hnsw_index(&self, name: &str) -> Option<Arc<HNSWIndex>> {
-        self.inner_hnsw_indexes.get(name).map(|index| index.clone())
-    }
-
-    /// Returns the `InvertedIndex` by collection's name
-    ///
-    /// If not found, None is returned
-    ///
-    /// Note that it tried to look up the InvertedIndex in the DashMap
-    /// only and doesn't check LMDB. This is because of the assumption
-    /// that at startup, all InvertedIndexes will be loaded from LMDB
-    /// into the in-memory DashMap and when a new InvertedIndex is
-    /// added, it will be written to the DashMap as well.
-    ///
-    /// @TODO: As a future improvement, we can fallback to checking if
-    /// the InvertedIndex exists in LMDB and caching it. But it's not
-    /// required for the current use case.
-    pub fn get_inverted_index(&self, name: &str) -> Option<Arc<InvertedIndex>> {
-        self.inner_inverted_indexes
-            .get(name)
-            .map(|index| index.clone())
-    }
-
-    /// Returns the `TFIDFIndex` by collection's name
-    ///
-    /// If not found, None is returned
-    ///
-    /// Note that it tried to look up the TFIDFINdex in the DashMap
-    /// only and doesn't check LMDB. This is because of the assumption
-    /// that at startup, all TFIDFIndex will be loaded from LMDB
-    /// into the in-memory DashMap and when a new TFIDFIndex is
-    /// added, it will be written to the DashMap as well.
-    ///
-    /// @TODO: As a future improvement, we can fallback to checking if
-    /// the TFIDFIndex exists in LMDB and caching it. But it's not
-    /// required for the current use case.
-    pub fn get_tf_idf_index(&self, name: &str) -> Option<Arc<TFIDFIndex>> {
-        self.inner_tf_idf_indexes
-            .get(name)
-            .map(|index| index.clone())
     }
 
     /// Returns the `Collection` by collection's name
@@ -993,16 +883,15 @@ impl CollectionsMap {
         self.inner_collections.get(name).map(|index| index.clone())
     }
 
-    pub fn remove_hnsw_index(
-        &self,
-        name: &str,
-    ) -> Result<Option<(String, Arc<HNSWIndex>)>, WaCustomError> {
-        match self.inner_hnsw_indexes.remove(name) {
-            Some((key, hnsw_index)) => {
-                HNSWIndexData::delete_index(&self.lmdb_env, self.lmdb_hnsw_index_db, &hnsw_index)
-                    .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-                Ok(Some((key, hnsw_index)))
-            }
+    pub fn remove_hnsw_index(&self, name: &str) -> Result<Option<Arc<HNSWIndex>>, WaCustomError> {
+        match self.inner_collections.get(name) {
+            Some(collection) => match collection.hnsw_index.write().unwrap().take() {
+                Some(hnsw_index) => {
+                    HNSWIndex::delete(&self.lmdb_env, self.lmdb_hnsw_index_db, name)?;
+                    Ok(Some(hnsw_index))
+                }
+                None => Ok(None),
+            },
             None => Ok(None),
         }
     }
@@ -1010,17 +899,15 @@ impl CollectionsMap {
     pub fn remove_inverted_index(
         &self,
         name: &str,
-    ) -> Result<Option<(String, Arc<InvertedIndex>)>, WaCustomError> {
-        match self.inner_inverted_indexes.remove(name) {
-            Some((key, inverted_index)) => {
-                InvertedIndexData::delete_index(
-                    &self.lmdb_env,
-                    self.lmdb_hnsw_index_db,
-                    &inverted_index,
-                )
-                .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-                Ok(Some((key, inverted_index)))
-            }
+    ) -> Result<Option<Arc<InvertedIndex>>, WaCustomError> {
+        match self.inner_collections.get(name) {
+            Some(collection) => match collection.inverted_index.write().unwrap().take() {
+                Some(inverted_index) => {
+                    InvertedIndex::delete(&self.lmdb_env, self.lmdb_inverted_index_db, name)?;
+                    Ok(Some(inverted_index))
+                }
+                None => Ok(None),
+            },
             None => Ok(None),
         }
     }
@@ -1028,17 +915,15 @@ impl CollectionsMap {
     pub fn remove_tf_idf_index(
         &self,
         name: &str,
-    ) -> Result<Option<(String, Arc<TFIDFIndex>)>, WaCustomError> {
-        match self.inner_tf_idf_indexes.remove(name) {
-            Some((key, inverted_index)) => {
-                TFIDFIndexData::delete_index(
-                    &self.lmdb_env,
-                    self.lmdb_hnsw_index_db,
-                    &inverted_index,
-                )
-                .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-                Ok(Some((key, inverted_index)))
-            }
+    ) -> Result<Option<Arc<TFIDFIndex>>, WaCustomError> {
+        match self.inner_collections.get(name) {
+            Some(collection) => match collection.tf_idf_index.write().unwrap().take() {
+                Some(tf_idf_index) => {
+                    TFIDFIndex::delete(&self.lmdb_env, self.lmdb_tf_idf_index_db, name)?;
+                    Ok(Some(tf_idf_index))
+                }
+                None => Ok(None),
+            },
             None => Ok(None),
         }
     }
@@ -1057,30 +942,6 @@ impl CollectionsMap {
                 Err(WaCustomError::NotFound("collection".into()))
             }
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn iter_hnsw_indexes(
-        &self,
-    ) -> dashmap::iter::Iter<
-        String,
-        Arc<HNSWIndex>,
-        std::hash::RandomState,
-        DashMap<String, Arc<HNSWIndex>>,
-    > {
-        self.inner_hnsw_indexes.iter()
-    }
-
-    #[allow(dead_code)]
-    pub fn iter_inverted_indexes(
-        &self,
-    ) -> dashmap::iter::Iter<
-        String,
-        Arc<InvertedIndex>,
-        std::hash::RandomState,
-        DashMap<String, Arc<InvertedIndex>>,
-    > {
-        self.inner_inverted_indexes.iter()
     }
 
     /// returns an iterator
