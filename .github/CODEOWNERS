@@ -1,0 +1,96 @@
+################################################################################
+#                        IMPORTANT NOTES FOR CODEOWNERS:                       #
+#                                                                              #
+# - If you will be unavailable for more than 24 hours, please do all of the    #
+#   following:                                                                 #
+#   (a) Make sure there are other folks on your codeowner team.                #
+#   (b) Send a note to them and make sure they can cover your reviews while    #
+#     absent, and tell them when you'll be back. Please include @tinkn,        #
+#     on that note.                                                            #
+#   (c) Update your GitHub status to "busy" to make sure you don't get         #
+#     reviews.                                                                 #
+#   (d) When you're back, change your status back so that you get new reviews. #
+#                                                                              #
+# - The order of ownership below matters. The later line always takes          #
+#   precedence, so broad ownership (e.g. directory-based) should be listed     #
+#   first and more narrow ownership (e.g. name-based) should be lasted later.  #
+#                                                                              #
+################################################################################
+
+# Single Codeowner for time being
+* @tinkn
+
+# ---=============================== MODULES ==============================--- #
+
+
+################################################################################
+#                                     Org                                      #
+################################################################################
+
+# TODO - Add required files here
+
+
+################################################################################
+#                                     Proto                                    #
+################################################################################
+
+# TODO - Add required files here
+
+
+################################################################################
+#                                     Test                                     #
+################################################################################
+
+# TODO - Add required files here
+
+
+################################################################################
+#                                     Wiki                                     #
+################################################################################
+
+# TODO - Add required files here
+
+
+
+# ---====================== REPOSITORY CONFIGURATIONS =====================--- #
+
+################################################################################
+#                           Git/GitHub configurations                          #
+################################################################################
+
+# TODO - Add required files here
+
+
+################################################################################
+#                     Continuous integration configurations                    #
+################################################################################
+
+/.github/workflows/ @tinkn
+
+
+################################################################################
+#              Third-party dependencies & licenses configurations              #
+################################################################################
+
+# TODO - Add required files here
+
+
+################################################################################
+#                         Linter & IDE configurations                          #
+################################################################################
+
+# TODO - Add required files here
+
+
+
+# ---========================== GLOBAL OVERRIDES ==========================--- #
+
+################################################################################
+#                           Sensitive file ownership                           #
+################################################################################
+
+# Codeowners ownership (for adding/changing/removing code owners).
+/.github/CODEOWNERS @tinkn
+
+# Code license.
+/LICENSE @tinkn
