@@ -16,4 +16,4 @@ Fixes #
 - [ ] The PR is made from a branch that's **not** called "main" and is up-to-date with "main".
 - [ ] The PR is **assigned** to the appropriate reviewers 
 
-@... PTAL?
+@<reviewer‑github‑handle> Could you please review this when you have a moment? Thank you!
