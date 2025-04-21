@@ -175,9 +175,8 @@ def create_index(name: str, k1: float, b: float):
 
 def create_transaction(collection_name: str) -> str:
     url = f"{BASE_URL}/collections/{collection_name}/transactions"
-    data = {"index_type": "tf_idf"}
     response = requests.post(
-        url, headers=generate_headers(), data=json.dumps(data), verify=False
+        url, headers=generate_headers(), verify=False
     )
     result = response.json()
     return result["transaction_id"]
@@ -187,8 +186,7 @@ def upsert_vectors(collection_name: str, txn_id: str, documents: List[Document])
     documents = [{"id": document[0], "text": document[1]} for document in documents]
 
     url = f"{BASE_URL}/collections/{collection_name}/transactions/{txn_id}/upsert"
-    data = {"index_type": "tf_idf", "documents": documents}
-    print(data)
+    data = {"vectors": documents}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
@@ -221,9 +219,8 @@ def index(
 
 def commit_transaction(collection_name: str, txn_id: str):
     url = f"{BASE_URL}/collections/{collection_name}/transactions/{txn_id}/commit"
-    data = {"index_type": "tf_idf"}
     response = requests.post(
-        url, data=json.dumps(data), headers=generate_headers(), verify=False
+        url, headers=generate_headers(), verify=False
     )
     if response.status_code not in [200, 204]:
         print(f"Error response: {response.text}")
@@ -238,7 +235,6 @@ def search_document(
         "query": query,
         "top_k": top_k,
     }
-    print(data)
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
@@ -410,6 +406,10 @@ def main(
     commit_transaction(collection_name, txn_id)
     results = search_documents(collection_name, queries, ids_map, top_k)
     ndcg, _map, recall, _precision = EvaluateRetrieval.evaluate(qrels, results, [1, 10])
+
+    print("NDCG@10:", ndcg["NDCG@10"])
+    print("Recall@10:", recall["Recall@10"])
+    
     qps_queries = [v for (_, v) in qps_queries.items()][:10_000]
     qps, _, _, _, _ = run_qps_test(collection_name, qps_queries, batch_size, top_k)
 

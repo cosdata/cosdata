@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use crate::{
     app_context::AppContext,
-    models::{collection::Collection, common::WaCustomError},
+    models::{
+        collection::Collection, common::WaCustomError, meta_persist::update_current_version,
+        types::MetaDb, versioning::VersionControl,
+    },
 };
 
 use super::{
@@ -24,9 +27,13 @@ pub(crate) async fn create_collection(
         sparse_vector,
         tf_idf_options,
     }: CreateCollectionDto,
-) -> Result<Collection, CollectionsError> {
+) -> Result<Arc<Collection>, CollectionsError> {
     let env = &ctx.ain_env.persist;
     let collections_db = &ctx.ain_env.collections_map.lmdb_collections_db;
+    let lmdb = MetaDb::from_env(env.clone(), &name)
+        .map_err(|err| CollectionsError::WaCustomError(WaCustomError::from(err)))?;
+    let (vcs, hash) = VersionControl::new(env.clone(), lmdb.db.clone())
+        .map_err(|err| CollectionsError::WaCustomError(WaCustomError::from(err)))?;
 
     let metadata_schema = match metadata_schema {
         Some(s) => {
@@ -38,27 +45,33 @@ pub(crate) async fn create_collection(
         None => None,
     };
 
-    let collection = Collection::new(
-        name,
-        description,
-        dense_vector,
-        sparse_vector,
-        tf_idf_options,
-        metadata_schema,
-        config,
-    )
-    .map_err(CollectionsError::WaCustomError)?;
+    let collection = Arc::new(
+        Collection::new(
+            name,
+            description,
+            dense_vector,
+            sparse_vector,
+            tf_idf_options,
+            metadata_schema,
+            config,
+            lmdb,
+            hash,
+            vcs,
+        )
+        .map_err(CollectionsError::WaCustomError)?,
+    );
 
     // adding the created collection into the in-memory map
     ctx.ain_env
         .collections_map
-        .insert_collection(Arc::new(collection.clone()))
+        .insert_collection(collection.clone())
         .map_err(CollectionsError::WaCustomError)?;
 
     // persisting collection after creation
-    let _ = collection
+    collection
         .persist(env, *collections_db)
-        .map_err(CollectionsError::WaCustomError);
+        .map_err(CollectionsError::WaCustomError)?;
+    update_current_version(&collection.lmdb, hash).map_err(CollectionsError::WaCustomError)?;
     Ok(collection)
 }
 
@@ -74,8 +87,8 @@ pub(crate) async fn get_collections(
         .collections_map
         .iter_collections()
         .map(|c| GetCollectionsResponseDto {
-            name: c.name.clone(),
-            description: c.description.clone(),
+            name: c.meta.name.clone(),
+            description: c.meta.description.clone(),
         })
         .collect();
     Ok(collections)
@@ -129,8 +142,8 @@ pub(crate) async fn list_collections(
         .collections_map
         .iter_collections()
         .map(|collection_arc| CollectionSummaryDto {
-            name: collection_arc.name.clone(),
-            description: collection_arc.description.clone(),
+            name: collection_arc.meta.name.clone(),
+            description: collection_arc.meta.description.clone(),
         })
         .collect();
 

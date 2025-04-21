@@ -25,18 +25,18 @@ impl Deref for BranchId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Version(u32);
+pub struct Version(u16);
 
-impl From<u32> for Version {
-    fn from(inner: u32) -> Self {
+impl From<u16> for Version {
+    fn from(inner: u16) -> Self {
         Self(inner)
     }
 }
 
 impl Deref for Version {
-    type Target = u32;
+    type Target = u16;
 
-    fn deref(&self) -> &u32 {
+    fn deref(&self) -> &u16 {
         &self.0
     }
 }
@@ -120,7 +120,7 @@ impl VersionHash {
     }
 
     fn serialize(&self) -> Vec<u8> {
-        let mut result = Vec::with_capacity(16);
+        let mut result = Vec::with_capacity(14);
 
         result.extend_from_slice(&self.branch.to_le_bytes());
         result.extend_from_slice(&self.version.to_le_bytes());
@@ -130,13 +130,13 @@ impl VersionHash {
     }
 
     fn deserialize(bytes: &[u8]) -> Result<Self, &'static str> {
-        if bytes.len() != 16 {
-            return Err("Input must be exactly 16 bytes");
+        if bytes.len() != 14 {
+            return Err("Input must be exactly 14 bytes");
         }
 
         let branch = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
-        let version = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
-        let timestamp = u32::from_le_bytes(bytes[12..16].try_into().unwrap());
+        let version = u16::from_le_bytes(bytes[8..10].try_into().unwrap());
+        let timestamp = u32::from_le_bytes(bytes[10..14].try_into().unwrap());
 
         Ok(VersionHash {
             branch: BranchId(branch),
@@ -161,7 +161,7 @@ impl BranchInfo {
     fn serialize(&self) -> Vec<u8> {
         let name_bytes = self.branch_name.as_bytes();
 
-        let mut result = Vec::with_capacity(20 + name_bytes.len());
+        let mut result = Vec::with_capacity(16 + name_bytes.len());
 
         // Serialize current_version
         result.extend_from_slice(&self.current_version.to_le_bytes());
@@ -182,24 +182,24 @@ impl BranchInfo {
     }
 
     fn deserialize(bytes: &[u8]) -> Result<Self, &'static str> {
-        if bytes.len() < 20 {
+        if bytes.len() < 16 {
             return Err("Input must be at least 20 bytes");
         }
 
         // Deserialize current_version
-        let current_version = Version(u32::from_le_bytes(bytes[0..4].try_into().unwrap()));
+        let current_version = Version(u16::from_le_bytes(bytes[0..2].try_into().unwrap()));
 
         // Deserialize parent_branch
-        let parent_branch = BranchId(u64::from_le_bytes(bytes[4..12].try_into().unwrap()));
+        let parent_branch = BranchId(u64::from_le_bytes(bytes[2..10].try_into().unwrap()));
 
         // Deserialize parent_version
-        let parent_version = Version(u32::from_le_bytes(bytes[12..16].try_into().unwrap()));
+        let parent_version = Version(u16::from_le_bytes(bytes[10..12].try_into().unwrap()));
 
         // Deserialize least_version
-        let least_version = Hash(u32::from_le_bytes(bytes[16..20].try_into().unwrap()));
+        let least_version = Hash(u32::from_le_bytes(bytes[12..16].try_into().unwrap()));
 
         let branch_name =
-            String::from_utf8(bytes[20..].to_vec()).map_err(|_| "Invalid UTF-8 in branch name")?;
+            String::from_utf8(bytes[16..].to_vec()).map_err(|_| "Invalid UTF-8 in branch name")?;
 
         Ok(BranchInfo {
             branch_name,

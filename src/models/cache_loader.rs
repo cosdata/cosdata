@@ -435,6 +435,11 @@ impl InvertedIndexCache {
             self,
         )
     }
+
+    pub fn flush_all(&self) -> Result<(), BufIoError> {
+        self.dim_bufman.flush()?;
+        self.data_bufmans.flush_all()
+    }
 }
 
 pub struct TFIDFIndexCache {
@@ -546,5 +551,10 @@ impl TFIDFIndexCache {
             self.data_file_parts,
             self,
         )
+    }
+
+    pub fn flush_all(&self) -> Result<(), BufIoError> {
+        self.dim_bufman.flush()?;
+        self.data_bufmans.flush_all()
     }
 }

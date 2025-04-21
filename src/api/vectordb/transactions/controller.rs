@@ -1,83 +1,41 @@
 use actix_web::{web, HttpResponse};
 
+use crate::api::vectordb::vectors::dtos::CreateVectorDto;
+use crate::app_context::AppContext;
 use crate::models::collection_cache::CollectionCacheExt;
-use crate::{
-    api::vectordb::{indexes::dtos::IndexType, vectors::dtos::CreateDenseVectorDto},
-    app_context::AppContext,
-};
 
-use super::{
-    dtos::{AbortTransactionDto, CommitTransactionDto, CreateTransactionDto, UpsertDto},
-    error::TransactionError,
-    service,
-};
+use super::{dtos::UpsertDto, error::TransactionError, service};
 
 pub(crate) async fn create_transaction(
     collection_id: web::Path<String>,
     ctx: web::Data<AppContext>,
-    web::Json(CreateTransactionDto { index_type }): web::Json<CreateTransactionDto>,
 ) -> Result<HttpResponse, TransactionError> {
     let collection_id = collection_id.into_inner();
 
     ctx.update_collection_for_transaction(&collection_id)
         .map_err(|e| TransactionError::FailedToCreateTransaction(format!("Cache error: {}", e)))?;
 
-    let transaction = match index_type {
-        IndexType::Dense => {
-            service::create_dense_index_transaction(ctx.into_inner(), &collection_id).await?
-        }
-        IndexType::Sparse => {
-            service::create_sparse_index_transaction(ctx.into_inner(), &collection_id).await?
-        }
-        IndexType::TfIdf => {
-            service::create_tf_idf_index_transaction(ctx.into_inner(), &collection_id).await?
-        }
-    };
+    let transaction = service::create_transaction(ctx.into_inner(), &collection_id).await?;
+
     Ok(HttpResponse::Ok().json(transaction))
 }
 
 pub(crate) async fn commit_transaction(
     params: web::Path<(String, u32)>,
     ctx: web::Data<AppContext>,
-    web::Json(CommitTransactionDto { index_type }): web::Json<CommitTransactionDto>,
 ) -> Result<HttpResponse, TransactionError> {
     let (collection_id, transaction_id) = params.into_inner();
 
     ctx.update_collection_for_transaction(&collection_id)
         .map_err(|e| TransactionError::FailedToCommitTransaction(format!("Cache error: {}", e)))?;
 
-    match index_type {
-        IndexType::Dense => {
-            service::commit_dense_index_transaction(
-                ctx.into_inner(),
-                &collection_id,
-                transaction_id.into(),
-            )
-            .await?
-        }
-        IndexType::Sparse => {
-            service::commit_sparse_index_transaction(
-                ctx.into_inner(),
-                &collection_id,
-                transaction_id.into(),
-            )
-            .await?
-        }
-        IndexType::TfIdf => {
-            service::commit_tf_idf_index_transaction(
-                ctx.into_inner(),
-                &collection_id,
-                transaction_id.into(),
-            )
-            .await?
-        }
-    };
+    service::commit_transaction(ctx.into_inner(), &collection_id, transaction_id.into()).await?;
     Ok(HttpResponse::NoContent().finish())
 }
 
 pub(crate) async fn create_vector_in_transaction(
     params: web::Path<(String, u32)>,
-    web::Json(create_vector_dto): web::Json<CreateDenseVectorDto>,
+    web::Json(create_vector_dto): web::Json<CreateVectorDto>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse, TransactionError> {
     let (collection_id, transaction_id) = params.into_inner();
@@ -97,38 +55,12 @@ pub(crate) async fn create_vector_in_transaction(
 pub(crate) async fn abort_transaction(
     params: web::Path<(String, u32)>,
     ctx: web::Data<AppContext>,
-    web::Json(AbortTransactionDto { index_type }): web::Json<AbortTransactionDto>,
 ) -> Result<HttpResponse, TransactionError> {
     let (collection_id, transaction_id) = params.into_inner();
 
     ctx.update_collection_for_transaction(&collection_id)
         .map_err(|e| TransactionError::FailedToCommitTransaction(format!("Cache error: {}", e)))?;
-    match index_type {
-        IndexType::Dense => {
-            service::abort_dense_index_transaction(
-                ctx.into_inner(),
-                &collection_id,
-                transaction_id.into(),
-            )
-            .await?
-        }
-        IndexType::Sparse => {
-            service::abort_sparse_index_transaction(
-                ctx.into_inner(),
-                &collection_id,
-                transaction_id.into(),
-            )
-            .await?
-        }
-        IndexType::TfIdf => {
-            service::abort_tf_idf_index_transaction(
-                ctx.into_inner(),
-                &collection_id,
-                transaction_id.into(),
-            )
-            .await?
-        }
-    };
+    service::abort_transaction(ctx.into_inner(), &collection_id, transaction_id.into()).await?;
     Ok(HttpResponse::NoContent().finish())
 }
 
@@ -161,34 +93,12 @@ pub(crate) async fn upsert(
     ctx.update_collection_for_transaction(&collection_id)
         .map_err(|e| TransactionError::FailedToCreateVector(format!("Cache error: {}", e)))?;
 
-    match upsert_dto {
-        UpsertDto::Dense { vectors } => {
-            service::upsert_dense_vectors(
-                ctx.into_inner(),
-                &collection_id,
-                transaction_id.into(),
-                vectors,
-            )
-            .await?
-        }
-        UpsertDto::Sparse { vectors } => {
-            service::upsert_sparse_vectors(
-                ctx.into_inner(),
-                &collection_id,
-                transaction_id.into(),
-                vectors,
-            )
-            .await?
-        }
-        UpsertDto::TfIdf { documents } => {
-            service::upsert_tf_idf_documents(
-                ctx.into_inner(),
-                &collection_id,
-                transaction_id.into(),
-                documents,
-            )
-            .await?
-        }
-    };
+    service::upsert_vectors(
+        ctx.into_inner(),
+        &collection_id,
+        transaction_id.into(),
+        upsert_dto.vectors,
+    )
+    .await?;
     Ok(HttpResponse::Ok().finish())
 }

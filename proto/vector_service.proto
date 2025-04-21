@@ -6,9 +6,11 @@ import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
 
 // Common types
-message DenseVector {
+message Vector {
     uint64 id = 1;
-    repeated float values = 2;
+    repeated float dense_values = 2;
+    repeated SparsePair sparse_values = 3;
+    optional string text = 4;
 }
 
 message SparsePair {
@@ -192,7 +194,7 @@ service TransactionsService {
     rpc CreateTransaction(CreateTransactionRequest) returns (CreateTransactionResponse);
     rpc CommitTransaction(CommitTransactionRequest) returns (google.protobuf.Empty);
     rpc AbortTransaction(AbortTransactionRequest) returns (google.protobuf.Empty);
-    rpc CreateVectorInTransaction(CreateVectorInTransactionRequest) returns (DenseVector);
+    rpc CreateVectorInTransaction(CreateVectorInTransactionRequest) returns (google.protobuf.Empty);
     rpc DeleteVectorInTransaction(DeleteVectorInTransactionRequest) returns (google.protobuf.Empty);
     rpc UpsertVectors(UpsertVectorsRequest) returns (google.protobuf.Empty);
 }
@@ -200,11 +202,11 @@ service TransactionsService {
 enum IndexType {
     DENSE = 0;
     SPARSE = 1;
+    TFIDF = 2;
 }
 
 message CreateTransactionRequest {
     string collection_id = 1;
-    IndexType index_type = 2;
 }
 
 message CreateTransactionResponse {
@@ -215,19 +217,17 @@ message CreateTransactionResponse {
 message CommitTransactionRequest {
     string collection_id = 1;
     uint32 transaction_id = 2;
-    IndexType index_type = 3;
 }
 
 message AbortTransactionRequest {
     string collection_id = 1;
     uint32 transaction_id = 2;
-    IndexType index_type = 3;
 }
 
 message CreateVectorInTransactionRequest {
     string collection_id = 1;
     uint32 transaction_id = 2;
-    DenseVector vector = 3;
+    Vector vector = 3;
 }
 
 message DeleteVectorInTransactionRequest {
@@ -239,56 +239,20 @@ message DeleteVectorInTransactionRequest {
 message UpsertVectorsRequest {
     string collection_id = 1;
     uint32 transaction_id = 2;
-    oneof vectors {
-        DenseVectorsPayload dense = 3;
-        SparseVectorsPayload sparse = 4;
-    }
-}
-
-message DenseVectorsPayload {
-    repeated DenseVector vectors = 1;
-}
-
-message SparseVectorsPayload {
-    repeated SparseVector vectors = 1;
+    repeated Vector vectors = 3;
 }
 
 // Vectors Service
 service VectorsService {
-    rpc CreateVector(CreateVectorRequest) returns (VectorResponse);
     rpc GetVector(GetVectorRequest) returns (VectorResponse);
-    rpc UpdateVector(UpdateVectorRequest) returns (VectorResponse);
-    rpc DeleteVector(DeleteVectorRequest) returns (google.protobuf.Empty);
     rpc FindSimilarVectors(FindSimilarVectorsRequest) returns (FindSimilarVectorsResponse);
 }
 
-message CreateVectorRequest {
-    string collection_id = 1;
-    oneof vector {
-        DenseVector dense = 2;
-        SparseVector sparse = 3;
-    }
-}
-
 message VectorResponse {
-    oneof vector {
-        DenseVector dense = 1;
-        SparseVector sparse = 2;
-    }
+    Vector vector = 1;
 }
 
 message GetVectorRequest {
-    string collection_id = 1;
-    uint64 vector_id = 2;
-}
-
-message UpdateVectorRequest {
-    string collection_id = 1;
-    uint64 vector_id = 2;
-    repeated float values = 3;
-}
-
-message DeleteVectorRequest {
     string collection_id = 1;
     uint64 vector_id = 2;
 }
@@ -298,17 +262,24 @@ message FindSimilarVectorsRequest {
     oneof query {
         FindSimilarDenseVectorsQuery dense = 2;
         FindSimilarSparseVectorsQuery sparse = 3;
+        FindSimilarTFIDFDocumentQuery tf_idf = 4;
     }
 }
 
 message FindSimilarDenseVectorsQuery {
     repeated float vector = 1;
-    uint64 k = 2;
+    optional uint64 top_k = 2;
 }
 
 message FindSimilarSparseVectorsQuery {
     repeated SparsePair values = 1;
-    uint64 k = 2;
+    optional float early_terminate_threshold = 2;
+    optional uint64 top_k = 3;
+}
+
+message FindSimilarTFIDFDocumentQuery {
+    string query = 1;
+    optional uint64 top_k = 2;
 }
 
 message SimilarVectorMatch {
@@ -317,16 +288,9 @@ message SimilarVectorMatch {
 }
 
 message FindSimilarVectorsResponse {
-    oneof results {
-        DenseResults dense = 1;
-        SparseResults sparse = 2;
-    }
+    SearchResults results = 1;
 }
 
-message DenseResults {
-    repeated SimilarVectorMatch matches = 1;
-}
-
-message SparseResults {
+message SearchResults {
     repeated SimilarVectorMatch matches = 1;
 }

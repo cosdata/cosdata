@@ -25,16 +25,18 @@ pub(crate) async fn dense_search(
     ctx.update_collection_for_query(&collection_id)
         .map_err(|e| SearchError::InternalServerError(format!("Cache update error: {}", e)))?;
 
-    let hnsw_index = ctx
+    let collection = ctx
         .ain_env
         .collections_map
-        .get_hnsw_index(&collection_id)
-        .ok_or_else(|| {
-            SearchError::IndexNotFound(format!(
-                "Dense (HNSW) index not found for collection '{}'",
-                collection_id
-            ))
-        })?;
+        .get_collection(&collection_id)
+        .ok_or_else(|| SearchError::CollectionNotFound(collection_id.clone()))?;
+
+    let hnsw_index = collection.get_hnsw_index().ok_or_else(|| {
+        SearchError::IndexNotFound(format!(
+            "Dense (HNSW) index not found for collection '{}'",
+            collection_id
+        ))
+    })?;
 
     let metadata_filter = match body.filter {
         Some(api_filter) => Some(api_filter),
@@ -43,6 +45,7 @@ pub(crate) async fn dense_search(
 
     let result: Vec<(crate::models::types::VectorId, MetricResult)> = ann_vector_query(
         ctx.into_inner(),
+        &collection,
         hnsw_index.clone(),
         body.query_vector,
         metadata_filter,
@@ -75,16 +78,18 @@ pub(crate) async fn batch_dense_search(
     ctx.update_collection_for_query(&collection_id)
         .map_err(|e| SearchError::InternalServerError(format!("Cache update error: {}", e)))?;
 
-    let hnsw_index = ctx
+    let collection = ctx
         .ain_env
         .collections_map
-        .get_hnsw_index(&collection_id)
-        .ok_or_else(|| {
-            SearchError::IndexNotFound(format!(
-                "Dense (HNSW) index not found for collection '{}'",
-                collection_id
-            ))
-        })?;
+        .get_collection(&collection_id)
+        .ok_or_else(|| SearchError::CollectionNotFound(collection_id.clone()))?;
+
+    let hnsw_index = collection.get_hnsw_index().ok_or_else(|| {
+        SearchError::IndexNotFound(format!(
+            "Dense (HNSW) index not found for collection '{}'",
+            collection_id
+        ))
+    })?;
 
     let metadata_filter = match body.filter {
         Some(api_filter) => Some(api_filter),
@@ -93,6 +98,7 @@ pub(crate) async fn batch_dense_search(
 
     let results: Vec<Vec<(crate::models::types::VectorId, MetricResult)>> = batch_ann_vector_query(
         ctx.into_inner(),
+        &collection,
         hnsw_index.clone(),
         body.query_vectors,
         metadata_filter,

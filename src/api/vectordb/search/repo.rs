@@ -25,21 +25,24 @@ pub(crate) async fn dense_search(
     collection_id: &str,
     request: dtos::DenseSearchRequestDto,
 ) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
-    let hnsw_index = ctx
+    let collection = ctx
         .ain_env
         .collections_map
-        .get_hnsw_index(collection_id)
-        .ok_or_else(|| {
-            WaCustomError::NotFound(format!(
-                "Dense index not found for collection '{}'",
-                collection_id
-            ))
-        })?;
+        .get_collection(collection_id)
+        .ok_or_else(|| WaCustomError::NotFound(format!("collection '{}'", collection_id)))?;
+
+    let hnsw_index = collection.get_hnsw_index().ok_or_else(|| {
+        WaCustomError::NotFound(format!(
+            "Dense index not found for collection '{}'",
+            collection_id
+        ))
+    })?;
 
     let metadata_filter: Option<Filter> = request.filter;
 
     ann_vector_query(
         ctx,
+        &collection,
         hnsw_index.clone(),
         request.query_vector,
         metadata_filter,
@@ -54,21 +57,24 @@ pub(crate) async fn batch_dense_search(
     collection_id: &str,
     request: dtos::BatchDenseSearchRequestDto,
 ) -> Result<Vec<Vec<(VectorId, MetricResult)>>, WaCustomError> {
-    let hnsw_index = ctx
+    let collection = ctx
         .ain_env
         .collections_map
-        .get_hnsw_index(collection_id)
-        .ok_or_else(|| {
-            WaCustomError::NotFound(format!(
-                "Dense index not found for collection '{}'",
-                collection_id
-            ))
-        })?;
+        .get_collection(collection_id)
+        .ok_or_else(|| WaCustomError::NotFound(format!("collection '{}'", collection_id)))?;
+
+    let hnsw_index = collection.get_hnsw_index().ok_or_else(|| {
+        WaCustomError::NotFound(format!(
+            "Dense index not found for collection '{}'",
+            collection_id
+        ))
+    })?;
 
     let metadata_filter: Option<Filter> = request.filter;
 
     batch_ann_vector_query(
         ctx,
+        &collection,
         hnsw_index.clone(),
         request.query_vectors,
         metadata_filter,
@@ -82,17 +88,18 @@ pub(crate) async fn sparse_search(
     collection_id: &str,
     request: dtos::SparseSearchRequestDto,
 ) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
-    // Get ONLY the regular inverted index
-    let inverted_index = ctx
+    let collection = ctx
         .ain_env
         .collections_map
-        .get_inverted_index(collection_id)
-        .ok_or_else(|| {
-            WaCustomError::NotFound(format!(
-                "Sparse index not found for collection '{}'",
-                collection_id
-            ))
-        })?;
+        .get_collection(collection_id)
+        .ok_or_else(|| WaCustomError::NotFound(format!("collection '{}'", collection_id)))?;
+
+    let inverted_index = collection.get_inverted_index().ok_or_else(|| {
+        WaCustomError::NotFound(format!(
+            "Sparse index not found for collection '{}'",
+            collection_id
+        ))
+    })?;
 
     let threshold = request
         .early_terminate_threshold
@@ -112,17 +119,18 @@ pub(crate) async fn batch_sparse_search(
     collection_id: &str,
     request: dtos::BatchSparseSearchRequestDto,
 ) -> Result<Vec<Vec<(VectorId, MetricResult)>>, WaCustomError> {
-    // Get ONLY the regular inverted index
-    let inverted_index = ctx
+    let collection = ctx
         .ain_env
         .collections_map
-        .get_inverted_index(collection_id)
-        .ok_or_else(|| {
-            WaCustomError::NotFound(format!(
-                "Sparse index not found for collection '{}'",
-                collection_id
-            ))
-        })?;
+        .get_collection(collection_id)
+        .ok_or_else(|| WaCustomError::NotFound(format!("collection '{}'", collection_id)))?;
+
+    let inverted_index = collection.get_inverted_index().ok_or_else(|| {
+        WaCustomError::NotFound(format!(
+            "Sparse index not found for collection '{}'",
+            collection_id
+        ))
+    })?;
 
     let threshold = request
         .early_terminate_threshold
@@ -137,7 +145,7 @@ pub(crate) async fn batch_sparse_search(
     )
 }
 
-fn sparse_ann_vector_query_logic(
+pub fn sparse_ann_vector_query_logic(
     config: &Config,
     inverted_index: Arc<InvertedIndex>,
     query: &[SparsePair],
@@ -258,19 +266,19 @@ pub(crate) async fn hybrid_search(
     collection_id: &str,
     request: dtos::HybridSearchRequestDto,
 ) -> Result<Vec<(VectorId, f32)>, SearchError> {
-    let hnsw_index = ctx
+    let collection = ctx
         .ain_env
         .collections_map
-        .get_hnsw_index(collection_id)
-        .ok_or_else(|| {
-            SearchError::IndexNotFound("Dense index required for hybrid search.".to_string())
-        })?;
+        .get_collection(collection_id)
+        .ok_or_else(|| WaCustomError::NotFound(format!("Collection '{}'", collection_id)))?;
+
+    let hnsw_index = collection.get_hnsw_index().ok_or_else(|| {
+        SearchError::IndexNotFound("Dense index required for hybrid search.".to_string())
+    })?;
 
     // Perform Search on *Available* Sparse Index (Synchronous Call)
-    let sparse_results: Vec<(VectorId, MetricResult)> = if let Some(inverted_index) = ctx
-        .ain_env
-        .collections_map
-        .get_inverted_index(collection_id)
+    let sparse_results: Vec<(VectorId, MetricResult)> = if let Some(inverted_index) =
+        collection.get_inverted_index()
     {
         let sparse_k = request.top_k * 3;
         let threshold = ctx.config.search.early_terminate_threshold;
@@ -285,7 +293,7 @@ pub(crate) async fn hybrid_search(
         .map_err(|e| {
             SearchError::SearchFailed(format!("Hybrid: Sparse component (regular) failed: {}", e))
         })?
-    } else if let Some(idf_index) = ctx.ain_env.collections_map.get_tf_idf_index(collection_id) {
+    } else if let Some(idf_index) = collection.get_tf_idf_index() {
         log::debug!(
             "Using IDF index for hybrid sparse component in collection '{}'",
             collection_id
@@ -321,6 +329,7 @@ pub(crate) async fn hybrid_search(
     let dense_k = request.top_k * 3;
     let dense_results = ann_vector_query(
         ctx.clone(),
+        &collection,
         hnsw_index.clone(),
         request.query_vector,
         None, // Pass None for filter
@@ -350,7 +359,7 @@ pub(crate) async fn hybrid_search(
     Ok(final_results)
 }
 
-fn tf_idf_ann_vector_query(
+pub fn tf_idf_ann_vector_query(
     tf_idf_index: Arc<TFIDFIndex>,
     query: &str,
     top_k: Option<usize>,
@@ -399,17 +408,19 @@ pub(crate) async fn tf_idf_search(
     collection_id: &str,
     request: dtos::FindSimilarTFIDFDocumentDto,
 ) -> Result<Vec<(VectorId, f32)>, WaCustomError> {
-    // Returns f32 score
-    let tf_idf_index = ctx
+    let collection = ctx
         .ain_env
         .collections_map
-        .get_tf_idf_index(collection_id)
-        .ok_or_else(|| {
-            WaCustomError::NotFound(format!(
-                "Sparse IDF index not found for collection '{}'",
-                collection_id
-            ))
-        })?;
+        .get_collection(collection_id)
+        .ok_or_else(|| WaCustomError::NotFound(format!("Collection '{}'", collection_id)))?;
+
+    // Returns f32 score
+    let tf_idf_index = collection.get_tf_idf_index().ok_or_else(|| {
+        WaCustomError::NotFound(format!(
+            "Sparse IDF index not found for collection '{}'",
+            collection_id
+        ))
+    })?;
 
     // Call the helper directly
     tf_idf_ann_vector_query(tf_idf_index, &request.query, request.top_k)
@@ -420,17 +431,19 @@ pub(crate) async fn batch_tf_idf_search(
     collection_id: &str,
     request: dtos::BatchSearchTFIDFDocumentsDto,
 ) -> Result<Vec<Vec<(VectorId, f32)>>, WaCustomError> {
-    // Returns f32 score
-    let tf_idf_index = ctx
+    let collection = ctx
         .ain_env
         .collections_map
-        .get_tf_idf_index(collection_id)
-        .ok_or_else(|| {
-            WaCustomError::NotFound(format!(
-                "Sparse IDF index not found for collection '{}'",
-                collection_id
-            ))
-        })?;
+        .get_collection(collection_id)
+        .ok_or_else(|| WaCustomError::NotFound(format!("collection '{}'", collection_id)))?;
+
+    // Returns f32 score
+    let tf_idf_index = collection.get_tf_idf_index().ok_or_else(|| {
+        WaCustomError::NotFound(format!(
+            "Sparse IDF index not found for collection '{}'",
+            collection_id
+        ))
+    })?;
 
     // Call the helper directly
     batch_tf_idf_ann_vector_query(tf_idf_index, &request.queries, request.top_k)

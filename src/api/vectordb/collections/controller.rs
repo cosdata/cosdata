@@ -31,7 +31,7 @@ pub(crate) async fn get_collection_by_id(
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse> {
     let collection = service::get_collection_by_id(ctx.into_inner(), &collection_id).await?;
-    Ok(HttpResponse::Ok().json(collection))
+    Ok(HttpResponse::Ok().json(&collection.meta))
 }
 
 pub(crate) async fn delete_collection_by_id(
@@ -47,7 +47,7 @@ pub(crate) async fn load_collection(
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse> {
     let collection = service::load_collection(ctx.into_inner(), &collection_id).await?;
-    Ok(HttpResponse::Ok().json(collection))
+    Ok(HttpResponse::Ok().json(&collection.meta))
 }
 
 pub(crate) async fn unload_collection(

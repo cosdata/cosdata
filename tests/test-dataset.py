@@ -177,9 +177,8 @@ def create_explicit_index(name):
 
 def create_transaction(collection_name):
     url = f"{base_url}/collections/{collection_name}/transactions"
-    data = {"index_type": "dense"}
     response = requests.post(
-        url, data=json.dumps(data), headers=generate_headers(), verify=False
+        url, headers=generate_headers(), verify=False
     )
     return response.json()
 
@@ -188,7 +187,8 @@ def upsert_in_transaction(collection_name, transaction_id, vectors):
     url = (
         f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/upsert"
     )
-    data = {"index_type": "dense", "vectors": vectors}
+    vectors = [{"id": vector["id"], "dense_values": vector["values"]} for vector in vectors]
+    data = {"vectors": vectors}
     print(f"Request URL: {url}")
     print(f"Request Vectors Count: {len(vectors)}")
     response = requests.post(
@@ -209,9 +209,8 @@ def commit_transaction(collection_name, transaction_id):
     url = (
         f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/commit"
     )
-    data = {"index_type": "dense"}
     response = requests.post(
-        url, data=json.dumps(data), headers=generate_headers(), verify=False
+        url, headers=generate_headers(), verify=False
     )
     if response.status_code not in [200, 204]:
         print(f"Error response: {response.text}")
@@ -223,9 +222,8 @@ def abort_transaction(collection_name, transaction_id):
     url = (
         f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/abort"
     )
-    data = {"index_type": "dense"}
     response = requests.post(
-        url, data=json.dumps(data), headers=generate_headers(), verify=False
+        url, headers=generate_headers(), verify=False
     )
     return response.json()
 

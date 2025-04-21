@@ -2,19 +2,16 @@
 // #[cfg(test)]
 // mod tests;
 
-use crate::indexes::hnsw::types::DenseInputVector;
 use crate::models::common::WaCustomError;
-use crate::models::types::VectorId;
 use crate::{app_context::AppContext, indexes::inverted::types::SparsePair};
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
 crate::cfg_grpc! {
 use super::proto::{
-    CreateVectorRequest, GetVectorRequest,
-    UpdateVectorRequest, DeleteVectorRequest,
+    GetVectorRequest,
     FindSimilarVectorsRequest, FindSimilarVectorsResponse,
-    SimilarVectorMatch, VectorResponse, DenseVector, SparseVector,
+    SimilarVectorMatch, VectorResponse,
     vectors_service_server::VectorsService,
 };
 
@@ -24,101 +21,6 @@ pub struct VectorsServiceImpl {
 
 #[tonic::async_trait]
 impl VectorsService for VectorsServiceImpl {
-    // Creates a new vector (dense or sparse) in a collection
-    async fn create_vector(
-        &self,
-        request: Request<CreateVectorRequest>,
-    ) -> Result<Response<VectorResponse>, Status> {
-        let req = request.into_inner();
-
-        // Check if collection exists
-        let collection = self.context.ain_env.collections_map
-            .get_collection(&req.collection_id)
-            .ok_or_else(|| Status::not_found(format!("Collection '{}' not found", req.collection_id)))?;
-
-        match req.vector {
-            // Handle dense vector creation
-            Some(super::proto::create_vector_request::Vector::Dense(dense)) => {
-                if !collection.dense_vector.enabled {
-                    return Err(Status::failed_precondition(
-                        "Dense vectors are not enabled for this collection"
-                    ));
-                }
-
-                // Prepare vector for insertion
-                // @TODO(vineet): Add support for optional metadata fields
-                let vec_to_insert = vec![
-                    DenseInputVector::new(VectorId(dense.id), dense.values.clone(), None)
-                ];
-                let hnsw_index = self.context.ain_env.collections_map
-                    .get_hnsw_index(&req.collection_id)
-                    .ok_or_else(|| Status::failed_precondition(
-                        "Dense index not initialized. Try recreating the collection with dense vectors enabled."
-                    ))?;
-
-                // Upload vector to storage
-                crate::api_service::run_upload_dense_vectors(
-                    self.context.clone(),
-                    hnsw_index,
-                    vec_to_insert,
-                ).map_err(|e| match e {
-                    WaCustomError::NotFound(msg) => Status::not_found(msg),
-                    _ => Status::internal(format!("Failed to create vector: {}", e))
-                })?;
-
-                Ok(Response::new(VectorResponse {
-                    vector: Some(super::proto::vector_response::Vector::Dense(DenseVector {
-                        id: dense.id,
-                        values: dense.values,
-                    }))
-                }))
-            }
-
-            // Handle sparse vector creation
-            Some(super::proto::create_vector_request::Vector::Sparse(sparse)) => {
-                if !collection.sparse_vector.enabled {
-                    return Err(Status::failed_precondition(
-                        "Sparse vectors are not enabled for this collection"
-                    ));
-                }
-
-                // Convert to internal sparse pair format
-                let sparse_pairs: Vec<SparsePair> = sparse.values.into_iter()
-                    .map(|p| SparsePair(p.index, p.value))
-                    .collect();
-
-                let vec_to_insert = vec![(VectorId(sparse.id), sparse_pairs.clone())];
-                let sparse_index = self.context.ain_env.collections_map
-                    .get_inverted_index(&req.collection_id)
-                    .ok_or_else(|| Status::failed_precondition(
-                        "Sparse index not initialized. Try recreating the collection with sparse vectors enabled."
-                    ))?;
-
-                // Upload sparse vector
-                crate::api_service::run_upload_sparse_vectors(
-                    sparse_index,
-                    vec_to_insert,
-                ).map_err(|e| match e {
-                    WaCustomError::NotFound(msg) => Status::not_found(msg),
-                    _ => Status::internal(format!("Failed to create sparse vector: {}", e))
-                })?;
-
-                Ok(Response::new(VectorResponse {
-                    vector: Some(super::proto::vector_response::Vector::Sparse(SparseVector {
-                        id: sparse.id,
-                        values: sparse_pairs.into_iter()
-                            .map(|p| super::proto::SparsePair {
-                                index: p.0,
-                                value: p.1,
-                            })
-                            .collect(),
-                    }))
-                }))
-            }
-            None => Err(Status::invalid_argument("Vector must be specified")),
-        }
-    }
-
     // Retrieves a vector by ID from a collection
     async fn get_vector(
         &self,
@@ -127,83 +29,11 @@ impl VectorsService for VectorsServiceImpl {
         let req = request.into_inner();
 
         // Validate collection and vector type
-        let collection = self.context.ain_env.collections_map
+        let _collection = self.context.ain_env.collections_map
             .get_collection(&req.collection_id)
             .ok_or_else(|| Status::not_found(format!("Collection '{}' not found", req.collection_id)))?;
 
-        if !collection.dense_vector.enabled {
-            return Err(Status::failed_precondition("Dense vectors are not enabled for this collection"));
-        }
-
-        // Get dense index and retrieve vector
-        let hnsw_index = self.context.ain_env.collections_map
-            .get_hnsw_index(&req.collection_id)
-            .ok_or_else(|| Status::failed_precondition("Dense index not initialized"))?;
-
-        let embedding = crate::vector_store::get_dense_embedding_by_id(
-            hnsw_index,
-            &VectorId(req.vector_id)
-        ).map_err(|e| match e {
-            WaCustomError::NotFound(msg) => Status::not_found(msg),
-            _ => Status::internal(format!("Failed to get vector: {}", e))
-        })?;
-
-        Ok(Response::new(VectorResponse {
-            vector: Some(super::proto::vector_response::Vector::Dense(DenseVector {
-                id: embedding.hash_vec.0,
-                values: (*embedding.raw_vec).clone(),
-            }))
-        }))
-    }
-
-    // Updates an existing vector in a collection
-    async fn update_vector(
-        &self,
-        request: Request<UpdateVectorRequest>,
-    ) -> Result<Response<VectorResponse>, Status> {
-        let req = request.into_inner();
-
-        // Validate collection and vector type
-        let collection = self.context.ain_env.collections_map
-            .get_collection(&req.collection_id)
-            .ok_or_else(|| Status::not_found(format!("Collection '{}' not found", req.collection_id)))?;
-
-        if !collection.dense_vector.enabled {
-            return Err(Status::failed_precondition("Dense vectors are not enabled for this collection"));
-        }
-
-        // Update vector in storage
-        let hnsw_index = self.context.ain_env.collections_map
-            .get_hnsw_index(&req.collection_id)
-            .ok_or_else(|| Status::failed_precondition("Dense index not initialized"))?;
-
-        // @TODO(vineet): Add support for optional metadata fields
-        let vec_to_update = vec![
-            DenseInputVector::new(VectorId(req.vector_id), req.values.clone(), None)
-        ];
-        crate::api_service::run_upload_dense_vectors(
-            self.context.clone(),
-            hnsw_index.clone(),
-            vec_to_update,
-        ).map_err(|e| match e {
-            WaCustomError::NotFound(msg) => Status::not_found(msg),
-            _ => Status::internal(format!("Failed to update vector: {}", e))
-        })?;
-
-        Ok(Response::new(VectorResponse {
-            vector: Some(super::proto::vector_response::Vector::Dense(DenseVector {
-                id: req.vector_id,
-                values: req.values,
-            }))
-        }))
-    }
-
-    // Delete vector operation (not implemented)
-    async fn delete_vector(
-        &self,
-        _request: Request<DeleteVectorRequest>,
-    ) -> Result<Response<()>, Status> {
-        Err(Status::unimplemented("Delete operation is not implemented"))
+        unimplemented!()
     }
 
     // Finds similar vectors based on a query vector
@@ -221,45 +51,80 @@ impl VectorsService for VectorsServiceImpl {
         match req.query {
             // Handle dense vector similarity search
             Some(super::proto::find_similar_vectors_request::Query::Dense(dense)) => {
-                if !collection.dense_vector.enabled {
+                if !collection.meta.dense_vector.enabled {
                     return Err(Status::failed_precondition("Dense vectors are not enabled for this collection"));
                 }
 
-                let hnsw_index = self.context.ain_env.collections_map
-                    .get_hnsw_index(&req.collection_id)
+                let hnsw_index = collection
+                    .get_hnsw_index()
                     .ok_or_else(|| Status::failed_precondition("Dense index not initialized"))?;
 
                 // Perform similarity search
                 let results = crate::api_service::ann_vector_query(
                     self.context.clone(),
+                    &collection,
                     hnsw_index,
                     dense.vector,
                     // @TODO: Support for metadata filtering to be
                     // added for grpc endpoints
                     None,
-                    Some(dense.k as usize),
+                    dense.top_k.map(|top_k| top_k as usize)
                 ).await.map_err(|e| match e {
                     WaCustomError::NotFound(msg) => Status::not_found(msg),
                     _ => Status::internal(format!("Failed to find similar vectors: {}", e))
                 })?;
 
                 Ok(Response::new(FindSimilarVectorsResponse {
-                    results: Some(super::proto::find_similar_vectors_response::Results::Dense(
-                        super::proto::DenseResults {
-                            matches: results.into_iter()
-                                .map(|(id, score)| SimilarVectorMatch {
-                                    id: id.0,
-                                    score: score.get_value(),
-                                })
-                                .collect(),
-                        }
-                    ))
+                    results: Some(super::proto::SearchResults {
+                        matches: results.into_iter()
+                            .map(|(id, score)| SimilarVectorMatch {
+                                id: id.0,
+                                score: score.get_value(),
+                            })
+                            .collect(),
+                    })
                 }))
             }
 
             // Sparse vector similarity search not implemented
-            Some(super::proto::find_similar_vectors_request::Query::Sparse(_)) => {
-                Err(Status::unimplemented("Sparse vector similarity search not yet implemented"))
+            Some(super::proto::find_similar_vectors_request::Query::Sparse(sparse)) => {
+                if !collection.meta.sparse_vector.enabled {
+                    return Err(Status::failed_precondition("Sparse vectors are not enabled for this collection"));
+                }
+
+                let inverted_index = collection.get_inverted_index().ok_or_else(|| Status::failed_precondition("Sparse index not initialized"))?;
+
+                let query: Vec<_> = sparse.values.into_iter().map(|pair| SparsePair(pair.index, pair.value)).collect();
+
+                let results = crate::api::vectordb::search::repo::sparse_ann_vector_query_logic(&self.context.config, inverted_index, &query, sparse.top_k.map(|top_k| top_k as usize), sparse.early_terminate_threshold.unwrap_or(self.context.config.search.early_terminate_threshold)).map_err(Status::from)?;
+
+                Ok(Response::new(FindSimilarVectorsResponse {
+                    results: Some(super::proto::SearchResults {
+                        matches: results.into_iter().map(|(id, score)| SimilarVectorMatch {
+                            id: id.0,
+                            score: score.get_value(),
+                        }).collect(),
+                    })
+                }))
+            }
+            Some(super::proto::find_similar_vectors_request::Query::TfIdf(idf)) => {
+                if !collection.meta.tf_idf_options.enabled {
+                    return Err(Status::failed_precondition("TF-IDF index is not enabled for this collection"));
+                }
+
+                let inverted_index = collection.get_tf_idf_index().ok_or_else(|| Status::failed_precondition("Sparse index not initialized"))?;
+
+                let results = crate::api::vectordb::search::repo::tf_idf_ann_vector_query(inverted_index, &idf.query, idf.top_k.map(|top_k| top_k as usize)).map_err(Status::from)?;
+
+                Ok(Response::new(FindSimilarVectorsResponse {
+                    results: Some(super::proto::SearchResults {
+                        matches: results.into_iter().map(|(id, score)| SimilarVectorMatch {
+                            id: id.0,
+                            score,
+                        }).collect(),
+                    })
+                }))
+
             }
             None => Err(Status::invalid_argument("Query must be specified")),
         }

@@ -3,53 +3,47 @@ use std::fmt;
 use crate::metadata::MetadataFields;
 
 use serde::{
-    de::{self, Visitor},
+    de::{self, MapAccess, Visitor},
     Deserialize, Deserializer, Serialize,
 };
 
 use crate::{indexes::inverted::types::SparsePair, models::types::VectorId};
 
-#[derive(Deserialize, Serialize, Debug)]
-pub(crate) struct CreateDenseVectorDto {
+#[derive(Serialize)]
+pub(crate) struct CreateVectorDto {
     pub id: VectorId,
-    pub values: Vec<f32>,
+    pub dense_values: Option<Vec<f32>>,
     pub metadata: Option<MetadataFields>,
+    pub sparse_values: Option<Vec<SparsePair>>,
+    pub text: Option<String>,
 }
 
-#[derive(Serialize, Debug)]
-pub(crate) struct CreateSparseVectorDto {
-    pub id: VectorId,
-    pub values: Vec<SparsePair>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub(crate) struct CreateTFIDFDocumentDto {
-    pub id: VectorId,
-    pub text: String,
-}
-
-impl<'de> Deserialize<'de> for CreateSparseVectorDto {
-    fn deserialize<D>(deserializer: D) -> Result<CreateSparseVectorDto, D::Error>
+impl<'de> Deserialize<'de> for CreateVectorDto {
+    fn deserialize<D>(deserializer: D) -> Result<CreateVectorDto, D::Error>
     where
         D: Deserializer<'de>,
     {
-        // A custom visitor to process the deserialization
-        struct CreateSparseVectorDtoVisitor;
+        struct CreateVectorDtoVisitor;
 
-        impl<'de> Visitor<'de> for CreateSparseVectorDtoVisitor {
-            type Value = CreateSparseVectorDto;
+        impl<'de> Visitor<'de> for CreateVectorDtoVisitor {
+            type Value = CreateVectorDto;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                write!(formatter, "struct CreateSparseVectorDto")
+                write!(
+                    formatter,
+                    "a vector with dense_values (+metadata), sparse (indices + values), or text"
+                )
             }
 
-            fn visit_map<M>(self, mut map: M) -> Result<CreateSparseVectorDto, M::Error>
+            fn visit_map<M>(self, mut map: M) -> Result<CreateVectorDto, M::Error>
             where
-                M: de::MapAccess<'de>,
+                M: MapAccess<'de>,
             {
                 let mut id = None;
-                let mut values: Option<Vec<f32>> = None;
-                let mut indices: Option<Vec<u32>> = None;
+                let mut dense_values = None;
+                let mut metadata = None;
+                let mut sparse_values_raw: Option<(Vec<u32>, Vec<f32>)> = None;
+                let mut text = None;
 
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
@@ -59,71 +53,88 @@ impl<'de> Deserialize<'de> for CreateSparseVectorDto {
                             }
                             id = Some(map.next_value()?);
                         }
-                        "values" => {
-                            if values.is_some() {
-                                return Err(de::Error::duplicate_field("values"));
+                        "dense_values" => {
+                            if dense_values.is_some() {
+                                return Err(de::Error::duplicate_field("dense_values"));
                             }
-                            values = Some(map.next_value()?);
+                            dense_values = Some(map.next_value()?);
                         }
-                        "indices" => {
-                            if indices.is_some() {
-                                return Err(de::Error::duplicate_field("indices"));
+                        "metadata" => {
+                            if metadata.is_some() {
+                                return Err(de::Error::duplicate_field("metadata"));
                             }
-                            indices = Some(map.next_value()?);
+                            metadata = map.next_value()?;
+                        }
+                        "sparse_values" => {
+                            let values: Vec<f32> = map.next_value()?;
+                            if let Some((indices, _)) = sparse_values_raw.take() {
+                                sparse_values_raw = Some((indices, values));
+                            } else {
+                                sparse_values_raw = Some((Vec::new(), values));
+                            }
+                        }
+                        "sparse_indices" => {
+                            let indices: Vec<u32> = map.next_value()?;
+                            if let Some((_, values)) = sparse_values_raw.take() {
+                                sparse_values_raw = Some((indices, values));
+                            } else {
+                                sparse_values_raw = Some((indices, Vec::new()));
+                            }
+                        }
+                        "text" => {
+                            if text.is_some() {
+                                return Err(de::Error::duplicate_field("text"));
+                            }
+                            text = Some(map.next_value()?);
                         }
                         _ => {
                             return Err(de::Error::unknown_field(
-                                key.as_str(),
-                                &["id", "values", "indices"],
+                                &key,
+                                &[
+                                    "id",
+                                    "dense_values",
+                                    "metadata",
+                                    "sparse_values",
+                                    "sparse_indices",
+                                    "text",
+                                ],
                             ));
                         }
                     }
                 }
 
                 let id = id.ok_or_else(|| de::Error::missing_field("id"))?;
-                let values = values.ok_or_else(|| de::Error::missing_field("values"))?;
-                let indices = indices.ok_or_else(|| de::Error::missing_field("indices"))?;
 
-                // Combine the values and indices into a Vec<SparsePair>
-                let values = indices
-                    .into_iter()
-                    .zip(values)
-                    .map(|(index, value)| SparsePair(index, value))
-                    .collect();
+                let sparse_values = match sparse_values_raw {
+                    Some((indices, values)) => {
+                        if indices.len() != values.len() {
+                            return Err(de::Error::custom(
+                                "length mismatch between sparse_indices and sprase_values",
+                            ));
+                        }
+                        Some(
+                            indices
+                                .into_iter()
+                                .zip(values)
+                                .map(|(dim, val)| SparsePair(dim, val))
+                                .collect(),
+                        )
+                    }
+                    None => None,
+                };
 
-                Ok(CreateSparseVectorDto { id, values })
+                Ok(CreateVectorDto {
+                    id,
+                    dense_values,
+                    metadata,
+                    sparse_values,
+                    text,
+                })
             }
         }
 
-        deserializer.deserialize_map(CreateSparseVectorDtoVisitor)
+        deserializer.deserialize_map(CreateVectorDtoVisitor)
     }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "index_type", rename_all = "snake_case")]
-pub(crate) enum CreateVectorDto {
-    Dense(CreateDenseVectorDto),
-    Sparse(CreateSparseVectorDto),
-    TfIdf(CreateTFIDFDocumentDto),
-}
-
-#[derive(Serialize)]
-pub(crate) enum CreateVectorResponseDto {
-    Dense(CreateDenseVectorDto),
-    Sparse(CreateSparseVectorDto),
-    TfIdf(CreateTFIDFDocumentDto),
-}
-
-#[derive(Deserialize)]
-pub(crate) struct UpdateVectorDto {
-    pub values: Vec<f32>,
-}
-
-#[derive(Serialize)]
-pub(crate) struct UpdateVectorResponseDto {
-    pub id: VectorId,
-    pub values: Vec<f32>,
-    // pub created_at: String
 }
 
 #[derive(Serialize)]

@@ -7,7 +7,7 @@ use controller::{
 mod controller;
 pub(crate) mod dtos;
 pub(crate) mod error;
-mod repo;
+pub(crate) mod repo;
 mod service;
 
 pub(crate) fn search_module() -> Scope {
