@@ -2,34 +2,40 @@
   <img src="org/logo.svg" alt="Cosdata" style="max-width: 100%; height: auto;">
 </p>
 
-
 <p align="center">
     <b>Next-gen vector database delivering lightning-fast performance at billion-vector scale.</b>
 </p>
 <p align="center">
-  <a href="https://cosdata.io"><img src="https://flat.badgen.net/badge/www/cosdata.io/blue"></a>
+  <a href="https://cosdata.io"><img src="https://flat.badgen.net/badge/www/cosdata.io/pink"></a>
   <a href="https://github.com/cosdata/cosdata/actions"><img src="https://flat.badgen.net/badge/build/passing/green"></a>
-  <a href="https://github.com/cosdata/cosdata/blob/master/LICENSE"><img src="https://flat.badgen.net/static/license/Apache-2.0"></a>
   <a href="https://www.rust-lang.org/"><img src="https://flat.badgen.net/badge/language/%F0%9F%A6%80%20Rust/yellow"></a>
+  <a href="https://www.rust-lang.org/"><img src="https://flat.badgen.net/badge/language/%F0%9F%90%8D%20Python/black"></a>
+  <br>
   <a href="https://discord.gg/WbSbXYWvta"><img src="https://flat.badgen.net/discord/members/WbSbXYWvta?icon=discord"></a>
+  <a href="https://www.linkedin.com/company/cosdata/"><img alt="Profile" src="https://img.shields.io/badge/our_journey-LinkedIn-blue"/></a>
+  <a href="https://github.com/cosdata/cosdata/blob/master/LICENSE"><img src="https://flat.badgen.net/static/license/Apache-2.0"></a> 
+  <a href="https://github.com/cosdata/cosdata/pulls"><img src="https://flat.badgen.net/badge/PRs/open/pink"></a> 
 </p>
 </br>
 <p></p>
 
-## Table of Contents
+## 📦 Table of Contents
 
-- [Overview](#overview)
-- [Getting Started](#getting-started)
-- [Client SDKs](#client-sdks)
-  - [Python SDK](#python-sdk)
-  - [Node.js SDK](#nodejs-sdk)
-- [Features](#features)
+- [Overview](#-overview)
+- [Getting Started](#-getting-started)
+- [Client SDKs](#-client-sdks)
+  - [Python SDK](#-python-sdk)
+  - [Node.js SDK](#-nodejs-sdk)
+- [Features](#-features)
 - [Benchmarks](https://www.cosdata.io/resources/benchmarks)
 - [Documentation](https://docs.cosdata.io/getting-started/introduction/)
-- [Contact Us](#contacts)
-- [Show Your Support](#show-your-support)
+- [Contacts & Community](#-contacts--community)
+- [Show Your Support](#-show-your-support)
 
-# Overview
+<br>
+<br>
+
+# 🚀 Overview
 
 Cosdata is cutting-edge AI data platform engineered for exceptional performance. Featuring immutability and version control, it's designed to elevate a wide range of AI and machine learning projects.
 
@@ -42,209 +48,373 @@ Cosdata is at the forefront of advancing search technology, excelling in critica
 
 Cosdata is designed to meet the demands of modern search applications, empowering businesses to harness the full potential of their data.
 
-## Getting Started
+<br>
 
-### 1. Quick Install (Linux)
-For a simple one-step installation on Linux, run:
-  ```bash
-  curl -sL https://cosdata.io/install.sh | bash
-  ```
+# ⚡️ Getting Started
 
-This script will handle all dependencies and set up Cosdata automatically.
+## 1. Install
 
-### 2. Install via Docker (Mac & Windows)
-For **Mac & Windows**, use our Docker-based installation:
-1. Ensure **Docker** is installed and running
-2. Pull the latest image from Ducker Hub:
+### Prerequisites
 
-```bash
-docker pull cosdatateam/cosdata:latest
-```
-
-3. Run the container
-
-  ```bash
-  docker run -it \
-  --name cosdata-server \
-  -p 8443:8443 \
-  -p 50051:50051 \
-  cosdatateam/cosdata:latest
-  ```
-
-The server will be available at `http://localhost:8443`.
-
-### 3. Build from Source (Development)
-For developers looking to modify or contribute to Cosdata:
-
-#### Prerequisites
-- Git
-- Rust (version 1.81.0 or higher)
-- Cargo (Rust's package manager)
-- C++ compiler (GCC 4.8+ or Clang 3.4+)
-
-#### Build Steps
-  ```bash
-  # Clone the repository
-  git clone https://github.com/cosdata/cosdata.git
-  cd cosdata
-
-  # Build the project
-  cargo build --release
-
-  # Run Cosdata
-  ./target/release/cosdata --admin-key your_admin_key
-  ```
-
-You should see output similar to:
-  ```
-  [2025-02-21T02:30:29Z INFO  cosdata::web_server] starting HTTP server at http://127.0.0.1:8443
-  [2025-02-21T02:30:29Z INFO  actix_server::builder] starting 20 workers
-  [2025-02-21T02:30:29Z INFO  actix_server::server] Actix runtime found; starting in Actix runtime
-  [2025-02-21T02:30:29Z INFO  actix_server::server] starting service: "actix-web-service-127.0.0.1:8443"
-  [2025-02-21T02:30:29Z INFO  cosdata::grpc::server] gRPC server listening on [::1]:50051
-  ```
-
-### Testing Your Installation
-
-#### Testing Cosdata Server with `test.py`
-
-To quickly get started with Cosdata, you can run the `test.py` file available in the top level directory. The `test.py` script -
-
-1. Creates a test collection and a Dense HNSW Index.
-2. In a transaction, submits batches of Random vectors to be stored on the server.
-3. Uses about 10% of the vectors from the above set as query vectors by adding small perturbations.
-4. Issues query to the server to perform the search against the query vectors and performs a brute force search locally using `cosine` distance.
-5. Compares the results
-
-In order to run the `test.py` file a few dependencies need to be added. The description here uses [`uv`](https://docs.astral.sh/uv/) for downloading and setting up required dependencies. Perform following steps.
-
-```
-# Run uv sync to setup the Python virtual Env and download and install dependencies using `pyproject.toml` file.
-uv sync
-
-# Run the test.py file
-uv run test.py
-```
-
-The script will then perform the steps described above and display the summary of execution
+- **Linux**: `curl`  
+- **macOS & Windows**: [Docker](https://www.docker.com/get-started) (v20.10+)
 
 
-#### Testing Cosdata Server with `test-dataset.py`
+### Quick Install (Linux 🐧)
 
-You can test Cosdata server using real world datasets. This is performed using `test-dataset.py`.  (TODO: Add details for this).
-
-
-### Running in HTTPS Mode
-
-It's recommended to run Cosdata server in HTTPS mode i.e. with TLS
-support. However, during development it might be easier to get it
-running without TLS. To do so, set `server.mode=http` in the
-[config.toml](config.toml) file.
-
-Alternately, you may use self-signed certificates for testing the
-APIs. The paths to the certificate and private key files are
-configured in the [config.toml](config.toml) file.
-
-This sections mentions how you can generate and setup the certificates.
-
-#### Generate Certificates
-
-Run the following commands in sequence to get the private key and certificate
+Run this one‑liner to install Cosdata and all dependencies:
 
 ```bash
-openssl req -newkey rsa:2048 -nodes -keyout private_key.pem -x509 -days 365 -out self_signed_certificate.crt
-
-# Convert the private key to PKCS#8 format
-openssl pkcs8 -topk8 -inform PEM -outform PEM -in private_key.pem -out private_key_pkcs8.pem -nocrypt
+curl -sL https://cosdata.io/install.sh | bash
 ```
 
-#### Setup Certificates
+✅ Installs the latest Cosdata CLI  
+✅ Sets up your configuration in `~/.cosdata/`
 
-Set the `SSL_CERT_DIR` environment variable to the folder where you're gonna store the certificates:
+
+### Install via Docker (macOS 🖥️ & Windows 💻)
+
+1. **Verify Docker is running**  
+   ```bash
+   docker --version
+   ```
+
+2. **Pull the latest Cosdata image**  
+   ```bash
+   docker pull cosdatateam/cosdata:latest
+   ```
+
+3. **Run the container**
+
+   ```bash
+   docker run -it \
+   --name cosdata-server \
+   -p 8443:8443 \
+   -p 50051:50051 \
+   cosdatateam/cosdata:latest
+   ```
+
+✅ The server will be available at `http://localhost:8443`.
+
+<br>
+
+## 2. Build from Source
+
+Perfect for contributors and power users who want to customize or extend Cosdata.
+
+### Prerequisites
+
+- **Git** (v2.0+)  
+- **Rust** (v1.81.0+) & **Cargo**  
+- **C++ compiler**  
+  - GCC ≥ 4.8 **or** Clang ≥ 3.4 
+
+<br>
+
+> **Tip:** On Ubuntu/Debian you can install everything with:  
+> ```bash
+> sudo apt update && sudo apt install -y git build-essential curl \
+>    clang lld rustc cargo
+> ```
+
+<br>
+
+### 🚀 Build & Run
+
+1. **Clone the repo**
+   ```bash
+   git clone https://github.com/cosdata/cosdata.git
+   cd cosdata
+   ```
+
+2. **Compile in release mode**
+   ```bash
+   cargo build --release
+   ```
+
+3. **Start the server**
+   ```bash
+   ./target/release/cosdata --admin-key YOUR_ADMIN_KEY
+   ```
+
+> You should see logs like:
+> 
+> ```text
+> [[2025-02-21T02:30:29Z INFO  cosdata::web_server] starting HTTP server at http://127.0.0.1:8443
+> [2025-02-21T02:30:29Z INFO  actix_server::builder] starting 20 workers
+> [2025-02-21T02:30:29Z INFO  actix_server::server] Actix runtime found; starting in Actix runtime
+> [2025-02-21T02:30:29Z INFO  actix_server::server] starting service: "actix-web-service-127.0.0.1:8443"
+> [2025-02-21T02:30:29Z INFO  cosdata::grpc::server] gRPC server listening on [::1]:50051
+> ```
+
+<br>
+
+## 3. Testing Your Installation
+
+### 🧪 Quick Validation Cosdata Server with `test.py`
+
+Cosdata includes a `test.py` script in the top level directory, to validate your server setup. This script will:
+
+1. **Create** a test collection and a Dense HNSW index.  
+2. **Insert** batches of random vectors in a single transaction.  
+3. **Generate** query vectors by perturbing ~10% of the inserted vectors.  
+4. **Search** the server for nearest neighbors using its HNSW index.  
+5. **Verify** results by comparing against a local brute‑force cosine distance search.
+
+
+### 🔧 Prerequisites
+
+- **Python 3.8+**  
+- The [`uv`](https://docs.astral.sh/uv/) CLI for virtual‑env & dependency management  
+- A running Cosdata server at `http://127.0.0.1:8443`
+
+
+
+### ⚙️ Setup & Execution
+
+1. **Install dependencies**
+
+   ```bash
+   uv sync
+   ```
+
+
+This will:
+
+-   Create a Python virtual environment
+-   Install packages listed in `pyproject.toml`
+    
+
+2.  **Run the test script**
+    ```bash
+    uv run test.py
+    ```
+    
+3.  **Review the output**  
+    The script prints a summary, including:
+    
+    -   Number of vectors inserted
+    -   Queries executed
+    -   Pass/fail status for each comparison
+        
+
+> **Tip:** If any test fails, check your server logs under `~/.cosdata/logs/` or review console output for errors.
+
+
+<br>
+
+### 🔍 Testing with Real‑World Datasets (`test-dataset.py`)
+
+Use the `test-dataset.py` script to benchmark Cosdata against real‑world datasets:
+
+1.  **Download** or mount the dataset (e.g., SIFT, GloVe embeddings).
+    
+2.  **Index** the dataset using your chosen index type (HNSW, IVF, etc.).
+    
+3.  **Query** sample vectors and record accuracy & latency metrics.
+    
+4.  **Compare** Cosdata’s performance against baseline implementations.
+    
+
+> **TODO:** Add download links, configuration flags, and step‑by‑step instructions for each dataset.
+
+
+<br>
+
+## 4. HTTPS Configuration (TLS)
+
+By default, Cosdata runs over HTTP, but we **strongly recommend** enabling HTTPS in production.
+
+
+
+### 1. Development Mode (HTTP)
+
+If you just want to spin up the server quickly without TLS, edit your `config.toml`:
+
+```toml
+[server]
+mode = "http"
+```
+
+> **⚠️ Warning:** HTTP mode is **not** secure—only use this for local development or testing.
+
+
+### 2. Enabling TLS (HTTPS)
+
+To run Cosdata over HTTPS, you need:
+
+1.  **TLS certificates** (self‑signed OK for testing)
+    
+2.  A valid `config.toml` pointing at your certs
+    
+3.  Proper file permissions
+
+
+#### a. Generate a Self‑Signed Certificate
+
+1. Create a new RSA key and self‑signed cert (valid 1 year)
+
+   ```bash
+   openssl req -newkey rsa:2048 -nodes -keyout private_key.pem -x509 -days 365 -out self_signed_certificate.crt
+   ```
+
+2. Convert the private key to PKCS#8 format
+
+   ```bash
+   openssl pkcs8 -topk8 -inform PEM -outform PEM -in private_key.pem -out private_key_pkcs8.pem -nocrypt
+   ```
+
+
+#### b. Store & Secure Your Certificates
+
+1. Set your cert directory (choose a secure path)
+
+   ```bash
+   export SSL_CERT_DIR="/etc/ssl"
+   ```
+
+2. Create subdirectories
+
+   ```bash
+   sudo mkdir -p $SSL_CERT_DIR/{certs,private}
+   ```
+
+
+3. Move certs into place
+
+   ```bash
+   sudo mv self_signed_certificate.crt   $SSL_CERT_DIR/certs/cosdata.crt
+   sudo mv private_key_pkcs8.pem         $SSL_CERT_DIR/private/cosdata.key
+   ```
+
+
+4. Secure the private key
+
+   ```bash
+   sudo groupadd ssl-cert            || true
+   sudo chgrp ssl-cert $SSL_CERT_DIR/private/cosdata.key
+   sudo chmod 640  $SSL_CERT_DIR/private/cosdata.key
+   sudo chmod 750  $SSL_CERT_DIR/private
+   sudo usermod -aG ssl-cert $USER   # you may need to log out/in or run `newgrp ssl-cert`
+   ```
+
+
+
+#### c. Configure Cosdata to Use TLS
+
+In your `config.toml`, update the `[server]` section:
+
+   ```toml
+   [server]
+   mode     = "https"
+   tls_cert = "/etc/ssl/certs/cosdata.crt"
+   tls_key  = "/etc/ssl/private/cosdata.key"
+   ```
+
+
+#### d. Restart Cosdata
+
+If running directly:
+   ```bash
+   ./target/release/cosdata --admin-key YOUR_ADMIN_KEY
+   ```
+
+If using Docker, mount your cert directory:
+   ```bash
+   docker run -it --rm \
+     -v "/etc/ssl/certs:/etc/ssl/certs:ro" \
+     -v "/etc/ssl/private:/etc/ssl/private:ro" \
+     cosdatateam/cosdata:latest \
+     cosdata --admin-key YOUR_ADMIN_KEY
+   ```
+
+
+### 🔎 Verify HTTPS
+
+Open your browser or run:
 
 ```bash
-export SSL_CERT_DIR="/etc/ssl"
+curl -kv https://localhost:8443/health
 ```
 
-Move certificates to appropriate folders and set permissions:
+You should see a successful TLS handshake and a healthy status response.
 
+
+<br>
+
+# 🧩 Client SDKs
+
+Cosdata provides an officially maintained Python SDK for seamless integration into your projects.
+
+### 🐍 Python SDK
+
+**Install**  
 ```bash
-# Create directories if don't exist
-sudo mkdir -p $SSL_CERT_DIR/{certs,private}
-
-# Move certificates
-sudo mv self_signed_certificate.crt $SSL_CERT_DIR/certs/cosdata-ssl.crt
-sudo mv private_key_pkcs8.pem $SSL_CERT_DIR/private/cosdata-ssl.key
-
-# Create 'ssl-cert' group (if if doesn't exist already)
-sudo groupadd ssl-cert
-
-# Change private key file permissions
-sudo chgrp ssl-cert $SSL_CERT_DIR/private/cosdata-ssl.key
-sudo chmod 640 $SSL_CERT_DIR/private/cosdata-ssl.key
-sudo usermod -aG ssl-cert $USER
-
-# Change private key folder permissions
-sudo chmod 750 $SSL_CERT_DIR/private
-sudo chgrp ssl-cert $SSL_CERT_DIR/private
-
-# Add yourself to ssl-cert group (you may need to re-login after this)
-newgrp ssl-cert
-```
-
-## Client SDKs
-
-Cosdata provides official client SDKs for easy integration:
-
-### Python SDK
-Install using pip:
-```python
 pip install cosdata-client
 ```
 
-Example usage:
+**Quickstart Example**
+
 ```python
 from cosdata.client import Client
 
-# Initialize the client
+# Initialize the Cosdata client
 client = Client(
-    host="http://127.0.0.1:8443",
-    admin_key="your_admin_key"
+    host="https://127.0.0.1:8443",
+    admin_key="YOUR_ADMIN_KEY",
 )
 
-# Create a collection
+# Create a new collection (vector dimension = 768)
 collection = client.create_collection(
     name="my_collection",
     dimension=768
 )
+print(f"Created collection: {collection.name}")
 ```
-[View Python SDK Documentation →](https://github.com/cosdata/cosdata-sdk-python)
 
-### Node.js SDK
-Install using npm:
+**Learn More**
+
+-   📦 Cosdata Python SDK Documentation: [cosdata-sdk-python](https://github.com/cosdata/cosdata-sdk-python)
+
+
+<br>
+
+### 🟢 Node.js SDK
+
+**Install**  
 ```bash
 npm install cosdata-sdk
 ```
 
-Example usage:
+**Quickstart Example**
+
 ```typescript
-import { Client } from 'cosdata';
+import { Client } from 'cosdata-sdk';
 
-// Initialize the client
-const client = new Client({
-    host: 'http://127.0.0.1:8443',
-    admin_key: 'your_admin_key'
-});
+(async () => {
+  // Initialize the Cosdata client
+  const client = new Client({
+    host: 'https://127.0.0.1:8443',
+    adminKey: 'YOUR_ADMIN_KEY',
+  });
 
-// Create a collection
-const collection = await client.createCollection({
+  // Create a new collection with 768‑d vectors
+  const collection = await client.createCollection({
     name: 'my_collection',
-    dimension: 768
-});
+    dimension: 768,
+  });
+  console.log(`Created collection: ${collection.name}`);
+})();
 ```
-[View Node.js SDK Documentation →](https://github.com/cosdata/cosdata-sdk-node)
 
-## Features
+**Learn More**
+
+-   📦 GitHub: [cosdata-sdk-node](https://github.com/cosdata/cosdata-sdk-node)
+
+
+<br>
+
+# ✨ Features
 
 ### Search Relevance
 - **Hybrid Search**: Enhance search precision with our vector database, leveraging the power of combined sparse and dense vector searches to deliver highly relevant, context-rich results for complex queries.
@@ -285,15 +455,29 @@ const collection = await client.createCollection({
 ### Manage Multi-modal data
 - Supports real-time querying and dynamic index updates, ensuring that new multi-modal data (text, images, audio, etc.) is immediately searchable without downtime or delays.
 
+<br>
 
-## Contacts
+# 🤝 Contacts & Community
 
-- Want to learn more and/or contribute to the project? Join our [Discord channel](https://discord.gg/WbSbXYWvta)
-- For business inquiries, please reach us at [contact@cosdata.io](mailto:contact@cosdata.io)
+Have questions, ideas, or want to contribute? We’d love to hear from you!
 
-## Show Your Support
+🔗 Discord: Chat, collaborate, and get support — [Join now](https://discord.gg/WbSbXYWvta)
 
-⭐️ If you find this project useful, please give it a star on GitHub! ⭐️
+📨 Email: Partnerships & business inquiries — [contact@cosdata.io](mailto:contact@cosdata.io)
 
-Your support helps us improve and continue developing. Thank you!
+🐛 Issues: Report bugs or suggest features — [Open an issue](https://github.com/cosdata/cosdata/issues)
+
+💡 Discussions: Share ideas and ask questions — [Join Discussion](https://discord.gg/WbSbXYWvta)
+
+Let’s collaborate and build the future of vector search—together! 💡
+
+<br>
+
+# ⭐️ Show Your Support
+
+If Cosdata has empowered your projects, please consider giving us a star on GitHub! ⭐️ 
+
+Your endorsement helps attract new contributors and fuels ongoing improvements.
+
+Thank you for your support! 🙏
 
