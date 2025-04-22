@@ -69,7 +69,6 @@ curl -sL https://cosdata.io/install.sh | bash
 ```
 
 ✅ Installs the latest Cosdata CLI  
-✅ Sets up your configuration in `~/.cosdata/`
 
 
 ### Install via Docker (macOS 🖥️ & Windows 💻)
