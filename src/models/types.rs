@@ -217,6 +217,12 @@ impl VectorId {
     }
 }
 
+impl From<VectorId> for u64 {
+    fn from(id: VectorId) -> Self {
+        id.0
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub enum MetricResult {
     CosineSimilarity(CosineSimilarity),

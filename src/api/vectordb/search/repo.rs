@@ -221,7 +221,7 @@ fn finalize_sparse_ann_results(
         let vector_u64_id = result.vector_id as u64;
         let vector_id_obj = VectorId(vector_u64_id);
 
-        match inverted_index.vec_raw_map.get_latest(vector_u64_id) {
+        match inverted_index.vec_raw_map.get_latest(vector_id_obj.clone()) {
             Some(raw_sparse_embedding_ref) => {
                 let sparse_pairs = raw_sparse_embedding_ref.raw_vec.clone();
                 let map: std::collections::HashMap<u32, f32> =
@@ -386,7 +386,7 @@ pub fn tf_idf_ann_vector_query(
             // Use filter_map to handle potential misses in map
             tf_idf_index
                 .vec_raw_map
-                .get_latest(result.document_id as u64)
+                .get_latest(result.document_id)
                 .map(|(ext_id, _)| (ext_id.clone(), result.score)) // Get external ID
         })
         .collect())

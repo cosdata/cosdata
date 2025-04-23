@@ -1,11 +1,8 @@
-// TODO: remove this attribute
-// This module is not used anywhere currently, once it being used, remove this attribute
-#![allow(unused)]
-
 use std::{
     cell::UnsafeCell,
+    marker::PhantomData,
     sync::{
-        atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc, RwLock,
     },
 };
@@ -20,8 +17,9 @@ use super::{
     versioning::Hash,
 };
 
-pub struct TreeMap<T> {
-    pub(crate) root: TreeMapNode<T>,
+pub struct TreeMap<K, V> {
+    pub(crate) root: TreeMapNode<V>,
+    _marker: PhantomData<K>,
 }
 
 pub struct TreeMapNode<T> {
@@ -214,10 +212,6 @@ impl<T> Default for QuotientsMap<T> {
 }
 
 impl<T> QuotientsMap<T> {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn insert(&self, version: Hash, quotient: u64, value: T) {
         self.map.modify_or_insert_with_value(
             quotient,
@@ -253,48 +247,48 @@ impl<T> QuotientsMap<T> {
     }
 }
 
-impl<T> Default for TreeMap<T> {
+impl<K, V> Default for TreeMap<K, V> {
     fn default() -> Self {
         Self {
             root: TreeMapNode::new(0),
+            _marker: PhantomData,
         }
     }
 }
 
 #[cfg(test)]
-impl<T: PartialEq> PartialEq for TreeMap<T> {
+impl<K, V: PartialEq> PartialEq for TreeMap<K, V> {
     fn eq(&self, other: &Self) -> bool {
         self.root == other.root
     }
 }
 
 #[cfg(test)]
-impl<T: std::fmt::Debug> std::fmt::Debug for TreeMap<T> {
+impl<K, V: std::fmt::Debug> std::fmt::Debug for TreeMap<K, V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TreeMap").field("root", &self.root).finish()
     }
 }
 
-impl<T> TreeMap<T> {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn insert(&self, version: Hash, key: u64, value: T) {
+impl<K: Into<u64>, V> TreeMap<K, V> {
+    pub fn insert(&self, version: Hash, key: K, value: V) {
+        let key = key.into();
         let node_pos = (key % 65536) as u32;
         let path = calculate_path(node_pos, 0);
         let node = self.root.find_or_create_node(&path);
         node.insert(version, key, value);
     }
 
-    pub fn get_latest(&self, key: u64) -> Option<&T> {
+    pub fn get_latest(&self, key: K) -> Option<&V> {
+        let key = key.into();
         let node_pos = (key % 65536) as u32;
         let path = calculate_path(node_pos, 0);
         let node = self.root.find_or_create_node(&path);
         node.get_latest(key)
     }
 
-    pub fn get_versioned(&self, key: u64) -> Option<&UnsafeVersionedItem<T>> {
+    pub fn get_versioned(&self, key: K) -> Option<&UnsafeVersionedItem<V>> {
+        let key = key.into();
         let node_pos = (key % 65536) as u32;
         let path = calculate_path(node_pos, 0);
         let node = self.root.find_or_create_node(&path);
@@ -302,7 +296,7 @@ impl<T> TreeMap<T> {
     }
 }
 
-impl<T: SimpleSerialize> TreeMap<T> {
+impl<K, V: SimpleSerialize> TreeMap<K, V> {
     pub fn serialize(
         &self,
         bufmans: &BufferManagerFactory<u8>,
@@ -328,6 +322,7 @@ impl<T: SimpleSerialize> TreeMap<T> {
         bufman.close_cursor(cursor)?;
         Ok(Self {
             root: TreeMapNode::deserialize(bufmans, file_parts, 0, FileOffset(offset))?,
+            _marker: PhantomData,
         })
     }
 }
@@ -338,7 +333,7 @@ mod tests {
 
     #[test]
     fn tests_basic_usage() {
-        let map = TreeMap::new();
+        let map: TreeMap<u64, u64> = TreeMap::default();
         map.insert(0.into(), 65536, 0);
         map.insert(0.into(), 0, 23);
         assert_eq!(map.get_latest(0), Some(&23));

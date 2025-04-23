@@ -203,7 +203,7 @@ fn test_versioned_pagepool_incremental_serialization2() {
 fn test_quotients_serialization() {
     let (bufman, cursor, _temp_dir) = setup_test();
     let mut rng = rand::thread_rng();
-    let quotients_map = QuotientsMap::new();
+    let quotients_map = QuotientsMap::default();
     for _ in 0..10000 {
         quotients_map.insert(
             0.into(),
@@ -221,7 +221,7 @@ fn test_quotients_serialization() {
 fn test_quotients_incremental_serialization() {
     let (bufman, cursor, _temp_dir) = setup_test();
     let mut rng = rand::thread_rng();
-    let quotients_map = QuotientsMap::new();
+    let quotients_map = QuotientsMap::default();
     for i in 0..1000 {
         quotients_map.insert(0.into(), i, rng.gen_range(0..u16::MAX));
     }
@@ -248,7 +248,7 @@ fn test_tree_map_serialization() {
         8192,
     );
     let mut rng = rand::thread_rng();
-    let map = TreeMap::new();
+    let map = TreeMap::default();
 
     for i in 0..1000 {
         map.insert(0.into(), i, rng.gen_range(0..u16::MAX));
@@ -259,7 +259,7 @@ fn test_tree_map_serialization() {
 
     map.serialize(&bufmans, 8).unwrap();
 
-    let deserialized = TreeMap::<u16>::deserialize(&bufmans, 8).unwrap();
+    let deserialized = TreeMap::<u64, u16>::deserialize(&bufmans, 8).unwrap();
 
     assert_eq!(map, deserialized);
 }
@@ -273,7 +273,7 @@ fn test_tree_map_incremental_serialization() {
         8192,
     );
     let mut rng = rand::thread_rng();
-    let map = TreeMap::new();
+    let map = TreeMap::default();
 
     for i in 0..1000 {
         map.insert(0.into(), i, rng.gen_range(0..u16::MAX));
@@ -296,7 +296,7 @@ fn test_tree_map_incremental_serialization() {
 
     map.serialize(&bufmans, 8).unwrap();
 
-    let deserialized = TreeMap::<u16>::deserialize(&bufmans, 8).unwrap();
+    let deserialized = TreeMap::<u64, u16>::deserialize(&bufmans, 8).unwrap();
 
     assert_eq!(map, deserialized);
 }
@@ -310,7 +310,7 @@ fn test_tree_map_incremental_serialization_with_multiple_versions() {
         8192,
     );
     let mut rng = rand::thread_rng();
-    let map = TreeMap::new();
+    let map = TreeMap::default();
 
     for i in 0..1000 {
         map.insert(0.into(), i, rng.gen_range(0..u16::MAX));
@@ -333,7 +333,7 @@ fn test_tree_map_incremental_serialization_with_multiple_versions() {
 
     map.serialize(&bufmans, 8).unwrap();
 
-    let deserialized = TreeMap::<u16>::deserialize(&bufmans, 8).unwrap();
+    let deserialized = TreeMap::<u64, u16>::deserialize(&bufmans, 8).unwrap();
 
     assert_eq!(map, deserialized);
 }

@@ -45,7 +45,7 @@ pub struct InvertedIndex {
     pub vectors_collected: AtomicUsize,
     pub sample_threshold: usize,
     pub vec_raw_manager: BufferManagerFactory<u8>,
-    pub vec_raw_map: TreeMap<RawSparseVectorEmbedding>,
+    pub vec_raw_map: TreeMap<VectorId, RawSparseVectorEmbedding>,
 }
 
 unsafe impl Send for InvertedIndex {}
@@ -70,7 +70,7 @@ impl InvertedIndex {
             vectors_collected: AtomicUsize::new(0),
             sample_threshold,
             vec_raw_manager,
-            vec_raw_map: TreeMap::new(),
+            vec_raw_map: TreeMap::default(),
         })
     }
 
@@ -95,7 +95,7 @@ impl InvertedIndex {
             hash_vec: id.clone(),
         };
 
-        self.vec_raw_map.insert(version, id.0, emb);
+        self.vec_raw_map.insert(version, id, emb);
         Ok(())
     }
 }

@@ -54,7 +54,7 @@ pub struct TFIDFIndex {
     pub sampling_data: SamplingData,
     pub sample_threshold: usize,
     pub vec_raw_manager: BufferManagerFactory<u8>,
-    pub vec_raw_map: TreeMap<(VectorId, Option<String>)>,
+    pub vec_raw_map: TreeMap<u32, (VectorId, Option<String>)>,
     pub document_id_counter: AtomicU32,
     pub store_raw_text: bool,
     pub k1: f32,
@@ -85,7 +85,7 @@ impl TFIDFIndex {
             documents_collected: AtomicUsize::new(0),
             sample_threshold,
             vec_raw_manager,
-            vec_raw_map: TreeMap::new(),
+            vec_raw_map: TreeMap::default(),
             document_id_counter: AtomicU32::new(0),
             store_raw_text,
             k1,
@@ -113,7 +113,7 @@ impl TFIDFIndex {
 
         self.vec_raw_map.insert(
             version,
-            document_id as u64,
+            document_id,
             (ext_id, self.store_raw_text.then_some(text)),
         );
 
