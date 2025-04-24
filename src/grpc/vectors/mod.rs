@@ -41,9 +41,9 @@ crate::cfg_grpc! {
                     Status::not_found(format!("Collection '{}' not found", req.collection_id))
                 })?;
 
-            let internal_id = *collection
+            let internal_id = collection
                 .external_to_internal_map
-                .get_latest(VectorId::from(req.vector_id))
+                .get_latest(&VectorId::from(req.vector_id))
                 .ok_or_else(|| Status::not_found("Vector not found"))?;
             let vector = collection
                 .internal_to_external_map

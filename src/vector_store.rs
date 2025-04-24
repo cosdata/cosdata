@@ -293,7 +293,7 @@ pub fn finalize_ann_results(
     for (orig_id, _) in filtered {
         let raw_emb = collection
             .internal_to_external_map
-            .get_latest(orig_id)
+            .get_latest(&orig_id)
             .ok_or_else(|| WaCustomError::NotFound("raw embedding not found".to_string()))?;
         let dense_values = raw_emb.dense_values.as_ref().ok_or_else(|| {
             WaCustomError::NotFound("dense values not found for raw embedding".to_string())

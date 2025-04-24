@@ -6,13 +6,15 @@ use std::sync::{
 use crate::models::{
     atomic_array::AtomicArray,
     buffered_io::{BufIoError, BufferManagerFactory},
-    tree_map::{QuotientsMap, TreeMapNode},
+    tree_map::{QuotientsMap, QuotientsMapVec, TreeMapKey, TreeMapNode, TreeMapVecNode},
     types::FileOffset,
 };
 
 use super::{PartitionedSerialize, SimpleSerialize};
 
-impl<T: SimpleSerialize> PartitionedSerialize for TreeMapNode<T> {
+impl<K: TreeMapKey + SimpleSerialize + Clone, V: SimpleSerialize> PartitionedSerialize
+    for TreeMapNode<K, V>
+{
     fn serialize(
         &self,
         bufmans: &BufferManagerFactory<u8>,

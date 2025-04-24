@@ -17,23 +17,27 @@ use super::{
     versioning::Hash,
 };
 
+pub trait TreeMapKey: std::hash::Hash + Eq {
+    fn key(&self) -> u64;
+}
+
 pub struct TreeMap<K, V> {
-    pub(crate) root: TreeMapNode<V>,
+    pub(crate) root: TreeMapNode<K, V>,
     bufmans: BufferManagerFactory<u8>,
     _marker: PhantomData<K>,
 }
 
-pub struct TreeMapNode<T> {
+pub struct TreeMapNode<K, V> {
     pub node_idx: u16,
     pub offset: RwLock<Option<FileOffset>>,
-    pub quotients: QuotientsMap<T>,
+    pub quotients: QuotientsMap<K, V>,
     pub children: AtomicArray<Self, 8>,
     pub dirty: AtomicBool,
 }
 
-pub struct QuotientsMap<T> {
+pub struct QuotientsMap<K, V> {
     pub offset: RwLock<Option<FileOffset>>,
-    pub map: TSHashTable<u64, Arc<Quotient<T>>>,
+    pub map: TSHashTable<K, Arc<Quotient<V>>>,
     pub len: AtomicU64,
     pub serialized_upto: AtomicUsize,
 }
@@ -51,7 +55,7 @@ pub struct UnsafeVersionedItem<T> {
 }
 
 #[cfg(test)]
-impl<T: PartialEq> PartialEq for TreeMapNode<T> {
+impl<K: TreeMapKey + Clone, V: PartialEq> PartialEq for TreeMapNode<K, V> {
     fn eq(&self, other: &Self) -> bool {
         *self.offset.read().unwrap() == *other.offset.read().unwrap()
             && self.quotients == other.quotients
@@ -60,7 +64,10 @@ impl<T: PartialEq> PartialEq for TreeMapNode<T> {
 }
 
 #[cfg(test)]
-impl<T: std::fmt::Debug> std::fmt::Debug for TreeMapNode<T> {
+#[cfg(test)]
+impl<K: std::fmt::Debug + TreeMapKey + Clone + Ord, V: std::fmt::Debug> std::fmt::Debug
+    for TreeMapNode<K, V>
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TreeMapNode")
             .field("offset", &*self.offset.read().unwrap())
@@ -71,7 +78,8 @@ impl<T: std::fmt::Debug> std::fmt::Debug for TreeMapNode<T> {
 }
 
 #[cfg(test)]
-impl<T: PartialEq> PartialEq for QuotientsMap<T> {
+#[cfg(test)]
+impl<K: TreeMapKey + Clone, V: PartialEq> PartialEq for QuotientsMap<K, V> {
     fn eq(&self, other: &Self) -> bool {
         self.map == other.map
             && self.len.load(Ordering::Relaxed) == other.len.load(Ordering::Relaxed)
@@ -81,7 +89,10 @@ impl<T: PartialEq> PartialEq for QuotientsMap<T> {
 }
 
 #[cfg(test)]
-impl<T: std::fmt::Debug> std::fmt::Debug for QuotientsMap<T> {
+#[cfg(test)]
+impl<K: std::fmt::Debug + TreeMapKey + Clone + Ord, V: std::fmt::Debug> std::fmt::Debug
+    for QuotientsMap<K, V>
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("QuotientMap")
             .field("map", &self.map)
@@ -141,13 +152,13 @@ impl<T> UnsafeVersionedItem<T> {
         }
     }
 
-    pub fn push(&self, version: Hash, value: T) {
-        self.push_inner(Box::new(Self::new(version, value)));
+    pub fn insert(&self, version: Hash, value: T) {
+        self.insert_inner(Box::new(Self::new(version, value)));
     }
 
-    fn push_inner(&self, version: Box<Self>) {
+    fn insert_inner(&self, version: Box<Self>) {
         if let Some(next) = unsafe { &*self.next.get() } {
-            return next.push_inner(version);
+            return next.insert_inner(version);
         }
 
         unsafe {
@@ -164,7 +175,7 @@ impl<T> UnsafeVersionedItem<T> {
     }
 }
 
-impl<T> TreeMapNode<T> {
+impl<K: TreeMapKey, V> TreeMapNode<K, V> {
     pub fn new(node_idx: u16) -> Self {
         Self {
             node_idx,
@@ -187,21 +198,21 @@ impl<T> TreeMapNode<T> {
         current
     }
 
-    pub fn insert(&self, version: Hash, quotient: u64, value: T) {
+    pub fn insert(&self, version: Hash, quotient: K, value: V) {
         self.quotients.insert(version, quotient, value);
         self.dirty.store(true, Ordering::Release);
     }
 
-    pub fn get_latest(&self, quotient: u64) -> Option<&T> {
+    pub fn get_latest(&self, quotient: &K) -> Option<&V> {
         self.quotients.get_latest(quotient)
     }
 
-    pub fn get_versioned(&self, quotient: u64) -> Option<&UnsafeVersionedItem<T>> {
+    pub fn get_versioned(&self, quotient: &K) -> Option<&UnsafeVersionedItem<V>> {
         self.quotients.get_versioned(quotient)
     }
 }
 
-impl<T> Default for QuotientsMap<T> {
+impl<K: TreeMapKey, V> Default for QuotientsMap<K, V> {
     fn default() -> Self {
         Self {
             offset: RwLock::new(None),
@@ -212,13 +223,13 @@ impl<T> Default for QuotientsMap<T> {
     }
 }
 
-impl<T> QuotientsMap<T> {
-    pub fn insert(&self, version: Hash, quotient: u64, value: T) {
+impl<K: TreeMapKey, V> QuotientsMap<K, V> {
+    pub fn insert(&self, version: Hash, quotient: K, value: V) {
         self.map.modify_or_insert_with_value(
             quotient,
             value,
             |value, quotient| {
-                quotient.value.push(version, value);
+                quotient.value.insert(version, value);
             },
             |value| {
                 Arc::new(Quotient {
@@ -229,8 +240,8 @@ impl<T> QuotientsMap<T> {
         );
     }
 
-    fn get_latest(&self, quotient: u64) -> Option<&T> {
-        self.map.lookup(&quotient).map(|q| {
+    fn get_latest(&self, quotient: &K) -> Option<&V> {
+        self.map.lookup(quotient).map(|q| {
             // SAFETY: here we are changing the lifetime of the value by using
             // `std::mem::transmute`, which by definition is not safe, but given our use of
             // this value and how we destroy it, its actually safe in this context.
@@ -238,8 +249,8 @@ impl<T> QuotientsMap<T> {
         })
     }
 
-    fn get_versioned(&self, quotient: u64) -> Option<&UnsafeVersionedItem<T>> {
-        self.map.lookup(&quotient).map(|q| {
+    fn get_versioned(&self, quotient: &K) -> Option<&UnsafeVersionedItem<V>> {
+        self.map.lookup(quotient).map(|q| {
             // SAFETY: here we are changing the lifetime of the value by using
             // `std::mem::transmute`, which by definition is not safe, but given our use of
             // this value and how we destroy it, its actually safe in this context.
@@ -249,20 +260,22 @@ impl<T> QuotientsMap<T> {
 }
 
 #[cfg(test)]
-impl<K, V: PartialEq> PartialEq for TreeMap<K, V> {
+impl<K: TreeMapKey + Clone, V: PartialEq> PartialEq for TreeMap<K, V> {
     fn eq(&self, other: &Self) -> bool {
         self.root == other.root
     }
 }
 
 #[cfg(test)]
-impl<K, V: std::fmt::Debug> std::fmt::Debug for TreeMap<K, V> {
+impl<K: std::fmt::Debug + TreeMapKey + Clone + Ord, V: std::fmt::Debug> std::fmt::Debug
+    for TreeMap<K, V>
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TreeMap").field("root", &self.root).finish()
     }
 }
 
-impl<K, V> TreeMap<K, V> {
+impl<K: TreeMapKey, V> TreeMap<K, V> {
     pub fn new(bufmans: BufferManagerFactory<u8>) -> Self {
         Self {
             root: TreeMapNode::new(0),
@@ -272,33 +285,30 @@ impl<K, V> TreeMap<K, V> {
     }
 }
 
-impl<K: Into<u64>, V> TreeMap<K, V> {
+impl<K: TreeMapKey, V> TreeMap<K, V> {
     pub fn insert(&self, version: Hash, key: K, value: V) {
-        let key = key.into();
-        let node_pos = (key % 65536) as u32;
+        let node_pos = (key.key() % 65536) as u32;
         let path = calculate_path(node_pos, 0);
         let node = self.root.find_or_create_node(&path);
         node.insert(version, key, value);
     }
 
-    pub fn get_latest(&self, key: K) -> Option<&V> {
-        let key = key.into();
-        let node_pos = (key % 65536) as u32;
+    pub fn get_latest(&self, key: &K) -> Option<&V> {
+        let node_pos = (key.key() % 65536) as u32;
         let path = calculate_path(node_pos, 0);
         let node = self.root.find_or_create_node(&path);
         node.get_latest(key)
     }
 
-    pub fn get_versioned(&self, key: K) -> Option<&UnsafeVersionedItem<V>> {
-        let key = key.into();
-        let node_pos = (key % 65536) as u32;
+    pub fn get_versioned(&self, key: &K) -> Option<&UnsafeVersionedItem<V>> {
+        let node_pos = (key.key() % 65536) as u32;
         let path = calculate_path(node_pos, 0);
         let node = self.root.find_or_create_node(&path);
         node.get_versioned(key)
     }
 }
 
-impl<K, V: SimpleSerialize> TreeMap<K, V> {
+impl<K: TreeMapKey + SimpleSerialize + Clone, V: SimpleSerialize> TreeMap<K, V> {
     pub fn serialize(&self, file_parts: u8) -> Result<(), BufIoError> {
         let bufman = self.bufmans.get(0)?;
         let cursor = bufman.open_cursor()?;

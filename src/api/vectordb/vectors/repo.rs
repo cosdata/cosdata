@@ -32,9 +32,9 @@ pub(crate) async fn get_vector_by_id(
         .collections_map
         .get_collection(collection_id)
         .ok_or(VectorsError::CollectionNotFound)?;
-    let internal_id = *collection
+    let internal_id = collection
         .external_to_internal_map
-        .get_latest(vector_id)
+        .get_latest(&vector_id)
         .ok_or(VectorsError::NotFound)?;
     let vector = collection
         .internal_to_external_map
@@ -70,8 +70,8 @@ pub(crate) async fn check_vector_existence(
         .get_collection(collection_id)
         .ok_or(VectorsError::CollectionNotFound)?;
     let internal_id =
-        if let Some(internal_id) = collection.external_to_internal_map.get_latest(vector_id) {
-            *internal_id
+        if let Some(internal_id) = collection.external_to_internal_map.get_latest(&vector_id) {
+            internal_id
         } else {
             return Ok(false);
         };

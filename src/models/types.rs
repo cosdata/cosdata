@@ -12,7 +12,7 @@ use super::{
     prob_lazy_load::lazy_item::FileIndex,
     prob_node::ProbNode,
     tf_idf_index::TFIDFIndexRoot,
-    tree_map::TreeMap,
+    tree_map::{TreeMap, TreeMapKey, TreeMapVec},
     versioning::VersionControl,
 };
 use crate::{
@@ -219,7 +219,15 @@ impl From<VectorId> for String {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Hash)]
+impl TreeMapKey for VectorId {
+    fn key(&self) -> u64 {
+        let mut hasher = SipHasher24::new();
+        self.0.hash(&mut hasher);
+        hasher.finish()
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Hash, PartialEq, Eq)]
 pub struct DocumentId(String);
 
 impl From<String> for DocumentId {
@@ -242,10 +250,10 @@ impl From<DocumentId> for String {
     }
 }
 
-impl From<VectorId> for u64 {
-    fn from(id: VectorId) -> Self {
+impl TreeMapKey for DocumentId {
+    fn key(&self) -> u64 {
         let mut hasher = SipHasher24::new();
-        id.0.hash(&mut hasher);
+        self.0.hash(&mut hasher);
         hasher.finish()
     }
 }
@@ -285,9 +293,9 @@ impl From<InternalId> for u32 {
     }
 }
 
-impl From<InternalId> for u64 {
-    fn from(id: InternalId) -> Self {
-        id.0 as u64
+impl TreeMapKey for InternalId {
+    fn key(&self) -> u64 {
+        self.0 as u64
     }
 }
 

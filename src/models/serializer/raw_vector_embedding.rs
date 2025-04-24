@@ -10,54 +10,7 @@ use crate::{
     },
 };
 
-use super::SimpleSerialize;
-
-/// Writes a u16 length to the buffer using custom encoding:
-/// - If the value fits in 7 bits (<= 127), write it directly as one byte.
-/// - Otherwise, set the MSB of the first byte to 1, store the top 7 bits,
-///   and follow with a byte for the lower 8 bits.
-fn write_len(buf: &mut Vec<u8>, len: u16) {
-    if len <= 0x7F {
-        buf.push(len as u8);
-    } else {
-        let msb = ((len >> 8) as u8 & 0x7F) | 0x80; // Set highest bit
-        let lsb = len as u8;
-        buf.push(msb);
-        buf.push(lsb);
-    }
-}
-
-/// Reads a u16 length from the buffer using the same encoding.
-fn read_len(bufman: &BufferManager, cursor: u64) -> Result<u16, BufIoError> {
-    let first = bufman.read_u8_with_cursor(cursor)?;
-    if first & 0x80 == 0 {
-        Ok(first as u16)
-    } else {
-        let msb = (first & 0x7F) as u16;
-        let lsb = bufman.read_u8_with_cursor(cursor)? as u16;
-        Ok((msb << 8) | lsb)
-    }
-}
-
-fn read_string(bufman: &BufferManager, cursor: u64) -> Result<String, BufIoError> {
-    let len = read_len(bufman, cursor)? as usize;
-    let mut buf = vec![0; len];
-    bufman.read_with_cursor(cursor, &mut buf)?;
-    String::from_utf8(buf)
-        .map_err(|err| BufIoError::Io(io::Error::new(io::ErrorKind::InvalidData, err)))
-}
-
-fn read_opt_string(bufman: &BufferManager, cursor: u64) -> Result<Option<String>, BufIoError> {
-    let len = read_len(bufman, cursor)? as usize;
-    if len == 0 {
-        return Ok(None);
-    }
-    let mut buf = vec![0; len];
-    bufman.read_with_cursor(cursor, &mut buf)?;
-    let str = String::from_utf8(buf)
-        .map_err(|err| BufIoError::Io(io::Error::new(io::ErrorKind::InvalidData, err)))?;
-    Ok(Some(str))
-}
+use super::{read_len, read_opt_string, read_string, write_len, SimpleSerialize};
 
 impl SimpleSerialize for RawVectorEmbedding {
     fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
