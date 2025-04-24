@@ -568,8 +568,14 @@ impl CollectionsMap {
             );
 
             let external_to_internal_map_bufmans = BufferManagerFactory::new(
-                collections_path.into(),
+                collections_path.clone().into(),
                 |root, part| root.join(format!("{}.etoi", part)),
+                8192,
+            );
+
+            let document_to_internals_map_bufmans = BufferManagerFactory::new(
+                collections_path.into(),
+                |root, part| root.join(format!("{}.dtoi", part)),
                 8192,
             );
 
@@ -587,6 +593,10 @@ impl CollectionsMap {
                 )?,
                 external_to_internal_map: TreeMap::deserialize(
                     external_to_internal_map_bufmans,
+                    config.tree_map_serialized_parts,
+                )?,
+                document_to_internals_map: TreeMapVec::deserialize(
+                    document_to_internals_map_bufmans,
                     config.tree_map_serialized_parts,
                 )?,
                 internal_id_counter: AtomicU32::new(id_counter_value),

@@ -3,7 +3,7 @@ use super::collection_transaction::CollectionTransaction;
 use super::common::WaCustomError;
 use super::meta_persist::store_highest_internal_id;
 use super::paths::get_data_path;
-use super::tree_map::TreeMap;
+use super::tree_map::{TreeMap, TreeMapVec};
 use super::types::{get_collections_path, DocumentId, InternalId, MetaDb, VectorId};
 use super::versioning::{Hash, VersionControl};
 use crate::config_loader::Config;
@@ -74,6 +74,7 @@ pub struct Collection {
     pub vcs: VersionControl,
     pub internal_to_external_map: TreeMap<InternalId, RawVectorEmbedding>,
     pub external_to_internal_map: TreeMap<VectorId, InternalId>,
+    pub document_to_internals_map: TreeMapVec<DocumentId, InternalId>,
     pub internal_id_counter: AtomicU32,
     pub hnsw_index: RwLock<Option<Arc<HNSWIndex>>>,
     pub inverted_index: RwLock<Option<Arc<InvertedIndex>>>,
@@ -108,8 +109,14 @@ impl Collection {
         );
 
         let external_to_internal_map_bufmans = BufferManagerFactory::new(
-            collections_path.into(),
+            collections_path.clone().into(),
             |root, part| root.join(format!("{}.etoi", part)),
+            8192,
+        );
+
+        let document_to_internals_map_bufmans = BufferManagerFactory::new(
+            collections_path.into(),
+            |root, part| root.join(format!("{}.dtoi", part)),
             8192,
         );
 
@@ -130,6 +137,7 @@ impl Collection {
             vcs,
             internal_to_external_map: TreeMap::new(internal_to_external_map_bufmans),
             external_to_internal_map: TreeMap::new(external_to_internal_map_bufmans),
+            document_to_internals_map: TreeMapVec::new(document_to_internals_map_bufmans),
             internal_id_counter: AtomicU32::new(0),
             hnsw_index: RwLock::new(None),
             inverted_index: RwLock::new(None),
@@ -229,7 +237,7 @@ impl Collection {
                 |mut acc, (i, mut embedding)| {
                     let RawVectorEmbedding {
                         id,
-                        document_id: _,
+                        document_id,
                         dense_values,
                         metadata,
                         sparse_values,
@@ -255,6 +263,14 @@ impl Collection {
                         .insert(transaction.id, internal_id, embedding);
                     self.external_to_internal_map
                         .insert(transaction.id, id, internal_id);
+
+                    if let Some(document_id) = document_id {
+                        self.document_to_internals_map.push(
+                            transaction.id,
+                            document_id,
+                            internal_id,
+                        );
+                    }
 
                     acc
                 },
@@ -285,6 +301,8 @@ impl Collection {
         self.internal_to_external_map
             .serialize(config.tree_map_serialized_parts)?;
         self.external_to_internal_map
+            .serialize(config.tree_map_serialized_parts)?;
+        self.document_to_internals_map
             .serialize(config.tree_map_serialized_parts)?;
         store_highest_internal_id(&self.lmdb, self.internal_id_counter.load(Ordering::Relaxed))?;
         Ok(())
