@@ -10,7 +10,6 @@ use crate::models::common::WaCustomError;
 pub(crate) enum SearchError {
     CollectionNotFound(String),
     IndexNotFound(String),
-    SearchFailed(String),
     InvalidFilter(String),
     InternalServerError(String),
     WaCustom(WaCustomError),
@@ -23,7 +22,6 @@ impl Display for SearchError {
         match self {
             SearchError::CollectionNotFound(name) => write!(f, "Collection '{}' not found", name),
             SearchError::IndexNotFound(msg) => write!(f, "Required index not found: {}", msg),
-            SearchError::SearchFailed(msg) => write!(f, "Search operation failed: {}", msg),
             SearchError::InvalidFilter(msg) => write!(f, "Invalid metadata filter: {}", msg),
             SearchError::InternalServerError(msg) => write!(f, "Internal server error: {}", msg),
             SearchError::WaCustom(e) => write!(f, "Internal search error: {:?}", e),
@@ -49,7 +47,6 @@ impl ResponseError for SearchError {
         match self {
             SearchError::CollectionNotFound(_) => StatusCode::NOT_FOUND,
             SearchError::IndexNotFound(_) => StatusCode::BAD_REQUEST,
-            SearchError::SearchFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
             SearchError::InvalidFilter(_) => StatusCode::BAD_REQUEST,
             SearchError::InternalServerError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             SearchError::WaCustom(_) => StatusCode::INTERNAL_SERVER_ERROR,

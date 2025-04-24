@@ -1,13 +1,14 @@
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
+
 use crate::config_loader::Config;
 use crate::config_loader::VectorsIndexingMode;
-use crate::distance::cosine::CosineSimilarity;
 use crate::distance::DistanceFunction;
 use crate::indexes::hnsw::types::HNSWHyperParams;
 use crate::indexes::hnsw::types::QuantizedDenseVectorEmbedding;
 use crate::indexes::hnsw::types::RawDenseVectorEmbedding;
 use crate::indexes::hnsw::DenseInputEmbedding;
 use crate::indexes::hnsw::HNSWIndex;
-use crate::macros::key;
+use crate::indexes::InternalSearchResult;
 use crate::metadata;
 use crate::metadata::fields_to_dimensions;
 use crate::metadata::pseudo_level_probs;
@@ -19,7 +20,6 @@ use crate::models::collection::Collection;
 use crate::models::collection_transaction::CollectionTransaction;
 use crate::models::common::*;
 use crate::models::dot_product::dot_product_f32;
-use crate::models::embedding_persist::*;
 use crate::models::file_persist::*;
 use crate::models::fixedset::PerformantFixedSet;
 use crate::models::prob_lazy_load::lazy_item::FileIndex;
@@ -31,7 +31,6 @@ use crate::models::types::*;
 use crate::models::versioning::Hash;
 use crate::quantization::{Quantization, StorageType};
 use crate::storage::Storage;
-use lmdb::Transaction;
 use rand::Rng;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use std::cmp::Reverse;
@@ -64,16 +63,16 @@ pub fn create_root_node(
             random_number
         })
         .collect::<Vec<f32>>();
-    let vec_hash = VectorId(u64::MAX);
+    let vec_hash = InternalId::from(u32::MAX);
 
     let vector_list = Arc::new(quantization_metric.quantize(&vec, storage_type, values_range)?);
 
     let mut prop_file_guard = prop_file.write().unwrap();
-    let location = write_prop_value_to_file(&vec_hash, vector_list.clone(), &mut prop_file_guard)?;
+    let location = write_prop_value_to_file(&vec_hash, &vector_list, &mut prop_file_guard)?;
 
     let prop_value = Arc::new(NodePropValue {
         id: vec_hash,
-        vec: vector_list.clone(),
+        vec: vector_list,
         location,
     });
 
@@ -81,11 +80,8 @@ pub fn create_root_node(
         Some(schema) => {
             let mbits = schema.base_dimensions();
             let metadata = Arc::new(Metadata { mag: 0.0, mbits });
-            let mid = MetadataId(1);
-            let location =
-                write_prop_metadata_to_file(&mid, metadata.clone(), &mut prop_file_guard)?;
+            let location = write_prop_metadata_to_file(metadata.clone(), &mut prop_file_guard)?;
             Some(Arc::new(NodePropMetadata {
-                id: mid,
                 vec: metadata,
                 location,
             }))
@@ -148,7 +144,7 @@ pub fn create_root_node(
 
 pub fn ann_search(
     config: &Config,
-    hnsw_index: Arc<HNSWIndex>,
+    hnsw_index: &HNSWIndex,
     vector_emb: QuantizedDenseVectorEmbedding,
     query_filter_dims: Option<&Vec<metadata::QueryFilterDimensions>>,
     cur_entry: SharedNode,
@@ -161,7 +157,7 @@ pub fn ann_search(
     } else {
         hnsw_params.neighbors_count
     });
-    skipm.insert(vector_emb.hash_vec.0 as u32);
+    skipm.insert(*vector_emb.hash_vec);
 
     let z = match query_filter_dims {
         Some(qf_dims) => {
@@ -171,7 +167,7 @@ pub fn ann_search(
                 let mdims = Metadata::from(qfd);
                 let mut z_with_mdims = traverse_find_nearest(
                     config,
-                    &hnsw_index,
+                    hnsw_index,
                     cur_entry,
                     &fvec,
                     None,
@@ -198,7 +194,7 @@ pub fn ann_search(
         }
         None => traverse_find_nearest(
             config,
-            &hnsw_index,
+            hnsw_index,
             cur_entry,
             &fvec,
             None,
@@ -266,7 +262,7 @@ pub fn ann_search(
     if cur_level.0 != 0 {
         let results = ann_search(
             config,
-            hnsw_index.clone(),
+            hnsw_index,
             vector_emb,
             query_filter_dims,
             unsafe { &*z[0].0 }
@@ -287,118 +283,41 @@ pub fn finalize_ann_results(
     hnsw_index: &HNSWIndex,
     results: Vec<(SharedNode, MetricResult)>,
     query: &[f32],
-    k: Option<usize>,
-) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
-    let filtered = remove_duplicates_and_filter(results, k, &hnsw_index.cache);
-    let mut results = Vec::with_capacity(k.unwrap_or(filtered.len()));
+    top_k: Option<usize>,
+    return_raw_text: bool,
+) -> Result<Vec<InternalSearchResult>, WaCustomError> {
+    let filtered = remove_duplicates_and_filter(hnsw_index, results, top_k, &hnsw_index.cache);
+    let mut results = Vec::with_capacity(top_k.unwrap_or(filtered.len()));
     let mag_query = query.iter().map(|x| x * x).sum::<f32>().sqrt();
 
-    for (orig_id, _, _) in filtered {
-        let raw = get_dense_embedding_by_id(collection, hnsw_index, &orig_id)?;
-        let dp = dot_product_f32(query, &raw.raw_vec);
-        let mag_raw = raw.raw_vec.iter().map(|x| x * x).sum::<f32>().sqrt();
+    for (orig_id, _) in filtered {
+        let raw_emb = collection
+            .internal_to_external_map
+            .get_latest(orig_id)
+            .ok_or_else(|| WaCustomError::NotFound("raw embedding not found".to_string()))?;
+        let dense_values = raw_emb.dense_values.as_ref().ok_or_else(|| {
+            WaCustomError::NotFound("dense values not found for raw embedding".to_string())
+        })?;
+        let dp = dot_product_f32(query, dense_values);
+        let mag_raw = dense_values.iter().map(|x| x * x).sum::<f32>().sqrt();
         let cs = dp / (mag_query * mag_raw);
         results.push((
             orig_id,
-            MetricResult::CosineSimilarity(CosineSimilarity(cs)),
+            Some(raw_emb.id.clone()),
+            raw_emb.document_id.clone(),
+            cs,
+            if return_raw_text {
+                raw_emb.text.clone()
+            } else {
+                None
+            },
         ));
     }
-    results.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
-    if let Some(k) = k {
+    results.sort_unstable_by(|(_, _, _, a, _), (_, _, _, b, _)| b.total_cmp(a));
+    if let Some(k) = top_k {
         results.truncate(k);
     }
     Ok(results)
-}
-
-/// Retrieves a raw embedding vector from the vector store by its ID.
-///
-/// Note the id to be passed to this function is the user specified
-/// identifier, which may not be the same as the id returned by
-/// `ProbNode.get_id` function. This difference was introduced with
-/// metadata filtering support. In case the collection supports
-/// metadata filtering, then for an input vector, multiple replica
-/// nodes may get created in the index, which have an internally
-/// computed node id that's different from the user specified vector
-/// id. The calling function is expected to always pass the user
-/// specified id.
-///
-/// This function performs the following steps to retrieve the embedding:
-/// 1. Begins a read-write transaction with the LMDB environment.
-/// 2. Retrieves the serialized offset of the embedding from the database using the provided `vector_id`.
-/// 3. Deserializes the offset to obtain the embedding offset and version.
-/// 4. Uses a `BufferManagerFactory` to create a buffer manager for the appropriate version.
-/// 5. Reads the embedding from the buffer using the offset.
-///
-/// # Arguments
-///
-/// * `dense_index` - An `Arc`-wrapped `DenseIndex` instance, which contains the LMDB environment and database for embeddings.
-/// * `vector_id` - The ID of the vector whose embedding is to be retrieved.
-///
-/// # Returns
-///
-/// * `Ok(RawVectorEmbedding)` - On success, returns the embedding associated with the given `vector_id`.
-/// * `Err(WaCustomError)` - On failure, returns a custom error indicating the reason for the failure.
-///
-/// # Errors
-///
-/// This function may return an `Err` variant of `WaCustomError` in cases where:
-/// * There is an error beginning the LMDB transaction (e.g., database access issues).
-/// * The `vector_id` does not exist in the database, leading to a failure when retrieving the serialized offset.
-/// * Deserialization of the embedding offset fails.
-/// * There are issues with accessing or reading from the buffer manager.
-///
-/// # Examples
-///
-/// ```
-/// use std::sync::Arc;
-/// use std::path::Path;
-/// use my_crate::{DenseIndex, get_embedding_by_id, RawVectorEmbedding, WaCustomError, VectorId};
-///
-/// let hnsw_index = Arc::new(HNSWIndex::new());
-/// let vector_id = VectorId::Int(42); // Example vector ID
-/// match get_embedding_by_id(hnsw_index.clone(), vector_id) {
-///     Ok(embedding) => println!("Embedding: {:?}", embedding),
-///     Err(err) => eprintln!("Error retrieving embedding: {:?}", err),
-/// }
-/// ```
-///
-/// # Panics
-///
-/// This function does not panic.
-///
-/// # Notes
-///
-/// Ensure that the buffer manager and the database are correctly initialized and configured before calling this function.
-/// The function assumes the existence of methods and types like `EmbeddingOffset::deserialize`, `BufferManagerFactory::new`, and `read_embedding` which should be implemented correctly.
-pub fn get_dense_embedding_by_id(
-    collection: &Collection,
-    hnsw_index: &HNSWIndex,
-    vector_id: &VectorId,
-) -> Result<RawDenseVectorEmbedding, WaCustomError> {
-    let env = collection.lmdb.env.clone();
-    let db = collection.lmdb.db.clone();
-
-    let txn = env
-        .begin_ro_txn()
-        .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
-
-    let embedding_key = key!(e:vector_id);
-
-    let offset_serialized = txn.get(*db, &embedding_key).map_err(|e| {
-        WaCustomError::DatabaseError(format!("Failed to get serialized embedding offset: {}", e))
-    })?;
-
-    let embedding_offset = EmbeddingOffset::deserialize(offset_serialized)
-        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-
-    txn.abort();
-
-    let offset = embedding_offset.offset;
-    let current_version = embedding_offset.version;
-    let bufman = hnsw_index.vec_raw_manager.get(current_version)?;
-    let (embedding, _next) = read_embedding(bufman.clone(), offset)?;
-
-    Ok(embedding)
 }
 
 /// Intermediate representation of the embedding in a form that's
@@ -409,7 +328,6 @@ pub fn get_dense_embedding_by_id(
 struct IndexableEmbedding {
     prop_value: Arc<NodePropValue>,
     prop_metadata: Option<Arc<NodePropMetadata>>,
-    embedding: QuantizedDenseVectorEmbedding,
     overridden_level_probs: Option<Vec<(f64, u8)>>,
 }
 
@@ -420,23 +338,9 @@ struct IndexableEmbedding {
 fn metadata_replica_set(
     schema: &MetadataSchema,
     fields: Option<&MetadataFields>,
-) -> Result<Vec<(MetadataId, Metadata)>, WaCustomError> {
+) -> Result<Vec<Metadata>, WaCustomError> {
     let dims = fields_to_dimensions(schema, fields).map_err(WaCustomError::MetadataError)?;
-    let replicas = dims
-        .into_iter()
-        .enumerate()
-        .map(|(i, d)| {
-            // @TODO(vineet): Need more clarity about how a metadata
-            // ids that are unique within a replica set (v/s unique
-            // across all vectors in a collections) will result in
-            // deterministic composite identifiers for the
-            // ProbNode. Ref:
-            // https://discord.com/channels/1250672673856421938/1335809236537446452/1348638117984206848
-            let mid = MetadataId(i as u8 + 1);
-            let metadata = Metadata::from(d);
-            (mid, metadata)
-        })
-        .collect();
+    let replicas = dims.into_iter().map(Metadata::from).collect();
     Ok(replicas)
 }
 
@@ -488,7 +392,7 @@ fn prop_metadata_replicas(
 
     if let Some(replicas) = replica_set {
         let mut result = Vec::with_capacity(replicas.len());
-        for (mid, m) in replicas {
+        for m in replicas {
             let mvalue = Arc::new(m);
 
             // Write metadata to the same prop file
@@ -497,11 +401,10 @@ fn prop_metadata_replicas(
                     "Failed to acquire lock to write prop metadata".to_string(),
                 )
             })?;
-            let location = write_prop_metadata_to_file(&mid, mvalue.clone(), &mut prop_file_guard)?;
+            let location = write_prop_metadata_to_file(mvalue.clone(), &mut prop_file_guard)?;
             drop(prop_file_guard);
 
             let prop_metadata = NodePropMetadata {
-                id: mid,
                 vec: mvalue,
                 location,
             };
@@ -520,13 +423,8 @@ fn pseudo_metadata_replicas(
     let dims = schema.pseudo_weighted_dimensions(HIGH_WEIGHT);
     let replicas = dims
         .into_iter()
-        .enumerate()
-        .map(|(i, d)| {
-            let mid = MetadataId(i as u8 + 1);
-            let metadata = Metadata::from(d);
-            (mid, metadata)
-        })
-        .collect::<Vec<(MetadataId, Metadata)>>();
+        .map(Metadata::from)
+        .collect::<Vec<Metadata>>();
     // As pseudo_replicas will be created only at the time of index
     // initialization, it's ok to hold a single rw lock for writing
     // metadata for all replicas to the prop file
@@ -534,11 +432,10 @@ fn pseudo_metadata_replicas(
         WaCustomError::LockError("Failed to acquire lock to write prop metadata".to_string())
     })?;
     let mut result = Vec::with_capacity(replicas.len());
-    for (mid, m) in replicas {
+    for m in replicas {
         let mvalue = Arc::new(m);
-        let location = write_prop_metadata_to_file(&mid, mvalue.clone(), &mut prop_file_guard)?;
+        let location = write_prop_metadata_to_file(mvalue.clone(), &mut prop_file_guard)?;
         let prop_metadata = NodePropMetadata {
-            id: mid,
             vec: mvalue,
             location,
         };
@@ -574,24 +471,22 @@ fn preprocess_embedding(
 
     // Write props to the prop file
     let mut prop_file_guard = hnsw_index.cache.prop_file.write().unwrap();
-    let location = write_prop_value_to_file(
-        &raw_emb.hash_vec,
-        quantized_vec.clone(),
-        &mut prop_file_guard,
-    )
-    .expect("failed to write prop");
+    let location =
+        write_prop_value_to_file(&raw_emb.hash_vec, &quantized_vec, &mut prop_file_guard)
+            .expect("failed to write prop");
     drop(prop_file_guard);
 
+    let base_id = if raw_emb.is_pseudo {
+        raw_emb.hash_vec
+    } else {
+        raw_emb.hash_vec * hnsw_index.max_replica_per_node as u32
+    };
+
     let prop_value = Arc::new(NodePropValue {
-        id: raw_emb.hash_vec.clone(),
+        id: base_id,
         vec: quantized_vec.clone(),
         location,
     });
-
-    let embedding = QuantizedDenseVectorEmbedding {
-        quantized_vec,
-        hash_vec: raw_emb.hash_vec.clone(),
-    };
 
     let metadata_schema = collection.meta.metadata_schema.as_ref();
     let prop_file = &hnsw_index.cache.prop_file;
@@ -604,7 +499,7 @@ fn preprocess_embedding(
         let plp = pseudo_level_probs(num_levels as u8, replicas.len() as u16);
         let mut embeddings: Vec<IndexableEmbedding> = vec![];
         let mut is_first_overrideen = false;
-        for prop_metadata in replicas {
+        for (replica_id, prop_metadata) in replicas.into_iter().enumerate() {
             let overridden_level_probs = if !is_first_overrideen {
                 is_first_overrideen = true;
                 plp.iter()
@@ -614,9 +509,12 @@ fn preprocess_embedding(
                 plp.clone()
             };
             let emb = IndexableEmbedding {
-                prop_value: prop_value.clone(),
+                prop_value: Arc::new(NodePropValue {
+                    id: InternalId::from(*base_id + replica_id as u32 + 1),
+                    vec: quantized_vec.clone(),
+                    location,
+                }),
                 prop_metadata: Some(Arc::new(prop_metadata)),
-                embedding: embedding.clone(),
                 overridden_level_probs: Some(overridden_level_probs),
             };
             embeddings.push(emb);
@@ -632,11 +530,14 @@ fn preprocess_embedding(
         match metadata_replicas {
             Some(replicas) => {
                 let mut embeddings: Vec<IndexableEmbedding> = vec![];
-                for prop_metadata in replicas {
+                for (replica_id, prop_metadata) in replicas.into_iter().enumerate() {
                     let emb = IndexableEmbedding {
-                        prop_value: prop_value.clone(),
+                        prop_value: Arc::new(NodePropValue {
+                            id: InternalId::from(*base_id + replica_id as u32 + 1),
+                            vec: quantized_vec.clone(),
+                            location,
+                        }),
                         prop_metadata: Some(Arc::new(prop_metadata)),
-                        embedding: embedding.clone(),
                         overridden_level_probs: None,
                     };
                     embeddings.push(emb);
@@ -647,7 +548,6 @@ fn preprocess_embedding(
                 let emb = IndexableEmbedding {
                     prop_value,
                     prop_metadata: None,
-                    embedding: embedding.clone(),
                     overridden_level_probs: None,
                 };
                 vec![emb]
@@ -656,7 +556,7 @@ fn preprocess_embedding(
     }
 }
 
-pub fn index_embeddings_in_transaction(
+pub fn index_embeddings(
     config: &Config,
     collection: &Collection,
     hnsw_index: &HNSWIndex,
@@ -669,14 +569,12 @@ pub fn index_embeddings_in_transaction(
             .into_iter()
             .map(|vec| {
                 let DenseInputEmbedding(id, values, metadata, is_pseudo) = vec;
-                let raw_emb = RawDenseVectorEmbedding {
+                RawDenseVectorEmbedding {
                     hash_vec: id,
                     raw_vec: Arc::new(values),
                     raw_metadata: metadata,
                     is_pseudo,
-                };
-                transaction.post_raw_dense_embedding(raw_emb.clone());
-                raw_emb
+                }
             })
             .flat_map(|emb| {
                 preprocess_embedding(
@@ -698,7 +596,6 @@ pub fn index_embeddings_in_transaction(
                 config,
                 hnsw_index,
                 ptr::null_mut(),
-                emb.embedding,
                 emb.prop_value,
                 emb.prop_metadata,
                 root_entry,
@@ -736,27 +633,26 @@ pub fn index_embedding(
     config: &Config,
     hnsw_index: &HNSWIndex,
     parent: SharedNode,
-    vector_emb: QuantizedDenseVectorEmbedding,
     prop_value: Arc<NodePropValue>,
     prop_metadata: Option<Arc<NodePropMetadata>>,
     cur_entry: SharedNode,
     cur_level: HNSWLevel,
     version: Hash,
     version_number: u16,
-    lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16, u8), SharedNode>>,
+    lazy_item_versions_table: Arc<TSHashTable<(InternalId, u16, u8), SharedNode>>,
     hnsw_params: &HNSWHyperParams,
     max_level: u8,
     offset_fn: &mut impl FnMut() -> u32,
     level_0_offset_fn: &mut impl FnMut() -> u32,
     distance_metric: DistanceMetric,
 ) -> Result<(), WaCustomError> {
-    let fvec = vector_emb.quantized_vec.clone();
+    let fvec = &prop_value.vec;
     let mut skipm = PerformantFixedSet::new(if cur_level.0 == 0 {
         hnsw_params.level_0_neighbors_count
     } else {
         hnsw_params.neighbors_count
     });
-    skipm.insert(vector_emb.hash_vec.0 as u32);
+    skipm.insert(*prop_value.id);
 
     let cur_node = unsafe { &*ProbLazyItem::get_latest_version(cur_entry, &hnsw_index.cache)?.0 }
         .try_get_data(&hnsw_index.cache)?;
@@ -769,7 +665,7 @@ pub fn index_embedding(
         config,
         hnsw_index,
         cur_entry,
-        &fvec,
+        fvec,
         Some(&prop_value.id),
         mdims.as_deref(),
         &mut 0,
@@ -782,7 +678,7 @@ pub fn index_embedding(
     let z = if z.is_empty() {
         let fvec_data = VectorData {
             id: None,
-            quantized_vec: &fvec,
+            quantized_vec: fvec,
             metadata: mdims.as_deref(),
         };
         let cur_node_metadata = cur_node.prop_metadata.clone().map(|pm| pm.vec.clone());
@@ -807,7 +703,6 @@ pub fn index_embedding(
                 config,
                 hnsw_index,
                 ptr::null_mut(),
-                vector_emb.clone(),
                 prop_value.clone(),
                 prop_metadata.clone(),
                 unsafe { &*z[0].0 }
@@ -864,7 +759,6 @@ pub fn index_embedding(
                 config,
                 hnsw_index,
                 lazy_node,
-                vector_emb.clone(),
                 prop_value.clone(),
                 prop_metadata.clone(),
                 unsafe { &*z[0].0 }
@@ -945,7 +839,7 @@ fn create_node(
 #[allow(clippy::too_many_arguments)]
 fn get_or_create_version(
     hnsw_index: &HNSWIndex,
-    lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16, u8), SharedNode>>,
+    lazy_item_versions_table: Arc<TSHashTable<(InternalId, u16, u8), SharedNode>>,
     lazy_item: SharedNode,
     version_id: Hash,
     version_number: u16,
@@ -956,7 +850,7 @@ fn get_or_create_version(
     let node = unsafe { &*lazy_item }.try_get_data(&hnsw_index.cache)?;
 
     let new_version = lazy_item_versions_table.get_or_create_with_flag(
-        (node.get_id().clone(), version_number, node.hnsw_level.0),
+        (node.get_id(), version_number, node.hnsw_level.0),
         || {
             let root_version = ProbLazyItem::get_root_version(lazy_item, &hnsw_index.cache)
                 .expect("Couldn't get root version");
@@ -1016,7 +910,7 @@ fn create_node_edges(
     neighbors: Vec<(SharedNode, MetricResult)>,
     version: Hash,
     version_number: u16,
-    lazy_item_versions_table: Arc<TSHashTable<(VectorId, u16, u8), SharedNode>>,
+    lazy_item_versions_table: Arc<TSHashTable<(InternalId, u16, u8), SharedNode>>,
     max_edges: usize,
     is_level_0: bool,
     offset_fn: &mut dyn FnMut() -> u32,
@@ -1026,7 +920,7 @@ fn create_node_edges(
     let mut neighbors_to_update = Vec::new();
 
     lazy_item_versions_table.insert(
-        (node.get_id().clone(), version_number, node.hnsw_level.0),
+        (node.get_id(), version_number, node.hnsw_level.0),
         lazy_node,
     );
 
@@ -1049,7 +943,7 @@ fn create_node_edges(
 
         let new_neighbor = unsafe { &*new_lazy_neighbor }.try_get_data(&hnsw_index.cache)?;
         let neighbor_inserted_idx = node.add_neighbor(
-            new_neighbor.get_id().0 as u32,
+            new_neighbor.get_id(),
             new_lazy_neighbor,
             dist,
             &hnsw_index.cache,
@@ -1058,7 +952,7 @@ fn create_node_edges(
 
         let neighbour_update_info = if let Some(neighbor_inserted_idx) = neighbor_inserted_idx {
             let node_inserted_idx = new_neighbor.add_neighbor(
-                node.get_id().0 as u32,
+                node.get_id(),
                 lazy_node,
                 dist,
                 &hnsw_index.cache,
@@ -1068,7 +962,7 @@ fn create_node_edges(
                 successful_edges += 1;
                 Some((idx, dist))
             } else {
-                node.remove_neighbor(neighbor_inserted_idx, new_neighbor.get_id().0 as u32);
+                node.remove_neighbor_by_index_and_id(neighbor_inserted_idx, new_neighbor.get_id());
                 None
             }
         } else {
@@ -1096,7 +990,7 @@ fn create_node_edges(
         };
         let cursor = bufman.open_cursor()?;
         let mut current_node_link = Vec::with_capacity(14);
-        current_node_link.extend((node.get_id().0 as u32).to_le_bytes());
+        current_node_link.extend(node.get_id().to_le_bytes());
 
         let node = unsafe { &*lazy_node };
 
@@ -1143,7 +1037,7 @@ fn traverse_find_nearest(
     hnsw_index: &HNSWIndex,
     start_node: SharedNode,
     fvec: &Storage,
-    fvec_id: Option<&VectorId>,
+    fvec_id: Option<&InternalId>,
     mdims: Option<&Metadata>,
     nodes_visited: &mut u32,
     skipm: &mut PerformantFixedSet,
@@ -1171,7 +1065,7 @@ fn traverse_find_nearest(
     };
     let start_dist = distance_metric.calculate(&fvec_data, &start_vec_data, is_indexing)?;
 
-    let start_id = start_data.get_id().0 as u32;
+    let start_id = *start_data.get_id();
     skipm.insert(start_id);
     candidate_queue.push((start_dist, start_node));
 
@@ -1200,12 +1094,7 @@ fn traverse_find_nearest(
                 }
             };
 
-            // @TODO(vineet): The problem seems to be that neighbor_id
-            // is always the same when indexing pseudo node
-            // replicas. This is because the ids of base node and the
-            // pseudo node are > u32::MAX, whereas neighbor_id is of
-            // type u32. Hence they get truncated to u32::MAX - 1.
-            if !skipm.is_member(neighbor_id) {
+            if !skipm.is_member(*neighbor_id) {
                 let neighbor_data = unsafe { &*neighbor_node }.try_get_data(&hnsw_index.cache)?;
                 let neighbor_metadata =
                     neighbor_data.prop_metadata.clone().map(|pm| pm.vec.clone());
@@ -1216,7 +1105,7 @@ fn traverse_find_nearest(
                 };
                 let dist =
                     distance_metric.calculate(&fvec_data, &neighbor_vec_data, is_indexing)?;
-                skipm.insert(neighbor_id);
+                skipm.insert(*neighbor_id);
                 candidate_queue.push((dist, neighbor_node));
             }
         }

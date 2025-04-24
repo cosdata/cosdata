@@ -19,6 +19,7 @@ use super::{
 
 pub struct TreeMap<K, V> {
     pub(crate) root: TreeMapNode<V>,
+    bufmans: BufferManagerFactory<u8>,
     _marker: PhantomData<K>,
 }
 
@@ -247,15 +248,6 @@ impl<T> QuotientsMap<T> {
     }
 }
 
-impl<K, V> Default for TreeMap<K, V> {
-    fn default() -> Self {
-        Self {
-            root: TreeMapNode::new(0),
-            _marker: PhantomData,
-        }
-    }
-}
-
 #[cfg(test)]
 impl<K, V: PartialEq> PartialEq for TreeMap<K, V> {
     fn eq(&self, other: &Self) -> bool {
@@ -267,6 +259,16 @@ impl<K, V: PartialEq> PartialEq for TreeMap<K, V> {
 impl<K, V: std::fmt::Debug> std::fmt::Debug for TreeMap<K, V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TreeMap").field("root", &self.root).finish()
+    }
+}
+
+impl<K, V> TreeMap<K, V> {
+    pub fn new(bufmans: BufferManagerFactory<u8>) -> Self {
+        Self {
+            root: TreeMapNode::new(0),
+            bufmans,
+            _marker: PhantomData,
+        }
     }
 }
 
@@ -297,23 +299,20 @@ impl<K: Into<u64>, V> TreeMap<K, V> {
 }
 
 impl<K, V: SimpleSerialize> TreeMap<K, V> {
-    pub fn serialize(
-        &self,
-        bufmans: &BufferManagerFactory<u8>,
-        file_parts: u8,
-    ) -> Result<(), BufIoError> {
-        let bufman = bufmans.get(0)?;
+    pub fn serialize(&self, file_parts: u8) -> Result<(), BufIoError> {
+        let bufman = self.bufmans.get(0)?;
         let cursor = bufman.open_cursor()?;
         bufman.update_u32_with_cursor(cursor, u32::MAX)?;
-        let offset = self.root.serialize(bufmans, file_parts, 0, 0)?;
+        let offset = self.root.serialize(&self.bufmans, file_parts, 0, 0)?;
         bufman.seek_with_cursor(cursor, 0)?;
         bufman.update_u32_with_cursor(cursor, offset)?;
         bufman.close_cursor(cursor)?;
+        self.bufmans.flush_all()?;
         Ok(())
     }
 
     pub fn deserialize(
-        bufmans: &BufferManagerFactory<u8>,
+        bufmans: BufferManagerFactory<u8>,
         file_parts: u8,
     ) -> Result<Self, BufIoError> {
         let bufman = bufmans.get(0)?;
@@ -321,7 +320,8 @@ impl<K, V: SimpleSerialize> TreeMap<K, V> {
         let offset = bufman.read_u32_with_cursor(cursor)?;
         bufman.close_cursor(cursor)?;
         Ok(Self {
-            root: TreeMapNode::deserialize(bufmans, file_parts, 0, FileOffset(offset))?,
+            root: TreeMapNode::deserialize(&bufmans, file_parts, 0, FileOffset(offset))?,
+            bufmans,
             _marker: PhantomData,
         })
     }
@@ -329,11 +329,19 @@ impl<K, V: SimpleSerialize> TreeMap<K, V> {
 
 #[cfg(test)]
 mod tests {
+    use tempfile::tempdir;
+
     use super::*;
 
     #[test]
     fn tests_basic_usage() {
-        let map: TreeMap<u64, u64> = TreeMap::default();
+        let tempdir = tempdir().unwrap();
+        let bufmans = BufferManagerFactory::new(
+            tempdir.as_ref().into(),
+            |root, part| root.join(format!("{}.tree-map", part)),
+            8192,
+        );
+        let map: TreeMap<u64, u64> = TreeMap::new(bufmans);
         map.insert(0.into(), 65536, 0);
         map.insert(0.into(), 0, 23);
         assert_eq!(map.get_latest(0), Some(&23));

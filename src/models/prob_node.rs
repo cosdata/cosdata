@@ -9,11 +9,11 @@ use std::{
 use super::{
     cache_loader::HNSWIndexCache,
     prob_lazy_load::{lazy_item::ProbLazyItem, lazy_item_array::ProbLazyItemArray},
-    types::{DistanceMetric, HNSWLevel, MetricResult, NodePropMetadata, NodePropValue, VectorId},
+    types::{DistanceMetric, HNSWLevel, InternalId, MetricResult, NodePropMetadata, NodePropValue},
 };
 
 pub type SharedNode = *mut ProbLazyItem<ProbNode>;
-pub type Neighbors = Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]>;
+pub type Neighbors = Box<[AtomicPtr<(InternalId, SharedNode, MetricResult)>]>;
 
 pub struct ProbNode {
     pub hnsw_level: HNSWLevel,
@@ -118,32 +118,8 @@ impl ProbNode {
         self.child.store(child, Ordering::Release);
     }
 
-    pub fn get_id(&self) -> VectorId {
-        match &self.prop_metadata {
-            Some(m_prop) => {
-                let metadata_id = (m_prop.id.0 as u64) << 56;
-                let vector_id = metadata_id | self.prop_value.id.0;
-                VectorId(vector_id)
-            }
-            None => self.prop_value.id.clone(),
-        }
-    }
-
-    /// Returns two ids for the same prob node (original id, node_id)
-    ///
-    /// In case of metadata fields, one vector can have multiple
-    /// replicas. In that case, original_id = user provided vector id
-    /// and node_id = internal node id computed from vector id and
-    /// metadata id
-    ///
-    /// In case there are no metadata fields, original_id will be the
-    /// same as node_id
-    pub fn get_ids(&self) -> (VectorId, VectorId) {
-        if self.prop_metadata.is_some() {
-            (self.prop_value.id.clone(), self.get_id())
-        } else {
-            (self.prop_value.id.clone(), self.prop_value.id.clone())
-        }
+    pub fn get_id(&self) -> InternalId {
+        self.prop_value.id
     }
 
     pub fn lock_lowest_index(&self) -> MutexGuard<'_, (u8, MetricResult)> {
@@ -152,7 +128,7 @@ impl ProbNode {
 
     pub fn add_neighbor(
         &self,
-        neighbor_id: u32,
+        neighbor_id: InternalId,
         neighbor_node: SharedNode,
         dist: MetricResult,
         cache: &HNSWIndexCache,
@@ -209,7 +185,7 @@ impl ProbNode {
                         (**node)
                             .try_get_data(cache)
                             .unwrap()
-                            .remove_neighbor_by_id(self.get_id().0 as u32);
+                            .remove_neighbor_by_id(self.get_id());
                         drop(Box::from_raw(old_ptr));
                     }
                 }
@@ -225,7 +201,7 @@ impl ProbNode {
         }
     }
 
-    pub fn remove_neighbor_by_id(&self, id: u32) {
+    pub fn remove_neighbor_by_id(&self, id: InternalId) {
         let _lock = self.lock_lowest_index();
         for neighbor in &self.neighbors {
             let res = neighbor.fetch_update(Ordering::Release, Ordering::Acquire, |nbr| {
@@ -247,7 +223,7 @@ impl ProbNode {
         }
     }
 
-    pub fn remove_neighbor(&self, index: u8, id: u32) {
+    pub fn remove_neighbor_by_index_and_id(&self, index: u8, id: InternalId) {
         let _lock = self.lock_lowest_index();
         let _ = self.neighbors[index as usize].fetch_update(
             Ordering::Release,

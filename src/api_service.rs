@@ -1,11 +1,10 @@
 use crate::app_context::AppContext;
-use crate::indexes::hnsw::types::{HNSWHyperParams, QuantizedDenseVectorEmbedding};
+use crate::indexes::hnsw::types::HNSWHyperParams;
 use crate::indexes::hnsw::{DenseInputEmbedding, HNSWIndex};
 use crate::indexes::inverted::InvertedIndex;
 use crate::indexes::tf_idf::TFIDFIndex;
 use crate::indexes::IndexOps;
-use crate::metadata::query_filtering::filter_encoded_dimensions;
-use crate::metadata::{self, pseudo_level_probs};
+use crate::metadata::pseudo_level_probs;
 use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::cache_loader::HNSWIndexCache;
 use crate::models::collection::Collection;
@@ -15,9 +14,8 @@ use crate::models::meta_persist::{store_values_range, update_current_version};
 use crate::models::prob_node::ProbNode;
 use crate::models::types::*;
 use crate::models::versioning::Hash;
-use crate::quantization::{Quantization, StorageType};
+use crate::quantization::StorageType;
 use crate::vector_store::*;
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
@@ -71,11 +69,6 @@ pub async fn init_hnsw_index_for_collection(
         |root, ver: &Hash| root.join(format!("{}_0.index", **ver)),
         ProbNode::get_serialized_size(hnsw_params.level_0_neighbors_count) * 1000,
     ));
-    let vec_raw_manager = BufferManagerFactory::new(
-        index_path.into(),
-        |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
-        8192,
-    );
     let distance_metric = Arc::new(RwLock::new(distance_metric));
 
     // TODO: May be the value can be taken from config
@@ -145,10 +138,14 @@ pub async fn init_hnsw_index_for_collection(
         storage_type,
         hnsw_params,
         cache,
-        vec_raw_manager,
         values_range,
         sample_threshold,
         is_configured,
+        collection
+            .meta
+            .metadata_schema
+            .as_ref()
+            .map_or(1, |schema| schema.max_num_replicas()),
     ));
 
     ctx.ain_env
@@ -161,12 +158,10 @@ pub async fn init_hnsw_index_for_collection(
     if collection.meta.metadata_schema.is_some() {
         let num_dims = collection.meta.dense_vector.dimension;
         let pseudo_vals: Vec<f32> = vec![1.0; num_dims];
-        // The pseudo vector's id will be equal to the max number that
-        // can be represented with 56 bits. This is because of how we
-        // are calculating the combined id for nodes having metadata
-        // dims. See `ProbNode.get_id` implementation. Perhaps it'd be
-        // a good idea to derive this value from root.
-        let pseudo_vec_id = VectorId(u64::pow(2, 56) - 1);
+        // The last 258 IDs in the generate u32 internal IDs range are reserved
+        // for special cases, `u32::MAX` is for root node, `u32::MAX - 1` is
+        // for queries, and the range `[u32::MAX - 257, u32::MAX - 2]`
+        let pseudo_vec_id = InternalId::from(u32::MAX - 257);
         let pseudo_vec = DenseInputEmbedding(pseudo_vec_id, pseudo_vals, None, true);
         let transaction = CollectionTransaction::new(collection.clone())?;
         hnsw_index.run_upload(&collection, vec![pseudo_vec], &transaction, &ctx.config)?;
@@ -193,18 +188,8 @@ pub async fn init_inverted_index_for_collection(
     let index_path = collection_path.join("sparse_inverted_index");
     fs::create_dir_all(&index_path).map_err(|e| WaCustomError::FsError(e.to_string()))?;
 
-    // what is the difference between vec_raw_manager and index_manager?
-    // vec_raw_manager manages persisting raw embeddings/vectors on disk
-    // index_manager manages persisting index data on disk
-    let vec_raw_manager = BufferManagerFactory::new(
-        index_path.clone().into(),
-        |root, ver: &u8| root.join(format!("{}.vec_raw", ver)),
-        8192,
-    );
-
     let index = Arc::new(InvertedIndex::new(
         index_path.clone(),
-        vec_raw_manager,
         quantization_bits,
         sample_threshold,
         ctx.config.inverted_index_data_file_parts,
@@ -212,7 +197,7 @@ pub async fn init_inverted_index_for_collection(
 
     ctx.ain_env
         .collections_map
-        .insert_inverted_index(&collection, index.clone())?;
+        .insert_inverted_index(collection, index.clone())?;
     Ok(index)
 }
 
@@ -221,7 +206,6 @@ pub async fn init_tf_idf_index_for_collection(
     ctx: Arc<AppContext>,
     collection: &Collection,
     sample_threshold: usize,
-    store_raw_text: bool,
     k1: f32,
     b: f32,
 ) -> Result<Arc<TFIDFIndex>, WaCustomError> {
@@ -229,109 +213,16 @@ pub async fn init_tf_idf_index_for_collection(
     let index_path = collection_path.join("tf_idf_index");
     fs::create_dir_all(&index_path).map_err(|e| WaCustomError::FsError(e.to_string()))?;
 
-    let vec_raw_manager = BufferManagerFactory::new(
-        index_path.clone().into(),
-        |root, ver: &u8| root.join(format!("{}.vec_raw", ver)),
-        8192,
-    );
-
     let index = Arc::new(TFIDFIndex::new(
         index_path.clone(),
-        vec_raw_manager,
         ctx.config.inverted_index_data_file_parts,
         sample_threshold,
-        store_raw_text,
         k1,
         b,
     )?);
 
     ctx.ain_env
         .collections_map
-        .insert_tf_idf_index(&collection, index.clone())?;
+        .insert_tf_idf_index(collection, index.clone())?;
     Ok(index)
-}
-
-pub async fn ann_vector_query(
-    ctx: Arc<AppContext>,
-    collection: &Collection,
-    hnsw_index: Arc<HNSWIndex>,
-    query: Vec<f32>,
-    metadata_filter: Option<metadata::Filter>,
-    k: Option<usize>,
-) -> Result<Vec<(VectorId, MetricResult)>, WaCustomError> {
-    let vec_hash = VectorId(u64::MAX - 1);
-    let vector_list = hnsw_index.quantization_metric.read().unwrap().quantize(
-        &query,
-        *hnsw_index.storage_type.read().unwrap(),
-        *hnsw_index.values_range.read().unwrap(),
-    )?;
-
-    let vec_emb = QuantizedDenseVectorEmbedding {
-        quantized_vec: Arc::new(vector_list.clone()),
-        hash_vec: vec_hash.clone(),
-    };
-
-    let hnsw_params_guard = hnsw_index.hnsw_params.read().unwrap();
-
-    let query_filter_dims = metadata_filter.map(|filter| {
-        let metadata_schema = collection.meta.metadata_schema.as_ref().unwrap();
-        filter_encoded_dimensions(metadata_schema, &filter).unwrap()
-    });
-
-    let results = ann_search(
-        &ctx.config,
-        hnsw_index.clone(),
-        vec_emb,
-        query_filter_dims.as_ref(),
-        hnsw_index.get_root_vec(),
-        HNSWLevel(hnsw_params_guard.num_layers),
-        &hnsw_params_guard,
-    )?;
-    drop(hnsw_params_guard);
-    let output = finalize_ann_results(collection, &hnsw_index, results, &query, k)?;
-    Ok(output)
-}
-
-pub async fn batch_ann_vector_query(
-    ctx: Arc<AppContext>,
-    collection: &Collection,
-    hnsw_index: Arc<HNSWIndex>,
-    queries: Vec<Vec<f32>>,
-    metadata_filter: Option<metadata::Filter>,
-    k: Option<usize>,
-) -> Result<Vec<Vec<(VectorId, MetricResult)>>, WaCustomError> {
-    let query_filter_dims = metadata_filter.map(|filter| {
-        let metadata_schema = collection.meta.metadata_schema.as_ref().unwrap();
-        filter_encoded_dimensions(metadata_schema, &filter).unwrap()
-    });
-
-    queries
-        .into_par_iter()
-        .map(|query| {
-            let vec_hash = VectorId(u64::MAX - 1);
-            let vector_list = hnsw_index.quantization_metric.read().unwrap().quantize(
-                &query,
-                *hnsw_index.storage_type.read().unwrap(),
-                *hnsw_index.values_range.read().unwrap(),
-            )?;
-
-            let vec_emb = QuantizedDenseVectorEmbedding {
-                quantized_vec: Arc::new(vector_list.clone()),
-                hash_vec: vec_hash.clone(),
-            };
-
-            let hnsw_params = hnsw_index.hnsw_params.read().unwrap();
-            let results = ann_search(
-                &ctx.config,
-                hnsw_index.clone(),
-                vec_emb,
-                query_filter_dims.as_ref(),
-                hnsw_index.get_root_vec(),
-                HNSWLevel(hnsw_params.num_layers),
-                &hnsw_params,
-            )?;
-            let output = finalize_ann_results(collection, &hnsw_index, results, &query, k)?;
-            Ok::<_, WaCustomError>(output)
-        })
-        .collect()
 }

@@ -108,7 +108,6 @@ pub(crate) async fn create_tf_idf_index(
     collection_name: String,
     _name: String,
     sample_threshold: usize,
-    store_raw_text: bool,
     k1: f32,
     b: f32,
 ) -> Result<(), IndexesError> {
@@ -122,7 +121,7 @@ pub(crate) async fn create_tf_idf_index(
         return Err(IndexesError::IndexAlreadyExists("tf_idf".to_string()));
     }
 
-    init_tf_idf_index_for_collection(ctx, &collection, sample_threshold, store_raw_text, k1, b)
+    init_tf_idf_index_for_collection(ctx, &collection, sample_threshold, k1, b)
         .await
         .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;
 

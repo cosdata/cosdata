@@ -76,7 +76,6 @@ def create_explicit_index(name, k, b):
     data = {
         "name": name,
         "sample_threshold": 1000,
-        "store_raw_text": False,
         "k1": k,
         "b": b,
     }
@@ -151,7 +150,7 @@ def construct_sparse_vector(tokens: List[str]) -> Tuple[List[Tuple[int, int]], i
     return sparse_vector, len(tokens)
 
 
-def transform_sentence_to_vector(k, sentence, punctuations, stemmer, token_max_len=40):
+def transform_sentence_to_vector(id, sentence, punctuations, stemmer, token_max_len=40):
     stopwords = {
         "a",
         "and",
@@ -201,7 +200,7 @@ def transform_sentence_to_vector(k, sentence, punctuations, stemmer, token_max_l
     terms, length = construct_sparse_vector(processed_tokens)
 
     return {
-        "id": k,
+        "id": id,
         "text": sentence,
         "indices": [term[0] for term in terms],
         "raw_term_frequencies": [term[1] for term in terms],
@@ -233,11 +232,11 @@ def get_dataset(dataset: str) -> tuple:
 
     with ThreadPoolExecutor(max_workers=32) as executor:
         futures = []
-        for idx, (_, v) in tqdm(enumerate(corpus.items())):
+        for k, v in tqdm(corpus.items()):
             futures.append(
                 executor.submit(
                     transform_sentence_to_vector,
-                    idx,
+                    k,
                     v["title"] + " " + v["text"],
                     punctuations,
                     stemmer,
@@ -373,9 +372,7 @@ def get_query_vectors(dataset):
         split = "test"
     queries = bm25s.utils.beir.load_queries(dataset, save_dir=save_dir)
     qrels = bm25s.utils.beir.load_qrels(dataset, split=split, save_dir=save_dir)
-    queries_lst = [
-        (idx, v["text"]) for idx, (k, v) in enumerate(queries.items()) if k in qrels
-    ]
+    queries_lst = [(k, v["text"]) for (k, v) in queries.items() if k in qrels]
     print(f"Processing {len(queries_lst)} queries...")
     queries = []
 
@@ -452,9 +449,7 @@ def compute_brute_force_results(dataset, vectors, query_vectors, top_k=10):
 
 def create_transaction(collection_name):
     url = f"{base_url}/collections/{collection_name}/transactions"
-    response = requests.post(
-        url, headers=generate_headers(), verify=False
-    )
+    response = requests.post(url, headers=generate_headers(), verify=False)
     return response.json()
 
 
@@ -482,9 +477,7 @@ def commit_transaction(collection_name, transaction_id):
     url = (
         f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/commit"
     )
-    response = requests.post(
-        url, headers=generate_headers(), verify=False
-    )
+    response = requests.post(url, headers=generate_headers(), verify=False)
     if response.status_code not in [200, 204]:
         print(f"Error response: {response.text}")
         raise Exception(f"Failed to commit transaction: {response.status_code}")

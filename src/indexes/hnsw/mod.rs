@@ -5,13 +5,15 @@ use std::sync::{
     Arc, RwLock,
 };
 
-use types::HNSWHyperParams;
+use types::{HNSWHyperParams, QuantizedDenseVectorEmbedding};
 
 use crate::{
     config_loader::Config,
-    metadata::MetadataFields,
+    metadata::{
+        query_filtering::{filter_encoded_dimensions, Filter},
+        MetadataFields,
+    },
     models::{
-        buffered_io::BufferManagerFactory,
         cache_loader::HNSWIndexCache,
         collection::Collection,
         collection_transaction::CollectionTransaction,
@@ -19,21 +21,26 @@ use crate::{
         meta_persist::store_values_range,
         prob_lazy_load::lazy_item::{FileIndex, ProbLazyItem},
         prob_node::{ProbNode, SharedNode},
-        types::{DistanceMetric, MetaDb, QuantizationMetric, VectorId},
-        versioning::Hash,
+        types::{DistanceMetric, HNSWLevel, InternalId, MetaDb, QuantizationMetric},
     },
-    quantization::StorageType,
-    vector_store::index_embeddings_in_transaction,
+    quantization::{Quantization, StorageType},
+    vector_store::{ann_search, finalize_ann_results, index_embeddings},
 };
 
-use super::IndexOps;
+use super::{IndexOps, InternalSearchResult};
 
 pub struct DenseInputEmbedding(
-    pub VectorId,
+    pub InternalId,
     pub Vec<f32>,
     pub Option<MetadataFields>,
     pub bool,
 );
+
+pub struct DenseSearchInput(pub Vec<f32>, pub Option<Filter>);
+
+pub struct DenseSearchOptions {
+    pub top_k: Option<usize>,
+}
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct HNSWIndexData {
@@ -56,13 +63,13 @@ pub struct HNSWIndex {
     pub storage_type: RwLock<StorageType>,
     pub hnsw_params: RwLock<HNSWHyperParams>,
     pub cache: HNSWIndexCache,
-    pub vec_raw_manager: BufferManagerFactory<Hash>,
     pub is_configured: AtomicBool,
     pub values_range: RwLock<(f32, f32)>,
     pub vectors: RwLock<Vec<DenseInputEmbedding>>,
     pub sampling_data: SamplingData,
     pub vectors_collected: AtomicUsize,
     pub sample_threshold: usize,
+    pub max_replica_per_node: u8,
 }
 
 #[derive(Default)]
@@ -94,10 +101,10 @@ impl HNSWIndex {
         storage_type: StorageType,
         hnsw_params: HNSWHyperParams,
         cache: HNSWIndexCache,
-        vec_raw_manager: BufferManagerFactory<Hash>,
         values_range: (f32, f32),
         sample_threshold: usize,
         is_configured: bool,
+        max_replica_per_node: u8,
     ) -> Self {
         Self {
             root_vec: AtomicPtr::new(root_vec),
@@ -108,13 +115,13 @@ impl HNSWIndex {
             storage_type: RwLock::new(storage_type),
             hnsw_params: RwLock::new(hnsw_params),
             cache,
-            vec_raw_manager,
             is_configured: AtomicBool::new(is_configured),
             values_range: RwLock::new(values_range),
             vectors: RwLock::new(Vec::new()),
             sampling_data: SamplingData::default(),
             vectors_collected: AtomicUsize::new(0),
             sample_threshold,
+            max_replica_per_node,
         }
     }
 
@@ -129,20 +136,22 @@ impl HNSWIndex {
 }
 
 impl IndexOps for HNSWIndex {
-    type InputEmbedding = DenseInputEmbedding;
+    type IndexingInput = DenseInputEmbedding;
+    type SearchInput = DenseSearchInput;
+    type SearchOptions = DenseSearchOptions;
     type Data = HNSWIndexData;
 
     fn index_embeddings(
         &self,
         collection: &Collection,
-        embeddings: Vec<Self::InputEmbedding>,
+        embeddings: Vec<Self::IndexingInput>,
         transaction: &CollectionTransaction,
         config: &Config,
     ) -> Result<(), WaCustomError> {
-        index_embeddings_in_transaction(config, collection, self, transaction, embeddings)
+        index_embeddings(config, collection, self, transaction, embeddings)
     }
 
-    fn sample_embedding(&self, embedding: &Self::InputEmbedding) {
+    fn sample_embedding(&self, embedding: &Self::IndexingInput) {
         for value in &embedding.1 {
             let value = *value;
 
@@ -192,7 +201,7 @@ impl IndexOps for HNSWIndex {
         &self,
         lmdb: &MetaDb,
         config: &Config,
-        embeddings: &[Self::InputEmbedding],
+        embeddings: &[Self::IndexingInput],
     ) -> Result<(), WaCustomError> {
         let dimension = embeddings
             .first()
@@ -257,7 +266,7 @@ impl IndexOps for HNSWIndex {
         Ok(())
     }
 
-    fn embeddings_collected(&self) -> &RwLock<Vec<Self::InputEmbedding>> {
+    fn embeddings_collected(&self) -> &RwLock<Vec<Self::IndexingInput>> {
         &self.vectors
     }
 
@@ -290,5 +299,51 @@ impl IndexOps for HNSWIndex {
             storage_type: *self.storage_type.read().unwrap(),
             sample_threshold: self.sample_threshold,
         }
+    }
+
+    fn search_internal(
+        &self,
+        collection: &Collection,
+        query: Self::SearchInput,
+        options: &Self::SearchOptions,
+        config: &Config,
+        return_raw_text: bool,
+    ) -> Result<Vec<InternalSearchResult>, WaCustomError> {
+        let id = InternalId::from(u32::MAX - 1);
+        let quantized_vec = self.quantization_metric.read().unwrap().quantize(
+            &query.0,
+            *self.storage_type.read().unwrap(),
+            *self.values_range.read().unwrap(),
+        )?;
+        let vec_emb = QuantizedDenseVectorEmbedding {
+            quantized_vec: Arc::new(quantized_vec),
+            hash_vec: id,
+        };
+
+        let hnsw_params_guard = self.hnsw_params.read().unwrap();
+
+        let query_filter_dims = query.1.map(|filter| {
+            let metadata_schema = collection.meta.metadata_schema.as_ref().unwrap();
+            filter_encoded_dimensions(metadata_schema, &filter).unwrap()
+        });
+
+        let results = ann_search(
+            config,
+            self,
+            vec_emb,
+            query_filter_dims.as_ref(),
+            self.get_root_vec(),
+            HNSWLevel(hnsw_params_guard.num_layers),
+            &hnsw_params_guard,
+        )?;
+        drop(hnsw_params_guard);
+        finalize_ann_results(
+            collection,
+            self,
+            results,
+            &query.0,
+            options.top_k,
+            return_raw_text,
+        )
     }
 }

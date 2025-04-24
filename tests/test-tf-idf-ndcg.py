@@ -23,8 +23,7 @@ TOKEN = None
 HOST = "http://127.0.0.1:8443"
 BASE_URL = f"{HOST}/vectordb"
 
-type Document = Tuple[int, str]
-type IdsMap = Dict[int, str]
+type Document = Tuple[str, str]
 
 
 def merge_cqa_dupstack(data_path: str, verbose: bool = False):
@@ -160,7 +159,6 @@ def create_index(name: str, k1: float, b: float):
     data = {
         "name": name,
         "sample_threshold": 1000,
-        "store_raw_text": False,
         "k1": k1,
         "b": b,
     }
@@ -175,9 +173,7 @@ def create_index(name: str, k1: float, b: float):
 
 def create_transaction(collection_name: str) -> str:
     url = f"{BASE_URL}/collections/{collection_name}/transactions"
-    response = requests.post(
-        url, headers=generate_headers(), verify=False
-    )
+    response = requests.post(url, headers=generate_headers(), verify=False)
     result = response.json()
     return result["transaction_id"]
 
@@ -219,9 +215,7 @@ def index(
 
 def commit_transaction(collection_name: str, txn_id: str):
     url = f"{BASE_URL}/collections/{collection_name}/transactions/{txn_id}/commit"
-    response = requests.post(
-        url, headers=generate_headers(), verify=False
-    )
+    response = requests.post(url, headers=generate_headers(), verify=False)
     if response.status_code not in [200, 204]:
         print(f"Error response: {response.text}")
         raise Exception(f"Failed to commit transaction: {response.status_code}")
@@ -229,7 +223,7 @@ def commit_transaction(collection_name: str, txn_id: str):
 
 def search_document(
     collection_name: str, query: str, top_k: int
-) -> List[Tuple[int, float]]:
+) -> List[Tuple[str, float]]:
     url = f"{BASE_URL}/collections/{collection_name}/search/tf-idf"
     data = {
         "query": query,
@@ -244,14 +238,13 @@ def search_document(
 def search_documents(
     collection_name: str,
     queries: List[Tuple[str, str]],
-    ids_map: Dict[int, str],
     top_k: int,
 ) -> Dict[str, Dict[str, float]]:
     results = {}
     for query in tqdm(queries, desc="Searching vectors"):
         qid = query[0]
         query_results = search_document(collection_name, query[1], top_k)
-        results[qid] = {ids_map[doc_id]: score for doc_id, score in query_results}
+        results[qid] = {doc_id: score for doc_id, score in query_results}
     return results
 
 
@@ -270,15 +263,8 @@ def batch_search_documents(collection_name: str, queries: List[str], top_k: int)
 
 def preprocess_corpus(
     corpus: Dict[str, Dict[str, str]],
-) -> Tuple[List[Document], IdsMap]:
-    ids_map = {}
-    documents = []
-    for idx, (k, v) in tqdm(
-        enumerate(corpus.items()), total=len(corpus), desc="Mapping corpus IDs"
-    ):
-        ids_map[idx] = k
-        documents.append((idx, v["title"] + " " + v["text"]))
-    return documents, ids_map
+) -> List[Document]:
+    return [(k, v["title"] + " " + v["text"]) for (k, v) in corpus.items()]
 
 
 def run_qps_test(
@@ -396,7 +382,7 @@ def main(
     print(f"Corpus Size: {num_docs:,}")
     print(f"Queries Size: {num_queries:,}")
 
-    vectors, ids_map = preprocess_corpus(corpus)
+    vectors = preprocess_corpus(corpus)
 
     create_session()
     create_db(collection_name)
@@ -404,12 +390,12 @@ def main(
     txn_id = create_transaction(collection_name)
     indexing_time = index(collection_name, txn_id, vectors)
     commit_transaction(collection_name, txn_id)
-    results = search_documents(collection_name, queries, ids_map, top_k)
+    results = search_documents(collection_name, queries, top_k)
     ndcg, _map, recall, _precision = EvaluateRetrieval.evaluate(qrels, results, [1, 10])
 
     print("NDCG@10:", ndcg["NDCG@10"])
     print("Recall@10:", recall["Recall@10"])
-    
+
     qps_queries = [v for (_, v) in qps_queries.items()][:10_000]
     qps, _, _, _, _ = run_qps_test(collection_name, qps_queries, batch_size, top_k)
 

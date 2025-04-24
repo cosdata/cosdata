@@ -6,9 +6,8 @@ mod metric_distance;
 mod page;
 mod pagepool;
 mod quotients_map;
-mod sparse_embedding;
+mod raw_vector_embedding;
 mod storage;
-mod tf_idf_document;
 mod tree_map;
 mod versioned_item;
 mod versioned_pagepool;
@@ -18,7 +17,7 @@ mod versioned_vec;
 mod tests;
 
 use super::buffered_io::{BufIoError, BufferManager, BufferManagerFactory};
-use super::types::FileOffset;
+use super::types::{FileOffset, InternalId};
 
 pub trait SimpleSerialize: Sized {
     fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError>;
@@ -59,5 +58,18 @@ impl SimpleSerialize for u16 {
         let res = bufman.read_u16_with_cursor(cursor)?;
         bufman.close_cursor(cursor)?;
         Ok(res)
+    }
+}
+
+impl SimpleSerialize for InternalId {
+    fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
+        Ok(bufman.write_to_end_of_file(cursor, &self.to_le_bytes())? as u32)
+    }
+
+    fn deserialize(bufman: &BufferManager, offset: FileOffset) -> Result<Self, BufIoError> {
+        let cursor = bufman.open_cursor()?;
+        bufman.seek_with_cursor(cursor, offset.0 as u64)?;
+        let id = Self::from(bufman.read_u32_with_cursor(cursor)?);
+        Ok(id)
     }
 }

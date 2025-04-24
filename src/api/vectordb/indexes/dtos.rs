@@ -119,7 +119,6 @@ pub(crate) struct CreateSparseIndexDto {
 pub(crate) struct CreateTFIDFIndexDto {
     pub name: String,
     pub sample_threshold: usize,
-    pub store_raw_text: bool,
     pub k1: f32,
     pub b: f32,
 }

@@ -9,7 +9,7 @@ use crate::{
 };
 
 pub(crate) async fn get_vector_by_id(
-    path: web::Path<(String, u64)>,
+    path: web::Path<(String, String)>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse> {
     let (collection_id, vector_id) = path.into_inner();
@@ -18,23 +18,28 @@ pub(crate) async fn get_vector_by_id(
         .map_err(|e| actix_web::error::ErrorInternalServerError(format!("Cache error: {}", e)))?;
 
     let vector =
-        service::get_vector_by_id(ctx.into_inner(), &collection_id, VectorId(vector_id)).await?;
+        service::get_vector_by_id(ctx.into_inner(), &collection_id, VectorId::from(vector_id))
+            .await?;
     Ok(HttpResponse::Ok().json(vector))
 }
 
 pub(crate) async fn check_vector_existence(
-    path: web::Path<(String, u64)>,
+    path: web::Path<(String, String)>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse, VectorsError> {
-    let (collection_id, vector_id_u64) = path.into_inner();
+    let (collection_id, vector_id) = path.into_inner();
 
     ctx.update_collection_for_query(&collection_id)
         .map_err(|e| {
             VectorsError::WaCustom(WaCustomError::DatabaseError(format!("Cache error: {}", e)))
         })?;
 
-    let exists =
-        service::check_vector_existence(ctx.into_inner(), &collection_id, vector_id_u64).await?;
+    let exists = service::check_vector_existence(
+        ctx.into_inner(),
+        &collection_id,
+        VectorId::from(vector_id),
+    )
+    .await?;
 
     if exists {
         // Return 200 OK for HEAD if resource exists
@@ -46,7 +51,7 @@ pub(crate) async fn check_vector_existence(
 }
 
 pub(crate) async fn fetch_vector_neighbors(
-    path: web::Path<(String, u64)>,
+    path: web::Path<(String, String)>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse, VectorsError> {
     let (collection_id, vector_id_u64) = path.into_inner();
@@ -55,8 +60,11 @@ pub(crate) async fn fetch_vector_neighbors(
             VectorsError::WaCustom(WaCustomError::DatabaseError(format!("Cache error: {}", e)))
         })?;
 
-    let neighbors =
-        service::fetch_vector_neighbors(ctx.into_inner(), &collection_id, VectorId(vector_id_u64))
-            .await?;
+    let neighbors = service::fetch_vector_neighbors(
+        ctx.into_inner(),
+        &collection_id,
+        VectorId::from(vector_id_u64),
+    )
+    .await?;
     Ok(HttpResponse::Ok().json(neighbors))
 }

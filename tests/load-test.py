@@ -110,9 +110,7 @@ def find_collection(id):
 
 def create_transaction(collection_name):
     url = f"{base_url}/collections/{collection_name}/transactions"
-    response = requests.post(
-        url, headers=generate_headers(), verify=False
-    )
+    response = requests.post(url, headers=generate_headers(), verify=False)
     return response.json()
 
 
@@ -135,7 +133,10 @@ def upsert_in_transaction(collection_name, transaction_id, vectors):
     url = (
         f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/upsert"
     )
-    vectors = [{"id": vector["id"], "dense_values": vector["values"]} for vector in vectors]
+    vectors = [
+        {"id": str(vector["id"]), "dense_values": vector["values"]}
+        for vector in vectors
+    ]
     data = {"vectors": vectors}
     print(f"Request URL: {url}")
     print(f"Request Vectors Count: {len(vectors)}")
@@ -151,9 +152,7 @@ def commit_transaction(collection_name, transaction_id):
     url = (
         f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/commit"
     )
-    response = requests.post(
-        url, headers=generate_headers(), verify=False
-    )
+    response = requests.post(url, headers=generate_headers(), verify=False)
     if response.status_code not in [200, 204]:
         print(f"Error response: {response.text}")
         raise Exception(f"Failed to commit transaction: {response.status_code}")
@@ -164,9 +163,7 @@ def abort_transaction(collection_name, transaction_id):
     url = (
         f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/abort"
     )
-    response = requests.post(
-        url, headers=generate_headers(), verify=False
-    )
+    response = requests.post(url, headers=generate_headers(), verify=False)
     return response.json() if response.status_code == 200 else None
 
 

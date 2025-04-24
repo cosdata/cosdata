@@ -16,19 +16,19 @@ use twox_hash::XxHash32;
 use crate::{
     config_loader::Config,
     models::{
-        buffered_io::{BufIoError, BufferManagerFactory},
+        buffered_io::BufIoError,
         collection::Collection,
         collection_transaction::CollectionTransaction,
         common::WaCustomError,
-        meta_persist::{store_average_document_length, store_highest_internal_id},
+        meta_persist::store_average_document_length,
+        sparse_ann_query::SparseAnnQueryBasic,
         tf_idf_index::TFIDFIndexRoot,
-        tree_map::TreeMap,
-        types::{MetaDb, VectorId},
+        types::{InternalId, MetaDb, SparseVector},
         versioning::Hash,
     },
 };
 
-use super::IndexOps;
+use super::{IndexOps, InternalSearchResult};
 
 #[derive(Default)]
 pub struct SamplingData {
@@ -36,15 +36,21 @@ pub struct SamplingData {
     pub total_documents_count: AtomicU32,
 }
 
-pub struct TFIDFInputEmbedding(pub VectorId, pub String);
+pub struct TFIDFInputEmbedding(pub InternalId, pub String);
+
+pub struct TFIDFSearchInput(pub String);
+
+pub struct TFIDFSearchOptions {
+    pub top_k: Option<usize>,
+}
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct TFIDFIndexData {
     pub sample_threshold: usize,
-    pub store_raw_text: bool,
     pub k1: f32,
     pub b: f32,
 }
+
 pub struct TFIDFIndex {
     pub root: TFIDFIndexRoot,
     pub average_document_length: RwLock<f32>,
@@ -53,10 +59,6 @@ pub struct TFIDFIndex {
     pub documents_collected: AtomicUsize,
     pub sampling_data: SamplingData,
     pub sample_threshold: usize,
-    pub vec_raw_manager: BufferManagerFactory<u8>,
-    pub vec_raw_map: TreeMap<u32, (VectorId, Option<String>)>,
-    pub document_id_counter: AtomicU32,
-    pub store_raw_text: bool,
     pub k1: f32,
     pub b: f32,
 }
@@ -67,10 +69,8 @@ unsafe impl Sync for TFIDFIndex {}
 impl TFIDFIndex {
     pub fn new(
         root_path: PathBuf,
-        vec_raw_manager: BufferManagerFactory<u8>,
         data_file_parts: u8,
         sample_threshold: usize,
-        store_raw_text: bool,
         k1: f32,
         b: f32,
     ) -> Result<Self, BufIoError> {
@@ -84,21 +84,16 @@ impl TFIDFIndex {
             documents: RwLock::new(Vec::new()),
             documents_collected: AtomicUsize::new(0),
             sample_threshold,
-            vec_raw_manager,
-            vec_raw_map: TreeMap::default(),
-            document_id_counter: AtomicU32::new(0),
-            store_raw_text,
             k1,
             b,
         })
     }
 
-    pub fn insert(&self, version: Hash, ext_id: VectorId, text: String) -> Result<(), BufIoError> {
+    pub fn insert(&self, version: Hash, id: InternalId, text: String) -> Result<(), BufIoError> {
         self.root
             .total_documents_count
             .fetch_add(1, Ordering::Relaxed);
 
-        let document_id = self.document_id_counter.fetch_add(1, Ordering::Relaxed);
         let terms = process_text(
             &text,
             40,
@@ -107,28 +102,26 @@ impl TFIDFIndex {
             self.b,
         );
 
-        for (term_hash, tf) in terms {
-            self.root.insert(term_hash, tf, document_id, version)?;
-        }
+        let id = id.into();
 
-        self.vec_raw_map.insert(
-            version,
-            document_id,
-            (ext_id, self.store_raw_text.then_some(text)),
-        );
+        for (term_hash, tf) in terms {
+            self.root.insert(term_hash, tf, id, version)?;
+        }
 
         Ok(())
     }
 }
 
 impl IndexOps for TFIDFIndex {
-    type InputEmbedding = TFIDFInputEmbedding;
+    type IndexingInput = TFIDFInputEmbedding;
+    type SearchInput = TFIDFSearchInput;
+    type SearchOptions = TFIDFSearchOptions;
     type Data = TFIDFIndexData;
 
     fn index_embeddings(
         &self,
         _collection: &Collection,
-        embeddings: Vec<Self::InputEmbedding>,
+        embeddings: Vec<Self::IndexingInput>,
         transaction: &CollectionTransaction,
         _config: &Config,
     ) -> Result<(), WaCustomError> {
@@ -138,7 +131,7 @@ impl IndexOps for TFIDFIndex {
         Ok(())
     }
 
-    fn sample_embedding(&self, embedding: &Self::InputEmbedding) {
+    fn sample_embedding(&self, embedding: &Self::IndexingInput) {
         let len = count_tokens(&embedding.1, 40);
         self.sampling_data
             .total_documents_length
@@ -152,7 +145,7 @@ impl IndexOps for TFIDFIndex {
         &self,
         lmdb: &MetaDb,
         _config: &Config,
-        _embeddings: &[Self::InputEmbedding],
+        _embeddings: &[Self::IndexingInput],
     ) -> Result<(), WaCustomError> {
         let total_documents_count = self
             .sampling_data
@@ -170,7 +163,7 @@ impl IndexOps for TFIDFIndex {
         Ok(())
     }
 
-    fn embeddings_collected(&self) -> &RwLock<Vec<Self::InputEmbedding>> {
+    fn embeddings_collected(&self) -> &RwLock<Vec<Self::IndexingInput>> {
         &self.documents
     }
 
@@ -186,13 +179,7 @@ impl IndexOps for TFIDFIndex {
         self.is_configured.load(Ordering::Acquire)
     }
 
-    fn flush(&self, collection: &Collection) -> Result<(), WaCustomError> {
-        store_highest_internal_id(
-            &collection.lmdb,
-            self.document_id_counter.load(Ordering::Relaxed),
-        )?;
-        self.vec_raw_map
-            .serialize(&self.vec_raw_manager, self.root.data_file_parts)?;
+    fn flush(&self, _collection: &Collection) -> Result<(), WaCustomError> {
         self.root.serialize()?;
         self.root.cache.flush_all()?;
         Ok(())
@@ -201,10 +188,47 @@ impl IndexOps for TFIDFIndex {
     fn get_data(&self) -> Self::Data {
         Self::Data {
             sample_threshold: self.sample_threshold,
-            store_raw_text: self.store_raw_text,
             k1: self.k1,
             b: self.b,
         }
+    }
+
+    fn search_internal(
+        &self,
+        _collection: &Collection,
+        query: Self::SearchInput,
+        options: &Self::SearchOptions,
+        _config: &Config,
+        _return_raw_text: bool,
+    ) -> Result<Vec<InternalSearchResult>, WaCustomError> {
+        let entries = process_text(
+            &query.0,
+            40,
+            *self.average_document_length.read().unwrap(),
+            self.k1,
+            self.b,
+        );
+
+        let sparse_vec = SparseVector {
+            vector_id: u32::MAX,
+            entries,
+        };
+
+        let results =
+            SparseAnnQueryBasic::new(sparse_vec).search_bm25(&self.root, options.top_k)?;
+
+        Ok(results
+            .into_iter()
+            .map(|result| {
+                (
+                    InternalId::from(result.document_id),
+                    None,
+                    None,
+                    result.score,
+                    None,
+                )
+            })
+            .collect())
     }
 }
 

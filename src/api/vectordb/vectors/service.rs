@@ -19,7 +19,7 @@ pub(crate) async fn get_vector_by_id(
 pub(crate) async fn check_vector_existence(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    vector_id: u64,
+    vector_id: VectorId,
 ) -> Result<bool, VectorsError> {
     repo::check_vector_existence(ctx, collection_id, vector_id).await
 }

@@ -1,6 +1,9 @@
 use std::fmt;
 
-use crate::metadata::MetadataFields;
+use crate::{
+    metadata::MetadataFields,
+    models::{collection::RawVectorEmbedding, types::DocumentId},
+};
 
 use serde::{
     de::{self, MapAccess, Visitor},
@@ -12,10 +15,37 @@ use crate::{indexes::inverted::types::SparsePair, models::types::VectorId};
 #[derive(Serialize)]
 pub(crate) struct CreateVectorDto {
     pub id: VectorId,
+    pub document_id: Option<DocumentId>,
     pub dense_values: Option<Vec<f32>>,
     pub metadata: Option<MetadataFields>,
     pub sparse_values: Option<Vec<SparsePair>>,
     pub text: Option<String>,
+}
+
+impl From<CreateVectorDto> for RawVectorEmbedding {
+    fn from(dto: CreateVectorDto) -> Self {
+        Self {
+            id: dto.id,
+            document_id: dto.document_id,
+            dense_values: dto.dense_values,
+            metadata: dto.metadata,
+            sparse_values: dto.sparse_values,
+            text: dto.text,
+        }
+    }
+}
+
+impl From<RawVectorEmbedding> for CreateVectorDto {
+    fn from(emb: RawVectorEmbedding) -> Self {
+        Self {
+            id: emb.id,
+            document_id: emb.document_id,
+            dense_values: emb.dense_values,
+            metadata: emb.metadata,
+            sparse_values: emb.sparse_values,
+            text: emb.text,
+        }
+    }
 }
 
 impl<'de> Deserialize<'de> for CreateVectorDto {
@@ -40,6 +70,7 @@ impl<'de> Deserialize<'de> for CreateVectorDto {
                 M: MapAccess<'de>,
             {
                 let mut id = None;
+                let mut document_id = None;
                 let mut dense_values = None;
                 let mut metadata = None;
                 let mut sparse_values_raw: Option<(Vec<u32>, Vec<f32>)> = None;
@@ -52,6 +83,12 @@ impl<'de> Deserialize<'de> for CreateVectorDto {
                                 return Err(de::Error::duplicate_field("id"));
                             }
                             id = Some(map.next_value()?);
+                        }
+                        "document_id" => {
+                            if document_id.is_some() {
+                                return Err(de::Error::duplicate_field("document_id"));
+                            }
+                            document_id = map.next_value()?;
                         }
                         "dense_values" => {
                             if dense_values.is_some() {
@@ -92,6 +129,7 @@ impl<'de> Deserialize<'de> for CreateVectorDto {
                                 &key,
                                 &[
                                     "id",
+                                    "document_id",
                                     "dense_values",
                                     "metadata",
                                     "sparse_values",
@@ -125,6 +163,7 @@ impl<'de> Deserialize<'de> for CreateVectorDto {
 
                 Ok(CreateVectorDto {
                     id,
+                    document_id,
                     dense_values,
                     metadata,
                     sparse_values,

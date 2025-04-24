@@ -49,7 +49,6 @@ pub(crate) async fn create_tf_idf_index(
         collection_id,
         create_index_dto.name,
         create_index_dto.sample_threshold,
-        create_index_dto.store_raw_text,
         create_index_dto.k1,
         create_index_dto.b,
     )

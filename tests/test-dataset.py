@@ -8,6 +8,7 @@ import urllib3
 import os
 import random
 import getpass
+from tqdm.auto import tqdm
 
 # Suppress only the single InsecureRequestWarning from urllib3 needed for this script
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -30,49 +31,50 @@ def load_brute_force_results(dataset_name):
         return False
 
 
+def cosine_sim_matrix(A, B):
+    """Compute cosine similarity between each row in A and each row in B"""
+    A = A / np.linalg.norm(A, axis=1, keepdims=True)
+    B = B / np.linalg.norm(B, axis=1, keepdims=True)
+    A[np.isnan(A)] = 0
+    B[np.isnan(B)] = 0
+    return np.dot(A, B.T)
+
 def generate_brute_force_results(dataset_name, vector_list):
     """Load brute force results from CSV, or generate them if file doesn't exist"""
     csv_path = f"datasets/{dataset_name}/brute-force-results.csv"
+    os.makedirs(f"datasets/{dataset_name}", exist_ok=True)
 
-    vectors_corrected = vector_list
-    total_vectors = len(vectors_corrected)
+    total_vectors = len(vector_list)
     print(f"Total vectors for brute force computation: {total_vectors}")
 
-    # Randomly select 100 fixed test vectors
-    np.random.seed(42)  # Fix seed for reproducibility
+    # Pre-process vectors into NumPy arrays
+    ids = [v["id"] for v in vector_list]
+    vectors = np.array([v["values"] for v in vector_list], dtype=np.float64)
+
+    np.random.seed(42)
     test_indices = np.random.choice(total_vectors, 100, replace=False)
-    test_vectors = [vectors_corrected[i] for i in test_indices]
+    test_ids = [ids[i] for i in test_indices]
+    test_vectors = vectors[test_indices]
 
     print("Computing brute force similarities...")
+    sim_matrix = cosine_sim_matrix(test_vectors, vectors)
+
     results = []
-
-    for i, query in enumerate(test_vectors):
+    for i, sims in enumerate(sim_matrix):
         if i % 10 == 0:
-            print(f"Processing query vector {i + 1}/100, ID: {query['id']}")
+            print(f"Processing query vector {i + 1}/100, ID: {test_ids[i]}")
 
-        similarities = []
-        for vector in vectors_corrected:
-            sim = cosine_similarity(query["values"], vector["values"])
-            similarities.append((vector["id"], sim))
+        top5_idx = np.argpartition(-sims, 5)[:5]
+        top5_sorted = top5_idx[np.argsort(-sims[top5_idx])]
 
-        similarities.sort(key=lambda x: x[1], reverse=True)
-        top5 = similarities[:5]
+        top_ids = [ids[j] for j in top5_sorted]
+        top_sims = [sims[j] for j in top5_sorted]
 
-        results.append(
-            {
-                "query_id": query["id"],
-                "top1_id": top5[0][0],
-                "top1_sim": top5[0][1],
-                "top2_id": top5[1][0],
-                "top2_sim": top5[1][1],
-                "top3_id": top5[2][0],
-                "top3_sim": top5[2][1],
-                "top4_id": top5[3][0],
-                "top4_sim": top5[3][1],
-                "top5_id": top5[4][0],
-                "top5_sim": top5[4][1],
-            }
-        )
+        results.append({
+            "query_id": test_ids[i],
+            **{f"top{j+1}_id": top_ids[j] for j in range(5)},
+            **{f"top{j+1}_sim": top_sims[j] for j in range(5)},
+        })
 
     df = pd.DataFrame(results)
     df.to_csv(csv_path, index=False)
@@ -177,9 +179,7 @@ def create_explicit_index(name):
 
 def create_transaction(collection_name):
     url = f"{base_url}/collections/{collection_name}/transactions"
-    response = requests.post(
-        url, headers=generate_headers(), verify=False
-    )
+    response = requests.post(url, headers=generate_headers(), verify=False)
     return response.json()
 
 
@@ -187,7 +187,9 @@ def upsert_in_transaction(collection_name, transaction_id, vectors):
     url = (
         f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/upsert"
     )
-    vectors = [{"id": vector["id"], "dense_values": vector["values"]} for vector in vectors]
+    vectors = [
+        {"id": vector["id"], "dense_values": vector["values"]} for vector in vectors
+    ]
     data = {"vectors": vectors}
     print(f"Request URL: {url}")
     print(f"Request Vectors Count: {len(vectors)}")
@@ -209,9 +211,7 @@ def commit_transaction(collection_name, transaction_id):
     url = (
         f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/commit"
     )
-    response = requests.post(
-        url, headers=generate_headers(), verify=False
-    )
+    response = requests.post(url, headers=generate_headers(), verify=False)
     if response.status_code not in [200, 204]:
         print(f"Error response: {response.text}")
         raise Exception(f"Failed to commit transaction: {response.status_code}")
@@ -222,9 +222,7 @@ def abort_transaction(collection_name, transaction_id):
     url = (
         f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/abort"
     )
-    response = requests.post(
-        url, headers=generate_headers(), verify=False
-    )
+    response = requests.post(url, headers=generate_headers(), verify=False)
     return response.json()
 
 
@@ -245,23 +243,18 @@ def ann_vector(idd, vector_db_name, vector):
     return (idd, result)
 
 
-def dot_product(vec1, vec2):
-    return sum(v1 * v2 for v1, v2 in zip(vec1, vec2))
-
-
-def magnitude(vec):
-    return np.sqrt(sum(v**2 for v in vec))
-
-
 def cosine_similarity(vec1, vec2):
-    dot_prod = dot_product(vec1, vec2)
-    magnitude_vec1 = magnitude(vec1)
-    magnitude_vec2 = magnitude(vec2)
+    vec1 = np.asarray(vec1, dtype=np.float64)
+    vec2 = np.asarray(vec2, dtype=np.float64)
 
-    if magnitude_vec1 == 0 or magnitude_vec2 == 0:
-        return 0.0  # Handle the case where one or both vectors are zero vectors
+    dot_prod = np.dot(vec1, vec2)
+    norm1 = np.linalg.norm(vec1)
+    norm2 = np.linalg.norm(vec2)
 
-    return dot_prod / (magnitude_vec1 * magnitude_vec2)
+    if norm1 == 0 or norm2 == 0:
+        return 0.0
+
+    return dot_prod / (norm1 * norm2)
 
 
 def bruteforce_search(vectors, query, k=5):
@@ -297,7 +290,7 @@ def bruteforce_search(vectors, query, k=5):
 
 def batch_ann_search(vector_db_name, vectors):
     url = f"{base_url}/collections/{vector_db_name}/search/batch-dense"
-    data = {"query_vectors": vectors, "top_k": 5}
+    data = {"queries": [{"vector": vector} for vector in vectors], "top_k": 5}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
@@ -361,7 +354,7 @@ def prompt_and_get_dataset_metadata():
 
 def pre_process_vector(id, values):
     corrected_values = [float(v) for v in values]
-    vector = {"id": int(id), "values": corrected_values}
+    vector = {"id": str(id), "values": corrected_values}
     return vector
 
 
@@ -677,7 +670,7 @@ def process_vectors_batch(
 
 def run_matching_tests(test_vectors, vector_db_name, brute_force_results):
     """Run matching accuracy tests and measure query latencies"""
-    print("\nStarting similarity search tests...")
+    print(f"\nStarting similarity search tests with {len(test_vectors)} queries...")
 
     total_recall = 0
     total_queries = 0

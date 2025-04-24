@@ -17,6 +17,7 @@ pub struct Config {
     pub upload_process_batch_size: usize,
     pub num_regions_to_load_on_restart: usize,
     pub inverted_index_data_file_parts: u8,
+    pub tree_map_serialized_parts: u8,
     pub sparse_raw_values_reranking_factor: usize,
     pub rerank_sparse_with_raw_values: bool,
     #[serde(default)]

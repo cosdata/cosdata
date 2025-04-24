@@ -100,9 +100,7 @@ def find_collection(id):
 
 def create_transaction(collection_name):
     url = f"{base_url}/collections/{collection_name}/transactions"
-    response = requests.post(
-        url, headers=generate_headers(), verify=False
-    )
+    response = requests.post(url, headers=generate_headers(), verify=False)
     if response.status_code != 200:
         print(f"Error creating transaction: {response.status_code} ({response.text})")
     return response.json()
@@ -127,7 +125,9 @@ def upsert_in_transaction(collection_name, transaction_id, vectors):
     url = (
         f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/upsert"
     )
-    vectors = [{"id": vector["id"], "dense_values": vector["values"]} for vector in vectors]
+    vectors = [
+        {"id": vector["id"], "dense_values": vector["values"]} for vector in vectors
+    ]
     data = {"vectors": vectors}
     print(f"Request URL: {url}")
     print(f"Request Vectors Count: {len(vectors)}")
@@ -143,9 +143,7 @@ def commit_transaction(collection_name, transaction_id):
     url = (
         f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/commit"
     )
-    response = requests.post(
-        url, headers=generate_headers(), verify=False
-    )
+    response = requests.post(url, headers=generate_headers(), verify=False)
     if response.status_code not in [200, 204]:
         print(f"Error response: {response.text}")
         raise Exception(f"Failed to commit transaction: {response.status_code}")
@@ -156,9 +154,7 @@ def abort_transaction(collection_name, transaction_id):
     url = (
         f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/abort"
     )
-    response = requests.post(
-        url, headers=generate_headers(), verify=False
-    )
+    response = requests.post(url, headers=generate_headers(), verify=False)
     if response.status_code not in [200, 204]:
         print(f"Error aborting transaction: {response.status_code} ({response.text})")
     return response.json() if response.status_code == 200 and response.text else None
@@ -166,7 +162,7 @@ def abort_transaction(collection_name, transaction_id):
 
 def batch_ann_search(vector_db_name, vectors):
     url = f"{base_url}/collections/{vector_db_name}/search/batch-dense"
-    data = {"query_vectors": vectors, "top_k": 5}
+    data = {"queries": [{"vector": vector} for vector in vectors], "top_k": 5}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
@@ -184,7 +180,7 @@ def generate_random_vector(rows, dimensions, min_val, max_val):
 
 def generate_random_vector_with_id(id, length):
     values = np.random.uniform(-1, 1, length).tolist()
-    return {"id": id, "values": values}
+    return {"id": str(id), "values": values}
 
 
 def perturb_vector(vector, perturbation_degree):

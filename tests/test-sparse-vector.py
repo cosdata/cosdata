@@ -86,9 +86,7 @@ def create_explicit_index(name):
 
 def create_transaction(collection_name):
     url = f"{base_url}/collections/{collection_name}/transactions"
-    response = requests.post(
-        url, headers=generate_headers(), verify=False
-    )
+    response = requests.post(url, headers=generate_headers(), verify=False)
     return response.json()
 
 
@@ -96,7 +94,14 @@ def upsert_in_transaction(vector_db_name, transaction_id, vectors):
     url = (
         f"{base_url}/collections/{vector_db_name}/transactions/{transaction_id}/upsert"
     )
-    vectors = [{"id": vector["id"], "sparse_values": vector["values"], "sparse_indices": vector["indices"]} for vector in vectors]
+    vectors = [
+        {
+            "id": vector["id"],
+            "sparse_values": vector["values"],
+            "sparse_indices": vector["indices"],
+        }
+        for vector in vectors
+    ]
     data = {"vectors": vectors}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
@@ -111,9 +116,7 @@ def commit_transaction(collection_name, transaction_id):
     url = (
         f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/commit"
     )
-    response = requests.post(
-        url, headers=generate_headers(), verify=False
-    )
+    response = requests.post(url, headers=generate_headers(), verify=False)
     if response.status_code not in [200, 204]:
         print(f"Error response: {response.text}")
         raise Exception(f"Failed to commit transaction: {response.status_code}")
@@ -132,6 +135,11 @@ def search_sparse_vector(
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
+
+    if response.status_code not in [200, 204]:
+        print(f"Error response: {response.text}")
+        raise Exception(f"Failed to search vector: {response.status_code}")
+
     return response.json()
 
 
@@ -160,7 +168,7 @@ def generate_random_sparse_vector(id, dimension, non_zero_dims):
     # Generate values between 0 and 2.0
     values = np.random.uniform(0.0, 2.0, actual_non_zero_dims).tolist()
 
-    return {"id": id, "indices": indices, "values": values}
+    return {"id": str(id), "indices": indices, "values": values}
 
 
 def generate_dataset(num_vectors, dimension, max_non_zero_dims):

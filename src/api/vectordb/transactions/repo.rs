@@ -108,7 +108,6 @@ pub(crate) async fn create_vector_in_transaction(
         current_open_transaction,
         create_vector_dto,
     )
-    .await
     .map_err(|e| TransactionError::FailedToCreateVector(e.to_string()))?;
 
     Ok(())
@@ -181,7 +180,6 @@ pub(crate) async fn upsert_vectors(
         current_open_transaction,
         vectors,
     )
-    .await
     .map_err(|e| TransactionError::FailedToCreateVector(e.to_string()))?;
 
     Ok(())

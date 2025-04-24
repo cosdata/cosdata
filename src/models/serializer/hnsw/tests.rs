@@ -10,7 +10,7 @@ use crate::{
             lazy_item_array::ProbLazyItemArray,
         },
         prob_node::{ProbNode, SharedNode},
-        types::{DistanceMetric, FileOffset, HNSWLevel, MetricResult, NodePropValue, VectorId},
+        types::{DistanceMetric, FileOffset, HNSWLevel, InternalId, MetricResult, NodePropValue},
         versioning::{Hash, Version, VersionControl},
     },
     storage::Storage,
@@ -65,7 +65,7 @@ impl EqualityTest for ProbNode {
     }
 }
 
-impl EqualityTest for Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]> {
+impl EqualityTest for Box<[AtomicPtr<(InternalId, SharedNode, MetricResult)>]> {
     fn assert_eq(&self, other: &Self, tester: &mut EqualityTester) {
         assert_eq!(self.len(), other.len());
         for i in 0..self.len() {
@@ -136,18 +136,18 @@ fn get_cache(
     ))
 }
 
-fn create_prob_node(id: u64, prop_file: &RwLock<File>) -> ProbNode {
-    let id = VectorId(id);
-    let value = Arc::new(Storage::UnsignedByte {
+fn create_prob_node(id: u32, prop_file: &RwLock<File>) -> ProbNode {
+    let id = InternalId::from(id);
+    let value = Storage::UnsignedByte {
         mag: 10.0,
         quant_vec: vec![1, 2, 3],
-    });
+    };
     let mut prop_file_guard = prop_file.write().unwrap();
-    let location = write_prop_value_to_file(&id, value.clone(), &mut prop_file_guard).unwrap();
+    let location = write_prop_value_to_file(&id, &value, &mut prop_file_guard).unwrap();
     drop(prop_file_guard);
     let prop = Arc::new(NodePropValue {
         id,
-        vec: value,
+        vec: Arc::new(value),
         location,
     });
     ProbNode::new(
@@ -262,7 +262,7 @@ fn test_prob_lazy_item_array_serialization() {
             root_version_id,
             root_version_number,
             false,
-            FileOffset(node_size * (i as u32 + 1)),
+            FileOffset(node_size * (i + 1)),
         );
         array.push(lazy_item);
     }
@@ -318,13 +318,19 @@ fn test_prob_node_serialization_with_neighbors() {
             root_version_id,
             root_version_number,
             false,
-            FileOffset(node_size * i as u32),
+            FileOffset(node_size * i),
         );
         let dist = MetricResult::CosineSimilarity(CosineSimilarity((i as f32) / 10.0));
         unsafe { &*lazy_node }
             .get_lazy_data()
             .unwrap()
-            .add_neighbor(i as u32, lazy_item, dist, &cache, DistanceMetric::Cosine);
+            .add_neighbor(
+                InternalId::from(i),
+                lazy_item,
+                dist,
+                &cache,
+                DistanceMetric::Cosine,
+            );
         nodes.push(lazy_item);
     }
 
