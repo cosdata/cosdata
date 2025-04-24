@@ -188,7 +188,7 @@ def upsert_in_transaction(collection_name, transaction_id, vectors):
         f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/upsert"
     )
     vectors = [
-        {"id": vector["id"], "dense_values": vector["values"]} for vector in vectors
+        {"id": str(vector["id"]), "dense_values": vector["values"]} for vector in vectors
     ]
     data = {"vectors": vectors}
     print(f"Request URL: {url}")
@@ -354,7 +354,7 @@ def prompt_and_get_dataset_metadata():
 
 def pre_process_vector(id, values):
     corrected_values = [float(v) for v in values]
-    vector = {"id": str(id), "values": corrected_values}
+    vector = {"id": id, "values": corrected_values}
     return vector
 
 
@@ -698,7 +698,7 @@ def run_matching_tests(test_vectors, vector_db_name, brute_force_results):
                 print(f"\nQuery {i + 1} (Vector ID: {query_id}):")
                 print(f"Query latency: {query_latency:.2f} ms")
 
-                server_top5 = [match["id"] for match in ann_response["results"][:5]]
+                server_top5 = [int(match["id"]) for match in ann_response["results"][:5]]
                 print("Server top 5:", server_top5)
 
                 brute_force_top5 = [test_vec[f"top{j}_id"] for j in range(1, 6)]
