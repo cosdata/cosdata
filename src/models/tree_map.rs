@@ -12,7 +12,7 @@ use super::{
     buffered_io::{BufIoError, BufferManagerFactory},
     common::TSHashTable,
     serializer::{PartitionedSerialize, SimpleSerialize},
-    tf_idf_index::UnsafeVersionedVec,
+    tf_idf_index::{UnsafeVersionedVec, UnsafeVersionedVecIter},
     types::FileOffset,
     utils::calculate_path,
     versioning::Hash,
@@ -309,7 +309,7 @@ impl<K: TreeMapKey, V> TreeMapNode<K, V> {
     }
 }
 
-impl<K: TreeMapKey, T> TreeMapVecNode<K, T> {
+impl<K: TreeMapKey, V> TreeMapVecNode<K, V> {
     pub fn new(node_idx: u16) -> Self {
         Self {
             node_idx,
@@ -332,9 +332,13 @@ impl<K: TreeMapKey, T> TreeMapVecNode<K, T> {
         current
     }
 
-    pub fn push(&self, version: Hash, quotient: K, value: T) {
+    pub fn push(&self, version: Hash, quotient: K, value: V) {
         self.quotients.push(version, quotient, value);
         self.dirty.store(true, Ordering::Release);
+    }
+
+    pub fn get<'a>(&'a self, quotient: &K) -> Option<UnsafeVersionedVecIter<'a, V>> {
+        self.quotients.get(quotient)
     }
 }
 
@@ -413,6 +417,10 @@ impl<K: TreeMapKey, V> QuotientsMapVec<K, V> {
                 })
             },
         );
+    }
+
+    fn get<'a>(&'a self, quotient: &K) -> Option<UnsafeVersionedVecIter<'a, V>> {
+        self.map.lookup(quotient).map(|q| q.value.iter())
     }
 }
 
@@ -528,6 +536,13 @@ impl<K: TreeMapKey, V> TreeMapVec<K, V> {
         let path = calculate_path(node_pos, 0);
         let node = self.root.find_or_create_node(&path);
         node.push(version, key, value);
+    }
+
+    pub fn get<'a>(&'a self, key: &K) -> Option<UnsafeVersionedVecIter<'a, V>> {
+        let node_pos = (key.key() % 65536) as u32;
+        let path = calculate_path(node_pos, 0);
+        let node = self.root.find_or_create_node(&path);
+        node.get(key)
     }
 }
 

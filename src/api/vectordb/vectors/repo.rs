@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::models::types::DocumentId;
 use crate::models::{
     collection::Collection, collection_transaction::CollectionTransaction, types::VectorId,
 };
@@ -20,6 +21,33 @@ pub(crate) fn create_vector_in_transaction(
     collection
         .run_upload(vec![create_vector_dto.into()], transaction, &ctx.config)
         .map_err(VectorsError::WaCustom)
+}
+
+pub(crate) async fn query_vectors(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    document_id: DocumentId,
+) -> Result<Vec<CreateVectorDto>, VectorsError> {
+    let collection = ctx
+        .ain_env
+        .collections_map
+        .get_collection(collection_id)
+        .ok_or(VectorsError::CollectionNotFound)?;
+
+    let Some(internal_ids) = collection.document_to_internals_map.get(&document_id) else {
+        return Ok(Vec::new());
+    };
+
+    internal_ids
+        .map(|internal_id| {
+            Ok(collection
+                .internal_to_external_map
+                .get_latest(internal_id)
+                .ok_or(VectorsError::NotFound)?
+                .clone()
+                .into())
+        })
+        .collect()
 }
 
 pub(crate) async fn get_vector_by_id(

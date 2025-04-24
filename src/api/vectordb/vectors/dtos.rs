@@ -12,6 +12,11 @@ use serde::{
 
 use crate::{indexes::inverted::types::SparsePair, models::types::VectorId};
 
+#[derive(Deserialize)]
+pub struct VectorsQueryDto {
+    pub document_id: DocumentId,
+}
+
 #[derive(Serialize)]
 pub(crate) struct CreateVectorDto {
     pub id: VectorId,

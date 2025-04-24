@@ -1,5 +1,6 @@
 use actix_web::{web, HttpResponse, Result};
 
+use super::dtos::VectorsQueryDto;
 use super::{error::VectorsError, service};
 
 use crate::models::collection_cache::CollectionCacheExt;
@@ -7,6 +8,22 @@ use crate::{
     app_context::AppContext,
     models::{common::WaCustomError, types::VectorId},
 };
+
+pub(crate) async fn query_vectors(
+    collection_id: web::Path<String>,
+    web::Query(query): web::Query<VectorsQueryDto>,
+    ctx: web::Data<AppContext>,
+) -> Result<HttpResponse> {
+    let collection_id = collection_id.into_inner();
+
+    ctx.update_collection_for_query(&collection_id)
+        .map_err(|e| actix_web::error::ErrorInternalServerError(format!("Cache error: {}", e)))?;
+
+    let vectors =
+        service::query_vectors(ctx.into_inner(), &collection_id, query.document_id).await?;
+
+    Ok(HttpResponse::Ok().json(vectors))
+}
 
 pub(crate) async fn get_vector_by_id(
     path: web::Path<(String, String)>,

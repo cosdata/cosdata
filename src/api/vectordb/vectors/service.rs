@@ -1,12 +1,23 @@
 use std::sync::Arc;
 
-use crate::{app_context::AppContext, models::types::VectorId};
+use crate::{
+    app_context::AppContext,
+    models::types::{DocumentId, VectorId},
+};
 
 use super::{
     dtos::{CreateVectorDto, SimilarVector},
     error::VectorsError,
     repo,
 };
+
+pub(crate) async fn query_vectors(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    document_id: DocumentId,
+) -> Result<Vec<CreateVectorDto>, VectorsError> {
+    repo::query_vectors(ctx, collection_id, document_id).await
+}
 
 pub(crate) async fn get_vector_by_id(
     ctx: Arc<AppContext>,
