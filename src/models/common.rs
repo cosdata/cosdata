@@ -1,8 +1,9 @@
 use super::buffered_io::BufIoError;
 use super::cache_loader::HNSWIndexCache;
 use super::prob_node::SharedNode;
-use super::types::{MetricResult, VectorId};
+use super::types::{InternalId, MetricResult};
 use crate::distance::DistanceError;
+use crate::indexes::hnsw::HNSWIndex;
 use crate::metadata;
 use crate::quantization::QuantizationError;
 use sha2::{Digest, Sha256};
@@ -279,8 +280,6 @@ pub enum WaCustomError {
     SerializationError(String),
     UpsertFailed,
     InvalidParams,
-    NodeError(String),
-    NeighborError(String, Option<VectorId>),
     LockError(String),
     QuantizationMismatch,
     LazyLoadingError(String),
@@ -306,11 +305,6 @@ impl fmt::Display for WaCustomError {
             WaCustomError::SerializationError(msg) => write!(f, "Serialization error: {}", msg),
             WaCustomError::UpsertFailed => write!(f, "Failed to upsert vectors"),
             WaCustomError::InvalidParams => write!(f, "Invalid params in request"),
-            WaCustomError::NodeError(msg) => write!(f, "Node error: {}", msg),
-            WaCustomError::NeighborError(msg, id) => match id {
-                Some(vec_id) => write!(f, "Neighbor error: {} for ID {}", msg, vec_id),
-                None => write!(f, "Neighbor error: {}", msg),
-            },
             WaCustomError::LockError(msg) => write!(f, "Lock error: {}", msg),
             WaCustomError::QuantizationMismatch => write!(f, "Quantization mismatch"),
             WaCustomError::LazyLoadingError(msg) => write!(f, "Lazy loading error: {}", msg),
@@ -383,27 +377,29 @@ pub fn get_max_insert_level(x: f64, levels: &[(f64, u8)]) -> u8 {
 }
 
 pub fn remove_duplicates_and_filter(
+    hnsw_index: &HNSWIndex,
     vec: Vec<(SharedNode, MetricResult)>,
     k: Option<usize>,
     cache: &HNSWIndexCache,
-) -> Vec<(VectorId, VectorId, MetricResult)> {
+) -> Vec<(InternalId, MetricResult)> {
     let mut seen = HashSet::new();
     let mut collected = vec
         .into_iter()
         .filter_map(|(lazy_item, similarity)| {
             let node = unsafe { &*lazy_item }.try_get_data(cache).unwrap();
-            let (orig_id, replica_id) = node.get_ids();
-            if !seen.insert(orig_id.clone()) {
+            let replica_id = node.get_id();
+            let orig_id = replica_id / (hnsw_index.max_replica_per_node as u32);
+            if !seen.insert(orig_id) {
                 return None;
             }
-            if orig_id.0 == u64::MAX {
+            if *replica_id == u32::MAX {
                 return None;
             }
-            Some((orig_id, replica_id, similarity))
+            Some((replica_id, similarity))
         })
         .collect::<Vec<_>>();
 
-    collected.sort_unstable_by(|(_, _, a), (_, _, b)| b.cmp(a));
+    collected.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
     if let Some(k) = k {
         collected.truncate(5 * k);
     }

@@ -3,7 +3,7 @@ use super::common::WaCustomError;
 use super::prob_node::SharedNode;
 use super::serializer::hnsw::HNSWIndexSerialize;
 use super::types::{
-    BytesToRead, FileOffset, Metadata, MetadataId, NodePropMetadata, NodePropValue, VectorId,
+    BytesToRead, FileOffset, InternalId, Metadata, NodePropMetadata, NodePropValue,
 };
 use super::versioning::Hash;
 use crate::storage::Storage;
@@ -35,19 +35,19 @@ pub fn write_node_to_file(
 
 #[derive(Debug, Clone, Serialize)]
 struct NodePropValueSerialize<'a> {
-    pub id: &'a VectorId,
-    pub value: Arc<Storage>,
+    pub id: &'a InternalId,
+    pub value: &'a Storage,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Deserialize)]
 struct NodePropValueDeserialize {
-    pub id: VectorId,
-    pub value: Arc<Storage>,
+    pub id: InternalId,
+    pub value: Storage,
 }
 
 pub fn write_prop_value_to_file(
-    id: &VectorId,
-    value: Arc<Storage>,
+    id: &InternalId,
+    value: &Storage,
     file: &mut File,
 ) -> Result<(FileOffset, BytesToRead), WaCustomError> {
     let prop = NodePropValueSerialize { id, value };
@@ -80,26 +80,21 @@ pub fn read_prop_value_from_file(
 
     Ok(NodePropValue {
         id: prop.id,
-        vec: prop.value,
+        vec: Arc::new(prop.value),
         location: (offset, bytes_to_read),
     })
 }
 
 #[derive(Deserialize, Serialize)]
 struct NodePropMetadataSerde {
-    pub id: MetadataId,
     pub vec: Arc<Metadata>,
 }
 
 pub fn write_prop_metadata_to_file(
-    id: &MetadataId,
     vec: Arc<Metadata>,
     file: &mut File,
 ) -> Result<(FileOffset, BytesToRead), WaCustomError> {
-    let prop_metadata = NodePropMetadataSerde {
-        id: id.clone(),
-        vec: vec.clone(),
-    };
+    let prop_metadata = NodePropMetadataSerde { vec: vec.clone() };
     let prop_bytes = serde_cbor::to_vec(&prop_metadata)
         .map_err(|e| WaCustomError::SerializationError(e.to_string()))?;
 
@@ -128,7 +123,6 @@ pub fn read_prop_metadata_from_file(
         .map_err(|e| BufIoError::Io(io::Error::new(io::ErrorKind::InvalidData, e.to_string())))?;
 
     Ok(NodePropMetadata {
-        id: prop_metadata.id,
         vec: prop_metadata.vec,
         location: (offset, bytes_to_read),
     })

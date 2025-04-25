@@ -5,7 +5,7 @@ use crate::models::{
     cache_loader::HNSWIndexCache,
     prob_lazy_load::{lazy_item::FileIndex, lazy_item_array::ProbLazyItemArray},
     prob_node::{ProbNode, SharedNode},
-    types::{BytesToRead, FileOffset, HNSWLevel, MetricResult},
+    types::{BytesToRead, FileOffset, HNSWLevel, InternalId, MetricResult},
     versioning::Hash,
 };
 
@@ -250,7 +250,7 @@ impl HNSWIndexSerialize for ProbNode {
             version_id,
         };
 
-        let neighbors: Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]> =
+        let neighbors: Box<[AtomicPtr<(InternalId, SharedNode, MetricResult)>]> =
             HNSWIndexSerialize::deserialize(
                 bufmans,
                 neighbors_file_index,

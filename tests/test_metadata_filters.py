@@ -108,20 +108,18 @@ def gen_vectors(num, vcoll):
 
 def create_transaction(collection_name: str) -> str:
     url = f"{base_url}/collections/{collection_name}/transactions"
-    response = requests.post(
-        url, headers=generate_headers(), verify=False
-    )
+    response = requests.post(url, headers=generate_headers(), verify=False)
     result = response.json()
     return result["transaction_id"]
 
+
 def commit_transaction(collection_name: str, txn_id: str):
     url = f"{base_url}/collections/{collection_name}/transactions/{txn_id}/commit"
-    response = requests.post(
-        url, headers=generate_headers(), verify=False
-    )
+    response = requests.post(url, headers=generate_headers(), verify=False)
     if response.status_code not in [200, 204]:
         print(f"Error response: {response.text}")
         raise Exception(f"Failed to commit transaction: {response.status_code}")
+
 
 def insert_vectors(coll_id, vectors):
     vec_index = {}
@@ -130,7 +128,7 @@ def insert_vectors(coll_id, vectors):
     url = f"{base_url}/collections/{coll_id}/transactions/{txn_id}/vectors"
     for vector in vectors:
         data = {
-            "id": vector["id"],
+            "id": str(vector["id"]),
             "dense_values": vector["values"],
             "metadata": vector["metadata"],
         }
@@ -347,16 +345,12 @@ class VectorCollection:
 
 
 class VecWithAgeColor(VectorCollection):
-
     def __init__(self, name, num_dimensions):
         age = {
             "name": "age",
             "values": [x for x in range(25, 50)],
         }
-        color = {
-            "name": "color",
-            "values": ["red", "blue", "green"]
-        }
+        color = {"name": "color", "values": ["red", "blue", "green"]}
         fields = [age, color]
         conds = [
             {"op": "and", "field_names": ["age", "color"]},
@@ -453,17 +447,16 @@ class VecWithAgeColor(VectorCollection):
                     )
                     continue
         return (
-            queries_eq_age +
-            queries_eq_color +
-            queries_eq_age_color +
-            queries_ne_age +
-            queries_ne_color +
-            queries_ne_age_color
+            queries_eq_age
+            + queries_eq_color
+            + queries_eq_age_color
+            + queries_ne_age
+            + queries_ne_color
+            + queries_ne_age_color
         )
 
 
 class VecWithBinaryStatus(VectorCollection):
-
     def __init__(self, name, num_dimensions):
         status = {
             "name": "status",
@@ -490,35 +483,31 @@ class VecWithBinaryStatus(VectorCollection):
             {
                 "vec": vecs[0]["values"],
                 "filter": None,
-                "test": partial(must_match, vecs[0]["id"])
+                "test": partial(must_match, vecs[0]["id"]),
             },
-
             # With filter status = todo
             {
                 "vec": vecs[1]["values"],
                 "filter": is_filter_json("status", "Equal", get_status(vecs[1])),
-                "test": partial(must_match, vecs[1]["id"])
+                "test": partial(must_match, vecs[1]["id"]),
             },
-
             # With filter status = done
             {
                 "vec": vecs[2]["values"],
                 "filter": is_filter_json("status", "Equal", get_status(vecs[2])),
-                "test": partial(must_match, vecs[2]["id"])
+                "test": partial(must_match, vecs[2]["id"]),
             },
-
             # With filter status != todo
             {
                 "vec": vecs[3]["values"],
                 "filter": is_filter_json("status", "NotEqual", get_status(vecs[3])),
-                "test": partial(must_not_match, vecs[3]["id"])
+                "test": partial(must_not_match, vecs[3]["id"]),
             },
-
             # With filter status != done
             {
                 "vec": vecs[4]["values"],
                 "filter": is_filter_json("status", "NotEqual", get_status(vecs[4])),
-                "test": partial(must_not_match, vecs[4]["id"])
+                "test": partial(must_not_match, vecs[4]["id"]),
             },
         ]
 
@@ -575,14 +564,14 @@ def main():
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(required=True)
 
-    parser_insert = subparsers.add_parser('insert')
-    parser_insert.add_argument('-n', '--num-vecs', type=int, default=100)
-    parser_insert.add_argument('-d', '--num-dims', type=int, default=1024)
+    parser_insert = subparsers.add_parser("insert")
+    parser_insert.add_argument("-n", "--num-vecs", type=int, default=100)
+    parser_insert.add_argument("-d", "--num-dims", type=int, default=1024)
     parser_insert.set_defaults(func=cmd_insert_and_check)
 
-    parser_query = subparsers.add_parser('query')
-    parser_query.add_argument('vector_id', type=int)
-    parser_query.add_argument('-m', '--metadata-filter', type=str, default=None)
+    parser_query = subparsers.add_parser("query")
+    parser_query.add_argument("vector_id", type=int)
+    parser_query.add_argument("-m", "--metadata-filter", type=str, default=None)
     parser_query.set_defaults(func=cmd_query)
 
     args = parser.parse_args()

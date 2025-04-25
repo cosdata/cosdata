@@ -10,6 +10,7 @@ use crate::models::common::WaCustomError;
 #[derive(Debug)]
 pub(crate) enum VectorsError {
     NotFound,
+    CollectionNotFound,
     FailedToGetAppEnv,
     IndexNotFound,
     FailedToCreateVector(String),
@@ -26,6 +27,7 @@ impl Display for VectorsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotFound => write!(f, "Vector Not Found!"),
+            Self::CollectionNotFound => write!(f, "Collection Not found!"),
             Self::FailedToGetAppEnv => write!(f, "Failed to get App Env!"),
             Self::IndexNotFound => write!(f, "Index not found"),
             Self::FailedToCreateVector(msg) => {
@@ -63,6 +65,7 @@ impl ResponseError for VectorsError {
     fn status_code(&self) -> StatusCode {
         match self {
             Self::NotFound => StatusCode::BAD_REQUEST,
+            Self::CollectionNotFound => StatusCode::BAD_REQUEST,
             Self::FailedToGetAppEnv => StatusCode::INTERNAL_SERVER_ERROR,
             Self::IndexNotFound => StatusCode::NOT_FOUND,
             Self::FailedToCreateVector(_) => StatusCode::BAD_REQUEST,

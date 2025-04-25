@@ -2,15 +2,13 @@ use actix_web::{web, HttpResponse, Result};
 
 use crate::app_context::AppContext;
 use crate::models::collection_cache::CollectionCacheExt;
-use crate::models::types::MetricResult;
 
 use super::dtos::{
-    BatchDenseSearchRequestDto, BatchSearchResponseDto, BatchSearchTFIDFDocumentsDto,
-    BatchSparseSearchRequestDto, DenseSearchRequestDto, FindSimilarTFIDFDocumentDto,
-    HybridSearchRequestDto, SearchResponseDto, SearchResultItemDto, SparseSearchRequestDto,
+    BatchDenseSearchRequestDto, BatchSearchTFIDFDocumentsDto, BatchSparseSearchRequestDto,
+    DenseSearchRequestDto, FindSimilarTFIDFDocumentDto, HybridSearchRequestDto,
+    SparseSearchRequestDto,
 };
 use super::error::SearchError;
-use crate::api_service::{ann_vector_query, batch_ann_vector_query};
 
 use super::service;
 
@@ -25,45 +23,8 @@ pub(crate) async fn dense_search(
     ctx.update_collection_for_query(&collection_id)
         .map_err(|e| SearchError::InternalServerError(format!("Cache update error: {}", e)))?;
 
-    let collection = ctx
-        .ain_env
-        .collections_map
-        .get_collection(&collection_id)
-        .ok_or_else(|| SearchError::CollectionNotFound(collection_id.clone()))?;
-
-    let hnsw_index = collection.get_hnsw_index().ok_or_else(|| {
-        SearchError::IndexNotFound(format!(
-            "Dense (HNSW) index not found for collection '{}'",
-            collection_id
-        ))
-    })?;
-
-    let metadata_filter = match body.filter {
-        Some(api_filter) => Some(api_filter),
-        None => None,
-    };
-
-    let result: Vec<(crate::models::types::VectorId, MetricResult)> = ann_vector_query(
-        ctx.into_inner(),
-        &collection,
-        hnsw_index.clone(),
-        body.query_vector,
-        metadata_filter,
-        body.top_k,
-    )
-    .await
-    .map_err(|e| SearchError::SearchFailed(format!("ANN query failed: {}", e)))?;
-
-    let response_data = SearchResponseDto {
-        results: result
-            .into_iter()
-            .map(|(id, dist)| SearchResultItemDto {
-                id,
-                score: dist.get_value(),
-            })
-            .collect(),
-    };
-    Ok(HttpResponse::Ok().json(response_data))
+    let results = service::dense_search(ctx.into_inner(), &collection_id, body).await?;
+    Ok(HttpResponse::Ok().json(results))
 }
 
 // Route: `POST /collections/{collection_id}/vectors/search/batch-dense`
@@ -78,49 +39,9 @@ pub(crate) async fn batch_dense_search(
     ctx.update_collection_for_query(&collection_id)
         .map_err(|e| SearchError::InternalServerError(format!("Cache update error: {}", e)))?;
 
-    let collection = ctx
-        .ain_env
-        .collections_map
-        .get_collection(&collection_id)
-        .ok_or_else(|| SearchError::CollectionNotFound(collection_id.clone()))?;
+    let results = service::batch_dense_search(ctx.into_inner(), &collection_id, body).await?;
 
-    let hnsw_index = collection.get_hnsw_index().ok_or_else(|| {
-        SearchError::IndexNotFound(format!(
-            "Dense (HNSW) index not found for collection '{}'",
-            collection_id
-        ))
-    })?;
-
-    let metadata_filter = match body.filter {
-        Some(api_filter) => Some(api_filter),
-        None => None,
-    };
-
-    let results: Vec<Vec<(crate::models::types::VectorId, MetricResult)>> = batch_ann_vector_query(
-        ctx.into_inner(),
-        &collection,
-        hnsw_index.clone(),
-        body.query_vectors,
-        metadata_filter,
-        body.top_k,
-    )
-    .await
-    .map_err(|e| SearchError::SearchFailed(format!("Batch ANN query failed: {}", e)))?;
-
-    let response_data: BatchSearchResponseDto = results
-        .into_iter()
-        .map(|result_list| SearchResponseDto {
-            results: result_list
-                .into_iter()
-                .map(|(id, dist)| SearchResultItemDto {
-                    id,
-                    score: dist.get_value(),
-                })
-                .collect(),
-        })
-        .collect();
-
-    Ok(HttpResponse::Ok().json(response_data))
+    Ok(HttpResponse::Ok().json(results))
 }
 
 pub(crate) async fn sparse_search(

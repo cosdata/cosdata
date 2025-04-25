@@ -12,7 +12,7 @@ use super::{
     prob_lazy_load::lazy_item::FileIndex,
     prob_node::ProbNode,
     tf_idf_index::TFIDFIndexRoot,
-    tree_map::TreeMap,
+    tree_map::{TreeMap, TreeMapKey, TreeMapVec},
     versioning::VersionControl,
 };
 use crate::{
@@ -41,8 +41,6 @@ use lmdb::{Cursor, Database, DatabaseFlags, Environment, Transaction, WriteFlags
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher24;
-use std::io::Write;
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
@@ -53,6 +51,11 @@ use std::{
 };
 use std::{
     hash::{Hash as StdHash, Hasher},
+    ops::{Div, Mul},
+};
+use std::{io::Write, ops::Deref};
+use std::{
+    path::{Path, PathBuf},
     sync::atomic::AtomicU32,
 };
 
@@ -67,9 +70,9 @@ pub struct BytesToRead(pub u32);
 
 pub type PropPersistRef = (FileOffset, BytesToRead);
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct NodePropValue {
-    pub id: VectorId,
+    pub id: InternalId,
     pub vec: Arc<Storage>,
     pub location: PropPersistRef,
 }
@@ -132,8 +135,6 @@ pub struct MetadataId(pub u8);
 
 #[derive(Debug)]
 pub struct NodePropMetadata {
-    #[allow(unused)]
-    pub id: MetadataId,
     pub vec: Arc<Metadata>,
     pub location: PropPersistRef,
 }
@@ -151,13 +152,13 @@ pub struct VectorData<'a> {
     // id). It's not being used any where but occasionally useful for
     // debugging. In case it's a query vector, `id` expected to be
     // None.
-    pub id: Option<&'a VectorId>,
+    pub id: Option<&'a InternalId>,
     pub quantized_vec: &'a Storage,
     pub metadata: Option<&'a Metadata>,
 }
 
 impl<'a> VectorData<'a> {
-    pub fn without_metadata(id: Option<&'a VectorId>, qvec: &'a Storage) -> Self {
+    pub fn without_metadata(id: Option<&'a InternalId>, qvec: &'a Storage) -> Self {
         Self {
             id,
             quantized_vec: qvec,
@@ -173,7 +174,7 @@ impl<'a> VectorData<'a> {
                 } else {
                     match self.id {
                         Some(id) => {
-                            if id.0 == u64::pow(2, 56) - 1 {
+                            if ((u32::MAX - 257)..=(u32::MAX - 2)).contains(&**id) {
                                 ReplicaNodeKind::Pseudo
                             } else {
                                 ReplicaNodeKind::Metadata
@@ -195,25 +196,122 @@ impl<'a> VectorData<'a> {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Hash, Eq, PartialEq)]
+pub struct VectorId(String);
+
+impl From<String> for VectorId {
+    fn from(id: String) -> Self {
+        Self(id)
+    }
+}
+
+impl Deref for VectorId {
+    type Target = String;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<VectorId> for String {
+    fn from(id: VectorId) -> Self {
+        id.0
+    }
+}
+
+impl TreeMapKey for VectorId {
+    fn key(&self) -> u64 {
+        let mut hasher = SipHasher24::new();
+        self.0.hash(&mut hasher);
+        hasher.finish()
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Hash, PartialEq, Eq)]
+pub struct DocumentId(String);
+
+impl From<String> for DocumentId {
+    fn from(id: String) -> Self {
+        Self(id)
+    }
+}
+
+impl Deref for DocumentId {
+    type Target = String;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<DocumentId> for String {
+    fn from(id: DocumentId) -> Self {
+        id.0
+    }
+}
+
+impl TreeMapKey for DocumentId {
+    fn key(&self) -> u64 {
+        let mut hasher = SipHasher24::new();
+        self.0.hash(&mut hasher);
+        hasher.finish()
+    }
+}
+
 #[derive(
     Debug,
     Clone,
+    Copy,
     PartialEq,
     Eq,
     Hash,
-    Serialize,
-    Deserialize,
     rkyv::Archive,
     rkyv::Serialize,
     rkyv::Deserialize,
+    Serialize,
+    Deserialize,
 )]
-pub struct VectorId(pub u64);
+pub struct InternalId(u32);
 
-impl VectorId {
-    pub fn get_hash(&self) -> u64 {
-        let mut hasher = SipHasher24::new();
-        self.hash(&mut hasher);
-        hasher.finish()
+impl From<u32> for InternalId {
+    fn from(id: u32) -> Self {
+        Self(id)
+    }
+}
+
+impl Deref for InternalId {
+    type Target = u32;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<InternalId> for u32 {
+    fn from(id: InternalId) -> Self {
+        id.0
+    }
+}
+
+impl TreeMapKey for InternalId {
+    fn key(&self) -> u64 {
+        self.0 as u64
+    }
+}
+
+impl Div<u32> for InternalId {
+    type Output = Self;
+
+    fn div(self, rhs: u32) -> Self::Output {
+        Self(self.0 / rhs)
+    }
+}
+
+impl Mul<u32> for InternalId {
+    type Output = Self;
+
+    fn mul(self, rhs: u32) -> Self::Output {
+        Self(self.0 * rhs)
     }
 }
 
@@ -429,7 +527,16 @@ impl CollectionsMap {
             // if collection has dense index load it from the lmdb
             let hnsw_index = if collection_meta.dense_vector.enabled {
                 collections_map
-                    .load_hnsw_index(&collection_meta, &lmdb, &vcs, config)?
+                    .load_hnsw_index(
+                        &collection_meta,
+                        &lmdb,
+                        &vcs,
+                        config,
+                        collection_meta
+                            .metadata_schema
+                            .as_ref()
+                            .map_or(1, |schema| schema.max_num_replicas()),
+                    )?
                     .map(Arc::new)
             } else {
                 None
@@ -452,12 +559,47 @@ impl CollectionsMap {
                 None
             };
 
+            let collections_path = get_collections_path().join(&collection_meta.name);
+
+            let internal_to_external_map_bufmans = BufferManagerFactory::new(
+                collections_path.clone().into(),
+                |root, part| root.join(format!("{}.itoe", part)),
+                8192,
+            );
+
+            let external_to_internal_map_bufmans = BufferManagerFactory::new(
+                collections_path.clone().into(),
+                |root, part| root.join(format!("{}.etoi", part)),
+                8192,
+            );
+
+            let document_to_internals_map_bufmans = BufferManagerFactory::new(
+                collections_path.into(),
+                |root, part| root.join(format!("{}.dtoi", part)),
+                8192,
+            );
+
+            let id_counter_value = retrieve_highest_internal_id(&lmdb)?.unwrap_or_default();
+
             let collection = Collection {
                 meta: collection_meta,
                 lmdb,
                 current_version: RwLock::new(current_version),
                 current_open_transaction: RwLock::new(None),
                 vcs,
+                internal_to_external_map: TreeMap::deserialize(
+                    internal_to_external_map_bufmans,
+                    config.tree_map_serialized_parts,
+                )?,
+                external_to_internal_map: TreeMap::deserialize(
+                    external_to_internal_map_bufmans,
+                    config.tree_map_serialized_parts,
+                )?,
+                document_to_internals_map: TreeMapVec::deserialize(
+                    document_to_internals_map_bufmans,
+                    config.tree_map_serialized_parts,
+                )?,
+                internal_id_counter: AtomicU32::new(id_counter_value),
                 hnsw_index: RwLock::new(hnsw_index),
                 inverted_index: RwLock::new(inverted_index),
                 tf_idf_index: RwLock::new(tf_idf_index),
@@ -480,6 +622,7 @@ impl CollectionsMap {
         lmdb: &MetaDb,
         vcs: &VersionControl,
         config: &Config,
+        max_replicas_per_node: u8,
     ) -> Result<Option<HNSWIndex>, WaCustomError> {
         let collection_path: Arc<Path> = get_collections_path().join(&collection_meta.name).into();
         let index_path = collection_path.join("dense_hnsw");
@@ -531,11 +674,6 @@ impl CollectionsMap {
             |root, ver: &Hash| root.join(format!("{}_0.index", **ver)),
             level_0_bufman_size,
         ));
-        let vec_raw_manager = BufferManagerFactory::new(
-            index_path.clone().into(),
-            |root, ver: &Hash| root.join(format!("{}.vec_raw", **ver)),
-            8192,
-        );
         let distance_metric = Arc::new(RwLock::new(hnsw_index_data.distance_metric));
         let cache = HNSWIndexCache::new(
             index_manager.clone(),
@@ -702,10 +840,10 @@ impl CollectionsMap {
             hnsw_index_data.storage_type,
             hnsw_index_data.hnsw_params,
             cache,
-            vec_raw_manager,
             values_range.unwrap_or((-1.0, 1.0)),
             hnsw_index_data.sample_threshold,
             values_range.is_some(),
+            max_replicas_per_node,
         );
 
         Ok(Some(hnsw_index))
@@ -724,12 +862,6 @@ impl CollectionsMap {
         if !index_path.exists() {
             return Ok(None);
         }
-
-        let vec_raw_manager = BufferManagerFactory::new(
-            index_path.clone().into(),
-            |root, ver: &u8| root.join(format!("{}.vec_raw", ver)),
-            8192,
-        );
 
         let Some(inverted_index_data) = InvertedIndex::load_data(
             &self.lmdb_env,
@@ -753,11 +885,6 @@ impl CollectionsMap {
             vectors_collected: AtomicUsize::new(0),
             sampling_data: crate::indexes::inverted::types::SamplingData::default(),
             sample_threshold: inverted_index_data.sample_threshold,
-            vec_raw_map: TreeMap::deserialize(
-                &vec_raw_manager,
-                config.inverted_index_data_file_parts,
-            )?,
-            vec_raw_manager,
         };
 
         Ok(Some(inverted_index))
@@ -777,12 +904,6 @@ impl CollectionsMap {
             return Ok(None);
         }
 
-        let vec_raw_manager = BufferManagerFactory::new(
-            index_path.clone().into(),
-            |root, ver: &u8| root.join(format!("{}.vec_raw", ver)),
-            8192,
-        );
-
         let Some(inverted_index_data) = TFIDFIndex::load_data(
             &self.lmdb_env,
             self.lmdb_tf_idf_index_db,
@@ -793,24 +914,16 @@ impl CollectionsMap {
         };
 
         let average_document_length = retrieve_average_document_length(lmdb)?;
-        let highest_internal_id = retrieve_highest_internal_id(lmdb)?;
         let inverted_index = TFIDFIndex {
             root: TFIDFIndexRoot::deserialize(index_path, config.inverted_index_data_file_parts)?,
-            vec_raw_map: TreeMap::deserialize(
-                &vec_raw_manager,
-                config.inverted_index_data_file_parts,
-            )?,
-            vec_raw_manager,
             average_document_length: RwLock::new(average_document_length.unwrap_or(1.0)),
             is_configured: AtomicBool::new(average_document_length.is_some()),
             documents: RwLock::new(Vec::new()),
             documents_collected: AtomicUsize::new(0),
             sampling_data: crate::indexes::tf_idf::SamplingData::default(),
             sample_threshold: inverted_index_data.sample_threshold,
-            store_raw_text: inverted_index_data.store_raw_text,
             k1: inverted_index_data.k1,
             b: inverted_index_data.b,
-            document_id_counter: AtomicU32::new(highest_internal_id.unwrap_or_default()),
         };
 
         Ok(Some(inverted_index))
@@ -1115,7 +1228,7 @@ fn get_admin_key(env: Arc<Environment>, args: CosdataArgs) -> lmdb::Result<Singl
     Ok(admin_key_hash)
 }
 
-fn get_collections_path() -> PathBuf {
+pub fn get_collections_path() -> PathBuf {
     get_data_path().join("collections")
 }
 

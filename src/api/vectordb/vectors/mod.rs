@@ -8,6 +8,7 @@ mod service;
 
 pub(crate) fn vectors_module() -> Scope {
     web::scope("/collections/{collection_id}/vectors")
+        .route("", web::get().to(controller::query_vectors))
         .route("/{vector_id}", web::get().to(controller::get_vector_by_id))
         .route(
             "/{vector_id}",

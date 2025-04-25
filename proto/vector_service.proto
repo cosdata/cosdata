@@ -7,20 +7,16 @@ import "google/protobuf/empty.proto";
 
 // Common types
 message Vector {
-    uint64 id = 1;
-    repeated float dense_values = 2;
-    repeated SparsePair sparse_values = 3;
-    optional string text = 4;
+    string id = 1;
+    optional string document_id = 2;
+    repeated float dense_values = 3;
+    repeated SparsePair sparse_values = 4;
+    optional string text = 5;
 }
 
 message SparsePair {
     uint32 index = 1;
     float value = 2;
-}
-
-message SparseVector {
-    uint64 id = 1;
-    repeated SparsePair values = 2;
 }
 
 // Metadata types
@@ -107,6 +103,7 @@ message CreateCollectionRequest {
     TFIDFOptions tf_idf_options = 5;
     optional MetadataSchema metadata_schema = 6;
     CollectionConfig config = 7;
+    optional bool store_raw_text = 8;
 }
 
 message CreateCollectionResponse {
@@ -254,7 +251,7 @@ message VectorResponse {
 
 message GetVectorRequest {
     string collection_id = 1;
-    uint64 vector_id = 2;
+    string vector_id = 2;
 }
 
 message FindSimilarVectorsRequest {
@@ -269,22 +266,27 @@ message FindSimilarVectorsRequest {
 message FindSimilarDenseVectorsQuery {
     repeated float vector = 1;
     optional uint64 top_k = 2;
+    optional bool return_raw_text = 3;
 }
 
 message FindSimilarSparseVectorsQuery {
     repeated SparsePair values = 1;
     optional float early_terminate_threshold = 2;
     optional uint64 top_k = 3;
+    optional bool return_raw_text = 4;
 }
 
 message FindSimilarTFIDFDocumentQuery {
     string query = 1;
     optional uint64 top_k = 2;
+    optional bool return_raw_text = 3;
 }
 
 message SimilarVectorMatch {
-    uint64 id = 1;
-    float score = 2;
+    string id = 1;
+    optional string document_id = 2;
+    float score = 3;
+    optional string text = 4;
 }
 
 message FindSimilarVectorsResponse {

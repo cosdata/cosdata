@@ -2,8 +2,12 @@ pub(crate) mod types;
 use crate::{
     config_loader::Config,
     models::{
-        collection::Collection, collection_transaction::CollectionTransaction,
-        common::WaCustomError, meta_persist::store_values_upper_bound, types::MetaDb,
+        collection::Collection,
+        collection_transaction::CollectionTransaction,
+        common::WaCustomError,
+        meta_persist::store_values_upper_bound,
+        sparse_ann_query::{SparseAnnQueryBasic, SparseAnnResult},
+        types::{InternalId, MetaDb, SparseVector},
     },
 };
 
@@ -11,24 +15,25 @@ use std::{
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc, RwLock,
+        RwLock,
     },
 };
 
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use types::{RawSparseVectorEmbedding, SamplingData, SparsePair};
+use types::{SamplingData, SparsePair};
 
-use crate::models::{
-    buffered_io::{BufIoError, BufferManagerFactory},
-    inverted_index::InvertedIndexRoot,
-    tree_map::TreeMap,
-    types::VectorId,
-    versioning::Hash,
-};
+use crate::models::{buffered_io::BufIoError, inverted_index::InvertedIndexRoot, versioning::Hash};
 
-use super::IndexOps;
+use super::{IndexOps, InternalSearchResult};
 
-pub struct SparseInputEmbedding(pub VectorId, pub Vec<SparsePair>);
+pub struct SparseInputEmbedding(pub InternalId, pub Vec<SparsePair>);
+
+pub struct SparseSearchInput(pub Vec<SparsePair>);
+
+pub struct SparseSearchOptions {
+    pub top_k: Option<usize>,
+    pub early_terminate_threshold: Option<f32>,
+}
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct InvertedIndexData {
@@ -44,8 +49,6 @@ pub struct InvertedIndex {
     pub vectors: RwLock<Vec<SparseInputEmbedding>>,
     pub vectors_collected: AtomicUsize,
     pub sample_threshold: usize,
-    pub vec_raw_manager: BufferManagerFactory<u8>,
-    pub vec_raw_map: TreeMap<RawSparseVectorEmbedding>,
 }
 
 unsafe impl Send for InvertedIndex {}
@@ -54,7 +57,6 @@ unsafe impl Sync for InvertedIndex {}
 impl InvertedIndex {
     pub fn new(
         root_path: PathBuf,
-        vec_raw_manager: BufferManagerFactory<u8>,
         quantization_bits: u8,
         sample_threshold: usize,
         data_file_parts: u8,
@@ -69,45 +71,39 @@ impl InvertedIndex {
             vectors: RwLock::new(Vec::new()),
             vectors_collected: AtomicUsize::new(0),
             sample_threshold,
-            vec_raw_manager,
-            vec_raw_map: TreeMap::new(),
         })
     }
 
     pub fn insert(
         &self,
-        id: VectorId,
+        id: InternalId,
         pairs: Vec<SparsePair>,
         version: Hash,
     ) -> Result<(), BufIoError> {
+        let id = id.into();
         for pair in &pairs {
             self.root.insert(
                 pair.0,
                 pair.1,
-                id.0 as u32,
+                id,
                 version,
                 *self.values_upper_bound.read().unwrap(),
             )?;
         }
-
-        let emb = RawSparseVectorEmbedding {
-            raw_vec: Arc::new(pairs),
-            hash_vec: id.clone(),
-        };
-
-        self.vec_raw_map.insert(version, id.0, emb);
         Ok(())
     }
 }
 
 impl IndexOps for InvertedIndex {
-    type InputEmbedding = SparseInputEmbedding;
+    type IndexingInput = SparseInputEmbedding;
+    type SearchInput = SparseSearchInput;
+    type SearchOptions = SparseSearchOptions;
     type Data = InvertedIndexData;
 
     fn index_embeddings(
         &self,
         _collection: &Collection,
-        embeddings: Vec<Self::InputEmbedding>,
+        embeddings: Vec<Self::IndexingInput>,
         transaction: &CollectionTransaction,
         _config: &Config,
     ) -> Result<(), WaCustomError> {
@@ -119,7 +115,7 @@ impl IndexOps for InvertedIndex {
         Ok(())
     }
 
-    fn sample_embedding(&self, embedding: &Self::InputEmbedding) {
+    fn sample_embedding(&self, embedding: &Self::IndexingInput) {
         for pair in &embedding.1 {
             let value = pair.1;
 
@@ -169,7 +165,7 @@ impl IndexOps for InvertedIndex {
         &self,
         lmdb: &MetaDb,
         config: &Config,
-        _embeddings: &[Self::InputEmbedding],
+        _embeddings: &[Self::IndexingInput],
     ) -> Result<(), WaCustomError> {
         let values_count = self.sampling_data.values_collected.load(Ordering::Relaxed) as f32;
 
@@ -220,7 +216,7 @@ impl IndexOps for InvertedIndex {
         Ok(())
     }
 
-    fn embeddings_collected(&self) -> &RwLock<Vec<Self::InputEmbedding>> {
+    fn embeddings_collected(&self) -> &RwLock<Vec<Self::IndexingInput>> {
         &self.vectors
     }
 
@@ -237,8 +233,6 @@ impl IndexOps for InvertedIndex {
     }
 
     fn flush(&self, _: &Collection) -> Result<(), WaCustomError> {
-        self.vec_raw_map
-            .serialize(&self.vec_raw_manager, self.root.data_file_parts)?;
         self.root.serialize()?;
         self.root.cache.flush_all()?;
         Ok(())
@@ -250,4 +244,109 @@ impl IndexOps for InvertedIndex {
             sample_threshold: self.sample_threshold,
         }
     }
+
+    fn search_internal(
+        &self,
+        collection: &Collection,
+        query: Self::SearchInput,
+        options: &Self::SearchOptions,
+        config: &Config,
+        return_raw_text: bool,
+    ) -> Result<Vec<InternalSearchResult>, WaCustomError> {
+        let sparse_vec = SparseVector {
+            vector_id: u32::MAX,
+            entries: query.0.iter().map(|pair| (pair.0, pair.1)).collect(),
+        };
+
+        let results = SparseAnnQueryBasic::new(sparse_vec).sequential_search(
+            &self.root,
+            self.root.root.quantization_bits,
+            *self.values_upper_bound.read().unwrap(),
+            options
+                .early_terminate_threshold
+                .unwrap_or(config.search.early_terminate_threshold),
+            if config.rerank_sparse_with_raw_values {
+                config.sparse_raw_values_reranking_factor
+            } else {
+                1
+            },
+            options.top_k,
+        )?;
+
+        if config.rerank_sparse_with_raw_values {
+            finalize_sparse_ann_results(
+                collection,
+                results,
+                &query.0,
+                options.top_k,
+                return_raw_text,
+            )
+        } else {
+            Ok(results
+                .into_iter()
+                .map(|result| {
+                    (
+                        InternalId::from(result.vector_id),
+                        None,
+                        None,
+                        result.similarity as f32,
+                        None,
+                    )
+                })
+                .collect())
+        }
+    }
+}
+
+fn finalize_sparse_ann_results(
+    collection: &Collection,
+    intermediate_results: Vec<SparseAnnResult>,
+    query: &[SparsePair],
+    k: Option<usize>,
+    return_raw_text: bool,
+) -> Result<Vec<InternalSearchResult>, WaCustomError> {
+    let mut results = Vec::with_capacity(k.unwrap_or(intermediate_results.len()));
+
+    for result in intermediate_results {
+        let internal_id = InternalId::from(result.vector_id);
+
+        let raw_embedding_ref = collection
+            .internal_to_external_map
+            .get_latest(&internal_id)
+            .ok_or_else(|| WaCustomError::NotFound("raw embedding not found".to_string()))?;
+
+        let sparse_pairs = raw_embedding_ref.sparse_values.clone().ok_or_else(|| {
+            WaCustomError::NotFound("sparse values is missing in raw embedding".to_string())
+        })?;
+        let map: std::collections::HashMap<u32, f32> =
+            sparse_pairs.iter().map(|sp| (sp.0, sp.1)).collect();
+
+        let mut dp = 0.0;
+        for pair in query {
+            if let Some(val) = map.get(&pair.0) {
+                dp += val * pair.1;
+            }
+        }
+
+        results.push((
+            internal_id,
+            Some(raw_embedding_ref.id.clone()),
+            raw_embedding_ref.document_id.clone(),
+            dp,
+            if return_raw_text {
+                raw_embedding_ref.text.clone()
+            } else {
+                None
+            },
+        ));
+    }
+
+    // Sort by descending order
+    results.sort_unstable_by(|(_, _, _, a, _), (_, _, _, b, _)| b.total_cmp(a));
+
+    if let Some(k_val) = k {
+        results.truncate(k_val);
+    }
+
+    Ok(results)
 }

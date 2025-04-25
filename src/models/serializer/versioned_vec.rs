@@ -9,7 +9,7 @@ use crate::models::{
 
 use super::SimpleSerialize;
 
-impl SimpleSerialize for UnsafeVersionedVec<(u32, f32)> {
+impl<T: SimpleSerialize> SimpleSerialize for UnsafeVersionedVec<T> {
     fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
         let next = unsafe { &*self.next.get() };
         let next_offset = if let Some(next) = next {
@@ -34,15 +34,15 @@ impl SimpleSerialize for UnsafeVersionedVec<(u32, f32)> {
             return Ok(offset.0);
         }
         let list = unsafe { &*self.list.get() };
-        let size = 8 * list.len() + 12;
+        let size = 4 * list.len() + 12;
         let mut buf = Vec::with_capacity(size);
         buf.extend(next_offset.to_le_bytes());
         buf.extend(self.version.to_le_bytes());
         buf.extend((list.len() as u32).to_le_bytes());
 
-        for (doc_id, tf) in list {
-            buf.extend(doc_id.to_le_bytes());
-            buf.extend(tf.to_le_bytes());
+        for el in list {
+            let serialized_offset = el.serialize(bufman, cursor)?;
+            buf.extend(serialized_offset.to_le_bytes());
         }
 
         let offset = bufman.write_to_end_of_file(cursor, &buf)? as u32;
@@ -60,9 +60,9 @@ impl SimpleSerialize for UnsafeVersionedVec<(u32, f32)> {
         let mut list = Vec::with_capacity(len);
 
         for _ in 0..len {
-            let doc_id = bufman.read_u32_with_cursor(cursor)?;
-            let tf = bufman.read_f32_with_cursor(cursor)?;
-            list.push((doc_id, tf));
+            let el_offset = bufman.read_u32_with_cursor(cursor)?;
+            let el = T::deserialize(bufman, FileOffset(el_offset))?;
+            list.push(el);
         }
 
         let next = if next_offset == u32::MAX {

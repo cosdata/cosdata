@@ -1,13 +1,8 @@
 use std::sync::Arc;
 
-use crate::{
-    indexes::{
-        hnsw::DenseInputEmbedding, inverted::SparseInputEmbedding, tf_idf::TFIDFInputEmbedding,
-        IndexOps,
-    },
-    models::{
-        collection::Collection, collection_transaction::CollectionTransaction, types::VectorId,
-    },
+use crate::models::types::DocumentId;
+use crate::models::{
+    collection::Collection, collection_transaction::CollectionTransaction, types::VectorId,
 };
 
 use crate::app_context::AppContext;
@@ -17,136 +12,101 @@ use super::{
     error::VectorsError,
 };
 
-pub(crate) async fn create_vector_in_transaction(
+pub(crate) fn create_vector_in_transaction(
     ctx: Arc<AppContext>,
     collection: &Collection,
     transaction: &CollectionTransaction,
     create_vector_dto: CreateVectorDto,
 ) -> Result<(), VectorsError> {
-    if let Some(values) = create_vector_dto.dense_values {
-        let Some(hnsw_index) = collection.get_hnsw_index() else {
-            return Err(VectorsError::IndexNotFound);
-        };
-        hnsw_index
-            .run_upload(
-                &collection,
-                vec![DenseInputEmbedding(
-                    create_vector_dto.id.clone(),
-                    values,
-                    create_vector_dto.metadata,
-                    false,
-                )],
-                transaction,
-                &ctx.config,
-            )
-            .map_err(VectorsError::WaCustom)?;
-    }
-    if let Some(values) = create_vector_dto.sparse_values {
-        let Some(inverted_index) = collection.get_inverted_index() else {
-            return Err(VectorsError::IndexNotFound);
-        };
-        inverted_index
-            .run_upload(
-                &collection,
-                vec![SparseInputEmbedding(create_vector_dto.id.clone(), values)],
-                transaction,
-                &ctx.config,
-            )
-            .map_err(VectorsError::WaCustom)?;
-    }
-    if let Some(text) = create_vector_dto.text {
-        let Some(tf_idf_index) = collection.get_tf_idf_index() else {
-            return Err(VectorsError::IndexNotFound);
-        };
-        tf_idf_index
-            .run_upload(
-                &collection,
-                vec![TFIDFInputEmbedding(create_vector_dto.id, text)],
-                transaction,
-                &ctx.config,
-            )
-            .map_err(VectorsError::WaCustom)?;
-    }
+    collection
+        .run_upload(vec![create_vector_dto.into()], transaction, &ctx.config)
+        .map_err(VectorsError::WaCustom)
+}
 
-    Ok(())
+pub(crate) async fn query_vectors(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    document_id: DocumentId,
+) -> Result<Vec<CreateVectorDto>, VectorsError> {
+    let collection = ctx
+        .ain_env
+        .collections_map
+        .get_collection(collection_id)
+        .ok_or(VectorsError::CollectionNotFound)?;
+
+    let Some(internal_ids) = collection.document_to_internals_map.get(&document_id) else {
+        return Ok(Vec::new());
+    };
+
+    internal_ids
+        .map(|internal_id| {
+            Ok(collection
+                .internal_to_external_map
+                .get_latest(internal_id)
+                .ok_or(VectorsError::NotFound)?
+                .clone()
+                .into())
+        })
+        .collect()
 }
 
 pub(crate) async fn get_vector_by_id(
-    _ctx: Arc<AppContext>,
-    _collection_id: &str,
-    _vector_id: VectorId,
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    vector_id: VectorId,
 ) -> Result<CreateVectorDto, VectorsError> {
-    unimplemented!()
+    let collection = ctx
+        .ain_env
+        .collections_map
+        .get_collection(collection_id)
+        .ok_or(VectorsError::CollectionNotFound)?;
+    let internal_id = collection
+        .external_to_internal_map
+        .get_latest(&vector_id)
+        .ok_or(VectorsError::NotFound)?;
+    let vector = collection
+        .internal_to_external_map
+        .get_latest(internal_id)
+        .ok_or(VectorsError::NotFound)?
+        .clone();
+    Ok(vector.into())
 }
 
-pub(crate) async fn upsert_vectors_in_transaction(
+pub(crate) fn upsert_vectors_in_transaction(
     ctx: Arc<AppContext>,
     collection: &Collection,
     transaction: &CollectionTransaction,
     vectors: Vec<CreateVectorDto>,
 ) -> Result<(), VectorsError> {
-    let (dense_vec, sparse_vec, tf_idf_vec): (Vec<_>, Vec<_>, Vec<_>) =
-        vectors
-            .into_iter()
-            .fold((Vec::new(), Vec::new(), Vec::new()), |mut acc, dto| {
-                let CreateVectorDto {
-                    id,
-                    dense_values,
-                    metadata,
-                    sparse_values,
-                    text,
-                } = dto;
-
-                if let Some(values) = dense_values {
-                    acc.0.push(DenseInputEmbedding(id, values, metadata, false));
-                } else if let Some(values) = sparse_values {
-                    acc.1.push(SparseInputEmbedding(id, values));
-                } else if let Some(text) = text {
-                    acc.2.push(TFIDFInputEmbedding(id, text));
-                }
-
-                acc
-            });
-
-    if !dense_vec.is_empty() {
-        let Some(hnsw_index) = collection.get_hnsw_index() else {
-            return Err(VectorsError::IndexNotFound);
-        };
-
-        hnsw_index
-            .run_upload(collection, dense_vec, transaction, &ctx.config)
-            .map_err(VectorsError::WaCustom)?;
-    }
-
-    if !sparse_vec.is_empty() {
-        let Some(inverted_index) = collection.get_inverted_index() else {
-            return Err(VectorsError::IndexNotFound);
-        };
-
-        inverted_index
-            .run_upload(collection, sparse_vec, transaction, &ctx.config)
-            .map_err(VectorsError::WaCustom)?;
-    }
-
-    if !tf_idf_vec.is_empty() {
-        let Some(tf_idf_index) = collection.get_tf_idf_index() else {
-            return Err(VectorsError::IndexNotFound);
-        };
-
-        tf_idf_index
-            .run_upload(collection, tf_idf_vec, transaction, &ctx.config)
-            .map_err(VectorsError::WaCustom)?;
-    }
-
-    Ok(())
+    collection
+        .run_upload(
+            vectors.into_iter().map(Into::into).collect(),
+            transaction,
+            &ctx.config,
+        )
+        .map_err(VectorsError::WaCustom)
 }
 
 pub(crate) async fn check_vector_existence(
-    _ctx: Arc<AppContext>,
-    _collection_id: &str,
-    _vector_id: u64,
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    vector_id: VectorId,
 ) -> Result<bool, VectorsError> {
-    unimplemented!()
+    let collection = ctx
+        .ain_env
+        .collections_map
+        .get_collection(collection_id)
+        .ok_or(VectorsError::CollectionNotFound)?;
+    let internal_id =
+        if let Some(internal_id) = collection.external_to_internal_map.get_latest(&vector_id) {
+            internal_id
+        } else {
+            return Ok(false);
+        };
+    Ok(collection
+        .internal_to_external_map
+        .get_latest(internal_id)
+        .is_some())
 }
 
 pub(crate) async fn fetch_vector_neighbors(

@@ -78,6 +78,8 @@ pub(crate) struct CreateCollectionDto {
     pub tf_idf_options: TFIDFOptions,
     pub metadata_schema: Option<MetadataSchemaParam>, //object (optional)
     pub config: CollectionConfig,
+    #[serde(default)]
+    pub store_raw_text: bool,
 }
 
 #[derive(Serialize)]

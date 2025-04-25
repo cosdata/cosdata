@@ -1,11 +1,5 @@
-use super::{
-    common::WaCustomError,
-    types::{MetricResult, VectorId},
-};
-use crate::{
-    metadata,
-    models::user::{AddUserResp, AuthResp, Statistics},
-};
+use super::common::WaCustomError;
+use crate::metadata;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -46,60 +40,6 @@ pub struct FetchNeighbors {
     pub vector_db_name: String,
     pub vector_id: u64,
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct UpsertVectors {
-    pub vectors: Vec<DenseVector>,
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
-pub struct CreateVectorDb {
-    pub vector_db_name: String,
-    pub dimensions: i32,
-    pub max_val: Option<f32>,
-    pub min_val: Option<f32>,
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
-pub enum RPCResponseBody {
-    AuthenticateResp {
-        auth: AuthResp,
-    },
-    RespAddUser {
-        add_user: AddUserResp,
-    },
-    RespUpsertVectors {
-        insert_stats: Option<Statistics>,
-    },
-    RespVectorKNN {
-        knn: Vec<(u64, MetricResult)>,
-    },
-    RespFetchNeighbors {
-        vector: DenseVector,
-        neighbors: Vec<(u64, MetricResult)>,
-    },
-    #[serde(untagged)]
-    RespCreateVectorDb {
-        id: String,
-        name: String,
-        dimensions: usize,
-        min_val: Option<f32>,
-        max_val: Option<f32>,
-        // created_at: String, // will be added when vector store has a creation timestamp
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct DenseVector {
-    pub id: VectorId,
-    pub values: Vec<f32>,
-    pub metadata: Option<metadata::MetadataFields>,
-}
-
-// #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-// pub struct VectorList {
-//     pub vectors: Vec<Vector>,
-// }
 
 pub type Single = MetadataColumnValue;
 

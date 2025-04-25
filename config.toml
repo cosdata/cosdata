@@ -4,6 +4,7 @@ num_regions_to_load_on_restart = 10000
 inverted_index_data_file_parts = 8
 sparse_raw_values_reranking_factor = 5
 rerank_sparse_with_raw_values = false
+tree_map_serialized_parts = 8
 
 [server]
 host = "127.0.0.1"

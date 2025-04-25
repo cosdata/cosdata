@@ -10,7 +10,7 @@ use crate::models::{
     prob_lazy_load::lazy_item::FileIndex,
     prob_node::SharedNode,
     serializer::SimpleSerialize,
-    types::{FileOffset, MetricResult},
+    types::{FileOffset, InternalId, MetricResult},
     versioning::Hash,
 };
 
@@ -23,7 +23,7 @@ use super::HNSWIndexSerialize;
 //     10 bytes offset & version +
 //     5 bytes for distance/similarity
 //   ) = 2 + len * 19
-impl HNSWIndexSerialize for Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]> {
+impl HNSWIndexSerialize for Box<[AtomicPtr<(InternalId, SharedNode, MetricResult)>]> {
     fn serialize(
         &self,
         bufmans: &BufferManagerFactory<Hash>,
@@ -93,7 +93,7 @@ impl HNSWIndexSerialize for Box<[AtomicPtr<(u32, SharedNode, MetricResult)>]> {
         for i in 0..len {
             let placeholder_offset = placeholder_start + i as u64 * 19;
             bufman.seek_with_cursor(cursor, placeholder_offset)?;
-            let node_id = bufman.read_u32_with_cursor(cursor)?;
+            let node_id = InternalId::from(bufman.read_u32_with_cursor(cursor)?);
             let node_offset = bufman.read_u32_with_cursor(cursor)?;
             if node_offset == u32::MAX {
                 neighbors.push(AtomicPtr::new(ptr::null_mut()));

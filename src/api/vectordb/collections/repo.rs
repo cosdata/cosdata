@@ -26,6 +26,7 @@ pub(crate) async fn create_collection(
         metadata_schema,
         sparse_vector,
         tf_idf_options,
+        store_raw_text,
     }: CreateCollectionDto,
 ) -> Result<Arc<Collection>, CollectionsError> {
     let env = &ctx.ain_env.persist;
@@ -54,6 +55,7 @@ pub(crate) async fn create_collection(
             tf_idf_options,
             metadata_schema,
             config,
+            store_raw_text,
             lmdb,
             hash,
             vcs,
