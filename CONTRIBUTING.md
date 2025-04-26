@@ -6,41 +6,96 @@ Whether you’re fixing a typo, writing tests, improving documentation, or build
 
 ---
 
-## Contributor License Agreement (CLA)
+# Contributor License Agreement (CLA)
 
 Before contributing, **you must first read and agree to the [CLA](./CLA.md)**. No pull request will be accepted unless the contributor has agreed to the CLA.
 
 ---
 
-## Getting Started
+# Getting Started
 
-### 1. Initial Build Configuration
+## 1. Initial Build Configuration
 
-1. To set up Cosdata locally, make sure you have Rust (v1.81.0+) & Cargo installed.
-
-2. Fork the repository on GitHub:
-
-![image](https://github.com/user-attachments/assets/3f1141b5-28a0-4bee-9fe4-d086ef4b71e0)
-
-3. Clone your fork to your machine:
-
+- ### Quick Install (Linux)
+   To install Cosdata and all dependencies, run:
+   
    ```bash
-   git clone https://github.com/YOUR_GITHUB_USERNAME/cosdata.git
-   cd cosdata
+   curl -sL https://cosdata.io/install.sh | bash
    ```
-
-4. Build the project:
-
+   
+   You should see something like this:
+   
+   <img width="626" alt="image" src="https://github.com/user-attachments/assets/b36b94a9-8eb0-488f-b870-5c045df314ea" />
+   
+   
+   After installation, reload your shell configuration:
+   
    ```bash
-   cargo build
+   source ~/.bashrc
    ```
-5. Run a local instance:
-   ```bash
-   cargo build --release
-   ./target/release/cosdata --admin-key YOUR_ADMIN_KEY
-   ```
+   
+   Finally, run the following command and provide your Admin Key when prompted:
+   
+   <img width="755" alt="image" src="https://github.com/user-attachments/assets/9bac0d6f-8b02-46ea-bac1-c472eb5e3fb9" />
 
-   You should now be ready to develop and run tests.
+- ### Install via Docker (macOS & Windows)
+
+   **Step 1: Verify Docker is running**
+   
+   Check if Docker is properly installed and running by executing:
+   
+   ```bash
+   docker --version
+   ```
+   
+   You should see an output similar to the following:
+   
+   <img width="754" alt="image" src="https://github.com/user-attachments/assets/609182d7-6fa7-4c46-add9-46e71b6c2e3c" />
+   
+   **Step 2: Pull the latest Cosdata Docker image**
+   
+   Download the latest Cosdata image from Docker Hub:
+   
+   ```bash
+   docker pull cosdatateam/cosdata:latest
+   ```
+   
+   Expected output:
+   
+   <img width="670" alt="image" src="https://github.com/user-attachments/assets/83470227-0ce3-4418-9511-aeab8a4f6b5c" />
+   
+   **Step 3: Start the container by running the following command**
+   
+   <img width="754" alt="image" src="https://github.com/user-attachments/assets/1d04f981-a4bb-4566-8310-79898dc0943d" />
+
+
+- ### Build from source
+  Make sure you have Rust (v1.81.0+) & Cargo installed
+
+   **Step 1: Fork the repository on GitHub**
+   
+   ![image](https://github.com/user-attachments/assets/3f1141b5-28a0-4bee-9fe4-d086ef4b71e0)
+   
+   **Step 2: Clone your fork to your machine**
+   
+  ```bash
+  git clone https://github.com/YOUR_GITHUB_USERNAME/cosdata.git
+  cd cosdata
+  ```
+   
+   **Step 3: Build the project**
+   
+  ```bash
+  cargo build
+  ```
+  
+   **Step 4: Run a local instance**
+  ```bash
+  cargo build --release
+  ./target/release/cosdata --admin-key YOUR_ADMIN_KEY
+  ```
+
+The server will be available at `http://localhost:8443`
 
 > **Note**: If you face any problems, see the [Troubleshooting](#troubleshooting) section.
 
@@ -66,7 +121,7 @@ Before starting any work:
 
 ---
 
-## Submitting Issues and Feature Requests:
+# Submitting Issues and Feature Requests:
 
 - Please use the provided [Pull Request Template](https://github.com/cosdata/cosdata/blob/main/.github/PULL_REQUEST_TEMPLATE.md) when making a pull request. 
 - Please use the provided [Issue Template](https://github.com/cosdata/cosdata/tree/main/.github/ISSUE_TEMPLATE) when reporting a bug or requesting a feature.
@@ -74,7 +129,7 @@ Before starting any work:
 
 ---
 
-## Pull Request Process
+# Pull Request Process
 
 ### Step-by-step Guide:
 
@@ -116,7 +171,7 @@ Before starting any work:
 
 ---
 
-## Keeping Your Fork in Sync
+# Keeping your fork in sync
 
 To keep your fork up-to-date with the main repository:
 
@@ -147,7 +202,7 @@ To keep your fork up-to-date with the main repository:
 
 ---
 
-## Troubleshooting
+# Troubleshooting
 
 - **Installation errors**: Make sure your environment meets all requirements (Rust, etc.).
 - **Build issues**: Run `cargo clean && cargo build`.
