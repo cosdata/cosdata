@@ -612,6 +612,24 @@ impl<K: Eq + Hash, V> TSHashTable<K, V> {
         }
     }
 
+    // This bool represents whether the key was found in the map or not.
+    pub fn get_or_try_create_with_flag<F, E>(&self, k: K, f: F) -> Result<(V, bool), E>
+    where
+        F: FnOnce() -> Result<V, E>,
+        V: Clone,
+    {
+        let index = self.hash_key(&k);
+        let mut ht = self.hash_table_list[index].lock().unwrap();
+        match ht.get(&k) {
+            Some(v) => Ok((v.clone(), true)),
+            None => {
+                let new_v = f()?;
+                ht.insert(k, new_v.clone());
+                Ok((new_v, false))
+            }
+        }
+    }
+
     pub fn with_value<F, R>(&self, k: &K, f: F) -> Option<R>
     where
         F: Fn(&V) -> R,

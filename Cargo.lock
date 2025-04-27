@@ -806,6 +806,7 @@ dependencies = [
  "log",
  "nom",
  "num_cpus",
+ "parking_lot",
  "prost",
  "prost-types",
  "quickcheck",

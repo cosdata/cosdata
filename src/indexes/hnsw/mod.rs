@@ -131,7 +131,7 @@ impl HNSWIndex {
 
     /// Returns FileIndex (offset) corresponding to the root node.
     pub fn root_vec_offset(&self) -> FileIndex {
-        unsafe { &*self.get_root_vec() }.get_file_index()
+        unsafe { &*self.get_root_vec() }.file_index
     }
 }
 

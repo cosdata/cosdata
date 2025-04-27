@@ -2,13 +2,15 @@ use std::{
     ptr,
     sync::{
         atomic::{AtomicPtr, Ordering},
-        Arc, Mutex, MutexGuard,
+        Arc,
     },
 };
 
+use parking_lot::{RwLock, RwLockReadGuard};
+
 use super::{
     cache_loader::HNSWIndexCache,
-    prob_lazy_load::{lazy_item::ProbLazyItem, lazy_item_array::ProbLazyItemArray},
+    prob_lazy_load::lazy_item::ProbLazyItem,
     types::{DistanceMetric, HNSWLevel, InternalId, MetricResult, NodePropMetadata, NodePropValue},
 };
 
@@ -19,14 +21,19 @@ pub struct ProbNode {
     pub hnsw_level: HNSWLevel,
     pub prop_value: Arc<NodePropValue>,
     pub prop_metadata: Option<Arc<NodePropMetadata>>,
-    // (neighbor_id, neighbor_node, distance)
-    // even though `VectorId` is an u64 we don't need the full range here.
+    // Each neighbor is represented as (neighbor_id, neighbor_node, distance)
     neighbors: Neighbors,
     parent: AtomicPtr<ProbLazyItem<ProbNode>>,
     child: AtomicPtr<ProbLazyItem<ProbNode>>,
-    pub versions: ProbLazyItemArray<ProbNode, 8>,
-    lowest_index: Mutex<(u8, MetricResult)>,
-    pub root_version: SharedNode,
+    lowest_index: RwLock<(u8, MetricResult)>,
+    // Tracks versioning of this node:
+    // - If this node is the *base* (original) version, `root_version` points to the latest version.
+    // - If this node is a *non-base* (derived) version, `root_version` points back to the base version.
+    // The accompanying `bool` flag indicates what `root_version` points to:
+    // - `true`: points to the root (base) version.
+    // - `false`: points to the latest version (this node is the base version).
+    // If the pointer is null, there is only one version (this node itself), and the flag can be ignored.
+    pub root_version: RwLock<(SharedNode, bool)>,
 }
 
 unsafe impl Send for ProbNode {}
@@ -55,9 +62,8 @@ impl ProbNode {
             neighbors: neighbors.into_boxed_slice(),
             parent: AtomicPtr::new(parent),
             child: AtomicPtr::new(child),
-            versions: ProbLazyItemArray::new(),
-            lowest_index: Mutex::new((0, MetricResult::min(dist_metric))),
-            root_version: ptr::null_mut(),
+            lowest_index: RwLock::new((0, MetricResult::min(dist_metric))),
+            root_version: RwLock::new((ptr::null_mut(), false)),
         }
     }
 
@@ -69,8 +75,8 @@ impl ProbNode {
         neighbors: Neighbors,
         parent: SharedNode,
         child: SharedNode,
-        versions: ProbLazyItemArray<ProbNode, 8>,
         root_version: SharedNode,
+        root_version_tag: bool,
         dist_metric: DistanceMetric,
     ) -> Self {
         let mut lowest_idx = 0;
@@ -96,9 +102,8 @@ impl ProbNode {
             neighbors,
             parent: AtomicPtr::new(parent),
             child: AtomicPtr::new(child),
-            versions,
-            lowest_index: Mutex::new((lowest_idx as u8, lowest_sim)),
-            root_version,
+            lowest_index: RwLock::new((lowest_idx as u8, lowest_sim)),
+            root_version: RwLock::new((root_version, root_version_tag)),
         }
     }
 
@@ -122,8 +127,8 @@ impl ProbNode {
         self.prop_value.id
     }
 
-    pub fn lock_lowest_index(&self) -> MutexGuard<'_, (u8, MetricResult)> {
-        self.lowest_index.lock().unwrap()
+    pub fn freeze(&self) -> RwLockReadGuard<'_, (u8, MetricResult)> {
+        self.lowest_index.read()
     }
 
     pub fn add_neighbor(
@@ -135,7 +140,7 @@ impl ProbNode {
         dist_metric: DistanceMetric,
     ) -> Option<u8> {
         // First find an empty slot or the slot with lowest similarity
-        let mut lowest_idx_guard = self.lock_lowest_index();
+        let mut lowest_idx_guard = self.lowest_index.write();
         let (lowest_idx, lowest_sim) = *lowest_idx_guard;
 
         // If we didn't find an empty slot and new neighbor isn't better, return
@@ -202,7 +207,7 @@ impl ProbNode {
     }
 
     pub fn remove_neighbor_by_id(&self, id: InternalId) {
-        let _lock = self.lock_lowest_index();
+        let _lock = self.freeze();
         for neighbor in &self.neighbors {
             let res = neighbor.fetch_update(Ordering::Release, Ordering::Acquire, |nbr| {
                 if let Some((nbr_id, _, _)) = unsafe { nbr.as_ref() } {
@@ -224,7 +229,7 @@ impl ProbNode {
     }
 
     pub fn remove_neighbor_by_index_and_id(&self, index: u8, id: InternalId) {
-        let _lock = self.lock_lowest_index();
+        let _lock = self.freeze();
         let _ = self.neighbors[index as usize].fetch_update(
             Ordering::Release,
             Ordering::Acquire,
@@ -258,9 +263,9 @@ impl ProbNode {
         &self.neighbors
     }
 
-    /// See [`crate::models::serializer::dense::node`] for how its calculated
+    /// See [`crate::models::serializer::hnsw::node`] for how its calculated
     pub fn get_serialized_size(neighbors_len: usize) -> usize {
-        neighbors_len * 19 + 129
+        neighbors_len * 19 + 49
     }
 }
 

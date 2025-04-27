@@ -8,7 +8,7 @@ use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
     cache_loader::HNSWIndexCache,
     prob_lazy_load::lazy_item::FileIndex,
-    prob_node::SharedNode,
+    prob_node::{ProbNode, SharedNode},
     serializer::SimpleSerialize,
     types::{FileOffset, InternalId, MetricResult},
     versioning::Hash,
@@ -33,7 +33,7 @@ impl HNSWIndexSerialize for Box<[AtomicPtr<(InternalId, SharedNode, MetricResult
         let bufman = bufmans.get(version)?;
         let start = bufman.cursor_position(cursor)?;
         debug_assert_eq!(
-            (start - 47) % (self.len() as u64 * 19 + 129),
+            (start - 47) % ProbNode::get_serialized_size(self.len()) as u64,
             0,
             "offset: {}",
             start
@@ -56,7 +56,7 @@ impl HNSWIndexSerialize for Box<[AtomicPtr<(InternalId, SharedNode, MetricResult
                 offset: node_offset,
                 version_number: node_version_number,
                 version_id: node_version_id,
-            } = node.get_file_index();
+            } = node.file_index;
             let mut buf = Vec::with_capacity(19);
             buf.extend(node_id.to_le_bytes());
             buf.extend(node_offset.0.to_le_bytes());

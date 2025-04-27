@@ -24,7 +24,6 @@ use crate::models::file_persist::*;
 use crate::models::fixedset::PerformantFixedSet;
 use crate::models::prob_lazy_load::lazy_item::FileIndex;
 use crate::models::prob_lazy_load::lazy_item::ProbLazyItem;
-use crate::models::prob_lazy_load::lazy_item_array::ProbLazyItemArray;
 use crate::models::prob_node::ProbNode;
 use crate::models::prob_node::SharedNode;
 use crate::models::types::*;
@@ -654,8 +653,7 @@ pub fn index_embedding(
     });
     skipm.insert(*prop_value.id);
 
-    let cur_node = unsafe { &*ProbLazyItem::get_latest_version(cur_entry, &hnsw_index.cache)?.0 }
-        .try_get_data(&hnsw_index.cache)?;
+    let cur_node = unsafe { &*cur_entry }.try_get_data(&hnsw_index.cache)?;
 
     let cur_node_id = &cur_node.prop_value.id;
 
@@ -840,66 +838,83 @@ fn create_node(
 fn get_or_create_version(
     hnsw_index: &HNSWIndex,
     lazy_item_versions_table: Arc<TSHashTable<(InternalId, u16, u8), SharedNode>>,
-    lazy_item: SharedNode,
+    root_version_item: SharedNode,
     version_id: Hash,
     version_number: u16,
     is_level_0: bool,
     offset_fn: &mut dyn FnMut() -> u32,
     distance_metric: DistanceMetric,
 ) -> Result<(SharedNode, bool), WaCustomError> {
-    let node = unsafe { &*lazy_item }.try_get_data(&hnsw_index.cache)?;
+    let root_version_item_ref = unsafe { &*root_version_item };
+    let root_node = root_version_item_ref.try_get_data(&hnsw_index.cache)?;
 
-    let new_version = lazy_item_versions_table.get_or_create_with_flag(
-        (node.get_id(), version_number, node.hnsw_level.0),
+    lazy_item_versions_table.get_or_try_create_with_flag(
+        (root_node.get_id(), version_number, root_node.hnsw_level.0),
         || {
-            let root_version = ProbLazyItem::get_root_version(lazy_item, &hnsw_index.cache)
-                .expect("Couldn't get root version");
-
-            if let Some(version) =
-                ProbLazyItem::get_version(root_version, version_number, &hnsw_index.cache)
-                    .expect("Deserialization failed")
-            {
-                return version;
+            let (latest_version_item, mut guard) =
+                ProbLazyItem::get_absolute_latest_version_write_access(
+                    root_version_item,
+                    &hnsw_index.cache,
+                )?;
+            let latest_version_item_ref = unsafe { &*latest_version_item };
+            let latest_node = latest_version_item_ref.try_get_data(&hnsw_index.cache)?;
+            if latest_version_item_ref.file_index.version_number == version_number {
+                return Ok(latest_version_item);
             }
 
             let new_node = ProbNode::new_with_neighbors_and_versions_and_root_version(
-                node.hnsw_level,
-                node.prop_value.clone(),
-                node.prop_metadata.clone(),
-                node.clone_neighbors(),
-                node.get_parent(),
-                node.get_child(),
-                ProbLazyItemArray::new(),
-                root_version,
+                latest_node.hnsw_level,
+                latest_node.prop_value.clone(),
+                latest_node.prop_metadata.clone(),
+                latest_node.clone_neighbors(),
+                latest_node.get_parent(),
+                latest_node.get_child(),
+                root_version_item,
+                true,
                 distance_metric,
             );
+
+            let new_node_offset = offset_fn();
 
             let version = ProbLazyItem::new(
                 new_node,
                 version_id,
                 version_number,
                 is_level_0,
-                FileOffset(offset_fn()),
+                FileOffset(new_node_offset),
             );
 
-            let updated_node = ProbLazyItem::add_version(root_version, version, &hnsw_index.cache)
-                .expect("Failed to add version")
-                .map_err(|_| "Failed to add version")
-                .unwrap();
+            *guard = (version, false);
+            drop(guard);
 
-            write_node_to_file(
-                updated_node,
-                &hnsw_index.cache.bufmans,
-                &hnsw_index.cache.level_0_bufmans,
-                unsafe { &*updated_node }.get_current_version_id(),
-            )
-            .unwrap();
+            let bufmans: &BufferManagerFactory<Hash> = if is_level_0 {
+                &hnsw_index.cache.level_0_bufmans
+            } else {
+                &hnsw_index.cache.bufmans
+            };
 
-            version
+            let bufman = bufmans.get(root_version_item_ref.file_index.version_id)?;
+
+            let cursor = bufman.open_cursor()?;
+            let file_index = root_version_item_ref.file_index;
+            let offset = file_index.offset.0;
+
+            bufman.seek_with_cursor(cursor, offset as u64 + 37)?;
+            bufman.update_u32_with_cursor(cursor, new_node_offset)?;
+            bufman.update_u16_with_cursor(cursor, version_number)?;
+            bufman.update_u32_with_cursor(cursor, *version_id)?;
+
+            bufman.close_cursor(cursor)?;
+
+            if latest_version_item_ref.file_index.version_number
+                != root_version_item_ref.file_index.version_number
+            {
+                hnsw_index.cache.unload(latest_version_item)?;
+            }
+
+            Ok(version)
         },
-    );
-
-    Ok(new_version)
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -923,6 +938,7 @@ fn create_node_edges(
         (node.get_id(), version_number, node.hnsw_level.0),
         lazy_node,
     );
+    hnsw_index.cache.insert_lazy_object(lazy_node);
 
     // First loop: Handle neighbor connections and collect updates
     for (neighbor, dist) in neighbors {
@@ -944,7 +960,7 @@ fn create_node_edges(
         let new_neighbor = unsafe { &*new_lazy_neighbor }.try_get_data(&hnsw_index.cache)?;
         let neighbor_inserted_idx = node.add_neighbor(
             new_neighbor.get_id(),
-            new_lazy_neighbor,
+            neighbor,
             dist,
             &hnsw_index.cache,
             distance_metric,
@@ -998,13 +1014,13 @@ fn create_node_edges(
             offset: node_offset,
             version_number: node_version_number,
             version_id: node_version_id,
-        } = node.get_file_index();
+        } = node.file_index;
         current_node_link.extend(node_offset.0.to_le_bytes());
         current_node_link.extend(node_version_number.to_le_bytes());
         current_node_link.extend(node_version_id.to_le_bytes());
 
         for (neighbor, neighbor_idx, dist) in neighbors_to_update {
-            let offset = unsafe { &*neighbor }.get_file_index().offset;
+            let offset = unsafe { &*neighbor }.file_index.offset;
             let mut current_node_link_with_dist = Vec::with_capacity(19);
             current_node_link_with_dist.clone_from(&current_node_link);
             let (tag, value) = dist.get_tag_and_value();
@@ -1026,8 +1042,6 @@ fn create_node_edges(
         version,
     )?;
 
-    hnsw_index.cache.insert_lazy_object(version, lazy_node);
-
     Ok(())
 }
 
@@ -1048,7 +1062,8 @@ fn traverse_find_nearest(
     let mut candidate_queue = BinaryHeap::new();
     let mut results = Vec::new();
 
-    let (start_version, _) = ProbLazyItem::get_latest_version(start_node, &hnsw_index.cache)?;
+    let (start_version, guard) =
+        ProbLazyItem::get_absolute_latest_version(start_node, &hnsw_index.cache)?;
     let start_data = unsafe { &*start_version }.try_get_data(&hnsw_index.cache)?;
 
     let fvec_data = VectorData {
@@ -1068,19 +1083,20 @@ fn traverse_find_nearest(
     let start_id = *start_data.get_id();
     skipm.insert(start_id);
     candidate_queue.push((start_dist, start_node));
+    drop(guard);
 
     while let Some((dist, current_node)) = candidate_queue.pop() {
         if *nodes_visited >= ef {
             break;
         }
         *nodes_visited += 1;
-        results.push((dist, current_node));
 
-        let (current_version, _) =
-            ProbLazyItem::get_latest_version(current_node, &hnsw_index.cache)?;
+        let (current_version, _guard) =
+            ProbLazyItem::get_absolute_latest_version(current_node, &hnsw_index.cache)?;
+        results.push((dist, current_node));
         let node = unsafe { &*current_version }.try_get_data(&hnsw_index.cache)?;
 
-        let _lock = node.lock_lowest_index();
+        let _lock = node.freeze();
         for neighbor in node
             .get_neighbors_raw()
             .iter()

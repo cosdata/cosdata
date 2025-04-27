@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
     cache_loader::HNSWIndexCache,
-    prob_lazy_load::lazy_item::{FileIndex, ProbLazyItemState, ReadyState},
+    prob_lazy_load::lazy_item::FileIndex,
     prob_node::SharedNode,
     versioning::Hash,
 };
@@ -18,33 +18,29 @@ impl HNSWIndexSerialize for SharedNode {
         cursor: u64,
     ) -> Result<u32, BufIoError> {
         let lazy_item = unsafe { &**self };
-        match lazy_item.unsafe_get_state() {
-            ProbLazyItemState::Pending(file_index) => Ok(file_index.offset.0),
-            ProbLazyItemState::Ready(ReadyState {
-                data,
-                file_offset,
-                version_id,
-                ..
-            }) => {
-                let bufman = bufmans.get(*version_id)?;
+        let file_offset = lazy_item.file_index.offset.0;
 
-                let cursor = if version_id == &version {
-                    cursor
-                } else {
-                    bufman.open_cursor()?
-                };
+        if let Some(data) = lazy_item.unsafe_get_data() {
+            let version_id = lazy_item.file_index.version_id;
 
-                bufman.seek_with_cursor(cursor, file_offset.0 as u64)?;
+            let bufman = bufmans.get(version_id)?;
 
-                data.serialize(bufmans, *version_id, cursor)?;
+            let cursor = if version_id == version {
+                cursor
+            } else {
+                bufman.open_cursor()?
+            };
 
-                if version_id != &version {
-                    bufman.close_cursor(cursor)?;
-                }
+            bufman.seek_with_cursor(cursor, file_offset as u64)?;
 
-                Ok(file_offset.0)
+            data.serialize(bufmans, version_id, cursor)?;
+
+            if version_id != version {
+                bufman.close_cursor(cursor)?;
             }
         }
+
+        Ok(file_offset)
     }
 
     fn deserialize(

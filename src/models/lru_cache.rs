@@ -84,6 +84,19 @@ impl EvictionIndex {
     fn remove(&self, idx: u8) {
         self.clear(idx as usize)
     }
+
+    /// Removes all instances of the specified key from the eviction index.
+    pub fn remove_key(&self, key: u64) {
+        for i in 0..self.inner.len() {
+            let slot = &self.inner[i];
+            let current = slot.load(Ordering::Acquire);
+            if current == key {
+                // Attempt to clear the slot if it still contains the key
+                let _ =
+                    slot.compare_exchange(current, u64::MAX, Ordering::SeqCst, Ordering::Relaxed);
+            }
+        }
+    }
 }
 
 pub struct ProbEviction {
@@ -350,6 +363,24 @@ where
 
     fn increment_counter(&self) -> u32 {
         self.counter.fetch_add(1, Ordering::SeqCst)
+    }
+
+    /// Removes an entry from the cache.
+    ///
+    /// Returns the value if the key was present, otherwise `None`.
+    pub fn remove(&self, key: &K) -> Option<V> {
+        if let Some((k, (v, _))) = self.map.remove(key) {
+            // Call the evict hook if provided
+            if let Some(hook) = self.evict_hook {
+                hook(&v);
+            }
+            // Remove all instances of the key from the eviction index
+            let key_u64: u64 = k.into();
+            self.index.remove_key(key_u64);
+            Some(v)
+        } else {
+            None
+        }
     }
 }
 
