@@ -92,7 +92,7 @@ impl VersionPtr {
         } else {
             unsafe { LEVELN_NEIGHBORS }
         };
-        let node_size = 121 + 19 * neighbor_count as u64; // Updated size to include root_version
+        let node_size = Self::get_serialized_size(neighbor_count); // Updated size calculation
 
         // Check if offset is aligned with the target level's node size
         if self.offset as u64 % node_size != 0 {
@@ -160,6 +160,12 @@ impl VersionPtr {
             reason: None,
         }
     }
+
+    // New method to calculate serialized size based on neighbor count
+    fn get_serialized_size(neighbor_count: u16) -> u64 {
+        // Formula from node.rs: nb * 19 + 49 (where nb is neighbor count)
+        (neighbor_count as u64) * 19 + 47 + 2 // 47 bytes for properties + 2 bytes for neighbor length
+    }
 }
 
 static mut LEVEL0_NEIGHBORS: u16 = 0;
@@ -178,14 +184,16 @@ struct Node {
     level: u8,
     prop_offset: u32,
     prop_length: u32,
+    metadata_offset: u32,
+    metadata_length: u32,
     parent: VersionPtr,
     parent_validation: LinkValidation,
     child: VersionPtr,
     child_validation: LinkValidation,
     root_version: VersionPtr,
     root_version_validation: LinkValidation,
+    root_version_is_root: bool,
     neighbors: Vec<Option<Neighbor>>,
-    versions: Vec<(VersionPtr, LinkValidation)>,
 }
 
 fn read_neighbors(
@@ -261,10 +269,17 @@ fn read_node(file: &mut File, current_file: &Path, current_hash: u32) -> io::Res
         }
     };
 
+    // Read property offset and length (8 bytes)
     let mut buffer = [0u8; 8];
     file.read_exact(&mut buffer)?;
     let prop_offset = u32::from_le_bytes(buffer[0..4].try_into().unwrap());
     let prop_length = u32::from_le_bytes(buffer[4..8].try_into().unwrap());
+
+    // Read metadata offset and length (8 bytes) - new in updated serialization
+    let mut metadata_buffer = [0u8; 8];
+    file.read_exact(&mut metadata_buffer)?;
+    let metadata_offset = u32::from_le_bytes(metadata_buffer[0..4].try_into().unwrap());
+    let metadata_length = u32::from_le_bytes(metadata_buffer[4..8].try_into().unwrap());
 
     let parent = VersionPtr::read(file)?;
     let parent_validation =
@@ -275,30 +290,36 @@ fn read_node(file: &mut File, current_file: &Path, current_hash: u32) -> io::Res
         child.validate_link(current_file, current_hash, level[0], level[0].max(1) - 1);
 
     let root_version = VersionPtr::read(file)?;
+
+    // Check if root version is tagged as self
+    let root_version_is_root = !root_version.is_absent()
+        && (root_version.offset % VersionPtr::get_serialized_size(neighbor_count) as u32 != 0);
+
+    // Adjust offset if it's tagged
+    let mut adjusted_root_version = root_version;
+    if root_version_is_root {
+        adjusted_root_version.offset -= 1;
+    }
+
     let root_version_validation =
-        root_version.validate_link(current_file, current_hash, level[0], level[0]); // Root is always level 0
+        adjusted_root_version.validate_link(current_file, current_hash, level[0], level[0]);
 
     let neighbors = read_neighbors(file, current_file, current_hash, neighbor_count, level[0])?;
-
-    let mut versions = Vec::with_capacity(8);
-    for _ in 0..8 {
-        let version = VersionPtr::read(file)?;
-        let validation = version.validate_link(current_file, current_hash, level[0], level[0]);
-        versions.push((version, validation));
-    }
 
     Ok(Node {
         level: level[0],
         prop_offset,
         prop_length,
+        metadata_offset,
+        metadata_length,
         parent,
         parent_validation,
         child,
         child_validation,
-        root_version,
+        root_version: adjusted_root_version,
         root_version_validation,
+        root_version_is_root,
         neighbors,
-        versions,
     })
 }
 
@@ -329,13 +350,36 @@ fn print_node(node: &Node, index: usize) {
         node.prop_offset, node.prop_length
     );
 
+    if node.metadata_offset != u32::MAX {
+        println!(
+            "Metadata Offset: {}, Length: {}",
+            node.metadata_offset, node.metadata_length
+        );
+    } else {
+        println!("Metadata: absent");
+    }
+
     print_version_ptr(&node.parent, &node.parent_validation, "Parent");
     print_version_ptr(&node.child, &node.child_validation, "Child");
-    print_version_ptr(
-        &node.root_version,
-        &node.root_version_validation,
-        "Root version",
-    );
+
+    // Display the root version with its tag info
+    if node.root_version.is_absent() {
+        println!("Root version: absent");
+    } else {
+        print!(
+            "Root version: offset={}, version={}, hash={}, is_root={}",
+            node.root_version.offset,
+            node.root_version.version_number,
+            node.root_version.version_hash,
+            node.root_version_is_root
+        );
+        if !node.root_version_validation.is_valid {
+            if let Some(reason) = &node.root_version_validation.reason {
+                print!(" (INVALID: {})", reason);
+            }
+        }
+        println!();
+    }
 
     println!("\nNeighbors:");
     for (i, neighbor) in node.neighbors.iter().enumerate() {
@@ -361,11 +405,6 @@ fn print_node(node: &Node, index: usize) {
                 println!("  {}. ABSENT", i + 1);
             }
         }
-    }
-
-    println!("\nVersions:");
-    for (i, (version, validation)) in node.versions.iter().enumerate() {
-        print_version_ptr(version, validation, &format!("  {}", i + 1));
     }
 }
 
@@ -396,12 +435,11 @@ fn main() -> io::Result<()> {
     for i in 0..opt.limit {
         match read_node(&mut file, &opt.input, current_hash) {
             Ok(node) => {
-                let node_size = 121
-                    + 19 * if node.level == 0 {
-                        opt.level0_neighbors
-                    } else {
-                        opt.leveln_neighbors
-                    } as u64;
+                let node_size = VersionPtr::get_serialized_size(if node.level == 0 {
+                    opt.level0_neighbors
+                } else {
+                    opt.leveln_neighbors
+                });
 
                 print_node(&node, i + 1);
 
