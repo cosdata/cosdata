@@ -3,7 +3,7 @@ use super::common::TSHashTable;
 use super::file_persist::{read_prop_metadata_from_file, read_prop_value_from_file};
 use super::inverted_index::InvertedIndexNodeData;
 use super::lru_cache::LRUCache;
-use super::prob_lazy_load::lazy_item::{FileIndex, ProbLazyItem, ProbLazyItemState, ReadyState};
+use super::prob_lazy_load::lazy_item::{FileIndex, ProbLazyItem};
 use super::prob_node::{ProbNode, SharedNode};
 use super::serializer::hnsw::HNSWIndexSerialize;
 use super::serializer::inverted::InvertedIndexSerialize;
@@ -63,6 +63,20 @@ impl HNSWIndexCache {
         }
     }
 
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub fn unload(&self, item: SharedNode) -> Result<(), BufIoError> {
+        if item.is_null() {
+            return Ok(());
+        }
+        let item_ref = unsafe { &*item };
+        let combined_index = Self::combine_index(&item_ref.file_index, item_ref.is_level_0);
+        self.registry.remove(&combined_index);
+        unsafe {
+            drop(Box::from_raw(item));
+        }
+        Ok(())
+    }
+
     pub fn flush_all(&self) -> Result<(), BufIoError> {
         self.bufmans.flush_all()?;
         self.level_0_bufmans.flush_all()?;
@@ -118,10 +132,9 @@ impl HNSWIndexCache {
     }
 
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
-    pub fn insert_lazy_object(&self, version: Hash, item: SharedNode) {
+    pub fn insert_lazy_object(&self, item: SharedNode) {
         let item_ref = unsafe { &*item };
-        let combined_index =
-            ((item_ref.get_file_index().offset.0 as u64) << 32) | (*version as u64);
+        let combined_index = Self::combine_index(&item_ref.file_index, item_ref.is_level_0);
         if let Some(node) = item_ref.get_lazy_data() {
             let prop_key =
                 Self::get_prop_key(node.prop_value.location.0, node.prop_value.location.1);
@@ -150,14 +163,8 @@ impl HNSWIndexCache {
             version_number,
             version_id,
         } = file_index;
-        let state = ProbLazyItemState::Ready(ReadyState {
-            data,
-            file_offset,
-            version_id,
-            version_number,
-        });
 
-        let item = ProbLazyItem::new_from_state(state, is_level_0);
+        let item = ProbLazyItem::new(data, version_id, version_number, is_level_0, file_offset);
 
         self.registry.insert(combined_index, item);
 
@@ -219,14 +226,8 @@ impl HNSWIndexCache {
 
         let data =
             ProbNode::deserialize(bufmans, file_index, self, max_loads - 1, skipm, is_level_0)?;
-        let state = ProbLazyItemState::Ready(ReadyState {
-            data,
-            file_offset,
-            version_id,
-            version_number,
-        });
 
-        let item = ProbLazyItem::new_from_state(state, is_level_0);
+        let item = ProbLazyItem::new(data, version_id, version_number, is_level_0, file_offset);
 
         self.registry.insert(combined_index, item);
 
@@ -244,6 +245,7 @@ impl HNSWIndexCache {
         node_size: u32,
         is_level_0: bool,
     ) -> Result<Vec<SharedNode>, BufIoError> {
+        debug_assert_eq!(region_start % node_size, 0);
         let bufman = if is_level_0 {
             self.level_0_bufmans.get(version_id)?
         } else {
@@ -265,7 +267,10 @@ impl HNSWIndexCache {
                 version_number,
                 version_id,
             };
-            let node = self.force_load_single_object(file_index, is_level_0)?;
+
+            let node = self
+                .force_load_single_object(file_index, is_level_0)
+                .unwrap();
             nodes.push(node);
         }
         Ok(nodes)
@@ -399,14 +404,8 @@ impl InvertedIndexCache {
             self.data_file_parts,
             self,
         )?;
-        let state = ProbLazyItemState::Ready(ReadyState {
-            data,
-            file_offset,
-            version_id: 0.into(),
-            version_number: 0,
-        });
 
-        let item = ProbLazyItem::new_from_state(state, false);
+        let item = ProbLazyItem::new(data, 0.into(), 0, false, file_offset);
 
         self.registry.insert(combined_index, item);
 
@@ -516,14 +515,8 @@ impl TFIDFIndexCache {
             self.data_file_parts,
             self,
         )?;
-        let state = ProbLazyItemState::Ready(ReadyState {
-            data,
-            file_offset,
-            version_id: 0.into(),
-            version_number: 0,
-        });
 
-        let item = ProbLazyItem::new_from_state(state, false);
+        let item = ProbLazyItem::new(data, 0.into(), 0, false, file_offset);
 
         self.registry.insert(combined_index, item);
 

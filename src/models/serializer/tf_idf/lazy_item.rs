@@ -3,7 +3,7 @@ use std::sync::atomic::AtomicU32;
 use crate::models::{
     buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
     cache_loader::TFIDFIndexCache,
-    prob_lazy_load::lazy_item::{ProbLazyItem, ProbLazyItemState, ReadyState},
+    prob_lazy_load::lazy_item::ProbLazyItem,
     tf_idf_index::TFIDFIndexNodeData,
     types::FileOffset,
 };
@@ -21,23 +21,21 @@ impl TFIDFIndexSerialize for *mut ProbLazyItem<TFIDFIndexNodeData> {
         cursor: u64,
     ) -> Result<u32, BufIoError> {
         let lazy_item = unsafe { &**self };
-        match lazy_item.unsafe_get_state() {
-            ProbLazyItemState::Pending(file_index) => Ok(file_index.offset.0),
-            ProbLazyItemState::Ready(ReadyState {
-                data, file_offset, ..
-            }) => {
-                dim_bufman.seek_with_cursor(cursor, file_offset.0 as u64)?;
-                data.serialize(
-                    dim_bufman,
-                    data_bufmans,
-                    offset_counter,
-                    data_file_idx,
-                    data_file_parts,
-                    cursor,
-                )?;
-                Ok(file_offset.0)
-            }
+        let file_offset = lazy_item.file_index.offset.0;
+
+        if let Some(data) = lazy_item.unsafe_get_data() {
+            dim_bufman.seek_with_cursor(cursor, file_offset as u64)?;
+            data.serialize(
+                dim_bufman,
+                data_bufmans,
+                offset_counter,
+                data_file_idx,
+                data_file_parts,
+                cursor,
+            )?;
         }
+
+        Ok(file_offset)
     }
 
     fn deserialize(

@@ -18,7 +18,7 @@ pub fn write_node_to_file(
     bufmans: &BufferManagerFactory<Hash>,
     level_0_bufmans: &BufferManagerFactory<Hash>,
     version: Hash,
-) -> Result<u32, WaCustomError> {
+) -> Result<u32, BufIoError> {
     let lazy_item_ref = unsafe { &*lazy_item };
     let is_level_0 = lazy_item_ref.is_level_0;
     let (bufman, bufmans) = if is_level_0 {

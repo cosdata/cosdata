@@ -39,7 +39,7 @@ impl<const N: usize> HNSWIndexSerialize for ProbLazyItemArray<ProbNode, N> {
                 offset,
                 version_number,
                 version_id,
-            } = item.get_file_index();
+            } = item.file_index;
 
             bufman.update_u32_with_cursor(cursor, offset.0)?;
             bufman.update_u16_with_cursor(cursor, version_number)?;
