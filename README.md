@@ -30,7 +30,7 @@
 - [Benchmarks](https://www.cosdata.io/resources/benchmarks)
 - [Documentation](https://docs.cosdata.io/getting-started/introduction/)
 - [Contacts & Community](#-contacts--community)
-- [Show Your Support](#show-your-support)
+- [Show Your Support](#-show-your-support)
 
 <br>
 <br>
@@ -50,6 +50,7 @@ Cosdata is designed to meet the demands of modern search applications, empowerin
 
 <br>
 <a id="-getting-started"></a>
+
 # ⚡️ Getting Started
 
 ## 1. Install
@@ -471,7 +472,8 @@ Have questions, ideas, or want to contribute? We’d love to hear from you!
 Let’s collaborate and build the future of vector search—together! 💡
 
 <br>
-<a id="show-your-support"></a>
+<a id="-show-your-support"></a>
+
 # ⭐️ Show Your Support
 
 If Cosdata has empowered your projects, please consider giving us a star on GitHub! ⭐️ 
