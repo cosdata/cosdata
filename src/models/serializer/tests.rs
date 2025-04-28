@@ -252,11 +252,11 @@ fn test_tree_map_serialization() {
     let map = TreeMap::new(bufmans);
 
     for i in 0..1000 {
-        map.insert(0.into(), i, rng.gen_range(0..u16::MAX));
+        map.insert(0.into(), &i, rng.gen_range(0..u16::MAX));
     }
 
     // edge case
-    map.insert(0.into(), u64::MAX, rng.gen_range(0..u16::MAX));
+    map.insert(0.into(), &u64::MAX, rng.gen_range(0..u16::MAX));
 
     map.serialize(8).unwrap();
 
@@ -283,22 +283,22 @@ fn test_tree_map_incremental_serialization() {
     let map = TreeMap::new(bufmans);
 
     for i in 0..1000 {
-        map.insert(0.into(), i, rng.gen_range(0..u16::MAX));
+        map.insert(0.into(), &i, rng.gen_range(0..u16::MAX));
     }
 
     // edge case
-    map.insert(0.into(), u64::MAX, rng.gen_range(0..u16::MAX));
+    map.insert(0.into(), &u64::MAX, rng.gen_range(0..u16::MAX));
 
     map.serialize(8).unwrap();
 
     for i in 1000..2001 {
-        map.insert(0.into(), i, rng.gen_range(0..u16::MAX));
+        map.insert(0.into(), &i, rng.gen_range(0..u16::MAX));
     }
 
     map.serialize(8).unwrap();
 
     for i in 2001..3000 {
-        map.insert(0.into(), i, rng.gen_range(0..u16::MAX));
+        map.insert(0.into(), &i, rng.gen_range(0..u16::MAX));
     }
 
     map.serialize(8).unwrap();
@@ -325,22 +325,22 @@ fn test_tree_map_incremental_serialization_with_multiple_versions() {
     let map = TreeMap::new(bufmans);
 
     for i in 0..1000 {
-        map.insert(0.into(), i, rng.gen_range(0..u16::MAX));
+        map.insert(0.into(), &i, rng.gen_range(0..u16::MAX));
     }
 
     // edge case
-    map.insert(1.into(), u64::MAX, rng.gen_range(0..u16::MAX));
+    map.insert(1.into(), &u64::MAX, rng.gen_range(0..u16::MAX));
 
     map.serialize(8).unwrap();
 
     for i in 1000..2001 {
-        map.insert(2.into(), i, rng.gen_range(0..u16::MAX));
+        map.insert(2.into(), &i, rng.gen_range(0..u16::MAX));
     }
 
     map.serialize(8).unwrap();
 
     for i in 2001..3000 {
-        map.insert(3.into(), i, rng.gen_range(0..u16::MAX));
+        map.insert(3.into(), &i, rng.gen_range(0..u16::MAX));
     }
 
     map.serialize(8).unwrap();
@@ -369,19 +369,19 @@ fn test_tree_map_vec_incremental_serialization_with_multiple_versions() {
     for i in 0..1000 {
         let count: u8 = rng.gen_range(1..5);
         for _ in 0..count {
-            map.push(0.into(), i, rng.gen_range(0..u16::MAX));
+            map.push(0.into(), &i, rng.gen_range(0..u16::MAX));
         }
     }
 
     // edge case
-    map.push(1.into(), u64::MAX, rng.gen_range(0..u16::MAX));
+    map.push(1.into(), &u64::MAX, rng.gen_range(0..u16::MAX));
 
     map.serialize(8).unwrap();
 
     for i in 1000..2001 {
         let count: u8 = rng.gen_range(1..5);
         for _ in 0..count {
-            map.push(2.into(), i, rng.gen_range(0..u16::MAX));
+            map.push(2.into(), &i, rng.gen_range(0..u16::MAX));
         }
     }
 
@@ -390,7 +390,7 @@ fn test_tree_map_vec_incremental_serialization_with_multiple_versions() {
     for i in 2001..3000 {
         let count: u8 = rng.gen_range(1..5);
         for _ in 0..count {
-            map.push(3.into(), i, rng.gen_range(0..u16::MAX));
+            map.push(3.into(), &i, rng.gen_range(0..u16::MAX));
         }
     }
 
