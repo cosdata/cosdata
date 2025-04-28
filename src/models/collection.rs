@@ -260,14 +260,14 @@ impl Collection {
                     }
 
                     self.internal_to_external_map
-                        .insert(transaction.id, internal_id, embedding);
+                        .insert(transaction.id, &internal_id, embedding);
                     self.external_to_internal_map
-                        .insert(transaction.id, id, internal_id);
+                        .insert(transaction.id, &id, internal_id);
 
                     if let Some(document_id) = document_id {
                         self.document_to_internals_map.push(
                             transaction.id,
-                            document_id,
+                            &document_id,
                             internal_id,
                         );
                     }

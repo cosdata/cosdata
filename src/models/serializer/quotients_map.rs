@@ -7,9 +7,7 @@ use crate::models::{
     buffered_io::{BufIoError, BufferManager},
     common::TSHashTable,
     tf_idf_index::UnsafeVersionedVec,
-    tree_map::{
-        Quotient, QuotientVec, QuotientsMap, QuotientsMapVec, TreeMapKey, UnsafeVersionedItem,
-    },
+    tree_map::{Quotient, QuotientVec, QuotientsMap, QuotientsMapVec, UnsafeVersionedItem},
     types::FileOffset,
 };
 
@@ -17,9 +15,7 @@ use super::SimpleSerialize;
 
 const CHUNK_SIZE: usize = 4;
 
-impl<K: TreeMapKey + SimpleSerialize + Clone, V: SimpleSerialize> SimpleSerialize
-    for QuotientsMap<K, V>
-{
+impl<T: SimpleSerialize> SimpleSerialize for QuotientsMap<T> {
     fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
         let mut list = self.map.to_list();
         list.sort_unstable_by_key(|(_, q)| q.sequence_idx);
@@ -38,13 +34,12 @@ impl<K: TreeMapKey + SimpleSerialize + Clone, V: SimpleSerialize> SimpleSerializ
 
             for i in 0..CHUNK_SIZE {
                 let Some((k, v)) = list.get(i) else {
-                    bufman.update_with_cursor(cursor, &[u8::MAX; 8])?;
+                    bufman.update_with_cursor(cursor, &[u8::MAX; 12])?;
                     continue;
                 };
                 let value_offset = v.value.serialize(bufman, cursor)?;
-                let key_offset = k.serialize(bufman, cursor)?;
-                bufman.seek_with_cursor(cursor, offset.0 as u64 + 8 + (i as u64 * 8))?;
-                bufman.update_u32_with_cursor(cursor, key_offset)?;
+                bufman.seek_with_cursor(cursor, offset.0 as u64 + 8 + (i as u64 * 12))?;
+                bufman.update_u64_with_cursor(cursor, *k)?;
                 bufman.update_u32_with_cursor(cursor, value_offset)?;
             }
 
@@ -55,14 +50,13 @@ impl<K: TreeMapKey + SimpleSerialize + Clone, V: SimpleSerialize> SimpleSerializ
                 bufman.seek_with_cursor(cursor, current_chunk_offset as u64)?;
                 for i in 0..CHUNK_SIZE {
                     let Some((k, v)) = list.get(i + (chunk_idx * CHUNK_SIZE)) else {
-                        bufman.update_with_cursor(cursor, &[u8::MAX; 8])?;
+                        bufman.update_with_cursor(cursor, &[u8::MAX; 12])?;
                         continue;
                     };
                     let value_offset = v.value.serialize(bufman, cursor)?;
-                    let key_offset = k.serialize(bufman, cursor)?;
                     bufman
-                        .seek_with_cursor(cursor, current_chunk_offset as u64 + (i as u64 * 8))?;
-                    bufman.update_u32_with_cursor(cursor, key_offset)?;
+                        .seek_with_cursor(cursor, current_chunk_offset as u64 + (i as u64 * 12))?;
+                    bufman.update_u64_with_cursor(cursor, *k)?;
                     bufman.update_u32_with_cursor(cursor, value_offset)?;
                 }
 
@@ -70,20 +64,19 @@ impl<K: TreeMapKey + SimpleSerialize + Clone, V: SimpleSerialize> SimpleSerializ
             }
 
             for chunk_idx in total_chunks_serialized..total_chunks {
-                let mut buf = Vec::with_capacity(CHUNK_SIZE * 8 + 4);
+                let mut buf = Vec::with_capacity(CHUNK_SIZE * 12 + 4);
                 for i in (chunk_idx * CHUNK_SIZE)..((chunk_idx + 1) * CHUNK_SIZE) {
                     let Some((k, v)) = list.get(i) else {
-                        buf.extend([u8::MAX; 8]);
+                        buf.extend([u8::MAX; 12]);
                         continue;
                     };
-                    let key_offset = k.serialize(bufman, cursor)?;
-                    buf.extend(key_offset.to_le_bytes());
+                    buf.extend(k.to_le_bytes());
                     let offset = v.value.serialize(bufman, cursor)?;
                     buf.extend(offset.to_le_bytes());
                 }
                 buf.extend([u8::MAX; 4]);
                 let chunk_offset = bufman.write_to_end_of_file(cursor, &buf)?;
-                bufman.seek_with_cursor(cursor, prev_chunk_offset + (CHUNK_SIZE as u64 * 8))?;
+                bufman.seek_with_cursor(cursor, prev_chunk_offset + (CHUNK_SIZE as u64 * 12))?;
                 bufman.update_u32_with_cursor(cursor, chunk_offset as u32)?;
                 prev_chunk_offset = chunk_offset;
             }
@@ -101,13 +94,12 @@ impl<K: TreeMapKey + SimpleSerialize + Clone, V: SimpleSerialize> SimpleSerializ
 
             for i in 0..CHUNK_SIZE {
                 let Some((k, v)) = list.get(i) else {
-                    bufman.update_with_cursor(cursor, &[u8::MAX; 8])?;
+                    bufman.update_with_cursor(cursor, &[u8::MAX; 12])?;
                     continue;
                 };
-                let key_offset = k.serialize(bufman, cursor)?;
                 let value_offset = v.value.serialize(bufman, cursor)?;
-                bufman.seek_with_cursor(cursor, offset.0 as u64 + 8 + (i as u64 * 8))?;
-                bufman.update_u32_with_cursor(cursor, key_offset)?;
+                bufman.seek_with_cursor(cursor, offset.0 as u64 + 8 + (i as u64 * 12))?;
+                bufman.update_u64_with_cursor(cursor, *k)?;
                 bufman.update_u32_with_cursor(cursor, value_offset)?;
             }
 
@@ -118,14 +110,13 @@ impl<K: TreeMapKey + SimpleSerialize + Clone, V: SimpleSerialize> SimpleSerializ
                 bufman.seek_with_cursor(cursor, current_chunk_offset as u64)?;
                 for i in 0..CHUNK_SIZE {
                     let Some((k, v)) = list.get(i + (chunk_idx * CHUNK_SIZE)) else {
-                        bufman.update_with_cursor(cursor, &[u8::MAX; 8])?;
+                        bufman.update_with_cursor(cursor, &[u8::MAX; 12])?;
                         continue;
                     };
-                    let key_offset = k.serialize(bufman, cursor)?;
                     let value_offset = v.value.serialize(bufman, cursor)?;
                     bufman
-                        .seek_with_cursor(cursor, current_chunk_offset as u64 + (i as u64 * 8))?;
-                    bufman.update_u32_with_cursor(cursor, key_offset)?;
+                        .seek_with_cursor(cursor, current_chunk_offset as u64 + (i as u64 * 12))?;
+                    bufman.update_u64_with_cursor(cursor, *k)?;
                     bufman.update_u32_with_cursor(cursor, value_offset)?;
                 }
 
@@ -133,35 +124,33 @@ impl<K: TreeMapKey + SimpleSerialize + Clone, V: SimpleSerialize> SimpleSerializ
             }
 
             for chunk_idx in total_chunks_serialized..total_chunks {
-                let mut buf = Vec::with_capacity(CHUNK_SIZE * 8 + 4);
+                let mut buf = Vec::with_capacity(CHUNK_SIZE * 12 + 4);
                 for i in (chunk_idx * CHUNK_SIZE)..((chunk_idx + 1) * CHUNK_SIZE) {
                     let Some((k, v)) = list.get(i) else {
-                        buf.extend([u8::MAX; 8]);
+                        buf.extend([u8::MAX; 12]);
                         continue;
                     };
-                    let key_offset = k.serialize(bufman, cursor)?;
-                    buf.extend(key_offset.to_le_bytes());
+                    buf.extend(k.to_le_bytes());
                     let offset = v.value.serialize(bufman, cursor)?;
                     buf.extend(offset.to_le_bytes());
                 }
                 buf.extend([u8::MAX; 4]);
                 let chunk_offset = bufman.write_to_end_of_file(cursor, &buf)?;
-                bufman.seek_with_cursor(cursor, prev_chunk_offset + (CHUNK_SIZE as u64 * 8))?;
+                bufman.seek_with_cursor(cursor, prev_chunk_offset + (CHUNK_SIZE as u64 * 12))?;
                 bufman.update_u32_with_cursor(cursor, chunk_offset as u32)?;
                 prev_chunk_offset = chunk_offset;
             }
 
             self.serialized_upto.store(list.len(), Ordering::Relaxed);
         }
-        let mut chunk_buf = Vec::with_capacity(CHUNK_SIZE * 8 + 12);
+        let mut chunk_buf = Vec::with_capacity(CHUNK_SIZE * 12 + 12);
         chunk_buf.extend(len.to_le_bytes());
         for i in 0..CHUNK_SIZE {
             let Some((k, v)) = list.get(i) else {
-                chunk_buf.extend([u8::MAX; 8]);
+                chunk_buf.extend([u8::MAX; 12]);
                 continue;
             };
-            let key_offset = k.serialize(bufman, cursor)?;
-            chunk_buf.extend(key_offset.to_le_bytes());
+            chunk_buf.extend(k.to_le_bytes());
             let offset = v.value.serialize(bufman, cursor)?;
             chunk_buf.extend(offset.to_le_bytes());
         }
@@ -170,20 +159,19 @@ impl<K: TreeMapKey + SimpleSerialize + Clone, V: SimpleSerialize> SimpleSerializ
         let mut prev_chunk_offset = start + 8;
 
         for chunk_idx in 1..total_chunks {
-            chunk_buf = Vec::with_capacity(CHUNK_SIZE * 8 + 4);
+            chunk_buf = Vec::with_capacity(CHUNK_SIZE * 12 + 4);
             for i in (chunk_idx * CHUNK_SIZE)..((chunk_idx + 1) * CHUNK_SIZE) {
                 let Some((k, v)) = list.get(i) else {
-                    chunk_buf.extend([u8::MAX; 8]);
+                    chunk_buf.extend([u8::MAX; 12]);
                     continue;
                 };
-                let key_offset = k.serialize(bufman, cursor)?;
-                chunk_buf.extend(key_offset.to_le_bytes());
+                chunk_buf.extend(k.to_le_bytes());
                 let offset = v.value.serialize(bufman, cursor)?;
                 chunk_buf.extend(offset.to_le_bytes());
             }
             chunk_buf.extend([u8::MAX; 4]);
             let chunk_offset = bufman.write_to_end_of_file(cursor, &chunk_buf)?;
-            bufman.seek_with_cursor(cursor, prev_chunk_offset + (CHUNK_SIZE as u64 * 8))?;
+            bufman.seek_with_cursor(cursor, prev_chunk_offset + (CHUNK_SIZE as u64 * 12))?;
             bufman.update_u32_with_cursor(cursor, chunk_offset as u32)?;
             prev_chunk_offset = chunk_offset;
         }
@@ -215,11 +203,10 @@ impl<K: TreeMapKey + SimpleSerialize + Clone, V: SimpleSerialize> SimpleSerializ
                 if i as u64 == len {
                     break 'outer;
                 }
-                let key_offset = bufman.read_u32_with_cursor(cursor)?;
+                let key = bufman.read_u64_with_cursor(cursor)?;
                 let value_offset = bufman.read_u32_with_cursor(cursor)?;
-                let key = K::deserialize(bufman, FileOffset(key_offset))?;
                 let value =
-                    UnsafeVersionedItem::<V>::deserialize(bufman, FileOffset(value_offset))?;
+                    UnsafeVersionedItem::<T>::deserialize(bufman, FileOffset(value_offset))?;
                 let q = Quotient {
                     value,
                     sequence_idx: i as u64,
@@ -243,9 +230,7 @@ impl<K: TreeMapKey + SimpleSerialize + Clone, V: SimpleSerialize> SimpleSerializ
     }
 }
 
-impl<K: TreeMapKey + SimpleSerialize + Clone, V: SimpleSerialize> SimpleSerialize
-    for QuotientsMapVec<K, V>
-{
+impl<T: SimpleSerialize> SimpleSerialize for QuotientsMapVec<T> {
     fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
         let mut list = self.map.to_list();
         list.sort_unstable_by_key(|(_, q)| q.sequence_idx);
@@ -264,13 +249,12 @@ impl<K: TreeMapKey + SimpleSerialize + Clone, V: SimpleSerialize> SimpleSerializ
 
             for i in 0..CHUNK_SIZE {
                 let Some((k, v)) = list.get(i) else {
-                    bufman.update_with_cursor(cursor, &[u8::MAX; 8])?;
+                    bufman.update_with_cursor(cursor, &[u8::MAX; 12])?;
                     continue;
                 };
                 let value_offset = v.value.serialize(bufman, cursor)?;
-                let key_offset = k.serialize(bufman, cursor)?;
-                bufman.seek_with_cursor(cursor, offset.0 as u64 + 8 + (i as u64 * 8))?;
-                bufman.update_u32_with_cursor(cursor, key_offset)?;
+                bufman.seek_with_cursor(cursor, offset.0 as u64 + 8 + (i as u64 * 12))?;
+                bufman.update_u64_with_cursor(cursor, *k)?;
                 bufman.update_u32_with_cursor(cursor, value_offset)?;
             }
 
@@ -281,14 +265,13 @@ impl<K: TreeMapKey + SimpleSerialize + Clone, V: SimpleSerialize> SimpleSerializ
                 bufman.seek_with_cursor(cursor, current_chunk_offset as u64)?;
                 for i in 0..CHUNK_SIZE {
                     let Some((k, v)) = list.get(i + (chunk_idx * CHUNK_SIZE)) else {
-                        bufman.update_with_cursor(cursor, &[u8::MAX; 8])?;
+                        bufman.update_with_cursor(cursor, &[u8::MAX; 12])?;
                         continue;
                     };
                     let value_offset = v.value.serialize(bufman, cursor)?;
-                    let key_offset = k.serialize(bufman, cursor)?;
                     bufman
-                        .seek_with_cursor(cursor, current_chunk_offset as u64 + (i as u64 * 8))?;
-                    bufman.update_u32_with_cursor(cursor, key_offset)?;
+                        .seek_with_cursor(cursor, current_chunk_offset as u64 + (i as u64 * 12))?;
+                    bufman.update_u64_with_cursor(cursor, *k)?;
                     bufman.update_u32_with_cursor(cursor, value_offset)?;
                 }
 
@@ -296,20 +279,19 @@ impl<K: TreeMapKey + SimpleSerialize + Clone, V: SimpleSerialize> SimpleSerializ
             }
 
             for chunk_idx in total_chunks_serialized..total_chunks {
-                let mut buf = Vec::with_capacity(CHUNK_SIZE * 8 + 4);
+                let mut buf = Vec::with_capacity(CHUNK_SIZE * 12 + 4);
                 for i in (chunk_idx * CHUNK_SIZE)..((chunk_idx + 1) * CHUNK_SIZE) {
                     let Some((k, v)) = list.get(i) else {
-                        buf.extend([u8::MAX; 8]);
+                        buf.extend([u8::MAX; 12]);
                         continue;
                     };
-                    let key_offset = k.serialize(bufman, cursor)?;
-                    buf.extend(key_offset.to_le_bytes());
+                    buf.extend(k.to_le_bytes());
                     let offset = v.value.serialize(bufman, cursor)?;
                     buf.extend(offset.to_le_bytes());
                 }
                 buf.extend([u8::MAX; 4]);
                 let chunk_offset = bufman.write_to_end_of_file(cursor, &buf)?;
-                bufman.seek_with_cursor(cursor, prev_chunk_offset + (CHUNK_SIZE as u64 * 8))?;
+                bufman.seek_with_cursor(cursor, prev_chunk_offset + (CHUNK_SIZE as u64 * 12))?;
                 bufman.update_u32_with_cursor(cursor, chunk_offset as u32)?;
                 prev_chunk_offset = chunk_offset;
             }
@@ -327,13 +309,12 @@ impl<K: TreeMapKey + SimpleSerialize + Clone, V: SimpleSerialize> SimpleSerializ
 
             for i in 0..CHUNK_SIZE {
                 let Some((k, v)) = list.get(i) else {
-                    bufman.update_with_cursor(cursor, &[u8::MAX; 8])?;
+                    bufman.update_with_cursor(cursor, &[u8::MAX; 12])?;
                     continue;
                 };
-                let key_offset = k.serialize(bufman, cursor)?;
                 let value_offset = v.value.serialize(bufman, cursor)?;
-                bufman.seek_with_cursor(cursor, offset.0 as u64 + 8 + (i as u64 * 8))?;
-                bufman.update_u32_with_cursor(cursor, key_offset)?;
+                bufman.seek_with_cursor(cursor, offset.0 as u64 + 8 + (i as u64 * 12))?;
+                bufman.update_u64_with_cursor(cursor, *k)?;
                 bufman.update_u32_with_cursor(cursor, value_offset)?;
             }
 
@@ -344,14 +325,13 @@ impl<K: TreeMapKey + SimpleSerialize + Clone, V: SimpleSerialize> SimpleSerializ
                 bufman.seek_with_cursor(cursor, current_chunk_offset as u64)?;
                 for i in 0..CHUNK_SIZE {
                     let Some((k, v)) = list.get(i + (chunk_idx * CHUNK_SIZE)) else {
-                        bufman.update_with_cursor(cursor, &[u8::MAX; 8])?;
+                        bufman.update_with_cursor(cursor, &[u8::MAX; 12])?;
                         continue;
                     };
-                    let key_offset = k.serialize(bufman, cursor)?;
                     let value_offset = v.value.serialize(bufman, cursor)?;
                     bufman
-                        .seek_with_cursor(cursor, current_chunk_offset as u64 + (i as u64 * 8))?;
-                    bufman.update_u32_with_cursor(cursor, key_offset)?;
+                        .seek_with_cursor(cursor, current_chunk_offset as u64 + (i as u64 * 12))?;
+                    bufman.update_u64_with_cursor(cursor, *k)?;
                     bufman.update_u32_with_cursor(cursor, value_offset)?;
                 }
 
@@ -359,35 +339,33 @@ impl<K: TreeMapKey + SimpleSerialize + Clone, V: SimpleSerialize> SimpleSerializ
             }
 
             for chunk_idx in total_chunks_serialized..total_chunks {
-                let mut buf = Vec::with_capacity(CHUNK_SIZE * 8 + 4);
+                let mut buf = Vec::with_capacity(CHUNK_SIZE * 12 + 4);
                 for i in (chunk_idx * CHUNK_SIZE)..((chunk_idx + 1) * CHUNK_SIZE) {
                     let Some((k, v)) = list.get(i) else {
-                        buf.extend([u8::MAX; 8]);
+                        buf.extend([u8::MAX; 12]);
                         continue;
                     };
-                    let key_offset = k.serialize(bufman, cursor)?;
-                    buf.extend(key_offset.to_le_bytes());
+                    buf.extend(k.to_le_bytes());
                     let offset = v.value.serialize(bufman, cursor)?;
                     buf.extend(offset.to_le_bytes());
                 }
                 buf.extend([u8::MAX; 4]);
                 let chunk_offset = bufman.write_to_end_of_file(cursor, &buf)?;
-                bufman.seek_with_cursor(cursor, prev_chunk_offset + (CHUNK_SIZE as u64 * 8))?;
+                bufman.seek_with_cursor(cursor, prev_chunk_offset + (CHUNK_SIZE as u64 * 12))?;
                 bufman.update_u32_with_cursor(cursor, chunk_offset as u32)?;
                 prev_chunk_offset = chunk_offset;
             }
 
             self.serialized_upto.store(list.len(), Ordering::Relaxed);
         }
-        let mut chunk_buf = Vec::with_capacity(CHUNK_SIZE * 8 + 12);
+        let mut chunk_buf = Vec::with_capacity(CHUNK_SIZE * 12 + 12);
         chunk_buf.extend(len.to_le_bytes());
         for i in 0..CHUNK_SIZE {
             let Some((k, v)) = list.get(i) else {
-                chunk_buf.extend([u8::MAX; 8]);
+                chunk_buf.extend([u8::MAX; 12]);
                 continue;
             };
-            let key_offset = k.serialize(bufman, cursor)?;
-            chunk_buf.extend(key_offset.to_le_bytes());
+            chunk_buf.extend(k.to_le_bytes());
             let offset = v.value.serialize(bufman, cursor)?;
             chunk_buf.extend(offset.to_le_bytes());
         }
@@ -396,20 +374,19 @@ impl<K: TreeMapKey + SimpleSerialize + Clone, V: SimpleSerialize> SimpleSerializ
         let mut prev_chunk_offset = start + 8;
 
         for chunk_idx in 1..total_chunks {
-            chunk_buf = Vec::with_capacity(CHUNK_SIZE * 8 + 4);
+            chunk_buf = Vec::with_capacity(CHUNK_SIZE * 12 + 4);
             for i in (chunk_idx * CHUNK_SIZE)..((chunk_idx + 1) * CHUNK_SIZE) {
                 let Some((k, v)) = list.get(i) else {
-                    chunk_buf.extend([u8::MAX; 8]);
+                    chunk_buf.extend([u8::MAX; 12]);
                     continue;
                 };
-                let key_offset = k.serialize(bufman, cursor)?;
-                chunk_buf.extend(key_offset.to_le_bytes());
+                chunk_buf.extend(k.to_le_bytes());
                 let offset = v.value.serialize(bufman, cursor)?;
                 chunk_buf.extend(offset.to_le_bytes());
             }
             chunk_buf.extend([u8::MAX; 4]);
             let chunk_offset = bufman.write_to_end_of_file(cursor, &chunk_buf)?;
-            bufman.seek_with_cursor(cursor, prev_chunk_offset + (CHUNK_SIZE as u64 * 8))?;
+            bufman.seek_with_cursor(cursor, prev_chunk_offset + (CHUNK_SIZE as u64 * 12))?;
             bufman.update_u32_with_cursor(cursor, chunk_offset as u32)?;
             prev_chunk_offset = chunk_offset;
         }
@@ -441,10 +418,9 @@ impl<K: TreeMapKey + SimpleSerialize + Clone, V: SimpleSerialize> SimpleSerializ
                 if i as u64 == len {
                     break 'outer;
                 }
-                let key_offset = bufman.read_u32_with_cursor(cursor)?;
+                let key = bufman.read_u64_with_cursor(cursor)?;
                 let value_offset = bufman.read_u32_with_cursor(cursor)?;
-                let key = K::deserialize(bufman, FileOffset(key_offset))?;
-                let value = UnsafeVersionedVec::<V>::deserialize(bufman, FileOffset(value_offset))?;
+                let value = UnsafeVersionedVec::<T>::deserialize(bufman, FileOffset(value_offset))?;
                 let q = QuotientVec {
                     value,
                     sequence_idx: i as u64,
