@@ -22,7 +22,7 @@
 ## 📦 Table of Contents
 
 - [Overview](#-overview)
-- [Getting Started](#-getting-started)
+- [Getting Started](#️-getting-started)
 - [Client SDKs](#-client-sdks)
   - [Python SDK](#-python-sdk)
   - [Node.js SDK](#-nodejs-sdk)
@@ -30,7 +30,7 @@
 - [Benchmarks](https://www.cosdata.io/resources/benchmarks)
 - [Documentation](https://docs.cosdata.io/getting-started/introduction/)
 - [Contacts & Community](#-contacts--community)
-- [Show Your Support](#-show-your-support)
+- [Show Your Support](#️-show-your-support)
 
 <br>
 <br>
