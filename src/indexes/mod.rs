@@ -9,7 +9,7 @@ use crate::{
     config_loader::Config,
     models::{
         collection::Collection,
-        collection_transaction::CollectionTransaction,
+        collection_transaction::BackgroundCollectionTransaction,
         common::WaCustomError,
         types::{DocumentId, InternalId, MetaDb, VectorId},
     },
@@ -35,11 +35,13 @@ pub trait IndexOps: Send + Sync {
     type SearchOptions: Send + Sync;
     type Data: serde::Serialize + serde::de::DeserializeOwned;
 
+    fn validate_embedding(&self, embedding: Self::IndexingInput) -> Result<(), WaCustomError>;
+
     fn run_upload(
         &self,
         collection: &Collection,
         embeddings: Vec<Self::IndexingInput>,
-        transaction: &CollectionTransaction,
+        transaction: &BackgroundCollectionTransaction,
         config: &Config,
     ) -> Result<(), WaCustomError> {
         let Some(embeddings) = self.sample_embeddings(&collection.lmdb, embeddings, config)? else {
@@ -53,14 +55,14 @@ pub trait IndexOps: Send + Sync {
         &self,
         collection: &Collection,
         embeddings: Vec<Self::IndexingInput>,
-        transaction: &CollectionTransaction,
+        transaction: &BackgroundCollectionTransaction,
         config: &Config,
     ) -> Result<(), WaCustomError>;
 
     fn force_index(
         &self,
         collection: &Collection,
-        transaction: &CollectionTransaction,
+        transaction: &BackgroundCollectionTransaction,
         config: &Config,
     ) -> Result<(), WaCustomError> {
         if !self.is_configured() {
@@ -131,7 +133,7 @@ pub trait IndexOps: Send + Sync {
     fn pre_commit_transaction(
         &self,
         collection: &Collection,
-        transaction: &CollectionTransaction,
+        transaction: &BackgroundCollectionTransaction,
         config: &Config,
     ) -> Result<(), WaCustomError> {
         self.force_index(collection, transaction, config)?;

@@ -46,22 +46,21 @@ pub(crate) async fn create_collection(
         None => None,
     };
 
-    let collection = Arc::new(
-        Collection::new(
-            name,
-            description,
-            dense_vector,
-            sparse_vector,
-            tf_idf_options,
-            metadata_schema,
-            config,
-            store_raw_text,
-            lmdb,
-            hash,
-            vcs,
-        )
-        .map_err(CollectionsError::WaCustomError)?,
-    );
+    let collection = Collection::new(
+        name,
+        description,
+        dense_vector,
+        sparse_vector,
+        tf_idf_options,
+        metadata_schema,
+        config,
+        store_raw_text,
+        lmdb,
+        hash,
+        vcs,
+        ctx.config.clone(),
+    )
+    .map_err(CollectionsError::WaCustomError)?;
 
     // adding the created collection into the in-memory map
     ctx.ain_env

@@ -3,7 +3,7 @@ use crate::{
     config_loader::Config,
     models::{
         collection::Collection,
-        collection_transaction::CollectionTransaction,
+        collection_transaction::BackgroundCollectionTransaction,
         common::WaCustomError,
         meta_persist::store_values_upper_bound,
         sparse_ann_query::{SparseAnnQueryBasic, SparseAnnResult},
@@ -100,11 +100,15 @@ impl IndexOps for InvertedIndex {
     type SearchOptions = SparseSearchOptions;
     type Data = InvertedIndexData;
 
+    fn validate_embedding(&self, _embedding: Self::IndexingInput) -> Result<(), WaCustomError> {
+        Ok(())
+    }
+
     fn index_embeddings(
         &self,
         _collection: &Collection,
         embeddings: Vec<Self::IndexingInput>,
-        transaction: &CollectionTransaction,
+        transaction: &BackgroundCollectionTransaction,
         _config: &Config,
     ) -> Result<(), WaCustomError> {
         embeddings

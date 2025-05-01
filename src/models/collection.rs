@@ -1,11 +1,13 @@
 use super::buffered_io::BufferManagerFactory;
-use super::collection_transaction::CollectionTransaction;
+use super::collection_transaction::{BackgroundCollectionTransaction, CollectionTransaction};
 use super::common::WaCustomError;
+use super::indexing_manager::IndexingManager;
 use super::meta_persist::store_highest_internal_id;
 use super::paths::get_data_path;
 use super::tree_map::{TreeMap, TreeMapVec};
 use super::types::{get_collections_path, DocumentId, InternalId, MetaDb, VectorId};
 use super::versioning::{Hash, VersionControl};
+use super::wal::VectorOp;
 use crate::config_loader::Config;
 use crate::indexes::hnsw::{DenseInputEmbedding, HNSWIndex};
 use crate::indexes::inverted::types::SparsePair;
@@ -14,12 +16,12 @@ use crate::indexes::tf_idf::{TFIDFIndex, TFIDFInputEmbedding};
 use crate::indexes::IndexOps;
 use crate::metadata::{MetadataFields, MetadataSchema};
 use lmdb::{Database, Environment, Transaction, WriteFlags};
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_cbor::to_vec;
 use siphasher::sip::SipHasher24;
 use std::fs::create_dir_all;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::RwLock;
 use std::{fs, hash::Hasher, path::Path, sync::Arc};
 
 #[derive(Deserialize, Clone, Serialize, Debug)]
@@ -44,7 +46,7 @@ pub struct CollectionConfig {
     pub replication_factor: Option<u32>,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct RawVectorEmbedding {
     pub id: VectorId,
     pub document_id: Option<DocumentId>,
@@ -66,6 +68,14 @@ pub struct CollectionMetadata {
     pub store_raw_text: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexingState {
+    NotStarted,
+    Indexing,
+    Completed,
+    Failed,
+}
+
 pub struct Collection {
     pub meta: CollectionMetadata,
     pub lmdb: MetaDb,
@@ -79,6 +89,12 @@ pub struct Collection {
     pub hnsw_index: RwLock<Option<Arc<HNSWIndex>>>,
     pub inverted_index: RwLock<Option<Arc<InvertedIndex>>>,
     pub tf_idf_index: RwLock<Option<Arc<TFIDFIndex>>>,
+    // this field is actually NOT optional, the only reason it is wrapped in
+    // `Option` is to allow us to create `Collection` first without the
+    // indexing manager, because `IndexingManager`'s constructor also requires
+    // a reference to the collection
+    pub indexing_manager: RwLock<Option<IndexingManager>>,
+    pub indexing_state: RwLock<IndexingState>,
 }
 
 impl Collection {
@@ -90,12 +106,13 @@ impl Collection {
         sparse_vector_options: SparseVectorOptions,
         tf_idf_options: TFIDFOptions,
         metadata_schema: Option<MetadataSchema>,
-        config: CollectionConfig,
+        collection_config: CollectionConfig,
         store_raw_text: bool,
         lmdb: MetaDb,
         current_version: Hash,
         vcs: VersionControl,
-    ) -> Result<Self, WaCustomError> {
+        config: Config,
+    ) -> Result<Arc<Self>, WaCustomError> {
         if name.is_empty() {
             return Err(WaCustomError::InvalidParams);
         }
@@ -120,7 +137,7 @@ impl Collection {
             8192,
         );
 
-        let collection = Collection {
+        let collection = Arc::new(Collection {
             meta: CollectionMetadata {
                 name,
                 description,
@@ -128,7 +145,7 @@ impl Collection {
                 sparse_vector: sparse_vector_options,
                 tf_idf_options,
                 metadata_schema,
-                config,
+                config: collection_config,
                 store_raw_text,
             },
             lmdb,
@@ -142,7 +159,12 @@ impl Collection {
             hnsw_index: RwLock::new(None),
             inverted_index: RwLock::new(None),
             tf_idf_index: RwLock::new(None),
-        };
+            indexing_manager: RwLock::new(None),
+            indexing_state: RwLock::new(IndexingState::NotStarted),
+        });
+
+        *collection.indexing_manager.write() =
+            Some(IndexingManager::new(collection.clone(), config));
 
         let collection_path = collection.get_path();
         fs::create_dir_all(&collection_path).map_err(|e| WaCustomError::FsError(e.to_string()))?;
@@ -210,21 +232,60 @@ impl Collection {
     }
 
     pub fn get_hnsw_index(&self) -> Option<Arc<HNSWIndex>> {
-        self.hnsw_index.read().unwrap().clone()
+        self.hnsw_index.read().clone()
     }
 
     pub fn get_inverted_index(&self) -> Option<Arc<InvertedIndex>> {
-        self.inverted_index.read().unwrap().clone()
+        self.inverted_index.read().clone()
     }
 
     pub fn get_tf_idf_index(&self) -> Option<Arc<TFIDFIndex>> {
-        self.tf_idf_index.read().unwrap().clone()
+        self.tf_idf_index.read().clone()
     }
 
     pub fn run_upload(
         &self,
         embeddings: Vec<RawVectorEmbedding>,
         transaction: &CollectionTransaction,
+    ) -> Result<(), WaCustomError> {
+        for embedding in embeddings.clone() {
+            if let Some(dense_values) = embedding.dense_values {
+                if let Some(hnsw_index) = self.get_hnsw_index() {
+                    let dense_emb = DenseInputEmbedding(
+                        InternalId::from(u32::MAX),
+                        dense_values,
+                        embedding.metadata,
+                        false,
+                    );
+                    hnsw_index.validate_embedding(dense_emb)?;
+                }
+            }
+
+            if let Some(sparse_values) = embedding.sparse_values {
+                if let Some(inverted_index) = self.get_inverted_index() {
+                    let sparse_emb =
+                        SparseInputEmbedding(InternalId::from(u32::MAX), sparse_values);
+                    inverted_index.validate_embedding(sparse_emb)?;
+                }
+            }
+
+            if let Some(text) = embedding.text {
+                if let Some(tf_idf_index) = self.get_tf_idf_index() {
+                    let tf_idf_emb = TFIDFInputEmbedding(InternalId::from(u32::MAX), text);
+                    tf_idf_index.validate_embedding(tf_idf_emb)?;
+                }
+            }
+        }
+
+        transaction.wal.append(VectorOp::Upsert(embeddings))?;
+
+        Ok(())
+    }
+
+    pub fn index_embeddings(
+        &self,
+        embeddings: Vec<RawVectorEmbedding>,
+        transaction: &BackgroundCollectionTransaction,
         config: &Config,
     ) -> Result<(), WaCustomError> {
         let id_start = self
@@ -277,24 +338,36 @@ impl Collection {
             );
 
         if !dense_embs.is_empty() {
-            if let Some(hnsw_index) = &*self.hnsw_index.read().unwrap() {
+            if let Some(hnsw_index) = &*self.hnsw_index.read() {
                 hnsw_index.run_upload(self, dense_embs, transaction, config)?;
             }
         }
 
         if !sparse_embs.is_empty() {
-            if let Some(inverted_index) = &*self.inverted_index.read().unwrap() {
+            if let Some(inverted_index) = &*self.inverted_index.read() {
                 inverted_index.run_upload(self, sparse_embs, transaction, config)?;
             }
         }
 
         if !tf_idf_embs.is_empty() {
-            if let Some(tf_idf_index) = &*self.tf_idf_index.read().unwrap() {
+            if let Some(tf_idf_index) = &*self.tf_idf_index.read() {
                 tf_idf_index.run_upload(self, tf_idf_embs, transaction, config)?;
             }
         }
 
         Ok(())
+    }
+
+    pub fn trigger_indexing(&self, version_id: Hash, version_number: u16) {
+        self.indexing_manager
+            .read()
+            .as_ref()
+            .unwrap()
+            .trigger(version_id, version_number);
+    }
+
+    pub fn get_indexing_state(&self) -> IndexingState {
+        *self.indexing_state.read()
     }
 
     pub fn flush(&self, config: &Config) -> Result<(), WaCustomError> {

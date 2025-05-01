@@ -18,7 +18,7 @@ use crate::{
     models::{
         buffered_io::BufIoError,
         collection::Collection,
-        collection_transaction::CollectionTransaction,
+        collection_transaction::BackgroundCollectionTransaction,
         common::WaCustomError,
         meta_persist::store_average_document_length,
         sparse_ann_query::SparseAnnQueryBasic,
@@ -118,11 +118,15 @@ impl IndexOps for TFIDFIndex {
     type SearchOptions = TFIDFSearchOptions;
     type Data = TFIDFIndexData;
 
+    fn validate_embedding(&self, _embedding: Self::IndexingInput) -> Result<(), WaCustomError> {
+        Ok(())
+    }
+
     fn index_embeddings(
         &self,
         _collection: &Collection,
         embeddings: Vec<Self::IndexingInput>,
-        transaction: &CollectionTransaction,
+        transaction: &BackgroundCollectionTransaction,
         _config: &Config,
     ) -> Result<(), WaCustomError> {
         embeddings

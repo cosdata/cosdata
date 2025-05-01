@@ -1,12 +1,14 @@
 use super::{
     buffered_io::BufferManagerFactory,
     cache_loader::HNSWIndexCache,
-    collection::{Collection, CollectionMetadata},
+    collection::{Collection, CollectionMetadata, IndexingState},
     crypto::{DoubleSHA256Hash, SingleSHA256Hash},
+    indexing_manager::IndexingManager,
     inverted_index::InvertedIndexRoot,
     meta_persist::{
         lmdb_init_collections_db, lmdb_init_db, load_collections, retrieve_average_document_length,
-        retrieve_current_version, retrieve_highest_internal_id, retrieve_values_upper_bound,
+        retrieve_background_version, retrieve_current_version, retrieve_highest_internal_id,
+        retrieve_values_upper_bound,
     },
     paths::get_data_path,
     prob_lazy_load::lazy_item::FileIndex,
@@ -581,11 +583,11 @@ impl CollectionsMap {
 
             let id_counter_value = retrieve_highest_internal_id(&lmdb)?.unwrap_or_default();
 
-            let collection = Collection {
+            let collection = Arc::new(Collection {
                 meta: collection_meta,
                 lmdb,
-                current_version: RwLock::new(current_version),
-                current_open_transaction: RwLock::new(None),
+                current_version: parking_lot::RwLock::new(current_version),
+                current_open_transaction: parking_lot::RwLock::new(None),
                 vcs,
                 internal_to_external_map: TreeMap::deserialize(
                     internal_to_external_map_bufmans,
@@ -600,14 +602,34 @@ impl CollectionsMap {
                     config.tree_map_serialized_parts,
                 )?,
                 internal_id_counter: AtomicU32::new(id_counter_value),
-                hnsw_index: RwLock::new(hnsw_index),
-                inverted_index: RwLock::new(inverted_index),
-                tf_idf_index: RwLock::new(tf_idf_index),
-            };
+                hnsw_index: parking_lot::RwLock::new(hnsw_index),
+                inverted_index: parking_lot::RwLock::new(inverted_index),
+                tf_idf_index: parking_lot::RwLock::new(tf_idf_index),
+                indexing_manager: parking_lot::RwLock::new(None),
+                indexing_state: parking_lot::RwLock::new(IndexingState::NotStarted),
+            });
+
+            *collection.indexing_manager.write() =
+                Some(IndexingManager::new(collection.clone(), config.clone()));
+
+            let background_version = retrieve_background_version(&collection.lmdb)?;
+
+            if background_version != current_version {
+                let all_versions = collection.vcs.get_branch_versions("main")?;
+                let mut index = false;
+                for (hash, info) in all_versions {
+                    if hash == background_version {
+                        index = true;
+                    }
+                    if index {
+                        collection.trigger_indexing(hash, *info.version);
+                    }
+                }
+            }
 
             collections_map
                 .inner_collections
-                .insert(collection.meta.name.clone(), Arc::new(collection));
+                .insert(collection.meta.name.clone(), collection);
         }
         Ok(collections_map)
     }
@@ -939,7 +961,7 @@ impl CollectionsMap {
             &self.lmdb_env,
             self.lmdb_hnsw_index_db,
         )?;
-        *collection.hnsw_index.write().unwrap() = Some(hnsw_index);
+        *collection.hnsw_index.write() = Some(hnsw_index);
         Ok(())
     }
 
@@ -953,7 +975,7 @@ impl CollectionsMap {
             &self.lmdb_env,
             self.lmdb_inverted_index_db,
         )?;
-        *collection.inverted_index.write().unwrap() = Some(inverted_index);
+        *collection.inverted_index.write() = Some(inverted_index);
         Ok(())
     }
 
@@ -967,7 +989,7 @@ impl CollectionsMap {
             &self.lmdb_env,
             self.lmdb_tf_idf_index_db,
         )?;
-        *collection.tf_idf_index.write().unwrap() = Some(tf_idf_index);
+        *collection.tf_idf_index.write() = Some(tf_idf_index);
         Ok(())
     }
 
@@ -998,7 +1020,7 @@ impl CollectionsMap {
 
     pub fn remove_hnsw_index(&self, name: &str) -> Result<Option<Arc<HNSWIndex>>, WaCustomError> {
         match self.inner_collections.get(name) {
-            Some(collection) => match collection.hnsw_index.write().unwrap().take() {
+            Some(collection) => match collection.hnsw_index.write().take() {
                 Some(hnsw_index) => {
                     HNSWIndex::delete(&self.lmdb_env, self.lmdb_hnsw_index_db, name)?;
                     Ok(Some(hnsw_index))
@@ -1014,7 +1036,7 @@ impl CollectionsMap {
         name: &str,
     ) -> Result<Option<Arc<InvertedIndex>>, WaCustomError> {
         match self.inner_collections.get(name) {
-            Some(collection) => match collection.inverted_index.write().unwrap().take() {
+            Some(collection) => match collection.inverted_index.write().take() {
                 Some(inverted_index) => {
                     InvertedIndex::delete(&self.lmdb_env, self.lmdb_inverted_index_db, name)?;
                     Ok(Some(inverted_index))
@@ -1030,7 +1052,7 @@ impl CollectionsMap {
         name: &str,
     ) -> Result<Option<Arc<TFIDFIndex>>, WaCustomError> {
         match self.inner_collections.get(name) {
-            Some(collection) => match collection.tf_idf_index.write().unwrap().take() {
+            Some(collection) => match collection.tf_idf_index.write().take() {
                 Some(tf_idf_index) => {
                     TFIDFIndex::delete(&self.lmdb_env, self.lmdb_tf_idf_index_db, name)?;
                     Ok(Some(tf_idf_index))

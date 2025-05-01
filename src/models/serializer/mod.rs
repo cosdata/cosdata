@@ -48,7 +48,7 @@ pub fn read_len(bufman: &BufferManager, cursor: u64) -> Result<u16, BufIoError> 
     }
 }
 
-fn read_string(bufman: &BufferManager, cursor: u64) -> Result<String, BufIoError> {
+pub fn read_string(bufman: &BufferManager, cursor: u64) -> Result<String, BufIoError> {
     let len = read_len(bufman, cursor)? as usize;
     let mut buf = vec![0; len];
     bufman.read_with_cursor(cursor, &mut buf)?;
@@ -56,7 +56,7 @@ fn read_string(bufman: &BufferManager, cursor: u64) -> Result<String, BufIoError
         .map_err(|err| BufIoError::Io(io::Error::new(io::ErrorKind::InvalidData, err)))
 }
 
-fn read_opt_string(bufman: &BufferManager, cursor: u64) -> Result<Option<String>, BufIoError> {
+pub fn read_opt_string(bufman: &BufferManager, cursor: u64) -> Result<Option<String>, BufIoError> {
     let len = read_len(bufman, cursor)? as usize;
     if len == 0 {
         return Ok(None);

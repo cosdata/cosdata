@@ -294,6 +294,7 @@ pub enum WaCustomError {
     NotFound(String),
     ConfigError(String),
     NotImplemented(String),
+    InvalidData(String),
 }
 
 impl std::error::Error for WaCustomError {}
@@ -318,6 +319,7 @@ impl fmt::Display for WaCustomError {
             WaCustomError::NotFound(msg) => write!(f, "{} Not Found!", msg),
             WaCustomError::ConfigError(msg) => write!(f, "{} Config file reading error: ", msg),
             WaCustomError::NotImplemented(msg) => write!(f, "Not Implemented: {}", msg),
+            WaCustomError::InvalidData(msg) => write!(f, "Invalid data: {}", msg),
         }
     }
 }
