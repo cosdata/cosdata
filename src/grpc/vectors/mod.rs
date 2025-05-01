@@ -6,6 +6,7 @@ use crate::indexes::hnsw::{DenseSearchInput, DenseSearchOptions};
 use crate::indexes::inverted::{SparseSearchInput, SparseSearchOptions};
 use crate::indexes::tf_idf::{TFIDFSearchInput, TFIDFSearchOptions};
 use crate::indexes::IndexOps;
+use crate::models::collection::IndexingState;
 use crate::models::common::WaCustomError;
 use crate::models::types::VectorId;
 use crate::{app_context::AppContext, indexes::inverted::types::SparsePair};
@@ -87,6 +88,11 @@ crate::cfg_grpc! {
                     Status::not_found(format!("Collection '{}' not found", req.collection_id))
                 })?;
 
+            let warning = (collection.get_indexing_state() == IndexingState::Indexing).then(|| {
+                "Embeddings are currently being indexed; some results may be temporarily unavailable."
+                    .to_string()
+            });
+
             match req.query {
                 // Handle dense vector similarity search
                 Some(super::proto::find_similar_vectors_request::Query::Dense(dense)) => {
@@ -133,6 +139,7 @@ crate::cfg_grpc! {
                                 })
                                 .collect(),
                         }),
+                        warning,
                     }))
                 }
 
@@ -179,6 +186,7 @@ crate::cfg_grpc! {
                                 })
                                 .collect(),
                         }),
+                        warning,
                     }))
                 }
                 Some(super::proto::find_similar_vectors_request::Query::TfIdf(idf)) => {
@@ -216,6 +224,7 @@ crate::cfg_grpc! {
                                 })
                                 .collect(),
                         }),
+                        warning,
                     }))
                 }
                 None => Err(Status::invalid_argument("Query must be specified")),
