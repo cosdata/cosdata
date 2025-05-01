@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use crate::{
-    api::vectordb::vectors::dtos::CreateVectorDto, app_context::AppContext,
-    models::versioning::Hash,
+    api::vectordb::vectors::dtos::CreateVectorDto,
+    app_context::AppContext,
+    models::{collection_transaction::TransactionStatus, versioning::Hash},
 };
 
 use super::{dtos::CreateTransactionResponseDto, error::TransactionError, repo};
@@ -20,6 +21,14 @@ pub(crate) async fn commit_transaction(
     transaction_id: Hash,
 ) -> Result<(), TransactionError> {
     repo::commit_transaction(ctx, collection_id, transaction_id).await
+}
+
+pub(crate) async fn get_transaction_status(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    transaction_id: Hash,
+) -> Result<TransactionStatus, TransactionError> {
+    repo::get_transaction_status(ctx, collection_id, transaction_id).await
 }
 
 pub(crate) async fn create_vector_in_transaction(

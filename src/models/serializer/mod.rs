@@ -8,6 +8,7 @@ mod pagepool;
 mod quotients_map;
 mod raw_vector_embedding;
 mod storage;
+mod transaction_status;
 mod tree_map;
 mod versioned_item;
 mod versioned_pagepool;
@@ -17,6 +18,8 @@ mod versioned_vec;
 mod tests;
 
 use std::io;
+
+use parking_lot::RwLock;
 
 use super::buffered_io::{BufIoError, BufferManager, BufferManagerFactory};
 use super::types::{DocumentId, FileOffset, InternalId, VectorId};
@@ -188,5 +191,15 @@ impl SimpleSerialize for (u32, f32) {
         let val = bufman.read_f32_with_cursor(cursor)?;
         bufman.close_cursor(cursor)?;
         Ok((idx, val))
+    }
+}
+
+impl<T: SimpleSerialize> SimpleSerialize for RwLock<T> {
+    fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
+        self.read().serialize(bufman, cursor)
+    }
+
+    fn deserialize(bufman: &BufferManager, offset: FileOffset) -> Result<Self, BufIoError> {
+        Ok(Self::new(T::deserialize(bufman, offset)?))
     }
 }

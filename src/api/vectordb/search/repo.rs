@@ -9,7 +9,7 @@ use crate::indexes::hnsw::{DenseSearchInput, DenseSearchOptions};
 use crate::indexes::inverted::{SparseSearchInput, SparseSearchOptions};
 use crate::indexes::tf_idf::{TFIDFSearchInput, TFIDFSearchOptions};
 use crate::indexes::{IndexOps, SearchResult};
-use crate::models::collection::IndexingState;
+use crate::models::collection_transaction::TransactionStatus;
 use crate::models::types::{DocumentId, VectorId};
 
 pub(crate) async fn dense_search(
@@ -27,7 +27,11 @@ pub(crate) async fn dense_search(
         SearchError::IndexNotFound(format!("HNSW index for collection '{}'", collection_id))
     })?;
 
-    let warning = (collection.get_indexing_state() == IndexingState::Indexing).then(|| {
+    let warning = matches!(
+        collection.get_latest_transaction_status(),
+        Some(TransactionStatus::NotStarted { .. }) | Some(TransactionStatus::InProgress { .. })
+    )
+    .then(|| {
         "Embeddings are currently being indexed; some results may be temporarily unavailable."
             .to_string()
     });
@@ -63,7 +67,11 @@ pub(crate) async fn batch_dense_search(
         SearchError::IndexNotFound(format!("HNSW index for collection '{}'", collection_id))
     })?;
 
-    let warning = (collection.get_indexing_state() == IndexingState::Indexing).then(|| {
+    let warning = matches!(
+        collection.get_latest_transaction_status(),
+        Some(TransactionStatus::NotStarted { .. }) | Some(TransactionStatus::InProgress { .. })
+    )
+    .then(|| {
         "Embeddings are currently being indexed; some results may be temporarily unavailable."
             .to_string()
     });
@@ -103,7 +111,11 @@ pub(crate) async fn sparse_search(
         SearchError::IndexNotFound(format!("Sparse index for collection '{}'", collection_id))
     })?;
 
-    let warning = (collection.get_indexing_state() == IndexingState::Indexing).then(|| {
+    let warning = matches!(
+        collection.get_latest_transaction_status(),
+        Some(TransactionStatus::NotStarted { .. }) | Some(TransactionStatus::InProgress { .. })
+    )
+    .then(|| {
         "Embeddings are currently being indexed; some results may be temporarily unavailable."
             .to_string()
     });
@@ -140,7 +152,11 @@ pub(crate) async fn batch_sparse_search(
         SearchError::IndexNotFound(format!("Sparse index for collection '{}'", collection_id))
     })?;
 
-    let warning = (collection.get_indexing_state() == IndexingState::Indexing).then(|| {
+    let warning = matches!(
+        collection.get_latest_transaction_status(),
+        Some(TransactionStatus::NotStarted { .. }) | Some(TransactionStatus::InProgress { .. })
+    )
+    .then(|| {
         "Embeddings are currently being indexed; some results may be temporarily unavailable."
             .to_string()
     });
@@ -304,7 +320,11 @@ pub(crate) async fn hybrid_search(
         }
     };
 
-    let warning = (collection.get_indexing_state() == IndexingState::Indexing).then(|| {
+    let warning = matches!(
+        collection.get_latest_transaction_status(),
+        Some(TransactionStatus::NotStarted { .. }) | Some(TransactionStatus::InProgress { .. })
+    )
+    .then(|| {
         "Embeddings are currently being indexed; some results may be temporarily unavailable."
             .to_string()
     });
@@ -356,7 +376,11 @@ pub(crate) async fn tf_idf_search(
         SearchError::IndexNotFound(format!("TF-IDF index for collection '{}'", collection_id))
     })?;
 
-    let warning = (collection.get_indexing_state() == IndexingState::Indexing).then(|| {
+    let warning = matches!(
+        collection.get_latest_transaction_status(),
+        Some(TransactionStatus::NotStarted { .. }) | Some(TransactionStatus::InProgress { .. })
+    )
+    .then(|| {
         "Embeddings are currently being indexed; some results may be temporarily unavailable."
             .to_string()
     });
@@ -392,7 +416,11 @@ pub(crate) async fn batch_tf_idf_search(
         SearchError::IndexNotFound(format!("TF-IDF index for collection '{}'", collection_id))
     })?;
 
-    let warning = (collection.get_indexing_state() == IndexingState::Indexing).then(|| {
+    let warning = matches!(
+        collection.get_latest_transaction_status(),
+        Some(TransactionStatus::NotStarted { .. }) | Some(TransactionStatus::InProgress { .. })
+    )
+    .then(|| {
         "Embeddings are currently being indexed; some results may be temporarily unavailable."
             .to_string()
     });

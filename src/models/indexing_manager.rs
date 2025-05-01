@@ -1,15 +1,22 @@
 use std::{
     fs,
-    sync::{mpsc, Arc},
+    sync::{
+        atomic::{AtomicU32, Ordering},
+        mpsc, Arc,
+    },
     thread::{self, JoinHandle},
 };
+
+use chrono::Utc;
 
 use crate::config_loader::Config;
 
 use super::{
     buffered_io::BufIoError,
-    collection::{Collection, IndexingState},
-    collection_transaction::BackgroundCollectionTransaction,
+    collection::Collection,
+    collection_transaction::{
+        BackgroundCollectionTransaction, Progress, Summary, TransactionStatus,
+    },
     common::WaCustomError,
     meta_persist::update_background_version,
     versioning::Hash,
@@ -27,29 +34,86 @@ impl IndexingManager {
 
         let thread = thread::spawn(move || {
             for (version_id, version_number) in receiver {
-                *collection.indexing_state.write() = IndexingState::Indexing;
                 let txn = BackgroundCollectionTransaction::from_version_id_and_number(
                     collection.clone(),
                     version_id,
                     version_number,
                 )?;
                 let wal = WALFile::new(&collection.get_path(), version_id)?;
+                let vectors_count = wal.vectors_count();
+                let status = collection
+                    .transaction_status_map
+                    .get_latest(&version_id)
+                    .unwrap();
+                let start = Utc::now();
+                *status.write() = TransactionStatus::InProgress {
+                    progress: Progress {
+                        percentage_done: 0.0,
+                        records_indexed: 0,
+                        total_records: vectors_count,
+                        rate_per_second: 0.0,
+                        estimated_time_remaining_seconds: u32::MAX,
+                    },
+                    last_updated: start,
+                };
+                let records_indexed = AtomicU32::new(0);
                 thread::scope(|s| {
                     while let Some(op) = wal.read()? {
                         match op {
                             VectorOp::Upsert(embeddings) => {
-                                s.spawn(|| collection.index_embeddings(embeddings, &txn, &config));
+                                s.spawn(|| {
+                                    let len = embeddings.len() as u32;
+                                    collection.index_embeddings(embeddings, &txn, &config)?;
+                                    let old_count =
+                                        records_indexed.fetch_add(len, Ordering::AcqRel);
+                                    let new_count = old_count + len;
+                                    let now = Utc::now();
+                                    let delta = now - start;
+                                    let delta_seconds = delta.num_seconds() as f32;
+                                    let rate_per_second = new_count as f32 / delta_seconds;
+                                    let mut status = status.write();
+                                    *status = TransactionStatus::InProgress {
+                                        progress: Progress {
+                                            percentage_done: (new_count as f32
+                                                / vectors_count as f32)
+                                                * 100.0,
+                                            records_indexed: new_count,
+                                            total_records: vectors_count,
+                                            rate_per_second,
+                                            estimated_time_remaining_seconds: (vectors_count
+                                                .saturating_sub(new_count)
+                                                as f32
+                                                / rate_per_second)
+                                                .ceil()
+                                                as u32,
+                                        },
+                                        last_updated: now,
+                                    };
+                                    Ok::<_, WaCustomError>(())
+                                });
                             }
                             VectorOp::Delete(_vector_id) => unimplemented!(),
                         }
                     }
                     Ok::<_, WaCustomError>(())
                 })?;
+                let end = Utc::now();
+                let delta = end - start;
+                let delta_seconds = delta.num_seconds() as u32;
                 txn.pre_commit(&collection, &config)?;
                 update_background_version(&collection.lmdb, version_id)?;
-                *collection.indexing_state.write() = IndexingState::Completed;
                 fs::remove_file(collection.get_path().join(format!("{}.wal", *version_id)))
                     .map_err(BufIoError::Io)?;
+                let total_records_indexed = records_indexed.load(Ordering::Relaxed);
+                *status.write() = TransactionStatus::Complete {
+                    summary: Summary {
+                        total_records_indexed,
+                        duration_seconds: delta_seconds,
+                        average_rate_per_second: total_records_indexed as f32
+                            / delta_seconds as f32,
+                    },
+                    last_updated: end,
+                };
             }
             Ok(())
         });

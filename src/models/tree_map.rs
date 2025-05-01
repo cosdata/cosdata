@@ -486,7 +486,7 @@ impl<K: TreeMapKey, V> TreeMap<K, V> {
     }
 }
 
-impl<K: TreeMapKey + SimpleSerialize + Clone, V: SimpleSerialize> TreeMap<K, V> {
+impl<K, V: SimpleSerialize> TreeMap<K, V> {
     pub fn serialize(&self, file_parts: u8) -> Result<(), BufIoError> {
         let bufman = self.bufmans.get(0)?;
         let cursor = bufman.open_cursor()?;
@@ -543,7 +543,7 @@ impl<K: TreeMapKey, V> TreeMapVec<K, V> {
     }
 }
 
-impl<K: TreeMapKey + SimpleSerialize + Clone, V: SimpleSerialize> TreeMapVec<K, V> {
+impl<K, V: SimpleSerialize> TreeMapVec<K, V> {
     pub fn serialize(&self, file_parts: u8) -> Result<(), BufIoError> {
         let bufman = self.bufmans.get(0)?;
         let cursor = bufman.open_cursor()?;

@@ -7,6 +7,8 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use super::tree_map::TreeMapKey;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BranchId(u64);
 
@@ -72,6 +74,12 @@ impl Deref for Hash {
 
     fn deref(&self) -> &u32 {
         &self.0
+    }
+}
+
+impl TreeMapKey for Hash {
+    fn key(&self) -> u64 {
+        self.0 as u64
     }
 }
 

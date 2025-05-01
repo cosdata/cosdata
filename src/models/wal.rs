@@ -1,4 +1,13 @@
-use std::{collections::HashMap, fs::OpenOptions, io, path::Path, sync::Arc};
+use std::{
+    collections::HashMap,
+    fs::OpenOptions,
+    io,
+    path::Path,
+    sync::{
+        atomic::{AtomicU32, Ordering},
+        Arc,
+    },
+};
 
 use parking_lot::Mutex;
 
@@ -22,6 +31,7 @@ pub struct WALFile {
     bufman: BufferManager,
     cursor: u64,
     read_lock: Mutex<()>,
+    vectors_count: AtomicU32,
 }
 
 impl WALFile {
@@ -37,15 +47,27 @@ impl WALFile {
 
         let bufman = BufferManager::new(file, 8192)?;
         let cursor = bufman.open_cursor()?;
+        let vectors_count = bufman.read_u32_with_cursor(cursor)?;
+        bufman.seek_with_cursor(cursor, 0)?;
+        bufman.update_u32_with_cursor(cursor, vectors_count)?;
 
         Ok(Self {
             bufman,
             cursor,
             read_lock: Mutex::new(()),
+            vectors_count: AtomicU32::new(vectors_count),
         })
     }
 
+    pub fn vectors_count(&self) -> u32 {
+        self.vectors_count.load(Ordering::Relaxed)
+    }
+
     pub fn flush(&self) -> Result<(), BufIoError> {
+        let cursor = self.bufman.open_cursor()?;
+        self.bufman
+            .update_u32_with_cursor(cursor, self.vectors_count.load(Ordering::Acquire))?;
+        self.bufman.close_cursor(cursor)?;
         self.bufman.flush()
     }
 
@@ -56,6 +78,8 @@ impl WALFile {
 
         match op {
             VectorOp::Upsert(vectors) => {
+                self.vectors_count
+                    .fetch_add(vectors.len() as u32, Ordering::Relaxed);
                 write_len(&mut buf, vectors.len() as u16);
                 for vector in vectors {
                     write_len(&mut buf, vector.id.len() as u16);

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use self::vectors::dtos::CreateVectorDto;
 
 use super::{dtos::CreateTransactionResponseDto, error::TransactionError};
-use crate::models::collection_transaction::CollectionTransaction;
+use crate::models::collection_transaction::{CollectionTransaction, TransactionStatus};
 use crate::models::meta_persist::update_current_version;
 use crate::models::versioning::Hash;
 use crate::{api::vectordb::vectors, app_context::AppContext};
@@ -79,6 +79,26 @@ pub(crate) async fn commit_transaction(
     collection.trigger_indexing(current_transaction_id, version_number);
 
     Ok(())
+}
+
+pub(crate) async fn get_transaction_status(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    transaction_id: Hash,
+) -> Result<TransactionStatus, TransactionError> {
+    let collection = ctx
+        .ain_env
+        .collections_map
+        .get_collection(collection_id)
+        .ok_or(TransactionError::CollectionNotFound)?;
+
+    let status = collection
+        .transaction_status_map
+        .get_latest(&transaction_id)
+        .ok_or(TransactionError::NotFound)?
+        .read();
+
+    Ok(status.clone())
 }
 
 pub(crate) async fn create_vector_in_transaction(

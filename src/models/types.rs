@@ -1,7 +1,7 @@
 use super::{
     buffered_io::BufferManagerFactory,
     cache_loader::HNSWIndexCache,
-    collection::{Collection, CollectionMetadata, IndexingState},
+    collection::{Collection, CollectionMetadata},
     crypto::{DoubleSHA256Hash, SingleSHA256Hash},
     indexing_manager::IndexingManager,
     inverted_index::InvertedIndexRoot,
@@ -561,23 +561,30 @@ impl CollectionsMap {
                 None
             };
 
-            let collections_path = get_collections_path().join(&collection_meta.name);
+            let collections_path: Arc<Path> =
+                get_collections_path().join(&collection_meta.name).into();
 
             let internal_to_external_map_bufmans = BufferManagerFactory::new(
-                collections_path.clone().into(),
+                collections_path.clone(),
                 |root, part| root.join(format!("{}.itoe", part)),
                 8192,
             );
 
             let external_to_internal_map_bufmans = BufferManagerFactory::new(
-                collections_path.clone().into(),
+                collections_path.clone(),
                 |root, part| root.join(format!("{}.etoi", part)),
                 8192,
             );
 
             let document_to_internals_map_bufmans = BufferManagerFactory::new(
-                collections_path.into(),
+                collections_path.clone(),
                 |root, part| root.join(format!("{}.dtoi", part)),
+                8192,
+            );
+
+            let transaction_status_map_bufmans = BufferManagerFactory::new(
+                collections_path.clone(),
+                |root, part| root.join(format!("{}.txn_status", part)),
                 8192,
             );
 
@@ -601,12 +608,15 @@ impl CollectionsMap {
                     document_to_internals_map_bufmans,
                     config.tree_map_serialized_parts,
                 )?,
+                transaction_status_map: TreeMap::deserialize(
+                    transaction_status_map_bufmans,
+                    config.tree_map_serialized_parts,
+                )?,
                 internal_id_counter: AtomicU32::new(id_counter_value),
                 hnsw_index: parking_lot::RwLock::new(hnsw_index),
                 inverted_index: parking_lot::RwLock::new(inverted_index),
                 tf_idf_index: parking_lot::RwLock::new(tf_idf_index),
                 indexing_manager: parking_lot::RwLock::new(None),
-                indexing_state: parking_lot::RwLock::new(IndexingState::NotStarted),
             });
 
             *collection.indexing_manager.write() =

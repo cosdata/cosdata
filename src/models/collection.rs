@@ -1,5 +1,7 @@
 use super::buffered_io::BufferManagerFactory;
-use super::collection_transaction::{BackgroundCollectionTransaction, CollectionTransaction};
+use super::collection_transaction::{
+    BackgroundCollectionTransaction, CollectionTransaction, TransactionStatus,
+};
 use super::common::WaCustomError;
 use super::indexing_manager::IndexingManager;
 use super::meta_persist::store_highest_internal_id;
@@ -15,6 +17,7 @@ use crate::indexes::inverted::{InvertedIndex, SparseInputEmbedding};
 use crate::indexes::tf_idf::{TFIDFIndex, TFIDFInputEmbedding};
 use crate::indexes::IndexOps;
 use crate::metadata::{MetadataFields, MetadataSchema};
+use chrono::{DateTime, TimeZone, Utc};
 use lmdb::{Database, Environment, Transaction, WriteFlags};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -68,12 +71,29 @@ pub struct CollectionMetadata {
     pub store_raw_text: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IndexingState {
-    NotStarted,
-    Indexing,
-    Completed,
-    Failed,
+#[derive(Debug, Serialize)]
+pub struct CollectionIndexingStatusSummary {
+    pub total_transactions: u32,
+    pub completed_transactions: u32,
+    pub in_progress_transactions: u32,
+    pub not_started_transactions: u32,
+    pub total_records_indexed_completed: u64,
+    pub average_rate_per_second_completed: f32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TransactionStatusWithTransactionId {
+    pub transaction_id: Hash,
+    #[serde(flatten)]
+    pub status: TransactionStatus,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CollectionIndexingStatus {
+    pub collection_name: String,
+    pub status_summary: CollectionIndexingStatusSummary,
+    pub active_transactions: Vec<TransactionStatusWithTransactionId>,
+    pub last_synced: DateTime<Utc>,
 }
 
 pub struct Collection {
@@ -85,6 +105,7 @@ pub struct Collection {
     pub internal_to_external_map: TreeMap<InternalId, RawVectorEmbedding>,
     pub external_to_internal_map: TreeMap<VectorId, InternalId>,
     pub document_to_internals_map: TreeMapVec<DocumentId, InternalId>,
+    pub transaction_status_map: TreeMap<Hash, RwLock<TransactionStatus>>,
     pub internal_id_counter: AtomicU32,
     pub hnsw_index: RwLock<Option<Arc<HNSWIndex>>>,
     pub inverted_index: RwLock<Option<Arc<InvertedIndex>>>,
@@ -94,7 +115,6 @@ pub struct Collection {
     // indexing manager, because `IndexingManager`'s constructor also requires
     // a reference to the collection
     pub indexing_manager: RwLock<Option<IndexingManager>>,
-    pub indexing_state: RwLock<IndexingState>,
 }
 
 impl Collection {
@@ -117,23 +137,29 @@ impl Collection {
             return Err(WaCustomError::InvalidParams);
         }
 
-        let collections_path = get_collections_path().join(&name);
+        let collections_path: Arc<Path> = get_collections_path().join(&name).into();
 
         let internal_to_external_map_bufmans = BufferManagerFactory::new(
-            collections_path.clone().into(),
+            collections_path.clone(),
             |root, part| root.join(format!("{}.itoe", part)),
             8192,
         );
 
         let external_to_internal_map_bufmans = BufferManagerFactory::new(
-            collections_path.clone().into(),
+            collections_path.clone(),
             |root, part| root.join(format!("{}.etoi", part)),
             8192,
         );
 
         let document_to_internals_map_bufmans = BufferManagerFactory::new(
-            collections_path.into(),
+            collections_path.clone(),
             |root, part| root.join(format!("{}.dtoi", part)),
+            8192,
+        );
+
+        let transaction_status_map_bufmans = BufferManagerFactory::new(
+            collections_path,
+            |root, part| root.join(format!("{}.txn_status", part)),
             8192,
         );
 
@@ -155,12 +181,12 @@ impl Collection {
             internal_to_external_map: TreeMap::new(internal_to_external_map_bufmans),
             external_to_internal_map: TreeMap::new(external_to_internal_map_bufmans),
             document_to_internals_map: TreeMapVec::new(document_to_internals_map_bufmans),
+            transaction_status_map: TreeMap::new(transaction_status_map_bufmans),
             internal_id_counter: AtomicU32::new(0),
             hnsw_index: RwLock::new(None),
             inverted_index: RwLock::new(None),
             tf_idf_index: RwLock::new(None),
             indexing_manager: RwLock::new(None),
-            indexing_state: RwLock::new(IndexingState::NotStarted),
         });
 
         *collection.indexing_manager.write() =
@@ -359,6 +385,13 @@ impl Collection {
     }
 
     pub fn trigger_indexing(&self, version_id: Hash, version_number: u16) {
+        self.transaction_status_map.insert(
+            version_id,
+            &version_id,
+            RwLock::new(TransactionStatus::NotStarted {
+                last_updated: Utc::now(),
+            }),
+        );
         self.indexing_manager
             .read()
             .as_ref()
@@ -366,8 +399,13 @@ impl Collection {
             .trigger(version_id, version_number);
     }
 
-    pub fn get_indexing_state(&self) -> IndexingState {
-        *self.indexing_state.read()
+    pub fn get_latest_transaction_status(&self) -> Option<TransactionStatus> {
+        Some(
+            self.transaction_status_map
+                .get_latest(&self.current_version.read())?
+                .read()
+                .clone(),
+        )
     }
 
     pub fn flush(&self, config: &Config) -> Result<(), WaCustomError> {
@@ -377,7 +415,71 @@ impl Collection {
             .serialize(config.tree_map_serialized_parts)?;
         self.document_to_internals_map
             .serialize(config.tree_map_serialized_parts)?;
+        self.transaction_status_map
+            .serialize(config.tree_map_serialized_parts)?;
         store_highest_internal_id(&self.lmdb, self.internal_id_counter.load(Ordering::Relaxed))?;
         Ok(())
+    }
+
+    pub fn indexing_status(&self) -> Result<CollectionIndexingStatus, WaCustomError> {
+        let mut active_transactions = Vec::new();
+        let mut last_synced = Utc.timestamp_opt(0, 0).unwrap();
+        let mut total_transactions = 0;
+        let mut completed_transactions = 0;
+        let mut in_progress_transactions = 0;
+        let mut not_started_transactions = 0;
+        let mut total_records_indexed_completed = 0u64;
+        let mut rate_per_second_acc = 0.0;
+
+        for (hash, _) in self.vcs.get_branch_versions("main")? {
+            let Some(status) = self.transaction_status_map.get_latest(&hash) else {
+                continue;
+            };
+            total_transactions += 1;
+            let status = status.read();
+            match &*status {
+                TransactionStatus::NotStarted { last_updated } => {
+                    last_synced = last_synced.max(*last_updated);
+                    not_started_transactions += 1;
+                }
+                TransactionStatus::InProgress {
+                    progress,
+                    last_updated,
+                } => {
+                    last_synced = last_synced.max(*last_updated);
+                    total_records_indexed_completed += progress.records_indexed as u64;
+                    rate_per_second_acc += progress.rate_per_second;
+                    in_progress_transactions += 1;
+                }
+                TransactionStatus::Complete {
+                    summary,
+                    last_updated,
+                } => {
+                    last_synced = last_synced.max(*last_updated);
+                    total_records_indexed_completed += summary.total_records_indexed as u64;
+                    rate_per_second_acc += summary.average_rate_per_second;
+                    completed_transactions += 1;
+                }
+            }
+            active_transactions.push(TransactionStatusWithTransactionId {
+                transaction_id: hash,
+                status: status.clone(),
+            });
+        }
+
+        Ok(CollectionIndexingStatus {
+            collection_name: self.meta.name.clone(),
+            status_summary: CollectionIndexingStatusSummary {
+                total_transactions,
+                completed_transactions,
+                in_progress_transactions,
+                not_started_transactions,
+                total_records_indexed_completed,
+                average_rate_per_second_completed: rate_per_second_acc
+                    / (in_progress_transactions + completed_transactions) as f32,
+            },
+            active_transactions,
+            last_synced,
+        })
     }
 }

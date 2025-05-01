@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use crate::{app_context::AppContext, models::collection::Collection};
+use crate::{
+    app_context::AppContext,
+    models::collection::{Collection, CollectionIndexingStatus},
+};
 
 use super::{
     dtos::{
@@ -41,6 +44,14 @@ pub(crate) async fn get_collection_by_id(
 ) -> Result<Arc<Collection>, CollectionsError> {
     let collection = repo::get_collection_by_name(ctx, collection_id).await?;
     Ok(collection)
+}
+
+pub(crate) async fn get_collection_indexing_status(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+) -> Result<CollectionIndexingStatus, CollectionsError> {
+    let status = repo::get_collection_indexing_status(ctx, collection_id).await?;
+    Ok(status)
 }
 
 /// deletes a collection by its id
