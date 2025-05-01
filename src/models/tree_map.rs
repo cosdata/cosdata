@@ -411,7 +411,7 @@ impl<T> QuotientsMapVec<T> {
         );
     }
 
-    fn get<'a>(&'a self, quotient: u64) -> Option<UnsafeVersionedVecIter<'a, T>> {
+    fn get(&self, quotient: u64) -> Option<UnsafeVersionedVecIter<'_, T>> {
         self.map.lookup(&quotient).map(|q| q.value.iter())
     }
 }
