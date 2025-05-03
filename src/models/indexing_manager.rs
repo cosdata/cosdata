@@ -58,10 +58,11 @@ impl IndexingManager {
                 };
                 let records_indexed = AtomicU32::new(0);
                 thread::scope(|s| {
+                    let mut handles = Vec::new();
                     while let Some(op) = wal.read()? {
                         match op {
                             VectorOp::Upsert(embeddings) => {
-                                s.spawn(|| {
+                                let handle = s.spawn(|| {
                                     let len = embeddings.len() as u32;
                                     collection.index_embeddings(embeddings, &txn, &config)?;
                                     let old_count =
@@ -91,9 +92,13 @@ impl IndexingManager {
                                     };
                                     Ok::<_, WaCustomError>(())
                                 });
+                                handles.push(handle);
                             }
                             VectorOp::Delete(_vector_id) => unimplemented!(),
                         }
+                    }
+                    for handle in handles {
+                        handle.join().unwrap()?;
                     }
                     Ok::<_, WaCustomError>(())
                 })?;
