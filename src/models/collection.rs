@@ -336,9 +336,11 @@ impl Collection {
                     if let Some(values) = dense_values {
                         acc.0
                             .push(DenseInputEmbedding(internal_id, values, metadata, false));
-                    } else if let Some(values) = sparse_values {
+                    }
+                    if let Some(values) = sparse_values {
                         acc.1.push(SparseInputEmbedding(internal_id, values));
-                    } else if let Some(text) = text {
+                    }
+                    if let Some(text) = text {
                         acc.2.push(TFIDFInputEmbedding(internal_id, text));
                     }
 
