@@ -1,18 +1,4 @@
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
-
-use std::{
-    hash::Hasher,
-    path::PathBuf,
-    sync::{
-        atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
-        RwLock,
-    },
-};
-
-use rustc_hash::FxHashMap;
-use snowball_stemmer::Stemmer;
-use twox_hash::XxHash32;
-
+use super::{IndexOps, InternalSearchResult};
 use crate::{
     config_loader::Config,
     models::{
@@ -27,8 +13,17 @@ use crate::{
         versioning::Hash,
     },
 };
-
-use super::{IndexOps, InternalSearchResult};
+use rustc_hash::FxHashMap;
+use snowball_stemmer::Stemmer;
+use std::{
+    hash::Hasher,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
+        RwLock,
+    },
+};
+use twox_hash::XxHash32;
 
 #[derive(Default)]
 pub struct SamplingData {
@@ -130,7 +125,7 @@ impl IndexOps for TFIDFIndex {
         _config: &Config,
     ) -> Result<(), WaCustomError> {
         embeddings
-            .into_par_iter()
+            .into_iter()
             .try_for_each(|TFIDFInputEmbedding(id, text)| self.insert(transaction.id, id, text))?;
         Ok(())
     }

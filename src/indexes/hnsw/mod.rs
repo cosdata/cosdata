@@ -1,12 +1,6 @@
 pub(crate) mod types;
 
-use std::sync::{
-    atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering},
-    Arc, RwLock,
-};
-
-use types::{HNSWHyperParams, QuantizedDenseVectorEmbedding};
-
+use super::{IndexOps, InternalSearchResult};
 use crate::{
     config_loader::Config,
     metadata::{
@@ -26,8 +20,11 @@ use crate::{
     quantization::{Quantization, StorageType},
     vector_store::{ann_search, finalize_ann_results, index_embeddings},
 };
-
-use super::{IndexOps, InternalSearchResult};
+use std::sync::{
+    atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering},
+    Arc, RwLock,
+};
+use types::{HNSWHyperParams, QuantizedDenseVectorEmbedding};
 
 pub struct DenseInputEmbedding(
     pub InternalId,

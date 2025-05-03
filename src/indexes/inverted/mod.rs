@@ -1,16 +1,19 @@
 pub(crate) mod types;
+use super::{IndexOps, InternalSearchResult};
 use crate::{
     config_loader::Config,
     models::{
+        buffered_io::BufIoError,
         collection::Collection,
         collection_transaction::BackgroundCollectionTransaction,
         common::WaCustomError,
+        inverted_index::InvertedIndexRoot,
         meta_persist::store_values_upper_bound,
         sparse_ann_query::{SparseAnnQueryBasic, SparseAnnResult},
         types::{InternalId, MetaDb, SparseVector},
+        versioning::Hash,
     },
 };
-
 use std::{
     path::PathBuf,
     sync::{
@@ -18,13 +21,7 @@ use std::{
         RwLock,
     },
 };
-
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use types::{SamplingData, SparsePair};
-
-use crate::models::{buffered_io::BufIoError, inverted_index::InvertedIndexRoot, versioning::Hash};
-
-use super::{IndexOps, InternalSearchResult};
 
 pub struct SparseInputEmbedding(pub InternalId, pub Vec<SparsePair>);
 
@@ -112,7 +109,7 @@ impl IndexOps for InvertedIndex {
         _config: &Config,
     ) -> Result<(), WaCustomError> {
         embeddings
-            .into_par_iter()
+            .into_iter()
             .try_for_each(|SparseInputEmbedding(id, pairs)| {
                 self.insert(id, pairs, transaction.id)
             })?;

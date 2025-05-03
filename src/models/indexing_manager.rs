@@ -8,8 +8,9 @@ use std::{
 };
 
 use chrono::Utc;
+use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 
-use crate::config_loader::Config;
+use crate::config_loader::{Config, VectorsIndexingMode};
 
 use super::{
     buffered_io::BufIoError,
@@ -64,7 +65,21 @@ impl IndexingManager {
                             VectorOp::Upsert(embeddings) => {
                                 let handle = s.spawn(|| {
                                     let len = embeddings.len() as u32;
-                                    collection.index_embeddings(embeddings, &txn, &config)?;
+                                    match config.indexing.mode {
+                                        VectorsIndexingMode::Sequential => {
+                                            collection
+                                                .index_embeddings(embeddings, &txn, &config)?;
+                                        }
+                                        VectorsIndexingMode::Batch { batch_size } => {
+                                            embeddings
+                                                .into_par_iter()
+                                                .chunks(batch_size)
+                                                .try_for_each(|embeddings| {
+                                                    collection
+                                                        .index_embeddings(embeddings, &txn, &config)
+                                                })?;
+                                        }
+                                    }
                                     let old_count =
                                         records_indexed.fetch_add(len, Ordering::AcqRel);
                                     let new_count = old_count + len;
