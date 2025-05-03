@@ -461,10 +461,13 @@ impl Collection {
                     completed_transactions += 1;
                 }
             }
-            active_transactions.push(TransactionStatusWithTransactionId {
-                transaction_id: hash,
-                status: status.clone(),
-            });
+
+            if !matches!(&*status, TransactionStatus::Complete { .. }) {
+                active_transactions.push(TransactionStatusWithTransactionId {
+                    transaction_id: hash,
+                    status: status.clone(),
+                });
+            }
         }
 
         Ok(CollectionIndexingStatus {

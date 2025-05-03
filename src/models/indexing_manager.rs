@@ -69,8 +69,8 @@ impl IndexingManager {
                                     let new_count = old_count + len;
                                     let now = Utc::now();
                                     let delta = now - start;
-                                    let delta_seconds = delta.num_seconds() as f32;
-                                    let rate_per_second = new_count as f32 / delta_seconds;
+                                    let delta_seconds = (delta.num_seconds() as u32).max(1);
+                                    let rate_per_second = new_count as f32 / delta_seconds as f32;
                                     let mut status = status.write();
                                     *status = TransactionStatus::InProgress {
                                         progress: Progress {
@@ -99,7 +99,7 @@ impl IndexingManager {
                 })?;
                 let end = Utc::now();
                 let delta = end - start;
-                let delta_seconds = delta.num_seconds() as u32;
+                let delta_seconds = (delta.num_seconds() as u32).max(1);
                 txn.pre_commit(&collection, &config)?;
                 update_background_version(&collection.lmdb, version_id)?;
                 fs::remove_file(collection.get_path().join(format!("{}.wal", *version_id)))
