@@ -29,9 +29,10 @@
 - [Features](#-features)
 - [Benchmarks](https://www.cosdata.io/resources/benchmarks)
 - [Documentation](https://docs.cosdata.io/getting-started/introduction/)
+- [Contributing](#-contributing)
 - [Contacts & Community](#-contacts--community)
 - [Show Your Support](#️-show-your-support)
-- [Contributing](#-contributing)
+
 
 <br>
 <br>
@@ -547,7 +548,9 @@ const results = await collection.getSearch().dense({
 
 We welcome contributions from the community! Whether it's _fixing a bug_, _improving documentation_, or building _new features_—every bit helps.
 
-Please read our [CONTRIBUTING.md](CONTRIBUTING.md) guide to get started.
+For full guidelines (coding standards, commit messages, CI checks), please see our [CONTRIBUTING.md](CONTRIBUTING.md) If you have any questions, feel free to open an issue or join the discussion on [Discord](https://discord.gg/WbSbXYWvta). We can’t wait to collaborate with you!
+
+Please read our  guide to get started.
 
 <br>
 
