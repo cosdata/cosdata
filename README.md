@@ -550,7 +550,7 @@ We welcome contributions from the community! Whether it's _fixing a bug_, _impro
 
 For full guidelines (coding standards, commit messages, CI checks), please see our [CONTRIBUTING.md](CONTRIBUTING.md) If you have any questions, feel free to open an issue or join the discussion on [Discord](https://discord.gg/WbSbXYWvta). We can’t wait to collaborate with you!
 
-Please read our  guide to get started.
+Please read our [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
 
 <br>
 
