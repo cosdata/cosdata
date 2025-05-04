@@ -33,7 +33,6 @@
 - [Contacts & Community](#-contacts--community)
 - [Show Your Support](#️-show-your-support)
 
-
 <br>
 <br>
 
@@ -577,4 +576,3 @@ If Cosdata has empowered your projects, please consider giving us a star on GitH
 Your endorsement helps attract new contributors and fuels ongoing improvements.
 
 Thank you for your support! 🙏
-
