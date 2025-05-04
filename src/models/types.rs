@@ -16,7 +16,7 @@ use super::{
     versioning::VersionControl,
 };
 use crate::{
-    args::CosdataArgs,
+    args::{CosdataArgs, Command},
     config_loader::Config,
     distance::{
         cosine::{CosineDistance, CosineSimilarity},
@@ -1197,37 +1197,59 @@ fn get_admin_key(env: Arc<Environment>, args: CosdataArgs) -> lmdb::Result<Singl
     };
     txn.abort();
 
-    let admin_key_hash = if let Some(admin_key_from_lmdb) = admin_key_from_lmdb {
-        // Database already exists, verify admin key
-        let arg_admin_key = args.admin_key;
-        let arg_admin_key_hash = SingleSHA256Hash::from_str(&arg_admin_key).unwrap();
-        let arg_admin_key_double_hash = arg_admin_key_hash.hash_again();
-        if !admin_key_from_lmdb.verify_eq(&arg_admin_key_double_hash) {
-            log::error!("Invalid admin key!");
-            return Err(lmdb::Error::Other(5));
+    match args.command {
+        Some(Command::ResetPassword) => {
+            // Reset password mode - always update the admin key
+            let arg_admin_key = args.admin_key;
+            let arg_admin_key_hash = SingleSHA256Hash::from_str(&arg_admin_key).unwrap();
+            let arg_admin_key_double_hash = arg_admin_key_hash.hash_again();
+
+            // Store the new admin key double hash in the database
+            let mut txn = env.begin_rw_txn()?;
+            let db = unsafe { txn.open_db(Some("meta"))? };
+            txn.put(
+                db,
+                &"admin_key",
+                &arg_admin_key_double_hash.0,
+                WriteFlags::empty(),
+            )?;
+            txn.commit()?;
+            
+            println!("Admin password has been successfully reset!");
+            Ok(arg_admin_key_hash)
         }
-        arg_admin_key_hash
-    } else {
-        // First-time setup
-        let arg_admin_key = args.admin_key;
-        let arg_admin_key_hash = SingleSHA256Hash::from_str(&arg_admin_key).unwrap();
-        let arg_admin_key_double_hash = arg_admin_key_hash.hash_again();
+        None => {
+            let admin_key_hash = if let Some(admin_key_from_lmdb) = admin_key_from_lmdb {
+                let arg_admin_key = args.admin_key;
+                let arg_admin_key_hash = SingleSHA256Hash::from_str(&arg_admin_key).unwrap();
+                let arg_admin_key_double_hash = arg_admin_key_hash.hash_again();
+                if !admin_key_from_lmdb.verify_eq(&arg_admin_key_double_hash) {
+                    log::error!("Provided admin key does not match stored admin key");
+                    return Err(lmdb::Error::Other(8));
+                }
+                arg_admin_key_hash
+            } else {
+                // First-time setup
+                let arg_admin_key = args.admin_key;
+                let arg_admin_key_hash = SingleSHA256Hash::from_str(&arg_admin_key).unwrap();
+                let arg_admin_key_double_hash = arg_admin_key_hash.hash_again();
 
-        // Store the admin key double hash in the database
-        let mut txn = env.begin_rw_txn()?;
-        let db = unsafe { txn.open_db(Some("meta"))? };
-        txn.put(
-            db,
-            &"admin_key",
-            &arg_admin_key_double_hash.0,
-            WriteFlags::empty(),
-        )?;
-        txn.commit()?;
-        arg_admin_key_hash
-    };
-    Ok(admin_key_hash)
+                // Store the admin key double hash in the database
+                let mut txn = env.begin_rw_txn()?;
+                let db = unsafe { txn.open_db(Some("meta"))? };
+                txn.put(
+                    db,
+                    &"admin_key",
+                    &arg_admin_key_double_hash.0,
+                    WriteFlags::empty(),
+                )?;
+                txn.commit()?;
+                arg_admin_key_hash
+            };
+            Ok(admin_key_hash)
+        }
+    }
 }
-
 pub fn get_collections_path() -> PathBuf {
     get_data_path().join("collections")
 }

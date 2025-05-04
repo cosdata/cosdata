@@ -12,4 +12,12 @@ pub struct CosdataArgs {
     /// Internal flag to indicate confirmation has been processed
     #[arg(long, hide = true)]
     pub confirmed: bool,
+    #[command(subcommand)]
+    pub command: Option<Command>,
+}
+
+#[derive(Parser, Clone)]
+pub enum Command {
+    /// Reset the admin password
+    ResetPassword,
 }
