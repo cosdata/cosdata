@@ -31,6 +31,7 @@
 - [Documentation](https://docs.cosdata.io/getting-started/introduction/)
 - [Contacts & Community](#-contacts--community)
 - [Show Your Support](#️-show-your-support)
+- [Contributing](#-contributing)
 
 <br>
 <br>
@@ -539,6 +540,14 @@ const results = await collection.getSearch().dense({
 
 ### Manage Multi-modal data
 - Supports real-time querying and dynamic index updates, ensuring that new multi-modal data (text, images, audio, etc.) is immediately searchable without downtime or delays.
+
+<br>
+
+# 🙌 Contributing
+
+We welcome contributions from the community! Whether it's _fixing a bug_, _improving documentation_, or building _new features_—every bit helps.
+
+Please read our [CONTRIBUTING.md](CONTRIBUTING.md) guide to get started.
 
 <br>
 
