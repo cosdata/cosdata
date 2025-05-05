@@ -1,12 +1,6 @@
 pub(crate) mod types;
 
-use std::sync::{
-    atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering},
-    Arc, RwLock,
-};
-
-use types::{HNSWHyperParams, QuantizedDenseVectorEmbedding};
-
+use super::{IndexOps, InternalSearchResult};
 use crate::{
     config_loader::Config,
     metadata::{
@@ -16,7 +10,7 @@ use crate::{
     models::{
         cache_loader::HNSWIndexCache,
         collection::Collection,
-        collection_transaction::CollectionTransaction,
+        collection_transaction::BackgroundCollectionTransaction,
         common::WaCustomError,
         meta_persist::store_values_range,
         prob_lazy_load::lazy_item::{FileIndex, ProbLazyItem},
@@ -26,8 +20,11 @@ use crate::{
     quantization::{Quantization, StorageType},
     vector_store::{ann_search, finalize_ann_results, index_embeddings},
 };
-
-use super::{IndexOps, InternalSearchResult};
+use std::sync::{
+    atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering},
+    Arc, RwLock,
+};
+use types::{HNSWHyperParams, QuantizedDenseVectorEmbedding};
 
 pub struct DenseInputEmbedding(
     pub InternalId,
@@ -141,11 +138,23 @@ impl IndexOps for HNSWIndex {
     type SearchOptions = DenseSearchOptions;
     type Data = HNSWIndexData;
 
+    fn validate_embedding(&self, embedding: Self::IndexingInput) -> Result<(), WaCustomError> {
+        if embedding.1.len() == self.dim {
+            Ok(())
+        } else {
+            Err(WaCustomError::InvalidData(format!(
+                "Expected dimension of dense vector to be {}, found {}",
+                self.dim,
+                embedding.1.len()
+            )))
+        }
+    }
+
     fn index_embeddings(
         &self,
         collection: &Collection,
         embeddings: Vec<Self::IndexingInput>,
-        transaction: &CollectionTransaction,
+        transaction: &BackgroundCollectionTransaction,
         config: &Config,
     ) -> Result<(), WaCustomError> {
         index_embeddings(config, collection, self, transaction, embeddings)

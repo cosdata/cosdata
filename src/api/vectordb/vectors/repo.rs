@@ -13,13 +13,12 @@ use super::{
 };
 
 pub(crate) fn create_vector_in_transaction(
-    ctx: Arc<AppContext>,
     collection: &Collection,
     transaction: &CollectionTransaction,
     create_vector_dto: CreateVectorDto,
 ) -> Result<(), VectorsError> {
     collection
-        .run_upload(vec![create_vector_dto.into()], transaction, &ctx.config)
+        .run_upload(vec![create_vector_dto.into()], transaction)
         .map_err(VectorsError::WaCustom)
 }
 
@@ -73,17 +72,12 @@ pub(crate) async fn get_vector_by_id(
 }
 
 pub(crate) fn upsert_vectors_in_transaction(
-    ctx: Arc<AppContext>,
     collection: &Collection,
     transaction: &CollectionTransaction,
     vectors: Vec<CreateVectorDto>,
 ) -> Result<(), VectorsError> {
     collection
-        .run_upload(
-            vectors.into_iter().map(Into::into).collect(),
-            transaction,
-            &ctx.config,
-        )
+        .run_upload(vectors.into_iter().map(Into::into).collect(), transaction)
         .map_err(VectorsError::WaCustom)
 }
 

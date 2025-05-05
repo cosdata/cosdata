@@ -94,9 +94,16 @@ pub(crate) struct SearchResultItemDto {
 #[derive(Serialize, Debug)]
 pub(crate) struct SearchResponseDto {
     pub results: Vec<SearchResultItemDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
-pub(crate) type BatchSearchResponseDto = Vec<SearchResponseDto>;
+#[derive(Serialize, Debug)]
+pub(crate) struct BatchSearchResponseDto {
+    pub responses: Vec<SearchResponseDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+}
 
 #[derive(Deserialize, Debug)]
 pub(crate) struct FindSimilarTFIDFDocumentDto {

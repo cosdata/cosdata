@@ -34,6 +34,14 @@ pub(crate) async fn get_collection_by_id(
     Ok(HttpResponse::Ok().json(&collection.meta))
 }
 
+pub(crate) async fn get_collection_indexing_status(
+    collection_id: web::Path<String>,
+    ctx: web::Data<AppContext>,
+) -> Result<HttpResponse> {
+    let status = service::get_collection_indexing_status(ctx.into_inner(), &collection_id).await?;
+    Ok(HttpResponse::Ok().json(status))
+}
+
 pub(crate) async fn delete_collection_by_id(
     collection_id: web::Path<String>,
     ctx: web::Data<AppContext>,

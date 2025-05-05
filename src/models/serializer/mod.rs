@@ -8,6 +8,7 @@ mod pagepool;
 mod quotients_map;
 mod raw_vector_embedding;
 mod storage;
+mod transaction_status;
 mod tree_map;
 mod versioned_item;
 mod versioned_pagepool;
@@ -17,6 +18,8 @@ mod versioned_vec;
 mod tests;
 
 use std::io;
+
+use parking_lot::RwLock;
 
 use super::buffered_io::{BufIoError, BufferManager, BufferManagerFactory};
 use super::types::{DocumentId, FileOffset, InternalId, VectorId};
@@ -48,7 +51,7 @@ pub fn read_len(bufman: &BufferManager, cursor: u64) -> Result<u16, BufIoError> 
     }
 }
 
-fn read_string(bufman: &BufferManager, cursor: u64) -> Result<String, BufIoError> {
+pub fn read_string(bufman: &BufferManager, cursor: u64) -> Result<String, BufIoError> {
     let len = read_len(bufman, cursor)? as usize;
     let mut buf = vec![0; len];
     bufman.read_with_cursor(cursor, &mut buf)?;
@@ -56,7 +59,7 @@ fn read_string(bufman: &BufferManager, cursor: u64) -> Result<String, BufIoError
         .map_err(|err| BufIoError::Io(io::Error::new(io::ErrorKind::InvalidData, err)))
 }
 
-fn read_opt_string(bufman: &BufferManager, cursor: u64) -> Result<Option<String>, BufIoError> {
+pub fn read_opt_string(bufman: &BufferManager, cursor: u64) -> Result<Option<String>, BufIoError> {
     let len = read_len(bufman, cursor)? as usize;
     if len == 0 {
         return Ok(None);
@@ -188,5 +191,15 @@ impl SimpleSerialize for (u32, f32) {
         let val = bufman.read_f32_with_cursor(cursor)?;
         bufman.close_cursor(cursor)?;
         Ok((idx, val))
+    }
+}
+
+impl<T: SimpleSerialize> SimpleSerialize for RwLock<T> {
+    fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
+        self.read().serialize(bufman, cursor)
+    }
+
+    fn deserialize(bufman: &BufferManager, offset: FileOffset) -> Result<Self, BufIoError> {
+        Ok(Self::new(T::deserialize(bufman, offset)?))
     }
 }

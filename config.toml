@@ -32,8 +32,8 @@ early_terminate_threshold = 0.0
 
 [indexing]
 clamp_margin_percent = 1.0 # 1%
-mode = "sequential"   # Options: "sequential" or "batch"
-# batch_size = 32  # only required with "batch" indexing mode
+mode = "batch"   # Options: "sequential" or "batch"
+batch_size = 8  # only required with "batch" indexing mode
 
 [grpc]
 host = "127.0.0.1" # Optional - if not specified uses default loopback address

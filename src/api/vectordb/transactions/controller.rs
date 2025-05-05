@@ -33,6 +33,24 @@ pub(crate) async fn commit_transaction(
     Ok(HttpResponse::NoContent().finish())
 }
 
+pub(crate) async fn get_transaction_status(
+    params: web::Path<(String, u32)>,
+    ctx: web::Data<AppContext>,
+) -> Result<HttpResponse, TransactionError> {
+    let (collection_id, transaction_id) = params.into_inner();
+
+    ctx.update_collection_for_transaction(&collection_id)
+        .map_err(|e| {
+            TransactionError::FailedToGetTransactionStatus(format!("Cache error: {}", e))
+        })?;
+
+    let status =
+        service::get_transaction_status(ctx.into_inner(), &collection_id, transaction_id.into())
+            .await?;
+
+    Ok(HttpResponse::Ok().json(status))
+}
+
 pub(crate) async fn create_vector_in_transaction(
     params: web::Path<(String, u32)>,
     web::Json(create_vector_dto): web::Json<CreateVectorDto>,

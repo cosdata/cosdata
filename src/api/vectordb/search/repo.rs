@@ -9,13 +9,14 @@ use crate::indexes::hnsw::{DenseSearchInput, DenseSearchOptions};
 use crate::indexes::inverted::{SparseSearchInput, SparseSearchOptions};
 use crate::indexes::tf_idf::{TFIDFSearchInput, TFIDFSearchOptions};
 use crate::indexes::{IndexOps, SearchResult};
+use crate::models::collection_transaction::TransactionStatus;
 use crate::models::types::{DocumentId, VectorId};
 
 pub(crate) async fn dense_search(
     ctx: Arc<AppContext>,
     collection_id: &str,
     request: dtos::DenseSearchRequestDto,
-) -> Result<Vec<SearchResult>, SearchError> {
+) -> Result<(Vec<SearchResult>, Option<String>), SearchError> {
     let collection = ctx
         .ain_env
         .collections_map
@@ -26,24 +27,36 @@ pub(crate) async fn dense_search(
         SearchError::IndexNotFound(format!("HNSW index for collection '{}'", collection_id))
     })?;
 
-    hnsw_index
-        .search(
-            &collection,
-            DenseSearchInput(request.query_vector, request.filter),
-            &DenseSearchOptions {
-                top_k: request.top_k,
-            },
-            &ctx.config,
-            request.return_raw_text,
-        )
-        .map_err(SearchError::WaCustom)
+    let warning = matches!(
+        collection.get_latest_transaction_status(),
+        Some(TransactionStatus::NotStarted { .. }) | Some(TransactionStatus::InProgress { .. })
+    )
+    .then(|| {
+        "Embeddings are currently being indexed; some results may be temporarily unavailable."
+            .to_string()
+    });
+
+    Ok((
+        hnsw_index
+            .search(
+                &collection,
+                DenseSearchInput(request.query_vector, request.filter),
+                &DenseSearchOptions {
+                    top_k: request.top_k,
+                },
+                &ctx.config,
+                request.return_raw_text,
+            )
+            .map_err(SearchError::WaCustom)?,
+        warning,
+    ))
 }
 
 pub(crate) async fn batch_dense_search(
     ctx: Arc<AppContext>,
     collection_id: &str,
     request: dtos::BatchDenseSearchRequestDto,
-) -> Result<Vec<Vec<SearchResult>>, SearchError> {
+) -> Result<(Vec<Vec<SearchResult>>, Option<String>), SearchError> {
     let collection = ctx
         .ain_env
         .collections_map
@@ -54,28 +67,40 @@ pub(crate) async fn batch_dense_search(
         SearchError::IndexNotFound(format!("HNSW index for collection '{}'", collection_id))
     })?;
 
-    hnsw_index
-        .batch_search(
-            &collection,
-            request
-                .queries
-                .into_iter()
-                .map(|query| DenseSearchInput(query.vector, query.filter))
-                .collect(),
-            &DenseSearchOptions {
-                top_k: request.top_k,
-            },
-            &ctx.config,
-            request.return_raw_text,
-        )
-        .map_err(SearchError::WaCustom)
+    let warning = matches!(
+        collection.get_latest_transaction_status(),
+        Some(TransactionStatus::NotStarted { .. }) | Some(TransactionStatus::InProgress { .. })
+    )
+    .then(|| {
+        "Embeddings are currently being indexed; some results may be temporarily unavailable."
+            .to_string()
+    });
+
+    Ok((
+        hnsw_index
+            .batch_search(
+                &collection,
+                request
+                    .queries
+                    .into_iter()
+                    .map(|query| DenseSearchInput(query.vector, query.filter))
+                    .collect(),
+                &DenseSearchOptions {
+                    top_k: request.top_k,
+                },
+                &ctx.config,
+                request.return_raw_text,
+            )
+            .map_err(SearchError::WaCustom)?,
+        warning,
+    ))
 }
 
 pub(crate) async fn sparse_search(
     ctx: Arc<AppContext>,
     collection_id: &str,
     request: dtos::SparseSearchRequestDto,
-) -> Result<Vec<SearchResult>, SearchError> {
+) -> Result<(Vec<SearchResult>, Option<String>), SearchError> {
     let collection = ctx
         .ain_env
         .collections_map
@@ -86,25 +111,37 @@ pub(crate) async fn sparse_search(
         SearchError::IndexNotFound(format!("Sparse index for collection '{}'", collection_id))
     })?;
 
-    inverted_index
-        .search(
-            &collection,
-            SparseSearchInput(request.query_terms),
-            &SparseSearchOptions {
-                top_k: request.top_k,
-                early_terminate_threshold: request.early_terminate_threshold,
-            },
-            &ctx.config,
-            request.return_raw_text,
-        )
-        .map_err(SearchError::WaCustom)
+    let warning = matches!(
+        collection.get_latest_transaction_status(),
+        Some(TransactionStatus::NotStarted { .. }) | Some(TransactionStatus::InProgress { .. })
+    )
+    .then(|| {
+        "Embeddings are currently being indexed; some results may be temporarily unavailable."
+            .to_string()
+    });
+
+    Ok((
+        inverted_index
+            .search(
+                &collection,
+                SparseSearchInput(request.query_terms),
+                &SparseSearchOptions {
+                    top_k: request.top_k,
+                    early_terminate_threshold: request.early_terminate_threshold,
+                },
+                &ctx.config,
+                request.return_raw_text,
+            )
+            .map_err(SearchError::WaCustom)?,
+        warning,
+    ))
 }
 
 pub(crate) async fn batch_sparse_search(
     ctx: Arc<AppContext>,
     collection_id: &str,
     request: dtos::BatchSparseSearchRequestDto,
-) -> Result<Vec<Vec<SearchResult>>, SearchError> {
+) -> Result<(Vec<Vec<SearchResult>>, Option<String>), SearchError> {
     let collection = ctx
         .ain_env
         .collections_map
@@ -115,29 +152,41 @@ pub(crate) async fn batch_sparse_search(
         SearchError::IndexNotFound(format!("Sparse index for collection '{}'", collection_id))
     })?;
 
-    inverted_index
-        .batch_search(
-            &collection,
-            request
-                .query_terms_list
-                .into_iter()
-                .map(SparseSearchInput)
-                .collect(),
-            &SparseSearchOptions {
-                top_k: request.top_k,
-                early_terminate_threshold: request.early_terminate_threshold,
-            },
-            &ctx.config,
-            request.return_raw_text,
-        )
-        .map_err(SearchError::WaCustom)
+    let warning = matches!(
+        collection.get_latest_transaction_status(),
+        Some(TransactionStatus::NotStarted { .. }) | Some(TransactionStatus::InProgress { .. })
+    )
+    .then(|| {
+        "Embeddings are currently being indexed; some results may be temporarily unavailable."
+            .to_string()
+    });
+
+    Ok((
+        inverted_index
+            .batch_search(
+                &collection,
+                request
+                    .query_terms_list
+                    .into_iter()
+                    .map(SparseSearchInput)
+                    .collect(),
+                &SparseSearchOptions {
+                    top_k: request.top_k,
+                    early_terminate_threshold: request.early_terminate_threshold,
+                },
+                &ctx.config,
+                request.return_raw_text,
+            )
+            .map_err(SearchError::WaCustom)?,
+        warning,
+    ))
 }
 
 pub(crate) async fn hybrid_search(
     ctx: Arc<AppContext>,
     collection_id: &str,
     request: dtos::HybridSearchRequestDto,
-) -> Result<Vec<SearchResult>, SearchError> {
+) -> Result<(Vec<SearchResult>, Option<String>), SearchError> {
     let collection = ctx
         .ain_env
         .collections_map
@@ -271,6 +320,15 @@ pub(crate) async fn hybrid_search(
         }
     };
 
+    let warning = matches!(
+        collection.get_latest_transaction_status(),
+        Some(TransactionStatus::NotStarted { .. }) | Some(TransactionStatus::InProgress { .. })
+    )
+    .then(|| {
+        "Embeddings are currently being indexed; some results may be temporarily unavailable."
+            .to_string()
+    });
+
     let mut final_scores: FxHashMap<VectorId, (f32, Option<DocumentId>, Option<String>)> =
         FxHashMap::default();
     let k = request.fusion_constant_k;
@@ -300,14 +358,14 @@ pub(crate) async fn hybrid_search(
         final_results.select_nth_unstable_by(request.top_k, |a, b| b.2.total_cmp(&a.2));
     }
     final_results.sort_unstable_by(|a, b| b.2.total_cmp(&a.2));
-    Ok(final_results)
+    Ok((final_results, warning))
 }
 
 pub(crate) async fn tf_idf_search(
     ctx: Arc<AppContext>,
     collection_id: &str,
     request: dtos::FindSimilarTFIDFDocumentDto,
-) -> Result<Vec<SearchResult>, SearchError> {
+) -> Result<(Vec<SearchResult>, Option<String>), SearchError> {
     let collection = ctx
         .ain_env
         .collections_map
@@ -318,24 +376,36 @@ pub(crate) async fn tf_idf_search(
         SearchError::IndexNotFound(format!("TF-IDF index for collection '{}'", collection_id))
     })?;
 
-    tf_idf_index
-        .search(
-            &collection,
-            TFIDFSearchInput(request.query),
-            &TFIDFSearchOptions {
-                top_k: request.top_k,
-            },
-            &ctx.config,
-            request.return_raw_text,
-        )
-        .map_err(SearchError::WaCustom)
+    let warning = matches!(
+        collection.get_latest_transaction_status(),
+        Some(TransactionStatus::NotStarted { .. }) | Some(TransactionStatus::InProgress { .. })
+    )
+    .then(|| {
+        "Embeddings are currently being indexed; some results may be temporarily unavailable."
+            .to_string()
+    });
+
+    Ok((
+        tf_idf_index
+            .search(
+                &collection,
+                TFIDFSearchInput(request.query),
+                &TFIDFSearchOptions {
+                    top_k: request.top_k,
+                },
+                &ctx.config,
+                request.return_raw_text,
+            )
+            .map_err(SearchError::WaCustom)?,
+        warning,
+    ))
 }
 
 pub(crate) async fn batch_tf_idf_search(
     ctx: Arc<AppContext>,
     collection_id: &str,
     request: dtos::BatchSearchTFIDFDocumentsDto,
-) -> Result<Vec<Vec<SearchResult>>, SearchError> {
+) -> Result<(Vec<Vec<SearchResult>>, Option<String>), SearchError> {
     let collection = ctx
         .ain_env
         .collections_map
@@ -346,15 +416,27 @@ pub(crate) async fn batch_tf_idf_search(
         SearchError::IndexNotFound(format!("TF-IDF index for collection '{}'", collection_id))
     })?;
 
-    tf_idf_index
-        .batch_search(
-            &collection,
-            request.queries.into_iter().map(TFIDFSearchInput).collect(),
-            &TFIDFSearchOptions {
-                top_k: request.top_k,
-            },
-            &ctx.config,
-            request.return_raw_text,
-        )
-        .map_err(SearchError::WaCustom)
+    let warning = matches!(
+        collection.get_latest_transaction_status(),
+        Some(TransactionStatus::NotStarted { .. }) | Some(TransactionStatus::InProgress { .. })
+    )
+    .then(|| {
+        "Embeddings are currently being indexed; some results may be temporarily unavailable."
+            .to_string()
+    });
+
+    Ok((
+        tf_idf_index
+            .batch_search(
+                &collection,
+                request.queries.into_iter().map(TFIDFSearchInput).collect(),
+                &TFIDFSearchOptions {
+                    top_k: request.top_k,
+                },
+                &ctx.config,
+                request.return_raw_text,
+            )
+            .map_err(SearchError::WaCustom)?,
+        warning,
+    ))
 }
