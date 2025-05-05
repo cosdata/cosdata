@@ -3,7 +3,7 @@ use std::sync::Arc;
 use self::vectors::dtos::CreateVectorDto;
 
 use super::{dtos::CreateTransactionResponseDto, error::TransactionError};
-use crate::models::collection_transaction::CollectionTransaction;
+use crate::models::collection_transaction::{CollectionTransaction, TransactionStatus};
 use crate::models::meta_persist::update_current_version;
 use crate::models::versioning::Hash;
 use crate::{api::vectordb::vectors, app_context::AppContext};
@@ -20,7 +20,7 @@ pub(crate) async fn create_transaction(
         .get_collection(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
 
-    let mut current_open_transaction_guard = collection.current_open_transaction.write().unwrap();
+    let mut current_open_transaction_guard = collection.current_open_transaction.write();
 
     if current_open_transaction_guard.is_some() {
         return Err(TransactionError::OnGoingTransaction);
@@ -50,9 +50,9 @@ pub(crate) async fn commit_transaction(
         .get_collection(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
 
-    let mut current_version_guard = collection.current_version.write().unwrap();
+    let mut current_version_guard = collection.current_version.write();
 
-    let mut current_open_transaction_guard = collection.current_open_transaction.write().unwrap();
+    let mut current_open_transaction_guard = collection.current_open_transaction.write();
     let Some(current_open_transaction) = current_open_transaction_guard.take() else {
         return Err(TransactionError::NotFound);
     };
@@ -65,7 +65,7 @@ pub(crate) async fn commit_transaction(
     let version_number = current_open_transaction.version_number;
 
     current_open_transaction
-        .pre_commit(&collection, &ctx.config)
+        .pre_commit()
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
 
     *current_version_guard = current_transaction_id;
@@ -76,7 +76,29 @@ pub(crate) async fn commit_transaction(
     update_current_version(&collection.lmdb, current_transaction_id)
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
 
+    collection.trigger_indexing(current_transaction_id, version_number);
+
     Ok(())
+}
+
+pub(crate) async fn get_transaction_status(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    transaction_id: Hash,
+) -> Result<TransactionStatus, TransactionError> {
+    let collection = ctx
+        .ain_env
+        .collections_map
+        .get_collection(collection_id)
+        .ok_or(TransactionError::CollectionNotFound)?;
+
+    let status = collection
+        .transaction_status_map
+        .get_latest(&transaction_id)
+        .ok_or(TransactionError::NotFound)?
+        .read();
+
+    Ok(status.clone())
 }
 
 pub(crate) async fn create_vector_in_transaction(
@@ -91,7 +113,7 @@ pub(crate) async fn create_vector_in_transaction(
         .get_collection(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
 
-    let current_open_transaction_guard = collection.current_open_transaction.read().unwrap();
+    let current_open_transaction_guard = collection.current_open_transaction.read();
     let Some(current_open_transaction) = &*current_open_transaction_guard else {
         return Err(TransactionError::NotFound);
     };
@@ -103,7 +125,6 @@ pub(crate) async fn create_vector_in_transaction(
     }
 
     vectors::repo::create_vector_in_transaction(
-        ctx,
         &collection,
         current_open_transaction,
         create_vector_dto,
@@ -125,7 +146,7 @@ pub(crate) async fn abort_transaction(
         .get_collection(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
 
-    let mut current_open_transaction_guard = collection.current_open_transaction.write().unwrap();
+    let mut current_open_transaction_guard = collection.current_open_transaction.write();
     let Some(current_open_transaction) = current_open_transaction_guard.take() else {
         return Err(TransactionError::NotFound);
     };
@@ -134,10 +155,6 @@ pub(crate) async fn abort_transaction(
     if current_transaction_id != transaction_id {
         return Err(TransactionError::NotFound);
     }
-
-    current_open_transaction
-        .pre_commit(&collection, &ctx.config)
-        .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
 
     Ok(())
 }
@@ -163,7 +180,7 @@ pub(crate) async fn upsert_vectors(
         .get_collection(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
 
-    let current_open_transaction_guard = collection.current_open_transaction.read().unwrap();
+    let current_open_transaction_guard = collection.current_open_transaction.read();
     let Some(current_open_transaction) = &*current_open_transaction_guard else {
         return Err(TransactionError::NotFound);
     };
@@ -174,13 +191,8 @@ pub(crate) async fn upsert_vectors(
         ));
     }
 
-    vectors::repo::upsert_vectors_in_transaction(
-        ctx,
-        &collection,
-        current_open_transaction,
-        vectors,
-    )
-    .map_err(|e| TransactionError::FailedToCreateVector(e.to_string()))?;
+    vectors::repo::upsert_vectors_in_transaction(&collection, current_open_transaction, vectors)
+        .map_err(|e| TransactionError::FailedToCreateVector(e.to_string()))?;
 
     Ok(())
 }

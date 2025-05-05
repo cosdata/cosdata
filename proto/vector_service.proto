@@ -291,6 +291,7 @@ message SimilarVectorMatch {
 
 message FindSimilarVectorsResponse {
     SearchResults results = 1;
+    optional string warning = 2;
 }
 
 message SearchResults {

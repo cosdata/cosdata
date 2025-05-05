@@ -67,22 +67,21 @@ crate::cfg_grpc! {
                 .map_err(|e| Status::invalid_argument(format!("Invalid metadata schema: {}", e)))?;
 
             // Create new collection
-            let collection = Arc::new(
-                Collection::new(
-                    req.name.clone(),
-                    req.description.clone(),
-                    dense_vector,
-                    sparse_vector,
-                    tf_idf_options,
-                    metadata_schema,
-                    config,
-                    req.store_raw_text.unwrap_or_default(),
-                    lmdb,
-                    hash,
-                    vcs,
-                )
-                .map_err(Status::from)?,
-            );
+            let collection = Collection::new(
+                req.name.clone(),
+                req.description.clone(),
+                dense_vector,
+                sparse_vector,
+                tf_idf_options,
+                metadata_schema,
+                config,
+                req.store_raw_text.unwrap_or_default(),
+                lmdb,
+                hash,
+                vcs,
+                self.context.config.clone(),
+            )
+            .map_err(Status::from)?;
 
             // Store collection
             self.context

@@ -1,24 +1,10 @@
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
-
-use std::{
-    hash::Hasher,
-    path::PathBuf,
-    sync::{
-        atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
-        RwLock,
-    },
-};
-
-use rustc_hash::FxHashMap;
-use snowball_stemmer::Stemmer;
-use twox_hash::XxHash32;
-
+use super::{IndexOps, InternalSearchResult};
 use crate::{
     config_loader::Config,
     models::{
         buffered_io::BufIoError,
         collection::Collection,
-        collection_transaction::CollectionTransaction,
+        collection_transaction::BackgroundCollectionTransaction,
         common::WaCustomError,
         meta_persist::store_average_document_length,
         sparse_ann_query::SparseAnnQueryBasic,
@@ -27,8 +13,17 @@ use crate::{
         versioning::Hash,
     },
 };
-
-use super::{IndexOps, InternalSearchResult};
+use rustc_hash::FxHashMap;
+use snowball_stemmer::Stemmer;
+use std::{
+    hash::Hasher,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
+        RwLock,
+    },
+};
+use twox_hash::XxHash32;
 
 #[derive(Default)]
 pub struct SamplingData {
@@ -118,15 +113,19 @@ impl IndexOps for TFIDFIndex {
     type SearchOptions = TFIDFSearchOptions;
     type Data = TFIDFIndexData;
 
+    fn validate_embedding(&self, _embedding: Self::IndexingInput) -> Result<(), WaCustomError> {
+        Ok(())
+    }
+
     fn index_embeddings(
         &self,
         _collection: &Collection,
         embeddings: Vec<Self::IndexingInput>,
-        transaction: &CollectionTransaction,
+        transaction: &BackgroundCollectionTransaction,
         _config: &Config,
     ) -> Result<(), WaCustomError> {
         embeddings
-            .into_par_iter()
+            .into_iter()
             .try_for_each(|TFIDFInputEmbedding(id, text)| self.insert(transaction.id, id, text))?;
         Ok(())
     }

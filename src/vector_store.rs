@@ -1,7 +1,6 @@
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
 use crate::config_loader::Config;
-use crate::config_loader::VectorsIndexingMode;
 use crate::distance::DistanceFunction;
 use crate::indexes::hnsw::types::HNSWHyperParams;
 use crate::indexes::hnsw::types::QuantizedDenseVectorEmbedding;
@@ -17,7 +16,7 @@ use crate::metadata::MetadataSchema;
 use crate::metadata::HIGH_WEIGHT;
 use crate::models::buffered_io::*;
 use crate::models::collection::Collection;
-use crate::models::collection_transaction::CollectionTransaction;
+use crate::models::collection_transaction::BackgroundCollectionTransaction;
 use crate::models::common::*;
 use crate::models::dot_product::dot_product_f32;
 use crate::models::file_persist::*;
@@ -31,7 +30,6 @@ use crate::models::versioning::Hash;
 use crate::quantization::{Quantization, StorageType};
 use crate::storage::Storage;
 use rand::Rng;
-use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::fs::File;
@@ -497,10 +495,10 @@ fn preprocess_embedding(
         let num_levels = hnsw_index.levels_prob.len() - 1;
         let plp = pseudo_level_probs(num_levels as u8, replicas.len() as u16);
         let mut embeddings: Vec<IndexableEmbedding> = vec![];
-        let mut is_first_overrideen = false;
+        let mut is_first_overridden = false;
         for (replica_id, prop_metadata) in replicas.into_iter().enumerate() {
-            let overridden_level_probs = if !is_first_overrideen {
-                is_first_overrideen = true;
+            let overridden_level_probs = if !is_first_overridden {
+                is_first_overridden = true;
                 plp.iter()
                     .map(|(_, lev)| (0.0, *lev))
                     .collect::<Vec<(f64, u8)>>()
@@ -559,69 +557,56 @@ pub fn index_embeddings(
     config: &Config,
     collection: &Collection,
     hnsw_index: &HNSWIndex,
-    transaction: &CollectionTransaction,
+    transaction: &BackgroundCollectionTransaction,
     vecs: Vec<DenseInputEmbedding>,
 ) -> Result<(), WaCustomError> {
     let hnsw_params_guard = hnsw_index.hnsw_params.read().unwrap();
-    let index = |vecs: Vec<DenseInputEmbedding>| {
-        let embeddings = vecs
-            .into_iter()
-            .map(|vec| {
-                let DenseInputEmbedding(id, values, metadata, is_pseudo) = vec;
-                RawDenseVectorEmbedding {
-                    hash_vec: id,
-                    raw_vec: Arc::new(values),
-                    raw_metadata: metadata,
-                    is_pseudo,
-                }
-            })
-            .flat_map(|emb| {
-                preprocess_embedding(
-                    collection,
-                    hnsw_index,
-                    &hnsw_index.quantization_metric,
-                    &emb,
-                )
-            })
-            .collect::<Vec<IndexableEmbedding>>();
-        for emb in embeddings {
-            let max_level =
-                get_max_insert_level(rand::random::<f32>().into(), &hnsw_index.levels_prob);
-            // Start from root at highest level
-            let root_entry = hnsw_index.get_root_vec();
-            let highest_level = HNSWLevel(hnsw_params_guard.num_layers);
-
-            index_embedding(
-                config,
+    let embeddings = vecs
+        .into_iter()
+        .map(|vec| {
+            let DenseInputEmbedding(id, values, metadata, is_pseudo) = vec;
+            RawDenseVectorEmbedding {
+                hash_vec: id,
+                raw_vec: Arc::new(values),
+                raw_metadata: metadata,
+                is_pseudo,
+            }
+        })
+        .flat_map(|emb| {
+            preprocess_embedding(
+                collection,
                 hnsw_index,
-                ptr::null_mut(),
-                emb.prop_value,
-                emb.prop_metadata,
-                root_entry,
-                highest_level,
-                transaction.id,
-                transaction.version_number,
-                transaction.lazy_item_versions_table.clone(),
-                &hnsw_params_guard,
-                max_level, // Pass max_level to let index_embedding control node creation
-                &mut || transaction.get_new_node_offset(),
-                &mut || transaction.get_new_level_0_node_offset(),
-                *hnsw_index.distance_metric.read().unwrap(),
-            )?;
-        }
-        Ok::<_, WaCustomError>(())
-    };
+                &hnsw_index.quantization_metric,
+                &emb,
+            )
+        })
+        .collect::<Vec<IndexableEmbedding>>();
+    for emb in embeddings {
+        let max_level = match emb.overridden_level_probs {
+            Some(lp) => get_max_insert_level(rand::random::<f32>().into(), &lp),
+            None => get_max_insert_level(rand::random::<f32>().into(), &hnsw_index.levels_prob),
+        };
+        // Start from root at highest level
+        let root_entry = hnsw_index.get_root_vec();
+        let highest_level = HNSWLevel(hnsw_params_guard.num_layers);
 
-    match config.indexing.mode {
-        VectorsIndexingMode::Sequential => {
-            index(vecs)?;
-        }
-        VectorsIndexingMode::Batch { batch_size } => {
-            vecs.into_par_iter()
-                .chunks(batch_size)
-                .map(index)
-                .collect::<Result<(), _>>()?;
-        }
+        index_embedding(
+            config,
+            hnsw_index,
+            ptr::null_mut(),
+            emb.prop_value,
+            emb.prop_metadata,
+            root_entry,
+            highest_level,
+            transaction.id,
+            transaction.version_number,
+            transaction.lazy_item_versions_table.clone(),
+            &hnsw_params_guard,
+            max_level, // Pass max_level to let index_embedding control node creation
+            &mut || transaction.get_new_node_offset(),
+            &mut || transaction.get_new_level_0_node_offset(),
+            *hnsw_index.distance_metric.read().unwrap(),
+        )?;
     }
 
     Ok(())

@@ -13,6 +13,7 @@ pub(crate) enum TransactionError {
     IndexNotFound,
     OnGoingTransaction,
     FailedToGetAppEnv,
+    FailedToGetTransactionStatus(String),
     FailedToCreateTransaction(String),
     FailedToCommitTransaction(String),
     FailedToCreateVector(String),
@@ -28,6 +29,9 @@ impl Display for TransactionError {
             Self::IndexNotFound => write!(f, "Index not found!"),
             Self::FailedToGetAppEnv => write!(f, "Failed to get App Env!"),
             Self::OnGoingTransaction => write!(f, "There is an on-going transaction!"),
+            Self::FailedToGetTransactionStatus(msg) => {
+                write!(f, "Failed to get transaction status due to {}", msg)
+            }
             Self::FailedToCreateTransaction(msg) => {
                 write!(f, "Failed to create transaction due to {}", msg)
             }
@@ -59,6 +63,7 @@ impl ResponseError for TransactionError {
             Self::CollectionNotFound => StatusCode::BAD_REQUEST,
             Self::IndexNotFound => StatusCode::BAD_REQUEST,
             Self::FailedToGetAppEnv => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::FailedToGetTransactionStatus(_) => StatusCode::BAD_REQUEST,
             Self::FailedToCreateTransaction(_) => StatusCode::BAD_REQUEST,
             Self::FailedToCommitTransaction(_) => StatusCode::BAD_REQUEST,
             Self::OnGoingTransaction => StatusCode::CONFLICT,

@@ -245,6 +245,7 @@ impl ProbNode {
     }
 
     pub fn clone_neighbors(&self) -> Neighbors {
+        let _guard = self.freeze();
         self.neighbors
             .iter()
             .map(|neighbor| unsafe {
