@@ -29,6 +29,7 @@
 - [Features](#-features)
 - [Benchmarks](https://www.cosdata.io/resources/benchmarks)
 - [Documentation](https://docs.cosdata.io/getting-started/introduction/)
+- [Contributing](#-contributing)
 - [Contacts & Community](#-contacts--community)
 - [Show Your Support](#️-show-your-support)
 
@@ -542,6 +543,16 @@ const results = await collection.getSearch().dense({
 
 <br>
 
+# 🙌 Contributing
+
+We welcome contributions from the community! Whether it's _fixing a bug_, _improving documentation_, or building _new features_—every bit helps.
+
+For full guidelines (coding standards, commit messages, CI checks), please see our [CONTRIBUTING.md](CONTRIBUTING.md) If you have any questions, feel free to open an issue or join the discussion on [Discord](https://discord.gg/WbSbXYWvta). We can’t wait to collaborate with you!
+
+Please read our [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
+
+<br>
+
 # 🤝 Contacts & Community
 
 Have questions, ideas, or want to contribute? We'd love to hear from you!
@@ -565,4 +576,3 @@ If Cosdata has empowered your projects, please consider giving us a star on GitH
 Your endorsement helps attract new contributors and fuels ongoing improvements.
 
 Thank you for your support! 🙏
-
