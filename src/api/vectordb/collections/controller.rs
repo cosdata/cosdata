@@ -3,7 +3,7 @@ use actix_web::{web, HttpResponse, Result};
 use crate::app_context::AppContext;
 
 use super::{
-    dtos::{CreateCollectionDto, GetCollectionsDto},
+    dtos::{CreateCollectionDto},
     service,
 };
 use crate::api::vectordb::collections::error::CollectionsError;
@@ -18,13 +18,6 @@ pub(crate) async fn create_collection(
     Ok(HttpResponse::Created().json(create_collection_response_dto))
 }
 
-pub(crate) async fn get_collections(
-    web::Query(get_collections_dto): web::Query<GetCollectionsDto>,
-    ctx: web::Data<AppContext>,
-) -> Result<HttpResponse> {
-    let collections = service::get_collections(ctx.into_inner(), get_collections_dto).await?;
-    Ok(HttpResponse::Ok().json(collections))
-}
 
 pub(crate) async fn get_collection_by_id(
     collection_id: web::Path<String>,

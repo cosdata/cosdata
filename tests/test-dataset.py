@@ -29,7 +29,7 @@ def check_dependencies():
         print("Error: pyarrow is required for parquet support.")
         print("Please install it using: pip install pyarrow")
         sys.exit(1)
-    
+
     try:
         import datasets
     except ImportError:
@@ -44,6 +44,7 @@ check_dependencies()
 token = None
 host = "http://127.0.0.1:8443"
 base_url = f"{host}/vectordb"
+VERIFY_SSL = False
 
 # Dataset configurations with correct column names
 datasets = {
@@ -95,20 +96,20 @@ def download_huggingface_dataset(dataset_id, destination):
     response = requests.get(parquet_url)
     response.raise_for_status()
     parquet_info = response.json()
-    
+
     if not parquet_info or not isinstance(parquet_info, list) or not parquet_info:
         raise Exception(f"No parquet files found for dataset {dataset_id}")
-    
+
     # Get the first parquet file URL
     parquet_file_url = parquet_info[0]["url"]
-    
+
     # Download the parquet file
     print(f"Downloading parquet file from {parquet_file_url}")
     response = requests.get(parquet_file_url, stream=True)
     response.raise_for_status()
-    
+
     total_size = int(response.headers.get('content-length', 0))
-    
+
     with open(destination, 'wb') as f, tqdm(
         desc=os.path.basename(destination),
         total=total_size,
@@ -125,9 +126,9 @@ def download_file(url, destination):
     try:
         response = requests.get(url, stream=True)
         response.raise_for_status()  # Raise an exception for bad status codes
-        
+
         total_size = int(response.headers.get('content-length', 0))
-        
+
         with open(destination, 'wb') as f, tqdm(
             desc=os.path.basename(destination),
             total=total_size,
@@ -150,12 +151,12 @@ def prepare_glove_dataset(dataset_dir):
     if not os.path.exists(zip_path):
         print("Downloading GloVe dataset...")
         download_file(datasets["glove-100"]["url"], zip_path)
-    
+
     print("Extracting GloVe dataset...")
     with gzip.open(zip_path, 'rb') as f_in:
         with open(os.path.join(dataset_dir, "glove.6B.100d.txt"), 'wb') as f_out:
             shutil.copyfileobj(f_in, f_out)
-    
+
     print("Converting GloVe to parquet format...")
     # Read the GloVe text file
     data = []
@@ -165,11 +166,11 @@ def prepare_glove_dataset(dataset_dir):
             word = values[0]
             vector = [float(x) for x in values[1:]]
             data.append({"id": word, "embeddings": vector})
-    
+
     # Convert to DataFrame and save as parquet
     df = pd.DataFrame(data)
     df.to_parquet(os.path.join(dataset_dir, "test0.parquet"))
-    
+
     # Clean up temporary files
     os.remove(os.path.join(dataset_dir, "glove.6B.100d.txt"))
     os.remove(zip_path)
@@ -179,16 +180,16 @@ def prepare_dataset(dataset_name):
     dataset_dir = os.path.join("datasets", dataset_name)
     dataset_config = datasets[dataset_name]
     parquet_path = os.path.join(dataset_dir, "test0.parquet")
-    
+
     print(f"Downloading {dataset_name}...")
     prepare_huggingface_dataset(dataset_config["dataset_id"], parquet_path)
-    
+
     print(f"Dataset {dataset_name} is ready at {dataset_dir}")
 
 def prepare_huggingface_dataset(dataset_id, destination):
     """Download and prepare a dataset from Hugging Face"""
     print(f"Loading dataset {dataset_id} from Hugging Face...")
-    
+
     try:
         # Try loading with default config first
         dataset = load_dataset(dataset_id, split="train")
@@ -199,31 +200,31 @@ def prepare_huggingface_dataset(dataset_id, destination):
             dataset = load_dataset(dataset_id, 'train', split="train")
         else:
             raise
-    
+
     # Convert to pandas DataFrame
     df = dataset.to_pandas()
-    
+
     # Print dataset structure
     print("\nDataset Structure:")
     print(f"Columns: {df.columns.tolist()}")
     print(f"First row sample: {df.iloc[0].to_dict()}")
     print(f"Number of rows: {len(df)}")
-    
+
     # Ensure the required columns exist
     if "id" not in df.columns:
         df["id"] = range(len(df))
-    
+
     if "dense_values" not in df.columns:
         # Find the embedding column
         embedding_cols = [col for col in df.columns if "emb" in col.lower() or "embedding" in col.lower() or "vector" in col.lower()]
         if not embedding_cols:
             raise ValueError(f"No embedding column found in dataset {dataset_id}. Available columns: {df.columns.tolist()}")
         df["dense_values"] = df[embedding_cols[0]]
-    
+
     # Save as parquet
     print(f"\nSaving dataset to {destination}")
     df.to_parquet(destination)
-    
+
     print(f"Dataset saved successfully with {len(df)} rows")
 
 def ensure_dataset_available(dataset_name):
@@ -233,13 +234,13 @@ def ensure_dataset_available(dataset_name):
     if not os.path.exists(datasets_dir):
         os.makedirs(datasets_dir)
         print(f"Created datasets directory at {os.path.abspath(datasets_dir)}")
-    
+
     # Create dataset-specific directory if it doesn't exist
     dataset_dir = os.path.join(datasets_dir, dataset_name)
     if not os.path.exists(dataset_dir):
         os.makedirs(dataset_dir)
         print(f"Created dataset directory at {os.path.abspath(dataset_dir)}")
-    
+
     # Check if dataset files exist
     if not any(f.endswith('.parquet') for f in os.listdir(dataset_dir)):
         print(f"Dataset {dataset_name} not found. Downloading...")
@@ -256,16 +257,16 @@ def prompt_and_get_dataset_metadata():
     dataset_idx = int(input("Select: ")) - 1
     dataset_name = dataset_names[dataset_idx]
     print(f"Reading {dataset_name} ...")
-    
+
     # Ask for test mode
     print("\nChoose test mode:")
     print("1) Quick test (smaller dataset, faster)")
     print("2) Full test (complete dataset, slower)")
     test_mode = int(input("Select (1 or 2): "))
-    
+
     # Ensure dataset is available
     ensure_dataset_available(dataset_name)
-    
+
     dataset = datasets[dataset_name]
     return (dataset_name, dataset, test_mode == 1)
 
@@ -458,7 +459,7 @@ def process_vectors_batch(vectors, collection, batch_size):
         # Ensure all IDs are strings
         for vector in vectors:
             vector["id"] = str(vector["id"])
-        
+
         with collection.transaction() as txn:
             txn.batch_upsert_vectors(vectors)
         return True
@@ -491,7 +492,7 @@ def process_parquet_files(
     id_counter = 0
     matches_test_vectors = []
     rps_test_vectors = []
-    
+
     # For quick test, use the first 10 vectors as test vectors
     if quick_test:
         matches_test_vector_ids_set = set(result["query_id"] for result in brute_force_results[:10])
@@ -713,7 +714,7 @@ def batch_ann_search(collection, vectors):
                 "top_k": 5
             } for vector in vectors
         ]
-        
+
         # Use the collection's search method
         results = collection.search.batch_dense(queries)
         return results
@@ -724,7 +725,7 @@ def batch_ann_search(collection, vectors):
 if __name__ == "__main__":
     # Get password securely
     password = getpass.getpass("Enter your database password: ")
-    
+
     # Initialize client
     client = Client(
         host="http://127.0.0.1:8443",
@@ -753,6 +754,67 @@ if __name__ == "__main__":
         dimension=dataset_metadata["dimension"],
         description="Test collection for vector database"
     )
+
+    # --- NEW RBAC SETUP STEPS ---
+    print("\nSetting up RBAC for collection '{}'...".format(vector_db_name))
+
+    # We need the admin token. Use the password entered at the start.
+    print("Re-authenticating admin for RBAC setup...")
+    auth_payload = {"username": "admin", "password": password} # Use the 'password' variable from getpass
+    auth_url = "{}/auth/create-session".format(host) # Construct URL using BASE_URL
+
+    admin_token_for_rbac = None # Initialize
+    try:
+        # Use global VERIFY_SSL for the direct requests call
+        auth_resp = requests.post(auth_url, json=auth_payload, verify=VERIFY_SSL)
+        auth_resp.raise_for_status()
+        auth_data = auth_resp.json()
+        admin_token_for_rbac = auth_data.get("access_token")
+        if not admin_token_for_rbac:
+            raise Exception("Could not get admin token from auth response: {}".format(auth_data))
+        print("RBAC setup token obtained.")
+    except Exception as e:
+        print("❌ Failed to re-authenticate admin for RBAC: {}".format(e))
+        if 'auth_resp' in locals(): print("Auth Response Text:", auth_resp.text) # Print response text on error
+        sys.exit(1)
+
+    # Use the obtained token for subsequent RBAC API calls
+    rbac_headers = {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer {}".format(admin_token_for_rbac)
+    }
+
+    # 1. Create RBAC Collection Entry
+    print("Creating RBAC collection entry...")
+    rbac_coll_payload = {"collection_name": vector_db_name}
+    rbac_coll_url = "{}/rbac/collections".format(host) # Use BASE_URL
+    try:
+        # Use global VERIFY_SSL
+        rbac_coll_resp = requests.post(rbac_coll_url, headers=rbac_headers, json=rbac_coll_payload, verify=VERIFY_SSL)
+        if rbac_coll_resp.status_code not in [201, 409]:
+             rbac_coll_resp.raise_for_status()
+        print("RBAC collection entry ensured (Status: {}).".format(rbac_coll_resp.status_code))
+    except Exception as e:
+        print("❌ Failed to create RBAC collection entry: {}".format(e))
+        if 'rbac_coll_resp' in locals(): print("RBAC Coll Response Text:", rbac_coll_resp.text)
+        sys.exit(1)
+
+    # 2. Assign Admin Role to Admin User for this Collection
+    print("Assigning admin role to admin user for '{}'...".format(vector_db_name))
+    rbac_assign_url = "{}/rbac/collections/{}/users/{}/roles/admin".format(host, vector_db_name, "admin") # Use BASE_URL, ADMIN_USER
+    try:
+        # Use global VERIFY_SSL
+        rbac_assign_resp = requests.put(rbac_assign_url, headers=rbac_headers, verify=VERIFY_SSL)
+        rbac_assign_resp.raise_for_status() # Expect 200 OK
+        print("Admin role assigned to admin for collection.")
+    except Exception as e:
+        print("❌ Failed to assign admin role for collection: {}".format(e))
+        if 'rbac_assign_resp' in locals(): print("RBAC Assign Response Text:", rbac_assign_resp.text)
+        sys.exit(1)
+
+    print("RBAC setup complete for collection.")
+    print("-----------------------------------")
+    # --- END NEW RBAC SETUP STEPS ---
 
     # Create index
     print("Creating index...")

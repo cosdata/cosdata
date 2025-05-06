@@ -42,6 +42,8 @@ pub async fn run_actix_server_with_context(ctx: Data<AppContext>) -> std::io::Re
     );
 
     let server = HttpServer::new(move || {
+        let auth_mw = AuthenticationMiddleware(ctx.ain_env.active_sessions.clone()); // Create instance
+
         App::new()
             // enable logger
             .wrap(middleware::Logger::default())
@@ -53,29 +55,32 @@ pub async fn run_actix_server_with_context(ctx: Data<AppContext>) -> std::io::Re
             .app_data(ctx.clone())
             .service(auth_module())
             .service(
-                web::scope("/vectordb")
-                    .wrap(AuthenticationMiddleware(
-                        ctx.ain_env.active_sessions.clone(),
-                    ))
-                    // vectors module must be registered before collections module
-                    // as its scope path is more specific than collections module
-                    .service(search_module())
-                    .service(indexes_module())
-                    .service(vectors_module())
-                    .service(transactions_module())
-                    .service(version_module())
-                    .service(collections_module())
+                web::scope("")
+                    .wrap(auth_mw)
                     .service(
-                        web::scope("{database_name}/transactions")
-                            .route(
-                                "/{transaction_id}/update",
-                                web::post().to(api::vectordb::transactions::update),
+                        web::scope("/vectordb")
+                            .service(search_module())
+                            .service(indexes_module())
+                            .service(vectors_module())
+                            .service(transactions_module())
+                            .service(version_module())
+                            .service(collections_module())
+                            .service(
+                                web::scope("{database_name}/transactions")
+                                    .route(
+                                        "/{transaction_id}/update",
+                                        web::post().to(api::vectordb::transactions::update::update)
+                                        .wrap(crate::rbac::guards::require_upsert_vectors())
+                                    )
+                                    .route(
+                                        "/{transaction_id}/delete",
+                                        web::post().to(api::vectordb::transactions::delete::delete)
+                                        .wrap(crate::rbac::guards::require_delete_vectors())
+                                    ),
                             )
-                            .route(
-                                "/{transaction_id}/delete",
-                                web::post().to(api::vectordb::transactions::delete),
-                            ),
-                    ),
+                    )
+                    .configure(crate::api::rbac::configure_routes)
+
             )
     })
     .keep_alive(std::time::Duration::from_secs(10));
