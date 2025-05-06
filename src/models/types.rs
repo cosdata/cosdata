@@ -1,5 +1,5 @@
 use super::{
-    buffered_io::BufferManagerFactory,
+    buffered_io::{BufIoError, BufferManagerFactory},
     cache_loader::HNSWIndexCache,
     collection::{Collection, CollectionMetadata},
     crypto::{DoubleSHA256Hash, SingleSHA256Hash},
@@ -11,8 +11,8 @@ use super::{
         retrieve_values_upper_bound,
     },
     paths::get_data_path,
-    prob_lazy_load::lazy_item::FileIndex,
-    prob_node::ProbNode,
+    prob_node::{ProbNode, SharedNode},
+    serializer::hnsw::HNSWIndexSerialize,
     tf_idf_index::TFIDFIndexRoot,
     tree_map::{TreeMap, TreeMapKey, TreeMapVec},
     versioning::VersionControl,
@@ -27,11 +27,17 @@ use crate::{
         hamming::HammingDistance,
         DistanceError, DistanceFunction,
     },
-    indexes::{hnsw::HNSWIndex, inverted::InvertedIndex, tf_idf::TFIDFIndex, IndexOps},
-    metadata::{schema::MetadataDimensions, QueryFilterDimensions, HIGH_WEIGHT},
-    models::{
-        buffered_io::BufIoError, common::*, meta_persist::retrieve_values_range, versioning::*,
+    indexes::{
+        hnsw::{
+            offset_counter::{HNSWIndexFileOffsetCounter, IndexFileId},
+            HNSWIndex,
+        },
+        inverted::InvertedIndex,
+        tf_idf::TFIDFIndex,
+        IndexOps,
     },
+    metadata::{schema::MetadataDimensions, QueryFilterDimensions, HIGH_WEIGHT},
+    models::{common::*, meta_persist::retrieve_values_range},
     quantization::{
         product::ProductQuantization, scalar::ScalarQuantization, Quantization, QuantizationError,
         StorageType,
@@ -40,25 +46,22 @@ use crate::{
 };
 use dashmap::DashMap;
 use lmdb::{Cursor, Database, DatabaseFlags, Environment, Transaction, WriteFlags};
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher24;
-use std::sync::atomic::{AtomicBool, AtomicUsize};
-use std::sync::{Arc, RwLock};
-use std::time::Instant;
 use std::{
     fmt,
-    fs::{create_dir_all, OpenOptions},
-    str::FromStr,
-};
-use std::{
+    fs::{self, create_dir_all, OpenOptions},
     hash::{Hash as StdHash, Hasher},
-    ops::{Div, Mul},
-};
-use std::{io::Write, ops::Deref};
-use std::{
+    io::Write,
+    ops::{Deref, Div, Mul},
     path::{Path, PathBuf},
-    sync::atomic::AtomicU32,
+    str::FromStr,
+    sync::{
+        atomic::{AtomicBool, AtomicU32, AtomicUsize},
+        Arc, RwLock,
+    },
+    time::Instant,
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -132,10 +135,16 @@ impl From<&QueryFilterDimensions> for Metadata {
     }
 }
 
+impl PartialEq for Metadata {
+    fn eq(&self, other: &Self) -> bool {
+        self.mag.to_bits() == other.mag.to_bits() && self.mbits == other.mbits
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetadataId(pub u8);
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct NodePropMetadata {
     pub vec: Arc<Metadata>,
     pub location: PropPersistRef,
@@ -532,13 +541,13 @@ impl CollectionsMap {
                     .load_hnsw_index(
                         &collection_meta,
                         &lmdb,
-                        &vcs,
                         config,
                         collection_meta
                             .metadata_schema
                             .as_ref()
                             .map_or(1, |schema| schema.max_num_replicas()),
-                    )?
+                    )
+                    .unwrap()
                     .map(Arc::new)
             } else {
                 None
@@ -627,12 +636,12 @@ impl CollectionsMap {
             if background_version != current_version {
                 let all_versions = collection.vcs.get_branch_versions("main")?;
                 let mut index = false;
-                for (hash, info) in all_versions {
+                for (hash, _) in all_versions {
                     if hash == background_version {
                         index = true;
                     }
                     if index {
-                        collection.trigger_indexing(hash, *info.version);
+                        collection.trigger_indexing(hash);
                     }
                 }
             }
@@ -652,7 +661,6 @@ impl CollectionsMap {
         &self,
         collection_meta: &CollectionMetadata,
         lmdb: &MetaDb,
-        vcs: &VersionControl,
         config: &Config,
         max_replicas_per_node: u8,
     ) -> Result<Option<HNSWIndex>, WaCustomError> {
@@ -689,169 +697,13 @@ impl CollectionsMap {
             }
         };
 
-        let node_size = ProbNode::get_serialized_size(hnsw_index_data.hnsw_params.neighbors_count);
-        let level_0_node_size =
-            ProbNode::get_serialized_size(hnsw_index_data.hnsw_params.level_0_neighbors_count);
-
-        let bufman_size = node_size * 1000;
-        let level_0_bufman_size = level_0_node_size * 1000;
-
         let index_manager = Arc::new(BufferManagerFactory::new(
             index_path.clone().into(),
-            |root, ver: &Hash| root.join(format!("{}.index", **ver)),
-            bufman_size,
-        ));
-        let level_0_index_manager = Arc::new(BufferManagerFactory::new(
-            index_path.clone().into(),
-            |root, ver: &Hash| root.join(format!("{}_0.index", **ver)),
-            level_0_bufman_size,
+            |root, ver: &IndexFileId| root.join(format!("{}.index", **ver)),
+            8192,
         ));
         let distance_metric = Arc::new(RwLock::new(hnsw_index_data.distance_metric));
-        let cache = HNSWIndexCache::new(
-            index_manager.clone(),
-            level_0_index_manager.clone(),
-            prop_file,
-            distance_metric.clone(),
-        );
-
-        let FileIndex {
-            offset: root_offset,
-            version_number: root_version_number,
-            version_id: root_version_id,
-        } = hnsw_index_data.file_index;
-
-        let root_node_region_offset = root_offset.0 - (root_offset.0 % bufman_size as u32);
-        let load_start = Instant::now();
-
-        let region_result = cache.load_region(
-            root_node_region_offset,
-            root_version_number,
-            root_version_id,
-            node_size as u32,
-            false,
-        );
-
-        let region = match region_result {
-            Ok(r) => r,
-            Err(e) => {
-                return Err(WaCustomError::DatabaseError(format!(
-                    "Failed to load region: {}",
-                    e
-                )));
-            }
-        };
-
-        let root_index = (root_offset.0 - root_node_region_offset) as usize / node_size;
-        if root_index >= region.len() {
-            return Err(WaCustomError::DatabaseError(format!(
-                "Root index out of bounds: {} >= {}",
-                root_index,
-                region.len()
-            )));
-        }
-
-        let root = region[root_index];
-
-        let versions_result = vcs.get_branch_versions("main");
-        let mut versions = match versions_result {
-            Ok(v) => v,
-            Err(err) => {
-                return Err(WaCustomError::DatabaseError(format!(
-                    "Failed to get branch versions: {}",
-                    err
-                )));
-            }
-        };
-
-        // root node region is already loaded
-        let mut num_regions_queued = 1;
-        let mut regions_to_load = Vec::new();
-
-        while !versions.is_empty() {
-            let num_regions_to_load = (config.num_regions_to_load_on_restart - num_regions_queued)
-                .div_ceil(versions.len())
-                / 2;
-            let (version_id, version_hash) = versions.remove(0);
-
-            // level n
-            let bufman_result = index_manager.get(version_id);
-            let bufman = match bufman_result {
-                Ok(bm) => bm,
-                Err(e) => {
-                    return Err(WaCustomError::DatabaseError(format!(
-                        "Failed to get buffer manager: {}",
-                        e
-                    )));
-                }
-            };
-            for i in 0..num_regions_to_load.min((bufman.file_size() as usize).div_ceil(bufman_size))
-            {
-                let region_start = (bufman_size * i) as u32;
-                if version_id == root_version_id && region_start == root_node_region_offset {
-                    continue;
-                }
-                regions_to_load.push((
-                    region_start,
-                    *version_hash.version,
-                    version_id,
-                    node_size as u32,
-                    false,
-                ));
-                num_regions_queued += 1;
-            }
-
-            // level 0
-            let level0_bufman_result = level_0_index_manager.get(version_id);
-            let level0_bufman = match level0_bufman_result {
-                Ok(bm) => bm,
-                Err(e) => {
-                    return Err(WaCustomError::DatabaseError(format!(
-                        "Failed to get level 0 buffer manager: {}",
-                        e
-                    )));
-                }
-            };
-
-            for i in 0..num_regions_to_load
-                .min((level0_bufman.file_size() as usize).div_ceil(level_0_bufman_size))
-            {
-                let region_start = (level_0_bufman_size * i) as u32;
-                regions_to_load.push((
-                    region_start,
-                    *version_hash.version,
-                    version_id,
-                    level_0_node_size as u32,
-                    true,
-                ));
-                num_regions_queued += 1;
-            }
-        }
-
-        let regions_load_result = regions_to_load
-            .into_par_iter()
-            .map(
-                |(region_start, version_number, version_id, node_size, is_level_0)| {
-                    cache.load_region(
-                        region_start,
-                        version_number,
-                        version_id,
-                        node_size,
-                        is_level_0,
-                    )?;
-                    Ok(())
-                },
-            )
-            .collect::<Result<Vec<_>, BufIoError>>();
-
-        if let Err(e) = regions_load_result {
-            return Err(WaCustomError::DatabaseError(format!(
-                "Failed to load regions: {}",
-                e
-            )));
-        }
-
-        let load_time = load_start.elapsed();
-        println!("Loaded regions in: {:?}", load_time);
+        let cache = HNSWIndexCache::new(index_manager.clone(), prop_file, distance_metric.clone());
 
         let values_range_result = retrieve_values_range(lmdb);
         let values_range = match values_range_result {
@@ -863,6 +715,69 @@ impl CollectionsMap {
                 )));
             }
         };
+
+        let first_index_file_path = index_path.join("0.index");
+        let (file_id, offset) = if first_index_file_path.exists() {
+            let mut file_id = 0;
+            let mut offset = fs::metadata(first_index_file_path)
+                .map_err(BufIoError::Io)?
+                .len() as u32;
+            loop {
+                let index_file_path = index_path.join(format!("{}.index", file_id));
+                if index_file_path.exists() {
+                    file_id += 1;
+                    offset = fs::metadata(index_file_path).map_err(BufIoError::Io)?.len() as u32;
+                } else {
+                    break;
+                }
+            }
+
+            (file_id, offset)
+        } else {
+            (0, 0)
+        };
+        let offset_counter = HNSWIndexFileOffsetCounter::from_offset_and_file_id(
+            offset,
+            file_id,
+            config.index_file_min_size,
+            hnsw_index_data.hnsw_params.level_0_neighbors_count,
+            hnsw_index_data.hnsw_params.neighbors_count,
+        );
+
+        let start = Instant::now();
+
+        let mut ready_items = FxHashMap::default();
+        let mut pending_items = FxHashMap::default();
+
+        let file_index = hnsw_index_data.file_index;
+        let bufman = index_manager.get(file_index.file_id)?;
+        let root = SharedNode::deserialize(
+            &bufman,
+            file_index.offset,
+            file_index.file_id,
+            &cache,
+            &ready_items,
+            &mut pending_items,
+        )?;
+
+        while let Some(file_index) = pending_items.keys().next().cloned() {
+            let bufman = index_manager.get(file_index.file_id)?;
+            let node = ProbNode::deserialize(
+                &bufman,
+                file_index.offset,
+                file_index.file_id,
+                &cache,
+                &ready_items,
+                &mut pending_items,
+            )?;
+            let lazy_item = pending_items.remove(&file_index).unwrap();
+            let lazy_item_ref = unsafe { &*lazy_item };
+            lazy_item_ref.set_data(node);
+            ready_items.insert(file_index, lazy_item);
+        }
+
+        println!("Dense index loaded in {:?}", start.elapsed());
+
         let hnsw_index = HNSWIndex::new(
             root,
             hnsw_index_data.levels_prob,
@@ -876,6 +791,7 @@ impl CollectionsMap {
             hnsw_index_data.sample_threshold,
             values_range.is_some(),
             max_replicas_per_node,
+            offset_counter,
         );
 
         Ok(Some(hnsw_index))

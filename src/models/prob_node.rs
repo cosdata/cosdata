@@ -12,6 +12,7 @@ use super::{
     cache_loader::HNSWIndexCache,
     prob_lazy_load::lazy_item::ProbLazyItem,
     types::{DistanceMetric, HNSWLevel, InternalId, MetricResult, NodePropMetadata, NodePropValue},
+    versioning::VersionHash,
 };
 
 pub type SharedNode = *mut ProbLazyItem<ProbNode>;
@@ -19,6 +20,7 @@ pub type Neighbors = Box<[AtomicPtr<(InternalId, SharedNode, MetricResult)>]>;
 
 pub struct ProbNode {
     pub hnsw_level: HNSWLevel,
+    pub version: VersionHash,
     pub prop_value: Arc<NodePropValue>,
     pub prop_metadata: Option<Arc<NodePropMetadata>>,
     // Each neighbor is represented as (neighbor_id, neighbor_node, distance)
@@ -40,8 +42,10 @@ unsafe impl Send for ProbNode {}
 unsafe impl Sync for ProbNode {}
 
 impl ProbNode {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         hnsw_level: HNSWLevel,
+        version: VersionHash,
         prop_value: Arc<NodePropValue>,
         prop_metadata: Option<Arc<NodePropMetadata>>,
         parent: SharedNode,
@@ -57,6 +61,7 @@ impl ProbNode {
 
         Self {
             hnsw_level,
+            version,
             prop_value,
             prop_metadata,
             neighbors: neighbors.into_boxed_slice(),
@@ -70,6 +75,7 @@ impl ProbNode {
     #[allow(clippy::too_many_arguments)]
     pub fn new_with_neighbors_and_versions_and_root_version(
         hnsw_level: HNSWLevel,
+        version: VersionHash,
         prop_value: Arc<NodePropValue>,
         prop_metadata: Option<Arc<NodePropMetadata>>,
         neighbors: Neighbors,
@@ -97,6 +103,7 @@ impl ProbNode {
 
         Self {
             hnsw_level,
+            version,
             prop_value,
             prop_metadata,
             neighbors,
@@ -266,7 +273,7 @@ impl ProbNode {
 
     /// See [`crate::models::serializer::hnsw::node`] for how its calculated
     pub fn get_serialized_size(neighbors_len: usize) -> usize {
-        neighbors_len * 19 + 49
+        neighbors_len * 17 + 52
     }
 }
 

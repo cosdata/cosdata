@@ -1,12 +1,17 @@
-use std::{collections::HashSet, ptr, sync::atomic::AtomicPtr};
+use std::{ptr, sync::atomic::AtomicPtr};
 
-use crate::models::{
-    buffered_io::{BufIoError, BufferManagerFactory},
-    cache_loader::HNSWIndexCache,
-    prob_lazy_load::lazy_item::FileIndex,
-    prob_node::{ProbNode, SharedNode},
-    types::{BytesToRead, FileOffset, HNSWLevel, InternalId, MetricResult},
-    versioning::Hash,
+use rustc_hash::FxHashMap;
+
+use crate::{
+    indexes::hnsw::offset_counter::IndexFileId,
+    models::{
+        buffered_io::{BufIoError, BufferManager},
+        cache_loader::HNSWIndexCache,
+        prob_lazy_load::lazy_item::{FileIndex, ProbLazyItem},
+        prob_node::{ProbNode, SharedNode},
+        types::{BytesToRead, FileOffset, HNSWLevel, InternalId, MetricResult},
+        versioning::VersionHash,
+    },
 };
 
 use super::HNSWIndexSerialize;
@@ -14,37 +19,31 @@ use super::HNSWIndexSerialize;
 // @SERIALIZED_SIZE:
 //   Properties:
 //     1 byte for HNSW level +                           | 1
-//     8 bytes for prop offset & length +                | 9
-//     8 bytes for prop metadata offset & length         | 9 + 8 = 17
+//     8 bytes for version +                             | 9
+//     8 bytes for prop offset & length +                | 17
+//     8 bytes for prop metadata offset & length         | 17 + 8 = 25
 //
 //   Links:
-//     10 bytes for parent offset & version +           | 10
-//     10 bytes for child offset & version +            | 20
-//     10 bytes for root version offset & version +     | 30
-//     2 bytes for neighbors length +                   | 32
-//     neighbors length * 19 bytes for neighbor link +  | nb * 19 + 32
+//     8 bytes for parent offset & file id +            | 8
+//     8 bytes for child offset & file id +             | 16
+//     1 byte for root version tag +                    | 17
+//     8 bytes for root version offset & file id +      | 25
+//     2 bytes for neighbors length +                   | 27
+//     neighbors length * 17 bytes for neighbor link +  | nb * 17 + 27
 //
-//   Total = nb * 19 + 49 (where `nb` is the neighbors count)
+//   Total = nb * 17 + 52 (where `nb` is the neighbors count)
 impl HNSWIndexSerialize for ProbNode {
-    fn serialize(
-        &self,
-        bufmans: &BufferManagerFactory<Hash>,
-        version: Hash,
-        cursor: u64,
-    ) -> Result<u32, BufIoError> {
-        let is_level_0 = self.hnsw_level.0 == 0;
-        let bufman = bufmans.get(version)?;
+    fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
         let start_offset = bufman.cursor_position(cursor)?;
 
         let neighbors = self.get_neighbors_raw();
-        let size = Self::get_serialized_size(neighbors.len()) as u64;
 
-        debug_assert_eq!(start_offset % size, 0, "offset: {}", start_offset);
-
-        let mut buf = Vec::with_capacity(47);
+        let mut buf = Vec::with_capacity(50);
 
         // Serialize basic fields
         buf.push(self.hnsw_level.0);
+
+        buf.extend(self.version.to_le_bytes());
 
         // Serialize prop_value
         let (FileOffset(offset), BytesToRead(length)) = &self.prop_value.location;
@@ -63,64 +62,36 @@ impl HNSWIndexSerialize for ProbNode {
         let parent_ptr = self.get_parent();
 
         // Get parent file index
-        let parent_file_index = if let Some(parent) = unsafe { parent_ptr.as_ref() } {
-            debug_assert!(!parent.is_level_0);
-            Some(parent.file_index)
-        } else {
-            None
-        };
+        let parent_file_index = unsafe { parent_ptr.as_ref() }.map(|parent| parent.file_index);
 
         let child_ptr = self.get_child();
 
         // Get child file index
-        let child_file_index = if let Some(child) = unsafe { child_ptr.as_ref() } {
-            debug_assert_eq!(child.is_level_0, self.hnsw_level.0 == 1);
-            Some(child.file_index)
-        } else {
-            None
-        };
+        let child_file_index = unsafe { child_ptr.as_ref() }.map(|child| child.file_index);
 
-        if let Some(FileIndex {
-            offset,
-            version_number,
-            version_id,
-        }) = parent_file_index
-        {
+        if let Some(FileIndex { offset, file_id }) = parent_file_index {
             buf.extend(offset.0.to_le_bytes());
-            buf.extend(version_number.to_le_bytes());
-            buf.extend(version_id.to_le_bytes());
+            buf.extend(file_id.to_le_bytes());
         } else {
-            buf.extend([u8::MAX; 10]);
+            buf.extend([u8::MAX; 8]);
         }
 
-        if let Some(FileIndex {
-            offset,
-            version_number,
-            version_id,
-        }) = child_file_index
-        {
+        if let Some(FileIndex { offset, file_id }) = child_file_index {
             buf.extend(offset.0.to_le_bytes());
-            buf.extend(version_number.to_le_bytes());
-            buf.extend(version_id.to_le_bytes());
+            buf.extend(file_id.to_le_bytes());
         } else {
-            buf.extend([u8::MAX; 10]);
+            buf.extend([u8::MAX; 8]);
         }
 
         let (root, is_root) = *self.root_version.read();
 
         if let Some(root) = unsafe { root.as_ref() } {
-            debug_assert_eq!(root.is_level_0, is_level_0);
-            let FileIndex {
-                offset,
-                version_number,
-                version_id,
-            } = root.file_index;
-            let tagged_offset = if is_root { offset.0 + 1 } else { offset.0 };
-            buf.extend(tagged_offset.to_le_bytes());
-            buf.extend(version_number.to_le_bytes());
-            buf.extend(version_id.to_le_bytes());
+            let FileIndex { offset, file_id } = root.file_index;
+            buf.push(is_root as u8);
+            buf.extend(offset.0.to_le_bytes());
+            buf.extend(file_id.to_le_bytes());
         } else {
-            buf.extend([u8::MAX; 10]);
+            buf.extend([u8::MAX; 9]);
         }
 
         bufman.update_with_cursor(cursor, &buf)?;
@@ -128,40 +99,30 @@ impl HNSWIndexSerialize for ProbNode {
         #[cfg(debug_assertions)]
         {
             let current = bufman.cursor_position(cursor)?;
-            assert_eq!(current, start_offset + 47);
+            assert_eq!(current, start_offset + 50);
         }
 
         {
             let _lock = self.freeze();
-            neighbors.serialize(bufmans, version, cursor)?;
+            neighbors.serialize(bufman, cursor)?;
         }
 
         Ok(start_offset as u32)
     }
 
     fn deserialize(
-        bufmans: &BufferManagerFactory<Hash>,
-        file_index: FileIndex,
+        bufman: &BufferManager,
+        FileOffset(offset): FileOffset,
+        file_id: IndexFileId,
         cache: &HNSWIndexCache,
-        max_loads: u16,
-        skipm: &mut HashSet<u64>,
-        is_level_0: bool,
+        ready_items: &FxHashMap<FileIndex, SharedNode>,
+        pending_items: &mut FxHashMap<FileIndex, SharedNode>,
     ) -> Result<Self, BufIoError> {
-        let FileIndex {
-            version_id,
-            version_number,
-            offset: FileOffset(offset),
-        } = file_index;
-        let bufman = bufmans.get(version_id)?;
         let cursor = bufman.open_cursor()?;
         bufman.seek_with_cursor(cursor, offset as u64)?;
         // Read basic fields
         let hnsw_level = HNSWLevel(bufman.read_u8_with_cursor(cursor)?);
-        if is_level_0 {
-            debug_assert_eq!(hnsw_level.0, 0, "file_index: {:?}", file_index);
-        } else {
-            debug_assert_ne!(hnsw_level.0, 0, "file_index: {:?}", file_index);
-        }
+        let version = VersionHash::from(bufman.read_u64_with_cursor(cursor)?);
         // Read prop_value
         let prop_offset = FileOffset(bufman.read_u32_with_cursor(cursor)?);
         let prop_length = BytesToRead(bufman.read_u32_with_cursor(cursor)?);
@@ -180,110 +141,89 @@ impl HNSWIndexSerialize for ProbNode {
         };
 
         let parent_offset = bufman.read_u32_with_cursor(cursor)?;
-        let parent_version_number = bufman.read_u16_with_cursor(cursor)?;
-        let parent_version_id = Hash::from(bufman.read_u32_with_cursor(cursor)?);
+        let parent_file_id = IndexFileId::from(bufman.read_u32_with_cursor(cursor)?);
 
         let child_offset = bufman.read_u32_with_cursor(cursor)?;
-        let child_version_number = bufman.read_u16_with_cursor(cursor)?;
-        let child_version_id = Hash::from(bufman.read_u32_with_cursor(cursor)?);
+        let child_file_id = IndexFileId::from(bufman.read_u32_with_cursor(cursor)?);
 
-        let root_version_tagged_offset = bufman.read_u32_with_cursor(cursor)?;
-        let root_version_version_number = bufman.read_u16_with_cursor(cursor)?;
-        let root_version_version_id = Hash::from(bufman.read_u32_with_cursor(cursor)?);
+        let root_tag = bufman.read_u8_with_cursor(cursor)? != 0;
+        let root_offset = bufman.read_u32_with_cursor(cursor)?;
+        let root_file_id = IndexFileId::from(bufman.read_u32_with_cursor(cursor)?);
+
         bufman.close_cursor(cursor)?;
         // Deserialize parent
         let parent = if parent_offset != u32::MAX {
-            SharedNode::deserialize(
-                bufmans,
-                FileIndex {
-                    offset: FileOffset(parent_offset),
-                    version_number: parent_version_number,
-                    version_id: parent_version_id,
-                },
-                cache,
-                max_loads,
-                skipm,
-                false,
-            )?
+            let parent_file_index = FileIndex {
+                offset: FileOffset(parent_offset),
+                file_id: parent_file_id,
+            };
+            ready_items
+                .get(&parent_file_index)
+                .cloned()
+                .unwrap_or_else(|| {
+                    *pending_items
+                        .entry(parent_file_index)
+                        .or_insert_with(|| ProbLazyItem::new_pending(parent_file_index))
+                })
         } else {
             ptr::null_mut()
         };
         // Deserialize child
         let child = if child_offset != u32::MAX {
-            SharedNode::deserialize(
-                bufmans,
-                FileIndex {
-                    offset: FileOffset(child_offset),
-                    version_number: child_version_number,
-                    version_id: child_version_id,
-                },
-                cache,
-                max_loads,
-                skipm,
-                hnsw_level.0 == 1,
-            )?
+            let child_file_index = FileIndex {
+                offset: FileOffset(child_offset),
+                file_id: child_file_id,
+            };
+            ready_items
+                .get(&child_file_index)
+                .cloned()
+                .unwrap_or_else(|| {
+                    *pending_items
+                        .entry(child_file_index)
+                        .or_insert_with(|| ProbLazyItem::new_pending(child_file_index))
+                })
         } else {
             ptr::null_mut()
         };
-
-        let neighbors_file_index = FileIndex {
-            // @NOTE: 47 = 17 (properties) + 10 (parent) + 10 (child)
-            // + 10 (root)
-            offset: FileOffset(offset + 47),
-            version_number,
-            version_id,
+        // Deserialize root version
+        let root_version = if root_offset != u32::MAX {
+            let root_file_index = FileIndex {
+                offset: FileOffset(root_offset),
+                file_id: root_file_id,
+            };
+            ready_items
+                .get(&root_file_index)
+                .cloned()
+                .unwrap_or_else(|| {
+                    *pending_items
+                        .entry(root_file_index)
+                        .or_insert_with(|| ProbLazyItem::new_pending(root_file_index))
+                })
+        } else {
+            ptr::null_mut()
         };
 
         let neighbors: Box<[AtomicPtr<(InternalId, SharedNode, MetricResult)>]> =
             HNSWIndexSerialize::deserialize(
-                bufmans,
-                neighbors_file_index,
+                bufman,
+                // @NOTE: 50 = 25 (properties) + 8 (parent) + 8 (child) + 9 (root)
+                FileOffset(offset + 50),
+                file_id,
                 cache,
-                max_loads,
-                skipm,
-                is_level_0,
+                ready_items,
+                pending_items,
             )?;
-        let size = Self::get_serialized_size(neighbors.len()) as u32;
-        let (root_version_offset, root_version_tag) = if root_version_tagged_offset == u32::MAX {
-            (u32::MAX, false)
-        } else if root_version_tagged_offset % size == 0 {
-            (root_version_tagged_offset, false)
-        } else {
-            debug_assert_eq!(
-                root_version_tagged_offset % size,
-                1,
-                "offset: {}",
-                root_version_tagged_offset
-            );
-            (root_version_tagged_offset - 1, true)
-        };
-        // Deserialize root_version
-        let root_version = if root_version_offset != u32::MAX {
-            SharedNode::deserialize(
-                bufmans,
-                FileIndex {
-                    offset: FileOffset(root_version_offset),
-                    version_number: root_version_version_number,
-                    version_id: root_version_version_id,
-                },
-                cache,
-                max_loads,
-                skipm,
-                hnsw_level.0 == 0,
-            )?
-        } else {
-            ptr::null_mut()
-        };
 
         Ok(Self::new_with_neighbors_and_versions_and_root_version(
             hnsw_level,
+            version,
             prop,
             metadata,
             neighbors,
             parent,
             child,
             root_version,
-            root_version_tag,
+            root_tag,
             *cache.distance_metric.read().unwrap(),
         ))
     }

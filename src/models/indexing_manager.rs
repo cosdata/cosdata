@@ -1,3 +1,17 @@
+use super::{
+    buffered_io::BufIoError,
+    collection::Collection,
+    collection_transaction::{
+        BackgroundCollectionTransaction, Progress, Summary, TransactionStatus,
+    },
+    common::WaCustomError,
+    meta_persist::update_background_version,
+    versioning::VersionHash,
+    wal::{VectorOp, WALFile},
+};
+use crate::config_loader::{Config, VectorsIndexingMode};
+use chrono::Utc;
+use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use std::{
     fs,
     sync::{
@@ -7,26 +21,9 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use chrono::Utc;
-use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
-
-use crate::config_loader::{Config, VectorsIndexingMode};
-
-use super::{
-    buffered_io::BufIoError,
-    collection::Collection,
-    collection_transaction::{
-        BackgroundCollectionTransaction, Progress, Summary, TransactionStatus,
-    },
-    common::WaCustomError,
-    meta_persist::update_background_version,
-    versioning::Hash,
-    wal::{VectorOp, WALFile},
-};
-
 pub struct IndexingManager {
     thread: Option<JoinHandle<Result<(), WaCustomError>>>,
-    channel: mpsc::Sender<(Hash, u16)>,
+    channel: mpsc::Sender<VersionHash>,
 }
 
 impl IndexingManager {
@@ -34,17 +31,17 @@ impl IndexingManager {
         let (sender, receiver) = mpsc::channel();
 
         let thread = thread::spawn(move || {
-            for (version_id, version_number) in receiver {
+            for version_hash in receiver {
                 let txn = BackgroundCollectionTransaction::from_version_id_and_number(
                     collection.clone(),
-                    version_id,
-                    version_number,
-                )?;
-                let wal = WALFile::new(&collection.get_path(), version_id)?;
+                    version_hash,
+                    version_hash.version_number(),
+                );
+                let wal = WALFile::new(&collection.get_path(), version_hash)?;
                 let vectors_count = wal.vectors_count();
                 let status = collection
                     .transaction_status_map
-                    .get_latest(&version_id)
+                    .get_latest(&version_hash)
                     .unwrap();
                 let start = Utc::now();
                 *status.write() = TransactionStatus::InProgress {
@@ -121,8 +118,8 @@ impl IndexingManager {
                 let delta = end - start;
                 let delta_seconds = (delta.num_seconds() as u32).max(1);
                 txn.pre_commit(&collection, &config)?;
-                update_background_version(&collection.lmdb, version_id)?;
-                fs::remove_file(collection.get_path().join(format!("{}.wal", *version_id)))
+                update_background_version(&collection.lmdb, version_hash)?;
+                fs::remove_file(collection.get_path().join(format!("{}.wal", *version_hash)))
                     .map_err(BufIoError::Io)?;
                 let total_records_indexed = records_indexed.load(Ordering::Relaxed);
                 *status.write() = TransactionStatus::Complete {
@@ -144,8 +141,8 @@ impl IndexingManager {
         }
     }
 
-    pub fn trigger(&self, version_id: Hash, version_number: u16) {
-        self.channel.send((version_id, version_number)).unwrap()
+    pub fn trigger(&self, version_hash: VersionHash) {
+        self.channel.send(version_hash).unwrap()
     }
 }
 

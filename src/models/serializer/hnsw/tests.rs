@@ -1,20 +1,19 @@
 use super::HNSWIndexSerialize;
 use crate::{
     distance::cosine::CosineSimilarity,
+    indexes::hnsw::offset_counter::IndexFileId,
     models::{
         buffered_io::{BufferManager, BufferManagerFactory},
         cache_loader::HNSWIndexCache,
         file_persist::write_prop_value_to_file,
-        prob_lazy_load::{
-            lazy_item::{FileIndex, ProbLazyItem},
-            lazy_item_array::ProbLazyItemArray,
-        },
+        prob_lazy_load::lazy_item::ProbLazyItem,
         prob_node::{ProbNode, SharedNode},
         types::{DistanceMetric, FileOffset, HNSWLevel, InternalId, MetricResult, NodePropValue},
-        versioning::Hash,
+        versioning::VersionHash,
     },
     storage::Storage,
 };
+use rustc_hash::FxHashMap;
 use std::{
     collections::HashSet,
     fs::{File, OpenOptions},
@@ -38,7 +37,9 @@ pub trait EqualityTest {
 impl EqualityTest for ProbNode {
     fn assert_eq(&self, other: &Self, tester: &mut EqualityTester) {
         assert_eq!(self.hnsw_level, other.hnsw_level);
+        assert_eq!(self.version, other.version);
         assert_eq!(self.prop_value, other.prop_value);
+        assert_eq!(self.prop_metadata, other.prop_metadata);
 
         let parent = self.get_parent();
         if !parent.is_null() {
@@ -82,17 +83,6 @@ impl EqualityTest for Box<[AtomicPtr<(InternalId, SharedNode, MetricResult)>]> {
     }
 }
 
-impl<const N: usize> EqualityTest for ProbLazyItemArray<ProbNode, N> {
-    fn assert_eq(&self, other: &Self, tester: &mut EqualityTester) {
-        assert_eq!(self.len(), other.len());
-        for i in 0..self.len() {
-            let self_el = self.get(i).unwrap();
-            let other_el = other.get(i).unwrap();
-            self_el.assert_eq(&other_el, tester);
-        }
-    }
-}
-
 impl EqualityTest for SharedNode {
     fn assert_eq(&self, other: &Self, tester: &mut EqualityTester) {
         if tester.checked.insert((*self, *other)) {
@@ -116,18 +106,17 @@ impl EqualityTester {
 }
 
 fn get_cache(
-    bufmans: Arc<BufferManagerFactory<Hash>>,
+    bufmans: Arc<BufferManagerFactory<IndexFileId>>,
     prop_file: RwLock<File>,
 ) -> Arc<HNSWIndexCache> {
     Arc::new(HNSWIndexCache::new(
-        bufmans.clone(),
         bufmans,
         prop_file,
         Arc::new(RwLock::new(DistanceMetric::Cosine)),
     ))
 }
 
-fn create_prob_node(id: u32, prop_file: &RwLock<File>) -> ProbNode {
+fn create_prob_node(id: u32, version: VersionHash, prop_file: &RwLock<File>) -> ProbNode {
     let id = InternalId::from(id);
     let value = Storage::UnsignedByte {
         mag: 10.0,
@@ -143,6 +132,7 @@ fn create_prob_node(id: u32, prop_file: &RwLock<File>) -> ProbNode {
     });
     ProbNode::new(
         HNSWLevel(2),
+        version,
         prop.clone(),
         // @TODO(vineet): Add tests for optional metadata dimensions
         None,
@@ -154,9 +144,9 @@ fn create_prob_node(id: u32, prop_file: &RwLock<File>) -> ProbNode {
 }
 
 fn setup_test(
-    root_version: Hash,
+    root_version_file_id: IndexFileId,
 ) -> (
-    Arc<BufferManagerFactory<Hash>>,
+    Arc<BufferManagerFactory<IndexFileId>>,
     Arc<HNSWIndexCache>,
     Arc<BufferManager>,
     u64,
@@ -165,7 +155,7 @@ fn setup_test(
     let dir = tempdir().unwrap();
     let bufmans = Arc::new(BufferManagerFactory::new(
         dir.as_ref().into(),
-        |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+        |root, ver: &IndexFileId| root.join(format!("{}.index", **ver)),
         ProbNode::get_serialized_size(8),
     ));
     let prop_file = RwLock::new(
@@ -177,38 +167,35 @@ fn setup_test(
             .unwrap(),
     );
     let cache = get_cache(bufmans.clone(), prop_file);
-    let bufman = bufmans.get(root_version).unwrap();
+    let bufman = bufmans.get(root_version_file_id).unwrap();
     let cursor = bufman.open_cursor().unwrap();
     (bufmans, cache, bufman, cursor, dir)
 }
 
 #[test]
 fn test_lazy_item_serialization() {
-    let root_version_number = 0;
-    let root_version_id = Hash::from(0);
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_id);
-    let node = create_prob_node(0, &cache.prop_file);
+    let root_version_hash = VersionHash::from(0);
+    let root_version_file_id = IndexFileId::from(0);
+    let (_bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_file_id);
+    let node = create_prob_node(0, root_version_hash, &cache.prop_file);
 
-    let lazy_item = ProbLazyItem::new(
-        node,
-        root_version_id,
-        root_version_number,
-        false,
-        FileOffset(0),
-    );
+    let lazy_item = ProbLazyItem::new(node, root_version_file_id, FileOffset(0));
 
-    let offset = lazy_item
-        .serialize(&bufmans, root_version_id, cursor)
-        .unwrap();
+    let offset = lazy_item.serialize(&bufman, cursor).unwrap();
     bufman.close_cursor(cursor).unwrap();
 
-    let file_index = FileIndex {
-        offset: FileOffset(offset),
-        version_number: root_version_number,
-        version_id: root_version_id,
-    };
+    let ready_items = FxHashMap::default();
+    let mut pending_items = FxHashMap::default();
 
-    let deserialized: SharedNode = cache.load_item(file_index, false).unwrap();
+    let deserialized = SharedNode::deserialize(
+        &bufman,
+        FileOffset(offset),
+        root_version_file_id,
+        &cache,
+        &ready_items,
+        &mut pending_items,
+    )
+    .unwrap();
 
     let mut tester = EqualityTester::new(cache.clone());
 
@@ -217,20 +204,27 @@ fn test_lazy_item_serialization() {
 
 #[test]
 fn test_prob_node_acyclic_serialization() {
-    let root_version_id = Hash::from(0);
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_id);
+    let root_version_hash = VersionHash::from(0);
+    let root_version_file_id = IndexFileId::from(0);
+    let (_bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_file_id);
 
-    let node = create_prob_node(0, &cache.prop_file);
+    let node = create_prob_node(0, root_version_hash, &cache.prop_file);
 
-    let offset = node.serialize(&bufmans, root_version_id, cursor).unwrap();
-    let file_index = FileIndex {
-        offset: FileOffset(offset),
-        version_number: 0,
-        version_id: root_version_id,
-    };
+    let offset = node.serialize(&bufman, cursor).unwrap();
     bufman.close_cursor(cursor).unwrap();
 
-    let deserialized: ProbNode = cache.load_item(file_index, false).unwrap();
+    let ready_items = FxHashMap::default();
+    let mut pending_items = FxHashMap::default();
+
+    let deserialized = ProbNode::deserialize(
+        &bufman,
+        FileOffset(offset),
+        root_version_file_id,
+        &cache,
+        &ready_items,
+        &mut pending_items,
+    )
+    .unwrap();
 
     let mut tester = EqualityTester::new(cache.clone());
 
@@ -238,77 +232,25 @@ fn test_prob_node_acyclic_serialization() {
 }
 
 #[test]
-fn test_prob_lazy_item_array_serialization() {
-    let root_version_id = Hash::from(0);
-    let root_version_number = 0;
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_id);
-    let array = ProbLazyItemArray::<_, 8>::new();
-    let node_size = ProbNode::get_serialized_size(8) as u32;
-
-    for i in 0..5 {
-        let node = create_prob_node(i, &cache.prop_file);
-
-        let lazy_item = ProbLazyItem::new(
-            node,
-            root_version_id,
-            root_version_number,
-            false,
-            FileOffset(node_size * (i + 1)),
-        );
-        array.push(lazy_item);
-    }
-    let offset = node_size - 80;
-    bufman.seek_with_cursor(cursor, offset as u64).unwrap();
-    array.serialize(&bufmans, root_version_id, cursor).unwrap();
-    for i in 0..5 {
-        array
-            .get(i)
-            .unwrap()
-            .serialize(&bufmans, root_version_id, cursor)
-            .unwrap();
-    }
-    let file_index = FileIndex {
-        offset: FileOffset(offset),
-        version_number: 0,
-        version_id: root_version_id,
-    };
-    bufman.close_cursor(cursor).unwrap();
-
-    let deserialized: ProbLazyItemArray<ProbNode, 8> = cache.load_item(file_index, false).unwrap();
-
-    let mut tester = EqualityTester::new(cache.clone());
-
-    array.assert_eq(&deserialized, &mut tester);
-}
-
-#[test]
 fn test_prob_node_serialization_with_neighbors() {
-    let root_version_id = Hash::from(0);
-    let root_version_number = 0;
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_id);
+    let root_version_hash = VersionHash::from(0);
+    let root_version_file_id = IndexFileId::from(0);
+    let (_bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_file_id);
 
     let mut nodes = Vec::new();
 
-    let node = create_prob_node(0, &cache.prop_file);
-    let lazy_node = ProbLazyItem::new(
-        node,
-        root_version_id,
-        root_version_number,
-        false,
-        FileOffset(0),
-    );
+    let node = create_prob_node(0, root_version_hash, &cache.prop_file);
+    let lazy_node = ProbLazyItem::new(node, root_version_file_id, FileOffset(0));
     let node_size = ProbNode::get_serialized_size(8) as u32;
 
     nodes.push(lazy_node);
 
     for i in 1..11 {
-        let neighbor_node = create_prob_node(i, &cache.prop_file);
+        let neighbor_node = create_prob_node(i, root_version_hash, &cache.prop_file);
 
         let lazy_item = ProbLazyItem::new(
             neighbor_node,
-            root_version_id,
-            root_version_number,
-            false,
+            root_version_file_id,
             FileOffset(node_size * i),
         );
         let dist = MetricResult::CosineSimilarity(CosineSimilarity((i as f32) / 10.0));
@@ -326,17 +268,22 @@ fn test_prob_node_serialization_with_neighbors() {
     }
 
     for node in nodes {
-        node.serialize(&bufmans, root_version_id, cursor).unwrap();
+        node.serialize(&bufman, cursor).unwrap();
     }
-
-    let file_index = FileIndex {
-        offset: FileOffset(0),
-        version_number: 0,
-        version_id: root_version_id,
-    };
     bufman.close_cursor(cursor).unwrap();
 
-    let deserialized: SharedNode = cache.load_item(file_index, false).unwrap();
+    let ready_items = FxHashMap::default();
+    let mut pending_items = FxHashMap::default();
+
+    let deserialized = SharedNode::deserialize(
+        &bufman,
+        FileOffset(0),
+        root_version_file_id,
+        &cache,
+        &ready_items,
+        &mut pending_items,
+    )
+    .unwrap();
 
     let mut tester = EqualityTester::new(cache.clone());
 
@@ -345,28 +292,16 @@ fn test_prob_node_serialization_with_neighbors() {
 
 #[test]
 fn test_prob_lazy_item_cyclic_serialization() {
-    let root_version_id = Hash::from(0);
-    let root_version_number = 0;
-    let (bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_id);
+    let root_version_hash = VersionHash::from(0);
+    let root_version_file_id = IndexFileId::from(0);
+    let (_bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_file_id);
 
-    let node0 = create_prob_node(0, &cache.prop_file);
-    let node1 = create_prob_node(1, &cache.prop_file);
+    let node0 = create_prob_node(0, root_version_hash, &cache.prop_file);
+    let node1 = create_prob_node(1, root_version_hash, &cache.prop_file);
     let node_size = ProbNode::get_serialized_size(8) as u32;
 
-    let lazy0 = ProbLazyItem::new(
-        node0,
-        root_version_id,
-        root_version_number,
-        false,
-        FileOffset(0),
-    );
-    let lazy1 = ProbLazyItem::new(
-        node1,
-        root_version_id,
-        root_version_number,
-        false,
-        FileOffset(node_size),
-    );
+    let lazy0 = ProbLazyItem::new(node0, root_version_file_id, FileOffset(0));
+    let lazy1 = ProbLazyItem::new(node1, root_version_file_id, FileOffset(node_size));
 
     unsafe { &*lazy0 }
         .get_lazy_data()
@@ -375,17 +310,23 @@ fn test_prob_lazy_item_cyclic_serialization() {
 
     unsafe { &*lazy1 }.get_lazy_data().unwrap().set_child(lazy0);
 
-    lazy0.serialize(&bufmans, root_version_id, cursor).unwrap();
-    lazy1.serialize(&bufmans, root_version_id, cursor).unwrap();
+    lazy0.serialize(&bufman, cursor).unwrap();
+    lazy1.serialize(&bufman, cursor).unwrap();
 
-    let file_index = FileIndex {
-        offset: FileOffset(0),
-        version_number: 0,
-        version_id: root_version_id,
-    };
     bufman.close_cursor(cursor).unwrap();
 
-    let deserialized: SharedNode = cache.load_item(file_index, false).unwrap();
+    let ready_items = FxHashMap::default();
+    let mut pending_items = FxHashMap::default();
+
+    let deserialized: SharedNode = SharedNode::deserialize(
+        &bufman,
+        FileOffset(0),
+        root_version_file_id,
+        &cache,
+        &ready_items,
+        &mut pending_items,
+    )
+    .unwrap();
 
     let mut tester = EqualityTester::new(cache.clone());
 

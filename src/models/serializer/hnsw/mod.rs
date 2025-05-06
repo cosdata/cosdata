@@ -1,33 +1,31 @@
 mod lazy_item;
-mod lazy_item_array;
 mod neighbors;
 mod node;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashSet;
+use rustc_hash::FxHashMap;
 
-use crate::models::{
-    buffered_io::{BufIoError, BufferManagerFactory},
-    cache_loader::HNSWIndexCache,
-    prob_lazy_load::lazy_item::FileIndex,
-    versioning::Hash,
+use crate::{
+    indexes::hnsw::offset_counter::IndexFileId,
+    models::{
+        buffered_io::{BufIoError, BufferManager},
+        cache_loader::HNSWIndexCache,
+        prob_lazy_load::lazy_item::FileIndex,
+        prob_node::SharedNode,
+        types::FileOffset,
+    },
 };
 
 pub trait HNSWIndexSerialize: Sized {
-    fn serialize(
-        &self,
-        bufmans: &BufferManagerFactory<Hash>,
-        version: Hash,
-        cursor: u64,
-    ) -> Result<u32, BufIoError>;
+    fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError>;
 
     fn deserialize(
-        bufmans: &BufferManagerFactory<Hash>,
-        file_index: FileIndex,
+        bufman: &BufferManager,
+        offset: FileOffset,
+        file_id: IndexFileId,
         cache: &HNSWIndexCache,
-        max_loads: u16,
-        skipm: &mut HashSet<u64>,
-        is_level_0: bool,
+        ready_items: &FxHashMap<FileIndex, SharedNode>,
+        pending_items: &mut FxHashMap<FileIndex, SharedNode>,
     ) -> Result<Self, BufIoError>;
 }

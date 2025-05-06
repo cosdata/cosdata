@@ -5,31 +5,22 @@ use super::serializer::hnsw::HNSWIndexSerialize;
 use super::types::{
     BytesToRead, FileOffset, InternalId, Metadata, NodePropMetadata, NodePropValue,
 };
-use super::versioning::Hash;
+use crate::indexes::hnsw::offset_counter::IndexFileId;
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::sync::Arc;
 
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn write_node_to_file(
     lazy_item: SharedNode,
-    bufmans: &BufferManagerFactory<Hash>,
-    level_0_bufmans: &BufferManagerFactory<Hash>,
-    version: Hash,
+    bufmans: &BufferManagerFactory<IndexFileId>,
+    file_id: IndexFileId,
 ) -> Result<u32, BufIoError> {
-    let lazy_item_ref = unsafe { &*lazy_item };
-    let is_level_0 = lazy_item_ref.is_level_0;
-    let (bufman, bufmans) = if is_level_0 {
-        (level_0_bufmans.get(version)?, level_0_bufmans)
-    } else {
-        (bufmans.get(version)?, bufmans)
-    };
+    let bufman = bufmans.get(file_id)?;
     let cursor = bufman.open_cursor()?;
-    let offset = lazy_item.serialize(bufmans, version, cursor)?;
+    let offset = lazy_item.serialize(&bufman, cursor)?;
     bufman.close_cursor(cursor)?;
-
     Ok(offset)
 }
 

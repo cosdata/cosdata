@@ -1,24 +1,25 @@
-use crate::models::versioning::Hash;
 use serde::Serialize;
+
+use crate::models::versioning::{Timestamp, VersionHash, VersionNumber};
 
 #[derive(Serialize)]
 pub struct VersionMetadata {
-    pub hash: Hash,
-    pub version_number: u16,
-    pub timestamp: u32,
+    pub hash: VersionHash,
+    pub version_number: VersionNumber,
+    pub timestamp: Timestamp,
     pub vector_count: u64,
 }
 
 #[derive(Serialize)]
 pub struct VersionListResponse {
     pub versions: Vec<VersionMetadata>,
-    pub current_hash: Hash,
+    pub current_hash: VersionHash,
 }
 
 #[derive(Serialize)]
 pub struct CurrentVersionResponse {
-    pub hash: Hash,
-    pub version_number: u16,
-    pub timestamp: u64,
+    pub hash: VersionHash,
+    pub version_number: VersionNumber,
+    pub timestamp: Timestamp,
     pub vector_count: u64,
 }

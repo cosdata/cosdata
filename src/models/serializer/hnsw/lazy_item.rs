@@ -1,56 +1,43 @@
-use std::collections::HashSet;
+use rustc_hash::FxHashMap;
 
-use crate::models::{
-    buffered_io::{BufIoError, BufferManagerFactory},
-    cache_loader::HNSWIndexCache,
-    prob_lazy_load::lazy_item::FileIndex,
-    prob_node::SharedNode,
-    versioning::Hash,
+use crate::{
+    indexes::hnsw::offset_counter::IndexFileId,
+    models::{
+        buffered_io::{BufIoError, BufferManager},
+        cache_loader::HNSWIndexCache,
+        prob_lazy_load::lazy_item::{FileIndex, ProbLazyItem},
+        prob_node::{ProbNode, SharedNode},
+        types::FileOffset,
+    },
 };
 
 use super::HNSWIndexSerialize;
 
 impl HNSWIndexSerialize for SharedNode {
-    fn serialize(
-        &self,
-        bufmans: &BufferManagerFactory<Hash>,
-        version: Hash,
-        cursor: u64,
-    ) -> Result<u32, BufIoError> {
+    fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
         let lazy_item = unsafe { &**self };
         let file_offset = lazy_item.file_index.offset.0;
 
         if let Some(data) = lazy_item.unsafe_get_data() {
-            let version_id = lazy_item.file_index.version_id;
-
-            let bufman = bufmans.get(version_id)?;
-
-            let cursor = if version_id == version {
-                cursor
-            } else {
-                bufman.open_cursor()?
-            };
-
             bufman.seek_with_cursor(cursor, file_offset as u64)?;
-
-            data.serialize(bufmans, version_id, cursor)?;
-
-            if version_id != version {
-                bufman.close_cursor(cursor)?;
-            }
+            data.serialize(bufman, cursor)?;
         }
 
         Ok(file_offset)
     }
 
     fn deserialize(
-        _bufmans: &BufferManagerFactory<Hash>,
-        file_index: FileIndex,
+        bufman: &BufferManager,
+        offset: FileOffset,
+        file_id: IndexFileId,
         cache: &HNSWIndexCache,
-        max_loads: u16,
-        skipm: &mut HashSet<u64>,
-        is_level_0: bool,
+        ready_items: &FxHashMap<FileIndex, SharedNode>,
+        pending_items: &mut FxHashMap<FileIndex, SharedNode>,
     ) -> Result<Self, BufIoError> {
-        cache.get_lazy_object(file_index, max_loads, skipm, is_level_0)
+        Ok(ProbLazyItem::new(
+            ProbNode::deserialize(bufman, offset, file_id, cache, ready_items, pending_items)?,
+            file_id,
+            offset,
+        ))
     }
 }

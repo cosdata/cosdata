@@ -1,7 +1,4 @@
-use std::sync::{
-    atomic::{AtomicU32, Ordering},
-    Arc,
-};
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use serde::{ser::SerializeStruct, Deserialize, Serialize, Serializer};
@@ -11,83 +8,45 @@ use crate::{config_loader::Config, indexes::IndexOps};
 use super::{
     collection::Collection,
     common::{TSHashTable, WaCustomError},
-    prob_node::{ProbNode, SharedNode},
+    prob_node::SharedNode,
     types::InternalId,
-    versioning::{Hash, Version},
+    versioning::{VersionHash, VersionNumber},
     wal::WALFile,
 };
 
 pub struct BackgroundCollectionTransaction {
-    pub id: Hash,
-    pub version_number: u16,
-    pub lazy_item_versions_table: Arc<TSHashTable<(InternalId, u16, u8), SharedNode>>,
-    level_0_node_offset_counter: AtomicU32,
-    node_offset_counter: AtomicU32,
-    node_size: u32,
-    level_0_node_size: u32,
+    pub id: VersionHash,
+    pub version_number: VersionNumber,
+    pub lazy_item_versions_table: Arc<TSHashTable<(InternalId, VersionHash, u8), SharedNode>>,
 }
 
 impl BackgroundCollectionTransaction {
     pub fn new(collection: Arc<Collection>) -> Result<Self, WaCustomError> {
         let branch_info = collection.vcs.get_branch_info("main")?.unwrap();
-        let version_number = *branch_info.get_current_version() + 1;
-        let id = collection
-            .vcs
-            .generate_hash("main", Version::from(version_number))?;
+        let version_number = VersionNumber::from(*branch_info.get_current_version() + 1);
+        let id = collection.vcs.generate_hash("main", version_number)?;
 
-        let level_0_node_offset_counter = AtomicU32::new(0);
-        let node_offset_counter = AtomicU32::new(0);
-
-        let (node_size, level_0_node_size) =
-            if let Some(hnsw_index) = &*collection.hnsw_index.read() {
-                let hnsw_params = hnsw_index.hnsw_params.read().unwrap();
-                (
-                    ProbNode::get_serialized_size(hnsw_params.neighbors_count) as u32,
-                    ProbNode::get_serialized_size(hnsw_params.level_0_neighbors_count) as u32,
-                )
-            } else {
-                (0, 0)
-            };
-
-        Ok(Self {
+        Ok(Self::from_version_id_and_number(
+            collection,
             id,
             version_number,
-            level_0_node_offset_counter,
-            node_offset_counter,
-            node_size,
-            level_0_node_size,
-            lazy_item_versions_table: Arc::new(TSHashTable::new(16)),
-        })
+        ))
     }
 
     pub fn from_version_id_and_number(
         collection: Arc<Collection>,
-        version_id: Hash,
-        version_number: u16,
-    ) -> Result<Self, WaCustomError> {
-        let level_0_node_offset_counter = AtomicU32::new(0);
-        let node_offset_counter = AtomicU32::new(0);
+        version_hash: VersionHash,
+        version_number: VersionNumber,
+    ) -> Self {
+        if let Some(hnsw_index) = &*collection.hnsw_index.read() {
+            hnsw_index.offset_counter.write().unwrap().next_file_id();
+        }
 
-        let (node_size, level_0_node_size) =
-            if let Some(hnsw_index) = &*collection.hnsw_index.read() {
-                let hnsw_params = hnsw_index.hnsw_params.read().unwrap();
-                (
-                    ProbNode::get_serialized_size(hnsw_params.neighbors_count) as u32,
-                    ProbNode::get_serialized_size(hnsw_params.level_0_neighbors_count) as u32,
-                )
-            } else {
-                (0, 0)
-            };
-
-        Ok(Self {
-            id: version_id,
+        Self {
+            id: version_hash,
             version_number,
-            level_0_node_offset_counter,
-            node_offset_counter,
-            node_size,
-            level_0_node_size,
             lazy_item_versions_table: Arc::new(TSHashTable::new(16)),
-        })
+        }
     }
 
     pub fn pre_commit(self, collection: &Collection, config: &Config) -> Result<(), WaCustomError> {
@@ -103,31 +62,19 @@ impl BackgroundCollectionTransaction {
         collection.flush(config)?;
         Ok(())
     }
-
-    pub fn get_new_node_offset(&self) -> u32 {
-        self.node_offset_counter
-            .fetch_add(self.node_size, Ordering::Relaxed)
-    }
-
-    pub fn get_new_level_0_node_offset(&self) -> u32 {
-        self.level_0_node_offset_counter
-            .fetch_add(self.level_0_node_size, Ordering::Relaxed)
-    }
 }
 
 pub struct CollectionTransaction {
-    pub id: Hash,
-    pub version_number: u16,
+    pub id: VersionHash,
+    pub version_number: VersionNumber,
     pub wal: WALFile,
 }
 
 impl CollectionTransaction {
     pub fn new(collection: Arc<Collection>) -> Result<Self, WaCustomError> {
         let branch_info = collection.vcs.get_branch_info("main")?.unwrap();
-        let version_number = *branch_info.get_current_version() + 1;
-        let id = collection
-            .vcs
-            .generate_hash("main", Version::from(version_number))?;
+        let version_number = VersionNumber::from(*branch_info.get_current_version() + 1);
+        let id = collection.vcs.generate_hash("main", version_number)?;
 
         Ok(Self {
             id,

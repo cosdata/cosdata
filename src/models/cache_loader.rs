@@ -10,32 +10,21 @@ use super::serializer::inverted::InvertedIndexSerialize;
 use super::serializer::tf_idf::TFIDFIndexSerialize;
 use super::tf_idf_index::TFIDFIndexNodeData;
 use super::types::*;
-use super::versioning::Hash;
+use crate::indexes::hnsw::offset_counter::IndexFileId;
 use dashmap::DashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashMap;
 use std::fs::File;
 use std::io::Write;
 use std::sync::atomic::AtomicU32;
-use std::sync::TryLockError;
 use std::sync::{Arc, Mutex, RwLock, Weak};
 
 pub struct HNSWIndexCache {
     registry: LRUCache<u64, SharedNode>,
     props_registry: DashMap<u64, Weak<NodePropValue>>,
-    pub bufmans: Arc<BufferManagerFactory<Hash>>,
-    pub level_0_bufmans: Arc<BufferManagerFactory<Hash>>,
+    pub bufmans: Arc<BufferManagerFactory<IndexFileId>>,
     pub prop_file: RwLock<File>,
     loading_items: TSHashTable<u64, Arc<Mutex<bool>>>,
     pub distance_metric: Arc<RwLock<DistanceMetric>>,
-    // A global lock to prevent deadlocks during batch loading of cache entries when `max_loads > 1`.
-    //
-    // This lock ensures that only one thread is allowed to load large batches of nodes (where `max_loads > 1`)
-    // at any given time. If multiple threads attempt to load interconnected nodes in parallel with high `max_loads`,
-    // it can lead to a deadlock situation due to circular dependencies between the locks. By serializing access to
-    // large batch loads, this mutex ensures that only one thread can initiate a batch load with a high `max_loads`
-    // value, preventing such circular waiting conditions. Threads with `max_loads = 1` can still load nodes in parallel
-    // without causing conflicts, allowing for efficient loading of smaller batches.
-    batch_load_lock: Mutex<()>,
 }
 
 unsafe impl Send for HNSWIndexCache {}
@@ -43,8 +32,7 @@ unsafe impl Sync for HNSWIndexCache {}
 
 impl HNSWIndexCache {
     pub fn new(
-        bufmans: Arc<BufferManagerFactory<Hash>>,
-        level_0_bufmans: Arc<BufferManagerFactory<Hash>>,
+        bufmans: Arc<BufferManagerFactory<IndexFileId>>,
         prop_file: RwLock<File>,
         distance_metric: Arc<RwLock<DistanceMetric>>,
     ) -> Self {
@@ -55,11 +43,9 @@ impl HNSWIndexCache {
             registry,
             props_registry,
             bufmans,
-            level_0_bufmans,
             prop_file,
             distance_metric,
             loading_items: TSHashTable::new(16),
-            batch_load_lock: Mutex::new(()),
         }
     }
 
@@ -69,7 +55,7 @@ impl HNSWIndexCache {
             return Ok(());
         }
         let item_ref = unsafe { &*item };
-        let combined_index = Self::combine_index(&item_ref.file_index, item_ref.is_level_0);
+        let combined_index = Self::combine_index(&item_ref.file_index);
         self.registry.remove(&combined_index);
         unsafe {
             drop(Box::from_raw(item));
@@ -79,7 +65,6 @@ impl HNSWIndexCache {
 
     pub fn flush_all(&self) -> Result<(), BufIoError> {
         self.bufmans.flush_all()?;
-        self.level_0_bufmans.flush_all()?;
         self.prop_file
             .write()
             .map_err(|_| BufIoError::Locking)?
@@ -134,7 +119,7 @@ impl HNSWIndexCache {
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn insert_lazy_object(&self, item: SharedNode) {
         let item_ref = unsafe { &*item };
-        let combined_index = Self::combine_index(&item_ref.file_index, item_ref.is_level_0);
+        let combined_index = Self::combine_index(&item_ref.file_index);
         if let Some(node) = item_ref.get_lazy_data() {
             let prop_key =
                 Self::get_prop_key(node.prop_value.location.0, node.prop_value.location.1);
@@ -144,48 +129,11 @@ impl HNSWIndexCache {
         self.registry.insert(combined_index, item);
     }
 
-    pub fn force_load_single_object(
-        &self,
-        file_index: FileIndex,
-        is_level_0: bool,
-    ) -> Result<SharedNode, BufIoError> {
-        let combined_index = Self::combine_index(&file_index, is_level_0);
-        let mut skipm = HashSet::new();
-        skipm.insert(combined_index);
-        let bufmans = if is_level_0 {
-            &self.level_0_bufmans
-        } else {
-            &self.bufmans
-        };
-        let data = ProbNode::deserialize(bufmans, file_index, self, 0, &mut skipm, is_level_0)?;
-        let FileIndex {
-            offset: file_offset,
-            version_number,
-            version_id,
-        } = file_index;
-
-        let item = ProbLazyItem::new(data, version_id, version_number, is_level_0, file_offset);
-
-        self.registry.insert(combined_index, item);
-
-        Ok(item)
-    }
-
-    pub fn get_lazy_object(
-        &self,
-        file_index: FileIndex,
-        max_loads: u16,
-        skipm: &mut HashSet<u64>,
-        is_level_0: bool,
-    ) -> Result<SharedNode, BufIoError> {
-        let combined_index = Self::combine_index(&file_index, is_level_0);
+    pub fn get_object(&self, file_index: FileIndex) -> Result<SharedNode, BufIoError> {
+        let combined_index = Self::combine_index(&file_index);
 
         if let Some(item) = self.registry.get(&combined_index) {
             return Ok(item);
-        }
-
-        if max_loads == 0 || !skipm.insert(combined_index) {
-            return Ok(ProbLazyItem::new_pending(file_index, is_level_0));
         }
 
         let mut mutex = self
@@ -212,22 +160,21 @@ impl HNSWIndexCache {
             break;
         }
 
-        let FileIndex {
-            offset: file_offset,
-            version_number,
-            version_id,
-        } = file_index;
+        let bufman = self.bufmans.get(file_index.file_id)?;
+        let ready_items = FxHashMap::default();
+        let mut pending_items = FxHashMap::default();
 
-        let bufmans = if is_level_0 {
-            &self.level_0_bufmans
-        } else {
-            &self.bufmans
-        };
+        let data = ProbNode::deserialize(
+            &bufman,
+            file_index.offset,
+            file_index.file_id,
+            self,
+            &ready_items,
+            &mut pending_items,
+        )?;
 
-        let data =
-            ProbNode::deserialize(bufmans, file_index, self, max_loads - 1, skipm, is_level_0)?;
-
-        let item = ProbLazyItem::new(data, version_id, version_number, is_level_0, file_offset);
+        let FileIndex { offset, file_id } = file_index;
+        let item = ProbLazyItem::new(data, file_id, offset);
 
         self.registry.insert(combined_index, item);
 
@@ -237,75 +184,8 @@ impl HNSWIndexCache {
         Ok(item)
     }
 
-    pub fn load_region(
-        &self,
-        region_start: u32,
-        version_number: u16,
-        version_id: Hash,
-        node_size: u32,
-        is_level_0: bool,
-    ) -> Result<Vec<SharedNode>, BufIoError> {
-        debug_assert_eq!(region_start % node_size, 0);
-        let bufman = if is_level_0 {
-            self.level_0_bufmans.get(version_id)?
-        } else {
-            self.bufmans.get(version_id)?
-        };
-        let file_size = bufman.file_size();
-        if region_start as u64 > file_size {
-            return Ok(Vec::new());
-        }
-        let cap = ((file_size - region_start as u64) / node_size as u64).min(1000) as usize;
-        let mut nodes = Vec::with_capacity(cap);
-        for i in 0..1000 {
-            let offset = FileOffset(i * node_size + region_start);
-            if offset.0 as u64 >= file_size {
-                break;
-            }
-            let file_index = FileIndex {
-                offset,
-                version_number,
-                version_id,
-            };
-
-            let node = self
-                .force_load_single_object(file_index, is_level_0)
-                .unwrap();
-            nodes.push(node);
-        }
-        Ok(nodes)
-    }
-
-    // Retrieves an object from the cache, attempting to batch load if possible, based on the state of the batch load lock.
-    //
-    // This function first attempts to acquire the `batch_load_lock` using a non-blocking `try_lock`. If successful,
-    // it sets a high `max_loads` value (1000), allowing for a larger batch load. This is the preferred scenario where
-    // the system is capable of performing a more efficient batch load, loading multiple nodes at once. If the lock is
-    // already held (i.e., another thread is performing a large batch load), the function falls back to a lower `max_loads`
-    // value (1), effectively loading nodes one at a time to avoid blocking or deadlocking.
-    //
-    // The key idea here is to **always attempt to load as many nodes as possible** (with `max_loads = 1000`) unless
-    // another thread is already performing a large load, in which case the function resorts to a smaller load size.
-    // This dynamic loading strategy balances efficient batch loading with the need to avoid blocking or deadlocks in high-concurrency situations.
-    //
-    // After determining the appropriate `max_loads`, the function proceeds by calling `get_lazy_object`, which handles
-    // the actual loading process, and retrieves the lazy-loaded data.
-    pub fn get_object(
-        &self,
-        file_index: FileIndex,
-        is_level_0: bool,
-    ) -> Result<SharedNode, BufIoError> {
-        let (_lock, max_loads) = match self.batch_load_lock.try_lock() {
-            Ok(lock) => (Some(lock), 1000),
-            Err(TryLockError::Poisoned(poison_err)) => panic!("lock error: {}", poison_err),
-            Err(TryLockError::WouldBlock) => (None, 1),
-        };
-        self.get_lazy_object(file_index, max_loads, &mut HashSet::new(), is_level_0)
-    }
-
-    pub fn combine_index(file_index: &FileIndex, is_level_0: bool) -> u64 {
-        let level_bit = if is_level_0 { 1u64 << 63 } else { 0 };
-        ((file_index.offset.0 as u64) << 32) | (*file_index.version_id as u64) | level_bit
+    pub fn combine_index(file_index: &FileIndex) -> u64 {
+        ((file_index.offset.0 as u64) << 32) | (*file_index.file_id as u64)
     }
 
     pub fn get_prop_key(
@@ -313,23 +193,6 @@ impl HNSWIndexCache {
         BytesToRead(length): BytesToRead,
     ) -> u64 {
         ((file_offset as u64) << 32) | (length as u64)
-    }
-
-    #[allow(unused)]
-    pub fn load_item<T: HNSWIndexSerialize>(
-        &self,
-        file_index: FileIndex,
-        is_level_0: bool,
-    ) -> Result<T, BufIoError> {
-        let mut skipm: HashSet<u64> = HashSet::new();
-
-        let bufmans = if is_level_0 {
-            &self.level_0_bufmans
-        } else {
-            &self.bufmans
-        };
-
-        T::deserialize(bufmans, file_index, self, 1000, &mut skipm, is_level_0)
     }
 }
 
@@ -405,7 +268,7 @@ impl InvertedIndexCache {
             self,
         )?;
 
-        let item = ProbLazyItem::new(data, 0.into(), 0, false, file_offset);
+        let item = ProbLazyItem::new(data, IndexFileId::invalid(), file_offset);
 
         self.registry.insert(combined_index, item);
 
@@ -516,7 +379,7 @@ impl TFIDFIndexCache {
             self,
         )?;
 
-        let item = ProbLazyItem::new(data, 0.into(), 0, false, file_offset);
+        let item = ProbLazyItem::new(data, IndexFileId::invalid(), file_offset);
 
         self.registry.insert(combined_index, item);
 

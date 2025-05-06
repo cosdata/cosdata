@@ -1,4 +1,5 @@
 use crate::app_context::AppContext;
+use crate::indexes::hnsw::offset_counter::{HNSWIndexFileOffsetCounter, IndexFileId};
 use crate::indexes::hnsw::types::HNSWHyperParams;
 use crate::indexes::hnsw::{DenseInputEmbedding, HNSWIndex};
 use crate::indexes::inverted::InvertedIndex;
@@ -13,7 +14,6 @@ use crate::models::common::*;
 use crate::models::meta_persist::{store_values_range, update_current_version};
 use crate::models::prob_node::ProbNode;
 use crate::models::types::*;
-use crate::models::versioning::Hash;
 use crate::quantization::StorageType;
 use crate::vector_store::*;
 use std::fs;
@@ -60,30 +60,24 @@ pub async fn init_hnsw_index_for_collection(
 
     let index_manager = Arc::new(BufferManagerFactory::new(
         index_path.clone().into(),
-        |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+        |root, ver: &IndexFileId| root.join(format!("{}.index", **ver)),
         ProbNode::get_serialized_size(hnsw_params.neighbors_count) * 1000,
     ));
 
-    let level_0_index_manager = Arc::new(BufferManagerFactory::new(
-        index_path.clone().into(),
-        |root, ver: &Hash| root.join(format!("{}_0.index", **ver)),
-        ProbNode::get_serialized_size(hnsw_params.level_0_neighbors_count) * 1000,
-    ));
     let distance_metric = Arc::new(RwLock::new(distance_metric));
 
-    // TODO: May be the value can be taken from config
-    let cache = HNSWIndexCache::new(
-        index_manager.clone(),
-        level_0_index_manager.clone(),
-        prop_file,
-        distance_metric.clone(),
-    );
+    let cache = HNSWIndexCache::new(index_manager.clone(), prop_file, distance_metric.clone());
     if let Some(values_range) = values_range {
         store_values_range(&lmdb, values_range).map_err(|e| {
             WaCustomError::DatabaseError(format!("Failed to store values range to LMDB: {}", e))
         })?;
     }
     let values_range = values_range.unwrap_or((-1.0, 1.0));
+    let offset_counter = HNSWIndexFileOffsetCounter::new(
+        ctx.config.index_file_min_size,
+        hnsw_params.level_0_neighbors_count,
+        hnsw_params.neighbors_count,
+    );
 
     let root = create_root_node(
         &quantization_metric,
@@ -91,8 +85,8 @@ pub async fn init_hnsw_index_for_collection(
         collection.meta.dense_vector.dimension,
         &cache.prop_file,
         *collection.current_version.read(),
+        &offset_counter,
         &index_manager,
-        &level_0_index_manager,
         values_range,
         &hnsw_params,
         *distance_metric.read().unwrap(),
@@ -146,6 +140,7 @@ pub async fn init_hnsw_index_for_collection(
             .metadata_schema
             .as_ref()
             .map_or(1, |schema| schema.max_num_replicas()),
+        offset_counter,
     ));
 
     ctx.ain_env
@@ -170,7 +165,7 @@ pub async fn init_hnsw_index_for_collection(
         *collection.current_version.write() = id;
         collection
             .vcs
-            .set_branch_version("main", version_number.into(), id)?;
+            .set_branch_version("main", version_number, id)?;
         update_current_version(&collection.lmdb, id)?;
     }
 

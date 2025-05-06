@@ -1,17 +1,20 @@
 use std::{
-    collections::HashSet,
     ptr,
     sync::atomic::{AtomicPtr, Ordering},
 };
 
-use crate::models::{
-    buffered_io::{BufIoError, BufferManagerFactory},
-    cache_loader::HNSWIndexCache,
-    prob_lazy_load::lazy_item::FileIndex,
-    prob_node::{ProbNode, SharedNode},
-    serializer::SimpleSerialize,
-    types::{FileOffset, InternalId, MetricResult},
-    versioning::Hash,
+use rustc_hash::FxHashMap;
+
+use crate::{
+    indexes::hnsw::offset_counter::IndexFileId,
+    models::{
+        buffered_io::{BufIoError, BufferManager},
+        cache_loader::HNSWIndexCache,
+        prob_lazy_load::lazy_item::{FileIndex, ProbLazyItem},
+        prob_node::SharedNode,
+        serializer::SimpleSerialize,
+        types::{FileOffset, InternalId, MetricResult},
+    },
 };
 
 use super::HNSWIndexSerialize;
@@ -20,24 +23,12 @@ use super::HNSWIndexSerialize;
 //   2 bytes for length +
 //   length * (
 //     4 bytes for id +
-//     10 bytes offset & version +
+//     8 bytes offset & file id +
 //     5 bytes for distance/similarity
-//   ) = 2 + len * 19
+//   ) = 2 + len * 17
 impl HNSWIndexSerialize for Box<[AtomicPtr<(InternalId, SharedNode, MetricResult)>]> {
-    fn serialize(
-        &self,
-        bufmans: &BufferManagerFactory<Hash>,
-        version: Hash,
-        cursor: u64,
-    ) -> Result<u32, BufIoError> {
-        let bufman = bufmans.get(version)?;
+    fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
         let start = bufman.cursor_position(cursor)?;
-        debug_assert_eq!(
-            (start - 47) % ProbNode::get_serialized_size(self.len()) as u64,
-            0,
-            "offset: {}",
-            start
-        );
         bufman.update_u16_with_cursor(cursor, self.len() as u16)?;
 
         for neighbor in self.iter() {
@@ -45,7 +36,7 @@ impl HNSWIndexSerialize for Box<[AtomicPtr<(InternalId, SharedNode, MetricResult
                 if let Some(neighbor) = neighbor.load(Ordering::SeqCst).as_ref() {
                     *neighbor
                 } else {
-                    bufman.update_with_cursor(cursor, &[u8::MAX; 19])?;
+                    bufman.update_with_cursor(cursor, &[u8::MAX; 17])?;
                     continue;
                 }
             };
@@ -54,14 +45,12 @@ impl HNSWIndexSerialize for Box<[AtomicPtr<(InternalId, SharedNode, MetricResult
 
             let FileIndex {
                 offset: node_offset,
-                version_number: node_version_number,
-                version_id: node_version_id,
+                file_id: node_file_id,
             } = node.file_index;
-            let mut buf = Vec::with_capacity(19);
+            let mut buf = Vec::with_capacity(17);
             buf.extend(node_id.to_le_bytes());
             buf.extend(node_offset.0.to_le_bytes());
-            buf.extend(node_version_number.to_le_bytes());
-            buf.extend(node_version_id.to_le_bytes());
+            buf.extend(node_file_id.to_le_bytes());
             let (tag, value) = dist.get_tag_and_value();
             buf.push(tag);
             buf.extend(value.to_le_bytes());
@@ -71,19 +60,13 @@ impl HNSWIndexSerialize for Box<[AtomicPtr<(InternalId, SharedNode, MetricResult
     }
 
     fn deserialize(
-        bufmans: &BufferManagerFactory<Hash>,
-        file_index: FileIndex,
-        cache: &HNSWIndexCache,
-        max_loads: u16,
-        skipm: &mut HashSet<u64>,
-        is_level_0: bool,
+        bufman: &BufferManager,
+        FileOffset(offset): FileOffset,
+        _file_id: IndexFileId,
+        _cache: &HNSWIndexCache,
+        ready_items: &FxHashMap<FileIndex, SharedNode>,
+        pending_items: &mut FxHashMap<FileIndex, SharedNode>,
     ) -> Result<Self, BufIoError> {
-        let FileIndex {
-            version_id,
-            version_number: _,
-            offset: FileOffset(offset),
-        } = file_index;
-        let bufman = bufmans.get(version_id)?;
         let cursor = bufman.open_cursor()?;
         bufman.seek_with_cursor(cursor, offset as u64)?;
         let len = bufman.read_u16_with_cursor(cursor)? as usize;
@@ -91,7 +74,7 @@ impl HNSWIndexSerialize for Box<[AtomicPtr<(InternalId, SharedNode, MetricResult
         let placeholder_start = offset as u64 + 2;
 
         for i in 0..len {
-            let placeholder_offset = placeholder_start + i as u64 * 19;
+            let placeholder_offset = placeholder_start + i as u64 * 17;
             bufman.seek_with_cursor(cursor, placeholder_offset)?;
             let node_id = InternalId::from(bufman.read_u32_with_cursor(cursor)?);
             let node_offset = bufman.read_u32_with_cursor(cursor)?;
@@ -99,26 +82,24 @@ impl HNSWIndexSerialize for Box<[AtomicPtr<(InternalId, SharedNode, MetricResult
                 neighbors.push(AtomicPtr::new(ptr::null_mut()));
                 continue;
             }
-            let node_version_number = bufman.read_u16_with_cursor(cursor)?;
-            let node_version_id = bufman.read_u32_with_cursor(cursor)?;
+            let node_file_id = bufman.read_u32_with_cursor(cursor)?;
 
             let dist: MetricResult =
-                SimpleSerialize::deserialize(&bufman, FileOffset(placeholder_offset as u32 + 14))?;
+                SimpleSerialize::deserialize(bufman, FileOffset(placeholder_offset as u32 + 12))?;
 
             let node_file_index = FileIndex {
                 offset: FileOffset(node_offset),
-                version_number: node_version_number,
-                version_id: Hash::from(node_version_id),
+                file_id: IndexFileId::from(node_file_id),
             };
 
-            let node = SharedNode::deserialize(
-                bufmans,
-                node_file_index,
-                cache,
-                max_loads,
-                skipm,
-                is_level_0,
-            )?;
+            let node = ready_items
+                .get(&node_file_index)
+                .cloned()
+                .unwrap_or_else(|| {
+                    *pending_items
+                        .entry(node_file_index)
+                        .or_insert_with(|| ProbLazyItem::new_pending(node_file_index))
+                });
             let ptr = Box::into_raw(Box::new((node_id, node, dist)));
 
             neighbors.push(AtomicPtr::new(ptr));

@@ -10,7 +10,7 @@ use crate::models::tree_map::QuotientsMap;
 use crate::models::tree_map::TreeMap;
 use crate::models::tree_map::TreeMapVec;
 use crate::models::types::*;
-use crate::models::versioning::Hash;
+use crate::models::versioning::VersionHash;
 use crate::storage::Storage;
 use half::f16;
 use rand::Rng;
@@ -54,12 +54,12 @@ fn test_storage_serialization() {
     let tempdir = TempDir::new().unwrap();
     let bufmans = BufferManagerFactory::new(
         tempdir.as_ref().into(),
-        |root, ver: &Hash| root.join(format!("{}.index", **ver)),
+        |root, ver: &VersionHash| root.join(format!("{}.index", **ver)),
         8192,
     );
 
     for (version, storage) in storages.into_iter().enumerate() {
-        let version_id = Hash::from(version as u32);
+        let version_id = VersionHash::from(version as u64);
         let bufman = bufmans.get(version_id).unwrap();
         let cursor = bufman.open_cursor().unwrap();
         let offset = SimpleSerialize::serialize(&storage, &bufman, cursor).unwrap();
@@ -79,7 +79,7 @@ fn get_random_pagepool<const LEN: usize>(rng: &mut impl Rng) -> Pagepool<LEN> {
 
 fn get_random_versioned_pagepool<const LEN: usize>(
     rng: &mut impl Rng,
-    version: Hash,
+    version: VersionHash,
 ) -> VersionedPagepool<LEN> {
     let pool = VersionedPagepool::new(version);
     let count = rng.gen_range(20..50);
@@ -101,7 +101,7 @@ fn add_random_items_to_versioned_pagepool<const LEN: usize>(
     rng: &mut impl Rng,
     pool: &VersionedPagepool<LEN>,
     count: usize,
-    version: Hash,
+    version: VersionHash,
 ) {
     for _ in 0..count {
         pool.push(version, rng.gen_range(0..u32::MAX));
