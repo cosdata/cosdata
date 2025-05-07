@@ -745,8 +745,6 @@ impl CollectionsMap {
         );
 
         let start = Instant::now();
-
-        let mut ready_items = FxHashMap::default();
         let mut pending_items = FxHashMap::default();
 
         let file_index = hnsw_index_data.file_index;
@@ -756,7 +754,6 @@ impl CollectionsMap {
             file_index.offset,
             file_index.file_id,
             &cache,
-            &ready_items,
             &mut pending_items,
         )?;
 
@@ -767,13 +764,14 @@ impl CollectionsMap {
                 file_index.offset,
                 file_index.file_id,
                 &cache,
-                &ready_items,
                 &mut pending_items,
             )?;
             let lazy_item = pending_items.remove(&file_index).unwrap();
             let lazy_item_ref = unsafe { &*lazy_item };
             lazy_item_ref.set_data(node);
-            ready_items.insert(file_index, lazy_item);
+            cache
+                .registry
+                .insert(HNSWIndexCache::combine_index(&file_index), lazy_item);
         }
 
         println!("Dense index loaded in {:?}", start.elapsed());

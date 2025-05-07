@@ -115,7 +115,6 @@ impl HNSWIndexSerialize for ProbNode {
         FileOffset(offset): FileOffset,
         file_id: IndexFileId,
         cache: &HNSWIndexCache,
-        ready_items: &FxHashMap<FileIndex, SharedNode>,
         pending_items: &mut FxHashMap<FileIndex, SharedNode>,
     ) -> Result<Self, BufIoError> {
         let cursor = bufman.open_cursor()?;
@@ -157,9 +156,9 @@ impl HNSWIndexSerialize for ProbNode {
                 offset: FileOffset(parent_offset),
                 file_id: parent_file_id,
             };
-            ready_items
-                .get(&parent_file_index)
-                .cloned()
+            cache
+                .registry
+                .get(&HNSWIndexCache::combine_index(&parent_file_index))
                 .unwrap_or_else(|| {
                     *pending_items
                         .entry(parent_file_index)
@@ -174,9 +173,9 @@ impl HNSWIndexSerialize for ProbNode {
                 offset: FileOffset(child_offset),
                 file_id: child_file_id,
             };
-            ready_items
-                .get(&child_file_index)
-                .cloned()
+            cache
+                .registry
+                .get(&HNSWIndexCache::combine_index(&child_file_index))
                 .unwrap_or_else(|| {
                     *pending_items
                         .entry(child_file_index)
@@ -191,9 +190,9 @@ impl HNSWIndexSerialize for ProbNode {
                 offset: FileOffset(root_offset),
                 file_id: root_file_id,
             };
-            ready_items
-                .get(&root_file_index)
-                .cloned()
+            cache
+                .registry
+                .get(&HNSWIndexCache::combine_index(&root_file_index))
                 .unwrap_or_else(|| {
                     *pending_items
                         .entry(root_file_index)
@@ -210,7 +209,6 @@ impl HNSWIndexSerialize for ProbNode {
                 FileOffset(offset + 50),
                 file_id,
                 cache,
-                ready_items,
                 pending_items,
             )?;
 

@@ -25,7 +25,6 @@ pub trait HNSWIndexSerialize: Sized {
         offset: FileOffset,
         file_id: IndexFileId,
         cache: &HNSWIndexCache,
-        ready_items: &FxHashMap<FileIndex, SharedNode>,
         pending_items: &mut FxHashMap<FileIndex, SharedNode>,
     ) -> Result<Self, BufIoError>;
 }

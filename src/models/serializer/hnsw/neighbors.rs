@@ -63,8 +63,7 @@ impl HNSWIndexSerialize for Box<[AtomicPtr<(InternalId, SharedNode, MetricResult
         bufman: &BufferManager,
         FileOffset(offset): FileOffset,
         _file_id: IndexFileId,
-        _cache: &HNSWIndexCache,
-        ready_items: &FxHashMap<FileIndex, SharedNode>,
+        cache: &HNSWIndexCache,
         pending_items: &mut FxHashMap<FileIndex, SharedNode>,
     ) -> Result<Self, BufIoError> {
         let cursor = bufman.open_cursor()?;
@@ -92,9 +91,9 @@ impl HNSWIndexSerialize for Box<[AtomicPtr<(InternalId, SharedNode, MetricResult
                 file_id: IndexFileId::from(node_file_id),
             };
 
-            let node = ready_items
-                .get(&node_file_index)
-                .cloned()
+            let node = cache
+                .registry
+                .get(&HNSWIndexCache::combine_index(&node_file_index))
                 .unwrap_or_else(|| {
                     *pending_items
                         .entry(node_file_index)

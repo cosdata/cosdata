@@ -31,11 +31,10 @@ impl HNSWIndexSerialize for SharedNode {
         offset: FileOffset,
         file_id: IndexFileId,
         cache: &HNSWIndexCache,
-        ready_items: &FxHashMap<FileIndex, SharedNode>,
         pending_items: &mut FxHashMap<FileIndex, SharedNode>,
     ) -> Result<Self, BufIoError> {
         Ok(ProbLazyItem::new(
-            ProbNode::deserialize(bufman, offset, file_id, cache, ready_items, pending_items)?,
+            ProbNode::deserialize(bufman, offset, file_id, cache, pending_items)?,
             file_id,
             offset,
         ))

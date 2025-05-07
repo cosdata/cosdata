@@ -19,7 +19,7 @@ use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex, RwLock, Weak};
 
 pub struct HNSWIndexCache {
-    registry: LRUCache<u64, SharedNode>,
+    pub registry: LRUCache<u64, SharedNode>,
     props_registry: DashMap<u64, Weak<NodePropValue>>,
     pub bufmans: Arc<BufferManagerFactory<IndexFileId>>,
     pub prop_file: RwLock<File>,
@@ -161,7 +161,6 @@ impl HNSWIndexCache {
         }
 
         let bufman = self.bufmans.get(file_index.file_id)?;
-        let ready_items = FxHashMap::default();
         let mut pending_items = FxHashMap::default();
 
         let data = ProbNode::deserialize(
@@ -169,7 +168,6 @@ impl HNSWIndexCache {
             file_index.offset,
             file_index.file_id,
             self,
-            &ready_items,
             &mut pending_items,
         )?;
 

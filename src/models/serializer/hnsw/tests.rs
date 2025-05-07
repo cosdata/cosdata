@@ -184,7 +184,6 @@ fn test_lazy_item_serialization() {
     let offset = lazy_item.serialize(&bufman, cursor).unwrap();
     bufman.close_cursor(cursor).unwrap();
 
-    let ready_items = FxHashMap::default();
     let mut pending_items = FxHashMap::default();
 
     let deserialized = SharedNode::deserialize(
@@ -192,7 +191,6 @@ fn test_lazy_item_serialization() {
         FileOffset(offset),
         root_version_file_id,
         &cache,
-        &ready_items,
         &mut pending_items,
     )
     .unwrap();
@@ -213,7 +211,6 @@ fn test_prob_node_acyclic_serialization() {
     let offset = node.serialize(&bufman, cursor).unwrap();
     bufman.close_cursor(cursor).unwrap();
 
-    let ready_items = FxHashMap::default();
     let mut pending_items = FxHashMap::default();
 
     let deserialized = ProbNode::deserialize(
@@ -221,7 +218,6 @@ fn test_prob_node_acyclic_serialization() {
         FileOffset(offset),
         root_version_file_id,
         &cache,
-        &ready_items,
         &mut pending_items,
     )
     .unwrap();
@@ -272,7 +268,6 @@ fn test_prob_node_serialization_with_neighbors() {
     }
     bufman.close_cursor(cursor).unwrap();
 
-    let ready_items = FxHashMap::default();
     let mut pending_items = FxHashMap::default();
 
     let deserialized = SharedNode::deserialize(
@@ -280,7 +275,6 @@ fn test_prob_node_serialization_with_neighbors() {
         FileOffset(0),
         root_version_file_id,
         &cache,
-        &ready_items,
         &mut pending_items,
     )
     .unwrap();
@@ -315,7 +309,6 @@ fn test_prob_lazy_item_cyclic_serialization() {
 
     bufman.close_cursor(cursor).unwrap();
 
-    let ready_items = FxHashMap::default();
     let mut pending_items = FxHashMap::default();
 
     let deserialized: SharedNode = SharedNode::deserialize(
@@ -323,7 +316,6 @@ fn test_prob_lazy_item_cyclic_serialization() {
         FileOffset(0),
         root_version_file_id,
         &cache,
-        &ready_items,
         &mut pending_items,
     )
     .unwrap();
