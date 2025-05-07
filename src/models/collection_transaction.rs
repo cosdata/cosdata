@@ -21,10 +21,12 @@ pub struct BackgroundCollectionTransaction {
 }
 
 impl BackgroundCollectionTransaction {
-    pub fn new(collection: &Collection) -> Result<Self, WaCustomError> {
+    pub fn new(collection: &Collection, implicit: bool) -> Result<Self, WaCustomError> {
         let branch_info = collection.vcs.get_branch_info("main")?.unwrap();
         let version_number = VersionNumber::from(*branch_info.get_current_version() + 1);
-        let id = collection.vcs.generate_hash("main", version_number)?;
+        let id = collection
+            .vcs
+            .generate_hash("main", version_number, implicit)?;
 
         Ok(Self::from_version_id_and_number(
             collection,
@@ -71,10 +73,12 @@ pub struct CollectionTransaction {
 }
 
 impl CollectionTransaction {
-    pub fn new(collection: &Collection) -> Result<Self, WaCustomError> {
+    pub fn new(collection: &Collection, implicit: bool) -> Result<Self, WaCustomError> {
         let branch_info = collection.vcs.get_branch_info("main")?.unwrap();
         let version_number = VersionNumber::from(*branch_info.get_current_version() + 1);
-        let id = collection.vcs.generate_hash("main", version_number)?;
+        let id = collection
+            .vcs
+            .generate_hash("main", version_number, implicit)?;
 
         Ok(Self {
             id,

@@ -118,40 +118,48 @@ impl Timestamp {
 #[derive(Debug, Clone)]
 pub struct VersionMeta {
     pub version: VersionNumber,
+    pub implicit: bool,
     pub timestamp: Timestamp,
 }
 
 impl VersionMeta {
-    pub fn new(version: VersionNumber) -> Self {
+    pub fn new(version: VersionNumber, implicit: bool) -> Self {
         Self {
             version,
+            implicit,
             timestamp: Timestamp::now(),
         }
     }
 
     pub fn calculate_hash(&self) -> VersionHash {
-        VersionHash(((*self.version as u64) << 32) | (self.timestamp.hash() as u64))
+        let timestamp_hash = (self.timestamp.hash() & 0x7FFFFFFF) as u64;
+        let implicit_bit = (self.implicit as u64) << 31;
+
+        VersionHash(((*self.version as u64) << 32) | timestamp_hash | implicit_bit)
     }
 
     fn serialize(&self) -> Vec<u8> {
-        let mut result = Vec::with_capacity(20);
+        let mut result = Vec::with_capacity(21);
 
         result.extend_from_slice(&self.version.to_le_bytes());
+        result.push(self.implicit as u8);
         result.extend_from_slice(&self.timestamp.to_le_bytes());
 
         result
     }
 
     fn deserialize(bytes: &[u8]) -> Result<Self, &'static str> {
-        if bytes.len() != 20 {
-            return Err("Input must be exactly 20 bytes");
+        if bytes.len() != 21 {
+            return Err("Input must be exactly 21 bytes");
         }
 
         let version = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
-        let timestamp = u128::from_le_bytes(bytes[4..16].try_into().unwrap());
+        let implicit = bytes[4] != 0;
+        let timestamp = u128::from_le_bytes(bytes[5..21].try_into().unwrap());
 
         Ok(VersionMeta {
             version: VersionNumber(version),
+            implicit,
             timestamp: Timestamp(timestamp),
         })
     }
@@ -236,7 +244,7 @@ impl VersionControl {
     pub fn new(env: Arc<Environment>, db: Arc<Database>) -> lmdb::Result<(Self, VersionHash)> {
         let main_branch_id = BranchId::new("main");
         let current_version = VersionNumber(0);
-        let current_version_hash = VersionMeta::new(current_version);
+        let current_version_hash = VersionMeta::new(current_version, false);
         let hash = current_version_hash.calculate_hash();
         let branch_info = BranchInfo {
             branch_name: "main".to_string(),
@@ -268,9 +276,10 @@ impl VersionControl {
         &self,
         branch_name: &str,
         version: VersionNumber,
+        implicit: bool,
     ) -> lmdb::Result<VersionHash> {
         let branch_id = BranchId::new(branch_name);
-        let version_hash = VersionMeta::new(version);
+        let version_hash = VersionMeta::new(version, implicit);
         let hash = version_hash.calculate_hash();
         let version_key = key!(v:hash);
         let bytes = version_hash.serialize();
@@ -285,6 +294,7 @@ impl VersionControl {
     pub fn add_next_version(
         &self,
         branch_name: &str,
+        implicit: bool,
     ) -> lmdb::Result<(VersionHash, VersionNumber)> {
         let branch_id = BranchId::new(branch_name);
         let branch_key = key!(b:branch_id);
@@ -294,7 +304,7 @@ impl VersionControl {
 
         let mut branch_info: BranchInfo = BranchInfo::deserialize(bytes).unwrap();
         let new_version = VersionNumber(*branch_info.current_version + 1);
-        let version_hash = VersionMeta::new(new_version);
+        let version_hash = VersionMeta::new(new_version, implicit);
         let hash = version_hash.calculate_hash();
         branch_info.current_version = new_version;
         if hash.to_le_bytes() < branch_info.least_version.to_le_bytes() {
@@ -332,7 +342,7 @@ impl VersionControl {
         let parent_bytes = txn.get(*self.db, &parent_key)?;
         let parent_info = BranchInfo::deserialize(parent_bytes).unwrap();
         let current_version = VersionNumber(0);
-        let current_version_hash = VersionMeta::new(current_version);
+        let current_version_hash = VersionMeta::new(current_version, false);
         let hash = current_version_hash.calculate_hash();
         let new_branch_info = BranchInfo {
             branch_name: branch_name.to_string(),
@@ -527,7 +537,7 @@ mod tests {
         let mut versions = HashSet::new();
 
         for i in 0..1000 {
-            let version_hash = VersionMeta::new(VersionNumber::from(i));
+            let version_hash = VersionMeta::new(VersionNumber::from(i), false);
             versions.insert(version_hash.calculate_hash());
             // simulate some processing
             std::thread::sleep(std::time::Duration::from_millis(10));

@@ -29,7 +29,7 @@ pub(crate) async fn upsert_vectors(
 
     let mut current_version = collection.current_version.write();
 
-    let transaction = CollectionTransaction::new(&collection)
+    let transaction = CollectionTransaction::new(&collection, true)
         .map_err(|err| TransactionError::FailedToCreateTransaction(err.to_string()))?;
 
     transaction
@@ -79,7 +79,7 @@ pub(crate) async fn delete_vector_by_id(
 
     let mut current_version = collection.current_version.write();
 
-    let transaction = CollectionTransaction::new(&collection)
+    let transaction = CollectionTransaction::new(&collection, true)
         .map_err(|err| TransactionError::FailedToCreateTransaction(err.to_string()))?;
 
     transaction

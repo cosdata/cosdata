@@ -28,7 +28,7 @@ pub(crate) async fn create_transaction(
         return Err(TransactionError::OnGoingTransaction);
     }
 
-    let transaction = CollectionTransaction::new(&collection)
+    let transaction = CollectionTransaction::new(&collection, false)
         .map_err(|err| TransactionError::FailedToCreateTransaction(err.to_string()))?;
     let transaction_id = transaction.id;
 
