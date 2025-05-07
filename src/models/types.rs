@@ -11,8 +11,7 @@ use super::{
         retrieve_values_upper_bound,
     },
     paths::get_data_path,
-    prob_node::{ProbNode, SharedNode},
-    serializer::hnsw::HNSWIndexSerialize,
+    prob_node::ProbNode,
     tf_idf_index::TFIDFIndexRoot,
     tree_map::{TreeMap, TreeMapKey, TreeMapVec},
     versioning::VersionControl,
@@ -37,13 +36,19 @@ use crate::{
         IndexOps,
     },
     metadata::{schema::MetadataDimensions, QueryFilterDimensions, HIGH_WEIGHT},
-    models::{common::*, meta_persist::retrieve_values_range},
+    models::{
+        common::*,
+        meta_persist::retrieve_values_range,
+        prob_lazy_load::lazy_item::{FileIndex, ProbLazyItem},
+        serializer::hnsw::RawDeserialize,
+    },
     quantization::{
         product::ProductQuantization, scalar::ScalarQuantization, Quantization, QuantizationError,
         StorageType,
     },
     storage::Storage,
 };
+use crossbeam::channel;
 use dashmap::DashMap;
 use lmdb::{Cursor, Database, DatabaseFlags, Environment, Transaction, WriteFlags};
 use rustc_hash::FxHashMap;
@@ -61,6 +66,7 @@ use std::{
         atomic::{AtomicBool, AtomicU32, AtomicUsize},
         Arc, RwLock,
     },
+    thread,
     time::Instant,
 };
 
@@ -749,30 +755,84 @@ impl CollectionsMap {
 
         let file_index = hnsw_index_data.file_index;
         let bufman = index_manager.get(file_index.file_id)?;
-        let root = SharedNode::deserialize(
+        let cursor = bufman.open_cursor()?;
+        let root_node_raw = ProbNode::deserialize_raw(
             &bufman,
+            cursor,
             file_index.offset,
             file_index.file_id,
             &cache,
-            &mut pending_items,
         )?;
+        let root_node = ProbNode::build_from_raw(root_node_raw, &cache, &mut pending_items);
+        let root = ProbLazyItem::new(root_node, file_index.file_id, file_index.offset);
+        bufman.close_cursor(cursor)?;
 
-        while let Some(file_index) = pending_items.keys().next().cloned() {
-            let bufman = index_manager.get(file_index.file_id)?;
-            let node = ProbNode::deserialize(
-                &bufman,
-                file_index.offset,
-                file_index.file_id,
-                &cache,
-                &mut pending_items,
-            )?;
-            let lazy_item = pending_items.remove(&file_index).unwrap();
-            let lazy_item_ref = unsafe { &*lazy_item };
-            lazy_item_ref.set_data(node);
-            cache
-                .registry
-                .insert(HNSWIndexCache::combine_index(&file_index), lazy_item);
-        }
+        let (file_index_sender, file_index_receiver) = channel::unbounded::<FileIndex>();
+        let (raw_node_sender, raw_node_receiver) =
+            channel::unbounded::<(<ProbNode as RawDeserialize>::Raw, FileIndex)>();
+
+        thread::scope(|s| {
+            let mut handles = Vec::new();
+            let file_index_receiver = Arc::new(file_index_receiver);
+            let index_manager = &index_manager;
+            let cache = &cache;
+            for _ in 0..8 {
+                let file_index_receiver = file_index_receiver.clone();
+                let cursors = (0..=offset_counter.file_id)
+                    .map(|file_id| index_manager.get(IndexFileId::from(file_id))?.open_cursor())
+                    .collect::<Result<Vec<_>, _>>()?;
+                let raw_node_sender = raw_node_sender.clone();
+                let handle = s.spawn(move || {
+                    for file_index in &*file_index_receiver {
+                        let bufman = index_manager.get(file_index.file_id)?;
+                        let node = ProbNode::deserialize_raw(
+                            &bufman,
+                            cursors[*file_index.file_id as usize],
+                            file_index.offset,
+                            file_index.file_id,
+                            cache,
+                        )?;
+                        raw_node_sender.send((node, file_index)).unwrap();
+                    }
+
+                    for (file_id, cursor) in cursors.into_iter().enumerate() {
+                        let file_id = IndexFileId::from(file_id as u32);
+                        index_manager.get(file_id)?.close_cursor(cursor)?;
+                    }
+
+                    Ok::<_, WaCustomError>(())
+                });
+                handles.push(handle);
+            }
+
+            while !pending_items.is_empty() {
+                let keys = pending_items.keys().cloned().collect::<Vec<_>>();
+                let len = keys.len();
+                for file_index in keys {
+                    file_index_sender.send(file_index).unwrap();
+                }
+
+                for _ in 0..len {
+                    let (raw, file_index) = raw_node_receiver.recv().unwrap();
+
+                    let node = ProbNode::build_from_raw(raw, cache, &mut pending_items);
+                    let lazy_item = pending_items.remove(&file_index).unwrap();
+                    let lazy_item_ref = unsafe { &*lazy_item };
+                    lazy_item_ref.set_data(node);
+                    cache
+                        .registry
+                        .insert(HNSWIndexCache::combine_index(&file_index), lazy_item);
+                }
+            }
+
+            drop(file_index_sender);
+
+            for handle in handles {
+                handle.join().unwrap()?;
+            }
+
+            Ok::<_, WaCustomError>(())
+        })?;
 
         println!("Dense index loaded in {:?}", start.elapsed());
 

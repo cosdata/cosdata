@@ -3,21 +3,21 @@ use std::{
     sync::atomic::{AtomicPtr, Ordering},
 };
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashSet;
 
 use crate::{
     indexes::hnsw::offset_counter::IndexFileId,
     models::{
         buffered_io::{BufIoError, BufferManager},
         cache_loader::HNSWIndexCache,
-        prob_lazy_load::lazy_item::{FileIndex, ProbLazyItem},
-        prob_node::SharedNode,
+        prob_lazy_load::lazy_item::FileIndex,
+        prob_node::{Neighbors, SharedNode},
         serializer::SimpleSerialize,
         types::{FileOffset, InternalId, MetricResult},
     },
 };
 
-use super::HNSWIndexSerialize;
+use super::{HNSWIndexSerialize, RawDeserialize};
 
 // @SERIALIZED_SIZE:
 //   2 bytes for length +
@@ -26,7 +26,7 @@ use super::HNSWIndexSerialize;
 //     8 bytes offset & file id +
 //     5 bytes for distance/similarity
 //   ) = 2 + len * 17
-impl HNSWIndexSerialize for Box<[AtomicPtr<(InternalId, SharedNode, MetricResult)>]> {
+impl HNSWIndexSerialize for Neighbors {
     fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
         let start = bufman.cursor_position(cursor)?;
         bufman.update_u16_with_cursor(cursor, self.len() as u16)?;
@@ -61,12 +61,13 @@ impl HNSWIndexSerialize for Box<[AtomicPtr<(InternalId, SharedNode, MetricResult
 
     fn deserialize(
         bufman: &BufferManager,
-        FileOffset(offset): FileOffset,
-        _file_id: IndexFileId,
+        file_index: FileIndex,
         cache: &HNSWIndexCache,
-        pending_items: &mut FxHashMap<FileIndex, SharedNode>,
+        max_loads: u16,
+        skipm: &mut FxHashSet<u64>,
     ) -> Result<Self, BufIoError> {
         let cursor = bufman.open_cursor()?;
+        let offset = file_index.offset.0;
         bufman.seek_with_cursor(cursor, offset as u64)?;
         let len = bufman.read_u16_with_cursor(cursor)? as usize;
         let mut neighbors = Vec::with_capacity(len);
@@ -90,20 +91,55 @@ impl HNSWIndexSerialize for Box<[AtomicPtr<(InternalId, SharedNode, MetricResult
                 offset: FileOffset(node_offset),
                 file_id: IndexFileId::from(node_file_id),
             };
-
-            let node = cache
-                .registry
-                .get(&HNSWIndexCache::combine_index(&node_file_index))
-                .unwrap_or_else(|| {
-                    *pending_items
-                        .entry(node_file_index)
-                        .or_insert_with(|| ProbLazyItem::new_pending(node_file_index))
-                });
+            let node = SharedNode::deserialize(bufman, node_file_index, cache, max_loads, skipm)?;
             let ptr = Box::into_raw(Box::new((node_id, node, dist)));
 
             neighbors.push(AtomicPtr::new(ptr));
         }
 
+        bufman.close_cursor(cursor)?;
+
         Ok(neighbors.into_boxed_slice())
+    }
+}
+
+impl RawDeserialize for Neighbors {
+    type Raw = Vec<Option<(InternalId, FileIndex, MetricResult)>>;
+
+    fn deserialize_raw(
+        bufman: &BufferManager,
+        cursor: u64,
+        FileOffset(offset): FileOffset,
+        _file_id: IndexFileId,
+        _cache: &HNSWIndexCache,
+    ) -> Result<Self::Raw, BufIoError> {
+        bufman.seek_with_cursor(cursor, offset as u64)?;
+        let len = bufman.read_u16_with_cursor(cursor)? as usize;
+        let mut neighbors = Vec::with_capacity(len);
+        let placeholder_start = offset as u64 + 2;
+
+        for i in 0..len {
+            let placeholder_offset = placeholder_start + i as u64 * 17;
+            bufman.seek_with_cursor(cursor, placeholder_offset)?;
+            let node_id = InternalId::from(bufman.read_u32_with_cursor(cursor)?);
+            let node_offset = bufman.read_u32_with_cursor(cursor)?;
+            if node_offset == u32::MAX {
+                neighbors.push(None);
+                continue;
+            }
+            let node_file_id = bufman.read_u32_with_cursor(cursor)?;
+
+            let dist: MetricResult =
+                SimpleSerialize::deserialize(bufman, FileOffset(placeholder_offset as u32 + 12))?;
+
+            let node_file_index = FileIndex {
+                offset: FileOffset(node_offset),
+                file_id: IndexFileId::from(node_file_id),
+            };
+
+            neighbors.push(Some((node_id, node_file_index, dist)));
+        }
+
+        Ok(neighbors)
     }
 }

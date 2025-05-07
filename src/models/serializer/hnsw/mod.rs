@@ -4,7 +4,7 @@ mod node;
 #[cfg(test)]
 mod tests;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashSet;
 
 use crate::{
     indexes::hnsw::offset_counter::IndexFileId,
@@ -12,7 +12,6 @@ use crate::{
         buffered_io::{BufIoError, BufferManager},
         cache_loader::HNSWIndexCache,
         prob_lazy_load::lazy_item::FileIndex,
-        prob_node::SharedNode,
         types::FileOffset,
     },
 };
@@ -22,9 +21,21 @@ pub trait HNSWIndexSerialize: Sized {
 
     fn deserialize(
         bufman: &BufferManager,
+        file_index: FileIndex,
+        cache: &HNSWIndexCache,
+        max_loads: u16,
+        skipm: &mut FxHashSet<u64>,
+    ) -> Result<Self, BufIoError>;
+}
+
+pub trait RawDeserialize: Sized {
+    type Raw;
+
+    fn deserialize_raw(
+        bufman: &BufferManager,
+        cursor: u64,
         offset: FileOffset,
         file_id: IndexFileId,
         cache: &HNSWIndexCache,
-        pending_items: &mut FxHashMap<FileIndex, SharedNode>,
-    ) -> Result<Self, BufIoError>;
+    ) -> Result<Self::Raw, BufIoError>;
 }
