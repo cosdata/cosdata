@@ -22,15 +22,16 @@
 ## 📦 Table of Contents
 
 - [Overview](#-overview)
-- [Getting Started](#-getting-started)
+- [Getting Started](#️-getting-started)
 - [Client SDKs](#-client-sdks)
   - [Python SDK](#-python-sdk)
   - [Node.js SDK](#-nodejs-sdk)
 - [Features](#-features)
 - [Benchmarks](https://www.cosdata.io/resources/benchmarks)
 - [Documentation](https://docs.cosdata.io/getting-started/introduction/)
+- [Contributing](#-contributing)
 - [Contacts & Community](#-contacts--community)
-- [Show Your Support](#-show-your-support)
+- [Show Your Support](#️-show-your-support)
 
 <br>
 <br>
@@ -106,7 +107,7 @@ Perfect for contributors and power users who want to customize or extend Cosdata
 - **Git** (v2.0+)  
 - **Rust** (v1.81.0+) & **Cargo**  
 - **C++ compiler**  
-  - GCC ≥ 4.8 **or** Clang ≥ 3.4 
+  - GCC ≥ 4.8 **or** Clang ≥ 3.4 
 
 <br>
 
@@ -212,7 +213,7 @@ Use the `test-dataset.py` script to benchmark Cosdata against real‑world datas
     
 3.  **Query** sample vectors and record accuracy & latency metrics.
     
-4.  **Compare** Cosdata’s performance against baseline implementations.
+4.  **Compare** Cosdata's performance against baseline implementations.
     
 
 > **TODO:** Add download links, configuration flags, and step‑by‑step instructions for each dataset.
@@ -355,20 +356,65 @@ pip install cosdata-client
 **Quickstart Example**
 
 ```python
-from cosdata.client import Client
+from cosdata import Client
 
-# Initialize the Cosdata client
+# Initialize the client with your server details
 client = Client(
-    host="https://127.0.0.1:8443",
-    admin_key="YOUR_ADMIN_KEY",
+    host="http://127.0.0.1:8443",  # Default host
+    username="admin",               # Default username
+    password="admin",               # Default password
+    verify=False                    # SSL verification
 )
 
-# Create a new collection (vector dimension = 768)
+# Create a collection for storing 768-dimensional vectors
 collection = client.create_collection(
     name="my_collection",
-    dimension=768
+    dimension=768,                  # Vector dimension
+    description="My vector collection"
 )
-print(f"Created collection: {collection.name}")
+
+# Create an index with custom parameters
+index = collection.create_index(
+    distance_metric="cosine",       # Default: cosine
+    num_layers=10,                  # Default: 10
+    max_cache_size=1000,           # Default: 1000
+    ef_construction=128,           # Default: 128
+    ef_search=64,                  # Default: 64
+    neighbors_count=32,            # Default: 32
+    level_0_neighbors_count=64     # Default: 64
+)
+
+# Generate and insert vectors
+import numpy as np
+
+def generate_random_vector(id: int, dimension: int) -> dict:
+    values = np.random.uniform(-1, 1, dimension).tolist()
+    return {
+        "id": f"vec_{id}",
+        "dense_values": values,
+        "document_id": f"doc_{id//10}",  # Group vectors into documents
+        "metadata": {  # Optional metadata
+            "created_at": "2024-03-20",
+            "category": "example"
+        }
+    }
+
+# Generate and insert vectors
+vectors = [generate_random_vector(i, 768) for i in range(100)]
+
+# Add vectors using a transaction
+with collection.transaction() as txn:
+    # Single vector upsert
+    txn.upsert_vector(vectors[0])
+    # Batch upsert for remaining vectors
+    txn.batch_upsert_vectors(vectors[1:])
+
+# Search for similar vectors
+results = collection.search.dense(
+    query_vector=vectors[0]["dense_values"],  # Use first vector as query
+    top_k=5,                                  # Number of nearest neighbors
+    return_raw_text=True
+)
 ```
 
 **Learn More**
@@ -388,22 +434,63 @@ npm install cosdata-sdk
 **Quickstart Example**
 
 ```typescript
-import { Client } from 'cosdata-sdk';
+import { createClient } from 'cosdata-sdk';
 
-(async () => {
-  // Initialize the Cosdata client
-  const client = new Client({
-    host: 'https://127.0.0.1:8443',
-    adminKey: 'YOUR_ADMIN_KEY',
-  });
+// Initialize the client (all parameters are optional)
+const client = createClient({
+  host: 'http://127.0.0.1:8443',  // Default host
+  username: 'admin',              // Default username
+  password: 'test_key',           // Default password
+  verifySSL: false                // SSL verification
+});
 
-  // Create a new collection with 768‑d vectors
-  const collection = await client.createCollection({
-    name: 'my_collection',
-    dimension: 768,
-  });
-  console.log(`Created collection: ${collection.name}`);
-})();
+// Create a collection
+const collection = await client.createCollection({
+  name: 'my_collection',
+  dimension: 128,
+  dense_vector: {
+    enabled: true,
+    dimension: 128,
+    auto_create_index: false
+  }
+});
+
+// Create an index
+const index = await collection.createIndex({
+  name: 'my_collection_dense_index',
+  distance_metric: 'cosine',
+  quantization_type: 'auto',
+  sample_threshold: 100,
+  num_layers: 16,
+  max_cache_size: 1024,
+  ef_construction: 128,
+  ef_search: 64,
+  neighbors_count: 10,
+  level_0_neighbors_count: 20
+});
+
+// Generate some vectors
+function generateRandomVector(dimension: number): number[] {
+  return Array.from({ length: dimension }, () => Math.random());
+}
+
+const vectors = Array.from({ length: 100 }, (_, i) => ({
+  id: `vec_${i}`,
+  dense_values: generateRandomVector(128),
+  document_id: `doc_${i}`
+}));
+
+// Add vectors using a transaction
+const txn = collection.transaction();
+await txn.batch_upsert_vectors(vectors);
+await txn.commit();
+
+// Search for similar vectors
+const results = await collection.getSearch().dense({
+  query_vector: generateRandomVector(128),
+  top_k: 5,
+  return_raw_text: true
+});
 ```
 
 **Learn More**
@@ -456,9 +543,19 @@ import { Client } from 'cosdata-sdk';
 
 <br>
 
+# 🙌 Contributing
+
+We welcome contributions from the community! Whether it's _fixing a bug_, _improving documentation_, or building _new features_—every bit helps.
+
+For full guidelines (coding standards, commit messages, CI checks), please see our [CONTRIBUTING.md](CONTRIBUTING.md) If you have any questions, feel free to open an issue or join the discussion on [Discord](https://discord.gg/WbSbXYWvta). We can’t wait to collaborate with you!
+
+Please read our [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
+
+<br>
+
 # 🤝 Contacts & Community
 
-Have questions, ideas, or want to contribute? We’d love to hear from you!
+Have questions, ideas, or want to contribute? We'd love to hear from you!
 
 🔗 Discord: Chat, collaborate, and get support — [Join now](https://discord.gg/WbSbXYWvta)
 
@@ -468,7 +565,7 @@ Have questions, ideas, or want to contribute? We’d love to hear from you!
 
 💡 Discussions: Share ideas and ask questions — [Join Discussion](https://discord.gg/WbSbXYWvta)
 
-Let’s collaborate and build the future of vector search—together! 💡
+Let's collaborate and build the future of vector search—together! 💡
 
 <br>
 
@@ -479,4 +576,3 @@ If Cosdata has empowered your projects, please consider giving us a star on GitH
 Your endorsement helps attract new contributors and fuels ongoing improvements.
 
 Thank you for your support! 🙏
-
