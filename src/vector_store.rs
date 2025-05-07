@@ -495,10 +495,10 @@ fn preprocess_embedding(
         let num_levels = hnsw_index.levels_prob.len() - 1;
         let plp = pseudo_level_probs(num_levels as u8, replicas.len() as u16);
         let mut embeddings: Vec<IndexableEmbedding> = vec![];
-        let mut is_first_overrideen = false;
+        let mut is_first_overridden = false;
         for (replica_id, prop_metadata) in replicas.into_iter().enumerate() {
-            let overridden_level_probs = if !is_first_overrideen {
-                is_first_overrideen = true;
+            let overridden_level_probs = if !is_first_overridden {
+                is_first_overridden = true;
                 plp.iter()
                     .map(|(_, lev)| (0.0, *lev))
                     .collect::<Vec<(f64, u8)>>()
@@ -586,7 +586,10 @@ pub fn index_embeddings(
     let file_id = offset_counter.file_id();
 
     for emb in embeddings {
-        let max_level = get_max_insert_level(rand::random::<f32>().into(), &hnsw_index.levels_prob);
+        let max_level = match emb.overridden_level_probs {
+            Some(lp) => get_max_insert_level(rand::random::<f32>().into(), &lp),
+            None => get_max_insert_level(rand::random::<f32>().into(), &hnsw_index.levels_prob),
+        };
         // Start from root at highest level
         let root_entry = hnsw_index.get_root_vec();
         let highest_level = HNSWLevel(hnsw_params_guard.num_layers);
