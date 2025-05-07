@@ -1,14 +1,10 @@
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashSet;
 
-use crate::{
-    indexes::hnsw::offset_counter::IndexFileId,
-    models::{
-        buffered_io::{BufIoError, BufferManager},
-        cache_loader::HNSWIndexCache,
-        prob_lazy_load::lazy_item::{FileIndex, ProbLazyItem},
-        prob_node::{ProbNode, SharedNode},
-        types::FileOffset,
-    },
+use crate::models::{
+    buffered_io::{BufIoError, BufferManager},
+    cache_loader::HNSWIndexCache,
+    prob_lazy_load::lazy_item::FileIndex,
+    prob_node::SharedNode,
 };
 
 use super::HNSWIndexSerialize;
@@ -27,16 +23,12 @@ impl HNSWIndexSerialize for SharedNode {
     }
 
     fn deserialize(
-        bufman: &BufferManager,
-        offset: FileOffset,
-        file_id: IndexFileId,
+        _bufman: &BufferManager,
+        file_index: FileIndex,
         cache: &HNSWIndexCache,
-        pending_items: &mut FxHashMap<FileIndex, SharedNode>,
+        max_loads: u16,
+        skipm: &mut FxHashSet<u64>,
     ) -> Result<Self, BufIoError> {
-        Ok(ProbLazyItem::new(
-            ProbNode::deserialize(bufman, offset, file_id, cache, pending_items)?,
-            file_id,
-            offset,
-        ))
+        cache.get_lazy_object(file_index, max_loads, skipm)
     }
 }

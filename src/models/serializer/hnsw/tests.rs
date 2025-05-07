@@ -6,14 +6,14 @@ use crate::{
         buffered_io::{BufferManager, BufferManagerFactory},
         cache_loader::HNSWIndexCache,
         file_persist::write_prop_value_to_file,
-        prob_lazy_load::lazy_item::ProbLazyItem,
+        prob_lazy_load::lazy_item::{FileIndex, ProbLazyItem},
         prob_node::{ProbNode, SharedNode},
         types::{DistanceMetric, FileOffset, HNSWLevel, InternalId, MetricResult, NodePropValue},
         versioning::VersionHash,
     },
     storage::Storage,
 };
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashSet;
 use std::{
     collections::HashSet,
     fs::{File, OpenOptions},
@@ -184,16 +184,14 @@ fn test_lazy_item_serialization() {
     let offset = lazy_item.serialize(&bufman, cursor).unwrap();
     bufman.close_cursor(cursor).unwrap();
 
-    let mut pending_items = FxHashMap::default();
+    let file_index = FileIndex {
+        offset: FileOffset(offset),
+        file_id: root_version_file_id,
+    };
 
-    let deserialized = SharedNode::deserialize(
-        &bufman,
-        FileOffset(offset),
-        root_version_file_id,
-        &cache,
-        &mut pending_items,
-    )
-    .unwrap();
+    let deserialized =
+        SharedNode::deserialize(&bufman, file_index, &cache, 1000, &mut FxHashSet::default())
+            .unwrap();
 
     let mut tester = EqualityTester::new(cache.clone());
 
@@ -211,16 +209,14 @@ fn test_prob_node_acyclic_serialization() {
     let offset = node.serialize(&bufman, cursor).unwrap();
     bufman.close_cursor(cursor).unwrap();
 
-    let mut pending_items = FxHashMap::default();
+    let file_index = FileIndex {
+        offset: FileOffset(offset),
+        file_id: root_version_file_id,
+    };
 
-    let deserialized = ProbNode::deserialize(
-        &bufman,
-        FileOffset(offset),
-        root_version_file_id,
-        &cache,
-        &mut pending_items,
-    )
-    .unwrap();
+    let deserialized =
+        ProbNode::deserialize(&bufman, file_index, &cache, 1000, &mut FxHashSet::default())
+            .unwrap();
 
     let mut tester = EqualityTester::new(cache.clone());
 
@@ -268,16 +264,14 @@ fn test_prob_node_serialization_with_neighbors() {
     }
     bufman.close_cursor(cursor).unwrap();
 
-    let mut pending_items = FxHashMap::default();
+    let file_index = FileIndex {
+        offset: FileOffset(0),
+        file_id: root_version_file_id,
+    };
 
-    let deserialized = SharedNode::deserialize(
-        &bufman,
-        FileOffset(0),
-        root_version_file_id,
-        &cache,
-        &mut pending_items,
-    )
-    .unwrap();
+    let deserialized =
+        SharedNode::deserialize(&bufman, file_index, &cache, 1000, &mut FxHashSet::default())
+            .unwrap();
 
     let mut tester = EqualityTester::new(cache.clone());
 
@@ -309,16 +303,14 @@ fn test_prob_lazy_item_cyclic_serialization() {
 
     bufman.close_cursor(cursor).unwrap();
 
-    let mut pending_items = FxHashMap::default();
+    let file_index = FileIndex {
+        offset: FileOffset(0),
+        file_id: root_version_file_id,
+    };
 
-    let deserialized: SharedNode = SharedNode::deserialize(
-        &bufman,
-        FileOffset(0),
-        root_version_file_id,
-        &cache,
-        &mut pending_items,
-    )
-    .unwrap();
+    let deserialized: SharedNode =
+        SharedNode::deserialize(&bufman, file_index, &cache, 1000, &mut FxHashSet::default())
+            .unwrap();
 
     let mut tester = EqualityTester::new(cache.clone());
 

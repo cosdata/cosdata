@@ -1,3 +1,5 @@
+use crate::indexes::hnsw::offset_counter::IndexFileId;
+
 use super::buffered_io::{BufIoError, BufferManager, BufferManagerFactory};
 use super::common::TSHashTable;
 use super::file_persist::{read_prop_metadata_from_file, read_prop_value_from_file};
@@ -10,12 +12,12 @@ use super::serializer::inverted::InvertedIndexSerialize;
 use super::serializer::tf_idf::TFIDFIndexSerialize;
 use super::tf_idf_index::TFIDFIndexNodeData;
 use super::types::*;
-use crate::indexes::hnsw::offset_counter::IndexFileId;
 use dashmap::DashMap;
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashSet;
 use std::fs::File;
 use std::io::Write;
 use std::sync::atomic::AtomicU32;
+use std::sync::TryLockError;
 use std::sync::{Arc, Mutex, RwLock, Weak};
 
 pub struct HNSWIndexCache {
@@ -25,6 +27,15 @@ pub struct HNSWIndexCache {
     pub prop_file: RwLock<File>,
     loading_items: TSHashTable<u64, Arc<Mutex<bool>>>,
     pub distance_metric: Arc<RwLock<DistanceMetric>>,
+    // A global lock to prevent deadlocks during batch loading of cache entries when `max_loads > 1`.
+    //
+    // This lock ensures that only one thread is allowed to load large batches of nodes (where `max_loads > 1`)
+    // at any given time. If multiple threads attempt to load interconnected nodes in parallel with high `max_loads`,
+    // it can lead to a deadlock situation due to circular dependencies between the locks. By serializing access to
+    // large batch loads, this mutex ensures that only one thread can initiate a batch load with a high `max_loads`
+    // value, preventing such circular waiting conditions. Threads with `max_loads = 1` can still load nodes in parallel
+    // without causing conflicts, allowing for efficient loading of smaller batches.
+    batch_load_lock: Mutex<()>,
 }
 
 unsafe impl Send for HNSWIndexCache {}
@@ -46,6 +57,7 @@ impl HNSWIndexCache {
             prop_file,
             distance_metric,
             loading_items: TSHashTable::new(16),
+            batch_load_lock: Mutex::new(()),
         }
     }
 
@@ -129,11 +141,20 @@ impl HNSWIndexCache {
         self.registry.insert(combined_index, item);
     }
 
-    pub fn get_object(&self, file_index: FileIndex) -> Result<SharedNode, BufIoError> {
+    pub fn get_lazy_object(
+        &self,
+        file_index: FileIndex,
+        max_loads: u16,
+        skipm: &mut FxHashSet<u64>,
+    ) -> Result<SharedNode, BufIoError> {
         let combined_index = Self::combine_index(&file_index);
 
         if let Some(item) = self.registry.get(&combined_index) {
             return Ok(item);
+        }
+
+        if max_loads == 0 || !skipm.insert(combined_index) {
+            return Ok(ProbLazyItem::new_pending(file_index));
         }
 
         let mut mutex = self
@@ -161,25 +182,37 @@ impl HNSWIndexCache {
         }
 
         let bufman = self.bufmans.get(file_index.file_id)?;
-        let mut pending_items = FxHashMap::default();
-
-        let data = ProbNode::deserialize(
-            &bufman,
-            file_index.offset,
-            file_index.file_id,
-            self,
-            &mut pending_items,
-        )?;
-
-        let FileIndex { offset, file_id } = file_index;
-        let item = ProbLazyItem::new(data, file_id, offset);
+        let data = ProbNode::deserialize(&bufman, file_index, self, max_loads - 1, skipm)?;
+        let item = ProbLazyItem::new(data, file_index.file_id, file_index.offset);
 
         self.registry.insert(combined_index, item);
-
         *load_complete = true;
         self.loading_items.delete(&combined_index);
 
         Ok(item)
+    }
+
+    // Retrieves an object from the cache, attempting to batch load if possible, based on the state of the batch load lock.
+    //
+    // This function first attempts to acquire the `batch_load_lock` using a non-blocking `try_lock`. If successful,
+    // it sets a high `max_loads` value (1000), allowing for a larger batch load. This is the preferred scenario where
+    // the system is capable of performing a more efficient batch load, loading multiple nodes at once. If the lock is
+    // already held (i.e., another thread is performing a large batch load), the function falls back to a lower `max_loads`
+    // value (1), effectively loading nodes one at a time to avoid blocking or deadlocking.
+    //
+    // The key idea here is to **always attempt to load as many nodes as possible** (with `max_loads = 1000`) unless
+    // another thread is already performing a large load, in which case the function resorts to a smaller load size.
+    // This dynamic loading strategy balances efficient batch loading with the need to avoid blocking or deadlocks in high-concurrency situations.
+    //
+    // After determining the appropriate `max_loads`, the function proceeds by calling `get_lazy_object`, which handles
+    // the actual loading process, and retrieves the lazy-loaded data.
+    pub fn get_object(&self, file_index: FileIndex) -> Result<SharedNode, BufIoError> {
+        let (_lock, max_loads) = match self.batch_load_lock.try_lock() {
+            Ok(lock) => (Some(lock), 1000),
+            Err(TryLockError::Poisoned(poison_err)) => panic!("lock error: {}", poison_err),
+            Err(TryLockError::WouldBlock) => (None, 1),
+        };
+        self.get_lazy_object(file_index, max_loads, &mut FxHashSet::default())
     }
 
     pub fn combine_index(file_index: &FileIndex) -> u64 {
