@@ -21,7 +21,7 @@ pub struct BackgroundCollectionTransaction {
 }
 
 impl BackgroundCollectionTransaction {
-    pub fn new(collection: Arc<Collection>) -> Result<Self, WaCustomError> {
+    pub fn new(collection: &Collection) -> Result<Self, WaCustomError> {
         let branch_info = collection.vcs.get_branch_info("main")?.unwrap();
         let version_number = VersionNumber::from(*branch_info.get_current_version() + 1);
         let id = collection.vcs.generate_hash("main", version_number)?;
@@ -34,7 +34,7 @@ impl BackgroundCollectionTransaction {
     }
 
     pub fn from_version_id_and_number(
-        collection: Arc<Collection>,
+        collection: &Collection,
         version_hash: VersionHash,
         version_number: VersionNumber,
     ) -> Self {
@@ -71,7 +71,7 @@ pub struct CollectionTransaction {
 }
 
 impl CollectionTransaction {
-    pub fn new(collection: Arc<Collection>) -> Result<Self, WaCustomError> {
+    pub fn new(collection: &Collection) -> Result<Self, WaCustomError> {
         let branch_info = collection.vcs.get_branch_info("main")?.unwrap();
         let version_number = VersionNumber::from(*branch_info.get_current_version() + 1);
         let id = collection.vcs.generate_hash("main", version_number)?;

@@ -158,7 +158,7 @@ pub async fn init_hnsw_index_for_collection(
         // for queries, and the range `[u32::MAX - 257, u32::MAX - 2]`
         let pseudo_vec_id = InternalId::from(u32::MAX - 257);
         let pseudo_vec = DenseInputEmbedding(pseudo_vec_id, pseudo_vals, None, true);
-        let transaction = BackgroundCollectionTransaction::new(collection.clone())?;
+        let transaction = BackgroundCollectionTransaction::new(&collection)?;
         hnsw_index.run_upload(&collection, vec![pseudo_vec], &transaction, &ctx.config)?;
         let (id, version_number) = (transaction.id, transaction.version_number);
         transaction.pre_commit(&collection, &ctx.config)?;
