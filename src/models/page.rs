@@ -1,4 +1,4 @@
-use super::{types::FileOffset, versioning::Hash};
+use super::{types::FileOffset, versioning::VersionHash};
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -9,7 +9,7 @@ use std::{
 
 #[derive(Debug, Clone)]
 pub struct VersionedPagepool<const LEN: usize> {
-    pub current_version: Hash,
+    pub current_version: VersionHash,
     pub serialized_at: Arc<RwLock<Option<FileOffset>>>,
     pub pagepool: Arc<Pagepool<LEN>>,
     pub next: Arc<RwLock<Option<VersionedPagepool<LEN>>>>,
@@ -26,7 +26,7 @@ impl<const LEN: usize> PartialEq for VersionedPagepool<LEN> {
 }
 
 impl<const LEN: usize> VersionedPagepool<LEN> {
-    pub fn new(version: Hash) -> Self {
+    pub fn new(version: VersionHash) -> Self {
         Self {
             current_version: version,
             serialized_at: Arc::new(RwLock::new(None)),
@@ -35,7 +35,7 @@ impl<const LEN: usize> VersionedPagepool<LEN> {
         }
     }
 
-    pub fn push(&self, version: Hash, id: u32) {
+    pub fn push(&self, version: VersionHash, id: u32) {
         if self.current_version != version {
             let next_read_guard = self.next.read().unwrap();
             if let Some(next) = &*next_read_guard {

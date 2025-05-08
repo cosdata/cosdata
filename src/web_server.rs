@@ -1,8 +1,8 @@
-use crate::api;
 use crate::api::auth::{auth_module, authentication_middleware::AuthenticationMiddleware};
 use crate::api::vectordb::collections::collections_module;
 use crate::api::vectordb::indexes::indexes_module;
 use crate::api::vectordb::search::search_module;
+use crate::api::vectordb::sync_transaction::sync_transactions_module;
 use crate::api::vectordb::transactions::transactions_module;
 use crate::api::vectordb::vectors::vectors_module;
 use crate::api::vectordb::versions::version_module;
@@ -63,19 +63,9 @@ pub async fn run_actix_server_with_context(ctx: Data<AppContext>) -> std::io::Re
                     .service(indexes_module())
                     .service(vectors_module())
                     .service(transactions_module())
+                    .service(sync_transactions_module())
                     .service(version_module())
-                    .service(collections_module())
-                    .service(
-                        web::scope("{database_name}/transactions")
-                            .route(
-                                "/{transaction_id}/update",
-                                web::post().to(api::vectordb::transactions::update),
-                            )
-                            .route(
-                                "/{transaction_id}/delete",
-                                web::post().to(api::vectordb::transactions::delete),
-                            ),
-                    ),
+                    .service(collections_module()),
             )
     })
     .keep_alive(std::time::Duration::from_secs(10));

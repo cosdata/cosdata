@@ -11,7 +11,7 @@ use crate::{
         meta_persist::store_values_upper_bound,
         sparse_ann_query::{SparseAnnQueryBasic, SparseAnnResult},
         types::{InternalId, MetaDb, SparseVector},
-        versioning::Hash,
+        versioning::VersionHash,
     },
 };
 use std::{
@@ -75,7 +75,7 @@ impl InvertedIndex {
         &self,
         id: InternalId,
         pairs: Vec<SparsePair>,
-        version: Hash,
+        version: VersionHash,
     ) -> Result<(), BufIoError> {
         let id = id.into();
         for pair in &pairs {

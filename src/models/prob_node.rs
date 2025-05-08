@@ -7,11 +7,14 @@ use std::{
 };
 
 use parking_lot::{RwLock, RwLockReadGuard};
+use rustc_hash::FxHashMap;
 
 use super::{
     cache_loader::HNSWIndexCache,
-    prob_lazy_load::lazy_item::ProbLazyItem,
+    prob_lazy_load::lazy_item::{FileIndex, ProbLazyItem},
+    serializer::hnsw::RawDeserialize,
     types::{DistanceMetric, HNSWLevel, InternalId, MetricResult, NodePropMetadata, NodePropValue},
+    versioning::VersionHash,
 };
 
 pub type SharedNode = *mut ProbLazyItem<ProbNode>;
@@ -19,6 +22,7 @@ pub type Neighbors = Box<[AtomicPtr<(InternalId, SharedNode, MetricResult)>]>;
 
 pub struct ProbNode {
     pub hnsw_level: HNSWLevel,
+    pub version: VersionHash,
     pub prop_value: Arc<NodePropValue>,
     pub prop_metadata: Option<Arc<NodePropMetadata>>,
     // Each neighbor is represented as (neighbor_id, neighbor_node, distance)
@@ -40,8 +44,10 @@ unsafe impl Send for ProbNode {}
 unsafe impl Sync for ProbNode {}
 
 impl ProbNode {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         hnsw_level: HNSWLevel,
+        version: VersionHash,
         prop_value: Arc<NodePropValue>,
         prop_metadata: Option<Arc<NodePropMetadata>>,
         parent: SharedNode,
@@ -57,6 +63,7 @@ impl ProbNode {
 
         Self {
             hnsw_level,
+            version,
             prop_value,
             prop_metadata,
             neighbors: neighbors.into_boxed_slice(),
@@ -70,6 +77,7 @@ impl ProbNode {
     #[allow(clippy::too_many_arguments)]
     pub fn new_with_neighbors_and_versions_and_root_version(
         hnsw_level: HNSWLevel,
+        version: VersionHash,
         prop_value: Arc<NodePropValue>,
         prop_metadata: Option<Arc<NodePropMetadata>>,
         neighbors: Neighbors,
@@ -97,6 +105,7 @@ impl ProbNode {
 
         Self {
             hnsw_level,
+            version,
             prop_value,
             prop_metadata,
             neighbors,
@@ -266,7 +275,100 @@ impl ProbNode {
 
     /// See [`crate::models::serializer::hnsw::node`] for how its calculated
     pub fn get_serialized_size(neighbors_len: usize) -> usize {
-        neighbors_len * 19 + 49
+        neighbors_len * 17 + 52
+    }
+
+    pub fn build_from_raw(
+        raw: <Self as RawDeserialize>::Raw,
+        cache: &HNSWIndexCache,
+        pending_items: &mut FxHashMap<FileIndex, SharedNode>,
+    ) -> Self {
+        let (
+            hnsw_level,
+            version,
+            prop_value,
+            prop_metadata,
+            neighbors,
+            parent_file_index,
+            child_file_index,
+            root_file_index,
+            root_tag,
+        ) = raw;
+
+        let parent = if let Some(file_index) = parent_file_index {
+            cache
+                .registry
+                .get(&HNSWIndexCache::combine_index(&file_index))
+                .unwrap_or_else(|| {
+                    *pending_items
+                        .entry(file_index)
+                        .or_insert_with(|| ProbLazyItem::new_pending(file_index))
+                })
+        } else {
+            ptr::null_mut()
+        };
+
+        let child = if let Some(file_index) = child_file_index {
+            cache
+                .registry
+                .get(&HNSWIndexCache::combine_index(&file_index))
+                .unwrap_or_else(|| {
+                    *pending_items
+                        .entry(file_index)
+                        .or_insert_with(|| ProbLazyItem::new_pending(file_index))
+                })
+        } else {
+            ptr::null_mut()
+        };
+
+        let root_version = if let Some(file_index) = root_file_index {
+            cache
+                .registry
+                .get(&HNSWIndexCache::combine_index(&file_index))
+                .unwrap_or_else(|| {
+                    *pending_items
+                        .entry(file_index)
+                        .or_insert_with(|| ProbLazyItem::new_pending(file_index))
+                })
+        } else {
+            ptr::null_mut()
+        };
+
+        let neighbors: Neighbors = neighbors
+            .into_iter()
+            .map(|neighbor| {
+                let ptr = if let Some((id, file_index, score)) = neighbor {
+                    Box::into_raw(Box::new((
+                        id,
+                        cache
+                            .registry
+                            .get(&HNSWIndexCache::combine_index(&file_index))
+                            .unwrap_or_else(|| {
+                                *pending_items
+                                    .entry(file_index)
+                                    .or_insert_with(|| ProbLazyItem::new_pending(file_index))
+                            }),
+                        score,
+                    )))
+                } else {
+                    ptr::null_mut()
+                };
+                AtomicPtr::new(ptr)
+            })
+            .collect();
+
+        Self::new_with_neighbors_and_versions_and_root_version(
+            hnsw_level,
+            version,
+            prop_value,
+            prop_metadata,
+            neighbors,
+            parent,
+            child,
+            root_version,
+            root_tag,
+            *cache.distance_metric.read().unwrap(),
+        )
     }
 }
 

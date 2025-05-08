@@ -9,6 +9,8 @@ use std::{
     },
 };
 
+use crate::indexes::hnsw::offset_counter::IndexFileId;
+
 use super::{
     atomic_array::AtomicArray,
     buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
@@ -18,7 +20,7 @@ use super::{
     serializer::tf_idf::{TFIDFIndexSerialize, TF_IDF_INDEX_DATA_CHUNK_SIZE},
     types::FileOffset,
     utils::calculate_path,
-    versioning::Hash,
+    versioning::VersionHash,
 };
 
 // Term quotient (upper 16 bits of the hash)
@@ -28,7 +30,7 @@ pub type QuotientMap = TSHashTable<TermQuotient, Arc<TermInfo>>;
 
 pub struct UnsafeVersionedVec<T> {
     pub serialized_at: RwLock<Option<FileOffset>>,
-    pub version: Hash,
+    pub version: VersionHash,
     pub list: UnsafeCell<Vec<T>>,
     pub next: UnsafeCell<Option<Box<UnsafeVersionedVec<T>>>>,
 }
@@ -37,7 +39,7 @@ unsafe impl<T: Send> Send for UnsafeVersionedVec<T> {}
 unsafe impl<T: Sync> Sync for UnsafeVersionedVec<T> {}
 
 impl<T> UnsafeVersionedVec<T> {
-    pub fn new(version: Hash) -> UnsafeVersionedVec<T> {
+    pub fn new(version: VersionHash) -> UnsafeVersionedVec<T> {
         Self {
             serialized_at: RwLock::new(None),
             version,
@@ -46,7 +48,7 @@ impl<T> UnsafeVersionedVec<T> {
         }
     }
 
-    pub fn push(&self, version: Hash, value: T) {
+    pub fn push(&self, version: VersionHash, value: T) {
         if self.version == version {
             return unsafe { &mut *self.list.get() }.push(value);
         }
@@ -88,7 +90,7 @@ impl<T> UnsafeVersionedVec<T> {
 }
 
 impl UnsafeVersionedVec<(u32, f32)> {
-    pub fn push_sorted(&self, version: Hash, value: (u32, f32)) {
+    pub fn push_sorted(&self, version: VersionHash, value: (u32, f32)) {
         if self.version == version {
             let list = unsafe { &mut *self.list.get() };
             let mut i = list.len();
@@ -161,7 +163,7 @@ pub struct TermInfo {
 
 impl TermInfo {
     #[allow(unused)]
-    pub fn new(sequence_idx: u16, version: Hash) -> Self {
+    pub fn new(sequence_idx: u16, version: VersionHash) -> Self {
         Self {
             documents: UnsafeVersionedVec::new(version),
             sequence_idx,
@@ -304,9 +306,7 @@ impl TFIDFIndexNode {
     pub fn new(dim_index: u32, file_offset: FileOffset) -> Self {
         let data = ProbLazyItem::new(
             TFIDFIndexNodeData::new(),
-            0.into(),
-            0,
-            false,
+            IndexFileId::invalid(),
             FileOffset(file_offset.0 + 4),
         );
 
@@ -352,7 +352,7 @@ impl TFIDFIndexNode {
         value: f32,
         document_id: u32,
         cache: &TFIDFIndexCache,
-        version: Hash,
+        version: VersionHash,
     ) -> Result<(), BufIoError> {
         // Get node data
         let data = unsafe { &*self.data }.try_get_data(cache, self.dim_index)?;
@@ -433,7 +433,7 @@ impl TFIDFIndexRoot {
         hash_dim: u32,
         value: f32,
         document_id: u32,
-        version: Hash,
+        version: VersionHash,
     ) -> Result<(), BufIoError> {
         // Split the hash dimension
         let storage_dim = hash_dim & (u16::MAX as u32);

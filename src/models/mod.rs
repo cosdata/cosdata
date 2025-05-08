@@ -10,6 +10,7 @@ pub mod dot_product;
 pub mod encoding_format;
 pub mod file_persist;
 pub mod fixedset;
+pub mod index_file_manager;
 pub mod indexing_manager;
 pub mod inverted_index;
 pub mod kmeans;

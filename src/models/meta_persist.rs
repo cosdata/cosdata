@@ -8,7 +8,10 @@ use serde_cbor::from_slice;
 use super::collection::CollectionMetadata;
 
 /// updates the current version of a collection
-pub fn update_current_version(lmdb: &MetaDb, version_hash: Hash) -> Result<(), WaCustomError> {
+pub fn update_current_version(
+    lmdb: &MetaDb,
+    version_hash: VersionHash,
+) -> Result<(), WaCustomError> {
     let env = lmdb.env.clone();
     let db = lmdb.db.clone();
 
@@ -30,7 +33,10 @@ pub fn update_current_version(lmdb: &MetaDb, version_hash: Hash) -> Result<(), W
 }
 
 /// updates the current version of a collection
-pub fn update_background_version(lmdb: &MetaDb, version_hash: Hash) -> Result<(), WaCustomError> {
+pub fn update_background_version(
+    lmdb: &MetaDb,
+    version_hash: VersionHash,
+) -> Result<(), WaCustomError> {
     let env = lmdb.env.clone();
     let db = lmdb.db.clone();
 
@@ -106,7 +112,7 @@ pub fn store_highest_internal_id(lmdb: &MetaDb, id: u32) -> lmdb::Result<()> {
 }
 
 /// retrieves the current version of a collection
-pub fn retrieve_current_version(lmdb: &MetaDb) -> Result<Hash, WaCustomError> {
+pub fn retrieve_current_version(lmdb: &MetaDb) -> Result<VersionHash, WaCustomError> {
     let env = lmdb.env.clone();
     let db = lmdb.db.clone();
     let txn = env
@@ -121,18 +127,18 @@ pub fn retrieve_current_version(lmdb: &MetaDb) -> Result<Hash, WaCustomError> {
         _ => WaCustomError::DatabaseError(e.to_string()),
     })?;
 
-    let bytes: [u8; 4] = serialized_hash.try_into().map_err(|_| {
+    let bytes: [u8; 8] = serialized_hash.try_into().map_err(|_| {
         WaCustomError::DeserializationError(
             "Failed to deserialize Hash: length mismatch".to_string(),
         )
     })?;
-    let hash = Hash::from(u32::from_le_bytes(bytes));
+    let hash = VersionHash::from(u64::from_le_bytes(bytes));
 
     Ok(hash)
 }
 
 /// retrieves the current version of a collection
-pub fn retrieve_background_version(lmdb: &MetaDb) -> Result<Hash, WaCustomError> {
+pub fn retrieve_background_version(lmdb: &MetaDb) -> Result<VersionHash, WaCustomError> {
     let env = lmdb.env.clone();
     let db = lmdb.db.clone();
     let txn = env
@@ -147,12 +153,12 @@ pub fn retrieve_background_version(lmdb: &MetaDb) -> Result<Hash, WaCustomError>
         _ => WaCustomError::DatabaseError(e.to_string()),
     })?;
 
-    let bytes: [u8; 4] = serialized_hash.try_into().map_err(|_| {
+    let bytes: [u8; 8] = serialized_hash.try_into().map_err(|_| {
         WaCustomError::DeserializationError(
             "Failed to deserialize Hash: length mismatch".to_string(),
         )
     })?;
-    let hash = Hash::from(u32::from_le_bytes(bytes));
+    let hash = VersionHash::from(u64::from_le_bytes(bytes));
 
     Ok(hash)
 }

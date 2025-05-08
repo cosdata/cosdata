@@ -2,6 +2,8 @@
 
 use crate::config_loader::Config;
 use crate::distance::DistanceFunction;
+use crate::indexes::hnsw::offset_counter::HNSWIndexFileOffsetCounter;
+use crate::indexes::hnsw::offset_counter::IndexFileId;
 use crate::indexes::hnsw::types::HNSWHyperParams;
 use crate::indexes::hnsw::types::QuantizedDenseVectorEmbedding;
 use crate::indexes::hnsw::types::RawDenseVectorEmbedding;
@@ -26,7 +28,7 @@ use crate::models::prob_lazy_load::lazy_item::ProbLazyItem;
 use crate::models::prob_node::ProbNode;
 use crate::models::prob_node::SharedNode;
 use crate::models::types::*;
-use crate::models::versioning::Hash;
+use crate::models::versioning::VersionHash;
 use crate::quantization::{Quantization, StorageType};
 use crate::storage::Storage;
 use rand::Rng;
@@ -44,9 +46,9 @@ pub fn create_root_node(
     storage_type: StorageType,
     dim: usize,
     prop_file: &RwLock<File>,
-    hash: Hash,
-    index_manager: &BufferManagerFactory<Hash>,
-    level_0_index_manager: &BufferManagerFactory<Hash>,
+    version_hash: VersionHash,
+    offset_counter: &HNSWIndexFileOffsetCounter,
+    index_manager: &BufferManagerFactory<IndexFileId>,
     values_range: (f32, f32),
     hnsw_params: &HNSWHyperParams,
     distance_metric: DistanceMetric,
@@ -88,9 +90,12 @@ pub fn create_root_node(
 
     drop(prop_file_guard);
 
+    let file_id = offset_counter.file_id();
+
     let mut root = ProbLazyItem::new(
         ProbNode::new(
             HNSWLevel(0),
+            version_hash,
             prop_value.clone(),
             prop_metadata.clone(),
             ptr::null_mut(),
@@ -98,21 +103,17 @@ pub fn create_root_node(
             hnsw_params.level_0_neighbors_count,
             distance_metric,
         ),
-        hash,
-        0,
-        true,
-        FileOffset(0),
+        file_id,
+        offset_counter.next_level_0_offset(),
     );
 
     let mut nodes = Vec::new();
     nodes.push(root);
 
-    let mut offset = 0;
-    let node_size = ProbNode::get_serialized_size(hnsw_params.neighbors_count) as u32;
-
     for l in 1..=hnsw_params.num_layers {
         let current_node = ProbNode::new(
             HNSWLevel(l),
+            version_hash,
             prop_value.clone(),
             prop_metadata.clone(),
             ptr::null_mut(),
@@ -121,8 +122,7 @@ pub fn create_root_node(
             distance_metric,
         );
 
-        let lazy_node = ProbLazyItem::new(current_node, hash, 0, false, FileOffset(offset));
-        offset += node_size;
+        let lazy_node = ProbLazyItem::new(current_node, file_id, offset_counter.next_offset());
 
         if let Some(prev_node) = unsafe { &*root }.get_lazy_data() {
             prev_node.set_parent(lazy_node);
@@ -133,7 +133,7 @@ pub fn create_root_node(
     }
 
     for item in nodes {
-        write_node_to_file(item, index_manager, level_0_index_manager, hash)?;
+        write_node_to_file(item, index_manager, file_id)?;
     }
 
     Ok(root)
@@ -581,6 +581,10 @@ pub fn index_embeddings(
             )
         })
         .collect::<Vec<IndexableEmbedding>>();
+
+    let offset_counter = hnsw_index.offset_counter.read().unwrap();
+    let file_id = offset_counter.file_id();
+
     for emb in embeddings {
         let max_level = match emb.overridden_level_probs {
             Some(lp) => get_max_insert_level(rand::random::<f32>().into(), &lp),
@@ -599,12 +603,11 @@ pub fn index_embeddings(
             root_entry,
             highest_level,
             transaction.id,
-            transaction.version_number,
+            file_id,
             transaction.lazy_item_versions_table.clone(),
             &hnsw_params_guard,
             max_level, // Pass max_level to let index_embedding control node creation
-            &mut || transaction.get_new_node_offset(),
-            &mut || transaction.get_new_level_0_node_offset(),
+            &offset_counter,
             *hnsw_index.distance_metric.read().unwrap(),
         )?;
     }
@@ -621,13 +624,12 @@ pub fn index_embedding(
     prop_metadata: Option<Arc<NodePropMetadata>>,
     cur_entry: SharedNode,
     cur_level: HNSWLevel,
-    version: Hash,
-    version_number: u16,
-    lazy_item_versions_table: Arc<TSHashTable<(InternalId, u16, u8), SharedNode>>,
+    version_hash: VersionHash,
+    file_id: IndexFileId,
+    lazy_item_versions_table: Arc<TSHashTable<(InternalId, VersionHash, u8), SharedNode>>,
     hnsw_params: &HNSWHyperParams,
     max_level: u8,
-    offset_fn: &mut impl FnMut() -> u32,
-    level_0_offset_fn: &mut impl FnMut() -> u32,
+    offset_counter: &HNSWIndexFileOffsetCounter,
     distance_metric: DistanceMetric,
 ) -> Result<(), WaCustomError> {
     let fvec = &prop_value.vec;
@@ -692,13 +694,12 @@ pub fn index_embedding(
                     .try_get_data(&hnsw_index.cache)?
                     .get_child(),
                 HNSWLevel(cur_level.0 - 1),
-                version,
-                version_number,
+                version_hash,
+                file_id,
                 lazy_item_versions_table.clone(),
                 hnsw_params,
                 max_level,
-                offset_fn,
-                level_0_offset_fn,
+                offset_counter,
                 distance_metric,
             )?;
         }
@@ -707,23 +708,26 @@ pub fn index_embedding(
             (
                 hnsw_params.level_0_neighbors_count,
                 true,
-                level_0_offset_fn(),
+                offset_counter.next_level_0_offset(),
             )
         } else {
-            (hnsw_params.neighbors_count, false, offset_fn())
+            (
+                hnsw_params.neighbors_count,
+                false,
+                offset_counter.next_offset(),
+            )
         };
 
         // Create node and edges at max_level and below
         let lazy_node = create_node(
-            version,
-            version_number,
+            version_hash,
+            file_id,
             cur_level,
             prop_value.clone(),
             prop_metadata.clone(),
             parent,
             ptr::null_mut(),
             neighbors_count,
-            is_level_0,
             offset,
             distance_metric,
         );
@@ -748,30 +752,23 @@ pub fn index_embedding(
                     .try_get_data(&hnsw_index.cache)?
                     .get_child(),
                 HNSWLevel(cur_level.0 - 1),
-                version,
-                version_number,
+                version_hash,
+                file_id,
                 lazy_item_versions_table.clone(),
                 hnsw_params,
                 max_level,
-                offset_fn,
-                level_0_offset_fn,
+                offset_counter,
                 distance_metric,
             )?;
         }
-
-        let (is_level_0, offset_fn): (bool, &mut dyn FnMut() -> u32) = if cur_level.0 == 0 {
-            (true, level_0_offset_fn)
-        } else {
-            (false, offset_fn)
-        };
 
         create_node_edges(
             hnsw_index,
             lazy_node,
             node,
             z,
-            version,
-            version_number,
+            version_hash,
+            file_id,
             lazy_item_versions_table,
             if cur_level.0 == 0 {
                 hnsw_params.level_0_neighbors_count
@@ -779,7 +776,7 @@ pub fn index_embedding(
                 hnsw_params.neighbors_count
             },
             is_level_0,
-            offset_fn,
+            offset_counter,
             distance_metric,
         )?;
     }
@@ -789,20 +786,20 @@ pub fn index_embedding(
 
 #[allow(clippy::too_many_arguments)]
 fn create_node(
-    version_id: Hash,
-    version_number: u16,
+    version_hash: VersionHash,
+    file_id: IndexFileId,
     hnsw_level: HNSWLevel,
     prop_value: Arc<NodePropValue>,
     prop_metadata: Option<Arc<NodePropMetadata>>,
     parent: SharedNode,
     child: SharedNode,
     neighbors_count: usize,
-    is_level_0: bool,
-    offset: u32,
+    offset: FileOffset,
     distance_metric: DistanceMetric,
 ) -> SharedNode {
     let node = ProbNode::new(
         hnsw_level,
+        version_hash,
         prop_value,
         prop_metadata,
         parent,
@@ -810,31 +807,26 @@ fn create_node(
         neighbors_count,
         distance_metric,
     );
-    ProbLazyItem::new(
-        node,
-        version_id,
-        version_number,
-        is_level_0,
-        FileOffset(offset),
-    )
+
+    ProbLazyItem::new(node, file_id, offset)
 }
 
 #[allow(clippy::too_many_arguments)]
 fn get_or_create_version(
     hnsw_index: &HNSWIndex,
-    lazy_item_versions_table: Arc<TSHashTable<(InternalId, u16, u8), SharedNode>>,
+    lazy_item_versions_table: Arc<TSHashTable<(InternalId, VersionHash, u8), SharedNode>>,
     root_version_item: SharedNode,
-    version_id: Hash,
-    version_number: u16,
+    version_hash: VersionHash,
+    file_id: IndexFileId,
     is_level_0: bool,
-    offset_fn: &mut dyn FnMut() -> u32,
+    offset_counter: &HNSWIndexFileOffsetCounter,
     distance_metric: DistanceMetric,
 ) -> Result<(SharedNode, bool), WaCustomError> {
     let root_version_item_ref = unsafe { &*root_version_item };
     let root_node = root_version_item_ref.try_get_data(&hnsw_index.cache)?;
 
     lazy_item_versions_table.get_or_try_create_with_flag(
-        (root_node.get_id(), version_number, root_node.hnsw_level.0),
+        (root_node.get_id(), version_hash, root_node.hnsw_level.0),
         || {
             let (latest_version_item, mut guard) =
                 ProbLazyItem::get_absolute_latest_version_write_access(
@@ -843,12 +835,13 @@ fn get_or_create_version(
                 )?;
             let latest_version_item_ref = unsafe { &*latest_version_item };
             let latest_node = latest_version_item_ref.try_get_data(&hnsw_index.cache)?;
-            if latest_version_item_ref.file_index.version_number == version_number {
+            if latest_node.version == version_hash {
                 return Ok(latest_version_item);
             }
 
             let new_node = ProbNode::new_with_neighbors_and_versions_and_root_version(
                 latest_node.hnsw_level,
+                version_hash,
                 latest_node.prop_value.clone(),
                 latest_node.prop_metadata.clone(),
                 latest_node.clone_neighbors(),
@@ -859,41 +852,34 @@ fn get_or_create_version(
                 distance_metric,
             );
 
-            let new_node_offset = offset_fn();
+            let new_node_offset = if is_level_0 {
+                offset_counter.next_level_0_offset()
+            } else {
+                offset_counter.next_offset()
+            };
 
-            let version = ProbLazyItem::new(
-                new_node,
-                version_id,
-                version_number,
-                is_level_0,
-                FileOffset(new_node_offset),
-            );
+            let version = ProbLazyItem::new(new_node, file_id, new_node_offset);
 
             *guard = (version, false);
             drop(guard);
 
-            let bufmans: &BufferManagerFactory<Hash> = if is_level_0 {
-                &hnsw_index.cache.level_0_bufmans
-            } else {
-                &hnsw_index.cache.bufmans
-            };
-
-            let bufman = bufmans.get(root_version_item_ref.file_index.version_id)?;
+            let bufman = hnsw_index
+                .cache
+                .bufmans
+                .get(root_version_item_ref.file_index.file_id)?;
 
             let cursor = bufman.open_cursor()?;
             let file_index = root_version_item_ref.file_index;
             let offset = file_index.offset.0;
 
-            bufman.seek_with_cursor(cursor, offset as u64 + 37)?;
-            bufman.update_u32_with_cursor(cursor, new_node_offset)?;
-            bufman.update_u16_with_cursor(cursor, version_number)?;
-            bufman.update_u32_with_cursor(cursor, *version_id)?;
+            bufman.seek_with_cursor(cursor, offset as u64 + 41)?;
+            bufman.update_u8_with_cursor(cursor, 0)?;
+            bufman.update_u32_with_cursor(cursor, new_node_offset.0)?;
+            bufman.update_u32_with_cursor(cursor, *file_id)?;
 
             bufman.close_cursor(cursor)?;
 
-            if latest_version_item_ref.file_index.version_number
-                != root_version_item_ref.file_index.version_number
-            {
+            if latest_node.version != root_node.version {
                 hnsw_index.cache.unload(latest_version_item)?;
             }
 
@@ -908,21 +894,18 @@ fn create_node_edges(
     lazy_node: SharedNode,
     node: &ProbNode,
     neighbors: Vec<(SharedNode, MetricResult)>,
-    version: Hash,
-    version_number: u16,
-    lazy_item_versions_table: Arc<TSHashTable<(InternalId, u16, u8), SharedNode>>,
+    version_hash: VersionHash,
+    file_id: IndexFileId,
+    lazy_item_versions_table: Arc<TSHashTable<(InternalId, VersionHash, u8), SharedNode>>,
     max_edges: usize,
     is_level_0: bool,
-    offset_fn: &mut dyn FnMut() -> u32,
+    offset_counter: &HNSWIndexFileOffsetCounter,
     distance_metric: DistanceMetric,
 ) -> Result<(), WaCustomError> {
     let mut successful_edges = 0;
     let mut neighbors_to_update = Vec::new();
 
-    lazy_item_versions_table.insert(
-        (node.get_id(), version_number, node.hnsw_level.0),
-        lazy_node,
-    );
+    lazy_item_versions_table.insert((node.get_id(), version_hash, node.hnsw_level.0), lazy_node);
     hnsw_index.cache.insert_lazy_object(lazy_node);
 
     // First loop: Handle neighbor connections and collect updates
@@ -935,10 +918,10 @@ fn create_node_edges(
             hnsw_index,
             lazy_item_versions_table.clone(),
             neighbor,
-            version,
-            version_number,
+            version_hash,
+            file_id,
             is_level_0,
-            offset_fn,
+            offset_counter,
             distance_metric,
         )?;
 
@@ -971,12 +954,7 @@ fn create_node_edges(
         };
 
         if !found_in_map {
-            write_node_to_file(
-                new_lazy_neighbor,
-                &hnsw_index.cache.bufmans,
-                &hnsw_index.cache.level_0_bufmans,
-                version,
-            )?;
+            write_node_to_file(new_lazy_neighbor, &hnsw_index.cache.bufmans, file_id)?;
         } else if let Some((idx, dist)) = neighbour_update_info {
             neighbors_to_update.push((new_lazy_neighbor, idx, dist));
         }
@@ -984,35 +962,29 @@ fn create_node_edges(
 
     // Second loop: Batch process file operations for updated neighbors
     if !neighbors_to_update.is_empty() {
-        let bufman = if is_level_0 {
-            hnsw_index.cache.level_0_bufmans.get(version)?
-        } else {
-            hnsw_index.cache.bufmans.get(version)?
-        };
+        let bufman = hnsw_index.cache.bufmans.get(file_id)?;
         let cursor = bufman.open_cursor()?;
-        let mut current_node_link = Vec::with_capacity(14);
+        let mut current_node_link = Vec::with_capacity(12);
         current_node_link.extend(node.get_id().to_le_bytes());
 
         let node = unsafe { &*lazy_node };
 
         let FileIndex {
             offset: node_offset,
-            version_number: node_version_number,
-            version_id: node_version_id,
+            file_id: node_file_id,
         } = node.file_index;
         current_node_link.extend(node_offset.0.to_le_bytes());
-        current_node_link.extend(node_version_number.to_le_bytes());
-        current_node_link.extend(node_version_id.to_le_bytes());
+        current_node_link.extend(node_file_id.to_le_bytes());
 
         for (neighbor, neighbor_idx, dist) in neighbors_to_update {
             let offset = unsafe { &*neighbor }.file_index.offset;
-            let mut current_node_link_with_dist = Vec::with_capacity(19);
+            let mut current_node_link_with_dist = Vec::with_capacity(17);
             current_node_link_with_dist.clone_from(&current_node_link);
             let (tag, value) = dist.get_tag_and_value();
             current_node_link_with_dist.push(tag);
             current_node_link_with_dist.extend(value.to_le_bytes());
 
-            let neighbor_offset = (offset.0 + 49) + neighbor_idx as u32 * 19;
+            let neighbor_offset = (offset.0 + 52) + neighbor_idx as u32 * 17;
             bufman.seek_with_cursor(cursor, neighbor_offset as u64)?;
             bufman.update_with_cursor(cursor, &current_node_link_with_dist)?;
         }
@@ -1020,12 +992,7 @@ fn create_node_edges(
         bufman.close_cursor(cursor)?;
     }
 
-    write_node_to_file(
-        lazy_node,
-        &hnsw_index.cache.bufmans,
-        &hnsw_index.cache.level_0_bufmans,
-        version,
-    )?;
+    write_node_to_file(lazy_node, &hnsw_index.cache.bufmans, file_id)?;
 
     Ok(())
 }

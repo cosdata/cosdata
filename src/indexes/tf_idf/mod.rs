@@ -10,7 +10,7 @@ use crate::{
         sparse_ann_query::SparseAnnQueryBasic,
         tf_idf_index::TFIDFIndexRoot,
         types::{InternalId, MetaDb, SparseVector},
-        versioning::Hash,
+        versioning::VersionHash,
     },
 };
 use rustc_hash::FxHashMap;
@@ -84,7 +84,12 @@ impl TFIDFIndex {
         })
     }
 
-    pub fn insert(&self, version: Hash, id: InternalId, text: String) -> Result<(), BufIoError> {
+    pub fn insert(
+        &self,
+        version: VersionHash,
+        id: InternalId,
+        text: String,
+    ) -> Result<(), BufIoError> {
         self.root
             .total_documents_count
             .fetch_add(1, Ordering::Relaxed);
