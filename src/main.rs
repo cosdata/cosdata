@@ -37,15 +37,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     match command {
         Some(Command::ResetPassword) => {
-            // Create context just to get the environment
-            let context = Data::new(AppContext::new(config, args)?);
             println!("Admin password reset complete!");
             Ok(())
         }
         None => {
-            // Create context
-            let context = Data::new(AppContext::new(config, args)?);
-
             // Start gRPC server
             #[cfg(feature = "grpc-server")]
             let grpc_context = context.clone().into_inner();
