@@ -139,6 +139,8 @@ pub async fn init_hnsw_index_for_collection(
 
     let hnsw_index = Arc::new(HNSWIndex::new(
         root,
+        // @TODO(vineet) Add pseudo root node
+        None,
         lp,
         collection.meta.dense_vector.dimension,
         quantization_metric,
