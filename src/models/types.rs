@@ -293,6 +293,15 @@ impl TreeMapKey for DocumentId {
 )]
 pub struct InternalId(u32);
 
+impl InternalId {
+    /// Increments an InternalId by 1 and returns a new instance
+    ///
+    /// The caller needs to ensure it doesn't result in overflow
+    pub fn inc(&self) -> Self {
+        InternalId::from(self.0 + 1)
+    }
+}
+
 impl From<u32> for InternalId {
     fn from(id: u32) -> Self {
         Self(id)

@@ -144,6 +144,105 @@ pub fn create_root_node(
     Ok(root_ptr)
 }
 
+/// Creates a pseudo root node in the index
+///
+/// This node is an independent node just like the main root node and
+/// it's not connected to the main root node. All metadata nodes and
+/// other pseudo nodes will be indexed under the pseudo root node. And
+/// any queries that contain metadata filters will use this node as
+/// the root when traversing the index.
+#[allow(clippy::too_many_arguments)]
+pub fn create_pseudo_root_node(
+    quantization_metric: &QuantizationMetric,
+    storage_type: StorageType,
+    prop_file: &RwLock<File>,
+    version_hash: VersionNumber,
+    offset_counter: &HNSWIndexFileOffsetCounter,
+    cache: &HNSWIndexCache,
+    values_range: (f32, f32),
+    hnsw_params: &HNSWHyperParams,
+    distance_metric: DistanceMetric,
+    metadata_schema: &MetadataSchema,
+    vec: Vec<f32>,
+    vec_hash: InternalId,
+) -> Result<SharedLatestNode, WaCustomError> {
+    let vector_list = Arc::new(quantization_metric.quantize(&vec, storage_type, values_range)?);
+
+    let mut prop_file_guard = prop_file.write().unwrap();
+    let location = write_prop_value_to_file(&vec_hash, &vector_list, &mut prop_file_guard)?;
+
+    let prop_value = Arc::new(NodePropValue {
+        id: vec_hash,
+        vec: vector_list,
+        location,
+    });
+
+    let prop_metadata = {
+        let mbits = metadata_schema.pseudo_root_dimensions(HIGH_WEIGHT);
+        let metadata = Arc::new(Metadata::from(mbits));
+        let location = write_prop_metadata_to_file(metadata.clone(), &mut prop_file_guard)?;
+        Some(Arc::new(NodePropMetadata {
+            vec: metadata,
+            location,
+        }))
+    };
+
+    drop(prop_file_guard);
+
+    let file_id = offset_counter.file_id();
+
+    let mut root = ProbLazyItem::new(
+        ProbNode::new(
+            HNSWLevel(0),
+            version_hash,
+            prop_value.clone(),
+            prop_metadata.clone(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            hnsw_params.level_0_neighbors_count,
+            distance_metric,
+        ),
+        file_id,
+        offset_counter.next_level_0_offset(),
+    );
+    let mut root_ptr = LatestNode::new(root, offset_counter.next_latest_version_link_offset());
+
+    let mut nodes = Vec::new();
+    nodes.push(root_ptr);
+
+    for l in 1..=hnsw_params.num_layers {
+        let current_node = ProbNode::new(
+            HNSWLevel(l),
+            version_hash,
+            prop_value.clone(),
+            prop_metadata.clone(),
+            ptr::null_mut(),
+            root_ptr,
+            hnsw_params.neighbors_count,
+            distance_metric,
+        );
+
+        let lazy_node = ProbLazyItem::new(current_node, file_id, offset_counter.next_offset());
+
+        let lazy_node_ptr =
+            LatestNode::new(lazy_node, offset_counter.next_latest_version_link_offset());
+
+        if let Some(prev_node) = unsafe { &*root }.get_lazy_data() {
+            prev_node.set_parent(lazy_node_ptr);
+        }
+        root = lazy_node;
+        root_ptr = lazy_node_ptr;
+
+        nodes.push(lazy_node_ptr);
+    }
+
+    for item in nodes {
+        write_lazy_item_latest_ptr_to_file(cache, item, file_id)?;
+    }
+
+    Ok(root_ptr)
+}
+
 pub fn ann_search(
     config: &Config,
     hnsw_index: &HNSWIndex,

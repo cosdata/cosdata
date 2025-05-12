@@ -5,13 +5,13 @@ use crate::indexes::hnsw::{DenseInputEmbedding, HNSWIndex};
 use crate::indexes::inverted::InvertedIndex;
 use crate::indexes::tf_idf::TFIDFIndex;
 use crate::indexes::IndexOps;
-use crate::metadata::pseudo_level_probs;
+use crate::metadata::{pseudo_level_probs, pseudo_node_vector, pseudo_root_id};
 use crate::models::buffered_io::{BufIoError, BufferManager, BufferManagerFactory};
 use crate::models::cache_loader::HNSWIndexCache;
 use crate::models::collection::Collection;
 use crate::models::collection_transaction::BackgroundCollectionTransaction;
 use crate::models::common::*;
-use crate::models::meta_persist::{store_values_range, update_current_version};
+use crate::models::meta_persist::store_values_range;
 use crate::models::prob_node::ProbNode;
 use crate::models::types::*;
 use crate::quantization::StorageType;
@@ -137,10 +137,39 @@ pub async fn init_hnsw_index_for_collection(
         None => generate_level_probs(factor_levels, hnsw_params.num_layers),
     };
 
+    // If the collection has metadata_schema defined, we create pseudo
+    // nodes. But first, we create the pseudo root node separately as
+    // it's an independent root node much like the main root
+    // node. Once pseudo root is created, it can be passed when
+    // instantiating the HNSWIndex. And the rest of the non-root
+    // pseudo nodes can be created through the index's methods
+    let pseudo_root = match &collection.meta.metadata_schema {
+        Some(metadata_schema) => {
+            let num_dims = collection.meta.dense_vector.dimension;
+            let pseudo_vals = pseudo_node_vector(num_dims);
+            let pseudo_root_id = pseudo_root_id();
+            let node = create_pseudo_root_node(
+                &quantization_metric,
+                storage_type,
+                &cache.prop_file,
+                *collection.current_version.read(),
+                &offset_counter,
+                &cache,
+                values_range,
+                &hnsw_params,
+                *distance_metric.read().unwrap(),
+                metadata_schema,
+                pseudo_vals.clone(),
+                pseudo_root_id,
+            )?;
+            Some(node)
+        }
+        None => None,
+    };
+
     let hnsw_index = Arc::new(HNSWIndex::new(
         root,
-        // @TODO(vineet) Add pseudo root node
-        None,
+        pseudo_root,
         lp,
         collection.meta.dense_vector.dimension,
         quantization_metric,
@@ -168,19 +197,20 @@ pub async fn init_hnsw_index_for_collection(
     // are reachable from the root node.
     if collection.meta.metadata_schema.is_some() {
         let num_dims = collection.meta.dense_vector.dimension;
-        let pseudo_vals: Vec<f32> = vec![1.0; num_dims];
-        // The last 258 IDs in the generate u32 internal IDs range are reserved
-        // for special cases, `u32::MAX` is for root node, `u32::MAX - 1` is
-        // for queries, and the range `[u32::MAX - 257, u32::MAX - 2]`
-        let pseudo_vec_id = InternalId::from(u32::MAX - 257);
-        let pseudo_vec = DenseInputEmbedding(pseudo_vec_id, pseudo_vals, None, true);
-        let transaction = BackgroundCollectionTransaction::new(&collection)?;
-        hnsw_index.run_upload(&collection, vec![pseudo_vec], &transaction, &ctx.config)?;
-        let version = transaction.version;
+        let pseudo_vals = pseudo_node_vector(num_dims);
+        // base id for nonroot pseudo nodes is 1 more than the pseudo node
+        let pseudo_nonroot_base_id = pseudo_root_id().inc();
+        let pseudo_vec = DenseInputEmbedding(pseudo_nonroot_base_id, pseudo_vals, None, true);
+        let version_number = *collection.current_version.read();
+        let transaction = BackgroundCollectionTransaction::from_version_id_and_number(
+            &collection,
+            version_number,
+        );
+        // NOTE: We're directly calling `index_embeddings` instead of
+        // `run_upload` because we want to skip sampling for pseudo
+        // nodes
+        hnsw_index.index_embeddings(&collection, vec![pseudo_vec], &transaction, &ctx.config)?;
         transaction.pre_commit(&collection, &ctx.config)?;
-        *collection.current_version.write() = version;
-        collection.vcs.set_current_version(version, false)?;
-        update_current_version(&collection.lmdb, version)?;
     }
 
     Ok(hnsw_index)
