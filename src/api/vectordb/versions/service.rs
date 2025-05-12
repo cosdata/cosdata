@@ -26,10 +26,10 @@ pub(crate) async fn list_versions(
         retrieve_current_version(&lmdb).map_err(|e| VersionError::DatabaseError(e.to_string()))?;
     let mut versions = versions
         .into_iter()
-        .map(|(hash, version_hash)| VersionMetadata {
+        .map(|(hash, meta)| VersionMetadata {
             hash,
-            version_number: *version_hash.version,
-            timestamp: version_hash.timestamp.0,
+            version_number: meta.version,
+            timestamp: meta.timestamp,
             vector_count: 0,
         })
         .collect::<Vec<VersionMetadata>>();
@@ -56,10 +56,10 @@ pub(crate) async fn get_current_version(
     let current_version = versions
         .into_iter()
         .find(|(hash, _)| *hash == current_hash)
-        .map(|(hash, version_hash)| CurrentVersionResponse {
+        .map(|(hash, version_meta)| CurrentVersionResponse {
             hash,
-            version_number: *version_hash.version,
-            timestamp: version_hash.timestamp.0 as u64,
+            version_number: version_meta.version,
+            timestamp: version_meta.timestamp,
             vector_count: 0,
         })
         .ok_or(VersionError::InvalidVersionHash)?;

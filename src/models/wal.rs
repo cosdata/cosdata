@@ -18,7 +18,7 @@ use super::{
     collection::RawVectorEmbedding,
     serializer::{read_len, read_opt_string, read_string, write_len},
     types::{DocumentId, VectorId},
-    versioning::Hash,
+    versioning::VersionHash,
 };
 
 #[derive(Debug, Clone)]
@@ -35,7 +35,7 @@ pub struct WALFile {
 }
 
 impl WALFile {
-    pub fn new(root_path: &Path, version: Hash) -> Result<Self, BufIoError> {
+    pub fn new(root_path: &Path, version: VersionHash) -> Result<Self, BufIoError> {
         let file_path: Arc<Path> = root_path.join(format!("{}.wal", *version)).into();
 
         let file = OpenOptions::new()
@@ -262,7 +262,7 @@ impl WALFile {
 mod tests {
     use super::*;
     use crate::metadata::FieldValue;
-    use crate::{indexes::inverted::types::SparsePair, models::versioning::Hash};
+    use crate::{indexes::inverted::types::SparsePair, models::versioning::VersionHash};
     use rand::{distributions::Alphanumeric, thread_rng, Rng};
     use std::collections::HashMap;
     use tempfile::tempdir;
@@ -306,8 +306,8 @@ mod tests {
         }
     }
 
-    fn reopen_wal(dir: &std::path::Path, version: u32) -> WALFile {
-        WALFile::new(dir, Hash::from(version)).unwrap()
+    fn reopen_wal(dir: &std::path::Path, version: u64) -> WALFile {
+        WALFile::new(dir, VersionHash::from(version)).unwrap()
     }
 
     #[test]
@@ -316,7 +316,7 @@ mod tests {
         let version = 0;
 
         {
-            let wal = WALFile::new(dir.path(), Hash::from(version)).unwrap();
+            let wal = WALFile::new(dir.path(), VersionHash::from(version)).unwrap();
             let vectors: Vec<_> = (0..3).map(|_| random_vector()).collect();
             wal.append(VectorOp::Upsert(vectors.clone())).unwrap();
             wal.flush().unwrap();
@@ -341,7 +341,7 @@ mod tests {
         let id = VectorId::from(random_string(10));
 
         {
-            let wal = WALFile::new(dir.path(), Hash::from(version)).unwrap();
+            let wal = WALFile::new(dir.path(), VersionHash::from(version)).unwrap();
             wal.append(VectorOp::Delete(id.clone())).unwrap();
             wal.flush().unwrap();
         }
@@ -364,7 +364,7 @@ mod tests {
         let del_id = VectorId::from(random_string(10));
 
         {
-            let wal = WALFile::new(dir.path(), Hash::from(version)).unwrap();
+            let wal = WALFile::new(dir.path(), VersionHash::from(version)).unwrap();
             wal.append(VectorOp::Upsert(vecs.clone())).unwrap();
             wal.append(VectorOp::Delete(del_id.clone())).unwrap();
             wal.flush().unwrap();
@@ -399,7 +399,7 @@ mod tests {
             .collect();
 
         {
-            let wal = WALFile::new(dir.path(), Hash::from(version)).unwrap();
+            let wal = WALFile::new(dir.path(), VersionHash::from(version)).unwrap();
             for op in &entries {
                 wal.append(op.clone()).unwrap();
             }

@@ -21,7 +21,7 @@ pub(crate) async fn create_transaction(
 }
 
 pub(crate) async fn commit_transaction(
-    params: web::Path<(String, u32)>,
+    params: web::Path<(String, u64)>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse, TransactionError> {
     let (collection_id, transaction_id) = params.into_inner();
@@ -34,7 +34,7 @@ pub(crate) async fn commit_transaction(
 }
 
 pub(crate) async fn get_transaction_status(
-    params: web::Path<(String, u32)>,
+    params: web::Path<(String, u64)>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse, TransactionError> {
     let (collection_id, transaction_id) = params.into_inner();
@@ -52,7 +52,7 @@ pub(crate) async fn get_transaction_status(
 }
 
 pub(crate) async fn create_vector_in_transaction(
-    params: web::Path<(String, u32)>,
+    params: web::Path<(String, u64)>,
     web::Json(create_vector_dto): web::Json<CreateVectorDto>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse, TransactionError> {
@@ -71,7 +71,7 @@ pub(crate) async fn create_vector_in_transaction(
 }
 
 pub(crate) async fn abort_transaction(
-    params: web::Path<(String, u32)>,
+    params: web::Path<(String, u64)>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse, TransactionError> {
     let (collection_id, transaction_id) = params.into_inner();
@@ -83,7 +83,7 @@ pub(crate) async fn abort_transaction(
 }
 
 pub(crate) async fn delete_vector_by_id(
-    path: web::Path<(String, u32, u32)>,
+    path: web::Path<(String, u64, String)>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse, TransactionError> {
     let (collection_id, transaction_id, vector_id) = path.into_inner();
@@ -95,14 +95,14 @@ pub(crate) async fn delete_vector_by_id(
         ctx.into_inner(),
         &collection_id,
         transaction_id.into(),
-        vector_id,
+        vector_id.into(),
     )
     .await?;
     Ok(HttpResponse::NoContent().finish())
 }
 
 pub(crate) async fn upsert(
-    path: web::Path<(String, u32)>,
+    path: web::Path<(String, u64)>,
     ctx: web::Data<AppContext>,
     web::Json(upsert_dto): web::Json<UpsertDto>,
 ) -> Result<HttpResponse, TransactionError> {

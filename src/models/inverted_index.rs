@@ -8,6 +8,8 @@ use std::{
     },
 };
 
+use crate::indexes::hnsw::offset_counter::IndexFileId;
+
 use super::{
     atomic_array::AtomicArray,
     buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
@@ -18,7 +20,7 @@ use super::{
     serializer::inverted::InvertedIndexSerialize,
     types::{FileOffset, SparseVector},
     utils::calculate_path,
-    versioning::Hash,
+    versioning::VersionHash,
 };
 
 // Size of a page in the hash table
@@ -124,9 +126,7 @@ impl InvertedIndexNode {
     ) -> Self {
         let data = ProbLazyItem::new(
             InvertedIndexNodeData::new(quantization_bits),
-            0.into(),
-            0,
-            false,
+            IndexFileId::invalid(),
             FileOffset(file_offset.0 + 5),
         );
 
@@ -184,7 +184,7 @@ impl InvertedIndexNode {
         value: f32,
         vector_id: u32,
         cache: &InvertedIndexCache,
-        version: Hash,
+        version: VersionHash,
         values_upper_bound: f32,
     ) -> Result<(), BufIoError> {
         let quantized_value = self.quantize(value, values_upper_bound);
@@ -265,7 +265,7 @@ impl InvertedIndexRoot {
         dim_index: u32,
         value: f32,
         vector_id: u32,
-        version: Hash,
+        version: VersionHash,
         values_upper_bound: f32,
     ) -> Result<(), BufIoError> {
         let path = calculate_path(dim_index, self.root.dim_index);
@@ -283,7 +283,7 @@ impl InvertedIndexRoot {
     pub fn add_sparse_vector(
         &self,
         vector: SparseVector,
-        version: Hash,
+        version: VersionHash,
         values_upper_bound: f32,
     ) -> Result<(), BufIoError> {
         let vector_id = vector.vector_id;

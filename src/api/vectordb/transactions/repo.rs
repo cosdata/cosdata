@@ -5,7 +5,9 @@ use self::vectors::dtos::CreateVectorDto;
 use super::{dtos::CreateTransactionResponseDto, error::TransactionError};
 use crate::models::collection_transaction::{CollectionTransaction, TransactionStatus};
 use crate::models::meta_persist::update_current_version;
-use crate::models::versioning::Hash;
+use crate::models::types::VectorId;
+use crate::models::versioning::VersionHash;
+use crate::models::wal::VectorOp;
 use crate::{api::vectordb::vectors, app_context::AppContext};
 use chrono::Utc;
 
@@ -26,7 +28,7 @@ pub(crate) async fn create_transaction(
         return Err(TransactionError::OnGoingTransaction);
     }
 
-    let transaction = CollectionTransaction::new(collection.clone())
+    let transaction = CollectionTransaction::new(&collection, false)
         .map_err(|err| TransactionError::FailedToCreateTransaction(err.to_string()))?;
     let transaction_id = transaction.id;
 
@@ -42,7 +44,7 @@ pub(crate) async fn create_transaction(
 pub(crate) async fn commit_transaction(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    transaction_id: Hash,
+    transaction_id: VersionHash,
 ) -> Result<(), TransactionError> {
     let collection = ctx
         .ain_env
@@ -71,12 +73,12 @@ pub(crate) async fn commit_transaction(
     *current_version_guard = current_transaction_id;
     collection
         .vcs
-        .set_branch_version("main", version_number.into(), current_transaction_id)
+        .set_branch_version("main", version_number, current_transaction_id)
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
     update_current_version(&collection.lmdb, current_transaction_id)
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
 
-    collection.trigger_indexing(current_transaction_id, version_number);
+    collection.trigger_indexing(current_transaction_id);
 
     Ok(())
 }
@@ -84,7 +86,7 @@ pub(crate) async fn commit_transaction(
 pub(crate) async fn get_transaction_status(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    transaction_id: Hash,
+    transaction_id: VersionHash,
 ) -> Result<TransactionStatus, TransactionError> {
     let collection = ctx
         .ain_env
@@ -104,7 +106,7 @@ pub(crate) async fn get_transaction_status(
 pub(crate) async fn create_vector_in_transaction(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    transaction_id: Hash,
+    transaction_id: VersionHash,
     create_vector_dto: CreateVectorDto,
 ) -> Result<(), TransactionError> {
     let collection = ctx
@@ -138,7 +140,7 @@ pub(crate) async fn create_vector_in_transaction(
 pub(crate) async fn abort_transaction(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    transaction_id: Hash,
+    transaction_id: VersionHash,
 ) -> Result<(), TransactionError> {
     let collection = ctx
         .ain_env
@@ -160,18 +162,40 @@ pub(crate) async fn abort_transaction(
 }
 
 pub(crate) async fn delete_vector_by_id(
-    _ctx: Arc<AppContext>,
-    _collection_id: &str,
-    _transaction_id: Hash,
-    _vector_id: u32,
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    transaction_id: VersionHash,
+    vector_id: VectorId,
 ) -> Result<(), TransactionError> {
-    unimplemented!();
+    let collection = ctx
+        .ain_env
+        .collections_map
+        .get_collection(collection_id)
+        .ok_or(TransactionError::CollectionNotFound)?;
+
+    let current_open_transaction_guard = collection.current_open_transaction.read();
+    let Some(current_open_transaction) = &*current_open_transaction_guard else {
+        return Err(TransactionError::NotFound);
+    };
+
+    if current_open_transaction.id != transaction_id {
+        return Err(TransactionError::FailedToCreateVector(
+            "This is not the currently open transaction!".into(),
+        ));
+    }
+
+    current_open_transaction
+        .wal
+        .append(VectorOp::Delete(vector_id))
+        .map_err(|e| TransactionError::FailedToDeleteVector(e.to_string()))?;
+
+    Ok(())
 }
 
 pub(crate) async fn upsert_vectors(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    transaction_id: Hash,
+    transaction_id: VersionHash,
     vectors: Vec<CreateVectorDto>,
 ) -> Result<(), TransactionError> {
     let collection = ctx

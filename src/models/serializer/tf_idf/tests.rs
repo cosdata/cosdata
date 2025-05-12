@@ -17,7 +17,7 @@ use crate::models::{
         TFIDFIndexNode, TFIDFIndexNodeData, TFIDFIndexRoot, TermInfo, UnsafeVersionedVec,
     },
     types::FileOffset,
-    versioning::Hash,
+    versioning::VersionHash,
 };
 
 use super::TFIDFIndexSerialize;
@@ -57,14 +57,19 @@ fn setup_test() -> (
     (dim_bufman, data_bufmans, cache, cursor, dir)
 }
 
-fn get_random_term_info(rng: &mut impl Rng, version: Hash) -> TermInfo {
+fn get_random_term_info(rng: &mut impl Rng, version: VersionHash) -> TermInfo {
     let term = TermInfo::new(rng.gen_range(0..4234), version);
     let count = rng.gen_range(20..50);
     add_random_items_to_term_info(rng, &term, count, version);
     term
 }
 
-fn add_random_items_to_term_info(rng: &mut impl Rng, term: &TermInfo, count: usize, version: Hash) {
+fn add_random_items_to_term_info(
+    rng: &mut impl Rng,
+    term: &TermInfo,
+    count: usize,
+    version: VersionHash,
+) {
     for _ in 0..count {
         term.documents.push(
             version,
@@ -73,7 +78,7 @@ fn add_random_items_to_term_info(rng: &mut impl Rng, term: &TermInfo, count: usi
     }
 }
 
-fn get_random_tf_idf_index_data(rng: &mut impl Rng, version: Hash) -> TFIDFIndexNodeData {
+fn get_random_tf_idf_index_data(rng: &mut impl Rng, version: VersionHash) -> TFIDFIndexNodeData {
     let data = TFIDFIndexNodeData::new();
     let count = rng.gen_range(1000..2000);
     add_random_items_to_tf_idf_index_data(rng, &data, count, version);
@@ -84,7 +89,7 @@ fn add_random_items_to_tf_idf_index_data(
     rng: &mut impl Rng,
     data: &TFIDFIndexNodeData,
     count: usize,
-    version: Hash,
+    version: VersionHash,
 ) {
     for _ in 0..count {
         let quotient = rng.gen_range(0..2000);

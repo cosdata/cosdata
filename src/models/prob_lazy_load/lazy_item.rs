@@ -9,71 +9,59 @@ use std::{
 use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
 use serde::{Deserialize, Serialize};
 
-use crate::models::{
-    buffered_io::BufIoError,
-    cache_loader::{HNSWIndexCache, InvertedIndexCache, TFIDFIndexCache},
-    inverted_index::InvertedIndexNodeData,
-    prob_node::ProbNode,
-    tf_idf_index::TFIDFIndexNodeData,
-    types::FileOffset,
-    versioning::Hash,
+use crate::{
+    indexes::hnsw::offset_counter::IndexFileId,
+    models::{
+        buffered_io::BufIoError,
+        cache_loader::{HNSWIndexCache, InvertedIndexCache, TFIDFIndexCache},
+        inverted_index::InvertedIndexNodeData,
+        prob_node::ProbNode,
+        tf_idf_index::TFIDFIndexNodeData,
+        types::FileOffset,
+    },
 };
 
-#[derive(Debug, Eq, PartialEq, Hash, Copy, Clone, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct FileIndex {
     pub offset: FileOffset,
-    pub version_number: u16,
-    pub version_id: Hash,
+    pub file_id: IndexFileId,
 }
 
 pub struct ProbLazyItem<T> {
     data: AtomicPtr<T>,
     pub file_index: FileIndex,
-    pub is_level_0: bool,
 }
 
 impl<T: PartialEq> PartialEq for ProbLazyItem<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.is_level_0 == other.is_level_0
-            && unsafe { *self.data.load(Ordering::Relaxed) == *other.data.load(Ordering::Relaxed) }
+        unsafe { *self.data.load(Ordering::Relaxed) == *other.data.load(Ordering::Relaxed) }
     }
 }
 
 impl<T: Debug> Debug for ProbLazyItem<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ProbLazyItem")
-            .field("data", unsafe { &*self.data.load(Ordering::Relaxed) })
+            .field("data", unsafe {
+                &self.data.load(Ordering::Relaxed).as_ref()
+            })
             .field("file_index", &self.file_index)
-            .field("is_level_0", &self.is_level_0)
             .finish()
     }
 }
 
 #[allow(unused)]
 impl<T> ProbLazyItem<T> {
-    pub fn new(
-        data: T,
-        version_id: Hash,
-        version_number: u16,
-        is_level_0: bool,
-        offset: FileOffset,
-    ) -> *mut Self {
+    pub fn new(data: T, file_id: IndexFileId, offset: FileOffset) -> *mut Self {
         Box::into_raw(Box::new(Self {
             data: AtomicPtr::new(Box::into_raw(Box::new(data))),
-            file_index: FileIndex {
-                offset,
-                version_number,
-                version_id,
-            },
-            is_level_0,
+            file_index: FileIndex { offset, file_id },
         }))
     }
 
-    pub fn new_pending(file_index: FileIndex, is_level_0: bool) -> *mut Self {
+    pub fn new_pending(file_index: FileIndex) -> *mut Self {
         Box::into_raw(Box::new(Self {
             data: AtomicPtr::new(ptr::null_mut()),
             file_index,
-            is_level_0,
         }))
     }
 
@@ -122,7 +110,7 @@ impl ProbLazyItem<ProbNode> {
             if let Some(data) = self.data.load(Ordering::Relaxed).as_ref() {
                 return Ok(data);
             }
-            (*(cache.get_object(self.file_index, self.is_level_0)?)).try_get_data(cache)
+            (*(cache.get_object(self.file_index)?)).try_get_data(cache)
         }
     }
 

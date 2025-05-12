@@ -1,3 +1,4 @@
+pub(crate) mod offset_counter;
 pub(crate) mod types;
 
 use super::{IndexOps, InternalSearchResult};
@@ -20,6 +21,7 @@ use crate::{
     quantization::{Quantization, StorageType},
     vector_store::{ann_search, finalize_ann_results, index_embeddings},
 };
+use offset_counter::HNSWIndexFileOffsetCounter;
 use std::sync::{
     atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering},
     Arc, RwLock,
@@ -67,6 +69,7 @@ pub struct HNSWIndex {
     pub vectors_collected: AtomicUsize,
     pub sample_threshold: usize,
     pub max_replica_per_node: u8,
+    pub offset_counter: RwLock<HNSWIndexFileOffsetCounter>,
 }
 
 #[derive(Default)]
@@ -102,6 +105,7 @@ impl HNSWIndex {
         sample_threshold: usize,
         is_configured: bool,
         max_replica_per_node: u8,
+        offset_counter: HNSWIndexFileOffsetCounter,
     ) -> Self {
         Self {
             root_vec: AtomicPtr::new(root_vec),
@@ -119,6 +123,7 @@ impl HNSWIndex {
             vectors_collected: AtomicUsize::new(0),
             sample_threshold,
             max_replica_per_node,
+            offset_counter: RwLock::new(offset_counter),
         }
     }
 

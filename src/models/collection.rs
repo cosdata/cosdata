@@ -8,7 +8,7 @@ use super::meta_persist::store_highest_internal_id;
 use super::paths::get_data_path;
 use super::tree_map::{TreeMap, TreeMapVec};
 use super::types::{get_collections_path, DocumentId, InternalId, MetaDb, VectorId};
-use super::versioning::{Hash, VersionControl};
+use super::versioning::{VersionControl, VersionHash};
 use super::wal::VectorOp;
 use crate::config_loader::Config;
 use crate::indexes::hnsw::{DenseInputEmbedding, HNSWIndex};
@@ -83,7 +83,7 @@ pub struct CollectionIndexingStatusSummary {
 
 #[derive(Debug, Serialize)]
 pub struct TransactionStatusWithTransactionId {
-    pub transaction_id: Hash,
+    pub transaction_id: VersionHash,
     #[serde(flatten)]
     pub status: TransactionStatus,
 }
@@ -99,13 +99,13 @@ pub struct CollectionIndexingStatus {
 pub struct Collection {
     pub meta: CollectionMetadata,
     pub lmdb: MetaDb,
-    pub current_version: RwLock<Hash>,
+    pub current_version: RwLock<VersionHash>,
     pub current_open_transaction: RwLock<Option<CollectionTransaction>>,
     pub vcs: VersionControl,
     pub internal_to_external_map: TreeMap<InternalId, RawVectorEmbedding>,
     pub external_to_internal_map: TreeMap<VectorId, InternalId>,
     pub document_to_internals_map: TreeMapVec<DocumentId, InternalId>,
-    pub transaction_status_map: TreeMap<Hash, RwLock<TransactionStatus>>,
+    pub transaction_status_map: TreeMap<VersionHash, RwLock<TransactionStatus>>,
     pub internal_id_counter: AtomicU32,
     pub hnsw_index: RwLock<Option<Arc<HNSWIndex>>>,
     pub inverted_index: RwLock<Option<Arc<InvertedIndex>>>,
@@ -129,7 +129,7 @@ impl Collection {
         collection_config: CollectionConfig,
         store_raw_text: bool,
         lmdb: MetaDb,
-        current_version: Hash,
+        current_version: VersionHash,
         vcs: VersionControl,
         config: Config,
     ) -> Result<Arc<Self>, WaCustomError> {
@@ -386,10 +386,10 @@ impl Collection {
         Ok(())
     }
 
-    pub fn trigger_indexing(&self, version_id: Hash, version_number: u16) {
+    pub fn trigger_indexing(&self, version_hash: VersionHash) {
         self.transaction_status_map.insert(
-            version_id,
-            &version_id,
+            version_hash,
+            &version_hash,
             RwLock::new(TransactionStatus::NotStarted {
                 last_updated: Utc::now(),
             }),
@@ -398,7 +398,7 @@ impl Collection {
             .read()
             .as_ref()
             .unwrap()
-            .trigger(version_id, version_number);
+            .trigger(version_hash);
     }
 
     pub fn get_latest_transaction_status(&self) -> Option<TransactionStatus> {

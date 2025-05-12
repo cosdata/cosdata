@@ -4,7 +4,7 @@ use crate::models::{
     buffered_io::{BufIoError, BufferManager},
     tf_idf_index::UnsafeVersionedVec,
     types::FileOffset,
-    versioning::Hash,
+    versioning::VersionHash,
 };
 
 use super::SimpleSerialize;
@@ -34,7 +34,7 @@ impl<T: SimpleSerialize> SimpleSerialize for UnsafeVersionedVec<T> {
             return Ok(offset.0);
         }
         let list = unsafe { &*self.list.get() };
-        let size = 4 * list.len() + 12;
+        let size = 4 * list.len() + 16;
         let mut buf = Vec::with_capacity(size);
         buf.extend(next_offset.to_le_bytes());
         buf.extend(self.version.to_le_bytes());
@@ -55,7 +55,7 @@ impl<T: SimpleSerialize> SimpleSerialize for UnsafeVersionedVec<T> {
         let cursor = bufman.open_cursor()?;
         bufman.seek_with_cursor(cursor, offset.0 as u64)?;
         let next_offset = bufman.read_u32_with_cursor(cursor)?;
-        let version = Hash::from(bufman.read_u32_with_cursor(cursor)?);
+        let version = VersionHash::from(bufman.read_u64_with_cursor(cursor)?);
         let len = bufman.read_u32_with_cursor(cursor)? as usize;
         let mut list = Vec::with_capacity(len);
 
