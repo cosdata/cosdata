@@ -185,20 +185,26 @@ def run_all_tests():
     """Run all gRPC tests"""
     print("Starting gRPC tests...")
 
+    all_passed = True
     with create_grpc_channel() as channel:
         stub = vector_service_grpc.CollectionsServiceStub(channel)
 
         # Test basic operations
         if not test_basic_collection_operations(stub):
             print("\n❌ Basic collection operations tests failed!")
+            all_passed = False
         else:
             print("\n✅ Basic collection operations tests passed!")
 
         # Test metadata operations
         if not test_metadata_collection_operations(stub):
             print("\n❌ Metadata collection operations tests failed!")
+            all_passed = False
         else:
             print("\n✅ Metadata collection operations tests passed!")
+
+    if not all_passed:
+        sys.exit(1) # Exit with error code if any test phase failed
 
 
 if __name__ == "__main__":
