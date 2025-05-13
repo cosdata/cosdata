@@ -528,14 +528,15 @@ def cmd_insert_and_check(ctx, args):
     print("  Create index response:", create_index_response)
 
     num_to_insert = args.num_vecs
-    vectors = gen_vectors(num_to_insert, vcoll)
-    print(f"Inserting {num_to_insert} vectors")
-    vidx = insert_vectors(coll_id, vectors)
+    if num_to_insert > 0:
+        vectors = gen_vectors(num_to_insert, vcoll)
+        print(f"Inserting {num_to_insert} vectors")
+        vidx = insert_vectors(coll_id, vectors)
 
-    tcs = vcoll.test_cases(vidx)
+        tcs = vcoll.test_cases(vidx)
 
-    print("Running search queries")
-    search_and_compare(db_name, tcs)
+        print("Running search queries")
+        search_and_compare(db_name, tcs)
 
 
 def cmd_query(ctx, args):

@@ -437,6 +437,26 @@ struct IndexableEmbedding {
     overridden_level_probs: Option<Vec<(f64, u8)>>,
 }
 
+impl IndexableEmbedding {
+    /// Returns the kind of replica node that will be created in the
+    /// index
+    fn node_kind(&self) -> ReplicaNodeKind {
+        if self.overridden_level_probs.is_some() {
+            ReplicaNodeKind::Pseudo
+        } else if self.prop_metadata.is_some() {
+            ReplicaNodeKind::Metadata
+        } else {
+            ReplicaNodeKind::Base
+        }
+    }
+
+    /// Returns the kind of root node that this embedding must be
+    /// indexed under
+    fn root_node_kind(&self) -> RootNodeKind {
+        self.node_kind().root_node_kind()
+    }
+}
+
 /// Computes "metadata replica sets" i.e. all metadata dimensions
 /// along with an id for the provided metadata `fields` and based on
 /// the metadata `schema`. If `fields` is None or an empty map, it
@@ -594,20 +614,10 @@ fn preprocess_embedding(
 
     let embeddings = if raw_emb.is_pseudo {
         let replicas = pseudo_metadata_replicas(metadata_schema.unwrap(), prop_file)?;
-        // @TODO(vineet): This is hacky
         let num_levels = hnsw_index.levels_prob.len() - 1;
         let plp = pseudo_level_probs(num_levels as u8, replicas.len() as u16);
         let mut embeddings: Vec<IndexableEmbedding> = vec![];
-        let mut is_first_overridden = false;
         for (replica_id, prop_metadata) in replicas.into_iter().enumerate() {
-            let overridden_level_probs = if !is_first_overridden {
-                is_first_overridden = true;
-                plp.iter()
-                    .map(|(_, lev)| (0.0, *lev))
-                    .collect::<Vec<(f64, u8)>>()
-            } else {
-                plp.clone()
-            };
             let id = InternalId::from(*base_id + replica_id as u32 + 1);
             let mut prop_file_guard = hnsw_index.cache.prop_file.write().unwrap();
             let location = write_prop_value_to_file(&id, &quantized_vec, &mut prop_file_guard)
@@ -620,7 +630,7 @@ fn preprocess_embedding(
                     location,
                 }),
                 prop_metadata: Some(Arc::new(prop_metadata)),
-                overridden_level_probs: Some(overridden_level_probs),
+                overridden_level_probs: Some(plp.clone()),
             };
             embeddings.push(emb);
         }
@@ -704,12 +714,15 @@ pub fn index_embeddings(
     let file_id = offset_counter.file_id();
 
     for emb in embeddings {
-        let max_level = match emb.overridden_level_probs {
-            Some(lp) => get_max_insert_level(rand::random::<f32>().into(), &lp),
+        let max_level = match &emb.overridden_level_probs {
+            Some(lp) => get_max_insert_level(rand::random::<f32>().into(), lp),
             None => get_max_insert_level(rand::random::<f32>().into(), &hnsw_index.levels_prob),
         };
         // Start from root at highest level
-        let root_entry = hnsw_index.get_root_vec();
+        let root_entry = match &emb.root_node_kind() {
+            RootNodeKind::Pseudo => hnsw_index.get_pseudo_root_vec().unwrap(),
+            RootNodeKind::Main => hnsw_index.get_root_vec(),
+        };
         let highest_level = HNSWLevel(hnsw_params_guard.num_layers);
 
         index_embedding(

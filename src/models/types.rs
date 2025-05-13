@@ -159,11 +159,42 @@ pub struct NodePropMetadata {
     pub location: PropPersistRef,
 }
 
+/// Kinds of nodes in the HNSW/dense index
+///
+/// They are called 'replica nodes' because when metadata fields are
+/// supported by the index, one embedding may result in multiple nodes
+/// getting added to the HNSW graph.
 #[derive(Debug)]
 pub enum ReplicaNodeKind {
+    /// These are "static" nodes created at the time of index
+    /// initialization under the pseudo root node (See `RootNodeKind`
+    /// for more types of root nodes)
     Pseudo,
+    /// Nodes corresponding to the vector embeddings with metadata
+    /// dimensions either absent or default value (all 0s)
     Base,
+    /// Nodes corresponding to the vector embeddings with metadata
+    /// dimensions set
     Metadata,
+}
+
+impl ReplicaNodeKind {
+    /// Returns the kind of root node that this kind of replica must
+    /// be indexed under
+    pub fn root_node_kind(&self) -> RootNodeKind {
+        match self {
+            Self::Pseudo => RootNodeKind::Pseudo,
+            Self::Base => RootNodeKind::Main,
+            Self::Metadata => RootNodeKind::Pseudo,
+        }
+    }
+}
+
+/// Kinds of root nodes in HNSW/dense index
+#[derive(Debug)]
+pub enum RootNodeKind {
+    Pseudo,
+    Main,
 }
 
 #[derive(Debug)]

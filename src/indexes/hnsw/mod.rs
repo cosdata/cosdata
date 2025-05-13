@@ -29,8 +29,11 @@ use types::{HNSWHyperParams, QuantizedDenseVectorEmbedding};
 
 pub struct DenseInputEmbedding(
     pub InternalId,
+    /// Raw vector embedding
     pub Vec<f32>,
+    /// Optional metadata fields
     pub Option<MetadataFields>,
+    /// Boolean flag to indicate pseudo nodes
     pub bool,
 );
 
@@ -351,17 +354,23 @@ impl IndexOps for HNSWIndex {
 
         let hnsw_params_guard = self.hnsw_params.read().unwrap();
 
-        let query_filter_dims = query.1.map(|filter| {
+        let query_filter_dims = query.1.as_ref().map(|filter| {
             let metadata_schema = collection.meta.metadata_schema.as_ref().unwrap();
             filter_encoded_dimensions(metadata_schema, &filter).unwrap()
         });
+
+        let root_node = if query.1.is_some() {
+            self.get_pseudo_root_vec().unwrap()
+        } else {
+            self.get_root_vec()
+        };
 
         let results = ann_search(
             config,
             self,
             vec_emb,
             query_filter_dims.as_ref(),
-            self.get_root_vec(),
+            root_node,
             HNSWLevel(hnsw_params_guard.num_layers),
             &hnsw_params_guard,
         )?;
