@@ -2,7 +2,7 @@ use serde::Serialize;
 
 use crate::models::versioning::{Timestamp, VersionHash, VersionNumber};
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct VersionMetadata {
     pub hash: VersionHash,
     pub version_number: VersionNumber,
@@ -10,13 +10,13 @@ pub struct VersionMetadata {
     pub vector_count: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct VersionListResponse {
     pub versions: Vec<VersionMetadata>,
     pub current_hash: VersionHash,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct CurrentVersionResponse {
     pub hash: VersionHash,
     pub version_number: VersionNumber,

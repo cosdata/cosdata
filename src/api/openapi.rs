@@ -145,6 +145,27 @@ pub struct IndexesApiDoc;
 )]
 pub struct SearchApiDoc;
 
+/// API documentation for version management endpoints
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        crate::api::vectordb::versions::controller::list_versions,
+        crate::api::vectordb::versions::controller::get_current_version,
+        crate::api::vectordb::versions::controller::set_current_version
+    ),
+    components(
+        schemas(
+            crate::api::vectordb::versions::dtos::VersionMetadata,
+            crate::api::vectordb::versions::dtos::VersionListResponse,
+            crate::api::vectordb::versions::dtos::CurrentVersionResponse
+        )
+    ),
+    tags(
+        (name = "versions", description = "Version management endpoints")
+    )
+)]
+pub struct VersionsApiDoc;
+
 /// API documentation for vector management endpoints
 #[derive(OpenApi)]
 #[openapi(
@@ -196,7 +217,10 @@ pub struct VectorsApiDoc;
         crate::api::vectordb::vectors::controller::query_vectors,
         crate::api::vectordb::vectors::controller::get_vector_by_id,
         crate::api::vectordb::vectors::controller::check_vector_existence,
-        crate::api::vectordb::vectors::controller::fetch_vector_neighbors
+        crate::api::vectordb::vectors::controller::fetch_vector_neighbors,
+        crate::api::vectordb::versions::controller::list_versions,
+        crate::api::vectordb::versions::controller::get_current_version,
+        crate::api::vectordb::versions::controller::set_current_version,
     ),
     components(
         schemas(
@@ -252,7 +276,10 @@ pub struct VectorsApiDoc;
             crate::api::vectordb::search::dtos::BatchSearchResponseDto,
             crate::api::vectordb::vectors::dtos::VectorsQueryDto,
             crate::api::vectordb::vectors::dtos::CreateVectorDto,
-            crate::api::vectordb::vectors::dtos::SimilarVector
+            crate::api::vectordb::vectors::dtos::SimilarVector,
+            crate::api::vectordb::versions::dtos::VersionMetadata,
+            crate::api::vectordb::versions::dtos::VersionListResponse,
+            crate::api::vectordb::versions::dtos::CurrentVersionResponse,
         )
     ),
     tags(
@@ -260,7 +287,8 @@ pub struct VectorsApiDoc;
         (name = "collections", description = "Collection management endpoints"),
         (name = "indexes", description = "Index management endpoints"),
         (name = "search", description = "Vector search endpoints"),
-        (name = "vectors", description = "Vector management endpoints")
+        (name = "vectors", description = "Vector management endpoints"),
+        (name = "versions", description = "Version management endpoints"),
     )
 )]
 pub struct CombinedApiDoc;
@@ -290,6 +318,12 @@ impl utoipa::Modify for SearchApiDoc {
 }
 
 impl utoipa::Modify for VectorsApiDoc {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        openapi.info = api_info().build();
+    }
+}
+
+impl utoipa::Modify for VersionsApiDoc {
     fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
         openapi.info = api_info().build();
     }
