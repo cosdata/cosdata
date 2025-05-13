@@ -26,24 +26,25 @@ use siphasher::sip::SipHasher24;
 use std::fs::create_dir_all;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::{fs, hash::Hasher, path::Path, sync::Arc};
+use utoipa::ToSchema;
 
-#[derive(Deserialize, Clone, Serialize, Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct DenseVectorOptions {
     pub enabled: bool,
     pub dimension: usize,
 }
 
-#[derive(Deserialize, Clone, Serialize, Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SparseVectorOptions {
     pub enabled: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct TFIDFOptions {
     pub enabled: bool,
 }
 
-#[derive(Deserialize, Clone, Serialize, Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct CollectionConfig {
     pub max_vectors: Option<u32>,
     pub replication_factor: Option<u32>,

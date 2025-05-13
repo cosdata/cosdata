@@ -3,10 +3,14 @@ use crate::models::collection::{
     CollectionConfig, DenseVectorOptions, SparseVectorOptions, TFIDFOptions,
 };
 use serde::{Deserialize, Serialize};
+use utoipa::{ToSchema, IntoParams};
 
-#[derive(Deserialize)]
+// Instead of implementing ToSchema for FieldValue, we'll use value_type in the schema attribute
+
+#[derive(Deserialize, ToSchema)]
 pub(crate) struct MetadataField {
     pub name: String,
+    #[schema(value_type = Vec<String>, example = "[\"value1\", \"value2\", 123]")]
     pub values: Vec<metadata::FieldValue>,
 }
 
@@ -20,14 +24,14 @@ impl TryFrom<MetadataField> for metadata::schema::MetadataField {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum ConditionOp {
     And,
     Or,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub(crate) struct SupportedCondition {
     pub op: ConditionOp,
     pub field_names: Vec<String>,
@@ -45,7 +49,7 @@ impl TryFrom<SupportedCondition> for metadata::schema::SupportedCondition {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub(crate) struct MetadataSchemaParam {
     pub fields: Vec<MetadataField>,
     pub supported_conditions: Vec<SupportedCondition>,
@@ -69,7 +73,7 @@ impl TryFrom<MetadataSchemaParam> for metadata::schema::MetadataSchema {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub(crate) struct CreateCollectionDto {
     pub name: String,
     pub description: Option<String>,
@@ -82,17 +86,18 @@ pub(crate) struct CreateCollectionDto {
     pub store_raw_text: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub(crate) struct CreateCollectionDtoResponse {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
+#[derive(IntoParams)]
 pub(crate) struct GetCollectionsDto {}
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub(crate) struct GetCollectionsResponseDto {
     pub name: String,
     pub description: Option<String>,
@@ -141,13 +146,13 @@ mod tests {
     }
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, ToSchema)]
 pub(crate) struct CollectionSummaryDto {
     pub name: String,
     pub description: Option<String>,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, ToSchema)]
 pub(crate) struct ListCollectionsResponseDto {
     pub collections: Vec<CollectionSummaryDto>,
 }
