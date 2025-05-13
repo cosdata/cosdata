@@ -145,6 +145,28 @@ pub struct IndexesApiDoc;
 )]
 pub struct SearchApiDoc;
 
+/// API documentation for vector management endpoints
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        crate::api::vectordb::vectors::controller::query_vectors,
+        crate::api::vectordb::vectors::controller::get_vector_by_id,
+        crate::api::vectordb::vectors::controller::check_vector_existence,
+        crate::api::vectordb::vectors::controller::fetch_vector_neighbors
+    ),
+    components(
+        schemas(
+            crate::api::vectordb::vectors::dtos::VectorsQueryDto,
+            crate::api::vectordb::vectors::dtos::CreateVectorDto,
+            crate::api::vectordb::vectors::dtos::SimilarVector
+        )
+    ),
+    tags(
+        (name = "vectors", description = "Vector management endpoints")
+    )
+)]
+pub struct VectorsApiDoc;
+
 /// Combined API documentation
 #[derive(OpenApi)]
 #[openapi(
@@ -170,7 +192,11 @@ pub struct SearchApiDoc;
         crate::api::vectordb::search::controller::batch_sparse_search,
         crate::api::vectordb::search::controller::hybrid_search,
         crate::api::vectordb::search::controller::tf_idf_search,
-        crate::api::vectordb::search::controller::batch_tf_idf_search
+        crate::api::vectordb::search::controller::batch_tf_idf_search,
+        crate::api::vectordb::vectors::controller::query_vectors,
+        crate::api::vectordb::vectors::controller::get_vector_by_id,
+        crate::api::vectordb::vectors::controller::check_vector_existence,
+        crate::api::vectordb::vectors::controller::fetch_vector_neighbors
     ),
     components(
         schemas(
@@ -223,14 +249,18 @@ pub struct SearchApiDoc;
             crate::api::vectordb::search::dtos::BatchSearchTFIDFDocumentsDto,
             crate::api::vectordb::search::dtos::SearchResultItemDto,
             crate::api::vectordb::search::dtos::SearchResponseDto,
-            crate::api::vectordb::search::dtos::BatchSearchResponseDto
+            crate::api::vectordb::search::dtos::BatchSearchResponseDto,
+            crate::api::vectordb::vectors::dtos::VectorsQueryDto,
+            crate::api::vectordb::vectors::dtos::CreateVectorDto,
+            crate::api::vectordb::vectors::dtos::SimilarVector
         )
     ),
     tags(
         (name = "auth", description = "Authentication endpoints"),
         (name = "collections", description = "Collection management endpoints"),
         (name = "indexes", description = "Index management endpoints"),
-        (name = "search", description = "Vector search endpoints")
+        (name = "search", description = "Vector search endpoints"),
+        (name = "vectors", description = "Vector management endpoints")
     )
 )]
 pub struct CombinedApiDoc;
@@ -254,6 +284,12 @@ impl utoipa::Modify for IndexesApiDoc {
 }
 
 impl utoipa::Modify for SearchApiDoc {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        openapi.info = api_info().build();
+    }
+}
+
+impl utoipa::Modify for VectorsApiDoc {
     fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
         openapi.info = api_info().build();
     }

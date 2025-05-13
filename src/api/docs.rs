@@ -1,5 +1,5 @@
 use actix_web::{web, HttpResponse, Scope};
-use crate::api::openapi::{AuthApiDoc, CollectionsApiDoc, CombinedApiDoc, IndexesApiDoc, SearchApiDoc};
+use crate::api::openapi::{AuthApiDoc, CollectionsApiDoc, CombinedApiDoc, IndexesApiDoc, SearchApiDoc, VectorsApiDoc};
 use utoipa::OpenApi;
 
 pub(crate) fn api_docs_module() -> Scope {
@@ -9,6 +9,7 @@ pub(crate) fn api_docs_module() -> Scope {
         .route("/collections/openapi.json", web::get().to(collections_openapi_json))
         .route("/indexes/openapi.json", web::get().to(indexes_openapi_json))
         .route("/search/openapi.json", web::get().to(search_openapi_json))
+        .route("/vectors/openapi.json", web::get().to(vectors_openapi_json))
 }
 
 async fn openapi_json() -> HttpResponse {
@@ -29,4 +30,8 @@ async fn indexes_openapi_json() -> HttpResponse {
 
 async fn search_openapi_json() -> HttpResponse {
     HttpResponse::Ok().json(SearchApiDoc::openapi())
+}
+
+async fn vectors_openapi_json() -> HttpResponse {
+    HttpResponse::Ok().json(VectorsApiDoc::openapi())
 }
