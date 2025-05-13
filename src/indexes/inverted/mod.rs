@@ -89,6 +89,15 @@ impl InvertedIndex {
         }
         Ok(())
     }
+
+    /// Cleans up all resources associated with this index
+    pub fn cleanup(&self) -> Result<(), WaCustomError> {
+        // Flush and close buffer managers
+        self.root.cache.flush_all()
+            .map_err(|e| WaCustomError::FsError(e.to_string()))?;
+        
+        Ok(())
+    }
 }
 
 impl IndexOps for InvertedIndex {

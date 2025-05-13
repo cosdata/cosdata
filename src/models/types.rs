@@ -1054,12 +1054,19 @@ impl CollectionsMap {
     /// returns error if not found
     #[allow(dead_code)]
     pub fn remove_collection(&self, name: &str) -> Result<Arc<Collection>, WaCustomError> {
-        match self.inner_collections.remove(name) {
-            Some((_, collection)) => Ok(collection),
-            None => {
-                // collection not found, return an error response
-                Err(WaCustomError::NotFound("collection".into()))
+        match self.inner_collections.get(name) {
+            Some(collection) => {
+                // Cleanup indexing manager before removing
+                if let Some(indexing_manager) = collection.indexing_manager.write().take() {
+                    indexing_manager.cleanup()?;
+                }
+                // Now remove from map
+                match self.inner_collections.remove(name) {
+                    Some((_, collection)) => Ok(collection),
+                    None => Err(WaCustomError::NotFound("collection".into())),
+                }
             }
+            None => Err(WaCustomError::NotFound("collection".into())),
         }
     }
 

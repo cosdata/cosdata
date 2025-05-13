@@ -240,11 +240,41 @@ impl Collection {
         Ok(())
     }
 
-    /// deletes a collection instance from the disk (lmdb -> collections database)
-    #[allow(dead_code)]
-    pub fn delete(&self, env: &Environment, db: Database) -> Result<(), WaCustomError> {
-        let key = self.get_key();
+    /// Performs a complete cleanup of all collection resources
+    pub fn cleanup(&self) -> Result<(), WaCustomError> {
+        // 1. Close and cleanup indexes
+        if let Some(hnsw_index) = self.hnsw_index.write().take() {
+            hnsw_index.cleanup()?;
+        }
+        if let Some(inverted_index) = self.inverted_index.write().take() {
+            inverted_index.cleanup()?;
+        }
+        if let Some(tf_idf_index) = self.tf_idf_index.write().take() {
+            tf_idf_index.cleanup()?;
+        }
 
+    
+
+        // 2. Close all TreeMaps
+        self.internal_to_external_map.cleanup()?;
+        self.external_to_internal_map.cleanup()?;
+        self.document_to_internals_map.cleanup()?;
+        self.transaction_status_map.cleanup()?;
+
+        // 3. Remove collection directory
+        let collection_path = self.get_path();
+        if collection_path.exists() {
+            fs::remove_dir_all(&collection_path)
+                .map_err(|e| WaCustomError::FsError(e.to_string()))?;
+        }
+
+        Ok(())
+    }
+
+    /// Deletes a collection instance and cleans up all resources
+    pub fn delete(&self, env: &Environment, db: Database) -> Result<(), WaCustomError> {
+        // 1. Remove from LMDB
+        let key = self.get_key();
         let mut txn = env
             .begin_rw_txn()
             .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
@@ -253,6 +283,9 @@ impl Collection {
             .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
         txn.commit()
             .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+        // 2. Perform complete cleanup
+        self.cleanup()?;
 
         Ok(())
     }

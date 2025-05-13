@@ -10,7 +10,7 @@ use std::{
 use super::{
     atomic_array::AtomicArray,
     buffered_io::{BufIoError, BufferManagerFactory},
-    common::TSHashTable,
+    common::{TSHashTable, WaCustomError},
     serializer::{PartitionedSerialize, SimpleSerialize},
     tf_idf_index::{UnsafeVersionedVec, UnsafeVersionedVecIter},
     types::FileOffset,
@@ -458,6 +458,12 @@ impl<K: TreeMapKey, V> TreeMap<K, V> {
             _marker: PhantomData,
         }
     }
+
+    pub fn cleanup(&self) -> Result<(), WaCustomError> {
+        self.bufmans.flush_all()
+            .map_err(|e| WaCustomError::FsError(e.to_string()))?;
+        Ok(())
+    }
 }
 
 impl<K: TreeMapKey, V> TreeMap<K, V> {
@@ -522,6 +528,12 @@ impl<K: TreeMapKey, V> TreeMapVec<K, V> {
             bufmans,
             _marker: PhantomData,
         }
+    }
+
+    pub fn cleanup(&self) -> Result<(), WaCustomError> {
+        self.bufmans.flush_all()
+            .map_err(|e| WaCustomError::FsError(e.to_string()))?;
+        Ok(())
     }
 }
 

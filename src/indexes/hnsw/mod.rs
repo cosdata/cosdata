@@ -135,6 +135,15 @@ impl HNSWIndex {
     pub fn root_vec_offset(&self) -> FileIndex {
         unsafe { &*self.get_root_vec() }.file_index
     }
+
+    /// Cleans up all resources associated with this index
+    pub fn cleanup(&self) -> Result<(), WaCustomError> {
+        // Flush and close buffer managers
+        self.cache.flush_all()
+            .map_err(|e| WaCustomError::FsError(e.to_string()))?;
+        
+        Ok(())
+    }
 }
 
 impl IndexOps for HNSWIndex {

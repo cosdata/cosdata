@@ -47,6 +47,11 @@ impl IndexingManager {
         self.channel.send(version_hash).unwrap()
     }
 
+    pub fn cleanup(&self) -> Result<(), WaCustomError> {
+        // No explicit cleanup needed as the thread is managed by Drop
+        Ok(())
+    }
+
     pub fn index_version(
         collection: &Collection,
         config: &Config,
