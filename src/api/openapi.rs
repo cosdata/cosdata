@@ -1,4 +1,17 @@
-use utoipa::OpenApi;
+use utoipa::{OpenApi, openapi};
+
+fn api_info() -> openapi::InfoBuilder {
+    openapi::InfoBuilder::new()
+        .title("Cosdata API")
+        .version(env!("CARGO_PKG_VERSION"))
+        .description(Some("Cosdata Vector Database API"))
+        .license(Some(
+            openapi::LicenseBuilder::new()
+                .name("Apache 2.0")
+                .url(Some("https://www.apache.org/licenses/LICENSE-2.0"))
+                .build()
+        ))
+}
 
 /// API documentation for authentication endpoints
 #[derive(OpenApi)]
@@ -15,15 +28,6 @@ use utoipa::OpenApi;
     ),
     tags(
         (name = "auth", description = "Authentication endpoints")
-    ),
-    info(
-        title = "Cosdata API",
-        version = env!("CARGO_PKG_VERSION"),
-        description = "Cosdata Vector Database API - Authentication",
-        license(
-            name = "Apache 2.0",
-            url = "https://www.apache.org/licenses/LICENSE-2.0"
-        )
     )
 )]
 pub struct AuthApiDoc;
@@ -63,18 +67,49 @@ pub struct AuthApiDoc;
     ),
     tags(
         (name = "collections", description = "Collection management endpoints")
-    ),
-    info(
-        title = "Cosdata API",
-        version = env!("CARGO_PKG_VERSION"),
-        description = "Cosdata Vector Database API - Collection Management",
-        license(
-            name = "Apache 2.0",
-            url = "https://www.apache.org/licenses/LICENSE-2.0"
-        )
     )
 )]
 pub struct CollectionsApiDoc;
+
+/// API documentation for index management endpoints
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        crate::api::vectordb::indexes::controller::create_dense_index,
+        crate::api::vectordb::indexes::controller::create_sparse_index,
+        crate::api::vectordb::indexes::controller::create_tf_idf_index,
+        crate::api::vectordb::indexes::controller::get_index,
+        crate::api::vectordb::indexes::controller::delete_index
+    ),
+    components(
+        schemas(
+            crate::api::vectordb::indexes::dtos::CreateDenseIndexDto,
+            crate::api::vectordb::indexes::dtos::CreateSparseIndexDto,
+            crate::api::vectordb::indexes::dtos::CreateTFIDFIndexDto,
+            crate::api::vectordb::indexes::dtos::IndexType,
+            crate::api::vectordb::indexes::dtos::SparseIndexQuantization,
+            crate::api::vectordb::indexes::dtos::DataType,
+            crate::api::vectordb::indexes::dtos::ValuesRange,
+            crate::api::vectordb::indexes::dtos::DenseIndexQuantizationDto,
+            crate::api::vectordb::indexes::dtos::HNSWHyperParamsDto,
+            crate::api::vectordb::indexes::dtos::DenseIndexParamsDto,
+            crate::models::schema_traits::DistanceMetricSchema,
+            crate::api::vectordb::indexes::dtos::IndexResponseDto,
+            crate::api::vectordb::indexes::dtos::IndexDetailsDto,
+            crate::api::vectordb::indexes::dtos::IndexInfo,
+            crate::api::vectordb::indexes::dtos::DenseIndexInfo,
+            crate::api::vectordb::indexes::dtos::SparseIndexInfo,
+            crate::api::vectordb::indexes::dtos::TfIdfIndexInfo,
+            crate::api::vectordb::indexes::dtos::QuantizationInfo,
+            crate::api::vectordb::indexes::dtos::RangeInfo,
+            crate::api::vectordb::indexes::dtos::HnswParamsInfo
+        )
+    ),
+    tags(
+        (name = "indexes", description = "Index management endpoints")
+    )
+)]
+pub struct IndexesApiDoc;
 
 /// Combined API documentation
 #[derive(OpenApi)]
@@ -89,7 +124,12 @@ pub struct CollectionsApiDoc;
         crate::api::vectordb::collections::controller::load_collection,
         crate::api::vectordb::collections::controller::unload_collection,
         crate::api::vectordb::collections::controller::get_loaded_collections,
-        crate::api::vectordb::collections::controller::list_collections
+        crate::api::vectordb::collections::controller::list_collections,
+        crate::api::vectordb::indexes::controller::create_dense_index,
+        crate::api::vectordb::indexes::controller::create_sparse_index,
+        crate::api::vectordb::indexes::controller::create_tf_idf_index,
+        crate::api::vectordb::indexes::controller::get_index,
+        crate::api::vectordb::indexes::controller::delete_index
     ),
     components(
         schemas(
@@ -110,26 +150,55 @@ pub struct CollectionsApiDoc;
             crate::models::collection::DenseVectorOptions,
             crate::models::collection::SparseVectorOptions,
             crate::models::collection::TFIDFOptions,
-            CollectionIndexingStatusResponse
+            CollectionIndexingStatusResponse,
+            crate::api::vectordb::indexes::dtos::CreateDenseIndexDto,
+            crate::api::vectordb::indexes::dtos::CreateSparseIndexDto,
+            crate::api::vectordb::indexes::dtos::CreateTFIDFIndexDto,
+            crate::api::vectordb::indexes::dtos::IndexType,
+            crate::api::vectordb::indexes::dtos::SparseIndexQuantization,
+            crate::api::vectordb::indexes::dtos::DataType,
+            crate::api::vectordb::indexes::dtos::ValuesRange,
+            crate::api::vectordb::indexes::dtos::DenseIndexQuantizationDto,
+            crate::api::vectordb::indexes::dtos::HNSWHyperParamsDto,
+            crate::api::vectordb::indexes::dtos::DenseIndexParamsDto,
+            crate::models::schema_traits::DistanceMetricSchema,
+            crate::api::vectordb::indexes::dtos::IndexResponseDto,
+            crate::api::vectordb::indexes::dtos::IndexDetailsDto,
+            crate::api::vectordb::indexes::dtos::IndexInfo,
+            crate::api::vectordb::indexes::dtos::DenseIndexInfo,
+            crate::api::vectordb::indexes::dtos::SparseIndexInfo,
+            crate::api::vectordb::indexes::dtos::TfIdfIndexInfo,
+            crate::api::vectordb::indexes::dtos::QuantizationInfo,
+            crate::api::vectordb::indexes::dtos::RangeInfo,
+            crate::api::vectordb::indexes::dtos::HnswParamsInfo
         )
     ),
     tags(
         (name = "auth", description = "Authentication endpoints"),
-        (name = "collections", description = "Collection management endpoints")
-    ),
-    info(
-        title = "Cosdata API",
-        version = env!("CARGO_PKG_VERSION"),
-        description = "Cosdata Vector Database API",
-        license(
-            name = "Apache 2.0",
-            url = "https://www.apache.org/licenses/LICENSE-2.0"
-        )
+        (name = "collections", description = "Collection management endpoints"),
+        (name = "indexes", description = "Index management endpoints")
     )
 )]
 pub struct CombinedApiDoc;
 
-/// Simplified schema for collection indexing status to avoid complex type issues
+impl utoipa::Modify for AuthApiDoc {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        openapi.info = api_info().build();
+    }
+}
+
+impl utoipa::Modify for CollectionsApiDoc {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        openapi.info = api_info().build();
+    }
+}
+
+impl utoipa::Modify for IndexesApiDoc {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        openapi.info = api_info().build();
+    }
+}
+
 #[derive(utoipa::ToSchema, serde::Serialize)]
 pub struct CollectionIndexingStatusResponse {
     pub collection_name: String,

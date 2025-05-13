@@ -21,6 +21,7 @@ pub mod paths;
 pub mod prob_lazy_load;
 pub mod prob_node;
 pub mod rpc;
+pub mod schema_traits;
 pub mod serializer;
 pub mod sparse_ann_query;
 pub mod tf_idf_index;
