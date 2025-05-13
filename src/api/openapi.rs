@@ -111,6 +111,40 @@ pub struct CollectionsApiDoc;
 )]
 pub struct IndexesApiDoc;
 
+/// API documentation for search endpoints
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        crate::api::vectordb::search::controller::dense_search,
+        crate::api::vectordb::search::controller::batch_dense_search,
+        crate::api::vectordb::search::controller::sparse_search,
+        crate::api::vectordb::search::controller::batch_sparse_search,
+        crate::api::vectordb::search::controller::hybrid_search,
+        crate::api::vectordb::search::controller::tf_idf_search,
+        crate::api::vectordb::search::controller::batch_tf_idf_search
+    ),
+    components(
+        schemas(
+            crate::api::vectordb::search::dtos::DenseSearchRequestDto,
+            crate::api::vectordb::search::dtos::BatchDenseSearchRequestDto,
+            crate::api::vectordb::search::dtos::BatchDenseSearchRequestQueryDto,
+            crate::api::vectordb::search::dtos::SparseSearchRequestDto,
+            crate::api::vectordb::search::dtos::BatchSparseSearchRequestDto,
+            crate::api::vectordb::search::dtos::HybridSearchRequestDto,
+            crate::api::vectordb::search::dtos::HybridSearchQuery,
+            crate::api::vectordb::search::dtos::FindSimilarTFIDFDocumentDto,
+            crate::api::vectordb::search::dtos::BatchSearchTFIDFDocumentsDto,
+            crate::api::vectordb::search::dtos::SearchResultItemDto,
+            crate::api::vectordb::search::dtos::SearchResponseDto,
+            crate::api::vectordb::search::dtos::BatchSearchResponseDto
+        )
+    ),
+    tags(
+        (name = "search", description = "Vector search endpoints")
+    )
+)]
+pub struct SearchApiDoc;
+
 /// Combined API documentation
 #[derive(OpenApi)]
 #[openapi(
@@ -129,7 +163,14 @@ pub struct IndexesApiDoc;
         crate::api::vectordb::indexes::controller::create_sparse_index,
         crate::api::vectordb::indexes::controller::create_tf_idf_index,
         crate::api::vectordb::indexes::controller::get_index,
-        crate::api::vectordb::indexes::controller::delete_index
+        crate::api::vectordb::indexes::controller::delete_index,
+        crate::api::vectordb::search::controller::dense_search,
+        crate::api::vectordb::search::controller::batch_dense_search,
+        crate::api::vectordb::search::controller::sparse_search,
+        crate::api::vectordb::search::controller::batch_sparse_search,
+        crate::api::vectordb::search::controller::hybrid_search,
+        crate::api::vectordb::search::controller::tf_idf_search,
+        crate::api::vectordb::search::controller::batch_tf_idf_search
     ),
     components(
         schemas(
@@ -170,13 +211,26 @@ pub struct IndexesApiDoc;
             crate::api::vectordb::indexes::dtos::TfIdfIndexInfo,
             crate::api::vectordb::indexes::dtos::QuantizationInfo,
             crate::api::vectordb::indexes::dtos::RangeInfo,
-            crate::api::vectordb::indexes::dtos::HnswParamsInfo
+            crate::api::vectordb::indexes::dtos::HnswParamsInfo,
+            crate::api::vectordb::search::dtos::DenseSearchRequestDto,
+            crate::api::vectordb::search::dtos::BatchDenseSearchRequestDto,
+            crate::api::vectordb::search::dtos::BatchDenseSearchRequestQueryDto,
+            crate::api::vectordb::search::dtos::SparseSearchRequestDto,
+            crate::api::vectordb::search::dtos::BatchSparseSearchRequestDto,
+            crate::api::vectordb::search::dtos::HybridSearchRequestDto,
+            crate::api::vectordb::search::dtos::HybridSearchQuery,
+            crate::api::vectordb::search::dtos::FindSimilarTFIDFDocumentDto,
+            crate::api::vectordb::search::dtos::BatchSearchTFIDFDocumentsDto,
+            crate::api::vectordb::search::dtos::SearchResultItemDto,
+            crate::api::vectordb::search::dtos::SearchResponseDto,
+            crate::api::vectordb::search::dtos::BatchSearchResponseDto
         )
     ),
     tags(
         (name = "auth", description = "Authentication endpoints"),
         (name = "collections", description = "Collection management endpoints"),
-        (name = "indexes", description = "Index management endpoints")
+        (name = "indexes", description = "Index management endpoints"),
+        (name = "search", description = "Vector search endpoints")
     )
 )]
 pub struct CombinedApiDoc;
@@ -194,6 +248,12 @@ impl utoipa::Modify for CollectionsApiDoc {
 }
 
 impl utoipa::Modify for IndexesApiDoc {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        openapi.info = api_info().build();
+    }
+}
+
+impl utoipa::Modify for SearchApiDoc {
     fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
         openapi.info = api_info().build();
     }
