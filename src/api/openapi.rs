@@ -215,6 +215,24 @@ pub struct TransactionsApiDoc;
 )]
 pub struct VectorsApiDoc;
 
+/// API documentation for sync transaction endpoints
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        crate::api::vectordb::sync_transaction::controller::upsert,
+        crate::api::vectordb::sync_transaction::controller::delete_vector_by_id
+    ),
+    components(
+        schemas(
+            crate::api::vectordb::transactions::dtos::UpsertDto
+        )
+    ),
+    tags(
+        (name = "sync_transactions", description = "Synchronous transaction endpoints")
+    )
+)]
+pub struct SyncTransactionsApiDoc;
+
 /// Combined API documentation
 #[derive(OpenApi)]
 #[openapi(
@@ -254,7 +272,9 @@ pub struct VectorsApiDoc;
         crate::api::vectordb::transactions::controller::create_vector_in_transaction,
         crate::api::vectordb::transactions::controller::delete_vector_by_id,
         crate::api::vectordb::transactions::controller::abort_transaction,
-        crate::api::vectordb::transactions::controller::upsert
+        crate::api::vectordb::transactions::controller::upsert,
+        crate::api::vectordb::sync_transaction::controller::upsert,
+        crate::api::vectordb::sync_transaction::controller::delete_vector_by_id
     ),
     components(
         schemas(
@@ -328,7 +348,8 @@ pub struct VectorsApiDoc;
         (name = "search", description = "Vector search endpoints"),
         (name = "vectors", description = "Vector management endpoints"),
         (name = "versions", description = "Version management endpoints"),
-        (name = "transactions", description = "Transaction management endpoints")
+        (name = "transactions", description = "Transaction management endpoints"),
+        (name = "sync_transactions", description = "Synchronous transaction endpoints")
     )
 )]
 pub struct CombinedApiDoc;
@@ -370,6 +391,12 @@ impl utoipa::Modify for TransactionsApiDoc {
 }
 
 impl utoipa::Modify for VersionsApiDoc {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        openapi.info = api_info().build();
+    }
+}
+
+impl utoipa::Modify for SyncTransactionsApiDoc {
     fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
         openapi.info = api_info().build();
     }

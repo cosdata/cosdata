@@ -1,4 +1,4 @@
-mod controller;
+pub mod controller;
 mod repo;
 mod service;
 
