@@ -166,6 +166,33 @@ pub struct SearchApiDoc;
 )]
 pub struct VersionsApiDoc;
 
+/// API documentation for transaction management endpoints
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        crate::api::vectordb::transactions::controller::create_transaction,
+        crate::api::vectordb::transactions::controller::commit_transaction,
+        crate::api::vectordb::transactions::controller::get_transaction_status,
+        crate::api::vectordb::transactions::controller::create_vector_in_transaction,
+        crate::api::vectordb::transactions::controller::delete_vector_by_id,
+        crate::api::vectordb::transactions::controller::abort_transaction,
+        crate::api::vectordb::transactions::controller::upsert
+    ),
+    components(
+        schemas(
+            crate::api::vectordb::transactions::dtos::CreateTransactionResponseDto,
+            crate::api::vectordb::transactions::dtos::UpsertDto,
+            crate::models::collection_transaction::TransactionStatus,
+            crate::models::collection_transaction::Progress,
+            crate::models::collection_transaction::Summary
+        )
+    ),
+    tags(
+        (name = "transactions", description = "Transaction management endpoints")
+    )
+)]
+pub struct TransactionsApiDoc;
+
 /// API documentation for vector management endpoints
 #[derive(OpenApi)]
 #[openapi(
@@ -221,6 +248,13 @@ pub struct VectorsApiDoc;
         crate::api::vectordb::versions::controller::list_versions,
         crate::api::vectordb::versions::controller::get_current_version,
         crate::api::vectordb::versions::controller::set_current_version,
+        crate::api::vectordb::transactions::controller::create_transaction,
+        crate::api::vectordb::transactions::controller::commit_transaction,
+        crate::api::vectordb::transactions::controller::get_transaction_status,
+        crate::api::vectordb::transactions::controller::create_vector_in_transaction,
+        crate::api::vectordb::transactions::controller::delete_vector_by_id,
+        crate::api::vectordb::transactions::controller::abort_transaction,
+        crate::api::vectordb::transactions::controller::upsert
     ),
     components(
         schemas(
@@ -280,6 +314,11 @@ pub struct VectorsApiDoc;
             crate::api::vectordb::versions::dtos::VersionMetadata,
             crate::api::vectordb::versions::dtos::VersionListResponse,
             crate::api::vectordb::versions::dtos::CurrentVersionResponse,
+            crate::api::vectordb::transactions::dtos::CreateTransactionResponseDto,
+            crate::api::vectordb::transactions::dtos::UpsertDto,
+            crate::models::collection_transaction::TransactionStatus,
+            crate::models::collection_transaction::Progress,
+            crate::models::collection_transaction::Summary
         )
     ),
     tags(
@@ -289,6 +328,7 @@ pub struct VectorsApiDoc;
         (name = "search", description = "Vector search endpoints"),
         (name = "vectors", description = "Vector management endpoints"),
         (name = "versions", description = "Version management endpoints"),
+        (name = "transactions", description = "Transaction management endpoints")
     )
 )]
 pub struct CombinedApiDoc;
@@ -318,6 +358,12 @@ impl utoipa::Modify for SearchApiDoc {
 }
 
 impl utoipa::Modify for VectorsApiDoc {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        openapi.info = api_info().build();
+    }
+}
+
+impl utoipa::Modify for TransactionsApiDoc {
     fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
         openapi.info = api_info().build();
     }

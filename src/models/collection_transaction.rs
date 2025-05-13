@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use serde::{ser::SerializeStruct, Deserialize, Serialize, Serializer};
+use utoipa::ToSchema;
 
 use crate::{config_loader::Config, indexes::IndexOps};
 
@@ -95,22 +96,25 @@ impl CollectionTransaction {
 
 const NOT_STARTED_MESSAGE: &str = "Indexing has not started yet.";
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, ToSchema)]
 pub enum TransactionStatus {
     NotStarted {
+        #[schema(value_type = String, example = "2023-01-01T12:00:00Z")]
         last_updated: DateTime<Utc>,
     },
     InProgress {
         progress: Progress,
+        #[schema(value_type = String, example = "2023-01-01T12:00:00Z")]
         last_updated: DateTime<Utc>,
     },
     Complete {
         summary: Summary,
+        #[schema(value_type = String, example = "2023-01-01T12:00:00Z")]
         last_updated: DateTime<Utc>,
     },
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
 pub struct Progress {
     pub percentage_done: f32,
     pub records_indexed: u32,
@@ -119,7 +123,7 @@ pub struct Progress {
     pub estimated_time_remaining_seconds: u32,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
 pub struct Summary {
     pub total_records_indexed: u32,
     pub duration_seconds: u32,
