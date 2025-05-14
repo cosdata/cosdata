@@ -3,7 +3,6 @@ use cosdata::args::{CosdataArgs, Command};
 use clap::Parser;
 
 use cosdata::app_context::AppContext;
-use cosdata::args::CosdataArgs;
 use cosdata::config_loader;
 use cosdata::web_server::run_actix_server_with_context;
 
