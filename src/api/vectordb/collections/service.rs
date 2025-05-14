@@ -6,10 +6,7 @@ use crate::{
 };
 
 use super::{
-    dtos::{
-        CreateCollectionDto, CreateCollectionDtoResponse, GetCollectionsDto,
-        GetCollectionsResponseDto, ListCollectionsResponseDto,
-    },
+    dtos::{CreateCollectionDto, CreateCollectionDtoResponse, ListCollectionsResponseDto},
     error::CollectionsError,
     repo,
 };
@@ -25,14 +22,6 @@ pub(crate) async fn create_collection(
         name: collection.meta.name.clone(),
         description: collection.meta.description.clone(),
     })
-}
-
-pub(crate) async fn get_collections(
-    ctx: Arc<AppContext>,
-    get_collections_dto: GetCollectionsDto,
-) -> Result<Vec<GetCollectionsResponseDto>, CollectionsError> {
-    let collections = repo::get_collections(ctx, get_collections_dto).await?;
-    Ok(collections)
 }
 
 /// gets a collection by its id

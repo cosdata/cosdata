@@ -12,10 +12,7 @@ use crate::{
 };
 
 use super::{
-    dtos::{
-        CollectionSummaryDto, CreateCollectionDto, GetCollectionsDto, GetCollectionsResponseDto,
-        ListCollectionsResponseDto,
-    },
+    dtos::{CollectionSummaryDto, CreateCollectionDto, ListCollectionsResponseDto},
     error::CollectionsError,
 };
 
@@ -77,25 +74,6 @@ pub(crate) async fn create_collection(
         .map_err(CollectionsError::WaCustomError)?;
     update_current_version(&collection.lmdb, hash).map_err(CollectionsError::WaCustomError)?;
     Ok(collection)
-}
-
-/// gets a list of collections
-/// TODO results should be filtered based on search params,
-/// if no params provided, it returns all collections
-pub(crate) async fn get_collections(
-    ctx: Arc<AppContext>,
-    _get_collections_dto: GetCollectionsDto,
-) -> Result<Vec<GetCollectionsResponseDto>, CollectionsError> {
-    let collections = ctx
-        .ain_env
-        .collections_map
-        .iter_collections()
-        .map(|c| GetCollectionsResponseDto {
-            name: c.meta.name.clone(),
-            description: c.meta.description.clone(),
-        })
-        .collect();
-    Ok(collections)
 }
 
 /// gets a collection by its name

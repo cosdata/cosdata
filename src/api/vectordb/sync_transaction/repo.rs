@@ -4,10 +4,15 @@ use crate::{
     api::vectordb::{transactions::error::TransactionError, vectors::dtos::CreateVectorDto},
     app_context::AppContext,
     models::{
-        collection_transaction::CollectionTransaction, indexing_manager::IndexingManager,
-        meta_persist::update_current_version, types::VectorId, wal::VectorOp,
+        collection_transaction::{CollectionTransaction, TransactionStatus},
+        indexing_manager::IndexingManager,
+        meta_persist::update_current_version,
+        types::VectorId,
+        wal::VectorOp,
     },
 };
+use chrono::Utc;
+use parking_lot::RwLock;
 
 pub(crate) async fn upsert_vectors(
     ctx: Arc<AppContext>,
@@ -53,6 +58,14 @@ pub(crate) async fn upsert_vectors(
     update_current_version(&collection.lmdb, transaction_id)
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
 
+    collection.transaction_status_map.insert(
+        transaction_id,
+        &transaction_id,
+        RwLock::new(TransactionStatus::NotStarted {
+            last_updated: Utc::now(),
+        }),
+    );
+
     IndexingManager::index_version(&collection, &ctx.config, transaction_id)
         .map_err(|err| TransactionError::FailedToCreateVector(err.to_string()))?;
 
@@ -80,12 +93,12 @@ pub(crate) async fn delete_vector_by_id(
     let mut current_version = collection.current_version.write();
 
     let transaction = CollectionTransaction::new(&collection, true)
-        .map_err(|err| TransactionError::FailedToCreateTransaction(err.to_string()))?;
+        .map_err(|err| TransactionError::FailedToCreateVector(err.to_string()))?;
 
     transaction
         .wal
         .append(VectorOp::Delete(vector_id))
-        .map_err(|err| TransactionError::FailedToCreateVector(err.to_string()))?;
+        .map_err(|err| TransactionError::FailedToDeleteVector(err.to_string()))?;
 
     let version_number = transaction.version_number;
     let transaction_id = transaction.id;
@@ -101,8 +114,16 @@ pub(crate) async fn delete_vector_by_id(
     update_current_version(&collection.lmdb, transaction_id)
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
 
+    collection.transaction_status_map.insert(
+        transaction_id,
+        &transaction_id,
+        RwLock::new(TransactionStatus::NotStarted {
+            last_updated: Utc::now(),
+        }),
+    );
+
     IndexingManager::index_version(&collection, &ctx.config, transaction_id)
-        .map_err(|err| TransactionError::FailedToCreateVector(err.to_string()))?;
+        .map_err(|err| TransactionError::FailedToDeleteVector(err.to_string()))?;
 
     Ok(())
 }
