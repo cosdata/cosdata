@@ -153,3 +153,81 @@ Updated key patterns for storage:
 - Direct permissions list in Role struct
 - Comprehensive permission enum covering all major database operations
 - Flexible and granular access control mechanism
+
+
+* API/System Overview
+RBAC is globally enforced via middleware with the following design principles:
+- RBAC enforcement happens transparently behind the scenes
+- API consumers do not see =/rbac/= prefixes in endpoints
+- Role assignment APIs are explicitly available for administrative operations
+
+* Users API
+Users represent individual accounts in the system.
+
+** Endpoints
+| Action           | Endpoint              | Method | Description                           |
+|------------------+-----------------------+--------+---------------------------------------|
+| Create a user    | =/users=              | POST   | Register a new user                   |
+| Get user details | =/users/{username}=   | GET    | Retrieve details for specified user   |
+| List all users   | =/users=              | GET    | List all users (with optional filters)|
+| Delete a user    | =/users/{username}=   | DELETE | Remove specified user                 |
+
+* Roles API
+Roles define sets of permissions that can be assigned to users.
+
+** Endpoints
+| Action           | Endpoint              | Method | Description                         |
+|------------------+-----------------------+--------+-------------------------------------|
+| Create a role    | =/roles=              | POST   | Define a new role                   |
+| Get role details | =/roles/{role_name}=  | GET    | Retrieve details for specified role |
+| List all roles   | =/roles=              | GET    | List all defined roles              |
+| Delete a role    | =/roles/{role_name}=  | DELETE | Remove specified role               |
+
+** Role Payload Example
+#+BEGIN_SRC json
+{
+  "name": "editor",
+  "description": "Can read and write to collections",
+  "permissions": [
+    "collections:read",
+    "collections:write"
+  ]
+}
+#+END_SRC
+
+* Resource-Centric Role Assignments
+Role assignments connect users to roles for specific resources.
+
+** Collection Access Endpoints
+| Action                     | Endpoint                                                    | Method | Description                              |
+|----------------------------+------------------------------------------------------------+--------+------------------------------------------|
+| Assign role to user        | =/collections/{collection_id}/access/users/{username}/roles/{role}= | POST   | Grant specified role to user on collection |
+| Remove role from user      | =/collections/{collection_id}/access/users/{username}/roles/{role}= | DELETE | Remove specified role from user           |
+| List access for collection | =/collections/{collection_id}/access=                             | GET    | Show all access assignments for collection |
+| Get user roles             | =/collections/{collection_id}/access/users/{username}/roles=      | GET    | List all roles assigned to user for this collection |
+
+* Collections API
+Collections are protected resources managed via RBAC.
+
+** Endpoints
+| Action                | Endpoint                      | Method | Description                                 |
+|-----------------------+-------------------------------+--------+---------------------------------------------|
+| Create a collection   | =/collections=                | POST   | Create a new collection                     |
+| List collections      | =/collections=                | GET    | List collections visible to current user    |
+| Get collection details| =/collections/{id}=           | GET    | Retrieve details for specified collection   |
+| Delete a collection   | =/collections/{id}=           | DELETE | Remove specified collection                 |
+
+* Implementation Notes
+** RBAC Enforcement
+- All routes are subject to RBAC enforcement
+- No route should be publicly accessible unless explicitly allowed
+- RBAC logic should be centralized in middleware or a policy service
+
+** Permission Model
+- Fine-grained permissions are modeled via =role → permission → resource=
+- Permissions should be checked at the API layer before any database queries
+
+** Security Considerations
+- JWT or session-based authentication should precede RBAC checks
+- All access attempts should be logged for audit purposes
+- Failed access attempts should return HTTP 403 Forbidden responses
