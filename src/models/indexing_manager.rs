@@ -62,14 +62,7 @@ impl IndexingManager {
         let status = collection
             .transaction_status_map
             .get_latest(&version_hash)
-            .ok_or_else(|| {
-                let error_msg = format!(
-                    "FATAL: Transaction status for version {:?} not found in map before indexing. This indicates an issue with transaction initialization before indexing.",
-                    version_hash
-                );
-                log::error!("{}", error_msg);
-                WaCustomError::DatabaseError(error_msg)
-        })?;
+            .unwrap();
         let start = Utc::now();
         *status.write() = TransactionStatus::InProgress {
             progress: Progress {

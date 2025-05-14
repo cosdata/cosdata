@@ -1,13 +1,30 @@
-use actix_web::web::Data;
-use clap::Parser;
+pub(crate) mod api;
+mod api_service;
+mod app_context;
+mod args;
+pub mod config_loader;
+pub mod cosql;
+pub mod distance;
+pub mod indexes;
+pub mod macros;
+pub mod metadata;
+mod models;
+pub mod quantization;
+pub mod storage;
+mod vector_store;
+mod web_server;
 
-use cosdata::app_context::AppContext;
-use cosdata::args::CosdataArgs;
-use cosdata::config_loader;
-use cosdata::web_server::run_actix_server_with_context;
+#[macro_use]
+mod cfg_macros;
 
 #[cfg(feature = "grpc-server")]
-use cosdata::grpc;
+pub mod grpc;
+
+use actix_web::web::Data;
+use args::CosdataArgs;
+use clap::Parser;
+
+use crate::{app_context::AppContext, web_server::run_actix_server_with_context};
 
 #[actix_web::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

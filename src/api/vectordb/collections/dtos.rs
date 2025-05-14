@@ -92,6 +92,12 @@ pub(crate) struct CreateCollectionDtoResponse {
 #[derive(Deserialize)]
 pub(crate) struct GetCollectionsDto {}
 
+#[derive(Serialize)]
+pub(crate) struct GetCollectionsResponseDto {
+    pub name: String,
+    pub description: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use crate::metadata::FieldValue;

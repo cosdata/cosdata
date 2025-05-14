@@ -1,7 +1,7 @@
 use actix_web::{web, Scope};
 pub(crate) mod authentication_middleware;
 mod controller;
-pub(crate) mod dtos;
+mod dtos;
 mod error;
 mod service;
 
