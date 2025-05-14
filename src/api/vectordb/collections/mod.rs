@@ -1,6 +1,6 @@
 use actix_web::{web, Scope};
-mod controller;
-mod dtos;
+pub(crate) mod controller;
+pub(crate) mod dtos;
 mod error;
 mod repo;
 pub(crate) mod service;
@@ -8,7 +8,7 @@ pub(crate) mod service;
 pub(crate) fn collections_module() -> Scope {
     web::scope("/collections")
         .route("", web::post().to(controller::create_collection))
-        .route("", web::get().to(controller::list_collections))
+        .route("/list", web::get().to(controller::list_collections))
         .route("", web::get().to(controller::get_collections))
         .route("/loaded", web::get().to(controller::get_loaded_collections))
         .route(

@@ -12,17 +12,23 @@ use serde::{
 
 use crate::{indexes::inverted::types::SparsePair, models::types::VectorId};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct VectorsQueryDto {
+    #[schema(value_type = String, example = "doc123")]
     pub document_id: DocumentId,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(crate) struct CreateVectorDto {
+    #[schema(value_type = String)]
     pub id: VectorId,
+    #[schema(value_type = String, nullable = true)]
     pub document_id: Option<DocumentId>,
+    #[schema(example = "[0.1, 0.2, 0.3]")]
     pub dense_values: Option<Vec<f32>>,
+    #[schema(value_type = Object, nullable = true)]
     pub metadata: Option<MetadataFields>,
+    #[schema(value_type = Object, nullable = true)]
     pub sparse_values: Option<Vec<SparsePair>>,
     pub text: Option<String>,
 }
@@ -181,8 +187,9 @@ impl<'de> Deserialize<'de> for CreateVectorDto {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(crate) struct SimilarVector {
+    #[schema(value_type = String)]
     pub id: VectorId,
     pub score: f32,
 }

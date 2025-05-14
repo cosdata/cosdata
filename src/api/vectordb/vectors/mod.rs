@@ -1,6 +1,6 @@
 use actix_web::{web, Scope};
 
-mod controller;
+pub mod controller;
 pub(crate) mod dtos;
 pub(crate) mod error;
 pub(crate) mod repo;

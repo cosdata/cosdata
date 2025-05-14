@@ -1,6 +1,6 @@
 use actix_web::{web, HttpResponse, Result};
 
-use super::dtos::VectorsQueryDto;
+use super::dtos::{CreateVectorDto, SimilarVector, VectorsQueryDto};
 use super::{error::VectorsError, service};
 
 use crate::models::collection_cache::CollectionCacheExt;
@@ -9,6 +9,23 @@ use crate::{
     models::{common::WaCustomError, types::VectorId},
 };
 
+/// Get vectors for a document
+///
+/// Returns all vectors associated with a specific document ID within a collection.
+#[utoipa::path(
+    get,
+    path = "/collections/{collection_id}/vectors",
+    params(
+        ("collection_id" = String, Path, description = "Collection identifier"),
+    ),
+    responses(
+        (status = 200, description = "List of vectors", body = [CreateVectorDto]),
+        (status = 400, description = "Bad request"),
+        (status = 404, description = "Collection not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "vectors"
+)]
 pub(crate) async fn query_vectors(
     collection_id: web::Path<String>,
     web::Query(query): web::Query<VectorsQueryDto>,
@@ -25,6 +42,24 @@ pub(crate) async fn query_vectors(
     Ok(HttpResponse::Ok().json(vectors))
 }
 
+/// Get a specific vector by ID
+///
+/// Returns a vector with the specified ID from a collection.
+#[utoipa::path(
+    get,
+    path = "/vectordb/collections/{collection_id}/vectors/{vector_id}",
+    params(
+        ("collection_id" = String, Path, description = "Collection identifier"),
+        ("vector_id" = String, Path, description = "Vector identifier")
+    ),
+    responses(
+        (status = 200, description = "The requested vector", body = CreateVectorDto),
+        (status = 400, description = "Bad request"),
+        (status = 404, description = "Vector not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "vectors"
+)]
 pub(crate) async fn get_vector_by_id(
     path: web::Path<(String, String)>,
     ctx: web::Data<AppContext>,
@@ -40,6 +75,23 @@ pub(crate) async fn get_vector_by_id(
     Ok(HttpResponse::Ok().json(vector))
 }
 
+/// Check if a vector exists
+///
+/// Returns 200 OK if the vector exists, 404 if it doesn't.
+#[utoipa::path(
+    head,
+    path = "/vectordb/collections/{collection_id}/vectors/{vector_id}",
+    params(
+        ("collection_id" = String, Path, description = "Collection identifier"),
+        ("vector_id" = String, Path, description = "Vector identifier")
+    ),
+    responses(
+        (status = 200, description = "Vector exists"),
+        (status = 404, description = "Vector not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "vectors"
+)]
 pub(crate) async fn check_vector_existence(
     path: web::Path<(String, String)>,
     ctx: web::Data<AppContext>,
@@ -67,6 +119,24 @@ pub(crate) async fn check_vector_existence(
     }
 }
 
+/// Fetch similar vectors (neighbors) for a specific vector
+///
+/// Returns vectors that are similar to the specified vector ID.
+#[utoipa::path(
+    get,
+    path = "/vectordb/collections/{collection_id}/vectors/{vector_id}/neighbors",
+    params(
+        ("collection_id" = String, Path, description = "Collection identifier"),
+        ("vector_id" = String, Path, description = "Vector identifier")
+    ),
+    responses(
+        (status = 200, description = "List of similar vectors", body = [SimilarVector]),
+        (status = 400, description = "Bad request"),
+        (status = 404, description = "Vector not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "vectors"
+)]
 pub(crate) async fn fetch_vector_neighbors(
     path: web::Path<(String, String)>,
     ctx: web::Data<AppContext>,

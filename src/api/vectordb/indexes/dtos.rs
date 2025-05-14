@@ -1,11 +1,12 @@
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
+use utoipa::ToSchema;
 
 use crate::{
-    config_loader::Config, indexes::hnsw::types::HNSWHyperParams, models::types::DistanceMetric,
-    quantization::StorageType,
+    config_loader::Config, indexes::hnsw::types::HNSWHyperParams, 
+    models::schema_traits::DistanceMetricSchema, quantization::StorageType,
 };
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum IndexType {
     Dense,
@@ -13,7 +14,7 @@ pub enum IndexType {
     TfIdf,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, ToSchema)]
 pub enum SparseIndexQuantization {
     #[default]
     B16,
@@ -21,6 +22,77 @@ pub enum SparseIndexQuantization {
     B64,
     B128,
     B256,
+}
+
+// Response DTOs for indexes
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct IndexResponseDto {
+    pub message: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct IndexDetailsDto {
+    pub collection_name: String,
+    pub indexes: Vec<IndexInfo>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "type")]
+pub enum IndexInfo {
+    #[serde(rename = "dense")]
+    Dense(DenseIndexInfo),
+    #[serde(rename = "sparse")]
+    Sparse(SparseIndexInfo),
+    #[serde(rename = "tf_idf")]
+    TfIdf(TfIdfIndexInfo),
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct DenseIndexInfo {
+    pub name: String,
+    pub algorithm: String,
+    pub distance_metric: String,
+    pub quantization: QuantizationInfo,
+    pub params: HnswParamsInfo,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct QuantizationInfo {
+    #[serde(rename = "type")]
+    pub quantization_type: String,
+    pub storage: String,
+    pub range: RangeInfo,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct RangeInfo {
+    pub min: f32,
+    pub max: f32,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct HnswParamsInfo {
+    pub ef_construction: u32,
+    pub ef_search: u32,
+    pub neighbors_count: usize,
+    pub level_0_neighbors_count: usize,
+    pub num_layers: u8,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct SparseIndexInfo {
+    pub name: String,
+    pub algorithm: String,
+    pub quantization_bits: u8,
+    pub values_upper_bound: f32,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct TfIdfIndexInfo {
+    pub name: String,
+    pub algorithm: String,
+    pub k1: f32,
+    pub b: f32,
 }
 
 impl<'de> Deserialize<'de> for SparseIndexQuantization {
@@ -55,7 +127,7 @@ impl SparseIndexQuantization {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum DataType {
     Binary,
@@ -66,13 +138,13 @@ pub enum DataType {
     F32,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct ValuesRange {
     pub min: f32,
     pub max: f32,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase", tag = "type", content = "properties")]
 pub enum DenseIndexQuantizationDto {
     Auto {
@@ -84,7 +156,7 @@ pub enum DenseIndexQuantizationDto {
     },
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct HNSWHyperParamsDto {
     ef_construction: Option<u32>, // Size of the dynamic candidate list during index construction
     ef_search: Option<u32>,       // Size of the dynamic candidate list during search
@@ -94,28 +166,28 @@ pub struct HNSWHyperParamsDto {
     neighbors_count: Option<usize>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase", tag = "type", content = "properties")]
 pub enum DenseIndexParamsDto {
     Hnsw(HNSWHyperParamsDto),
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub(crate) struct CreateDenseIndexDto {
     pub name: String,
-    pub distance_metric_type: DistanceMetric,
+    pub distance_metric_type: DistanceMetricSchema,
     pub quantization: DenseIndexQuantizationDto,
     pub index: DenseIndexParamsDto,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub(crate) struct CreateSparseIndexDto {
     pub name: String,
     pub quantization: SparseIndexQuantization,
     pub sample_threshold: usize,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub(crate) struct CreateTFIDFIndexDto {
     pub name: String,
     pub sample_threshold: usize,

@@ -1,5 +1,5 @@
-mod controller;
-pub(super) mod dtos;
+pub mod controller;
+pub mod dtos;
 pub(super) mod error;
 mod repo;
 mod service;

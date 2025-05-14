@@ -7,6 +7,24 @@ use crate::{
     models::collection_cache::CollectionCacheExt,
 };
 
+/// Upsert vectors into a collection with a synchronous transaction
+///
+/// This API provides a simplified way to upsert vectors without managing transaction lifecycle.
+/// A transaction is created, vectors are upserted, and the transaction is committed in a single request.
+#[utoipa::path(
+    post,
+    path = "/vectordb/collections/{collection_id}/sync_transaction/upsert",
+    tag = "sync_transactions",
+    params(
+        ("collection_id" = String, Path, description = "Collection ID")
+    ),
+    request_body = UpsertDto,
+    responses(
+        (status = 200, description = "Vectors upserted successfully"),
+        (status = 404, description = "Collection not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub(crate) async fn upsert(
     collection_id: web::Path<String>,
     ctx: web::Data<AppContext>,
@@ -22,6 +40,24 @@ pub(crate) async fn upsert(
     Ok(HttpResponse::Ok().finish())
 }
 
+/// Delete a vector by ID using a synchronous transaction
+///
+/// This API provides a simplified way to delete a vector without managing transaction lifecycle.
+/// A transaction is created, vector is deleted, and the transaction is committed in a single request.
+#[utoipa::path(
+    delete,
+    path = "/vectordb/collections/{collection_id}/sync_transaction/vectors/{vector_id}",
+    tag = "sync_transactions",
+    params(
+        ("collection_id" = String, Path, description = "Collection ID"),
+        ("vector_id" = String, Path, description = "Vector ID to delete")
+    ),
+    responses(
+        (status = 204, description = "Vector deleted successfully"),
+        (status = 404, description = "Collection or vector not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub(crate) async fn delete_vector_by_id(
     path: web::Path<(String, String)>,
     ctx: web::Data<AppContext>,

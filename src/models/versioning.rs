@@ -7,6 +7,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use twox_hash::XxHash32;
+use utoipa::ToSchema;
 
 use super::tree_map::TreeMapKey;
 
@@ -27,7 +28,8 @@ impl Deref for BranchId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, ToSchema)]
+#[schema(value_type = i32, description = "Version number")]
 pub struct VersionNumber(u32);
 
 impl From<u32> for VersionNumber {
@@ -44,7 +46,8 @@ impl Deref for VersionNumber {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, ToSchema)]
+#[schema(value_type = i64, description = "Timestamp in milliseconds since epoch")]
 pub struct Timestamp(pub u128);
 
 impl From<u128> for Timestamp {
@@ -61,7 +64,8 @@ impl Deref for Timestamp {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+#[schema(value_type = i64, description = "Version hash identifier")]
 pub struct VersionHash(u64);
 
 impl From<u64> for VersionHash {
@@ -525,6 +529,8 @@ impl VersionControl {
             .collect())
     }
 }
+
+
 
 #[cfg(test)]
 mod tests {
