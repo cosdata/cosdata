@@ -1128,37 +1128,6 @@ impl UsersMap {
     pub fn get_user(&self, username: &str) -> Option<User> {
         self.map.get(username).map(|user| user.value().clone())
     }
-
-    pub fn delete_user(&self, username: &str) -> lmdb::Result<()> {
-        let username_key: &[u8] = username.as_bytes();
-        let mut txn = self.env.begin_rw_txn()?;
-
-        // Pass a reference to username_key.
-        // K will be inferred as &[u8] (which is Sized),
-        match txn.del(self.users_db, &username_key, None) {
-            Ok(()) => {
-                txn.commit()?;
-                Ok(())
-            }
-            Err(lmdb::Error::NotFound) => {
-                txn.abort();
-                log::warn!(
-                    "Attempted to delete user '{}' from auth store, but user was not found.",
-                    username
-                );
-                Ok(())
-            }
-            Err(e) => {
-                txn.abort();
-                log::error!(
-                    "LMDB error while deleting user '{}' from auth store: {}",
-                    username,
-                    e
-                );
-                Err(e)
-            }
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -1325,7 +1294,7 @@ pub fn get_app_env(config: &Config, args: CosdataArgs) -> Result<Arc<AppEnv>, Wa
     create_dir_all(&db_path).map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
     // Initialize the environment
     let env = Environment::new()
-        .set_max_dbs(50)
+        .set_max_dbs(10)
         .set_map_size(1048576000) // Set the maximum size of the database to 1GB
         .open(&db_path)
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;

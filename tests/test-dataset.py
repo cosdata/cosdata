@@ -17,15 +17,9 @@ import shutil
 from pathlib import Path
 import sys
 from datasets import load_dataset
-from urllib.parse import urlparse
 
 # Suppress only the single InsecureRequestWarning from urllib3 needed for this script
-try:
-    # For newer versions of requests that bundle urllib3
-    requests.packages.urllib3.disable_warnings(requests.packages.urllib3.exceptions.InsecureRequestWarning)
-except AttributeError:
-    # For older versions or direct urllib3 usage
-    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 def check_dependencies():
     """Check if required dependencies are installed"""
@@ -35,7 +29,7 @@ def check_dependencies():
         print("Error: pyarrow is required for parquet support.")
         print("Please install it using: pip install pyarrow")
         sys.exit(1)
-
+    
     try:
         import datasets
     except ImportError:
@@ -46,12 +40,10 @@ def check_dependencies():
 # Check dependencies at startup
 check_dependencies()
 
-# Define global configuration
-BASE_URL = os.environ.get("COSDATA_URL", "http://127.0.0.1:8443")
-parsed_base_url = urlparse(BASE_URL)
-host = f"{parsed_base_url.scheme}://{parsed_base_url.netloc}"
+# Define your dynamic variables
+token = None
+host = "http://127.0.0.1:8443"
 base_url = f"{host}/vectordb"
-VERIFY_SSL = False
 
 # Dataset configurations with correct column names
 datasets = {
@@ -103,20 +95,20 @@ def download_huggingface_dataset(dataset_id, destination):
     response = requests.get(parquet_url)
     response.raise_for_status()
     parquet_info = response.json()
-
+    
     if not parquet_info or not isinstance(parquet_info, list) or not parquet_info:
         raise Exception(f"No parquet files found for dataset {dataset_id}")
-
+    
     # Get the first parquet file URL
     parquet_file_url = parquet_info[0]["url"]
-
+    
     # Download the parquet file
     print(f"Downloading parquet file from {parquet_file_url}")
     response = requests.get(parquet_file_url, stream=True)
     response.raise_for_status()
-
+    
     total_size = int(response.headers.get('content-length', 0))
-
+    
     with open(destination, 'wb') as f, tqdm(
         desc=os.path.basename(destination),
         total=total_size,
@@ -133,9 +125,9 @@ def download_file(url, destination):
     try:
         response = requests.get(url, stream=True)
         response.raise_for_status()  # Raise an exception for bad status codes
-
+        
         total_size = int(response.headers.get('content-length', 0))
-
+        
         with open(destination, 'wb') as f, tqdm(
             desc=os.path.basename(destination),
             total=total_size,
@@ -152,53 +144,18 @@ def download_file(url, destination):
             os.remove(destination)
         raise
 
-def make_request_direct(method, endpoint, expected_status, token=None, payload=None, params=None, check_body_on_ok=True):
-    """Makes a direct HTTP request, checks status, and returns success/data."""
-    url = f"{host}{endpoint}"
-    headers = {"Content-Type": "application/json"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-
-    try:
-        response = requests.request(
-            method=method,
-            url=url,
-            headers=headers,
-            json=payload,
-            params=params,
-            verify=False,
-            timeout=30
-        )
-
-        is_expected_status_tuple = isinstance(expected_status, tuple)
-        status_match = response.status_code in expected_status if is_expected_status_tuple else response.status_code == expected_status
-
-        try:
-            response_data = response.json() if response.text else None
-        except:
-            response_data = response.text if response.text else None
-
-        if status_match:
-            return True, response_data
-        else:
-            return False, response_data
-
-    except Exception as e:
-        return False, None
-
-
 def prepare_glove_dataset(dataset_dir):
     """Prepare GloVe dataset by converting it to parquet format"""
     zip_path = os.path.join(dataset_dir, "glove.6B.zip")
     if not os.path.exists(zip_path):
         print("Downloading GloVe dataset...")
         download_file(datasets["glove-100"]["url"], zip_path)
-
+    
     print("Extracting GloVe dataset...")
     with gzip.open(zip_path, 'rb') as f_in:
         with open(os.path.join(dataset_dir, "glove.6B.100d.txt"), 'wb') as f_out:
             shutil.copyfileobj(f_in, f_out)
-
+    
     print("Converting GloVe to parquet format...")
     # Read the GloVe text file
     data = []
@@ -208,11 +165,11 @@ def prepare_glove_dataset(dataset_dir):
             word = values[0]
             vector = [float(x) for x in values[1:]]
             data.append({"id": word, "embeddings": vector})
-
+    
     # Convert to DataFrame and save as parquet
     df = pd.DataFrame(data)
     df.to_parquet(os.path.join(dataset_dir, "test0.parquet"))
-
+    
     # Clean up temporary files
     os.remove(os.path.join(dataset_dir, "glove.6B.100d.txt"))
     os.remove(zip_path)
@@ -222,16 +179,16 @@ def prepare_dataset(dataset_name):
     dataset_dir = os.path.join("datasets", dataset_name)
     dataset_config = datasets[dataset_name]
     parquet_path = os.path.join(dataset_dir, "test0.parquet")
-
+    
     print(f"Downloading {dataset_name}...")
     prepare_huggingface_dataset(dataset_config["dataset_id"], parquet_path)
-
+    
     print(f"Dataset {dataset_name} is ready at {dataset_dir}")
 
 def prepare_huggingface_dataset(dataset_id, destination):
     """Download and prepare a dataset from Hugging Face"""
     print(f"Loading dataset {dataset_id} from Hugging Face...")
-
+    
     try:
         # Try loading with default config first
         dataset = load_dataset(dataset_id, split="train")
@@ -242,31 +199,31 @@ def prepare_huggingface_dataset(dataset_id, destination):
             dataset = load_dataset(dataset_id, 'train', split="train")
         else:
             raise
-
+    
     # Convert to pandas DataFrame
     df = dataset.to_pandas()
-
+    
     # Print dataset structure
     print("\nDataset Structure:")
     print(f"Columns: {df.columns.tolist()}")
     print(f"First row sample: {df.iloc[0].to_dict()}")
     print(f"Number of rows: {len(df)}")
-
+    
     # Ensure the required columns exist
     if "id" not in df.columns:
         df["id"] = range(len(df))
-
+    
     if "dense_values" not in df.columns:
         # Find the embedding column
         embedding_cols = [col for col in df.columns if "emb" in col.lower() or "embedding" in col.lower() or "vector" in col.lower()]
         if not embedding_cols:
             raise ValueError(f"No embedding column found in dataset {dataset_id}. Available columns: {df.columns.tolist()}")
         df["dense_values"] = df[embedding_cols[0]]
-
+    
     # Save as parquet
     print(f"\nSaving dataset to {destination}")
     df.to_parquet(destination)
-
+    
     print(f"Dataset saved successfully with {len(df)} rows")
 
 def ensure_dataset_available(dataset_name):
@@ -276,13 +233,13 @@ def ensure_dataset_available(dataset_name):
     if not os.path.exists(datasets_dir):
         os.makedirs(datasets_dir)
         print(f"Created datasets directory at {os.path.abspath(datasets_dir)}")
-
+    
     # Create dataset-specific directory if it doesn't exist
     dataset_dir = os.path.join(datasets_dir, dataset_name)
     if not os.path.exists(dataset_dir):
         os.makedirs(dataset_dir)
         print(f"Created dataset directory at {os.path.abspath(dataset_dir)}")
-
+    
     # Check if dataset files exist
     if not any(f.endswith('.parquet') for f in os.listdir(dataset_dir)):
         print(f"Dataset {dataset_name} not found. Downloading...")
@@ -299,16 +256,16 @@ def prompt_and_get_dataset_metadata():
     dataset_idx = int(input("Select: ")) - 1
     dataset_name = dataset_names[dataset_idx]
     print(f"Reading {dataset_name} ...")
-
+    
     # Ask for test mode
     print("\nChoose test mode:")
     print("1) Quick test (smaller dataset, faster)")
     print("2) Full test (complete dataset, slower)")
     test_mode = int(input("Select (1 or 2): "))
-
+    
     # Ensure dataset is available
     ensure_dataset_available(dataset_name)
-
+    
     dataset = datasets[dataset_name]
     return (dataset_name, dataset, test_mode == 1)
 
@@ -501,7 +458,7 @@ def process_vectors_batch(vectors, collection, batch_size):
         # Ensure all IDs are strings
         for vector in vectors:
             vector["id"] = str(vector["id"])
-
+        
         with collection.transaction() as txn:
             txn.batch_upsert_vectors(vectors)
         return True
@@ -534,7 +491,7 @@ def process_parquet_files(
     id_counter = 0
     matches_test_vectors = []
     rps_test_vectors = []
-
+    
     # For quick test, use the first 10 vectors as test vectors
     if quick_test:
         matches_test_vector_ids_set = set(result["query_id"] for result in brute_force_results[:10])
@@ -756,7 +713,7 @@ def batch_ann_search(collection, vectors):
                 "top_k": 5
             } for vector in vectors
         ]
-
+        
         # Use the collection's search method
         results = collection.search.batch_dense(queries)
         return results
@@ -764,19 +721,19 @@ def batch_ann_search(collection, vectors):
         print(f"Error in batch search: {e}")
         raise
 
-\if __name__ == "__main__":
+if __name__ == "__main__":
     # Get password securely
     password = getpass.getpass("Enter your database password: ")
-
+    
     # Initialize client
     client = Client(
-        host=host,
+        host="http://127.0.0.1:8443",
         username="admin",
         password=password,
         verify=False
     )
 
-    # Create database - use static name like original
+    # Create database
     vector_db_name = "testdb"
     batch_size = 100
     num_match_test_vectors = 100  # Number of vectors to test
@@ -785,61 +742,17 @@ def batch_ann_search(collection, vectors):
 
     dataset_name, dataset_metadata, quick_test = prompt_and_get_dataset_metadata()
 
-    # Adjust parameters for quick test
-    if quick_test:
-        num_match_test_vectors = 10
-        num_rps_test_vectors = 1000
-        batch_size = 50
-        rps_batch_size = 50
-
     # Load or generate brute force results
     brute_force_results = load_or_generate_brute_force_results(dataset_name, quick_test)
     print(f"Loaded {len(brute_force_results)} pre-computed brute force results")
 
-    # Setup RBAC (minimal and quiet)
-    auth_data = None
-    try:
-        response = requests.post(
-            f"{host}/auth/create-session",
-            json={"username": "admin", "password": password},
-            verify=False
-        )
-        if response.status_code == 200:
-            auth_data = response.json()
-            token = auth_data.get("access_token")
-            if token:
-                # Create collection in RBAC
-                requests.post(
-                    f"{host}/rbac/collections",
-                    headers={"Authorization": f"Bearer {token}"},
-                    json={"collection_name": vector_db_name},
-                    verify=False
-                )
-                # Assign admin role
-                requests.put(
-                    f"{host}/rbac/collections/{vector_db_name}/users/admin/roles/admin",
-                    headers={"Authorization": f"Bearer {token}"},
-                    verify=False
-                )
-    except:
-        pass  # Silent failure, continue with test
-
     # Create collection
     print("Creating collection...")
-    try:
-        collection = client.create_collection(
-            name=vector_db_name,
-            dimension=dataset_metadata["dimension"],
-            description="Test collection for vector database"
-        )
-    except Exception as e:
-        if "409" in str(e) or "Conflict" in str(e):
-            collection = client.get_collection(vector_db_name)
-            # Delete existing data to start fresh
-            try:
-                collection.delete_all_vectors()
-            except:
-                pass
+    collection = client.create_collection(
+        name=vector_db_name,
+        dimension=dataset_metadata["dimension"],
+        description="Test collection for vector database"
+    )
 
     # Create index
     print("Creating index...")
@@ -864,16 +777,5 @@ def batch_ann_search(collection, vectors):
     )
 
     run_matching_tests(matches_test_vectors, collection, brute_force_results)
-    run_rps_tests(rps_test_vectors, collection, rps_batch_size)
 
-    # Clean up (silent)
-    try:
-        if auth_data and "access_token" in auth_data:
-            requests.delete(
-                f"{host}/rbac/collections/{vector_db_name}",
-                headers={"Authorization": f"Bearer {auth_data['access_token']}"},
-                verify=False
-            )
-        collection.delete()
-    except:
-        pass
+    run_rps_tests(rps_test_vectors, collection, rps_batch_size)
