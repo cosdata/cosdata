@@ -3,7 +3,6 @@ use clap::Parser;
 
 use crate::args::{CosdataArgs, Command};
 use crate::app_context::AppContext;
-use crate::config_loader;
 use crate::web_server::run_actix_server_with_context;
 
 pub(crate) mod api;
