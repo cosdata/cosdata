@@ -1,5 +1,5 @@
 use actix_web::web::Data;
-use args::{CosdataArgs, Command};
+use cosdata::args::{CosdataArgs, Command};
 use clap::Parser;
 
 use cosdata::app_context::AppContext;
