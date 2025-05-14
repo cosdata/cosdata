@@ -1,5 +1,11 @@
 use crate::api::auth::{auth_module, authentication_middleware::AuthenticationMiddleware};
 use crate::api::vectordb::collections::collections_module;
+use crate::api::vectordb::indexes::indexes_module;
+use crate::api::vectordb::search::search_module;
+use crate::api::vectordb::sync_transaction::sync_transactions_module;
+use crate::api::vectordb::transactions::transactions_module;
+use crate::api::vectordb::vectors::vectors_module;
+use crate::api::vectordb::versions::version_module;
 use crate::app_context::AppContext;
 use crate::config_loader::{ServerMode, Ssl};
 use actix_cors::Cors;
@@ -7,7 +13,14 @@ use actix_web::web::Data;
 use actix_web::{middleware, web, App, HttpServer};
 use rustls::{pki_types::PrivateKeyDer, ServerConfig};
 use rustls_pemfile::{certs, pkcs8_private_keys};
+use serde::{Deserialize, Serialize};
 use std::{fs::File, io::BufReader};
+
+#[derive(Debug, Serialize, Deserialize)]
+struct MyObj {
+    name: String,
+    number: i32,
+}
 
 pub async fn run_actix_server_with_context(ctx: Data<AppContext>) -> std::io::Result<()> {
     let config = &ctx.config.clone();
@@ -29,8 +42,6 @@ pub async fn run_actix_server_with_context(ctx: Data<AppContext>) -> std::io::Re
     );
 
     let server = HttpServer::new(move || {
-        let auth_mw = AuthenticationMiddleware(ctx.ain_env.active_sessions.clone());
-
         App::new()
             // enable logger
             .wrap(middleware::Logger::default())
@@ -42,18 +53,19 @@ pub async fn run_actix_server_with_context(ctx: Data<AppContext>) -> std::io::Re
             .app_data(ctx.clone())
             .service(auth_module())
             .service(
-                // Scope for all authenticated and authorized APIs
-                web::scope("")
-                    .wrap(auth_mw) // Apply AuthenticationMiddleware to this entire scope
-                    .service(
-                        // VectorDB operations
-                        // collections_module will handle the /collections and /collections/{id}/...
-                        web::scope("/vectordb").service(collections_module()),
-                    )
-                    // RBAC Management API, inherits auth_mw
-                    // The .configure call itself will set up routes like /rbac/users, /rbac/roles
-                    // These routes are already protected by require_manage_permissions() within api::rbac::configure_routes
-                    .configure(crate::api::rbac::configure_routes),
+                web::scope("/vectordb")
+                    .wrap(AuthenticationMiddleware(
+                        ctx.ain_env.active_sessions.clone(),
+                    ))
+                    // vectors module must be registered before collections module
+                    // as its scope path is more specific than collections module
+                    .service(search_module())
+                    .service(indexes_module())
+                    .service(vectors_module())
+                    .service(transactions_module())
+                    .service(sync_transactions_module())
+                    .service(version_module())
+                    .service(collections_module()),
             )
     })
     .keep_alive(std::time::Duration::from_secs(10));

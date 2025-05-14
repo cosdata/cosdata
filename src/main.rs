@@ -1,13 +1,32 @@
 use actix_web::web::Data;
-use cosdata::args::{CosdataArgs, Command};
 use clap::Parser;
 
-use cosdata::app_context::AppContext;
-use cosdata::config_loader;
-use cosdata::web_server::run_actix_server_with_context;
+use crate::args::{CosdataArgs, Command};
+use crate::app_context::AppContext;
+use crate::config_loader;
+use crate::web_server::run_actix_server_with_context;
+
+pub(crate) mod api;
+mod api_service;
+mod app_context;
+mod args;
+pub mod config_loader;
+pub mod cosql;
+pub mod distance;
+pub mod indexes;
+pub mod macros;
+pub mod metadata;
+mod models;
+pub mod quantization;
+pub mod storage;
+mod vector_store;
+mod web_server;
+
+#[macro_use]
+mod cfg_macros;
 
 #[cfg(feature = "grpc-server")]
-use cosdata::grpc;
+pub mod grpc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = CosdataArgs::parse();
