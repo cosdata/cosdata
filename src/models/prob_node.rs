@@ -21,7 +21,7 @@ use super::{
     serializer::hnsw::RawDeserialize,
     types::{
         DistanceMetric, FileOffset, HNSWLevel, InternalId, MetricResult, NodePropMetadata,
-        NodePropValue,
+        NodePropValue, ReplicaNodeKind, VectorData,
     },
     versioning::VersionNumber,
 };
@@ -488,6 +488,18 @@ impl ProbNode {
             child,
             *cache.distance_metric.read().unwrap(),
         ))
+    }
+
+    /// Returns the kind of node it is
+    pub fn replica_node_kind(&self) -> ReplicaNodeKind {
+        let metadata = self.prop_metadata.as_ref().map(|pm| &*pm.vec);
+        let internal_id = self.get_id();
+        let vector_data = VectorData {
+            id: Some(&internal_id),
+            quantized_vec: &self.prop_value.vec,
+            metadata,
+        };
+        vector_data.replica_node_kind()
     }
 }
 
