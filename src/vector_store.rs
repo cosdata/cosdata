@@ -443,10 +443,17 @@ impl IndexableEmbedding {
     fn node_kind(&self) -> ReplicaNodeKind {
         if self.overridden_level_probs.is_some() {
             ReplicaNodeKind::Pseudo
-        } else if self.prop_metadata.is_some() {
-            ReplicaNodeKind::Metadata
         } else {
-            ReplicaNodeKind::Base
+            match &self.prop_metadata {
+                Some(m) => {
+                    if m.vec.mag == 0.0 {
+                        ReplicaNodeKind::Base
+                    } else {
+                        ReplicaNodeKind::Metadata
+                    }
+                },
+                None => ReplicaNodeKind::Base,
+            }
         }
     }
 
