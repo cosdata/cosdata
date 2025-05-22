@@ -26,7 +26,7 @@ use std::{
 };
 
 pub struct IndexingManager {
-    thread: Option<JoinHandle<Result<(), WaCustomError>>>,
+    thread: Option<JoinHandle<()>>,
     channel: mpsc::Sender<VersionNumber>,
 }
 
@@ -40,11 +40,8 @@ impl IndexingManager {
 
         let thread = thread::spawn(move || {
             for version_hash in receiver {
-                println!("processing version: {}", *version_hash);
                 Self::index_version(&collection, &config, &threadpool, version_hash).unwrap();
-                println!("processed version: {}", *version_hash);
             }
-            Ok(())
         });
 
         Self {
