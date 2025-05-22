@@ -1,4 +1,4 @@
-use std::{ptr, sync::Arc};
+use std::sync::Arc;
 
 use rustc_hash::FxHashSet;
 
@@ -8,11 +8,8 @@ use crate::{
         buffered_io::{BufIoError, BufferManager},
         cache_loader::HNSWIndexCache,
         lazy_item::FileIndex,
-        prob_node::{Neighbors, ProbNode, SharedNode},
-        types::{
-            BytesToRead, FileOffset, HNSWLevel, InternalId, MetricResult, NodePropMetadata,
-            NodePropValue,
-        },
+        prob_node::{Neighbors, ProbNode, SharedLatestNode},
+        types::{BytesToRead, FileOffset, HNSWLevel, NodePropMetadata, NodePropValue},
         versioning::VersionNumber,
     },
 };
@@ -27,21 +24,25 @@ use super::{HNSWIndexSerialize, RawDeserialize};
 //     8 bytes for prop metadata offset & length         | 21
 //
 //   Links:
-//     8 bytes for parent offset & file id +            | 8
-//     8 bytes for child offset & file id +             | 16
-//     1 byte for root version tag +                    | 17
-//     8 bytes for root version offset & file id +      | 25
-//     2 bytes for neighbors length +                   | 27
-//     neighbors length * 17 bytes for neighbor link +  | nb * 17 + 27
+//     4 bytes for parent offset +                      | 4
+//     4 bytes for child offset +                       | 8
+//     2 bytes for neighbors length +                   | 10
+//     neighbors length * 13 bytes for neighbor link +  | nb * 13 + 10
 //
-//   Total = nb * 17 + 48 (where `nb` is the neighbors count)
+//   Total = nb * 13 + 31 (where `nb` is the neighbors count)
 impl HNSWIndexSerialize for ProbNode {
-    fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
+    fn serialize(
+        &self,
+        bufman: &BufferManager,
+        latest_version_links_bufman: &BufferManager,
+        cursor: u64,
+        latest_version_links_cursor: u64,
+    ) -> Result<u32, BufIoError> {
         let start_offset = bufman.cursor_position(cursor)?;
 
         let neighbors = self.get_neighbors_raw();
 
-        let mut buf = Vec::with_capacity(46);
+        let mut buf = Vec::with_capacity(29);
 
         // Serialize basic fields
         buf.push(self.hnsw_level.0);
@@ -64,50 +65,36 @@ impl HNSWIndexSerialize for ProbNode {
 
         let parent_ptr = self.get_parent();
 
-        // Get parent file index
-        let parent_file_index = unsafe { parent_ptr.as_ref() }.map(|parent| parent.file_index);
+        // Get parent offset
+        let parent_offset =
+            unsafe { parent_ptr.as_ref() }.map_or(u32::MAX, |parent| parent.file_offset.0);
+
+        buf.extend(parent_offset.to_le_bytes());
 
         let child_ptr = self.get_child();
 
-        // Get child file index
-        let child_file_index = unsafe { child_ptr.as_ref() }.map(|child| child.file_index);
+        // Get child offset
+        let child_offset =
+            unsafe { child_ptr.as_ref() }.map_or(u32::MAX, |child| child.file_offset.0);
 
-        if let Some(FileIndex { offset, file_id }) = parent_file_index {
-            buf.extend(offset.0.to_le_bytes());
-            buf.extend(file_id.to_le_bytes());
-        } else {
-            buf.extend([u8::MAX; 8]);
-        }
-
-        if let Some(FileIndex { offset, file_id }) = child_file_index {
-            buf.extend(offset.0.to_le_bytes());
-            buf.extend(file_id.to_le_bytes());
-        } else {
-            buf.extend([u8::MAX; 8]);
-        }
-
-        let (root, is_root) = *self.root_version.read();
-
-        if let Some(root) = unsafe { root.as_ref() } {
-            let FileIndex { offset, file_id } = root.file_index;
-            buf.push(is_root as u8);
-            buf.extend(offset.0.to_le_bytes());
-            buf.extend(file_id.to_le_bytes());
-        } else {
-            buf.extend([u8::MAX; 9]);
-        }
+        buf.extend(child_offset.to_le_bytes());
 
         bufman.update_with_cursor(cursor, &buf)?;
 
         #[cfg(debug_assertions)]
         {
             let current = bufman.cursor_position(cursor)?;
-            assert_eq!(current, start_offset + 46);
+            assert_eq!(current, start_offset + 29);
         }
 
         {
             let _lock = self.freeze();
-            neighbors.serialize(bufman, cursor)?;
+            neighbors.serialize(
+                bufman,
+                latest_version_links_bufman,
+                cursor,
+                latest_version_links_cursor,
+            )?;
         }
 
         Ok(start_offset as u32)
@@ -115,6 +102,7 @@ impl HNSWIndexSerialize for ProbNode {
 
     fn deserialize(
         bufman: &BufferManager,
+        latest_version_links_bufman: &BufferManager,
         file_index: FileIndex,
         cache: &HNSWIndexCache,
         max_loads: u16,
@@ -143,59 +131,54 @@ impl HNSWIndexSerialize for ProbNode {
             None
         };
 
-        let parent_offset = bufman.read_u32_with_cursor(cursor)?;
-        let parent_file_id = IndexFileId::from(bufman.read_u32_with_cursor(cursor)?);
-
-        let child_offset = bufman.read_u32_with_cursor(cursor)?;
-        let child_file_id = IndexFileId::from(bufman.read_u32_with_cursor(cursor)?);
-
-        let root_tag = bufman.read_u8_with_cursor(cursor)? != 0;
-        let root_offset = bufman.read_u32_with_cursor(cursor)?;
-        let root_file_id = IndexFileId::from(bufman.read_u32_with_cursor(cursor)?);
+        let parent_offset = FileOffset(bufman.read_u32_with_cursor(cursor)?);
+        let child_offset = FileOffset(bufman.read_u32_with_cursor(cursor)?);
 
         bufman.close_cursor(cursor)?;
 
         // Deserialize parent
-        let parent = if parent_offset != u32::MAX {
-            let parent_file_index = FileIndex {
-                offset: FileOffset(parent_offset),
-                file_id: parent_file_id,
-            };
-            SharedNode::deserialize(bufman, parent_file_index, cache, max_loads, skipm)?
-        } else {
-            ptr::null_mut()
+        let parent_file_index = FileIndex {
+            file_id: IndexFileId::invalid(),
+            offset: parent_offset,
         };
+        let parent = SharedLatestNode::deserialize(
+            bufman,
+            latest_version_links_bufman,
+            parent_file_index,
+            cache,
+            max_loads,
+            skipm,
+        )?;
         // Deserialize child
-        let child = if child_offset != u32::MAX {
-            let child_file_index = FileIndex {
-                offset: FileOffset(child_offset),
-                file_id: child_file_id,
-            };
-            SharedNode::deserialize(bufman, child_file_index, cache, max_loads, skipm)?
-        } else {
-            ptr::null_mut()
+        let child_file_index = FileIndex {
+            file_id: IndexFileId::invalid(),
+            offset: child_offset,
         };
-        // Deserialize root version
-        let root_version = if root_offset != u32::MAX {
-            let root_file_index = FileIndex {
-                offset: FileOffset(root_offset),
-                file_id: root_file_id,
-            };
-            SharedNode::deserialize(bufman, root_file_index, cache, max_loads, skipm)?
-        } else {
-            ptr::null_mut()
-        };
+        let child = SharedLatestNode::deserialize(
+            bufman,
+            latest_version_links_bufman,
+            child_file_index,
+            cache,
+            max_loads,
+            skipm,
+        )?;
 
         let neighbors_file_index = FileIndex {
-            // @NOTE: 46 = 21 (properties) + 8 (parent) + 8 (child) + 9 (root)
-            offset: FileOffset(offset + 46),
+            // @NOTE: 29 = 21 (properties) + 4 (parent) + 4 (child)
+            offset: FileOffset(offset + 29),
             file_id: file_index.file_id,
         };
 
-        let neighbors =
-            Neighbors::deserialize(bufman, neighbors_file_index, cache, max_loads, skipm)?;
+        let neighbors = Neighbors::deserialize(
+            bufman,
+            latest_version_links_bufman,
+            neighbors_file_index,
+            cache,
+            max_loads,
+            skipm,
+        )?;
 
-        Ok(Self::new_with_neighbors_and_versions_and_root_version(
+        Ok(Self::new_with_neighbors_and_versions(
             hnsw_level,
             version,
             prop,
@@ -203,8 +186,6 @@ impl HNSWIndexSerialize for ProbNode {
             neighbors,
             parent,
             child,
-            root_version,
-            root_tag,
             *cache.distance_metric.read().unwrap(),
         ))
     }
@@ -216,16 +197,16 @@ impl RawDeserialize for ProbNode {
         VersionNumber,
         Arc<NodePropValue>,
         Option<Arc<NodePropMetadata>>,
-        Vec<Option<(InternalId, FileIndex, MetricResult)>>,
-        Option<FileIndex>,
-        Option<FileIndex>,
-        Option<FileIndex>,
-        bool,
+        <Neighbors as RawDeserialize>::Raw,
+        FileOffset,
+        FileOffset,
     );
 
     fn deserialize_raw(
         bufman: &BufferManager,
+        latest_version_links_bufman: &BufferManager,
         cursor: u64,
+        latest_version_links_cursor: u64,
         FileOffset(offset): FileOffset,
         file_id: IndexFileId,
         cache: &HNSWIndexCache,
@@ -251,42 +232,28 @@ impl RawDeserialize for ProbNode {
             None
         };
 
-        let parent_offset = bufman.read_u32_with_cursor(cursor)?;
-        let parent_file_id = IndexFileId::from(bufman.read_u32_with_cursor(cursor)?);
-
-        let child_offset = bufman.read_u32_with_cursor(cursor)?;
-        let child_file_id = IndexFileId::from(bufman.read_u32_with_cursor(cursor)?);
-
-        let root_tag = bufman.read_u8_with_cursor(cursor)? != 0;
-        let root_offset = bufman.read_u32_with_cursor(cursor)?;
-        let root_file_id = IndexFileId::from(bufman.read_u32_with_cursor(cursor)?);
-
-        let parent = (parent_offset != u32::MAX).then_some(FileIndex {
-            offset: FileOffset(parent_offset),
-            file_id: parent_file_id,
-        });
-
-        let child = (child_offset != u32::MAX).then_some(FileIndex {
-            offset: FileOffset(child_offset),
-            file_id: child_file_id,
-        });
-
-        let root = (root_offset != u32::MAX).then_some(FileIndex {
-            offset: FileOffset(root_offset),
-            file_id: root_file_id,
-        });
+        let parent_offset = FileOffset(bufman.read_u32_with_cursor(cursor)?);
+        let child_offset = FileOffset(bufman.read_u32_with_cursor(cursor)?);
 
         let neighbors = Neighbors::deserialize_raw(
             bufman,
+            latest_version_links_bufman,
             cursor,
-            // @NOTE: 46 = 21 (properties) + 8 (parent) + 8 (child) + 9 (root)
-            FileOffset(offset + 46),
+            latest_version_links_cursor,
+            // @NOTE: 29 = 21 (properties) + 4 (parent) + 4 (child)
+            FileOffset(offset + 29),
             file_id,
             cache,
         )?;
 
         Ok((
-            hnsw_level, version, prop, metadata, neighbors, parent, child, root, root_tag,
+            hnsw_level,
+            version,
+            prop,
+            metadata,
+            neighbors,
+            parent_offset,
+            child_offset,
         ))
     }
 }

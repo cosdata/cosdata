@@ -23,7 +23,8 @@ use std::sync::{Arc, Mutex, RwLock, Weak};
 pub struct HNSWIndexCache {
     pub registry: LRUCache<u64, SharedNode>,
     props_registry: DashMap<u64, Weak<NodePropValue>>,
-    pub bufmans: Arc<BufferManagerFactory<IndexFileId>>,
+    pub bufmans: BufferManagerFactory<IndexFileId>,
+    pub latest_version_links_bufman: BufferManager,
     pub prop_file: RwLock<File>,
     loading_items: TSHashTable<u64, Arc<Mutex<bool>>>,
     pub distance_metric: Arc<RwLock<DistanceMetric>>,
@@ -43,7 +44,8 @@ unsafe impl Sync for HNSWIndexCache {}
 
 impl HNSWIndexCache {
     pub fn new(
-        bufmans: Arc<BufferManagerFactory<IndexFileId>>,
+        bufmans: BufferManagerFactory<IndexFileId>,
+        latest_version_links_bufman: BufferManager,
         prop_file: RwLock<File>,
         distance_metric: Arc<RwLock<DistanceMetric>>,
     ) -> Self {
@@ -54,6 +56,7 @@ impl HNSWIndexCache {
             registry,
             props_registry,
             bufmans,
+            latest_version_links_bufman,
             prop_file,
             distance_metric,
             loading_items: TSHashTable::new(16),
@@ -81,7 +84,8 @@ impl HNSWIndexCache {
             .write()
             .map_err(|_| BufIoError::Locking)?
             .flush()
-            .map_err(BufIoError::Io)
+            .map_err(BufIoError::Io)?;
+        self.latest_version_links_bufman.flush()
     }
 
     pub fn get_prop(
@@ -182,7 +186,14 @@ impl HNSWIndexCache {
         }
 
         let bufman = self.bufmans.get(file_index.file_id)?;
-        let data = ProbNode::deserialize(&bufman, file_index, self, max_loads - 1, skipm)?;
+        let data = ProbNode::deserialize(
+            &bufman,
+            &self.latest_version_links_bufman,
+            file_index,
+            self,
+            max_loads - 1,
+            skipm,
+        )?;
         let item = ProbLazyItem::new(data, file_index.file_id, file_index.offset);
 
         self.registry.insert(combined_index, item);

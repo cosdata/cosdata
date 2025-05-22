@@ -10,13 +10,24 @@ use crate::models::{
 use super::HNSWIndexSerialize;
 
 impl HNSWIndexSerialize for SharedNode {
-    fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
+    fn serialize(
+        &self,
+        bufman: &BufferManager,
+        latest_version_links_bufman: &BufferManager,
+        cursor: u64,
+        latest_version_links_cursor: u64,
+    ) -> Result<u32, BufIoError> {
         let lazy_item = unsafe { &**self };
         let file_offset = lazy_item.file_index.offset.0;
 
         if let Some(data) = lazy_item.unsafe_get_data() {
             bufman.seek_with_cursor(cursor, file_offset as u64)?;
-            data.serialize(bufman, cursor)?;
+            data.serialize(
+                bufman,
+                latest_version_links_bufman,
+                cursor,
+                latest_version_links_cursor,
+            )?;
         }
 
         Ok(file_offset)
@@ -24,6 +35,7 @@ impl HNSWIndexSerialize for SharedNode {
 
     fn deserialize(
         _bufman: &BufferManager,
+        _latest_version_links_bufman: &BufferManager,
         file_index: FileIndex,
         cache: &HNSWIndexCache,
         max_loads: u16,

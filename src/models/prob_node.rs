@@ -1,4 +1,5 @@
 use std::{
+    collections::hash_map::Entry,
     ptr,
     sync::{
         atomic::{AtomicPtr, Ordering},
@@ -9,16 +10,110 @@ use std::{
 use parking_lot::{RwLock, RwLockReadGuard};
 use rustc_hash::FxHashMap;
 
+use crate::indexes::hnsw::offset_counter::{self, IndexFileId};
+
+use self::offset_counter::HNSWIndexFileOffsetCounter;
+
 use super::{
+    buffered_io::BufIoError,
     cache_loader::HNSWIndexCache,
     lazy_item::{FileIndex, ProbLazyItem},
     serializer::hnsw::RawDeserialize,
-    types::{DistanceMetric, HNSWLevel, InternalId, MetricResult, NodePropMetadata, NodePropValue},
+    types::{
+        DistanceMetric, FileOffset, HNSWLevel, InternalId, MetricResult, NodePropMetadata,
+        NodePropValue,
+    },
     versioning::VersionNumber,
 };
 
 pub type SharedNode = *mut ProbLazyItem<ProbNode>;
-pub type Neighbors = Box<[AtomicPtr<(InternalId, SharedNode, MetricResult)>]>;
+
+pub struct LatestNode {
+    pub latest: RwLock<SharedNode>,
+    pub file_offset: FileOffset,
+}
+
+impl LatestNode {
+    pub fn new(latest: SharedNode, file_offset: FileOffset) -> SharedLatestNode {
+        Box::into_raw(Box::new(Self {
+            latest: RwLock::new(latest),
+            file_offset,
+        }))
+    }
+
+    pub fn latest(&self) -> RwLockReadGuard<'_, SharedNode> {
+        self.latest.read()
+    }
+
+    pub fn get_or_create_version(
+        &self,
+        version: VersionNumber,
+        cache: &HNSWIndexCache,
+        file_id: IndexFileId,
+        offset_counter: &HNSWIndexFileOffsetCounter,
+    ) -> Result<(RwLockReadGuard<'_, SharedNode>, bool), BufIoError> {
+        let latest_read_guard = self.latest.read();
+        if unsafe { &**latest_read_guard }.try_get_data(cache)?.version == version {
+            return Ok((latest_read_guard, false));
+        }
+        drop(latest_read_guard);
+        let mut latest_write_guard = self.latest.write();
+        if unsafe { &**latest_write_guard }
+            .try_get_data(cache)?
+            .version
+            == version
+        {
+            drop(latest_write_guard);
+            return Ok((self.latest.read(), false));
+        }
+
+        let current_node = unsafe { &**latest_write_guard }.try_get_data(cache)?;
+
+        let new_node = ProbNode {
+            hnsw_level: current_node.hnsw_level,
+            version,
+            prop_value: current_node.prop_value.clone(),
+            prop_metadata: current_node.prop_metadata.clone(),
+            neighbors: current_node.clone_neighbors(),
+            parent: AtomicPtr::new(current_node.get_parent()),
+            child: AtomicPtr::new(current_node.get_child()),
+            lowest_index: RwLock::new(*current_node.lowest_index.read()),
+        };
+
+        let offset = if current_node.hnsw_level.0 == 0 {
+            offset_counter.next_level_0_offset()
+        } else {
+            offset_counter.next_offset()
+        };
+
+        let new_lazy_item = ProbLazyItem::new(new_node, file_id, offset);
+
+        let prev_lazy_item = *latest_write_guard;
+
+        *latest_write_guard = new_lazy_item;
+        let cursor = cache.latest_version_links_bufman.open_cursor()?;
+        cache
+            .latest_version_links_bufman
+            .seek_with_cursor(cursor, self.file_offset.0 as u64)?;
+        cache
+            .latest_version_links_bufman
+            .update_u32_with_cursor(cursor, offset.0)?;
+        cache
+            .latest_version_links_bufman
+            .update_u32_with_cursor(cursor, *file_id)?;
+        cache.latest_version_links_bufman.close_cursor(cursor)?;
+
+        drop(latest_write_guard);
+
+        cache.unload(prev_lazy_item)?;
+
+        Ok((self.latest.read(), true))
+    }
+}
+
+pub type SharedLatestNode = *mut LatestNode;
+
+pub type Neighbors = Box<[AtomicPtr<(InternalId, SharedLatestNode, MetricResult)>]>;
 
 pub struct ProbNode {
     pub hnsw_level: HNSWLevel,
@@ -27,17 +122,9 @@ pub struct ProbNode {
     pub prop_metadata: Option<Arc<NodePropMetadata>>,
     // Each neighbor is represented as (neighbor_id, neighbor_node, distance)
     neighbors: Neighbors,
-    parent: AtomicPtr<ProbLazyItem<ProbNode>>,
-    child: AtomicPtr<ProbLazyItem<ProbNode>>,
+    parent: AtomicPtr<LatestNode>,
+    child: AtomicPtr<LatestNode>,
     lowest_index: RwLock<(u8, MetricResult)>,
-    // Tracks versioning of this node:
-    // - If this node is the *base* (original) version, `root_version` points to the latest version.
-    // - If this node is a *non-base* (derived) version, `root_version` points back to the base version.
-    // The accompanying `bool` flag indicates what `root_version` points to:
-    // - `true`: points to the root (base) version.
-    // - `false`: points to the latest version (this node is the base version).
-    // If the pointer is null, there is only one version (this node itself), and the flag can be ignored.
-    pub root_version: RwLock<(SharedNode, bool)>,
 }
 
 unsafe impl Send for ProbNode {}
@@ -50,8 +137,8 @@ impl ProbNode {
         version: VersionNumber,
         prop_value: Arc<NodePropValue>,
         prop_metadata: Option<Arc<NodePropMetadata>>,
-        parent: SharedNode,
-        child: SharedNode,
+        parent: SharedLatestNode,
+        child: SharedLatestNode,
         neighbors_count: usize,
         dist_metric: DistanceMetric,
     ) -> Self {
@@ -70,21 +157,18 @@ impl ProbNode {
             parent: AtomicPtr::new(parent),
             child: AtomicPtr::new(child),
             lowest_index: RwLock::new((0, MetricResult::min(dist_metric))),
-            root_version: RwLock::new((ptr::null_mut(), false)),
         }
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn new_with_neighbors_and_versions_and_root_version(
+    pub fn new_with_neighbors_and_versions(
         hnsw_level: HNSWLevel,
         version: VersionNumber,
         prop_value: Arc<NodePropValue>,
         prop_metadata: Option<Arc<NodePropMetadata>>,
         neighbors: Neighbors,
-        parent: SharedNode,
-        child: SharedNode,
-        root_version: SharedNode,
-        root_version_tag: bool,
+        parent: SharedLatestNode,
+        child: SharedLatestNode,
         dist_metric: DistanceMetric,
     ) -> Self {
         let mut lowest_idx = 0;
@@ -112,23 +196,22 @@ impl ProbNode {
             parent: AtomicPtr::new(parent),
             child: AtomicPtr::new(child),
             lowest_index: RwLock::new((lowest_idx as u8, lowest_sim)),
-            root_version: RwLock::new((root_version, root_version_tag)),
         }
     }
 
-    pub fn get_parent(&self) -> SharedNode {
+    pub fn get_parent(&self) -> SharedLatestNode {
         self.parent.load(Ordering::Acquire)
     }
 
-    pub fn set_parent(&self, parent: SharedNode) {
+    pub fn set_parent(&self, parent: SharedLatestNode) {
         self.parent.store(parent, Ordering::Release);
     }
 
-    pub fn get_child(&self) -> SharedNode {
+    pub fn get_child(&self) -> SharedLatestNode {
         self.child.load(Ordering::Acquire)
     }
 
-    pub fn set_child(&self, child: SharedNode) {
+    pub fn set_child(&self, child: SharedLatestNode) {
         self.child.store(child, Ordering::Release);
     }
 
@@ -143,7 +226,7 @@ impl ProbNode {
     pub fn add_neighbor(
         &self,
         neighbor_id: InternalId,
-        neighbor_node: SharedNode,
+        neighbor_node: SharedLatestNode,
         dist: MetricResult,
         cache: &HNSWIndexCache,
         dist_metric: DistanceMetric,
@@ -196,7 +279,7 @@ impl ProbNode {
                 // Successful update
                 unsafe {
                     if let Some((_, node, _)) = old_ptr.as_ref() {
-                        (**node)
+                        (**(**node).latest())
                             .try_get_data(cache)
                             .unwrap()
                             .remove_neighbor_by_id(self.get_id());
@@ -275,89 +358,127 @@ impl ProbNode {
 
     /// See [`crate::models::serializer::hnsw::node`] for how its calculated
     pub fn get_serialized_size(neighbors_len: usize) -> usize {
-        neighbors_len * 17 + 48
+        neighbors_len * 13 + 31
     }
 
     pub fn build_from_raw(
         raw: <Self as RawDeserialize>::Raw,
         cache: &HNSWIndexCache,
         pending_items: &mut FxHashMap<FileIndex, SharedNode>,
-    ) -> Self {
+        latest_version_links: &mut FxHashMap<FileOffset, SharedLatestNode>,
+        latest_version_links_cursor: u64,
+    ) -> Result<Self, BufIoError> {
         let (
             hnsw_level,
             version,
             prop_value,
             prop_metadata,
             neighbors,
-            parent_file_index,
-            child_file_index,
-            root_file_index,
-            root_tag,
+            parent_offset,
+            child_offset,
         ) = raw;
 
-        let parent = if let Some(file_index) = parent_file_index {
-            cache
-                .registry
-                .get(&HNSWIndexCache::combine_index(&file_index))
-                .unwrap_or_else(|| {
-                    *pending_items
-                        .entry(file_index)
-                        .or_insert_with(|| ProbLazyItem::new_pending(file_index))
-                })
+        let parent = if parent_offset.0 != u32::MAX {
+            match latest_version_links.entry(parent_offset) {
+                Entry::Occupied(entry) => *entry.get(),
+                Entry::Vacant(entry) => {
+                    let file_index = SharedLatestNode::deserialize_raw(
+                        &cache.latest_version_links_bufman, // not used
+                        &cache.latest_version_links_bufman,
+                        u64::MAX, // not used
+                        latest_version_links_cursor,
+                        parent_offset,
+                        IndexFileId::invalid(),
+                        cache,
+                    )?;
+                    let item = cache
+                        .registry
+                        .get(&HNSWIndexCache::combine_index(&file_index))
+                        .unwrap_or_else(|| {
+                            *pending_items
+                                .entry(file_index)
+                                .or_insert_with(|| ProbLazyItem::new_pending(file_index))
+                        });
+                    let ptr = LatestNode::new(item, parent_offset);
+                    entry.insert(ptr);
+                    ptr
+                }
+            }
         } else {
             ptr::null_mut()
         };
 
-        let child = if let Some(file_index) = child_file_index {
-            cache
-                .registry
-                .get(&HNSWIndexCache::combine_index(&file_index))
-                .unwrap_or_else(|| {
-                    *pending_items
-                        .entry(file_index)
-                        .or_insert_with(|| ProbLazyItem::new_pending(file_index))
-                })
+        let child = if child_offset.0 != u32::MAX {
+            match latest_version_links.entry(child_offset) {
+                Entry::Occupied(entry) => *entry.get(),
+                Entry::Vacant(entry) => {
+                    let file_index = SharedLatestNode::deserialize_raw(
+                        &cache.latest_version_links_bufman, // not used
+                        &cache.latest_version_links_bufman,
+                        u64::MAX, // not used
+                        latest_version_links_cursor,
+                        child_offset,
+                        IndexFileId::invalid(),
+                        cache,
+                    )?;
+                    let item = cache
+                        .registry
+                        .get(&HNSWIndexCache::combine_index(&file_index))
+                        .unwrap_or_else(|| {
+                            *pending_items
+                                .entry(file_index)
+                                .or_insert_with(|| ProbLazyItem::new_pending(file_index))
+                        });
+                    let ptr = LatestNode::new(item, child_offset);
+                    entry.insert(ptr);
+                    ptr
+                }
+            }
         } else {
             ptr::null_mut()
         };
 
-        let root_version = if let Some(file_index) = root_file_index {
-            cache
-                .registry
-                .get(&HNSWIndexCache::combine_index(&file_index))
-                .unwrap_or_else(|| {
-                    *pending_items
-                        .entry(file_index)
-                        .or_insert_with(|| ProbLazyItem::new_pending(file_index))
-                })
-        } else {
-            ptr::null_mut()
-        };
-
-        let neighbors: Neighbors = neighbors
+        let neighbors = neighbors
             .into_iter()
             .map(|neighbor| {
-                let ptr = if let Some((id, file_index, score)) = neighbor {
+                let ptr = if let Some((id, neighbor_offset, score)) = neighbor {
                     Box::into_raw(Box::new((
                         id,
-                        cache
-                            .registry
-                            .get(&HNSWIndexCache::combine_index(&file_index))
-                            .unwrap_or_else(|| {
-                                *pending_items
-                                    .entry(file_index)
-                                    .or_insert_with(|| ProbLazyItem::new_pending(file_index))
-                            }),
+                        match latest_version_links.entry(neighbor_offset) {
+                            Entry::Occupied(entry) => *entry.get(),
+                            Entry::Vacant(entry) => {
+                                let file_index = SharedLatestNode::deserialize_raw(
+                                    &cache.latest_version_links_bufman, // not used
+                                    &cache.latest_version_links_bufman,
+                                    u64::MAX, // not used
+                                    latest_version_links_cursor,
+                                    neighbor_offset,
+                                    IndexFileId::invalid(),
+                                    cache,
+                                )?;
+                                let item = cache
+                                    .registry
+                                    .get(&HNSWIndexCache::combine_index(&file_index))
+                                    .unwrap_or_else(|| {
+                                        *pending_items.entry(file_index).or_insert_with(|| {
+                                            ProbLazyItem::new_pending(file_index)
+                                        })
+                                    });
+                                let ptr = LatestNode::new(item, neighbor_offset);
+                                entry.insert(ptr);
+                                ptr
+                            }
+                        },
                         score,
                     )))
                 } else {
                     ptr::null_mut()
                 };
-                AtomicPtr::new(ptr)
+                Ok::<_, BufIoError>(AtomicPtr::new(ptr))
             })
-            .collect();
+            .collect::<Result<Neighbors, _>>()?;
 
-        Self::new_with_neighbors_and_versions_and_root_version(
+        Ok(Self::new_with_neighbors_and_versions(
             hnsw_level,
             version,
             prop_value,
@@ -365,10 +486,8 @@ impl ProbNode {
             neighbors,
             parent,
             child,
-            root_version,
-            root_tag,
             *cache.distance_metric.read().unwrap(),
-        )
+        ))
     }
 }
 

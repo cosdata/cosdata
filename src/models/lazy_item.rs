@@ -6,7 +6,6 @@ use std::{
     sync::atomic::{AtomicPtr, Ordering},
 };
 
-use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -112,61 +111,6 @@ impl ProbLazyItem<ProbNode> {
             }
             (*(cache.get_object(self.file_index)?)).try_get_data(cache)
         }
-    }
-
-    #[allow(clippy::type_complexity)]
-    pub fn get_absolute_latest_version<'a>(
-        this: *mut Self,
-        cache: &HNSWIndexCache,
-    ) -> Result<(*mut Self, RwLockReadGuard<'a, (*mut Self, bool)>), BufIoError> {
-        let self_ = unsafe { &*this };
-        let guard = self_.try_get_data(cache)?.root_version.read();
-        let (root, is_root) = *guard;
-        if root.is_null() {
-            return Ok((this, guard));
-        }
-        if !is_root {
-            return Ok((root, guard));
-        }
-        drop(guard);
-        let root_ref = unsafe { &*root };
-        let guard = root_ref.try_get_data(cache)?.root_version.read();
-
-        Ok((guard.0, guard))
-    }
-
-    #[allow(clippy::type_complexity)]
-    pub fn get_absolute_latest_version_write_access<'a>(
-        this: *mut Self,
-        cache: &HNSWIndexCache,
-    ) -> Result<(*mut Self, RwLockWriteGuard<'a, (*mut Self, bool)>), BufIoError> {
-        let self_ = unsafe { &*this };
-        let guard = self_.try_get_data(cache)?.root_version.write();
-        let (root, is_root) = *guard;
-        if root.is_null() {
-            return Ok((this, guard));
-        }
-        if !is_root {
-            return Ok((root, guard));
-        }
-        drop(guard);
-        let root_ref = unsafe { &*root };
-        let guard = root_ref.try_get_data(cache)?.root_version.write();
-
-        Ok((guard.0, guard))
-    }
-
-    pub fn get_root_version(
-        this: *mut Self,
-        cache: &HNSWIndexCache,
-    ) -> Result<*mut Self, BufIoError> {
-        let self_ = unsafe { &*this };
-        let (root, is_root) = *self_.try_get_data(cache)?.root_version.read();
-        Ok(if root.is_null() || !is_root {
-            this
-        } else {
-            root
-        })
     }
 }
 

@@ -52,7 +52,7 @@ pub(crate) async fn upsert_vectors(
     update_current_version(&collection.lmdb, version)
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
 
-    IndexingManager::index_version(&collection, &ctx.config, version)
+    IndexingManager::index_version(&collection, &ctx.config, &ctx.threadpool, version)
         .map_err(|err| TransactionError::FailedToCreateVector(err.to_string()))?;
 
     Ok(())
@@ -99,7 +99,7 @@ pub(crate) async fn delete_vector_by_id(
     update_current_version(&collection.lmdb, version)
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
 
-    IndexingManager::index_version(&collection, &ctx.config, version)
+    IndexingManager::index_version(&collection, &ctx.config, &ctx.threadpool, version)
         .map_err(|err| TransactionError::FailedToCreateVector(err.to_string()))?;
 
     Ok(())

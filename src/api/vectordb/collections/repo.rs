@@ -61,7 +61,7 @@ pub(crate) async fn create_collection(
         lmdb,
         hash,
         vcs,
-        ctx.config.clone(),
+        &ctx,
     )
     .map_err(CollectionsError::WaCustomError)?;
 

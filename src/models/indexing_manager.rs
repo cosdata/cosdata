@@ -11,7 +11,11 @@ use super::{
 };
 use crate::config_loader::{Config, VectorsIndexingMode};
 use chrono::Utc;
-use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+use parking_lot::RwLock;
+use rayon::{
+    iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator},
+    ThreadPool,
+};
 use std::{
     fs,
     sync::{
@@ -27,12 +31,18 @@ pub struct IndexingManager {
 }
 
 impl IndexingManager {
-    pub fn new(collection: Arc<Collection>, config: Config) -> Self {
-        let (sender, receiver) = mpsc::channel();
+    pub fn new(
+        collection: Arc<Collection>,
+        config: Arc<Config>,
+        threadpool: Arc<ThreadPool>,
+    ) -> Self {
+        let (sender, receiver) = mpsc::channel::<VersionNumber>();
 
         let thread = thread::spawn(move || {
             for version_hash in receiver {
-                Self::index_version(&collection, &config, version_hash)?;
+                println!("processing version: {}", *version_hash);
+                Self::index_version(&collection, &config, &threadpool, version_hash).unwrap();
+                println!("processed version: {}", *version_hash);
             }
             Ok(())
         });
@@ -50,6 +60,7 @@ impl IndexingManager {
     pub fn index_version(
         collection: &Collection,
         config: &Config,
+        threadpool: &ThreadPool,
         version: VersionNumber,
     ) -> Result<(), WaCustomError> {
         let txn = BackgroundCollectionTransaction::from_version_id_and_number(collection, version);
@@ -71,12 +82,12 @@ impl IndexingManager {
             last_updated: start,
         };
         let records_indexed = AtomicU32::new(0);
-        thread::scope(|s| {
-            let mut handles = Vec::new();
+        let errors = RwLock::new(Vec::new());
+        threadpool.scope(|s| {
             while let Some(op) = wal.read()? {
-                match op {
-                    VectorOp::Upsert(embeddings) => {
-                        let handle = s.spawn(|| {
+                s.spawn(|_| {
+                    let fallible = || match op {
+                        VectorOp::Upsert(embeddings) => {
                             let len = embeddings.len() as u32;
                             match config.indexing.mode {
                                 VectorsIndexingMode::Sequential => {
@@ -113,18 +124,23 @@ impl IndexingManager {
                                 },
                                 last_updated: now,
                             };
+
                             Ok::<_, WaCustomError>(())
-                        });
-                        handles.push(handle);
+                        }
+                        VectorOp::Delete(_vector_id) => unimplemented!(),
+                    };
+
+                    if let Err(err) = fallible() {
+                        errors.write().push(err);
                     }
-                    VectorOp::Delete(_vector_id) => unimplemented!(),
-                }
-            }
-            for handle in handles {
-                handle.join().unwrap()?;
+                });
             }
             Ok::<_, WaCustomError>(())
         })?;
+        let errors = errors.into_inner();
+        if let Some(err) = errors.into_iter().next() {
+            return Err(err);
+        }
         let end = Utc::now();
         let delta = end - start;
         let delta_seconds = (delta.num_seconds() as u32).max(1);

@@ -10,6 +10,7 @@ use super::tree_map::{TreeMap, TreeMapVec};
 use super::types::{get_collections_path, DocumentId, InternalId, MetaDb, VectorId};
 use super::versioning::{VersionControl, VersionNumber};
 use super::wal::VectorOp;
+use crate::app_context::AppContext;
 use crate::config_loader::Config;
 use crate::indexes::hnsw::{DenseInputEmbedding, HNSWIndex};
 use crate::indexes::inverted::types::SparsePair;
@@ -131,7 +132,7 @@ impl Collection {
         lmdb: MetaDb,
         current_version: VersionNumber,
         vcs: VersionControl,
-        config: Config,
+        ctx: &AppContext,
     ) -> Result<Arc<Self>, WaCustomError> {
         if name.is_empty() {
             return Err(WaCustomError::InvalidParams);
@@ -189,8 +190,11 @@ impl Collection {
             indexing_manager: RwLock::new(None),
         });
 
-        *collection.indexing_manager.write() =
-            Some(IndexingManager::new(collection.clone(), config));
+        *collection.indexing_manager.write() = Some(IndexingManager::new(
+            collection.clone(),
+            ctx.config.clone(),
+            ctx.threadpool.clone(),
+        ));
 
         let collection_path = collection.get_path();
         fs::create_dir_all(&collection_path).map_err(|e| WaCustomError::FsError(e.to_string()))?;

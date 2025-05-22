@@ -79,7 +79,7 @@ crate::cfg_grpc! {
                 lmdb,
                 hash,
                 vcs,
-                self.context.config.clone(),
+                &self.context,
             )
             .map_err(Status::from)?;
 

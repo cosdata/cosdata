@@ -37,9 +37,11 @@ use crate::{
     },
     metadata::{schema::MetadataDimensions, QueryFilterDimensions, HIGH_WEIGHT},
     models::{
+        buffered_io::BufferManager,
         common::*,
         lazy_item::{FileIndex, ProbLazyItem},
         meta_persist::retrieve_values_range,
+        prob_node::{LatestNode, SharedLatestNode},
         serializer::hnsw::RawDeserialize,
     },
     quantization::{
@@ -51,6 +53,7 @@ use crate::{
 use crossbeam::channel;
 use dashmap::DashMap;
 use lmdb::{Cursor, Database, DatabaseFlags, Environment, Transaction, WriteFlags};
+use rayon::ThreadPool;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher24;
@@ -526,7 +529,11 @@ impl CollectionsMap {
     }
 
     /// Loads collections map from lmdb
-    fn load(env: Arc<Environment>, config: &Config) -> Result<Self, WaCustomError> {
+    fn load(
+        env: Arc<Environment>,
+        config: Arc<Config>,
+        threadpool: Arc<ThreadPool>,
+    ) -> Result<Self, WaCustomError> {
         let collections_map =
             Self::new(env.clone()).map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
@@ -547,7 +554,7 @@ impl CollectionsMap {
                     .load_hnsw_index(
                         &collection_meta,
                         &lmdb,
-                        config,
+                        &config,
                         collection_meta
                             .metadata_schema
                             .as_ref()
@@ -562,7 +569,7 @@ impl CollectionsMap {
             // if collection has inverted index load it from the lmdb
             let inverted_index = if collection_meta.sparse_vector.enabled {
                 collections_map
-                    .load_inverted_index(&collection_meta, &lmdb, config)?
+                    .load_inverted_index(&collection_meta, &lmdb, &config)?
                     .map(Arc::new)
             } else {
                 None
@@ -570,7 +577,7 @@ impl CollectionsMap {
 
             let tf_idf_index = if collection_meta.tf_idf_options.enabled {
                 collections_map
-                    .load_tf_idf_index(&collection_meta, &lmdb, config)?
+                    .load_tf_idf_index(&collection_meta, &lmdb, &config)?
                     .map(Arc::new)
             } else {
                 None
@@ -634,8 +641,11 @@ impl CollectionsMap {
                 indexing_manager: parking_lot::RwLock::new(None),
             });
 
-            *collection.indexing_manager.write() =
-                Some(IndexingManager::new(collection.clone(), config.clone()));
+            *collection.indexing_manager.write() = Some(IndexingManager::new(
+                collection.clone(),
+                config.clone(),
+                threadpool.clone(),
+            ));
 
             let background_version = retrieve_background_version(&collection.lmdb)?;
 
@@ -703,13 +713,28 @@ impl CollectionsMap {
             }
         };
 
-        let index_manager = Arc::new(BufferManagerFactory::new(
+        let index_manager = BufferManagerFactory::new(
             index_path.clone().into(),
             |root, ver: &IndexFileId| root.join(format!("{}.index", **ver)),
             8192,
-        ));
+        );
+
+        let latest_version_links_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(index_path.join("latest.version"))
+            .map_err(BufIoError::Io)?;
+        let latest_version_links_bufman =
+            BufferManager::new(latest_version_links_file, 8192).map_err(BufIoError::Io)?;
         let distance_metric = Arc::new(RwLock::new(hnsw_index_data.distance_metric));
-        let cache = HNSWIndexCache::new(index_manager.clone(), prop_file, distance_metric.clone());
+        let cache = HNSWIndexCache::new(
+            index_manager,
+            latest_version_links_bufman,
+            prop_file,
+            distance_metric.clone(),
+        );
 
         let values_range_result = retrieve_values_range(lmdb);
         let values_range = match values_range_result {
@@ -745,6 +770,7 @@ impl CollectionsMap {
         let offset_counter = HNSWIndexFileOffsetCounter::from_offset_and_file_id(
             offset,
             file_id,
+            cache.latest_version_links_bufman.file_size() as u32,
             config.index_file_min_size,
             hnsw_index_data.hnsw_params.level_0_neighbors_count,
             hnsw_index_data.hnsw_params.neighbors_count,
@@ -752,19 +778,43 @@ impl CollectionsMap {
 
         let start = Instant::now();
         let mut pending_items = FxHashMap::default();
+        let mut latest_version_links = FxHashMap::default();
 
-        let file_index = hnsw_index_data.file_index;
-        let bufman = index_manager.get(file_index.file_id)?;
+        let root_ptr_offset = hnsw_index_data.root_vec_ptr_offset;
+        let latest_version_links_cursor = cache.latest_version_links_bufman.open_cursor()?;
+        let root_file_index = SharedLatestNode::deserialize_raw(
+            &cache.latest_version_links_bufman, // not used
+            &cache.latest_version_links_bufman,
+            u64::MAX, // not used
+            latest_version_links_cursor,
+            root_ptr_offset,
+            IndexFileId::invalid(),
+            &cache,
+        )?;
+        let bufman = cache.bufmans.get(root_file_index.file_id)?;
         let cursor = bufman.open_cursor()?;
         let root_node_raw = ProbNode::deserialize_raw(
             &bufman,
+            &cache.latest_version_links_bufman,
             cursor,
-            file_index.offset,
-            file_index.file_id,
+            latest_version_links_cursor,
+            root_file_index.offset,
+            root_file_index.file_id,
             &cache,
         )?;
-        let root_node = ProbNode::build_from_raw(root_node_raw, &cache, &mut pending_items);
-        let root = ProbLazyItem::new(root_node, file_index.file_id, file_index.offset);
+        let root_node = ProbNode::build_from_raw(
+            root_node_raw,
+            &cache,
+            &mut pending_items,
+            &mut latest_version_links,
+            latest_version_links_cursor,
+        )?;
+        let root = ProbLazyItem::new(root_node, root_file_index.file_id, root_file_index.offset);
+        cache
+            .registry
+            .insert(HNSWIndexCache::combine_index(&root_file_index), root);
+        let root_ptr = LatestNode::new(root, root_ptr_offset);
+        latest_version_links.insert(root_ptr_offset, root_ptr);
         bufman.close_cursor(cursor)?;
 
         let (file_index_sender, file_index_receiver) = channel::unbounded::<FileIndex>();
@@ -774,31 +824,42 @@ impl CollectionsMap {
         thread::scope(|s| {
             let mut handles = Vec::new();
             let file_index_receiver = Arc::new(file_index_receiver);
-            let index_manager = &index_manager;
             let cache = &cache;
             for _ in 0..8 {
                 let file_index_receiver = file_index_receiver.clone();
                 let cursors = (0..=offset_counter.file_id)
-                    .map(|file_id| index_manager.get(IndexFileId::from(file_id))?.open_cursor())
+                    .map(|file_id| cache.bufmans.get(IndexFileId::from(file_id))?.open_cursor())
                     .collect::<Result<Vec<_>, _>>()?;
+                let latest_version_links_cursor =
+                    cache.latest_version_links_bufman.open_cursor()?;
                 let raw_node_sender = raw_node_sender.clone();
                 let handle = s.spawn(move || {
                     for file_index in &*file_index_receiver {
-                        let bufman = index_manager.get(file_index.file_id)?;
+                        let bufman = cache.bufmans.get(file_index.file_id).unwrap();
                         let node = ProbNode::deserialize_raw(
                             &bufman,
+                            &cache.latest_version_links_bufman,
                             cursors[*file_index.file_id as usize],
+                            latest_version_links_cursor,
                             file_index.offset,
                             file_index.file_id,
                             cache,
-                        )?;
+                        )
+                        .expect(&format!(
+                            "failed to load node at file index: {:?}",
+                            file_index
+                        ));
                         raw_node_sender.send((node, file_index)).unwrap();
                     }
 
                     for (file_id, cursor) in cursors.into_iter().enumerate() {
                         let file_id = IndexFileId::from(file_id as u32);
-                        index_manager.get(file_id)?.close_cursor(cursor)?;
+                        cache.bufmans.get(file_id)?.close_cursor(cursor)?;
                     }
+
+                    cache
+                        .latest_version_links_bufman
+                        .close_cursor(latest_version_links_cursor)?;
 
                     Ok::<_, WaCustomError>(())
                 });
@@ -815,7 +876,13 @@ impl CollectionsMap {
                 for _ in 0..len {
                     let (raw, file_index) = raw_node_receiver.recv().unwrap();
 
-                    let node = ProbNode::build_from_raw(raw, cache, &mut pending_items);
+                    let node = ProbNode::build_from_raw(
+                        raw,
+                        cache,
+                        &mut pending_items,
+                        &mut latest_version_links,
+                        latest_version_links_cursor,
+                    )?;
                     let lazy_item = pending_items.remove(&file_index).unwrap();
                     let lazy_item_ref = unsafe { &*lazy_item };
                     lazy_item_ref.set_data(node);
@@ -835,9 +902,12 @@ impl CollectionsMap {
         })?;
 
         println!("Dense index loaded in {:?}", start.elapsed());
+        cache
+            .latest_version_links_bufman
+            .close_cursor(latest_version_links_cursor)?;
 
         let hnsw_index = HNSWIndex::new(
-            root,
+            root_ptr,
             hnsw_index_data.levels_prob,
             hnsw_index_data.dim,
             hnsw_index_data.quantization_metric,
@@ -1238,7 +1308,11 @@ pub fn get_collections_path() -> PathBuf {
     get_data_path().join("collections")
 }
 
-pub fn get_app_env(config: &Config, args: CosdataArgs) -> Result<Arc<AppEnv>, WaCustomError> {
+pub fn get_app_env(
+    config: Arc<Config>,
+    threadpool: Arc<ThreadPool>,
+    args: CosdataArgs,
+) -> Result<Arc<AppEnv>, WaCustomError> {
     // Check both possible db path locations
     let db_path_1 = get_data_path().join("_mdb");
     let db_path_2 = get_data_path().join("data/_mdb");
@@ -1305,7 +1379,7 @@ pub fn get_app_env(config: &Config, args: CosdataArgs) -> Result<Arc<AppEnv>, Wa
         .map_err(|err| WaCustomError::DatabaseError(err.to_string()))?;
 
     // Add more resilient error handling for collections_map loading
-    let collections_map = match CollectionsMap::load(env_arc.clone(), config) {
+    let collections_map = match CollectionsMap::load(env_arc.clone(), config, threadpool) {
         Ok(map) => map,
         Err(_e) => {
             //println!("Warning: Failed to load collections map: {}", e);

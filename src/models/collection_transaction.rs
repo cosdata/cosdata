@@ -1,27 +1,20 @@
-use std::sync::Arc;
-
 use chrono::{DateTime, Utc};
 use serde::{ser::SerializeStruct, Deserialize, Serialize, Serializer};
 
 use crate::{config_loader::Config, indexes::IndexOps};
 
 use super::{
-    collection::Collection,
-    common::{TSHashTable, WaCustomError},
-    prob_node::SharedNode,
-    types::InternalId,
-    versioning::VersionNumber,
-    wal::WALFile,
+    collection::Collection, common::WaCustomError, meta_persist::retrieve_current_version,
+    versioning::VersionNumber, wal::WALFile,
 };
 
 pub struct BackgroundCollectionTransaction {
     pub version: VersionNumber,
-    pub lazy_item_versions_table: Arc<TSHashTable<(InternalId, VersionNumber, u8), SharedNode>>,
 }
 
 impl BackgroundCollectionTransaction {
     pub fn new(collection: &Collection) -> Result<Self, WaCustomError> {
-        let current_version_number = collection.vcs.get_current_version()?;
+        let current_version_number = retrieve_current_version(&collection.lmdb)?;
         let version_number = VersionNumber::from(*current_version_number + 1);
 
         Ok(Self::from_version_id_and_number(collection, version_number))
@@ -32,10 +25,7 @@ impl BackgroundCollectionTransaction {
             hnsw_index.offset_counter.write().unwrap().next_file_id();
         }
 
-        Self {
-            version,
-            lazy_item_versions_table: Arc::new(TSHashTable::new(16)),
-        }
+        Self { version }
     }
 
     pub fn pre_commit(self, collection: &Collection, config: &Config) -> Result<(), WaCustomError> {

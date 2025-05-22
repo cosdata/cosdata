@@ -6,7 +6,7 @@ use crate::indexes::inverted::InvertedIndex;
 use crate::indexes::tf_idf::TFIDFIndex;
 use crate::indexes::IndexOps;
 use crate::metadata::pseudo_level_probs;
-use crate::models::buffered_io::BufferManagerFactory;
+use crate::models::buffered_io::{BufIoError, BufferManager, BufferManagerFactory};
 use crate::models::cache_loader::HNSWIndexCache;
 use crate::models::collection::Collection;
 use crate::models::collection_transaction::BackgroundCollectionTransaction;
@@ -16,7 +16,7 @@ use crate::models::prob_node::ProbNode;
 use crate::models::types::*;
 use crate::quantization::StorageType;
 use crate::vector_store::*;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 
@@ -58,15 +58,29 @@ pub async fn init_hnsw_index_for_collection(
             .map_err(|e| WaCustomError::FsError(e.to_string()))?,
     );
 
-    let index_manager = Arc::new(BufferManagerFactory::new(
+    let index_manager = BufferManagerFactory::new(
         index_path.clone().into(),
         |root, ver: &IndexFileId| root.join(format!("{}.index", **ver)),
         ProbNode::get_serialized_size(hnsw_params.neighbors_count) * 1000,
-    ));
+    );
+    let latest_version_links_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(index_path.join("latest.version"))
+        .map_err(BufIoError::Io)?;
+    let latest_version_links_bufman =
+        BufferManager::new(latest_version_links_file, 8192).map_err(BufIoError::Io)?;
 
     let distance_metric = Arc::new(RwLock::new(distance_metric));
 
-    let cache = HNSWIndexCache::new(index_manager.clone(), prop_file, distance_metric.clone());
+    let cache = HNSWIndexCache::new(
+        index_manager,
+        latest_version_links_bufman,
+        prop_file,
+        distance_metric.clone(),
+    );
     if let Some(values_range) = values_range {
         store_values_range(&lmdb, values_range).map_err(|e| {
             WaCustomError::DatabaseError(format!("Failed to store values range to LMDB: {}", e))
@@ -86,14 +100,14 @@ pub async fn init_hnsw_index_for_collection(
         &cache.prop_file,
         *collection.current_version.read(),
         &offset_counter,
-        &index_manager,
+        &cache,
         values_range,
         &hnsw_params,
         *distance_metric.read().unwrap(),
         collection.meta.metadata_schema.as_ref(),
     )?;
 
-    index_manager.flush_all()?;
+    cache.flush_all()?;
     // ---------------------------
     // -- TODO level entry ratio
     // ---------------------------

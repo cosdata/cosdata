@@ -10,19 +10,22 @@ use rayon::ThreadPool;
 
 #[allow(unused)]
 pub struct AppContext {
-    pub config: Config,
-    pub threadpool: ThreadPool,
+    pub config: Arc<Config>,
+    pub threadpool: Arc<ThreadPool>,
     pub ain_env: Arc<AppEnv>,
     pub collection_cache_manager: Arc<CollectionCacheManager>,
 }
 
 impl AppContext {
     pub fn new(config: Config, args: CosdataArgs) -> Result<Self, WaCustomError> {
-        let ain_env = get_app_env(&config, args)?;
-        let threadpool = rayon::ThreadPoolBuilder::new()
-            .num_threads(config.thread_pool.pool_size)
-            .build()
-            .expect("Failed to build thread pool");
+        let config = Arc::new(config);
+        let threadpool = Arc::new(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(config.thread_pool.pool_size)
+                .build()
+                .expect("Failed to build thread pool"),
+        );
+        let ain_env = get_app_env(config.clone(), threadpool.clone(), args)?;
 
         let collections_path = get_data_path().join("collections");
         std::fs::create_dir_all(&collections_path)

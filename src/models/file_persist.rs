@@ -1,6 +1,7 @@
-use super::buffered_io::{BufIoError, BufferManagerFactory};
+use super::buffered_io::BufIoError;
+use super::cache_loader::HNSWIndexCache;
 use super::common::WaCustomError;
-use super::prob_node::SharedNode;
+use super::prob_node::{SharedLatestNode, SharedNode};
 use super::serializer::hnsw::HNSWIndexSerialize;
 use super::types::{
     BytesToRead, FileOffset, InternalId, Metadata, NodePropMetadata, NodePropValue,
@@ -12,14 +13,44 @@ use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::sync::Arc;
 
-pub fn write_node_to_file(
-    lazy_item: SharedNode,
-    bufmans: &BufferManagerFactory<IndexFileId>,
+pub fn write_lazy_item_latest_ptr_to_file(
+    cache: &HNSWIndexCache,
+    lazy_item_ptr: SharedLatestNode,
     file_id: IndexFileId,
 ) -> Result<u32, BufIoError> {
-    let bufman = bufmans.get(file_id)?;
+    let bufman = cache.bufmans.get(file_id)?;
     let cursor = bufman.open_cursor()?;
-    let offset = lazy_item.serialize(&bufman, cursor)?;
+    let latest_version_links_cursor = cache.latest_version_links_bufman.open_cursor()?;
+    let offset = lazy_item_ptr.serialize(
+        &bufman,
+        &cache.latest_version_links_bufman,
+        cursor,
+        latest_version_links_cursor,
+    )?;
+    cache
+        .latest_version_links_bufman
+        .close_cursor(latest_version_links_cursor)?;
+    bufman.close_cursor(cursor)?;
+    Ok(offset)
+}
+
+pub fn write_lazy_item_to_file(
+    cache: &HNSWIndexCache,
+    lazy_item: SharedNode,
+    file_id: IndexFileId,
+) -> Result<u32, BufIoError> {
+    let bufman = cache.bufmans.get(file_id)?;
+    let cursor = bufman.open_cursor()?;
+    let latest_version_links_cursor = cache.latest_version_links_bufman.open_cursor()?;
+    let offset = lazy_item.serialize(
+        &bufman,
+        &cache.latest_version_links_bufman,
+        cursor,
+        latest_version_links_cursor,
+    )?;
+    cache
+        .latest_version_links_bufman
+        .close_cursor(latest_version_links_cursor)?;
     bufman.close_cursor(cursor)?;
     Ok(offset)
 }
