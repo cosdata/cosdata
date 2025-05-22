@@ -56,7 +56,7 @@ datasets = {
         "description": "Cohere Wikipedia embeddings dataset (100k vectors)"
     },
     "million-text-embeddings": {
-        "id": "id",
+        "id": None,
         "embeddings": "embedding",
         "size": 1_000_000,
         "dimension": 768,
@@ -494,9 +494,9 @@ def process_parquet_files(
     
     # For quick test, use the first 10 vectors as test vectors
     if quick_test:
-        matches_test_vector_ids_set = set(result["query_id"] for result in brute_force_results[:10])
+        matches_test_vector_ids_set = set(str(result["query_id"]) for result in brute_force_results[:10])
     else:
-        matches_test_vector_ids_set = set(result["query_id"] for result in brute_force_results)
+        matches_test_vector_ids_set = set(str(result["query_id"]) for result in brute_force_results)
 
     def get_next_file_path(count):
         return os.path.join("datasets", dataset_name, f"test{count}.parquet")
