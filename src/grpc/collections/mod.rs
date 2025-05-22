@@ -56,7 +56,7 @@ crate::cfg_grpc! {
 
             let lmdb = MetaDb::from_env(env.clone(), &req.name)
                 .map_err(|e| Status::from(WaCustomError::from(e)))?;
-            let (vcs, hash) = VersionControl::new(env.clone(), lmdb.db.clone())
+            let (vcs, hash) = VersionControl::new(env.clone(), lmdb.db)
                 .map_err(|e| Status::from(WaCustomError::from(e)))?;
 
             // Convert metadata schema if present

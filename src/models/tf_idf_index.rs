@@ -16,11 +16,11 @@ use super::{
     buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
     cache_loader::TFIDFIndexCache,
     common::TSHashTable,
-    prob_lazy_load::lazy_item::ProbLazyItem,
+    lazy_item::ProbLazyItem,
     serializer::tf_idf::{TFIDFIndexSerialize, TF_IDF_INDEX_DATA_CHUNK_SIZE},
     types::FileOffset,
     utils::calculate_path,
-    versioning::VersionHash,
+    versioning::VersionNumber,
 };
 
 // Term quotient (upper 16 bits of the hash)
@@ -30,7 +30,7 @@ pub type QuotientMap = TSHashTable<TermQuotient, Arc<TermInfo>>;
 
 pub struct UnsafeVersionedVec<T> {
     pub serialized_at: RwLock<Option<FileOffset>>,
-    pub version: VersionHash,
+    pub version: VersionNumber,
     pub list: UnsafeCell<Vec<T>>,
     pub next: UnsafeCell<Option<Box<UnsafeVersionedVec<T>>>>,
 }
@@ -39,7 +39,7 @@ unsafe impl<T: Send> Send for UnsafeVersionedVec<T> {}
 unsafe impl<T: Sync> Sync for UnsafeVersionedVec<T> {}
 
 impl<T> UnsafeVersionedVec<T> {
-    pub fn new(version: VersionHash) -> UnsafeVersionedVec<T> {
+    pub fn new(version: VersionNumber) -> UnsafeVersionedVec<T> {
         Self {
             serialized_at: RwLock::new(None),
             version,
@@ -48,7 +48,7 @@ impl<T> UnsafeVersionedVec<T> {
         }
     }
 
-    pub fn push(&self, version: VersionHash, value: T) {
+    pub fn push(&self, version: VersionNumber, value: T) {
         if self.version == version {
             return unsafe { &mut *self.list.get() }.push(value);
         }
@@ -90,7 +90,7 @@ impl<T> UnsafeVersionedVec<T> {
 }
 
 impl UnsafeVersionedVec<(u32, f32)> {
-    pub fn push_sorted(&self, version: VersionHash, value: (u32, f32)) {
+    pub fn push_sorted(&self, version: VersionNumber, value: (u32, f32)) {
         if self.version == version {
             let list = unsafe { &mut *self.list.get() };
             let mut i = list.len();
@@ -163,7 +163,7 @@ pub struct TermInfo {
 
 impl TermInfo {
     #[allow(unused)]
-    pub fn new(sequence_idx: u16, version: VersionHash) -> Self {
+    pub fn new(sequence_idx: u16, version: VersionNumber) -> Self {
         Self {
             documents: UnsafeVersionedVec::new(version),
             sequence_idx,
@@ -352,7 +352,7 @@ impl TFIDFIndexNode {
         value: f32,
         document_id: u32,
         cache: &TFIDFIndexCache,
-        version: VersionHash,
+        version: VersionNumber,
     ) -> Result<(), BufIoError> {
         // Get node data
         let data = unsafe { &*self.data }.try_get_data(cache, self.dim_index)?;
@@ -433,7 +433,7 @@ impl TFIDFIndexRoot {
         hash_dim: u32,
         value: f32,
         document_id: u32,
-        version: VersionHash,
+        version: VersionNumber,
     ) -> Result<(), BufIoError> {
         // Split the hash dimension
         let storage_dim = hash_dim & (u16::MAX as u32);

@@ -23,12 +23,11 @@ use crate::models::common::*;
 use crate::models::dot_product::dot_product_f32;
 use crate::models::file_persist::*;
 use crate::models::fixedset::PerformantFixedSet;
-use crate::models::prob_lazy_load::lazy_item::FileIndex;
-use crate::models::prob_lazy_load::lazy_item::ProbLazyItem;
+use crate::models::lazy_item::{FileIndex, ProbLazyItem};
 use crate::models::prob_node::ProbNode;
 use crate::models::prob_node::SharedNode;
 use crate::models::types::*;
-use crate::models::versioning::VersionHash;
+use crate::models::versioning::VersionNumber;
 use crate::quantization::{Quantization, StorageType};
 use crate::storage::Storage;
 use rand::Rng;
@@ -46,7 +45,7 @@ pub fn create_root_node(
     storage_type: StorageType,
     dim: usize,
     prop_file: &RwLock<File>,
-    version_hash: VersionHash,
+    version: VersionNumber,
     offset_counter: &HNSWIndexFileOffsetCounter,
     index_manager: &BufferManagerFactory<IndexFileId>,
     values_range: (f32, f32),
@@ -95,7 +94,7 @@ pub fn create_root_node(
     let mut root = ProbLazyItem::new(
         ProbNode::new(
             HNSWLevel(0),
-            version_hash,
+            version,
             prop_value.clone(),
             prop_metadata.clone(),
             ptr::null_mut(),
@@ -113,7 +112,7 @@ pub fn create_root_node(
     for l in 1..=hnsw_params.num_layers {
         let current_node = ProbNode::new(
             HNSWLevel(l),
-            version_hash,
+            version,
             prop_value.clone(),
             prop_metadata.clone(),
             ptr::null_mut(),
@@ -602,7 +601,7 @@ pub fn index_embeddings(
             emb.prop_metadata,
             root_entry,
             highest_level,
-            transaction.id,
+            transaction.version,
             file_id,
             transaction.lazy_item_versions_table.clone(),
             &hnsw_params_guard,
@@ -624,9 +623,9 @@ pub fn index_embedding(
     prop_metadata: Option<Arc<NodePropMetadata>>,
     cur_entry: SharedNode,
     cur_level: HNSWLevel,
-    version_hash: VersionHash,
+    version: VersionNumber,
     file_id: IndexFileId,
-    lazy_item_versions_table: Arc<TSHashTable<(InternalId, VersionHash, u8), SharedNode>>,
+    lazy_item_versions_table: Arc<TSHashTable<(InternalId, VersionNumber, u8), SharedNode>>,
     hnsw_params: &HNSWHyperParams,
     max_level: u8,
     offset_counter: &HNSWIndexFileOffsetCounter,
@@ -694,7 +693,7 @@ pub fn index_embedding(
                     .try_get_data(&hnsw_index.cache)?
                     .get_child(),
                 HNSWLevel(cur_level.0 - 1),
-                version_hash,
+                version,
                 file_id,
                 lazy_item_versions_table.clone(),
                 hnsw_params,
@@ -720,7 +719,7 @@ pub fn index_embedding(
 
         // Create node and edges at max_level and below
         let lazy_node = create_node(
-            version_hash,
+            version,
             file_id,
             cur_level,
             prop_value.clone(),
@@ -752,7 +751,7 @@ pub fn index_embedding(
                     .try_get_data(&hnsw_index.cache)?
                     .get_child(),
                 HNSWLevel(cur_level.0 - 1),
-                version_hash,
+                version,
                 file_id,
                 lazy_item_versions_table.clone(),
                 hnsw_params,
@@ -767,7 +766,7 @@ pub fn index_embedding(
             lazy_node,
             node,
             z,
-            version_hash,
+            version,
             file_id,
             lazy_item_versions_table,
             if cur_level.0 == 0 {
@@ -786,7 +785,7 @@ pub fn index_embedding(
 
 #[allow(clippy::too_many_arguments)]
 fn create_node(
-    version_hash: VersionHash,
+    version: VersionNumber,
     file_id: IndexFileId,
     hnsw_level: HNSWLevel,
     prop_value: Arc<NodePropValue>,
@@ -799,7 +798,7 @@ fn create_node(
 ) -> SharedNode {
     let node = ProbNode::new(
         hnsw_level,
-        version_hash,
+        version,
         prop_value,
         prop_metadata,
         parent,
@@ -814,9 +813,9 @@ fn create_node(
 #[allow(clippy::too_many_arguments)]
 fn get_or_create_version(
     hnsw_index: &HNSWIndex,
-    lazy_item_versions_table: Arc<TSHashTable<(InternalId, VersionHash, u8), SharedNode>>,
+    lazy_item_versions_table: Arc<TSHashTable<(InternalId, VersionNumber, u8), SharedNode>>,
     root_version_item: SharedNode,
-    version_hash: VersionHash,
+    version: VersionNumber,
     file_id: IndexFileId,
     is_level_0: bool,
     offset_counter: &HNSWIndexFileOffsetCounter,
@@ -826,7 +825,7 @@ fn get_or_create_version(
     let root_node = root_version_item_ref.try_get_data(&hnsw_index.cache)?;
 
     lazy_item_versions_table.get_or_try_create_with_flag(
-        (root_node.get_id(), version_hash, root_node.hnsw_level.0),
+        (root_node.get_id(), version, root_node.hnsw_level.0),
         || {
             let (latest_version_item, mut guard) =
                 ProbLazyItem::get_absolute_latest_version_write_access(
@@ -835,13 +834,13 @@ fn get_or_create_version(
                 )?;
             let latest_version_item_ref = unsafe { &*latest_version_item };
             let latest_node = latest_version_item_ref.try_get_data(&hnsw_index.cache)?;
-            if latest_node.version == version_hash {
+            if latest_node.version == version {
                 return Ok(latest_version_item);
             }
 
             let new_node = ProbNode::new_with_neighbors_and_versions_and_root_version(
                 latest_node.hnsw_level,
-                version_hash,
+                version,
                 latest_node.prop_value.clone(),
                 latest_node.prop_metadata.clone(),
                 latest_node.clone_neighbors(),
@@ -894,9 +893,9 @@ fn create_node_edges(
     lazy_node: SharedNode,
     node: &ProbNode,
     neighbors: Vec<(SharedNode, MetricResult)>,
-    version_hash: VersionHash,
+    version: VersionNumber,
     file_id: IndexFileId,
-    lazy_item_versions_table: Arc<TSHashTable<(InternalId, VersionHash, u8), SharedNode>>,
+    lazy_item_versions_table: Arc<TSHashTable<(InternalId, VersionNumber, u8), SharedNode>>,
     max_edges: usize,
     is_level_0: bool,
     offset_counter: &HNSWIndexFileOffsetCounter,
@@ -905,7 +904,7 @@ fn create_node_edges(
     let mut successful_edges = 0;
     let mut neighbors_to_update = Vec::new();
 
-    lazy_item_versions_table.insert((node.get_id(), version_hash, node.hnsw_level.0), lazy_node);
+    lazy_item_versions_table.insert((node.get_id(), version, node.hnsw_level.0), lazy_node);
     hnsw_index.cache.insert_lazy_object(lazy_node);
 
     // First loop: Handle neighbor connections and collect updates
@@ -918,7 +917,7 @@ fn create_node_edges(
             hnsw_index,
             lazy_item_versions_table.clone(),
             neighbor,
-            version_hash,
+            version,
             file_id,
             is_level_0,
             offset_counter,

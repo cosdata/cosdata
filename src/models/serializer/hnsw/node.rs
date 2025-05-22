@@ -7,13 +7,13 @@ use crate::{
     models::{
         buffered_io::{BufIoError, BufferManager},
         cache_loader::HNSWIndexCache,
-        prob_lazy_load::lazy_item::FileIndex,
+        lazy_item::FileIndex,
         prob_node::{Neighbors, ProbNode, SharedNode},
         types::{
             BytesToRead, FileOffset, HNSWLevel, InternalId, MetricResult, NodePropMetadata,
             NodePropValue,
         },
-        versioning::VersionHash,
+        versioning::VersionNumber,
     },
 };
 
@@ -22,9 +22,9 @@ use super::{HNSWIndexSerialize, RawDeserialize};
 // @SERIALIZED_SIZE:
 //   Properties:
 //     1 byte for HNSW level +                           | 1
-//     8 bytes for version +                             | 9
-//     8 bytes for prop offset & length +                | 17
-//     8 bytes for prop metadata offset & length         | 17 + 8 = 25
+//     4 bytes for version +                             | 5
+//     8 bytes for prop offset & length +                | 13
+//     8 bytes for prop metadata offset & length         | 21
 //
 //   Links:
 //     8 bytes for parent offset & file id +            | 8
@@ -34,14 +34,14 @@ use super::{HNSWIndexSerialize, RawDeserialize};
 //     2 bytes for neighbors length +                   | 27
 //     neighbors length * 17 bytes for neighbor link +  | nb * 17 + 27
 //
-//   Total = nb * 17 + 52 (where `nb` is the neighbors count)
+//   Total = nb * 17 + 48 (where `nb` is the neighbors count)
 impl HNSWIndexSerialize for ProbNode {
     fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
         let start_offset = bufman.cursor_position(cursor)?;
 
         let neighbors = self.get_neighbors_raw();
 
-        let mut buf = Vec::with_capacity(50);
+        let mut buf = Vec::with_capacity(46);
 
         // Serialize basic fields
         buf.push(self.hnsw_level.0);
@@ -102,7 +102,7 @@ impl HNSWIndexSerialize for ProbNode {
         #[cfg(debug_assertions)]
         {
             let current = bufman.cursor_position(cursor)?;
-            assert_eq!(current, start_offset + 50);
+            assert_eq!(current, start_offset + 46);
         }
 
         {
@@ -125,7 +125,7 @@ impl HNSWIndexSerialize for ProbNode {
         bufman.seek_with_cursor(cursor, offset as u64)?;
         // Read basic fields
         let hnsw_level = HNSWLevel(bufman.read_u8_with_cursor(cursor)?);
-        let version = VersionHash::from(bufman.read_u64_with_cursor(cursor)?);
+        let version = VersionNumber::from(bufman.read_u32_with_cursor(cursor)?);
         // Read prop_value
         let prop_offset = FileOffset(bufman.read_u32_with_cursor(cursor)?);
         let prop_length = BytesToRead(bufman.read_u32_with_cursor(cursor)?);
@@ -187,8 +187,8 @@ impl HNSWIndexSerialize for ProbNode {
         };
 
         let neighbors_file_index = FileIndex {
-            // @NOTE: 50 = 25 (properties) + 8 (parent) + 8 (child) + 9 (root)
-            offset: FileOffset(offset + 50),
+            // @NOTE: 46 = 21 (properties) + 8 (parent) + 8 (child) + 9 (root)
+            offset: FileOffset(offset + 46),
             file_id: file_index.file_id,
         };
 
@@ -213,7 +213,7 @@ impl HNSWIndexSerialize for ProbNode {
 impl RawDeserialize for ProbNode {
     type Raw = (
         HNSWLevel,
-        VersionHash,
+        VersionNumber,
         Arc<NodePropValue>,
         Option<Arc<NodePropMetadata>>,
         Vec<Option<(InternalId, FileIndex, MetricResult)>>,
@@ -233,7 +233,7 @@ impl RawDeserialize for ProbNode {
         bufman.seek_with_cursor(cursor, offset as u64)?;
         // Read basic fields
         let hnsw_level = HNSWLevel(bufman.read_u8_with_cursor(cursor)?);
-        let version = VersionHash::from(bufman.read_u64_with_cursor(cursor)?);
+        let version = VersionNumber::from(bufman.read_u32_with_cursor(cursor)?);
         // Read prop_value
         let prop_offset = FileOffset(bufman.read_u32_with_cursor(cursor)?);
         let prop_length = BytesToRead(bufman.read_u32_with_cursor(cursor)?);
@@ -279,8 +279,8 @@ impl RawDeserialize for ProbNode {
         let neighbors = Neighbors::deserialize_raw(
             bufman,
             cursor,
-            // @NOTE: 50 = 25 (properties) + 8 (parent) + 8 (child) + 9 (root)
-            FileOffset(offset + 50),
+            // @NOTE: 46 = 21 (properties) + 8 (parent) + 8 (child) + 9 (root)
+            FileOffset(offset + 46),
             file_id,
             cache,
         )?;

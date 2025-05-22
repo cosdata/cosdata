@@ -38,8 +38,8 @@ use crate::{
     metadata::{schema::MetadataDimensions, QueryFilterDimensions, HIGH_WEIGHT},
     models::{
         common::*,
+        lazy_item::{FileIndex, ProbLazyItem},
         meta_persist::retrieve_values_range,
-        prob_lazy_load::lazy_item::{FileIndex, ProbLazyItem},
         serializer::hnsw::RawDeserialize,
     },
     quantization::{
@@ -486,12 +486,12 @@ impl fmt::Display for VectorId {
 #[derive(Debug, Clone)]
 pub struct MetaDb {
     pub env: Arc<Environment>,
-    pub db: Arc<Database>,
+    pub db: Database,
 }
 
 impl MetaDb {
     pub fn from_env(env: Arc<Environment>, collection_name: &str) -> lmdb::Result<Self> {
-        let db = Arc::new(env.create_db(Some(collection_name), DatabaseFlags::empty())?);
+        let db = env.create_db(Some(collection_name), DatabaseFlags::empty())?;
 
         Ok(Self { env, db })
     }
@@ -539,7 +539,7 @@ impl CollectionsMap {
         for collection_meta in collections {
             let lmdb = MetaDb::from_env(collections_map.lmdb_env.clone(), &collection_meta.name)?;
             let current_version = retrieve_current_version(&lmdb)?;
-            let vcs = VersionControl::from_existing(lmdb.env.clone(), lmdb.db.clone());
+            let vcs = VersionControl::from_existing(lmdb.env.clone(), lmdb.db);
 
             // if collection has dense index load it from the lmdb
             let hnsw_index = if collection_meta.dense_vector.enabled {
@@ -640,14 +640,14 @@ impl CollectionsMap {
             let background_version = retrieve_background_version(&collection.lmdb)?;
 
             if background_version != current_version {
-                let all_versions = collection.vcs.get_branch_versions("main")?;
+                let all_versions = collection.vcs.get_versions()?;
                 let mut index = false;
-                for (hash, _) in all_versions {
-                    if hash == background_version {
+                for version_info in all_versions {
+                    if version_info.version == background_version {
                         index = true;
                     }
                     if index {
-                        collection.trigger_indexing(hash);
+                        collection.trigger_indexing(version_info.version);
                     }
                 }
             }

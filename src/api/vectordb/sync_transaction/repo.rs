@@ -29,7 +29,7 @@ pub(crate) async fn upsert_vectors(
 
     let mut current_version = collection.current_version.write();
 
-    let transaction = CollectionTransaction::new(&collection, true)
+    let transaction = CollectionTransaction::new(&collection)
         .map_err(|err| TransactionError::FailedToCreateTransaction(err.to_string()))?;
 
     transaction
@@ -39,21 +39,20 @@ pub(crate) async fn upsert_vectors(
         ))
         .map_err(|err| TransactionError::FailedToCreateVector(err.to_string()))?;
 
-    let version_number = transaction.version_number;
-    let transaction_id = transaction.id;
+    let version = transaction.version;
 
     transaction
         .pre_commit()
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
-    *current_version = transaction_id;
+    *current_version = version;
     collection
         .vcs
-        .set_branch_version("main", version_number, transaction_id)
+        .set_current_version(version, true)
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
-    update_current_version(&collection.lmdb, transaction_id)
+    update_current_version(&collection.lmdb, version)
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
 
-    IndexingManager::index_version(&collection, &ctx.config, transaction_id)
+    IndexingManager::index_version(&collection, &ctx.config, version)
         .map_err(|err| TransactionError::FailedToCreateVector(err.to_string()))?;
 
     Ok(())
@@ -79,7 +78,7 @@ pub(crate) async fn delete_vector_by_id(
 
     let mut current_version = collection.current_version.write();
 
-    let transaction = CollectionTransaction::new(&collection, true)
+    let transaction = CollectionTransaction::new(&collection)
         .map_err(|err| TransactionError::FailedToCreateTransaction(err.to_string()))?;
 
     transaction
@@ -87,21 +86,20 @@ pub(crate) async fn delete_vector_by_id(
         .append(VectorOp::Delete(vector_id))
         .map_err(|err| TransactionError::FailedToCreateVector(err.to_string()))?;
 
-    let version_number = transaction.version_number;
-    let transaction_id = transaction.id;
+    let version = transaction.version;
 
     transaction
         .pre_commit()
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
-    *current_version = transaction_id;
+    *current_version = version;
     collection
         .vcs
-        .set_branch_version("main", version_number, transaction_id)
+        .set_current_version(version, true)
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
-    update_current_version(&collection.lmdb, transaction_id)
+    update_current_version(&collection.lmdb, version)
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
 
-    IndexingManager::index_version(&collection, &ctx.config, transaction_id)
+    IndexingManager::index_version(&collection, &ctx.config, version)
         .map_err(|err| TransactionError::FailedToCreateVector(err.to_string()))?;
 
     Ok(())

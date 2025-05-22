@@ -10,7 +10,7 @@ use crate::{
     models::{
         buffered_io::{BufIoError, BufferManager},
         cache_loader::HNSWIndexCache,
-        prob_lazy_load::lazy_item::FileIndex,
+        lazy_item::FileIndex,
         prob_node::{Neighbors, SharedNode},
         serializer::SimpleSerialize,
         types::{FileOffset, InternalId, MetricResult},

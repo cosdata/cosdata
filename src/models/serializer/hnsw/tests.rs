@@ -6,10 +6,10 @@ use crate::{
         buffered_io::{BufferManager, BufferManagerFactory},
         cache_loader::HNSWIndexCache,
         file_persist::write_prop_value_to_file,
-        prob_lazy_load::lazy_item::{FileIndex, ProbLazyItem},
+        lazy_item::{FileIndex, ProbLazyItem},
         prob_node::{ProbNode, SharedNode},
         types::{DistanceMetric, FileOffset, HNSWLevel, InternalId, MetricResult, NodePropValue},
-        versioning::VersionHash,
+        versioning::VersionNumber,
     },
     storage::Storage,
 };
@@ -116,7 +116,7 @@ fn get_cache(
     ))
 }
 
-fn create_prob_node(id: u32, version: VersionHash, prop_file: &RwLock<File>) -> ProbNode {
+fn create_prob_node(id: u32, version: VersionNumber, prop_file: &RwLock<File>) -> ProbNode {
     let id = InternalId::from(id);
     let value = Storage::UnsignedByte {
         mag: 10.0,
@@ -174,10 +174,10 @@ fn setup_test(
 
 #[test]
 fn test_lazy_item_serialization() {
-    let root_version_hash = VersionHash::from(0);
+    let root_version = VersionNumber::from(0);
     let root_version_file_id = IndexFileId::from(0);
     let (_bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_file_id);
-    let node = create_prob_node(0, root_version_hash, &cache.prop_file);
+    let node = create_prob_node(0, root_version, &cache.prop_file);
 
     let lazy_item = ProbLazyItem::new(node, root_version_file_id, FileOffset(0));
 
@@ -200,11 +200,11 @@ fn test_lazy_item_serialization() {
 
 #[test]
 fn test_prob_node_acyclic_serialization() {
-    let root_version_hash = VersionHash::from(0);
+    let root_version = VersionNumber::from(0);
     let root_version_file_id = IndexFileId::from(0);
     let (_bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_file_id);
 
-    let node = create_prob_node(0, root_version_hash, &cache.prop_file);
+    let node = create_prob_node(0, root_version, &cache.prop_file);
 
     let offset = node.serialize(&bufman, cursor).unwrap();
     bufman.close_cursor(cursor).unwrap();
@@ -225,20 +225,20 @@ fn test_prob_node_acyclic_serialization() {
 
 #[test]
 fn test_prob_node_serialization_with_neighbors() {
-    let root_version_hash = VersionHash::from(0);
+    let root_version = VersionNumber::from(0);
     let root_version_file_id = IndexFileId::from(0);
     let (_bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_file_id);
 
     let mut nodes = Vec::new();
 
-    let node = create_prob_node(0, root_version_hash, &cache.prop_file);
+    let node = create_prob_node(0, root_version, &cache.prop_file);
     let lazy_node = ProbLazyItem::new(node, root_version_file_id, FileOffset(0));
     let node_size = ProbNode::get_serialized_size(8) as u32;
 
     nodes.push(lazy_node);
 
     for i in 1..11 {
-        let neighbor_node = create_prob_node(i, root_version_hash, &cache.prop_file);
+        let neighbor_node = create_prob_node(i, root_version, &cache.prop_file);
 
         let lazy_item = ProbLazyItem::new(
             neighbor_node,
@@ -280,12 +280,12 @@ fn test_prob_node_serialization_with_neighbors() {
 
 #[test]
 fn test_prob_lazy_item_cyclic_serialization() {
-    let root_version_hash = VersionHash::from(0);
+    let root_version = VersionNumber::from(0);
     let root_version_file_id = IndexFileId::from(0);
     let (_bufmans, cache, bufman, cursor, _temp_dir) = setup_test(root_version_file_id);
 
-    let node0 = create_prob_node(0, root_version_hash, &cache.prop_file);
-    let node1 = create_prob_node(1, root_version_hash, &cache.prop_file);
+    let node0 = create_prob_node(0, root_version, &cache.prop_file);
+    let node1 = create_prob_node(1, root_version, &cache.prop_file);
     let node_size = ProbNode::get_serialized_size(8) as u32;
 
     let lazy0 = ProbLazyItem::new(node0, root_version_file_id, FileOffset(0));

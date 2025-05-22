@@ -6,7 +6,7 @@ use super::{
     },
     common::WaCustomError,
     meta_persist::update_background_version,
-    versioning::VersionHash,
+    versioning::VersionNumber,
     wal::{VectorOp, WALFile},
 };
 use crate::config_loader::{Config, VectorsIndexingMode};
@@ -23,7 +23,7 @@ use std::{
 
 pub struct IndexingManager {
     thread: Option<JoinHandle<Result<(), WaCustomError>>>,
-    channel: mpsc::Sender<VersionHash>,
+    channel: mpsc::Sender<VersionNumber>,
 }
 
 impl IndexingManager {
@@ -43,25 +43,21 @@ impl IndexingManager {
         }
     }
 
-    pub fn trigger(&self, version_hash: VersionHash) {
-        self.channel.send(version_hash).unwrap()
+    pub fn trigger(&self, version: VersionNumber) {
+        self.channel.send(version).unwrap()
     }
 
     pub fn index_version(
         collection: &Collection,
         config: &Config,
-        version_hash: VersionHash,
+        version: VersionNumber,
     ) -> Result<(), WaCustomError> {
-        let txn = BackgroundCollectionTransaction::from_version_id_and_number(
-            collection,
-            version_hash,
-            version_hash.version_number(),
-        );
-        let wal = WALFile::new(&collection.get_path(), version_hash)?;
+        let txn = BackgroundCollectionTransaction::from_version_id_and_number(collection, version);
+        let wal = WALFile::new(&collection.get_path(), version)?;
         let vectors_count = wal.vectors_count();
         let status = collection
             .transaction_status_map
-            .get_latest(&version_hash)
+            .get_latest(&version)
             .unwrap();
         let start = Utc::now();
         *status.write() = TransactionStatus::InProgress {
@@ -133,8 +129,8 @@ impl IndexingManager {
         let delta = end - start;
         let delta_seconds = (delta.num_seconds() as u32).max(1);
         txn.pre_commit(collection, config)?;
-        update_background_version(&collection.lmdb, version_hash)?;
-        fs::remove_file(collection.get_path().join(format!("{}.wal", *version_hash)))
+        update_background_version(&collection.lmdb, version)?;
+        fs::remove_file(collection.get_path().join(format!("{}.wal", *version)))
             .map_err(BufIoError::Io)?;
         let total_records_indexed = records_indexed.load(Ordering::Relaxed);
         *status.write() = TransactionStatus::Complete {

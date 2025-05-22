@@ -3,7 +3,7 @@ use rustc_hash::FxHashSet;
 use crate::models::{
     buffered_io::{BufIoError, BufferManager},
     cache_loader::HNSWIndexCache,
-    prob_lazy_load::lazy_item::FileIndex,
+    lazy_item::FileIndex,
     prob_node::SharedNode,
 };
 
