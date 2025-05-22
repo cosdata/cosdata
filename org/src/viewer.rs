@@ -7,25 +7,24 @@ use std::path::{Path, PathBuf};
 struct Opt {
     input: PathBuf,
     skip_bytes: u64,
-    limit: usize,
 }
 
 impl Opt {
     fn from_args() -> Self {
         let args: Vec<String> = std::env::args().collect();
-        if args.len() < 3 {
-            eprintln!("Usage: binary-parser <input> <skip_bytes> <limit>");
+        if args.len() < 2 {
+            eprintln!("Usage: binary-parser <input> <skip_bytes>");
             std::process::exit(1);
         }
 
         Self {
             input: PathBuf::from(&args[1]),
-            skip_bytes: args[2].parse().unwrap_or(0),
-            limit: args.get(3).map(|s| s.parse().unwrap_or(1)).unwrap_or(1),
+            skip_bytes: args.get(2).and_then(|arg| arg.parse().ok()).unwrap_or(0),
         }
     }
 }
 
+#[allow(unused)]
 #[derive(Debug)]
 enum Distance {
     CosineSimilarity(f32),
@@ -60,10 +59,10 @@ impl IndexPtr {
     }
 
     fn is_absent(&self) -> bool {
-        self.offset == u32::MAX
+        self.offset == u32::MAX || self.file_id == u32::MAX
     }
 
-    fn validate_link(&self, current_file: &Path, current_file_id: u32) -> LinkValidation {
+    fn validate_link(&self, dir: &Path) -> LinkValidation {
         if self.is_absent() {
             return LinkValidation {
                 is_valid: true,
@@ -71,31 +70,6 @@ impl IndexPtr {
             };
         }
 
-        // Get current file's directory and version
-        let dir = current_file.parent().unwrap_or_else(|| Path::new("."));
-
-        // If same hash, just check current file
-        if self.file_id == current_file_id {
-            let file_size = std::fs::metadata(current_file)
-                .map(|m| m.len())
-                .unwrap_or(0);
-
-            if (self.offset as u64) >= file_size {
-                return LinkValidation {
-                    is_valid: false,
-                    reason: Some(format!(
-                        "Offset {} exceeds file size {}",
-                        self.offset, file_size
-                    )),
-                };
-            }
-            return LinkValidation {
-                is_valid: true,
-                reason: None,
-            };
-        }
-
-        // Check for version file existence using hash
         let index_file = dir.join(format!("{}.index", self.file_id));
 
         if !index_file.exists() {
@@ -105,15 +79,14 @@ impl IndexPtr {
             };
         }
 
-        // Check file size
         let file_size = std::fs::metadata(&index_file).map(|m| m.len()).unwrap_or(0);
 
         if (self.offset as u64) >= file_size {
             return LinkValidation {
                 is_valid: false,
                 reason: Some(format!(
-                    "Offset {} exceeds file size {} in {:?}",
-                    self.offset, file_size, index_file
+                    "Offset {} exceeds file size {}",
+                    self.offset, file_size
                 )),
             };
         }
@@ -124,9 +97,6 @@ impl IndexPtr {
         }
     }
 }
-
-static mut LEVEL0_NEIGHBORS: u16 = 0;
-static mut LEVELN_NEIGHBORS: u16 = 0;
 
 #[derive(Debug)]
 struct Neighbor {
@@ -139,25 +109,33 @@ struct Neighbor {
 #[derive(Debug)]
 struct Node {
     level: u8,
-    version: u64,
+    version: u32,
     prop_offset: u32,
     prop_length: u32,
     metadata_offset: u32,
     metadata_length: u32,
-    parent: IndexPtr,
+    parent_ptr: IndexPtr,
     parent_validation: LinkValidation,
-    child: IndexPtr,
+    child_ptr: IndexPtr,
     child_validation: LinkValidation,
-    root_version: IndexPtr,
-    root_version_validation: LinkValidation,
-    root_version_is_root: bool,
     neighbors: Vec<Option<Neighbor>>,
+}
+
+fn resolve_latest_ptr(latest_version_file: &mut File, offset: u32) -> io::Result<IndexPtr> {
+    if offset == u32::MAX {
+        return Ok(IndexPtr {
+            offset: u32::MAX,
+            file_id: u32::MAX,
+        });
+    }
+    latest_version_file.seek(SeekFrom::Start(offset as u64))?;
+    IndexPtr::read(latest_version_file)
 }
 
 fn read_neighbors(
     reader: &mut impl Read,
-    current_file: &Path,
-    current_file_id: u32,
+    latest_version_file: &mut File,
+    dir: &Path,
 ) -> io::Result<Vec<Option<Neighbor>>> {
     let mut length = [0u8; 2];
     reader.read_exact(&mut length)?;
@@ -170,14 +148,18 @@ fn read_neighbors(
         let id = u32::from_le_bytes(id_buffer);
 
         if id == u32::MAX {
-            let mut skip_buffer = [0u8; 13];
+            let mut skip_buffer = [0u8; 9];
             reader.read_exact(&mut skip_buffer)?;
             neighbors.push(None);
             continue;
         }
 
-        let ptr = IndexPtr::read(reader)?;
-        let validation = ptr.validate_link(current_file, current_file_id);
+        let mut latest_offset_buffer = [0u8; 4];
+        reader.read_exact(&mut latest_offset_buffer)?;
+        let latest_offset = u32::from_le_bytes(latest_offset_buffer);
+
+        let ptr = resolve_latest_ptr(latest_version_file, latest_offset)?;
+        let validation = ptr.validate_link(dir);
 
         let mut distance_type = [0u8; 1];
         reader.read_exact(&mut distance_type)?;
@@ -206,56 +188,50 @@ fn read_neighbors(
     Ok(neighbors)
 }
 
-fn read_node(file: &mut File, current_file: &Path, current_file_id: u32) -> io::Result<Node> {
+fn read_node(file: &mut File, latest_version_file: &mut File, dir: &Path) -> io::Result<Node> {
     let mut level = [0u8; 1];
     file.read_exact(&mut level)?;
     let level = level[0];
-    let mut version_hash = [0u8; 8];
 
-    file.read_exact(&mut version_hash)?;
-    let version_hash = u64::from_le_bytes(version_hash);
+    let mut version_buffer = [0u8; 4];
+    file.read_exact(&mut version_buffer)?;
+    let version = u32::from_le_bytes(version_buffer);
 
-    // Read property offset and length (8 bytes)
-    let mut buffer = [0u8; 8];
-    file.read_exact(&mut buffer)?;
-    let prop_offset = u32::from_le_bytes(buffer[0..4].try_into().unwrap());
-    let prop_length = u32::from_le_bytes(buffer[4..8].try_into().unwrap());
+    let mut prop_buffer = [0u8; 8];
+    file.read_exact(&mut prop_buffer)?;
+    let prop_offset = u32::from_le_bytes(prop_buffer[0..4].try_into().unwrap());
+    let prop_length = u32::from_le_bytes(prop_buffer[4..8].try_into().unwrap());
 
-    // Read metadata offset and length (8 bytes) - new in updated serialization
     let mut metadata_buffer = [0u8; 8];
     file.read_exact(&mut metadata_buffer)?;
     let metadata_offset = u32::from_le_bytes(metadata_buffer[0..4].try_into().unwrap());
     let metadata_length = u32::from_le_bytes(metadata_buffer[4..8].try_into().unwrap());
 
-    let parent = IndexPtr::read(file)?;
-    let parent_validation = parent.validate_link(current_file, current_file_id);
+    let mut parent_latest_buffer = [0u8; 4];
+    file.read_exact(&mut parent_latest_buffer)?;
+    let parent_latest_offset = u32::from_le_bytes(parent_latest_buffer);
+    let parent_ptr = resolve_latest_ptr(latest_version_file, parent_latest_offset)?;
+    let parent_validation = parent_ptr.validate_link(dir);
 
-    let child = IndexPtr::read(file)?;
-    let child_validation = child.validate_link(current_file, current_file_id);
+    let mut child_latest_buffer = [0u8; 4];
+    file.read_exact(&mut child_latest_buffer)?;
+    let child_latest_offset = u32::from_le_bytes(child_latest_buffer);
+    let child_ptr = resolve_latest_ptr(latest_version_file, child_latest_offset)?;
+    let child_validation = child_ptr.validate_link(dir);
 
-    let mut root_version_is_root = [0u8; 1];
-    file.read_exact(&mut root_version_is_root)?;
-    let root_version_is_root = root_version_is_root[0] != 0;
-    let root_version = IndexPtr::read(file)?;
-
-    let root_version_validation = root_version.validate_link(current_file, current_file_id);
-
-    let neighbors = read_neighbors(file, current_file, current_file_id)?;
+    let neighbors = read_neighbors(file, latest_version_file, dir)?;
 
     Ok(Node {
         level,
-        version: version_hash,
+        version,
         prop_offset,
         prop_length,
         metadata_offset,
         metadata_length,
-        parent,
+        parent_ptr,
         parent_validation,
-        child,
+        child_ptr,
         child_validation,
-        root_version,
-        root_version_validation,
-        root_version_is_root,
         neighbors,
     })
 }
@@ -276,8 +252,7 @@ fn print_index_ptr(ptr: &IndexPtr, validation: &LinkValidation, prefix: &str) {
     println!();
 }
 
-fn print_node(node: &Node, index: usize) {
-    println!("\nNode {}:", index);
+fn print_node(node: &Node) {
     println!("HNSW Level: {}", node.level);
     println!("Version: {}", node.version);
     println!(
@@ -294,24 +269,8 @@ fn print_node(node: &Node, index: usize) {
         println!("Metadata: absent");
     }
 
-    print_index_ptr(&node.parent, &node.parent_validation, "Parent");
-    print_index_ptr(&node.child, &node.child_validation, "Child");
-
-    // Display the root version with its tag info
-    if node.root_version.is_absent() {
-        println!("Root version: absent");
-    } else {
-        print!(
-            "Root version: offset={}, file_id={}, is_root={}",
-            node.root_version.offset, node.root_version.file_id, node.root_version_is_root
-        );
-        if !node.root_version_validation.is_valid {
-            if let Some(reason) = &node.root_version_validation.reason {
-                print!(" (INVALID: {})", reason);
-            }
-        }
-        println!();
-    }
+    print_index_ptr(&node.parent_ptr, &node.parent_validation, "Parent");
+    print_index_ptr(&node.child_ptr, &node.child_validation, "Child");
 
     println!("\nNeighbors:");
     for (i, neighbor) in node.neighbors.iter().enumerate() {
@@ -342,34 +301,16 @@ fn print_node(node: &Node, index: usize) {
 fn main() -> io::Result<()> {
     let opt = Opt::from_args();
     let mut file = File::open(&opt.input)?;
-
-    // Extract version hash from filename
-    let current_file_id = opt
-        .input
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .and_then(|s| s.parse::<u32>().ok())
-        .expect("Invalid file name");
+    let dir = opt.input.parent().unwrap_or_else(|| Path::new("."));
+    let latest_version_path = dir.join("latest.version");
+    let mut latest_version_file = File::open(latest_version_path)?;
 
     if opt.skip_bytes > 0 {
         file.seek(SeekFrom::Start(opt.skip_bytes))?;
     }
 
-    for i in 0..opt.limit {
-        match read_node(&mut file, &opt.input, current_file_id) {
-            Ok(node) => {
-                print_node(&node, i + 1);
-            }
-            Err(e) => {
-                if e.kind() == io::ErrorKind::UnexpectedEof {
-                    println!("Reached end of file after reading {} nodes", i);
-                    break;
-                } else {
-                    return Err(e);
-                }
-            }
-        }
-    }
+    let node = read_node(&mut file, &mut latest_version_file, dir)?;
+    print_node(&node);
 
     Ok(())
 }
