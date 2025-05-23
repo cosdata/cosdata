@@ -208,8 +208,7 @@ pub fn pseudo_level_probs(num_levels: u8, num_pseudo_nodes: u16) -> Vec<(f64, u8
 
 /// Returns vector values for pseudo node
 pub fn pseudo_node_vector(num_dims: usize) -> Vec<f32> {
-    // @TODO(vineet): All 0s instead of all 1s
-    vec![1.0; num_dims]
+    vec![0.0; num_dims]
 }
 
 /// Returns the internal id for pseudo root node

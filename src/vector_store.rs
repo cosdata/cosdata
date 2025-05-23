@@ -266,7 +266,7 @@ pub fn ann_search(
             // @TODO: Can we compute the z_candidates in parallel?
             for qfd in qf_dims {
                 let mdims = Metadata::from(qfd);
-                let mut z_with_mdims = traverse_find_nearest(
+                let z_with_mdims = traverse_find_nearest(
                     config,
                     hnsw_index,
                     current_lazy_item_latest_ptr,
@@ -279,11 +279,19 @@ pub fn ann_search(
                     false,
                     hnsw_params.ef_search,
                 )?;
-                // @NOTE: We're considering nearest neighbors computed
-                // for all metadata dims. Here we're relying on
-                // `traverse_find_nearest` to deduplicate the results
-                // (thanks to the `skipm` argument)
-                z_candidates.append(&mut z_with_mdims);
+
+                for (node, dist) in z_with_mdims {
+                    match dist {
+                        MetricResult::CosineSimilarity(cs) => {
+                            if cs.0 == -1.0 {
+                                continue
+                            } else {
+                                z_candidates.push((node, dist));
+                            }
+                        },
+                        _ => z_candidates.push((node, dist))
+                    }
+                }
             }
 
             // Sort candidates by distance (asc)
@@ -315,7 +323,7 @@ pub fn ann_search(
         let dist = match query_filter_dims {
             // In case of metadata filters in query, we calculate the
             // distances between the cur_node and all query filter
-            // dimensions and take the minimum.
+            // dimensions and take the strongest match
             //
             // @TODO: Not sure if this additional computation is
             // required because eventually the same node is being
@@ -343,7 +351,7 @@ pub fn ann_search(
                     )?;
                     dists.push(d)
                 }
-                dists.into_iter().min().unwrap()
+                dists.into_iter().max().unwrap()
             }
             None => {
                 let fvec_data = VectorData::without_metadata(None, &fvec);
@@ -396,11 +404,13 @@ pub fn finalize_ann_results(
     let mut results = Vec::with_capacity(top_k.unwrap_or(filtered.len()));
     let mag_query = query.iter().map(|x| x * x).sum::<f32>().sqrt();
 
-    for (orig_id, _) in filtered {
+    for (internal_id, _) in filtered {
         let raw_emb = collection
             .internal_to_external_map
-            .get_latest(&orig_id)
-            .ok_or_else(|| WaCustomError::NotFound("raw embedding not found".to_string()))?;
+            .get_latest(&internal_id)
+            .ok_or_else(|| {
+                WaCustomError::NotFound(format!("raw embedding not found for id={internal_id:?}"))
+            })?;
         let dense_values = raw_emb.dense_values.as_ref().ok_or_else(|| {
             WaCustomError::NotFound("dense values not found for raw embedding".to_string())
         })?;
@@ -408,7 +418,7 @@ pub fn finalize_ann_results(
         let mag_raw = dense_values.iter().map(|x| x * x).sum::<f32>().sqrt();
         let cs = dp / (mag_query * mag_raw);
         results.push((
-            orig_id,
+            internal_id,
             Some(raw_emb.id.clone()),
             raw_emb.document_id.clone(),
             cs,
@@ -553,7 +563,7 @@ fn pseudo_metadata_replicas(
     schema: &MetadataSchema,
     prop_file: &RwLock<File>,
 ) -> Result<Vec<NodePropMetadata>, WaCustomError> {
-    let dims = schema.pseudo_weighted_dimensions(HIGH_WEIGHT);
+    let dims = schema.pseudo_nonroot_dimensions(HIGH_WEIGHT);
     let replicas = dims
         .into_iter()
         .map(Metadata::from)
@@ -974,6 +984,23 @@ fn create_node_edges(
         let neighbor_node = unsafe { &**neighbor_lazy_item }.try_get_data(&hnsw_index.cache)?;
 
         assert_eq!(neighbor_node.version, version);
+
+        // Ensure that a metadata node gets connected to a pseudo node
+        // only if there's a perfect match
+        match (neighbor_node.replica_node_kind(), node.replica_node_kind(), &dist) {
+            (ReplicaNodeKind::Pseudo, ReplicaNodeKind::Metadata, MetricResult::CosineSimilarity(cs)) => {
+                if cs.0 != 1.0 {
+                    continue
+                }
+            },
+            (ReplicaNodeKind::Metadata, ReplicaNodeKind::Metadata, MetricResult::CosineSimilarity(cs)) => {
+                if cs.0 == -1.0 {
+                    continue
+                }
+            },
+            _ => { },
+        }
+
         let neighbor_inserted_idx = node.add_neighbor(
             neighbor_node.get_id(),
             neighbor_lazy_item_latest_ptr,
