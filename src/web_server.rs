@@ -1,4 +1,5 @@
 use crate::api::auth::{auth_module, authentication_middleware::AuthenticationMiddleware};
+use crate::api::docs::api_docs_module;
 use crate::api::vectordb::collections::collections_module;
 use crate::api::vectordb::indexes::indexes_module;
 use crate::api::vectordb::search::search_module;
@@ -51,6 +52,7 @@ pub async fn run_actix_server_with_context(ctx: Data<AppContext>) -> std::io::Re
             // register simple handler, handle all methods
             .app_data(web::JsonConfig::default().limit(8_388_608)) // 8 MB)
             .app_data(ctx.clone())
+            .service(api_docs_module())
             .service(auth_module())
             .service(
                 web::scope("/vectordb")

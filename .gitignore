@@ -1,6 +1,5 @@
 /target
 /versions
-Cargo.lock
 rr
 /xdb
 flamegraph.svg
@@ -18,4 +17,6 @@ _mdb
 venv
 /collections/
 .idea/
-/datasets
+datasets/
+data/
+.vscode/

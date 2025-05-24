@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::app_context::AppContext;
 
 use super::{
-    dtos::{CreateDenseIndexDto, CreateSparseIndexDto, CreateTFIDFIndexDto, IndexType},
+    dtos::{CreateDenseIndexDto, CreateSparseIndexDto, CreateTFIDFIndexDto, IndexDetailsDto, IndexType},
     error::IndexesError,
     repo,
 };
@@ -17,7 +17,7 @@ pub(crate) async fn create_dense_index(
         ctx,
         collection_id,
         create_index_dto.name,
-        create_index_dto.distance_metric_type,
+        create_index_dto.distance_metric_type.into(),
         create_index_dto.quantization,
         create_index_dto.index,
     )
@@ -58,8 +58,12 @@ pub(crate) async fn create_tf_idf_index(
 pub(crate) async fn get_index(
     collection_id: String,
     ctx: Arc<AppContext>,
-) -> Result<serde_json::Value, IndexesError> {
-    repo::get_index(ctx, collection_id).await
+) -> Result<IndexDetailsDto, IndexesError> {
+    let index_json = repo::get_index(ctx, collection_id).await?;
+    
+    // Convert the JSON value to our IndexDetailsDto format
+    serde_json::from_value::<IndexDetailsDto>(index_json)
+        .map_err(|_e| IndexesError::FailedToGetAppEnv)
 }
 
 pub(crate) async fn delete_index(

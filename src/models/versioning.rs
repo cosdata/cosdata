@@ -4,9 +4,12 @@ use serde::Serialize;
 use std::ops::Deref;
 use std::sync::Arc;
 
+use utoipa::ToSchema;
+
 use super::tree_map::TreeMapKey;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, ToSchema)]
+#[schema(value_type = i32, description = "Version number")]
 pub struct VersionNumber(u32);
 
 impl From<u32> for VersionNumber {

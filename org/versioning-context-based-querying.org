@@ -1,0 +1,83 @@
+#+TITLE: Cosdata Versioning System Documentation
+#+AUTHOR: Cosdata Team
+#+DATE: 2025-05-11
+#+DESCRIPTION: Versioned Context-Based Querying System for HNSW, TF-IDF, Sparse and Key-Value Store Indexes
+
+* Cosdata Versioning System
+** Overview
+This document describes the architecture and semantics of our *append-only, context-based versioned database* for Cosdata's HNSW, TF-IDF, sparse and key-value store indexes. The system is designed to support *immutable historical querying* without global state rewinds, enabling fully isolated and reproducible reads from any committed version.
+
+** Key Characteristics
+- *Append-only transaction log*: All state changes are recorded as a linear, immutable sequence of transactions.
+- *Monotonically increasing version numbers*: Each transaction is assigned a ~u32~ version number, incremented with each new commit.
+- *Immutable historical contexts*: Queries are executed against specific versioned snapshots.
+- *No branching or forks*: The database history is strictly linear, simplifying version semantics and lookup logic.
+
+** Version Representation
+Previously, the system supported arbitrary ~VersionHash~ types, including timestamp-based hashes for identifying historical versions. However, due to the absence of branching, this is no longer necessary.
+
+*** Simplified Versioning
+- The ~VersionHash~ type is now reduced to a simple ~VersionNumber~:
+
+#+begin_src rust
+pub type VersionNumber = u32;
+#+end_src
+
+- Each transaction commits with an incremented version number.
+- This ensures a totally ordered, unique history without requiring cryptographic or timestamp-derived hashes.
+- *Version collisions at the same height are impossible*, eliminating the need for version disambiguation or parent tracking.
+
+*** Benefits
+- Faster lookups
+- Simplified internal APIs
+- Reduced memory usage
+- Eliminated conversions between ~VersionHash~ and ~VersionNumber~
+
+** Contexts
+*** What is a Context?
+A *context* is an isolated, read-only view of the database as it existed at a specific version.
+- It is initialized once and remains immutable.
+- Contexts are identified by a unique context ID.
+- All queries referencing that context operate against the version it was created with.
+
+*** Context Lifecycle
+**** Create
+#+begin_src http
+POST /context/create
+#+end_src
+
+- Accepts an optional ~version_number~. Defaults to latest.
+- The server prepares and caches an index-filtered snapshot at that version.
+- Response includes a ~context_id~.
+
+**** Query
+All read endpoints accept a ~context-id~ parameter. Queries are scoped strictly to the associated version snapshot.
+- No interference from concurrent writes
+- Deterministic and reproducible
+
+**** Close
+#+begin_src http
+POST /context/close/:context_id
+#+end_src
+
+- Frees memory or other resources associated with the context.
+- Automatic GC may be implemented later.
+
+** Internal Mechanics
+- A context does not change the state of the connection or the global DB.
+- It performs internal filtering or partial materialization from the append-only log.
+- Multiple contexts can exist concurrently, each tied to a different version.
+
+** Index Types Supported
+- HNSW (Hierarchical Navigable Small World) vector indexes
+- TF-IDF textual indexes
+- Sparse matrix indexes
+- Key-value store indexes
+
+** Summary
+- The system maintains a *linear, append-only* transaction history.
+- Versioning uses *simple u32 numbers*, avoiding unnecessary hashing.
+- Historical queries use *lightweight, immutable contexts*, not global rewinds.
+- There is *no branching*, so version uniqueness is guaranteed by position.
+
+This model provides clarity, performance, and auditability for time-travel queries across Cosdata's various index types without the complexity of multi-branch version control.

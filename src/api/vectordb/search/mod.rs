@@ -4,7 +4,7 @@ use controller::{
     sparse_search, tf_idf_search,
 };
 
-mod controller;
+pub mod controller;
 pub(crate) mod dtos;
 pub(crate) mod error;
 pub(crate) mod repo;

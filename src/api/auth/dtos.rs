@@ -1,23 +1,31 @@
 use actix_web::{dev::Payload, FromRequest, HttpMessage, HttpRequest};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use super::error::AuthError;
 use futures_util::future::{err, ok, Ready};
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+/// DTO for creating a user session (login)
+#[derive(Debug, Serialize, Deserialize, PartialEq, ToSchema)]
 pub(crate) struct CreateSessionDTO {
+    /// Username for authentication
     pub username: String,
+    /// Password for authentication
     pub password: String,
 }
 
-#[derive(Serialize)]
+/// Session response after successful authentication
+#[derive(Serialize, ToSchema)]
 pub(crate) struct Session {
+    /// Authentication token for subsequent requests
     pub access_token: String,
+    /// Timestamp when the session was created
     pub created_at: u64,
+    /// Timestamp when the session will expire
     pub expires_at: u64,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 // a structure for holding claims data used in JWT tokens
 // resembles payload in NodeJS world
 pub struct Claims {
