@@ -35,7 +35,7 @@ pub fn update_current_version(
 /// updates the current version of a collection
 pub fn update_background_version(
     lmdb: &MetaDb,
-    version_hash: VersionNumber,
+    version: VersionNumber,
 ) -> Result<(), WaCustomError> {
     let env = lmdb.env.clone();
     let db = lmdb.db;
@@ -45,7 +45,7 @@ pub fn update_background_version(
         .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
 
     let key = key!(m:background_version);
-    let bytes = version_hash.to_le_bytes();
+    let bytes = version.to_le_bytes();
 
     txn.put(db, &key, &bytes, WriteFlags::empty())
         .map_err(|e| WaCustomError::DatabaseError(format!("Failed to put data: {}", e)))?;

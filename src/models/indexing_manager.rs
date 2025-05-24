@@ -1,11 +1,12 @@
 use super::{
     buffered_io::BufIoError,
-    collection::Collection,
+    collection::{Collection, RawVectorEmbedding},
     collection_transaction::{
         BackgroundCollectionTransaction, Progress, Summary, TransactionStatus,
     },
     common::WaCustomError,
     meta_persist::update_background_version,
+    types::VectorId,
     versioning::VersionNumber,
     wal::{VectorOp, WALFile},
 };
@@ -54,7 +55,7 @@ impl IndexingManager {
         self.channel.send(version).unwrap()
     }
 
-    pub fn index_version(
+    fn index_version(
         collection: &Collection,
         config: &Config,
         threadpool: &ThreadPool,
@@ -155,6 +156,70 @@ impl IndexingManager {
             last_updated: end,
         };
         Ok(())
+    }
+
+    pub fn explicit_txn_upsert(
+        collection: &Collection,
+        version: VersionNumber,
+        config: &Config,
+        embeddings: Vec<RawVectorEmbedding>,
+    ) -> Result<(), WaCustomError> {
+        let txn = BackgroundCollectionTransaction::from_version_id_and_number(collection, version);
+        let vectors_count = embeddings.len() as u32;
+        let start = Utc::now();
+        let status = TransactionStatus::InProgress {
+            progress: Progress {
+                percentage_done: 0.0,
+                records_indexed: 0,
+                total_records: vectors_count,
+                rate_per_second: 0.0,
+                estimated_time_remaining_seconds: u32::MAX,
+            },
+            last_updated: start,
+        };
+        collection
+            .transaction_status_map
+            .insert(version, &version, RwLock::new(status));
+        let status = collection
+            .transaction_status_map
+            .get_latest(&version)
+            .unwrap();
+        match config.indexing.mode {
+            VectorsIndexingMode::Sequential => {
+                collection.index_embeddings(embeddings, &txn, config)?;
+            }
+            VectorsIndexingMode::Batch { batch_size } => {
+                embeddings
+                    .into_par_iter()
+                    .chunks(batch_size)
+                    .try_for_each(|embeddings| {
+                        collection.index_embeddings(embeddings, &txn, config)
+                    })?;
+            }
+        }
+        let end = Utc::now();
+        let delta = end - start;
+        let delta_seconds = (delta.num_seconds() as u32).max(1);
+        txn.pre_commit(collection, config)?;
+        update_background_version(&collection.lmdb, version)?;
+        *status.write() = TransactionStatus::Complete {
+            summary: Summary {
+                total_records_indexed: vectors_count,
+                duration_seconds: delta_seconds,
+                average_rate_per_second: vectors_count as f32 / delta_seconds as f32,
+            },
+            last_updated: end,
+        };
+        Ok(())
+    }
+
+    pub fn explicit_txn_delete(
+        _collection: &Collection,
+        _version: VersionNumber,
+        _config: &Config,
+        _vector_id: VectorId,
+    ) -> Result<(), WaCustomError> {
+        unimplemented!()
     }
 }
 

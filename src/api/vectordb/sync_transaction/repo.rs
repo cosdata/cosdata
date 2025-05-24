@@ -1,11 +1,14 @@
 use std::sync::Arc;
 
+use chrono::Utc;
+use parking_lot::RwLock;
+
 use crate::{
     api::vectordb::{transactions::error::TransactionError, vectors::dtos::CreateVectorDto},
     app_context::AppContext,
     models::{
-        collection_transaction::CollectionTransaction, indexing_manager::IndexingManager,
-        meta_persist::update_current_version, types::VectorId, wal::VectorOp,
+        collection_transaction::TransactionStatus, indexing_manager::IndexingManager,
+        meta_persist::update_current_version, types::VectorId, versioning::VersionNumber,
     },
 };
 
@@ -29,21 +32,12 @@ pub(crate) async fn upsert_vectors(
 
     let mut current_version = collection.current_version.write();
 
-    let transaction = CollectionTransaction::new(&collection)
+    let current_version_number = collection
+        .vcs
+        .get_current_version()
         .map_err(|err| TransactionError::FailedToCreateTransaction(err.to_string()))?;
+    let version = VersionNumber::from(*current_version_number + 1);
 
-    transaction
-        .wal
-        .append(VectorOp::Upsert(
-            vectors.into_iter().map(Into::into).collect(),
-        ))
-        .map_err(|err| TransactionError::FailedToCreateVector(err.to_string()))?;
-
-    let version = transaction.version;
-
-    transaction
-        .pre_commit()
-        .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
     *current_version = version;
     collection
         .vcs
@@ -52,8 +46,13 @@ pub(crate) async fn upsert_vectors(
     update_current_version(&collection.lmdb, version)
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
 
-    IndexingManager::index_version(&collection, &ctx.config, &ctx.threadpool, version)
-        .map_err(|err| TransactionError::FailedToCreateVector(err.to_string()))?;
+    IndexingManager::explicit_txn_upsert(
+        &collection,
+        version,
+        &ctx.config,
+        vectors.into_iter().map(Into::into).collect(),
+    )
+    .map_err(|err| TransactionError::FailedToCreateVector(err.to_string()))?;
 
     Ok(())
 }
@@ -78,19 +77,12 @@ pub(crate) async fn delete_vector_by_id(
 
     let mut current_version = collection.current_version.write();
 
-    let transaction = CollectionTransaction::new(&collection)
+    let current_version_number = collection
+        .vcs
+        .get_current_version()
         .map_err(|err| TransactionError::FailedToCreateTransaction(err.to_string()))?;
+    let version = VersionNumber::from(*current_version_number + 1);
 
-    transaction
-        .wal
-        .append(VectorOp::Delete(vector_id))
-        .map_err(|err| TransactionError::FailedToCreateVector(err.to_string()))?;
-
-    let version = transaction.version;
-
-    transaction
-        .pre_commit()
-        .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
     *current_version = version;
     collection
         .vcs
@@ -99,8 +91,16 @@ pub(crate) async fn delete_vector_by_id(
     update_current_version(&collection.lmdb, version)
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
 
-    IndexingManager::index_version(&collection, &ctx.config, &ctx.threadpool, version)
-        .map_err(|err| TransactionError::FailedToCreateVector(err.to_string()))?;
+    collection.transaction_status_map.insert(
+        version,
+        &version,
+        RwLock::new(TransactionStatus::NotStarted {
+            last_updated: Utc::now(),
+        }),
+    );
+
+    IndexingManager::explicit_txn_delete(&collection, version, &ctx.config, vector_id)
+        .map_err(|err| TransactionError::FailedToDeleteVector(err.to_string()))?;
 
     Ok(())
 }
