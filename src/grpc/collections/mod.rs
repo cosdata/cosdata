@@ -98,7 +98,7 @@ crate::cfg_grpc! {
                 .map_err(Status::from)?;
 
             collection
-                .flush(&ctx.config)
+                .flush(&self.context.config)
                 .map_err(Status::from)?;
             update_current_version(&collection.lmdb, hash).map_err(Status::from)?;
 
