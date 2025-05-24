@@ -10,7 +10,7 @@ use crate::models::{
     page::VersionedPagepool,
     serializer::inverted::InvertedIndexSerialize,
     types::FileOffset,
-    versioning::VersionHash,
+    versioning::VersionNumber,
 };
 
 fn get_cache(
@@ -50,7 +50,7 @@ fn setup_test() -> (
 
 fn get_random_versioned_pagepool<const LEN: usize>(
     rng: &mut impl Rng,
-    version: VersionHash,
+    version: VersionNumber,
 ) -> VersionedPagepool<LEN> {
     let pool = VersionedPagepool::new(version);
     let count = rng.gen_range(20..50);
@@ -62,7 +62,7 @@ fn add_random_items_to_versioned_pagepool<const LEN: usize>(
     rng: &mut impl Rng,
     pool: &VersionedPagepool<LEN>,
     count: usize,
-    version: VersionHash,
+    version: VersionNumber,
 ) {
     for _ in 0..count {
         pool.push(version, rng.gen_range(0..u32::MAX));

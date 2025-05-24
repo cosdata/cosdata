@@ -10,8 +10,8 @@ use crate::{
     models::{
         buffered_io::{BufIoError, BufferManager},
         cache_loader::HNSWIndexCache,
-        prob_lazy_load::lazy_item::FileIndex,
-        prob_node::{Neighbors, SharedNode},
+        lazy_item::FileIndex,
+        prob_node::{Neighbors, SharedLatestNode},
         serializer::SimpleSerialize,
         types::{FileOffset, InternalId, MetricResult},
     },
@@ -23,11 +23,17 @@ use super::{HNSWIndexSerialize, RawDeserialize};
 //   2 bytes for length +
 //   length * (
 //     4 bytes for id +
-//     8 bytes offset & file id +
+//     4 bytes for offset +
 //     5 bytes for distance/similarity
-//   ) = 2 + len * 17
+//   ) = 2 + len * 13
 impl HNSWIndexSerialize for Neighbors {
-    fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
+    fn serialize(
+        &self,
+        bufman: &BufferManager,
+        _latest_version_links_bufman: &BufferManager,
+        cursor: u64,
+        _latest_version_links_cursor: u64,
+    ) -> Result<u32, BufIoError> {
         let start = bufman.cursor_position(cursor)?;
         bufman.update_u16_with_cursor(cursor, self.len() as u16)?;
 
@@ -36,21 +42,16 @@ impl HNSWIndexSerialize for Neighbors {
                 if let Some(neighbor) = neighbor.load(Ordering::SeqCst).as_ref() {
                     *neighbor
                 } else {
-                    bufman.update_with_cursor(cursor, &[u8::MAX; 17])?;
+                    bufman.update_with_cursor(cursor, &[u8::MAX; 13])?;
                     continue;
                 }
             };
 
-            let node = unsafe { &*node_ptr };
+            let node_offset = unsafe { &*node_ptr }.file_offset;
 
-            let FileIndex {
-                offset: node_offset,
-                file_id: node_file_id,
-            } = node.file_index;
-            let mut buf = Vec::with_capacity(17);
+            let mut buf = Vec::with_capacity(13);
             buf.extend(node_id.to_le_bytes());
             buf.extend(node_offset.0.to_le_bytes());
-            buf.extend(node_file_id.to_le_bytes());
             let (tag, value) = dist.get_tag_and_value();
             buf.push(tag);
             buf.extend(value.to_le_bytes());
@@ -61,6 +62,7 @@ impl HNSWIndexSerialize for Neighbors {
 
     fn deserialize(
         bufman: &BufferManager,
+        latest_version_links_bufman: &BufferManager,
         file_index: FileIndex,
         cache: &HNSWIndexCache,
         max_loads: u16,
@@ -74,7 +76,7 @@ impl HNSWIndexSerialize for Neighbors {
         let placeholder_start = offset as u64 + 2;
 
         for i in 0..len {
-            let placeholder_offset = placeholder_start + i as u64 * 17;
+            let placeholder_offset = placeholder_start + i as u64 * 13;
             bufman.seek_with_cursor(cursor, placeholder_offset)?;
             let node_id = InternalId::from(bufman.read_u32_with_cursor(cursor)?);
             let node_offset = bufman.read_u32_with_cursor(cursor)?;
@@ -82,16 +84,22 @@ impl HNSWIndexSerialize for Neighbors {
                 neighbors.push(AtomicPtr::new(ptr::null_mut()));
                 continue;
             }
-            let node_file_id = bufman.read_u32_with_cursor(cursor)?;
 
             let dist: MetricResult =
-                SimpleSerialize::deserialize(bufman, FileOffset(placeholder_offset as u32 + 12))?;
+                SimpleSerialize::deserialize(bufman, FileOffset(placeholder_offset as u32 + 8))?;
 
             let node_file_index = FileIndex {
                 offset: FileOffset(node_offset),
-                file_id: IndexFileId::from(node_file_id),
+                file_id: IndexFileId::invalid(),
             };
-            let node = SharedNode::deserialize(bufman, node_file_index, cache, max_loads, skipm)?;
+            let node = SharedLatestNode::deserialize(
+                bufman,
+                latest_version_links_bufman,
+                node_file_index,
+                cache,
+                max_loads,
+                skipm,
+            )?;
             let ptr = Box::into_raw(Box::new((node_id, node, dist)));
 
             neighbors.push(AtomicPtr::new(ptr));
@@ -104,11 +112,13 @@ impl HNSWIndexSerialize for Neighbors {
 }
 
 impl RawDeserialize for Neighbors {
-    type Raw = Vec<Option<(InternalId, FileIndex, MetricResult)>>;
+    type Raw = Vec<Option<(InternalId, FileOffset, MetricResult)>>;
 
     fn deserialize_raw(
         bufman: &BufferManager,
+        _latest_version_links_bufman: &BufferManager,
         cursor: u64,
+        _latest_version_links_cursor: u64,
         FileOffset(offset): FileOffset,
         _file_id: IndexFileId,
         _cache: &HNSWIndexCache,
@@ -119,7 +129,7 @@ impl RawDeserialize for Neighbors {
         let placeholder_start = offset as u64 + 2;
 
         for i in 0..len {
-            let placeholder_offset = placeholder_start + i as u64 * 17;
+            let placeholder_offset = placeholder_start + i as u64 * 13;
             bufman.seek_with_cursor(cursor, placeholder_offset)?;
             let node_id = InternalId::from(bufman.read_u32_with_cursor(cursor)?);
             let node_offset = bufman.read_u32_with_cursor(cursor)?;
@@ -127,17 +137,11 @@ impl RawDeserialize for Neighbors {
                 neighbors.push(None);
                 continue;
             }
-            let node_file_id = bufman.read_u32_with_cursor(cursor)?;
 
             let dist: MetricResult =
-                SimpleSerialize::deserialize(bufman, FileOffset(placeholder_offset as u32 + 12))?;
+                SimpleSerialize::deserialize(bufman, FileOffset(placeholder_offset as u32 + 8))?;
 
-            let node_file_index = FileIndex {
-                offset: FileOffset(node_offset),
-                file_id: IndexFileId::from(node_file_id),
-            };
-
-            neighbors.push(Some((node_id, node_file_index, dist)));
+            neighbors.push(Some((node_id, FileOffset(node_offset), dist)));
         }
 
         Ok(neighbors)

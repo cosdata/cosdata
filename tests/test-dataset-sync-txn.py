@@ -458,9 +458,18 @@ def process_vectors_batch(vectors, collection, batch_size):
         # Ensure all IDs are strings
         for vector in vectors:
             vector["id"] = str(vector["id"])
+
+        url = f"{collection.client.base_url}/collections/{collection.name}/sync_transaction/upsert"
+        for batch_start in range(0, len(vectors), 200):
+            batch = vectors[batch_start:batch_start+200]
+            data = {"vectors": batch}
         
-        with collection.transaction() as txn:
-            txn.batch_upsert_vectors(vectors)
+            requests.post(
+                url,
+                headers=collection.client._get_headers(),
+                data=json.dumps(data),
+                verify=collection.client.verify_ssl
+            )
         return True
     except Exception as e:
         print(f"Error processing batch: {e}")

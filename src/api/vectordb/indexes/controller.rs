@@ -2,7 +2,7 @@ use actix_web::{web, HttpResponse, Result};
 
 use crate::app_context::AppContext;
 
-use super::dtos::{CreateTFIDFIndexDto, IndexType, IndexResponseDto, IndexDetailsDto};
+use super::dtos::{CreateTFIDFIndexDto, IndexDetailsDto, IndexResponseDto, IndexType};
 use super::error::IndexesError;
 use super::{
     dtos::{CreateDenseIndexDto, CreateSparseIndexDto},

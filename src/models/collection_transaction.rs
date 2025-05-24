@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use chrono::{DateTime, Utc};
 use serde::{ser::SerializeStruct, Deserialize, Serialize, Serializer};
 use utoipa::ToSchema;
@@ -7,49 +5,28 @@ use utoipa::ToSchema;
 use crate::{config_loader::Config, indexes::IndexOps};
 
 use super::{
-    collection::Collection,
-    common::{TSHashTable, WaCustomError},
-    prob_node::SharedNode,
-    types::InternalId,
-    versioning::{VersionHash, VersionNumber},
-    wal::WALFile,
+    collection::Collection, common::WaCustomError, meta_persist::retrieve_current_version,
+    versioning::VersionNumber, wal::WALFile,
 };
 
 pub struct BackgroundCollectionTransaction {
-    pub id: VersionHash,
-    pub version_number: VersionNumber,
-    pub lazy_item_versions_table: Arc<TSHashTable<(InternalId, VersionHash, u8), SharedNode>>,
+    pub version: VersionNumber,
 }
 
 impl BackgroundCollectionTransaction {
-    pub fn new(collection: &Collection, implicit: bool) -> Result<Self, WaCustomError> {
-        let branch_info = collection.vcs.get_branch_info("main")?.unwrap();
-        let version_number = VersionNumber::from(*branch_info.get_current_version() + 1);
-        let id = collection
-            .vcs
-            .generate_hash("main", version_number, implicit)?;
+    pub fn new(collection: &Collection) -> Result<Self, WaCustomError> {
+        let current_version_number = retrieve_current_version(&collection.lmdb)?;
+        let version_number = VersionNumber::from(*current_version_number + 1);
 
-        Ok(Self::from_version_id_and_number(
-            collection,
-            id,
-            version_number,
-        ))
+        Ok(Self::from_version_id_and_number(collection, version_number))
     }
 
-    pub fn from_version_id_and_number(
-        collection: &Collection,
-        version_hash: VersionHash,
-        version_number: VersionNumber,
-    ) -> Self {
+    pub fn from_version_id_and_number(collection: &Collection, version: VersionNumber) -> Self {
         if let Some(hnsw_index) = &*collection.hnsw_index.read() {
             hnsw_index.offset_counter.write().unwrap().next_file_id();
         }
 
-        Self {
-            id: version_hash,
-            version_number,
-            lazy_item_versions_table: Arc::new(TSHashTable::new(16)),
-        }
+        Self { version }
     }
 
     pub fn pre_commit(self, collection: &Collection, config: &Config) -> Result<(), WaCustomError> {
@@ -68,23 +45,18 @@ impl BackgroundCollectionTransaction {
 }
 
 pub struct CollectionTransaction {
-    pub id: VersionHash,
-    pub version_number: VersionNumber,
+    pub version: VersionNumber,
     pub wal: WALFile,
 }
 
 impl CollectionTransaction {
-    pub fn new(collection: &Collection, implicit: bool) -> Result<Self, WaCustomError> {
-        let branch_info = collection.vcs.get_branch_info("main")?.unwrap();
-        let version_number = VersionNumber::from(*branch_info.get_current_version() + 1);
-        let id = collection
-            .vcs
-            .generate_hash("main", version_number, implicit)?;
+    pub fn new(collection: &Collection) -> Result<Self, WaCustomError> {
+        let current_version_number = collection.vcs.get_current_version()?;
+        let version = VersionNumber::from(*current_version_number + 1);
 
         Ok(Self {
-            id,
-            version_number,
-            wal: WALFile::new(&collection.get_path(), id)?,
+            version,
+            wal: WALFile::new(&collection.get_path(), version)?,
         })
     }
 

@@ -14,16 +14,15 @@ use crate::{
         collection_transaction::BackgroundCollectionTransaction,
         common::WaCustomError,
         meta_persist::store_values_range,
-        prob_lazy_load::lazy_item::{FileIndex, ProbLazyItem},
-        prob_node::{ProbNode, SharedNode},
-        types::{DistanceMetric, HNSWLevel, InternalId, MetaDb, QuantizationMetric},
+        prob_node::SharedLatestNode,
+        types::{DistanceMetric, FileOffset, HNSWLevel, InternalId, MetaDb, QuantizationMetric},
     },
     quantization::{Quantization, StorageType},
     vector_store::{ann_search, finalize_ann_results, index_embeddings},
 };
 use offset_counter::HNSWIndexFileOffsetCounter;
 use std::sync::{
-    atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, RwLock,
 };
 use types::{HNSWHyperParams, QuantizedDenseVectorEmbedding};
@@ -46,7 +45,7 @@ pub struct HNSWIndexData {
     pub hnsw_params: HNSWHyperParams,
     pub levels_prob: Vec<(f64, u8)>,
     pub dim: usize,
-    pub file_index: FileIndex,
+    pub root_vec_ptr_offset: FileOffset,
     pub quantization_metric: QuantizationMetric,
     pub distance_metric: DistanceMetric,
     pub storage_type: StorageType,
@@ -54,7 +53,7 @@ pub struct HNSWIndexData {
 }
 
 pub struct HNSWIndex {
-    pub root_vec: AtomicPtr<ProbLazyItem<ProbNode>>,
+    pub root_vec: SharedLatestNode,
     pub levels_prob: Vec<(f64, u8)>,
     pub dim: usize,
     pub quantization_metric: RwLock<QuantizationMetric>,
@@ -93,7 +92,7 @@ unsafe impl Sync for HNSWIndex {}
 impl HNSWIndex {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        root_vec: SharedNode,
+        root_vec: SharedLatestNode,
         levels_prob: Vec<(f64, u8)>,
         dim: usize,
         quantization_metric: QuantizationMetric,
@@ -108,7 +107,7 @@ impl HNSWIndex {
         offset_counter: HNSWIndexFileOffsetCounter,
     ) -> Self {
         Self {
-            root_vec: AtomicPtr::new(root_vec),
+            root_vec,
             levels_prob,
             dim,
             quantization_metric: RwLock::new(quantization_metric),
@@ -127,13 +126,13 @@ impl HNSWIndex {
         }
     }
 
-    pub fn get_root_vec(&self) -> SharedNode {
-        self.root_vec.load(Ordering::SeqCst)
+    pub fn get_root_vec(&self) -> SharedLatestNode {
+        self.root_vec
     }
 
     /// Returns FileIndex (offset) corresponding to the root node.
-    pub fn root_vec_offset(&self) -> FileIndex {
-        unsafe { &*self.get_root_vec() }.file_index
+    pub fn root_vec_ptr_offset(&self) -> FileOffset {
+        unsafe { &*self.root_vec }.file_offset
     }
 }
 
@@ -302,12 +301,12 @@ impl IndexOps for HNSWIndex {
     }
 
     fn get_data(&self) -> Self::Data {
-        let offset = self.root_vec_offset();
+        let offset = self.root_vec_ptr_offset();
         Self::Data {
             hnsw_params: self.hnsw_params.read().unwrap().clone(),
             levels_prob: self.levels_prob.clone(),
             dim: self.dim,
-            file_index: offset,
+            root_vec_ptr_offset: offset,
             quantization_metric: self.quantization_metric.read().unwrap().clone(),
             distance_metric: *self.distance_metric.read().unwrap(),
             storage_type: *self.storage_type.read().unwrap(),

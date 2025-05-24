@@ -3,7 +3,7 @@ use std::sync::atomic::AtomicU32;
 use crate::models::{
     buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
     cache_loader::TFIDFIndexCache,
-    prob_lazy_load::lazy_item::ProbLazyItem,
+    lazy_item::ProbLazyItem,
     tf_idf_index::TFIDFIndexNodeData,
     types::FileOffset,
 };

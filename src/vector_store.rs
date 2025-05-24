@@ -16,19 +16,19 @@ use crate::metadata::pseudo_level_probs;
 use crate::metadata::MetadataFields;
 use crate::metadata::MetadataSchema;
 use crate::metadata::HIGH_WEIGHT;
-use crate::models::buffered_io::*;
+use crate::models::cache_loader::HNSWIndexCache;
 use crate::models::collection::Collection;
 use crate::models::collection_transaction::BackgroundCollectionTransaction;
 use crate::models::common::*;
 use crate::models::dot_product::dot_product_f32;
 use crate::models::file_persist::*;
 use crate::models::fixedset::PerformantFixedSet;
-use crate::models::prob_lazy_load::lazy_item::FileIndex;
-use crate::models::prob_lazy_load::lazy_item::ProbLazyItem;
+use crate::models::lazy_item::ProbLazyItem;
+use crate::models::prob_node::LatestNode;
 use crate::models::prob_node::ProbNode;
-use crate::models::prob_node::SharedNode;
+use crate::models::prob_node::SharedLatestNode;
 use crate::models::types::*;
-use crate::models::versioning::VersionHash;
+use crate::models::versioning::VersionNumber;
 use crate::quantization::{Quantization, StorageType};
 use crate::storage::Storage;
 use rand::Rng;
@@ -46,14 +46,14 @@ pub fn create_root_node(
     storage_type: StorageType,
     dim: usize,
     prop_file: &RwLock<File>,
-    version_hash: VersionHash,
+    version: VersionNumber,
     offset_counter: &HNSWIndexFileOffsetCounter,
-    index_manager: &BufferManagerFactory<IndexFileId>,
+    cache: &HNSWIndexCache,
     values_range: (f32, f32),
     hnsw_params: &HNSWHyperParams,
     distance_metric: DistanceMetric,
     metadata_schema: Option<&MetadataSchema>,
-) -> Result<SharedNode, WaCustomError> {
+) -> Result<SharedLatestNode, WaCustomError> {
     let vec = (0..dim)
         .map(|_| {
             let mut rng = rand::thread_rng();
@@ -95,7 +95,7 @@ pub fn create_root_node(
     let mut root = ProbLazyItem::new(
         ProbNode::new(
             HNSWLevel(0),
-            version_hash,
+            version,
             prop_value.clone(),
             prop_metadata.clone(),
             ptr::null_mut(),
@@ -106,37 +106,42 @@ pub fn create_root_node(
         file_id,
         offset_counter.next_level_0_offset(),
     );
+    let mut root_ptr = LatestNode::new(root, offset_counter.next_latest_version_link_offset());
 
     let mut nodes = Vec::new();
-    nodes.push(root);
+    nodes.push(root_ptr);
 
     for l in 1..=hnsw_params.num_layers {
         let current_node = ProbNode::new(
             HNSWLevel(l),
-            version_hash,
+            version,
             prop_value.clone(),
             prop_metadata.clone(),
             ptr::null_mut(),
-            root,
+            root_ptr,
             hnsw_params.neighbors_count,
             distance_metric,
         );
 
         let lazy_node = ProbLazyItem::new(current_node, file_id, offset_counter.next_offset());
 
+        let lazy_node_ptr =
+            LatestNode::new(lazy_node, offset_counter.next_latest_version_link_offset());
+
         if let Some(prev_node) = unsafe { &*root }.get_lazy_data() {
-            prev_node.set_parent(lazy_node);
+            prev_node.set_parent(lazy_node_ptr);
         }
         root = lazy_node;
+        root_ptr = lazy_node_ptr;
 
-        nodes.push(lazy_node);
+        nodes.push(lazy_node_ptr);
     }
 
     for item in nodes {
-        write_node_to_file(item, index_manager, file_id)?;
+        write_lazy_item_latest_ptr_to_file(cache, item, file_id)?;
     }
 
-    Ok(root)
+    Ok(root_ptr)
 }
 
 pub fn ann_search(
@@ -144,10 +149,10 @@ pub fn ann_search(
     hnsw_index: &HNSWIndex,
     vector_emb: QuantizedDenseVectorEmbedding,
     query_filter_dims: Option<&Vec<metadata::QueryFilterDimensions>>,
-    cur_entry: SharedNode,
+    current_lazy_item_latest_ptr: SharedLatestNode,
     cur_level: HNSWLevel,
     hnsw_params: &HNSWHyperParams,
-) -> Result<Vec<(SharedNode, MetricResult)>, WaCustomError> {
+) -> Result<Vec<(SharedLatestNode, MetricResult)>, WaCustomError> {
     let fvec = vector_emb.quantized_vec.clone();
     let mut skipm = PerformantFixedSet::new(if cur_level.0 == 0 {
         hnsw_params.level_0_neighbors_count
@@ -158,14 +163,14 @@ pub fn ann_search(
 
     let z = match query_filter_dims {
         Some(qf_dims) => {
-            let mut z_candidates: Vec<(SharedNode, MetricResult)> = vec![];
+            let mut z_candidates: Vec<(SharedLatestNode, MetricResult)> = vec![];
             // @TODO: Can we compute the z_candidates in parallel?
             for qfd in qf_dims {
                 let mdims = Metadata::from(qfd);
                 let mut z_with_mdims = traverse_find_nearest(
                     config,
                     hnsw_index,
-                    cur_entry,
+                    current_lazy_item_latest_ptr,
                     &fvec,
                     None,
                     Some(&mdims),
@@ -192,7 +197,7 @@ pub fn ann_search(
         None => traverse_find_nearest(
             config,
             hnsw_index,
-            cur_entry,
+            current_lazy_item_latest_ptr,
             &fvec,
             None,
             None,
@@ -205,8 +210,9 @@ pub fn ann_search(
     };
 
     let mut z = if z.is_empty() {
-        let cur_node = unsafe { &*cur_entry }.try_get_data(&hnsw_index.cache)?;
-        let cur_node_id = &cur_node.prop_value.id;
+        let current_lazy_item = unsafe { &*current_lazy_item_latest_ptr }.latest();
+        let current_node = unsafe { &**current_lazy_item }.try_get_data(&hnsw_index.cache)?;
+        let cur_node_id = &current_node.prop_value.id;
         let dist = match query_filter_dims {
             // In case of metadata filters in query, we calculate the
             // distances between the cur_node and all query filter
@@ -217,10 +223,10 @@ pub fn ann_search(
             // returned. Also need to consider performing the
             // following in parallel.
             Some(qf_dims) => {
-                let cur_node_metadata = cur_node.prop_metadata.clone().map(|pm| pm.vec.clone());
+                let cur_node_metadata = current_node.prop_metadata.clone().map(|pm| pm.vec.clone());
                 let cur_node_data = VectorData {
                     id: Some(cur_node_id),
-                    quantized_vec: &cur_node.prop_value.vec,
+                    quantized_vec: &current_node.prop_value.vec,
                     metadata: cur_node_metadata.as_deref(),
                 };
                 let mut dists = vec![];
@@ -243,7 +249,7 @@ pub fn ann_search(
             None => {
                 let fvec_data = VectorData::without_metadata(None, &fvec);
                 let cur_node_data =
-                    VectorData::without_metadata(Some(cur_node_id), &cur_node.prop_value.vec);
+                    VectorData::without_metadata(Some(cur_node_id), &current_node.prop_value.vec);
                 hnsw_index.distance_metric.read().unwrap().calculate(
                     &fvec_data,
                     &cur_node_data,
@@ -251,10 +257,16 @@ pub fn ann_search(
                 )?
             }
         };
-        vec![(cur_entry, dist)]
+        vec![(current_lazy_item_latest_ptr, dist)]
     } else {
         z
     };
+
+    let top_lazy_item_latest_ptr = z[0].0;
+    let top_lazy_item = unsafe { &*top_lazy_item_latest_ptr }.latest();
+    let top_node = unsafe { &**top_lazy_item }.try_get_data(&hnsw_index.cache)?;
+    let child = top_node.get_child();
+    drop(top_lazy_item);
 
     if cur_level.0 != 0 {
         let results = ann_search(
@@ -262,9 +274,7 @@ pub fn ann_search(
             hnsw_index,
             vector_emb,
             query_filter_dims,
-            unsafe { &*z[0].0 }
-                .try_get_data(&hnsw_index.cache)?
-                .get_child(),
+            child,
             HNSWLevel(cur_level.0 - 1),
             hnsw_params,
         )?;
@@ -278,7 +288,7 @@ pub fn ann_search(
 pub fn finalize_ann_results(
     collection: &Collection,
     hnsw_index: &HNSWIndex,
-    results: Vec<(SharedNode, MetricResult)>,
+    results: Vec<(SharedLatestNode, MetricResult)>,
     query: &[f32],
     top_k: Option<usize>,
     return_raw_text: bool,
@@ -611,9 +621,8 @@ pub fn index_embeddings(
             emb.prop_metadata,
             root_entry,
             highest_level,
-            transaction.id,
+            transaction.version,
             file_id,
-            transaction.lazy_item_versions_table.clone(),
             &hnsw_params_guard,
             max_level, // Pass max_level to let index_embedding control node creation
             &offset_counter,
@@ -628,14 +637,13 @@ pub fn index_embeddings(
 pub fn index_embedding(
     config: &Config,
     hnsw_index: &HNSWIndex,
-    parent: SharedNode,
+    parent_lazy_item_latest_ptr: SharedLatestNode,
     prop_value: Arc<NodePropValue>,
     prop_metadata: Option<Arc<NodePropMetadata>>,
-    cur_entry: SharedNode,
+    current_lazy_item_latest_ptr: SharedLatestNode,
     cur_level: HNSWLevel,
-    version_hash: VersionHash,
+    version: VersionNumber,
     file_id: IndexFileId,
-    lazy_item_versions_table: Arc<TSHashTable<(InternalId, VersionHash, u8), SharedNode>>,
     hnsw_params: &HNSWHyperParams,
     max_level: u8,
     offset_counter: &HNSWIndexFileOffsetCounter,
@@ -649,16 +657,17 @@ pub fn index_embedding(
     });
     skipm.insert(*prop_value.id);
 
-    let cur_node = unsafe { &*cur_entry }.try_get_data(&hnsw_index.cache)?;
+    let current_lazy_item = unsafe { &*current_lazy_item_latest_ptr }.latest();
+    let current_node = unsafe { &**current_lazy_item }.try_get_data(&hnsw_index.cache)?;
 
-    let cur_node_id = &cur_node.prop_value.id;
+    let cur_node_id = &current_node.prop_value.id;
 
     let mdims = prop_metadata.clone().map(|pm| pm.vec.clone());
 
     let z = traverse_find_nearest(
         config,
         hnsw_index,
-        cur_entry,
+        current_lazy_item_latest_ptr,
         fvec,
         Some(&prop_value.id),
         mdims.as_deref(),
@@ -675,10 +684,10 @@ pub fn index_embedding(
             quantized_vec: fvec,
             metadata: mdims.as_deref(),
         };
-        let cur_node_metadata = cur_node.prop_metadata.clone().map(|pm| pm.vec.clone());
+        let cur_node_metadata = current_node.prop_metadata.clone().map(|pm| pm.vec.clone());
         let cur_node_data = VectorData {
             id: Some(cur_node_id),
-            quantized_vec: &cur_node.prop_value.vec,
+            quantized_vec: &current_node.prop_value.vec,
             metadata: cur_node_metadata.as_deref(),
         };
         let dist = hnsw_index.distance_metric.read().unwrap().calculate(
@@ -686,10 +695,19 @@ pub fn index_embedding(
             &cur_node_data,
             true,
         )?;
-        vec![(cur_entry, dist)]
+        vec![(current_lazy_item_latest_ptr, dist)]
     } else {
         z
     };
+
+    drop(current_lazy_item);
+
+    let top_lazy_item_latest_ptr = z[0].0;
+    let top_lazy_item = unsafe { &*top_lazy_item_latest_ptr }.latest();
+    let top_node = unsafe { &**top_lazy_item }.try_get_data(&hnsw_index.cache)?;
+    let child = top_node.get_child();
+    drop(top_lazy_item);
+
     if cur_level.0 > max_level {
         // Just traverse down without creating nodes
         if cur_level.0 != 0 {
@@ -699,13 +717,10 @@ pub fn index_embedding(
                 ptr::null_mut(),
                 prop_value.clone(),
                 prop_metadata.clone(),
-                unsafe { &*z[0].0 }
-                    .try_get_data(&hnsw_index.cache)?
-                    .get_child(),
+                child,
                 HNSWLevel(cur_level.0 - 1),
-                version_hash,
+                version,
                 file_id,
-                lazy_item_versions_table.clone(),
                 hnsw_params,
                 max_level,
                 offset_counter,
@@ -713,57 +728,45 @@ pub fn index_embedding(
             )?;
         }
     } else {
-        let (neighbors_count, is_level_0, offset) = if cur_level.0 == 0 {
-            (
-                hnsw_params.level_0_neighbors_count,
-                true,
-                offset_counter.next_level_0_offset(),
-            )
+        let neighbors_count = if cur_level.0 == 0 {
+            hnsw_params.level_0_neighbors_count
         } else {
-            (
-                hnsw_params.neighbors_count,
-                false,
-                offset_counter.next_offset(),
-            )
+            hnsw_params.neighbors_count
         };
 
         // Create node and edges at max_level and below
-        let lazy_node = create_node(
-            version_hash,
+        let lazy_item_latest_ptr = create_node(
+            version,
             file_id,
             cur_level,
             prop_value.clone(),
             prop_metadata.clone(),
-            parent,
+            parent_lazy_item_latest_ptr,
             ptr::null_mut(),
             neighbors_count,
-            offset,
+            offset_counter,
             distance_metric,
         );
 
-        let node = unsafe { &*lazy_node }.get_lazy_data().unwrap();
-
-        if let Some(parent) = unsafe { parent.as_ref() } {
-            parent
+        if let Some(parent_lazy_item_latest_ptr) = unsafe { parent_lazy_item_latest_ptr.as_ref() } {
+            let parent_lazy_item = parent_lazy_item_latest_ptr.latest();
+            unsafe { &**parent_lazy_item }
                 .try_get_data(&hnsw_index.cache)
                 .unwrap()
-                .set_child(lazy_node);
+                .set_child(lazy_item_latest_ptr);
         }
 
         if cur_level.0 != 0 {
             index_embedding(
                 config,
                 hnsw_index,
-                lazy_node,
+                lazy_item_latest_ptr,
                 prop_value.clone(),
                 prop_metadata.clone(),
-                unsafe { &*z[0].0 }
-                    .try_get_data(&hnsw_index.cache)?
-                    .get_child(),
+                child,
                 HNSWLevel(cur_level.0 - 1),
-                version_hash,
+                version,
                 file_id,
-                lazy_item_versions_table.clone(),
                 hnsw_params,
                 max_level,
                 offset_counter,
@@ -773,18 +776,15 @@ pub fn index_embedding(
 
         create_node_edges(
             hnsw_index,
-            lazy_node,
-            node,
+            lazy_item_latest_ptr,
             z,
-            version_hash,
+            version,
             file_id,
-            lazy_item_versions_table,
             if cur_level.0 == 0 {
                 hnsw_params.level_0_neighbors_count
             } else {
                 hnsw_params.neighbors_count
             },
-            is_level_0,
             offset_counter,
             distance_metric,
         )?;
@@ -795,20 +795,25 @@ pub fn index_embedding(
 
 #[allow(clippy::too_many_arguments)]
 fn create_node(
-    version_hash: VersionHash,
+    version: VersionNumber,
     file_id: IndexFileId,
     hnsw_level: HNSWLevel,
     prop_value: Arc<NodePropValue>,
     prop_metadata: Option<Arc<NodePropMetadata>>,
-    parent: SharedNode,
-    child: SharedNode,
+    parent: SharedLatestNode,
+    child: SharedLatestNode,
     neighbors_count: usize,
-    offset: FileOffset,
+    offset_counter: &HNSWIndexFileOffsetCounter,
     distance_metric: DistanceMetric,
-) -> SharedNode {
+) -> SharedLatestNode {
+    let offset = if hnsw_level.0 == 0 {
+        offset_counter.next_level_0_offset()
+    } else {
+        offset_counter.next_offset()
+    };
     let node = ProbNode::new(
         hnsw_level,
-        version_hash,
+        version,
         prop_value,
         prop_metadata,
         parent,
@@ -817,136 +822,51 @@ fn create_node(
         distance_metric,
     );
 
-    ProbLazyItem::new(node, file_id, offset)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn get_or_create_version(
-    hnsw_index: &HNSWIndex,
-    lazy_item_versions_table: Arc<TSHashTable<(InternalId, VersionHash, u8), SharedNode>>,
-    root_version_item: SharedNode,
-    version_hash: VersionHash,
-    file_id: IndexFileId,
-    is_level_0: bool,
-    offset_counter: &HNSWIndexFileOffsetCounter,
-    distance_metric: DistanceMetric,
-) -> Result<(SharedNode, bool), WaCustomError> {
-    let root_version_item_ref = unsafe { &*root_version_item };
-    let root_node = root_version_item_ref.try_get_data(&hnsw_index.cache)?;
-
-    lazy_item_versions_table.get_or_try_create_with_flag(
-        (root_node.get_id(), version_hash, root_node.hnsw_level.0),
-        || {
-            let (latest_version_item, mut guard) =
-                ProbLazyItem::get_absolute_latest_version_write_access(
-                    root_version_item,
-                    &hnsw_index.cache,
-                )?;
-            let latest_version_item_ref = unsafe { &*latest_version_item };
-            let latest_node = latest_version_item_ref.try_get_data(&hnsw_index.cache)?;
-            if latest_node.version == version_hash {
-                return Ok(latest_version_item);
-            }
-
-            let new_node = ProbNode::new_with_neighbors_and_versions_and_root_version(
-                latest_node.hnsw_level,
-                version_hash,
-                latest_node.prop_value.clone(),
-                latest_node.prop_metadata.clone(),
-                latest_node.clone_neighbors(),
-                latest_node.get_parent(),
-                latest_node.get_child(),
-                root_version_item,
-                true,
-                distance_metric,
-            );
-
-            let new_node_offset = if is_level_0 {
-                offset_counter.next_level_0_offset()
-            } else {
-                offset_counter.next_offset()
-            };
-
-            let version = ProbLazyItem::new(new_node, file_id, new_node_offset);
-
-            *guard = (version, false);
-            drop(guard);
-
-            let bufman = hnsw_index
-                .cache
-                .bufmans
-                .get(root_version_item_ref.file_index.file_id)?;
-
-            let cursor = bufman.open_cursor()?;
-            let file_index = root_version_item_ref.file_index;
-            let offset = file_index.offset.0;
-
-            bufman.seek_with_cursor(cursor, offset as u64 + 41)?;
-            bufman.update_u8_with_cursor(cursor, 0)?;
-            bufman.update_u32_with_cursor(cursor, new_node_offset.0)?;
-            bufman.update_u32_with_cursor(cursor, *file_id)?;
-
-            bufman.close_cursor(cursor)?;
-
-            if latest_node.version != root_node.version {
-                hnsw_index.cache.unload(latest_version_item)?;
-            }
-
-            Ok(version)
-        },
-    )
+    let lazy_item = ProbLazyItem::new(node, file_id, offset);
+    LatestNode::new(lazy_item, offset_counter.next_latest_version_link_offset())
 }
 
 #[allow(clippy::too_many_arguments)]
 fn create_node_edges(
     hnsw_index: &HNSWIndex,
-    lazy_node: SharedNode,
-    node: &ProbNode,
-    neighbors: Vec<(SharedNode, MetricResult)>,
-    version_hash: VersionHash,
+    lazy_item_latest_ptr: SharedLatestNode,
+    neighbors: Vec<(SharedLatestNode, MetricResult)>,
+    version: VersionNumber,
     file_id: IndexFileId,
-    lazy_item_versions_table: Arc<TSHashTable<(InternalId, VersionHash, u8), SharedNode>>,
     max_edges: usize,
-    is_level_0: bool,
     offset_counter: &HNSWIndexFileOffsetCounter,
     distance_metric: DistanceMetric,
 ) -> Result<(), WaCustomError> {
     let mut successful_edges = 0;
     let mut neighbors_to_update = Vec::new();
 
-    lazy_item_versions_table.insert((node.get_id(), version_hash, node.hnsw_level.0), lazy_node);
-    hnsw_index.cache.insert_lazy_object(lazy_node);
+    let lazy_item = unsafe { &*lazy_item_latest_ptr }.latest();
+    let node = unsafe { &**lazy_item }.try_get_data(&hnsw_index.cache)?;
 
     // First loop: Handle neighbor connections and collect updates
-    for (neighbor, dist) in neighbors {
+    for (neighbor_lazy_item_latest_ptr, dist) in neighbors {
         if successful_edges >= max_edges {
             break;
         }
 
-        let (new_lazy_neighbor, found_in_map) = get_or_create_version(
-            hnsw_index,
-            lazy_item_versions_table.clone(),
-            neighbor,
-            version_hash,
-            file_id,
-            is_level_0,
-            offset_counter,
-            distance_metric,
-        )?;
+        let (neighbor_lazy_item, newly_created) = unsafe { &*neighbor_lazy_item_latest_ptr }
+            .get_or_create_version(version, &hnsw_index.cache, file_id, offset_counter)?;
 
-        let new_neighbor = unsafe { &*new_lazy_neighbor }.try_get_data(&hnsw_index.cache)?;
+        let neighbor_node = unsafe { &**neighbor_lazy_item }.try_get_data(&hnsw_index.cache)?;
+
+        assert_eq!(neighbor_node.version, version);
         let neighbor_inserted_idx = node.add_neighbor(
-            new_neighbor.get_id(),
-            neighbor,
+            neighbor_node.get_id(),
+            neighbor_lazy_item_latest_ptr,
             dist,
             &hnsw_index.cache,
             distance_metric,
         );
 
         let neighbour_update_info = if let Some(neighbor_inserted_idx) = neighbor_inserted_idx {
-            let node_inserted_idx = new_neighbor.add_neighbor(
+            let node_inserted_idx = neighbor_node.add_neighbor(
                 node.get_id(),
-                lazy_node,
+                lazy_item_latest_ptr,
                 dist,
                 &hnsw_index.cache,
                 distance_metric,
@@ -955,17 +875,17 @@ fn create_node_edges(
                 successful_edges += 1;
                 Some((idx, dist))
             } else {
-                node.remove_neighbor_by_index_and_id(neighbor_inserted_idx, new_neighbor.get_id());
+                node.remove_neighbor_by_index_and_id(neighbor_inserted_idx, neighbor_node.get_id());
                 None
             }
         } else {
             None
         };
 
-        if !found_in_map {
-            write_node_to_file(new_lazy_neighbor, &hnsw_index.cache.bufmans, file_id)?;
+        if newly_created {
+            write_lazy_item_to_file(&hnsw_index.cache, *neighbor_lazy_item, file_id)?;
         } else if let Some((idx, dist)) = neighbour_update_info {
-            neighbors_to_update.push((new_lazy_neighbor, idx, dist));
+            neighbors_to_update.push((neighbor_lazy_item_latest_ptr, idx, dist));
         }
     }
 
@@ -973,27 +893,25 @@ fn create_node_edges(
     if !neighbors_to_update.is_empty() {
         let bufman = hnsw_index.cache.bufmans.get(file_id)?;
         let cursor = bufman.open_cursor()?;
-        let mut current_node_link = Vec::with_capacity(12);
+        let mut current_node_link = Vec::with_capacity(8);
         current_node_link.extend(node.get_id().to_le_bytes());
+        current_node_link.extend(
+            unsafe { &*lazy_item_latest_ptr }
+                .file_offset
+                .0
+                .to_le_bytes(),
+        );
 
-        let node = unsafe { &*lazy_node };
-
-        let FileIndex {
-            offset: node_offset,
-            file_id: node_file_id,
-        } = node.file_index;
-        current_node_link.extend(node_offset.0.to_le_bytes());
-        current_node_link.extend(node_file_id.to_le_bytes());
-
-        for (neighbor, neighbor_idx, dist) in neighbors_to_update {
-            let offset = unsafe { &*neighbor }.file_index.offset;
-            let mut current_node_link_with_dist = Vec::with_capacity(17);
+        for (neighbor_lazy_item_latest_ptr, neighbor_idx, dist) in neighbors_to_update {
+            let neighbor_lazy_item = unsafe { &*neighbor_lazy_item_latest_ptr }.latest();
+            let offset = unsafe { &**neighbor_lazy_item }.file_index.offset;
+            let mut current_node_link_with_dist = Vec::with_capacity(13);
             current_node_link_with_dist.clone_from(&current_node_link);
             let (tag, value) = dist.get_tag_and_value();
             current_node_link_with_dist.push(tag);
             current_node_link_with_dist.extend(value.to_le_bytes());
 
-            let neighbor_offset = (offset.0 + 52) + neighbor_idx as u32 * 17;
+            let neighbor_offset = (offset.0 + 31) + neighbor_idx as u32 * 13;
             bufman.seek_with_cursor(cursor, neighbor_offset as u64)?;
             bufman.update_with_cursor(cursor, &current_node_link_with_dist)?;
         }
@@ -1001,7 +919,7 @@ fn create_node_edges(
         bufman.close_cursor(cursor)?;
     }
 
-    write_node_to_file(lazy_node, &hnsw_index.cache.bufmans, file_id)?;
+    write_lazy_item_latest_ptr_to_file(&hnsw_index.cache, lazy_item_latest_ptr, file_id)?;
 
     Ok(())
 }
@@ -1010,7 +928,7 @@ fn create_node_edges(
 fn traverse_find_nearest(
     config: &Config,
     hnsw_index: &HNSWIndex,
-    start_node: SharedNode,
+    start_lazy_item_latest_ptr: SharedLatestNode,
     fvec: &Storage,
     fvec_id: Option<&InternalId>,
     mdims: Option<&Metadata>,
@@ -1019,13 +937,12 @@ fn traverse_find_nearest(
     distance_metric: &DistanceMetric,
     is_indexing: bool,
     ef: u32,
-) -> Result<Vec<(SharedNode, MetricResult)>, WaCustomError> {
+) -> Result<Vec<(SharedLatestNode, MetricResult)>, WaCustomError> {
     let mut candidate_queue = BinaryHeap::new();
     let mut results = Vec::new();
 
-    let (start_version, guard) =
-        ProbLazyItem::get_absolute_latest_version(start_node, &hnsw_index.cache)?;
-    let start_data = unsafe { &*start_version }.try_get_data(&hnsw_index.cache)?;
+    let start_lazy_item = unsafe { &*start_lazy_item_latest_ptr }.latest();
+    let start_node = unsafe { &**start_lazy_item }.try_get_data(&hnsw_index.cache)?;
 
     let fvec_data = VectorData {
         id: fvec_id,
@@ -1033,37 +950,36 @@ fn traverse_find_nearest(
         metadata: mdims,
     };
 
-    let start_metadata = start_data.prop_metadata.clone().map(|pm| pm.vec.clone());
+    let start_metadata = start_node.prop_metadata.clone().map(|pm| pm.vec.clone());
     let start_vec_data = VectorData {
-        id: Some(&start_data.prop_value.id),
-        quantized_vec: &start_data.prop_value.vec,
+        id: Some(&start_node.prop_value.id),
+        quantized_vec: &start_node.prop_value.vec,
         metadata: start_metadata.as_deref(),
     };
     let start_dist = distance_metric.calculate(&fvec_data, &start_vec_data, is_indexing)?;
 
-    let start_id = *start_data.get_id();
+    let start_id = *start_node.get_id();
+    drop(start_lazy_item);
     skipm.insert(start_id);
-    candidate_queue.push((start_dist, start_node));
-    drop(guard);
+    candidate_queue.push((start_dist, start_lazy_item_latest_ptr));
 
-    while let Some((dist, current_node)) = candidate_queue.pop() {
+    while let Some((dist, current_lazy_item_latest_ptr)) = candidate_queue.pop() {
         if *nodes_visited >= ef {
             break;
         }
         *nodes_visited += 1;
 
-        let (current_version, _guard) =
-            ProbLazyItem::get_absolute_latest_version(current_node, &hnsw_index.cache)?;
-        results.push((dist, current_node));
-        let node = unsafe { &*current_version }.try_get_data(&hnsw_index.cache)?;
+        let current_lazy_item = unsafe { &*current_lazy_item_latest_ptr }.latest();
+        results.push((dist, current_lazy_item_latest_ptr));
+        let current_node = unsafe { &**current_lazy_item }.try_get_data(&hnsw_index.cache)?;
 
-        let _lock = node.freeze();
-        for neighbor in node
+        let _lock = current_node.freeze();
+        for neighbor in current_node
             .get_neighbors_raw()
             .iter()
             .take(config.search.shortlist_size)
         {
-            let (neighbor_id, neighbor_node) = unsafe {
+            let (neighbor_id, neighbor_lazy_item_latest_ptr) = unsafe {
                 if let Some((id, node, _)) = neighbor.load(Ordering::Relaxed).as_ref() {
                     (*id, *node)
                 } else {
@@ -1072,18 +988,20 @@ fn traverse_find_nearest(
             };
 
             if !skipm.is_member(*neighbor_id) {
-                let neighbor_data = unsafe { &*neighbor_node }.try_get_data(&hnsw_index.cache)?;
+                let neighbor_lazy_item = unsafe { &*neighbor_lazy_item_latest_ptr }.latest();
+                let neighbor_node =
+                    unsafe { &**neighbor_lazy_item }.try_get_data(&hnsw_index.cache)?;
                 let neighbor_metadata =
-                    neighbor_data.prop_metadata.clone().map(|pm| pm.vec.clone());
+                    neighbor_node.prop_metadata.clone().map(|pm| pm.vec.clone());
                 let neighbor_vec_data = VectorData {
-                    id: Some(&neighbor_data.prop_value.id),
-                    quantized_vec: &neighbor_data.prop_value.vec,
+                    id: Some(&neighbor_node.prop_value.id),
+                    quantized_vec: &neighbor_node.prop_value.vec,
                     metadata: neighbor_metadata.as_deref(),
                 };
                 let dist =
                     distance_metric.calculate(&fvec_data, &neighbor_vec_data, is_indexing)?;
                 skipm.insert(*neighbor_id);
-                candidate_queue.push((dist, neighbor_node));
+                candidate_queue.push((dist, neighbor_lazy_item_latest_ptr));
             }
         }
     }

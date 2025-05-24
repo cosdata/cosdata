@@ -15,7 +15,7 @@ use super::{
     tf_idf_index::{UnsafeVersionedVec, UnsafeVersionedVecIter},
     types::FileOffset,
     utils::calculate_path,
-    versioning::VersionHash,
+    versioning::VersionNumber,
 };
 
 pub trait TreeMapKey: std::hash::Hash + Eq {
@@ -76,7 +76,7 @@ pub struct QuotientVec<T> {
 
 pub struct UnsafeVersionedItem<T> {
     pub serialized_at: RwLock<Option<FileOffset>>,
-    pub version: VersionHash,
+    pub version: VersionNumber,
     pub value: T,
     pub next: UnsafeCell<Option<Box<Self>>>,
 }
@@ -224,7 +224,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for UnsafeVersionedItem<T> {
 }
 
 impl<T> UnsafeVersionedItem<T> {
-    pub fn new(version: VersionHash, value: T) -> Self {
+    pub fn new(version: VersionNumber, value: T) -> Self {
         Self {
             serialized_at: RwLock::new(None),
             version,
@@ -233,7 +233,7 @@ impl<T> UnsafeVersionedItem<T> {
         }
     }
 
-    pub fn insert(&self, version: VersionHash, value: T) {
+    pub fn insert(&self, version: VersionNumber, value: T) {
         self.insert_inner(Box::new(Self::new(version, value)));
     }
 
@@ -287,7 +287,7 @@ impl<T> TreeMapNode<T> {
         current
     }
 
-    pub fn insert(&self, version: VersionHash, quotient: u64, value: T) {
+    pub fn insert(&self, version: VersionNumber, quotient: u64, value: T) {
         self.quotients.insert(version, quotient, value);
         self.dirty.store(true, Ordering::Release);
     }
@@ -324,7 +324,7 @@ impl<T> TreeMapVecNode<T> {
         current
     }
 
-    pub fn push(&self, version: VersionHash, quotient: u64, value: T) {
+    pub fn push(&self, version: VersionNumber, quotient: u64, value: T) {
         self.quotients.push(version, quotient, value);
         self.dirty.store(true, Ordering::Release);
     }
@@ -357,7 +357,7 @@ impl<T> Default for QuotientsMapVec<T> {
 }
 
 impl<T> QuotientsMap<T> {
-    pub fn insert(&self, version: VersionHash, quotient: u64, value: T) {
+    pub fn insert(&self, version: VersionNumber, quotient: u64, value: T) {
         self.map.modify_or_insert_with_value(
             quotient,
             value,
@@ -393,7 +393,7 @@ impl<T> QuotientsMap<T> {
 }
 
 impl<T> QuotientsMapVec<T> {
-    pub fn push(&self, version: VersionHash, quotient: u64, value: T) {
+    pub fn push(&self, version: VersionNumber, quotient: u64, value: T) {
         self.map.modify_or_insert_with_value(
             quotient,
             value,
@@ -461,7 +461,7 @@ impl<K: TreeMapKey, V> TreeMap<K, V> {
 }
 
 impl<K: TreeMapKey, V> TreeMap<K, V> {
-    pub fn insert(&self, version: VersionHash, key: &K, value: V) {
+    pub fn insert(&self, version: VersionNumber, key: &K, value: V) {
         let key = key.key();
         let node_pos = (key % 65536) as u32;
         let path = calculate_path(node_pos, 0);
@@ -526,7 +526,7 @@ impl<K: TreeMapKey, V> TreeMapVec<K, V> {
 }
 
 impl<K: TreeMapKey, V> TreeMapVec<K, V> {
-    pub fn push(&self, version: VersionHash, key: &K, value: V) {
+    pub fn push(&self, version: VersionNumber, key: &K, value: V) {
         let key = key.key();
         let node_pos = (key % 65536) as u32;
         let path = calculate_path(node_pos, 0);

@@ -18,25 +18,22 @@ pub(crate) async fn list_versions(
     let env = ctx.ain_env.persist.clone();
     let lmdb = MetaDb::from_env(env.clone(), collection_id)
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-    let version_control = VersionControl::from_existing(env.clone(), lmdb.db.clone());
+    let version_control = VersionControl::from_existing(env.clone(), lmdb.db);
     let versions = version_control
-        .get_branch_versions("main")
+        .get_versions()
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-    let current_hash =
+    let current_version =
         retrieve_current_version(&lmdb).map_err(|e| VersionError::DatabaseError(e.to_string()))?;
-    let mut versions = versions
+    let versions = versions
         .into_iter()
-        .map(|(hash, meta)| VersionMetadata {
-            hash,
+        .map(|meta| VersionMetadata {
             version_number: meta.version,
-            timestamp: meta.timestamp,
             vector_count: 0,
         })
         .collect::<Vec<VersionMetadata>>();
-    versions.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     Ok(VersionListResponse {
         versions,
-        current_hash,
+        current_version,
     })
 }
 
@@ -47,23 +44,15 @@ pub(crate) async fn get_current_version(
     let env = ctx.ain_env.persist.clone();
     let lmdb = MetaDb::from_env(env.clone(), collection_id)
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-    let version_control = VersionControl::from_existing(env.clone(), lmdb.db.clone());
-    let versions = version_control
-        .get_branch_versions("main")
-        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-    let current_hash =
-        retrieve_current_version(&lmdb).map_err(|e| VersionError::DatabaseError(e.to_string()))?;
-    let current_version = versions
-        .into_iter()
-        .find(|(hash, _)| *hash == current_hash)
-        .map(|(hash, version_meta)| CurrentVersionResponse {
-            hash,
-            version_number: version_meta.version,
-            timestamp: version_meta.timestamp,
-            vector_count: 0,
-        })
-        .ok_or(VersionError::InvalidVersionHash)?;
-    Ok(current_version)
+    let version_control = VersionControl::from_existing(env.clone(), lmdb.db);
+    let version_number = version_control
+        .get_current_version()
+        .map_err(|e| VersionError::DatabaseError(e.to_string()))?;
+
+    Ok(CurrentVersionResponse {
+        version_number,
+        vector_count: 0,
+    })
 }
 
 #[allow(unused)]

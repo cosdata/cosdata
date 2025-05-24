@@ -5,7 +5,10 @@ use actix_web::{
 
 use crate::app_context::AppContext;
 
-use super::{dtos::{CreateSessionDTO, Session}, service};
+use super::{
+    dtos::{CreateSessionDTO, Session},
+    service,
+};
 
 /// Create a new user session (login)
 #[utoipa::path(

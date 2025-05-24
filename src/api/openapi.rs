@@ -1,4 +1,4 @@
-use utoipa::{OpenApi, openapi};
+use utoipa::{openapi, OpenApi};
 
 fn api_info() -> openapi::InfoBuilder {
     openapi::InfoBuilder::new()
@@ -9,7 +9,7 @@ fn api_info() -> openapi::InfoBuilder {
             openapi::LicenseBuilder::new()
                 .name("Apache 2.0")
                 .url(Some("https://www.apache.org/licenses/LICENSE-2.0"))
-                .build()
+                .build(),
         ))
 }
 

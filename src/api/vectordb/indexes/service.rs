@@ -3,7 +3,9 @@ use std::sync::Arc;
 use crate::app_context::AppContext;
 
 use super::{
-    dtos::{CreateDenseIndexDto, CreateSparseIndexDto, CreateTFIDFIndexDto, IndexDetailsDto, IndexType},
+    dtos::{
+        CreateDenseIndexDto, CreateSparseIndexDto, CreateTFIDFIndexDto, IndexDetailsDto, IndexType,
+    },
     error::IndexesError,
     repo,
 };
@@ -60,7 +62,7 @@ pub(crate) async fn get_index(
     ctx: Arc<AppContext>,
 ) -> Result<IndexDetailsDto, IndexesError> {
     let index_json = repo::get_index(ctx, collection_id).await?;
-    
+
     // Convert the JSON value to our IndexDetailsDto format
     serde_json::from_value::<IndexDetailsDto>(index_json)
         .map_err(|_e| IndexesError::FailedToGetAppEnv)

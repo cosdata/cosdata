@@ -3,7 +3,7 @@ use crate::models::collection::{
     CollectionConfig, DenseVectorOptions, SparseVectorOptions, TFIDFOptions,
 };
 use serde::{Deserialize, Serialize};
-use utoipa::{ToSchema, IntoParams};
+use utoipa::{IntoParams, ToSchema};
 
 // Instead of implementing ToSchema for FieldValue, we'll use value_type in the schema attribute
 
@@ -93,8 +93,7 @@ pub(crate) struct CreateCollectionDtoResponse {
     pub description: Option<String>,
 }
 
-#[derive(Deserialize, ToSchema)]
-#[derive(IntoParams)]
+#[derive(Deserialize, ToSchema, IntoParams)]
 pub(crate) struct GetCollectionsDto {}
 
 #[derive(Serialize, ToSchema)]

@@ -10,7 +10,7 @@ use crate::{
         sparse_ann_query::SparseAnnQueryBasic,
         tf_idf_index::TFIDFIndexRoot,
         types::{InternalId, MetaDb, SparseVector},
-        versioning::VersionHash,
+        versioning::VersionNumber,
     },
 };
 use rustc_hash::FxHashMap;
@@ -86,7 +86,7 @@ impl TFIDFIndex {
 
     pub fn insert(
         &self,
-        version: VersionHash,
+        version: VersionNumber,
         id: InternalId,
         text: String,
     ) -> Result<(), BufIoError> {
@@ -131,7 +131,9 @@ impl IndexOps for TFIDFIndex {
     ) -> Result<(), WaCustomError> {
         embeddings
             .into_iter()
-            .try_for_each(|TFIDFInputEmbedding(id, text)| self.insert(transaction.id, id, text))?;
+            .try_for_each(|TFIDFInputEmbedding(id, text)| {
+                self.insert(transaction.version, id, text)
+            })?;
         Ok(())
     }
 

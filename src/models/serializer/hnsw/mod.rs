@@ -1,3 +1,4 @@
+mod latest_node;
 mod lazy_item;
 mod neighbors;
 mod node;
@@ -11,16 +12,23 @@ use crate::{
     models::{
         buffered_io::{BufIoError, BufferManager},
         cache_loader::HNSWIndexCache,
-        prob_lazy_load::lazy_item::FileIndex,
+        lazy_item::FileIndex,
         types::FileOffset,
     },
 };
 
 pub trait HNSWIndexSerialize: Sized {
-    fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError>;
+    fn serialize(
+        &self,
+        bufman: &BufferManager,
+        latest_version_links_bufman: &BufferManager,
+        cursor: u64,
+        latest_version_links_cursor: u64,
+    ) -> Result<u32, BufIoError>;
 
     fn deserialize(
         bufman: &BufferManager,
+        latest_version_links_bufman: &BufferManager,
         file_index: FileIndex,
         cache: &HNSWIndexCache,
         max_loads: u16,
@@ -33,7 +41,9 @@ pub trait RawDeserialize: Sized {
 
     fn deserialize_raw(
         bufman: &BufferManager,
+        latest_version_links_bufman: &BufferManager,
         cursor: u64,
+        latest_version_links_cursor: u64,
         offset: FileOffset,
         file_id: IndexFileId,
         cache: &HNSWIndexCache,

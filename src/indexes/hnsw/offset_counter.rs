@@ -34,6 +34,7 @@ pub struct HNSWIndexFileOffsetCounter {
     pub node_size: u32,
     pub min_size: u32,
     pub file_id: u32,
+    pub latest_version_links_offset: AtomicU32,
 }
 
 impl HNSWIndexFileOffsetCounter {
@@ -44,12 +45,14 @@ impl HNSWIndexFileOffsetCounter {
             node_size: ProbNode::get_serialized_size(neighbours_count) as u32,
             min_size,
             file_id: 0,
+            latest_version_links_offset: AtomicU32::new(0),
         }
     }
 
     pub fn from_offset_and_file_id(
         offset: u32,
         file_id: u32,
+        latest_version_links_offset: u32,
         min_size: u32,
         level_0_neighbors_count: usize,
         neighbours_count: usize,
@@ -60,6 +63,7 @@ impl HNSWIndexFileOffsetCounter {
             node_size: ProbNode::get_serialized_size(neighbours_count) as u32,
             min_size,
             file_id,
+            latest_version_links_offset: AtomicU32::new(latest_version_links_offset),
         }
     }
 
@@ -85,5 +89,12 @@ impl HNSWIndexFileOffsetCounter {
 
     pub fn next_offset(&self) -> FileOffset {
         FileOffset(self.offset.fetch_add(self.node_size, Ordering::Relaxed))
+    }
+
+    pub fn next_latest_version_link_offset(&self) -> FileOffset {
+        FileOffset(
+            self.latest_version_links_offset
+                .fetch_add(8, Ordering::Relaxed),
+        )
     }
 }

@@ -4,7 +4,7 @@ use crate::models::{
     buffered_io::{BufIoError, BufferManager},
     page::{Pagepool, VersionedPagepool},
     types::FileOffset,
-    versioning::VersionHash,
+    versioning::VersionNumber,
 };
 
 use super::SimpleSerialize;
@@ -21,7 +21,7 @@ impl<const LEN: usize> SimpleSerialize for VersionedPagepool<LEN> {
             }
         };
         if let Some(offset) = *self.serialized_at.read().map_err(|_| BufIoError::Locking)? {
-            bufman.seek_with_cursor(cursor, offset.0 as u64 + 8)?;
+            bufman.seek_with_cursor(cursor, offset.0 as u64 + 4)?;
             bufman.update_u32_with_cursor(cursor, pagepool_offset)?;
             bufman.update_u32_with_cursor(cursor, next_offset)?;
             return Ok(offset.0);
@@ -31,12 +31,12 @@ impl<const LEN: usize> SimpleSerialize for VersionedPagepool<LEN> {
             .write()
             .map_err(|_| BufIoError::Locking)?;
         if let Some(offset) = *serialized_at {
-            bufman.seek_with_cursor(cursor, offset.0 as u64 + 8)?;
+            bufman.seek_with_cursor(cursor, offset.0 as u64 + 4)?;
             bufman.update_u32_with_cursor(cursor, pagepool_offset)?;
             bufman.update_u32_with_cursor(cursor, next_offset)?;
             return Ok(offset.0);
         }
-        let mut buf = Vec::with_capacity(16);
+        let mut buf = Vec::with_capacity(12);
         buf.extend(self.current_version.to_le_bytes());
         buf.extend(pagepool_offset.to_le_bytes());
         buf.extend(next_offset.to_le_bytes());
@@ -48,7 +48,7 @@ impl<const LEN: usize> SimpleSerialize for VersionedPagepool<LEN> {
     fn deserialize(bufman: &BufferManager, file_offset: FileOffset) -> Result<Self, BufIoError> {
         let cursor = bufman.open_cursor()?;
         bufman.seek_with_cursor(cursor, file_offset.0 as u64)?;
-        let current_version = VersionHash::from(bufman.read_u64_with_cursor(cursor)?);
+        let current_version = VersionNumber::from(bufman.read_u32_with_cursor(cursor)?);
         let pagepool_offset = bufman.read_u32_with_cursor(cursor)?;
         let next_offset = bufman.read_u32_with_cursor(cursor)?;
         bufman.close_cursor(cursor)?;

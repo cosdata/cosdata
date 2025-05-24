@@ -2,7 +2,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use utoipa::ToSchema;
 
 use crate::{
-    config_loader::Config, indexes::hnsw::types::HNSWHyperParams, 
+    config_loader::Config, indexes::hnsw::types::HNSWHyperParams,
     models::schema_traits::DistanceMetricSchema, quantization::StorageType,
 };
 

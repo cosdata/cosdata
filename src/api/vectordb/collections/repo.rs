@@ -36,7 +36,7 @@ pub(crate) async fn create_collection(
     let collections_db = &ctx.ain_env.collections_map.lmdb_collections_db;
     let lmdb = MetaDb::from_env(env.clone(), &name)
         .map_err(|err| CollectionsError::WaCustomError(WaCustomError::from(err)))?;
-    let (vcs, hash) = VersionControl::new(env.clone(), lmdb.db.clone())
+    let (vcs, hash) = VersionControl::new(env.clone(), lmdb.db)
         .map_err(|err| CollectionsError::WaCustomError(WaCustomError::from(err)))?;
 
     let metadata_schema = match metadata_schema {
@@ -61,7 +61,7 @@ pub(crate) async fn create_collection(
         lmdb,
         hash,
         vcs,
-        ctx.config.clone(),
+        &ctx,
     )
     .map_err(CollectionsError::WaCustomError)?;
 

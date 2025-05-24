@@ -1,6 +1,6 @@
-use utoipa::ToSchema;
-use serde::{Deserialize, Serialize};
 use crate::models::types::DistanceMetric;
+use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 // Create a wrapper type for DistanceMetric that can derive ToSchema
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

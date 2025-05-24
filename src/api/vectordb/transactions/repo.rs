@@ -6,7 +6,7 @@ use super::{dtos::CreateTransactionResponseDto, error::TransactionError};
 use crate::models::collection_transaction::{CollectionTransaction, TransactionStatus};
 use crate::models::meta_persist::update_current_version;
 use crate::models::types::VectorId;
-use crate::models::versioning::VersionHash;
+use crate::models::versioning::VersionNumber;
 use crate::models::wal::VectorOp;
 use crate::{api::vectordb::vectors, app_context::AppContext};
 use chrono::Utc;
@@ -28,9 +28,9 @@ pub(crate) async fn create_transaction(
         return Err(TransactionError::OnGoingTransaction);
     }
 
-    let transaction = CollectionTransaction::new(&collection, false)
+    let transaction = CollectionTransaction::new(&collection)
         .map_err(|err| TransactionError::FailedToCreateTransaction(err.to_string()))?;
-    let transaction_id = transaction.id;
+    let transaction_id = transaction.version;
 
     *current_open_transaction_guard = Some(transaction);
 
@@ -44,7 +44,7 @@ pub(crate) async fn create_transaction(
 pub(crate) async fn commit_transaction(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    transaction_id: VersionHash,
+    transaction_id: VersionNumber,
 ) -> Result<(), TransactionError> {
     let collection = ctx
         .ain_env
@@ -58,13 +58,11 @@ pub(crate) async fn commit_transaction(
     let Some(current_open_transaction) = current_open_transaction_guard.take() else {
         return Err(TransactionError::NotFound);
     };
-    let current_transaction_id = current_open_transaction.id;
+    let current_transaction_id = current_open_transaction.version;
 
     if current_transaction_id != transaction_id {
         return Err(TransactionError::NotFound);
     }
-
-    let version_number = current_open_transaction.version_number;
 
     current_open_transaction
         .pre_commit()
@@ -73,7 +71,7 @@ pub(crate) async fn commit_transaction(
     *current_version_guard = current_transaction_id;
     collection
         .vcs
-        .set_branch_version("main", version_number, current_transaction_id)
+        .set_current_version(current_transaction_id, false)
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
     update_current_version(&collection.lmdb, current_transaction_id)
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
@@ -86,7 +84,7 @@ pub(crate) async fn commit_transaction(
 pub(crate) async fn get_transaction_status(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    transaction_id: VersionHash,
+    transaction_id: VersionNumber,
 ) -> Result<TransactionStatus, TransactionError> {
     let collection = ctx
         .ain_env
@@ -106,7 +104,7 @@ pub(crate) async fn get_transaction_status(
 pub(crate) async fn create_vector_in_transaction(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    transaction_id: VersionHash,
+    transaction_id: VersionNumber,
     create_vector_dto: CreateVectorDto,
 ) -> Result<(), TransactionError> {
     let collection = ctx
@@ -120,7 +118,7 @@ pub(crate) async fn create_vector_in_transaction(
         return Err(TransactionError::NotFound);
     };
 
-    if current_open_transaction.id != transaction_id {
+    if current_open_transaction.version != transaction_id {
         return Err(TransactionError::FailedToCreateVector(
             "This is not the currently open transaction!".into(),
         ));
@@ -140,7 +138,7 @@ pub(crate) async fn create_vector_in_transaction(
 pub(crate) async fn abort_transaction(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    transaction_id: VersionHash,
+    transaction_id: VersionNumber,
 ) -> Result<(), TransactionError> {
     let collection = ctx
         .ain_env
@@ -152,7 +150,7 @@ pub(crate) async fn abort_transaction(
     let Some(current_open_transaction) = current_open_transaction_guard.take() else {
         return Err(TransactionError::NotFound);
     };
-    let current_transaction_id = current_open_transaction.id;
+    let current_transaction_id = current_open_transaction.version;
 
     if current_transaction_id != transaction_id {
         return Err(TransactionError::NotFound);
@@ -164,7 +162,7 @@ pub(crate) async fn abort_transaction(
 pub(crate) async fn delete_vector_by_id(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    transaction_id: VersionHash,
+    transaction_id: VersionNumber,
     vector_id: VectorId,
 ) -> Result<(), TransactionError> {
     let collection = ctx
@@ -178,7 +176,7 @@ pub(crate) async fn delete_vector_by_id(
         return Err(TransactionError::NotFound);
     };
 
-    if current_open_transaction.id != transaction_id {
+    if current_open_transaction.version != transaction_id {
         return Err(TransactionError::FailedToCreateVector(
             "This is not the currently open transaction!".into(),
         ));
@@ -195,7 +193,7 @@ pub(crate) async fn delete_vector_by_id(
 pub(crate) async fn upsert_vectors(
     ctx: Arc<AppContext>,
     collection_id: &str,
-    transaction_id: VersionHash,
+    transaction_id: VersionNumber,
     vectors: Vec<CreateVectorDto>,
 ) -> Result<(), TransactionError> {
     let collection = ctx
@@ -209,7 +207,7 @@ pub(crate) async fn upsert_vectors(
         return Err(TransactionError::NotFound);
     };
 
-    if current_open_transaction.id != transaction_id {
+    if current_open_transaction.version != transaction_id {
         return Err(TransactionError::FailedToCreateVector(
             "This is not the currently open transaction!".into(),
         ));

@@ -1,8 +1,8 @@
+use super::dtos::{CurrentVersionResponse, VersionListResponse};
+use super::error::VersionError;
 use super::service;
 use crate::app_context::AppContext;
 use actix_web::{web, HttpResponse, Result};
-use super::dtos::{VersionListResponse, CurrentVersionResponse};
-use super::error::VersionError;
 
 /// List all versions of a collection
 #[utoipa::path(

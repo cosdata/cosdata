@@ -4,7 +4,7 @@ use crate::models::{
     atomic_array::AtomicArray,
     buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
     cache_loader::TFIDFIndexCache,
-    prob_lazy_load::lazy_item::ProbLazyItem,
+    lazy_item::ProbLazyItem,
     tf_idf_index::{TFIDFIndexNode, TFIDFIndexNodeData},
     types::FileOffset,
 };

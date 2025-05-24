@@ -2,7 +2,7 @@ use crate::models::{
     buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
     cache_loader::InvertedIndexCache,
     inverted_index::InvertedIndexNodeData,
-    prob_lazy_load::lazy_item::ProbLazyItem,
+    lazy_item::ProbLazyItem,
     types::FileOffset,
 };
 

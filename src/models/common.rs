@@ -1,6 +1,6 @@
 use super::buffered_io::BufIoError;
 use super::cache_loader::HNSWIndexCache;
-use super::prob_node::SharedNode;
+use super::prob_node::SharedLatestNode;
 use super::types::{InternalId, MetricResult};
 use crate::distance::DistanceError;
 use crate::indexes::hnsw::HNSWIndex;
@@ -380,15 +380,16 @@ pub fn get_max_insert_level(x: f64, levels: &[(f64, u8)]) -> u8 {
 
 pub fn remove_duplicates_and_filter(
     hnsw_index: &HNSWIndex,
-    vec: Vec<(SharedNode, MetricResult)>,
+    vec: Vec<(SharedLatestNode, MetricResult)>,
     k: Option<usize>,
     cache: &HNSWIndexCache,
 ) -> Vec<(InternalId, MetricResult)> {
     let mut seen = HashSet::new();
     let mut collected = vec
         .into_iter()
-        .filter_map(|(lazy_item, similarity)| {
-            let node = unsafe { &*lazy_item }.try_get_data(cache).unwrap();
+        .filter_map(|(lazy_item_latest_ptr, similarity)| {
+            let lazy_item = unsafe { &*lazy_item_latest_ptr }.latest();
+            let node = unsafe { &**lazy_item }.try_get_data(cache).unwrap();
             let replica_id = node.get_id();
             let orig_id = replica_id / (hnsw_index.max_replica_per_node as u32);
             if !seen.insert(orig_id) {
