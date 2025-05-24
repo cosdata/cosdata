@@ -96,6 +96,10 @@ crate::cfg_grpc! {
                     self.context.ain_env.collections_map.lmdb_collections_db,
                 )
                 .map_err(Status::from)?;
+
+            collection
+                .flush(&ctx.config)
+                .map_err(Status::from)?;
             update_current_version(&collection.lmdb, hash).map_err(Status::from)?;
 
             Ok(Response::new(CreateCollectionResponse {

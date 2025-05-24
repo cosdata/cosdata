@@ -75,6 +75,10 @@ pub(crate) async fn create_collection(
     collection
         .persist(env, *collections_db)
         .map_err(CollectionsError::WaCustomError)?;
+
+    collection
+        .flush(&ctx.config)
+        .map_err(CollectionsError::WaCustomError)?;
     update_current_version(&collection.lmdb, hash).map_err(CollectionsError::WaCustomError)?;
     Ok(collection)
 }
