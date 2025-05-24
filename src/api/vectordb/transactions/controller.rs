@@ -5,7 +5,11 @@ use crate::app_context::AppContext;
 use crate::models::collection_cache::CollectionCacheExt;
 use crate::models::collection_transaction::TransactionStatus;
 
-use super::{dtos::{CreateTransactionResponseDto, UpsertDto}, error::TransactionError, service};
+use super::{
+    dtos::{CreateTransactionResponseDto, UpsertDto},
+    error::TransactionError,
+    service,
+};
 
 /// Create a new transaction for a collection
 ///

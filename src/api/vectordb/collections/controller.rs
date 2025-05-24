@@ -4,13 +4,13 @@ use crate::app_context::AppContext;
 
 use super::{
     dtos::{
-        CreateCollectionDto, CreateCollectionDtoResponse, GetCollectionsDto, GetCollectionsResponseDto,
-        ListCollectionsResponseDto,
+        CreateCollectionDto, CreateCollectionDtoResponse, GetCollectionsDto,
+        GetCollectionsResponseDto, ListCollectionsResponseDto,
     },
     service,
 };
-use crate::api::vectordb::collections::error::CollectionsError;
 use crate::api::openapi::CollectionIndexingStatusResponse;
+use crate::api::vectordb::collections::error::CollectionsError;
 
 /// Create a new collection
 ///
@@ -104,7 +104,7 @@ pub(crate) async fn get_collection_indexing_status(
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse> {
     let status = service::get_collection_indexing_status(ctx.into_inner(), &collection_id).await?;
-    
+
     // Convert to the simplified response format for the API docs
     let response = CollectionIndexingStatusResponse {
         collection_name: status.collection_name,
@@ -116,7 +116,7 @@ pub(crate) async fn get_collection_indexing_status(
         average_rate_per_second_completed: status.status_summary.average_rate_per_second_completed,
         last_synced: status.last_synced.to_rfc3339(),
     };
-    
+
     Ok(HttpResponse::Ok().json(response))
 }
 

@@ -845,8 +845,9 @@ impl CollectionsMap {
                             file_index.file_id,
                             cache,
                         )
-                        .unwrap_or_else(|_| panic!("failed to load node at file index: {:?}",
-                            file_index));
+                        .unwrap_or_else(|_| {
+                            panic!("failed to load node at file index: {:?}", file_index)
+                        });
                         raw_node_sender.send((node, file_index)).unwrap();
                     }
 

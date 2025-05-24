@@ -4,9 +4,9 @@ use crate::app_context::AppContext;
 use crate::models::collection_cache::CollectionCacheExt;
 
 use super::dtos::{
-    BatchDenseSearchRequestDto, BatchSearchResponseDto, BatchSearchTFIDFDocumentsDto, BatchSparseSearchRequestDto,
-    DenseSearchRequestDto, FindSimilarTFIDFDocumentDto, HybridSearchRequestDto,
-    SearchResponseDto, SparseSearchRequestDto
+    BatchDenseSearchRequestDto, BatchSearchResponseDto, BatchSearchTFIDFDocumentsDto,
+    BatchSparseSearchRequestDto, DenseSearchRequestDto, FindSimilarTFIDFDocumentDto,
+    HybridSearchRequestDto, SearchResponseDto, SparseSearchRequestDto,
 };
 use super::error::SearchError;
 
