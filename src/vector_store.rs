@@ -79,8 +79,13 @@ pub fn create_root_node(
         Some(schema) => {
             let mbits = schema.base_dimensions();
             let metadata = Arc::new(Metadata { mag: 0.0, mbits });
-            let location = write_prop_metadata_to_file(metadata.clone(), &mut prop_file_guard)?;
+            // A root node is similar to a base replica node. Hence
+            // the replica_id and prop_value's id are same.
+            let replica_id = vec_hash;
+            let location =
+                write_prop_metadata_to_file(replica_id, metadata.clone(), &mut prop_file_guard)?;
             Some(Arc::new(NodePropMetadata {
+                replica_id: vec_hash,
                 vec: metadata,
                 location,
             }))
@@ -180,8 +185,13 @@ pub fn create_pseudo_root_node(
     let prop_metadata = {
         let mbits = metadata_schema.pseudo_root_dimensions(HIGH_WEIGHT);
         let metadata = Arc::new(Metadata::from(mbits));
-        let location = write_prop_metadata_to_file(metadata.clone(), &mut prop_file_guard)?;
+        // A pseudo root node is similar to a base replica node. Hence
+        // the replica_id and prop_value's id are same.
+        let replica_id = vec_hash;
+        let location =
+            write_prop_metadata_to_file(replica_id, metadata.clone(), &mut prop_file_guard)?;
         Some(Arc::new(NodePropMetadata {
+            replica_id: vec_hash,
             vec: metadata,
             location,
         }))
@@ -284,12 +294,12 @@ pub fn ann_search(
                     match dist {
                         MetricResult::CosineSimilarity(cs) => {
                             if cs.0 == -1.0 {
-                                continue
+                                continue;
                             } else {
                                 z_candidates.push((node, dist));
                             }
-                        },
-                        _ => z_candidates.push((node, dist))
+                        }
+                        _ => z_candidates.push((node, dist)),
                     }
                 }
             }
@@ -319,7 +329,7 @@ pub fn ann_search(
     let mut z = if z.is_empty() {
         let current_lazy_item = unsafe { &*current_lazy_item_latest_ptr }.latest();
         let current_node = unsafe { &**current_lazy_item }.try_get_data(&hnsw_index.cache)?;
-        let cur_node_id = &current_node.prop_value.id;
+        let cur_node_id = &current_node.get_id();
         let dist = match query_filter_dims {
             // In case of metadata filters in query, we calculate the
             // distances between the cur_node and all query filter
@@ -461,7 +471,7 @@ impl IndexableEmbedding {
                     } else {
                         ReplicaNodeKind::Metadata
                     }
-                },
+                }
                 None => ReplicaNodeKind::Base,
             }
         }
@@ -475,9 +485,14 @@ impl IndexableEmbedding {
 }
 
 /// Computes "metadata replica sets" i.e. all metadata dimensions
-/// along with an id for the provided metadata `fields` and based on
-/// the metadata `schema`. If `fields` is None or an empty map, it
-/// will return a vector with a single item i.e. the base dimensions.
+/// along based on the metadata `schema`. This includes both base and
+/// metadata dimensions.
+///
+/// Note that the first item in the result will correspond to the base
+/// dimensions. This can be used as an assumption.
+///
+/// If `fields` is None or an empty map, it will return a vector with
+/// a single item i.e. the base dimensions.
 fn metadata_replica_set(
     schema: &MetadataSchema,
     fields: Option<&MetadataFields>,
@@ -509,13 +524,19 @@ fn prop_metadata_replicas(
     schema: Option<&MetadataSchema>,
     metadata_fields: Option<&MetadataFields>,
     prop_file: &RwLock<File>,
+    base_id: &InternalId,
 ) -> Result<Option<Vec<NodePropMetadata>>, WaCustomError> {
     if schema.is_none() {
         return Ok(None);
     }
 
     let replica_set = if metadata_fields.is_some() {
-        Some(metadata_replica_set(schema.unwrap(), metadata_fields)?)
+        let rs = metadata_replica_set(schema.unwrap(), metadata_fields)?
+            .into_iter()
+            .enumerate()
+            .map(|(i, r)| (InternalId::from(**base_id + i as u32), r))
+            .collect::<Vec<(InternalId, Metadata)>>();
+        Some(rs)
     } else {
         // If the collection supports metadata schema and
         // even if no metadata fields are specified with
@@ -525,7 +546,12 @@ fn prop_metadata_replicas(
             Some(s) => {
                 let mrset = metadata_replica_set(s, None)?;
                 debug_assert_eq!(1, mrset.len());
-                Some(mrset)
+                let result = mrset
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, r)| (InternalId::from(**base_id + i as u32), r))
+                    .collect::<Vec<(InternalId, Metadata)>>();
+                Some(result)
             }
             // Following is unreachable as the case of schema being
             // None has already been handled
@@ -535,7 +561,7 @@ fn prop_metadata_replicas(
 
     if let Some(replicas) = replica_set {
         let mut result = Vec::with_capacity(replicas.len());
-        for m in replicas {
+        for (id, m) in replicas {
             let mvalue = Arc::new(m);
 
             // Write metadata to the same prop file
@@ -544,10 +570,11 @@ fn prop_metadata_replicas(
                     "Failed to acquire lock to write prop metadata".to_string(),
                 )
             })?;
-            let location = write_prop_metadata_to_file(mvalue.clone(), &mut prop_file_guard)?;
+            let location = write_prop_metadata_to_file(id, mvalue.clone(), &mut prop_file_guard)?;
             drop(prop_file_guard);
 
             let prop_metadata = NodePropMetadata {
+                replica_id: id,
                 vec: mvalue,
                 location,
             };
@@ -562,6 +589,7 @@ fn prop_metadata_replicas(
 fn pseudo_metadata_replicas(
     schema: &MetadataSchema,
     prop_file: &RwLock<File>,
+    base_id: &InternalId,
 ) -> Result<Vec<NodePropMetadata>, WaCustomError> {
     let dims = schema.pseudo_nonroot_dimensions(HIGH_WEIGHT);
     let replicas = dims
@@ -575,10 +603,15 @@ fn pseudo_metadata_replicas(
         WaCustomError::LockError("Failed to acquire lock to write prop metadata".to_string())
     })?;
     let mut result = Vec::with_capacity(replicas.len());
-    for m in replicas {
+    for (i, m) in replicas.into_iter().enumerate() {
         let mvalue = Arc::new(m);
-        let location = write_prop_metadata_to_file(mvalue.clone(), &mut prop_file_guard)?;
+        // @NOTE: Why is an extra 1 added below - The base_id is of
+        // pseudo root node which has already been created
+        let replica_id = InternalId::from(**base_id + i as u32 + 1);
+        let location =
+            write_prop_metadata_to_file(replica_id, mvalue.clone(), &mut prop_file_guard)?;
         let prop_metadata = NodePropMetadata {
+            replica_id,
             vec: mvalue,
             location,
         };
@@ -608,44 +641,26 @@ fn preprocess_embedding(
         *hnsw_index.values_range.read().unwrap(),
     )?);
 
-    let base_id = if raw_emb.is_pseudo {
-        raw_emb.hash_vec
-    } else {
-        raw_emb.hash_vec * hnsw_index.max_replica_per_node as u32
-    };
-
-    // Write props to the prop file
-    let mut prop_file_guard = hnsw_index.cache.prop_file.write().unwrap();
-    let location = write_prop_value_to_file(&base_id, &quantized_vec, &mut prop_file_guard)
-        .expect("failed to write prop");
-    drop(prop_file_guard);
-
-    let prop_value = Arc::new(NodePropValue {
-        id: base_id,
-        vec: quantized_vec.clone(),
-        location,
-    });
+    let base_id = raw_emb.hash_vec;
 
     let metadata_schema = collection.meta.metadata_schema.as_ref();
     let prop_file = &hnsw_index.cache.prop_file;
 
     let embeddings = if raw_emb.is_pseudo {
-        let replicas = pseudo_metadata_replicas(metadata_schema.unwrap(), prop_file)?;
+        let replicas = pseudo_metadata_replicas(metadata_schema.unwrap(), prop_file, &base_id)?;
         let num_levels = hnsw_index.levels_prob.len() - 1;
         let plp = pseudo_level_probs(num_levels as u8, replicas.len() as u16);
+
+        // Find the pseudo root node so that we can reuse it's
+        // prop_value in rest of the pseudo nodes
+        let pseudo_root = hnsw_index.pseudo_root_vec.unwrap();
+        let pseudo_root_lazy = unsafe { &*pseudo_root }.latest();
+        let pseudo_root_node = unsafe { &**pseudo_root_lazy }.try_get_data(&hnsw_index.cache)?;
+
         let mut embeddings: Vec<IndexableEmbedding> = vec![];
-        for (replica_id, prop_metadata) in replicas.into_iter().enumerate() {
-            let id = InternalId::from(*base_id + replica_id as u32 + 1);
-            let mut prop_file_guard = hnsw_index.cache.prop_file.write().unwrap();
-            let location = write_prop_value_to_file(&id, &quantized_vec, &mut prop_file_guard)
-                .expect("failed to write prop");
-            drop(prop_file_guard);
+        for prop_metadata in replicas.into_iter() {
             let emb = IndexableEmbedding {
-                prop_value: Arc::new(NodePropValue {
-                    id,
-                    vec: quantized_vec.clone(),
-                    location,
-                }),
+                prop_value: pseudo_root_node.prop_value.clone(),
                 prop_metadata: Some(Arc::new(prop_metadata)),
                 overridden_level_probs: Some(plp.clone()),
             };
@@ -653,27 +668,30 @@ fn preprocess_embedding(
         }
         embeddings
     } else {
+        // Write props to the prop file
+        let mut prop_file_guard = hnsw_index.cache.prop_file.write().unwrap();
+        let location = write_prop_value_to_file(&base_id, &quantized_vec, &mut prop_file_guard)
+            .expect("failed to write prop");
+        drop(prop_file_guard);
+
+        let prop_value = Arc::new(NodePropValue {
+            id: base_id,
+            vec: quantized_vec.clone(),
+            location,
+        });
+
         let metadata_replicas = prop_metadata_replicas(
             collection.meta.metadata_schema.as_ref(),
             raw_emb.raw_metadata.as_ref(),
             &hnsw_index.cache.prop_file,
+            &base_id,
         )?;
         match metadata_replicas {
             Some(replicas) => {
                 let mut embeddings: Vec<IndexableEmbedding> = vec![];
-                for (replica_id, prop_metadata) in replicas.into_iter().enumerate() {
-                    let id = InternalId::from(*base_id + replica_id as u32 + 1);
-                    let mut prop_file_guard = hnsw_index.cache.prop_file.write().unwrap();
-                    let location =
-                        write_prop_value_to_file(&id, &quantized_vec, &mut prop_file_guard)
-                            .expect("failed to write prop");
-                    drop(prop_file_guard);
+                for prop_metadata in replicas.into_iter() {
                     let emb = IndexableEmbedding {
-                        prop_value: Arc::new(NodePropValue {
-                            id,
-                            vec: quantized_vec.clone(),
-                            location,
-                        }),
+                        prop_value: prop_value.clone(),
                         prop_metadata: Some(Arc::new(prop_metadata)),
                         overridden_level_probs: None,
                     };
@@ -789,7 +807,7 @@ pub fn index_embedding(
     let current_lazy_item = unsafe { &*current_lazy_item_latest_ptr }.latest();
     let current_node = unsafe { &**current_lazy_item }.try_get_data(&hnsw_index.cache)?;
 
-    let cur_node_id = &current_node.prop_value.id;
+    let cur_node_id = &current_node.get_id();
 
     let mdims = prop_metadata.clone().map(|pm| pm.vec.clone());
 
@@ -987,18 +1005,30 @@ fn create_node_edges(
 
         // Ensure that a metadata node gets connected to a pseudo node
         // only if there's a perfect match
-        match (neighbor_node.replica_node_kind(), node.replica_node_kind(), &dist) {
-            (ReplicaNodeKind::Pseudo, ReplicaNodeKind::Metadata, MetricResult::CosineSimilarity(cs)) => {
+        match (
+            neighbor_node.replica_node_kind(),
+            node.replica_node_kind(),
+            &dist,
+        ) {
+            (
+                ReplicaNodeKind::Pseudo,
+                ReplicaNodeKind::Metadata,
+                MetricResult::CosineSimilarity(cs),
+            ) => {
                 if cs.0 != 1.0 {
-                    continue
+                    continue;
                 }
-            },
-            (ReplicaNodeKind::Metadata, ReplicaNodeKind::Metadata, MetricResult::CosineSimilarity(cs)) => {
+            }
+            (
+                ReplicaNodeKind::Metadata,
+                ReplicaNodeKind::Metadata,
+                MetricResult::CosineSimilarity(cs),
+            ) => {
                 if cs.0 == -1.0 {
-                    continue
+                    continue;
                 }
-            },
-            _ => { },
+            }
+            _ => {}
         }
 
         let neighbor_inserted_idx = node.add_neighbor(
@@ -1097,8 +1127,9 @@ fn traverse_find_nearest(
     };
 
     let start_metadata = start_node.prop_metadata.clone().map(|pm| pm.vec.clone());
+    let start_node_id = start_node.get_id();
     let start_vec_data = VectorData {
-        id: Some(&start_node.prop_value.id),
+        id: Some(&start_node_id),
         quantized_vec: &start_node.prop_value.vec,
         metadata: start_metadata.as_deref(),
     };
@@ -1139,8 +1170,9 @@ fn traverse_find_nearest(
                     unsafe { &**neighbor_lazy_item }.try_get_data(&hnsw_index.cache)?;
                 let neighbor_metadata =
                     neighbor_node.prop_metadata.clone().map(|pm| pm.vec.clone());
+                let neighbor_node_id = neighbor_node.get_id();
                 let neighbor_vec_data = VectorData {
-                    id: Some(&neighbor_node.prop_value.id),
+                    id: Some(&neighbor_node_id),
                     quantized_vec: &neighbor_node.prop_value.vec,
                     metadata: neighbor_metadata.as_deref(),
                 };

@@ -155,6 +155,7 @@ pub struct MetadataId(pub u8);
 
 #[derive(Debug, PartialEq)]
 pub struct NodePropMetadata {
+    pub replica_id: InternalId,
     pub vec: Arc<Metadata>,
     pub location: PropPersistRef,
 }

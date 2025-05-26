@@ -216,7 +216,10 @@ impl ProbNode {
     }
 
     pub fn get_id(&self) -> InternalId {
-        self.prop_value.id
+        match &self.prop_metadata {
+            Some(metadata) => metadata.replica_id,
+            None => self.prop_value.id,
+        }
     }
 
     pub fn freeze(&self) -> RwLockReadGuard<'_, (u8, MetricResult)> {

@@ -121,6 +121,10 @@ impl<'de> Deserialize<'de> for FieldValue {
 
 pub type MetadataFields = HashMap<FieldName, FieldValue>;
 
+/// Returns metadata dimensions based on the fields
+///
+/// Note that the base dimensions will be implicitly included as the
+/// first item in the returned vector
 pub fn fields_to_dimensions(
     schema: &MetadataSchema,
     metadata_fields: Option<&MetadataFields>,

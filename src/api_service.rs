@@ -199,8 +199,7 @@ pub async fn init_hnsw_index_for_collection(
         let num_dims = collection.meta.dense_vector.dimension;
         let pseudo_vals = pseudo_node_vector(num_dims);
         // base id for nonroot pseudo nodes is 1 more than the pseudo node
-        let pseudo_nonroot_base_id = pseudo_root_id().inc();
-        let pseudo_vec = DenseInputEmbedding(pseudo_nonroot_base_id, pseudo_vals, None, true);
+        let pseudo_vec = DenseInputEmbedding(pseudo_root_id(), pseudo_vals, None, true);
         let version_number = *collection.current_version.read();
         let transaction = BackgroundCollectionTransaction::from_version_id_and_number(
             &collection,
