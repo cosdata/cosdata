@@ -160,6 +160,8 @@ impl IndexOps for HNSWIndex {
     type Data = HNSWIndexData;
 
     fn validate_embedding(&self, embedding: Self::IndexingInput) -> Result<(), WaCustomError> {
+        // @TODO(vineet): Add validation for metadata fields (if
+        // applicable)
         if embedding.1.len() == self.dim {
             Ok(())
         } else {
@@ -356,7 +358,7 @@ impl IndexOps for HNSWIndex {
 
         let query_filter_dims = query.1.as_ref().map(|filter| {
             let metadata_schema = collection.meta.metadata_schema.as_ref().unwrap();
-            filter_encoded_dimensions(metadata_schema, &filter).unwrap()
+            filter_encoded_dimensions(metadata_schema, filter).unwrap()
         });
 
         let root_node = if query.1.is_some() {

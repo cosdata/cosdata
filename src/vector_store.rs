@@ -416,8 +416,7 @@ pub fn finalize_ann_results(
 
     for (internal_id, _) in filtered {
         let raw_emb = collection
-            .internal_to_external_map
-            .get_latest(&internal_id)
+            .get_raw_emb_by_internal_id(&internal_id)
             .ok_or_else(|| {
                 WaCustomError::NotFound(format!("raw embedding not found for id={internal_id:?}"))
             })?;
