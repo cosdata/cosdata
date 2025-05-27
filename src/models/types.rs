@@ -899,7 +899,7 @@ impl CollectionsMap {
                     pseudo_root,
                 );
                 let pseudo_root_ptr = LatestNode::new(pseudo_root, pseudo_root_ptr_offset);
-                latest_version_links.insert(root_ptr_offset, root_ptr);
+                latest_version_links.insert(pseudo_root_ptr_offset, pseudo_root_ptr);
                 bufman.close_cursor(cursor)?;
                 Some(pseudo_root_ptr)
             }

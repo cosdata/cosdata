@@ -801,7 +801,11 @@ pub fn index_embedding(
     } else {
         hnsw_params.neighbors_count
     });
-    skipm.insert(*prop_value.id);
+    let new_node_id = match &prop_metadata {
+        Some(metadata) => *metadata.replica_id,
+        None => *prop_value.id,
+    };
+    skipm.insert(new_node_id);
 
     let current_lazy_item = unsafe { &*current_lazy_item_latest_ptr }.latest();
     let current_node = unsafe { &**current_lazy_item }.try_get_data(&hnsw_index.cache)?;
@@ -989,6 +993,8 @@ fn create_node_edges(
     let lazy_item = unsafe { &*lazy_item_latest_ptr }.latest();
     let node = unsafe { &**lazy_item }.try_get_data(&hnsw_index.cache)?;
 
+    let node_id = node.get_id();
+
     // First loop: Handle neighbor connections and collect updates
     for (neighbor_lazy_item_latest_ptr, dist) in neighbors {
         if successful_edges >= max_edges {
@@ -999,6 +1005,7 @@ fn create_node_edges(
             .get_or_create_version(version, &hnsw_index.cache, file_id, offset_counter)?;
 
         let neighbor_node = unsafe { &**neighbor_lazy_item }.try_get_data(&hnsw_index.cache)?;
+        let neighbor_node_id = neighbor_node.get_id();
 
         assert_eq!(neighbor_node.version, version);
 
@@ -1031,7 +1038,7 @@ fn create_node_edges(
         }
 
         let neighbor_inserted_idx = node.add_neighbor(
-            neighbor_node.get_id(),
+            neighbor_node_id,
             neighbor_lazy_item_latest_ptr,
             dist,
             &hnsw_index.cache,
@@ -1040,7 +1047,7 @@ fn create_node_edges(
 
         let neighbour_update_info = if let Some(neighbor_inserted_idx) = neighbor_inserted_idx {
             let node_inserted_idx = neighbor_node.add_neighbor(
-                node.get_id(),
+                node_id,
                 lazy_item_latest_ptr,
                 dist,
                 &hnsw_index.cache,
@@ -1050,7 +1057,7 @@ fn create_node_edges(
                 successful_edges += 1;
                 Some((idx, dist))
             } else {
-                node.remove_neighbor_by_index_and_id(neighbor_inserted_idx, neighbor_node.get_id());
+                node.remove_neighbor_by_index_and_id(neighbor_inserted_idx, neighbor_node_id);
                 None
             }
         } else {
