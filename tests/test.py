@@ -4,6 +4,8 @@ import numpy as np
 from cosdata import Client
 import getpass
 import json
+import requests
+import time
 
 def format_vector(vector):
     """Format a vector for better readability"""
@@ -17,12 +19,12 @@ def format_vector(vector):
                 "id": vector.id,
                 "dense_values": f"{preview}... (total: {len(dense_values)} dimensions)"
             }
-    else:
+        else:
             formatted = {
                 "id": vector.id,
                 "dense_values": "[]"
             }
-        return json.dumps(formatted, indent=2)
+            return json.dumps(formatted, indent=2)
     # Handle dictionary format
     elif isinstance(vector, dict):
         dense_values = vector.get('dense_values', [])
@@ -41,10 +43,17 @@ def format_vector(vector):
         return json.dumps(formatted, indent=2)
     return str(vector)
 
+def get_transaction_status(client, coll_name, txn_id):
+    host = client.host
+    url = f"{host}/vectordb/collections/{coll_name}/transactions/{txn_id}/status"
+    resp = requests.get(url, headers=client._get_headers(), verify=False)
+    result = resp.json()
+    return result['status']
+
 def test_basic_functionality():
     # Get password securely
     password = getpass.getpass("Enter your database password: ")
-    
+
     # Initialize client
     client = Client(
         host="http://127.0.0.1:8443",
@@ -55,7 +64,7 @@ def test_basic_functionality():
 
     # Test collection name
     collection_name = "test_collection"
-    
+
     try:
         # Create a collection
         print("Creating collection...")
@@ -87,17 +96,27 @@ def test_basic_functionality():
             test_vectors.append({
                 "id": f"vec_{i}",
                 "dense_values": values,
-                "metadata": {
-                    "test_id": i,
-                    "category": "test"
-                }
             })
 
         # Insert vectors using transaction
         print("Inserting vectors...")
+        txn_id = None
         with collection.transaction() as txn:
             txn.batch_upsert_vectors(test_vectors)
+            txn_id = txn.transaction_id
+
         print("Vectors inserted successfully")
+
+        print("Waiting for transaction to complete")
+        txn_status = 'indexing_in_progress'
+        remaining_attempts = 3
+        while txn_status != 'complete':
+            txn_status = get_transaction_status(client, collection_name, txn_id)
+            time.sleep(2)
+            remaining_attempts -= 1
+            if remaining_attempts == 0:
+                print("Max attempts waiting for transaction to complete exceeded")
+                break
 
         # Test search
         print("\nTesting search...")
@@ -107,7 +126,7 @@ def test_basic_functionality():
             top_k=5,
             return_raw_text=True
         )
-        
+
         print("\nSearch results:")
         for i, result in enumerate(results.get("results", []), 1):
             # Fetch the full vector for each result
