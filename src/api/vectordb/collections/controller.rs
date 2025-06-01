@@ -22,6 +22,7 @@ use crate::api::vectordb::collections::error::CollectionsError;
     responses(
         (status = 201, description = "Collection created successfully", body = CreateCollectionDtoResponse),
         (status = 400, description = "Invalid request"),
+        (status = 409, description = "Collection already exists"),
         (status = 500, description = "Server error")
     ),
     tag = "collections"
