@@ -1,16 +1,23 @@
 use utoipa::{openapi, OpenApi};
 
-fn api_info() -> openapi::InfoBuilder {
+fn api_info() -> openapi::Info {
     openapi::InfoBuilder::new()
         .title("Cosdata API")
         .version(env!("CARGO_PKG_VERSION"))
-        .description(Some("Cosdata Vector Database API"))
+        .description(Some("Cosdata Vector Database API\n\nAPI description for Cosdata vector search engine.\n\nThis document describes CRUD and search operations on collections of points (vectors with payload)."))
+        .contact(Some(
+            openapi::ContactBuilder::new()
+                .email(Some("info@cosdata.io"))
+                .url(Some("https://cosdata.io"))
+                .build(),
+        ))
         .license(Some(
             openapi::LicenseBuilder::new()
                 .name("Apache 2.0")
                 .url(Some("https://www.apache.org/licenses/LICENSE-2.0"))
                 .build(),
         ))
+        .build()
 }
 
 /// API documentation for authentication endpoints
@@ -28,7 +35,8 @@ fn api_info() -> openapi::InfoBuilder {
     ),
     tags(
         (name = "auth", description = "Authentication endpoints")
-    )
+    ),
+    modifiers(&AuthApiDoc)
 )]
 pub struct AuthApiDoc;
 
@@ -67,7 +75,8 @@ pub struct AuthApiDoc;
     ),
     tags(
         (name = "collections", description = "Collection management endpoints")
-    )
+    ),
+    modifiers(&CollectionsApiDoc)
 )]
 pub struct CollectionsApiDoc;
 
@@ -107,7 +116,8 @@ pub struct CollectionsApiDoc;
     ),
     tags(
         (name = "indexes", description = "Index management endpoints")
-    )
+    ),
+    modifiers(&IndexesApiDoc)
 )]
 pub struct IndexesApiDoc;
 
@@ -141,7 +151,8 @@ pub struct IndexesApiDoc;
     ),
     tags(
         (name = "search", description = "Vector search endpoints")
-    )
+    ),
+    modifiers(&SearchApiDoc)
 )]
 pub struct SearchApiDoc;
 
@@ -162,7 +173,8 @@ pub struct SearchApiDoc;
     ),
     tags(
         (name = "versions", description = "Version management endpoints")
-    )
+    ),
+    modifiers(&VersionsApiDoc)
 )]
 pub struct VersionsApiDoc;
 
@@ -189,7 +201,8 @@ pub struct VersionsApiDoc;
     ),
     tags(
         (name = "transactions", description = "Transaction management endpoints")
-    )
+    ),
+    modifiers(&TransactionsApiDoc)
 )]
 pub struct TransactionsApiDoc;
 
@@ -211,7 +224,8 @@ pub struct TransactionsApiDoc;
     ),
     tags(
         (name = "vectors", description = "Vector management endpoints")
-    )
+    ),
+    modifiers(&VectorsApiDoc)
 )]
 pub struct VectorsApiDoc;
 
@@ -229,7 +243,8 @@ pub struct VectorsApiDoc;
     ),
     tags(
         (name = "sync_transactions", description = "Synchronous transaction endpoints")
-    )
+    ),
+    modifiers(&SyncTransactionsApiDoc)
 )]
 pub struct SyncTransactionsApiDoc;
 
@@ -350,55 +365,62 @@ pub struct SyncTransactionsApiDoc;
         (name = "versions", description = "Version management endpoints"),
         (name = "transactions", description = "Transaction management endpoints"),
         (name = "sync_transactions", description = "Synchronous transaction endpoints")
-    )
+    ),
+    modifiers(&CombinedApiDoc)
 )]
 pub struct CombinedApiDoc;
 
 impl utoipa::Modify for AuthApiDoc {
     fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
-        openapi.info = api_info().build();
+        openapi.info = api_info();
     }
 }
 
 impl utoipa::Modify for CollectionsApiDoc {
     fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
-        openapi.info = api_info().build();
+        openapi.info = api_info();
     }
 }
 
 impl utoipa::Modify for IndexesApiDoc {
     fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
-        openapi.info = api_info().build();
+        openapi.info = api_info();
     }
 }
 
 impl utoipa::Modify for SearchApiDoc {
     fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
-        openapi.info = api_info().build();
+        openapi.info = api_info();
     }
 }
 
 impl utoipa::Modify for VectorsApiDoc {
     fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
-        openapi.info = api_info().build();
+        openapi.info = api_info();
     }
 }
 
 impl utoipa::Modify for TransactionsApiDoc {
     fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
-        openapi.info = api_info().build();
+        openapi.info = api_info();
     }
 }
 
 impl utoipa::Modify for VersionsApiDoc {
     fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
-        openapi.info = api_info().build();
+        openapi.info = api_info();
     }
 }
 
 impl utoipa::Modify for SyncTransactionsApiDoc {
     fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
-        openapi.info = api_info().build();
+        openapi.info = api_info();
+    }
+}
+
+impl utoipa::Modify for CombinedApiDoc {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        openapi.info = api_info();
     }
 }
 
