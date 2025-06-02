@@ -109,6 +109,8 @@ pub struct Collection {
     pub document_to_internals_map: TreeMapVec<DocumentId, InternalId>,
     pub transaction_status_map: TreeMap<VersionNumber, RwLock<TransactionStatus>>,
     pub internal_id_counter: AtomicU32,
+    // Add version-based vector count cache
+    pub vector_count_cache: TreeMap<VersionNumber, usize>,
     pub hnsw_index: RwLock<Option<Arc<HNSWIndex>>>,
     pub inverted_index: RwLock<Option<Arc<InvertedIndex>>>,
     pub tf_idf_index: RwLock<Option<Arc<TFIDFIndex>>>,
@@ -160,8 +162,14 @@ impl Collection {
         );
 
         let transaction_status_map_bufmans = BufferManagerFactory::new(
-            collections_path,
+            collections_path.clone(),
             |root, part| root.join(format!("{}.txn_status", part)),
+            8192,
+        );
+
+        let vector_count_cache_bufmans = BufferManagerFactory::new(
+            collections_path.clone(),
+            |root, part| root.join(format!("{}.vector_count_cache", part)),
             8192,
         );
 
@@ -185,6 +193,7 @@ impl Collection {
             document_to_internals_map: TreeMapVec::new(document_to_internals_map_bufmans),
             transaction_status_map: TreeMap::new(transaction_status_map_bufmans),
             internal_id_counter: AtomicU32::new(0),
+            vector_count_cache: TreeMap::new(vector_count_cache_bufmans),
             hnsw_index: RwLock::new(None),
             inverted_index: RwLock::new(None),
             tf_idf_index: RwLock::new(None),
@@ -323,6 +332,9 @@ impl Collection {
             .internal_id_counter
             .fetch_add(embeddings.len() as u32, Ordering::Relaxed);
 
+        // Store the embeddings count before consuming the vector
+        let embeddings_count = embeddings.len();
+
         let (dense_embs, sparse_embs, tf_idf_embs): (Vec<_>, Vec<_>, Vec<_>) =
             embeddings.into_iter().enumerate().fold(
                 (Vec::new(), Vec::new(), Vec::new()),
@@ -391,6 +403,14 @@ impl Collection {
             }
         }
 
+        // Update cached vector count for this version
+        if let Some(previous_count) =
+            self.get_cached_vector_count_before_version(transaction.version)
+        {
+            let new_count = previous_count + embeddings_count;
+            self.cache_vector_count(transaction.version, new_count);
+        }
+
         Ok(())
     }
 
@@ -418,6 +438,52 @@ impl Collection {
         )
     }
 
+    /// Get cached vector count for a specific version
+    pub fn get_cached_vector_count(&self, version: VersionNumber) -> Option<usize> {
+        self.vector_count_cache.get_latest(&version).copied()
+    }
+
+    /// Cache vector count for a specific version
+    pub fn cache_vector_count(&self, version: VersionNumber, count: usize) {
+        self.vector_count_cache.insert(version, &version, count);
+    }
+
+    /// Find the most recent cached count before the target version
+    pub fn get_cached_vector_count_before_version(
+        &self,
+        target_version: VersionNumber,
+    ) -> Option<usize> {
+        // Get all versions up to target and find the latest cached one
+        if let Ok(versions) = self.vcs.get_versions() {
+            for version_info in versions.iter().rev() {
+                if version_info.version < target_version {
+                    if let Some(count) = self.get_cached_vector_count(version_info.version) {
+                        return Some(count);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Find the nearest cached count before or at the target version
+    pub fn find_nearest_cached_count_before(
+        &self,
+        target_version: VersionNumber,
+    ) -> (VersionNumber, usize) {
+        if let Ok(versions) = self.vcs.get_versions() {
+            for version_info in versions.iter().rev() {
+                if version_info.version <= target_version {
+                    if let Some(count) = self.get_cached_vector_count(version_info.version) {
+                        return (version_info.version, count);
+                    }
+                }
+            }
+        }
+        // Base case: no cached versions found
+        (VersionNumber::from(0), 0)
+    }
+
     pub fn flush(&self, config: &Config) -> Result<(), WaCustomError> {
         self.internal_to_external_map
             .serialize(config.tree_map_serialized_parts)?;
@@ -426,6 +492,8 @@ impl Collection {
         self.document_to_internals_map
             .serialize(config.tree_map_serialized_parts)?;
         self.transaction_status_map
+            .serialize(config.tree_map_serialized_parts)?;
+        self.vector_count_cache
             .serialize(config.tree_map_serialized_parts)?;
         store_highest_internal_id(&self.lmdb, self.internal_id_counter.load(Ordering::Relaxed))?;
         Ok(())

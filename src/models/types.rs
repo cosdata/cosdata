@@ -610,6 +610,12 @@ impl CollectionsMap {
                 8192,
             );
 
+            let vector_count_cache_bufmans = BufferManagerFactory::new(
+                collections_path.clone(),
+                |root, part| root.join(format!("{}.vector_count_cache", part)),
+                8192,
+            );
+
             let id_counter_value = retrieve_highest_internal_id(&lmdb)?.unwrap_or_default();
 
             let collection = Arc::new(Collection {
@@ -635,6 +641,10 @@ impl CollectionsMap {
                     config.tree_map_serialized_parts,
                 )?,
                 internal_id_counter: AtomicU32::new(id_counter_value),
+                vector_count_cache: TreeMap::deserialize(
+                    vector_count_cache_bufmans,
+                    config.tree_map_serialized_parts,
+                )?,
                 hnsw_index: parking_lot::RwLock::new(hnsw_index),
                 inverted_index: parking_lot::RwLock::new(inverted_index),
                 tf_idf_index: parking_lot::RwLock::new(tf_idf_index),

@@ -578,6 +578,27 @@ impl TreeMapKey for u64 {
     }
 }
 
+impl TreeMapKey for usize {
+    fn key(&self) -> u64 {
+        *self as u64
+    }
+}
+
+impl super::serializer::SimpleSerialize for usize {
+    fn serialize(&self, bufman: &super::buffered_io::BufferManager, cursor: u64) -> Result<u32, super::buffered_io::BufIoError> {
+        let data = self.to_le_bytes();
+        Ok(bufman.write_to_end_of_file(cursor, &data)? as u32)
+    }
+
+    fn deserialize(bufman: &super::buffered_io::BufferManager, offset: super::types::FileOffset) -> Result<Self, super::buffered_io::BufIoError> {
+        let cursor = bufman.open_cursor()?;
+        bufman.seek_with_cursor(cursor, offset.0 as u64)?;
+        let value = bufman.read_u64_with_cursor(cursor)?;
+        bufman.close_cursor(cursor)?;
+        Ok(value as usize)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use tempfile::tempdir;

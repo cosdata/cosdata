@@ -8,7 +8,7 @@ use utoipa::ToSchema;
 
 use super::tree_map::TreeMapKey;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, ToSchema)]
 #[schema(value_type = i32, description = "Version number")]
 pub struct VersionNumber(u32);
 

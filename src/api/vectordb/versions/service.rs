@@ -6,6 +6,7 @@ use super::error::VersionError;
 use crate::{
     app_context::AppContext,
     models::{
+        collection_version_utils::count_live_vectors,
         common::WaCustomError, meta_persist::retrieve_current_version, types::MetaDb,
         versioning::VersionControl,
     },
@@ -24,11 +25,19 @@ pub(crate) async fn list_versions(
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
     let current_version =
         retrieve_current_version(&lmdb).map_err(|e| VersionError::DatabaseError(e.to_string()))?;
+    
+    // Get the collection to calculate vector counts
+    let collection = ctx.ain_env.collections_map.get_collection(collection_id)
+        .ok_or_else(|| VersionError::CollectionNotFound)?;
+    
     let versions = versions
         .into_iter()
-        .map(|meta| VersionMetadata {
-            version_number: meta.version,
-            vector_count: 0,
+        .map(|meta| {
+            let vector_count = count_live_vectors(&collection, meta.version) as u64;
+            VersionMetadata {
+                version_number: meta.version,
+                vector_count,
+            }
         })
         .collect::<Vec<VersionMetadata>>();
     Ok(VersionListResponse {
@@ -49,9 +58,15 @@ pub(crate) async fn get_current_version(
         .get_current_version()
         .map_err(|e| VersionError::DatabaseError(e.to_string()))?;
 
+    // Get the collection to calculate vector count
+    let collection = ctx.ain_env.collections_map.get_collection(collection_id)
+        .ok_or_else(|| VersionError::CollectionNotFound)?;
+    
+    let vector_count = count_live_vectors(&collection, version_number) as u64;
+
     Ok(CurrentVersionResponse {
         version_number,
-        vector_count: 0,
+        vector_count,
     })
 }
 
