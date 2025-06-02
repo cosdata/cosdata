@@ -1,17 +1,17 @@
-use std::{cell::UnsafeCell, sync::RwLock};
+use std::sync::RwLock;
 
 use crate::models::{
     buffered_io::{BufIoError, BufferManager},
-    tree_map::UnsafeVersionedItem,
+    tree_map::VersionedItem,
     types::FileOffset,
     versioning::VersionNumber,
 };
 
 use super::SimpleSerialize;
 
-impl<T: SimpleSerialize> SimpleSerialize for UnsafeVersionedItem<T> {
+impl<T: SimpleSerialize> SimpleSerialize for VersionedItem<T> {
     fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
-        let next = unsafe { &*self.next.get() };
+        let next = &*self.next.read().unwrap();
         let next_offset = if let Some(next) = next {
             next.serialize(bufman, cursor)?
         } else {
@@ -70,7 +70,7 @@ impl<T: SimpleSerialize> SimpleSerialize for UnsafeVersionedItem<T> {
             serialized_at: RwLock::new(Some(offset)),
             version,
             value,
-            next: UnsafeCell::new(next),
+            next: RwLock::new(next),
         })
     }
 }

@@ -1,5 +1,4 @@
 use std::{
-    cell::UnsafeCell,
     marker::PhantomData,
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -66,7 +65,7 @@ pub struct QuotientsMapVec<T> {
 
 pub struct Quotient<T> {
     pub sequence_idx: u64,
-    pub value: UnsafeVersionedItem<T>,
+    pub value: VersionedItem<T>,
 }
 
 pub struct QuotientVec<T> {
@@ -74,11 +73,11 @@ pub struct QuotientVec<T> {
     pub value: UnsafeVersionedVec<T>,
 }
 
-pub struct UnsafeVersionedItem<T> {
+pub struct VersionedItem<T> {
     pub serialized_at: RwLock<Option<FileOffset>>,
     pub version: VersionNumber,
     pub value: T,
-    pub next: UnsafeCell<Option<Box<Self>>>,
+    pub next: RwLock<Option<Box<Self>>>,
 }
 
 #[cfg(test)]
@@ -204,32 +203,32 @@ impl<T: std::fmt::Debug> std::fmt::Debug for QuotientVec<T> {
 }
 
 #[cfg(test)]
-impl<T: PartialEq> PartialEq for UnsafeVersionedItem<T> {
+impl<T: PartialEq> PartialEq for VersionedItem<T> {
     fn eq(&self, other: &Self) -> bool {
         self.version == other.version
             && self.value == other.value
-            && unsafe { *self.next.get() == *other.next.get() }
+            && *self.next.read().unwrap() == *other.next.read().unwrap()
     }
 }
 
 #[cfg(test)]
-impl<T: std::fmt::Debug> std::fmt::Debug for UnsafeVersionedItem<T> {
+impl<T: std::fmt::Debug> std::fmt::Debug for VersionedItem<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("UnsafeVersionedItem")
             .field("version", &self.version)
             .field("value", &self.value)
-            .field("next", unsafe { &*self.next.get() })
+            .field("next", &*self.next.read().unwrap())
             .finish()
     }
 }
 
-impl<T> UnsafeVersionedItem<T> {
+impl<T> VersionedItem<T> {
     pub fn new(version: VersionNumber, value: T) -> Self {
         Self {
             serialized_at: RwLock::new(None),
             version,
             value,
-            next: UnsafeCell::new(None),
+            next: RwLock::new(None),
         }
     }
 
@@ -238,25 +237,31 @@ impl<T> UnsafeVersionedItem<T> {
     }
 
     fn insert_inner(&self, version: Box<Self>) {
-        if let Some(next) = unsafe { &*self.next.get() } {
+        if let Some(next) = &*self.next.read().unwrap() {
             return next.insert_inner(version);
         }
 
-        unsafe {
-            *self.next.get() = Some(version);
+        let mut next_write_guard = self.next.write().unwrap();
+
+        if let Some(next) = &*next_write_guard {
+            return next.insert_inner(version);
         }
+
+        *next_write_guard = Some(version);
     }
 
-    pub fn latest(&self) -> &T {
-        if let Some(next) = unsafe { &*self.next.get() } {
+    pub fn latest<'a>(&'a self) -> &'a T {
+        if let Some(next) = &*self.next.read().unwrap() {
+            let next = unsafe { std::mem::transmute::<&Box<Self>, &'a Box<Self>>(next) };
             return next.latest();
         }
 
         &self.value
     }
 
-    pub fn latest_item(&self) -> &Self {
-        if let Some(next) = unsafe { &*self.next.get() } {
+    pub fn latest_item<'a>(&'a self) -> &'a Self {
+        if let Some(next) = &*self.next.read().unwrap() {
+            let next = unsafe { std::mem::transmute::<&Box<Self>, &'a Box<Self>>(next) };
             return next.latest_item();
         }
 
@@ -296,7 +301,7 @@ impl<T> TreeMapNode<T> {
         self.quotients.get_latest(quotient)
     }
 
-    pub fn get_versioned(&self, quotient: u64) -> Option<&UnsafeVersionedItem<T>> {
+    pub fn get_versioned(&self, quotient: u64) -> Option<&VersionedItem<T>> {
         self.quotients.get_versioned(quotient)
     }
 }
@@ -367,7 +372,7 @@ impl<T> QuotientsMap<T> {
             |value| {
                 Arc::new(Quotient {
                     sequence_idx: self.len.fetch_add(1, Ordering::Relaxed),
-                    value: UnsafeVersionedItem::new(version, value),
+                    value: VersionedItem::new(version, value),
                 })
             },
         );
@@ -382,7 +387,7 @@ impl<T> QuotientsMap<T> {
         })
     }
 
-    fn get_versioned(&self, quotient: u64) -> Option<&UnsafeVersionedItem<T>> {
+    fn get_versioned(&self, quotient: u64) -> Option<&VersionedItem<T>> {
         self.map.lookup(&quotient).map(|q| {
             // SAFETY: here we are changing the lifetime of the value by using
             // `std::mem::transmute`, which by definition is not safe, but given our use of
@@ -477,7 +482,7 @@ impl<K: TreeMapKey, V> TreeMap<K, V> {
         node.get_latest(key)
     }
 
-    pub fn get_versioned(&self, key: &K) -> Option<&UnsafeVersionedItem<V>> {
+    pub fn get_versioned(&self, key: &K) -> Option<&VersionedItem<V>> {
         let key = key.key();
         let node_pos = (key % 65536) as u32;
         let path = calculate_path(node_pos, 0);
@@ -600,11 +605,11 @@ mod tests {
         assert_eq!(map.get_latest(&0), Some(&29));
         assert_eq!(
             map.get_versioned(&0),
-            Some(&UnsafeVersionedItem {
+            Some(&VersionedItem {
                 version: 0.into(),
                 serialized_at: RwLock::new(None),
                 value: 23,
-                next: UnsafeCell::new(Some(Box::new(UnsafeVersionedItem::new(1.into(), 29))))
+                next: RwLock::new(Some(Box::new(VersionedItem::new(1.into(), 29))))
             })
         );
     }

@@ -7,7 +7,7 @@ use crate::models::{
     buffered_io::{BufIoError, BufferManager},
     common::TSHashTable,
     tf_idf_index::UnsafeVersionedVec,
-    tree_map::{Quotient, QuotientVec, QuotientsMap, QuotientsMapVec, UnsafeVersionedItem},
+    tree_map::{Quotient, QuotientVec, QuotientsMap, QuotientsMapVec, VersionedItem},
     types::FileOffset,
 };
 
@@ -205,8 +205,7 @@ impl<T: SimpleSerialize> SimpleSerialize for QuotientsMap<T> {
                 }
                 let key = bufman.read_u64_with_cursor(cursor)?;
                 let value_offset = bufman.read_u32_with_cursor(cursor)?;
-                let value =
-                    UnsafeVersionedItem::<T>::deserialize(bufman, FileOffset(value_offset))?;
+                let value = VersionedItem::<T>::deserialize(bufman, FileOffset(value_offset))?;
                 let q = Quotient {
                     value,
                     sequence_idx: i as u64,
