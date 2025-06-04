@@ -32,6 +32,11 @@ pub(crate) async fn create_collection(
         store_raw_text,
     }: CreateCollectionDto,
 ) -> Result<Arc<Collection>, CollectionsError> {
+    // Check if collection already exists
+    if ctx.ain_env.collections_map.get_collection(&name).is_some() {
+        return Err(CollectionsError::AlreadyExists(name));
+    }
+
     let env = &ctx.ain_env.persist;
     let collections_db = &ctx.ain_env.collections_map.lmdb_collections_db;
     let lmdb = MetaDb::from_env(env.clone(), &name)
