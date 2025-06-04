@@ -65,7 +65,7 @@ pub struct QuotientsMapVec<T> {
 
 pub struct Quotient<T> {
     pub sequence_idx: u64,
-    pub value: VersionedItem<T>,
+    pub value: RwLock<VersionedItem<T>>,
 }
 
 pub struct QuotientVec<T> {
@@ -77,7 +77,7 @@ pub struct VersionedItem<T> {
     pub serialized_at: RwLock<Option<FileOffset>>,
     pub version: VersionNumber,
     pub value: T,
-    pub next: RwLock<Option<Box<Self>>>,
+    pub next: Option<Box<Self>>,
 }
 
 #[cfg(test)]
@@ -171,7 +171,8 @@ impl<T: std::fmt::Debug> std::fmt::Debug for QuotientsMapVec<T> {
 #[cfg(test)]
 impl<T: PartialEq> PartialEq for Quotient<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.sequence_idx == other.sequence_idx && self.value == other.value
+        self.sequence_idx == other.sequence_idx
+            && *self.value.read().unwrap() == *other.value.read().unwrap()
     }
 }
 
@@ -206,9 +207,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for QuotientVec<T> {
 #[cfg(test)]
 impl<T: PartialEq> PartialEq for VersionedItem<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.version == other.version
-            && self.value == other.value
-            && *self.next.read().unwrap() == *other.next.read().unwrap()
+        self.version == other.version && self.value == other.value && self.next == other.next
     }
 }
 
@@ -218,7 +217,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for VersionedItem<T> {
         f.debug_struct("UnsafeVersionedItem")
             .field("version", &self.version)
             .field("value", &self.value)
-            .field("next", &*self.next.read().unwrap())
+            .field("next", &self.next)
             .finish()
     }
 }
@@ -229,40 +228,32 @@ impl<T> VersionedItem<T> {
             serialized_at: RwLock::new(None),
             version,
             value,
-            next: RwLock::new(None),
+            next: None,
         }
     }
 
-    pub fn insert(&self, version: VersionNumber, value: T) {
+    pub fn insert(&mut self, version: VersionNumber, value: T) {
         self.insert_inner(Box::new(Self::new(version, value)));
     }
 
-    fn insert_inner(&self, version: Box<Self>) {
-        if let Some(next) = &*self.next.read().unwrap() {
+    fn insert_inner(&mut self, version: Box<Self>) {
+        if let Some(next) = &mut self.next {
             return next.insert_inner(version);
         }
 
-        let mut next_write_guard = self.next.write().unwrap();
-
-        if let Some(next) = &*next_write_guard {
-            return next.insert_inner(version);
-        }
-
-        *next_write_guard = Some(version);
+        self.next = Some(version);
     }
 
-    pub fn latest<'a>(&'a self) -> &'a T {
-        if let Some(next) = &*self.next.read().unwrap() {
-            let next = unsafe { std::mem::transmute::<&Box<Self>, &'a Box<Self>>(next) };
+    pub fn latest(&self) -> &T {
+        if let Some(next) = &self.next {
             return next.latest();
         }
 
         &self.value
     }
 
-    pub fn latest_item<'a>(&'a self) -> &'a Self {
-        if let Some(next) = &*self.next.read().unwrap() {
-            let next = unsafe { std::mem::transmute::<&Box<Self>, &'a Box<Self>>(next) };
+    pub fn latest_item(&self) -> &Self {
+        if let Some(next) = &self.next {
             return next.latest_item();
         }
 
@@ -368,12 +359,12 @@ impl<T> QuotientsMap<T> {
             quotient,
             value,
             |value, quotient| {
-                quotient.value.insert(version, value);
+                quotient.value.write().unwrap().insert(version, value);
             },
             |value| {
                 Arc::new(Quotient {
                     sequence_idx: self.len.fetch_add(1, Ordering::Relaxed),
-                    value: VersionedItem::new(version, value),
+                    value: RwLock::new(VersionedItem::new(version, value)),
                 })
             },
         );
@@ -384,7 +375,7 @@ impl<T> QuotientsMap<T> {
             // SAFETY: here we are changing the lifetime of the value by using
             // `std::mem::transmute`, which by definition is not safe, but given our use of
             // this value and how we destroy it, its actually safe in this context.
-            unsafe { std::mem::transmute(q.value.latest()) }
+            unsafe { std::mem::transmute(q.value.read().unwrap().latest()) }
         })
     }
 
@@ -393,7 +384,7 @@ impl<T> QuotientsMap<T> {
             // SAFETY: here we are changing the lifetime of the value by using
             // `std::mem::transmute`, which by definition is not safe, but given our use of
             // this value and how we destroy it, its actually safe in this context.
-            unsafe { std::mem::transmute(&q.value) }
+            unsafe { std::mem::transmute(&*q.value.read().unwrap()) }
         })
     }
 }
@@ -617,7 +608,7 @@ mod tests {
                 version: 0.into(),
                 serialized_at: RwLock::new(None),
                 value: 23,
-                next: RwLock::new(Some(Box::new(VersionedItem::new(1.into(), 29))))
+                next: Some(Box::new(VersionedItem::new(1.into(), 29)))
             })
         );
     }

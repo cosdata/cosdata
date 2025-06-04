@@ -11,8 +11,7 @@ use super::SimpleSerialize;
 
 impl<T: SimpleSerialize> SimpleSerialize for VersionedItem<T> {
     fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
-        let next = &*self.next.read().unwrap();
-        let next_offset = if let Some(next) = next {
+        let next_offset = if let Some(next) = &self.next {
             next.serialize(bufman, cursor)?
         } else {
             u32::MAX
@@ -70,7 +69,7 @@ impl<T: SimpleSerialize> SimpleSerialize for VersionedItem<T> {
             serialized_at: RwLock::new(Some(offset)),
             version,
             value,
-            next: RwLock::new(next),
+            next,
         })
     }
 }
