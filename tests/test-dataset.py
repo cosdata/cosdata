@@ -452,19 +452,28 @@ def read_single_parquet_file(path, dataset_name, file_index, base_id, quick_test
         print(f"Error processing file {path}: {e}")
         return None
 
+def get_transaction_status(collection, txn_id):
+    host = collection.client.host
+    coll_name = collection.name
+    url = f"{host}/vectordb/collections/{coll_name}/transactions/{txn_id}/status"
+    resp = requests.get(url, headers=client._get_headers(), verify=False)
+    result = resp.json()
+    return result['status']
+
 def process_vectors_batch(vectors, collection, batch_size):
     """Process a batch of vectors and insert them into the database"""
     try:
         # Ensure all IDs are strings
         for vector in vectors:
             vector["id"] = str(vector["id"])
-        
+        txn_id = None
         with collection.transaction() as txn:
             txn.batch_upsert_vectors(vectors)
-        return True
+            txn_id = txn.transaction_id
+        return txn_id
     except Exception as e:
         print(f"Error processing batch: {e}")
-        return False
+        return None
 
 def process_parquet_files(
     dataset_name,
@@ -502,6 +511,8 @@ def process_parquet_files(
         return os.path.join("datasets", dataset_name, f"test{count}.parquet")
 
     start_time = time.time()
+
+    txn_ids = []
 
     with ThreadPoolExecutor(max_workers=3) as executor:
         current_path = get_next_file_path(file_count)
@@ -549,7 +560,10 @@ def process_parquet_files(
                     rps_test_vectors.extend(random.sample(vectors, sample_size))
 
                 insertion_start = time.time()
-                vectors_inserted = process_vectors_batch(vectors, collection, batch_size)
+                txn_id = process_vectors_batch(vectors, collection, batch_size)
+                print(f"Transaction id for batch upsert: {txn_id}")
+                if txn_id is not None:
+                    txn_ids.append(txn_id)
                 insertion_end = time.time()
                 insertion_time = insertion_end - insertion_start
                 total_insertion_time += insertion_time
@@ -577,6 +591,21 @@ def process_parquet_files(
 
     end_time = time.time()
     total_time = end_time - start_time
+
+    print("Waiting for transactions to complete")
+    while len(txn_ids) > 0:
+        print(f"Transactions remaining: {len(txn_ids)}")
+        rem_txn_ids = []
+        for txn_id in txn_ids:
+            txn_status = get_transaction_status(collection, txn_id)
+            if txn_status != 'complete':
+                rem_txn_ids.append(txn_id)
+        txn_ids = rem_txn_ids
+        if len(txn_ids) == 0:
+            print("Time taken to wait for transactions to complete", end_time - time.time())
+            break
+        else:
+            time.sleep(60)
 
     print("\nProcessing complete!")
     print(f"Total files processed: {file_count}")
