@@ -2,7 +2,7 @@ use std::{
     fs::OpenOptions,
     sync::{
         atomic::{AtomicU32, Ordering},
-        Arc,
+        Arc, RwLock,
     },
 };
 
@@ -13,9 +13,7 @@ use crate::models::{
     buffered_io::{BufferManager, BufferManagerFactory},
     cache_loader::TFIDFIndexCache,
     serializer::tf_idf::TF_IDF_INDEX_DATA_CHUNK_SIZE,
-    tf_idf_index::{
-        TFIDFIndexNode, TFIDFIndexNodeData, TFIDFIndexRoot, TermInfo, UnsafeVersionedVec,
-    },
+    tf_idf_index::{TFIDFIndexNode, TFIDFIndexNodeData, TFIDFIndexRoot, TermInfo, VersionedVec},
     types::FileOffset,
     versioning::VersionNumber,
 };
@@ -71,7 +69,7 @@ fn add_random_items_to_term_info(
     version: VersionNumber,
 ) {
     for _ in 0..count {
-        term.documents.push(
+        term.documents.write().unwrap().push(
             version,
             (rng.gen_range(0..u32::MAX), rng.gen_range(0.0..1.0)),
         );
@@ -98,15 +96,18 @@ fn add_random_items_to_tf_idf_index_data(
         data.map.modify_or_insert(
             quotient,
             |term| {
-                term.documents.push(version, (document_id, value));
+                term.documents
+                    .write()
+                    .unwrap()
+                    .push(version, (document_id, value));
             },
             || {
                 // Create new inner map if quotient not found
-                let documents = UnsafeVersionedVec::new(version);
+                let mut documents = VersionedVec::new(version);
                 let sequence_idx = data.map_len.fetch_add(1, Ordering::Relaxed);
                 documents.push(version, (document_id, value));
                 Arc::new(TermInfo {
-                    documents,
+                    documents: RwLock::new(documents),
                     sequence_idx,
                 })
             },

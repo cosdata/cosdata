@@ -1,10 +1,10 @@
-use std::sync::atomic::AtomicU32;
+use std::sync::{atomic::AtomicU32, RwLock};
 
 use crate::models::{
     buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
     cache_loader::TFIDFIndexCache,
     serializer::SimpleSerialize,
-    tf_idf_index::{TermInfo, UnsafeVersionedVec},
+    tf_idf_index::{TermInfo, VersionedVec},
     types::FileOffset,
 };
 
@@ -23,7 +23,11 @@ impl TFIDFIndexSerialize for TermInfo {
         let data_bufman = data_bufmans.get(data_file_idx)?;
         let data_cursor = data_bufman.open_cursor()?;
 
-        let offset = self.documents.serialize(&data_bufman, data_cursor)?;
+        let offset = self
+            .documents
+            .read()
+            .map_err(|_| BufIoError::Locking)?
+            .serialize(&data_bufman, data_cursor)?;
 
         data_bufman.close_cursor(data_cursor)?;
         Ok(offset)
@@ -38,10 +42,10 @@ impl TFIDFIndexSerialize for TermInfo {
         _cache: &TFIDFIndexCache,
     ) -> Result<Self, BufIoError> {
         let data_bufman = data_bufmans.get(data_file_idx)?;
-        let documents = UnsafeVersionedVec::deserialize(&data_bufman, file_offset)?;
+        let documents = VersionedVec::deserialize(&data_bufman, file_offset)?;
 
         Ok(Self {
-            documents,
+            documents: RwLock::new(documents),
             sequence_idx: 0, // Handled by caller
         })
     }

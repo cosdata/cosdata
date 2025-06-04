@@ -11,7 +11,7 @@ use super::{
     buffered_io::{BufIoError, BufferManagerFactory},
     common::TSHashTable,
     serializer::{PartitionedSerialize, SimpleSerialize},
-    tf_idf_index::{UnsafeVersionedVec, UnsafeVersionedVecIter},
+    tf_idf_index::{VersionedVec, VersionedVecIter},
     types::FileOffset,
     utils::calculate_path,
     versioning::VersionNumber,
@@ -70,7 +70,7 @@ pub struct Quotient<T> {
 
 pub struct QuotientVec<T> {
     pub sequence_idx: u64,
-    pub value: UnsafeVersionedVec<T>,
+    pub value: RwLock<VersionedVec<T>>,
 }
 
 pub struct VersionedItem<T> {
@@ -178,7 +178,8 @@ impl<T: PartialEq> PartialEq for Quotient<T> {
 #[cfg(test)]
 impl<T: PartialEq> PartialEq for QuotientVec<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.sequence_idx == other.sequence_idx && self.value == other.value
+        self.sequence_idx == other.sequence_idx
+            && *self.value.read().unwrap() == *other.value.read().unwrap()
     }
 }
 
@@ -334,7 +335,7 @@ impl<T> TreeMapVecNode<T> {
         self.dirty.store(true, Ordering::Release);
     }
 
-    pub fn get(&self, quotient: u64) -> Option<UnsafeVersionedVecIter<'_, T>> {
+    pub fn get(&self, quotient: u64) -> Option<VersionedVecIter<'_, T>> {
         self.quotients.get(quotient)
     }
 }
@@ -403,21 +404,28 @@ impl<T> QuotientsMapVec<T> {
             quotient,
             value,
             |value, quotient| {
-                quotient.value.push(version, value);
+                quotient.value.write().unwrap().push(version, value);
             },
             |value| {
-                let vec = UnsafeVersionedVec::new(version);
+                let mut vec = VersionedVec::new(version);
                 vec.push(version, value);
                 Arc::new(QuotientVec {
                     sequence_idx: self.len.fetch_add(1, Ordering::Relaxed),
-                    value: vec,
+                    value: RwLock::new(vec),
                 })
             },
         );
     }
 
-    fn get(&self, quotient: u64) -> Option<UnsafeVersionedVecIter<'_, T>> {
-        self.map.lookup(&quotient).map(|q| q.value.iter())
+    fn get<'a>(&self, quotient: u64) -> Option<VersionedVecIter<'a, T>> {
+        self.map.lookup(&quotient).map(|q| {
+            unsafe {
+                std::mem::transmute::<&VersionedVec<T>, &'a VersionedVec<T>>(
+                    &*q.value.read().unwrap(),
+                )
+            }
+            .iter()
+        })
     }
 }
 
@@ -539,7 +547,7 @@ impl<K: TreeMapKey, V> TreeMapVec<K, V> {
         node.push(version, key, value);
     }
 
-    pub fn get<'a>(&'a self, key: &K) -> Option<UnsafeVersionedVecIter<'a, V>> {
+    pub fn get<'a>(&'a self, key: &K) -> Option<VersionedVecIter<'a, V>> {
         let key = key.key();
         let node_pos = (key % 65536) as u32;
         let path = calculate_path(node_pos, 0);
