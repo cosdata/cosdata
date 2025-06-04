@@ -7,6 +7,7 @@ requires-python = ">=3.13"
 dependencies = [
     "beir>=2.1.0",
     "bm25s[core]>=0.2.12",
+    "cosdata-client>=0.2.2",
     "fastparquet>=2024.11.0",
     "numpy>=2.2.2",
     "pandas>=2.2.3",
