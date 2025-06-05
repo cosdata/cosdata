@@ -38,6 +38,7 @@ pub(crate) async fn query_vectors(
     };
 
     internal_ids
+        .iter()
         .map(|internal_id| {
             Ok(collection
                 .internal_to_external_map

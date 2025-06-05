@@ -1,4 +1,4 @@
-use std::sync::RwLock;
+use parking_lot::RwLock;
 
 use crate::models::{
     buffered_io::{BufIoError, BufferManager},
@@ -16,17 +16,14 @@ impl<T: SimpleSerialize> SimpleSerialize for VersionedItem<T> {
         } else {
             u32::MAX
         };
-        let offset_read_guard = self.serialized_at.read().map_err(|_| BufIoError::Locking)?;
+        let offset_read_guard = self.serialized_at.read();
         if let Some(FileOffset(offset)) = *offset_read_guard {
             bufman.seek_with_cursor(cursor, offset as u64 + 8)?;
             bufman.update_u32_with_cursor(cursor, next_offset)?;
             return Ok(offset);
         }
         drop(offset_read_guard);
-        let mut offset_write_guard = self
-            .serialized_at
-            .write()
-            .map_err(|_| BufIoError::Locking)?;
+        let mut offset_write_guard = self.serialized_at.write();
         if let Some(FileOffset(offset)) = *offset_write_guard {
             bufman.seek_with_cursor(cursor, offset as u64 + 8)?;
             bufman.update_u32_with_cursor(cursor, next_offset)?;

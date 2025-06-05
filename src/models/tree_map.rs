@@ -2,16 +2,18 @@ use std::{
     marker::PhantomData,
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-        Arc, RwLock,
+        Arc,
     },
 };
+
+use parking_lot::{RwLock, RwLockReadGuard};
 
 use super::{
     atomic_array::AtomicArray,
     buffered_io::{BufIoError, BufferManagerFactory},
     common::TSHashTable,
     serializer::{PartitionedSerialize, SimpleSerialize},
-    tf_idf_index::{VersionedVec, VersionedVecIter},
+    tf_idf_index::VersionedVec,
     types::FileOffset,
     utils::calculate_path,
     versioning::VersionNumber,
@@ -83,7 +85,7 @@ pub struct VersionedItem<T> {
 #[cfg(test)]
 impl<T: PartialEq> PartialEq for TreeMapNode<T> {
     fn eq(&self, other: &Self) -> bool {
-        *self.offset.read().unwrap() == *other.offset.read().unwrap()
+        *self.offset.read() == *other.offset.read()
             && self.quotients == other.quotients
             && self.children == other.children
     }
@@ -92,7 +94,7 @@ impl<T: PartialEq> PartialEq for TreeMapNode<T> {
 #[cfg(test)]
 impl<T: PartialEq> PartialEq for TreeMapVecNode<T> {
     fn eq(&self, other: &Self) -> bool {
-        *self.offset.read().unwrap() == *other.offset.read().unwrap()
+        *self.offset.read() == *other.offset.read()
             && self.quotients == other.quotients
             && self.children == other.children
     }
@@ -102,7 +104,7 @@ impl<T: PartialEq> PartialEq for TreeMapVecNode<T> {
 impl<T: std::fmt::Debug> std::fmt::Debug for TreeMapNode<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TreeMapNode")
-            .field("offset", &*self.offset.read().unwrap())
+            .field("offset", &*self.offset.read())
             .field("quotients", &self.quotients)
             .field("children", &self.children)
             .finish()
@@ -113,7 +115,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for TreeMapNode<T> {
 impl<T: std::fmt::Debug> std::fmt::Debug for TreeMapVecNode<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TreeMapVecNode")
-            .field("offset", &*self.offset.read().unwrap())
+            .field("offset", &*self.offset.read())
             .field("quotients", &self.quotients)
             .field("children", &self.children)
             .finish()
@@ -171,16 +173,14 @@ impl<T: std::fmt::Debug> std::fmt::Debug for QuotientsMapVec<T> {
 #[cfg(test)]
 impl<T: PartialEq> PartialEq for Quotient<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.sequence_idx == other.sequence_idx
-            && *self.value.read().unwrap() == *other.value.read().unwrap()
+        self.sequence_idx == other.sequence_idx && *self.value.read() == *other.value.read()
     }
 }
 
 #[cfg(test)]
 impl<T: PartialEq> PartialEq for QuotientVec<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.sequence_idx == other.sequence_idx
-            && *self.value.read().unwrap() == *other.value.read().unwrap()
+        self.sequence_idx == other.sequence_idx && *self.value.read() == *other.value.read()
     }
 }
 
@@ -293,7 +293,7 @@ impl<T> TreeMapNode<T> {
         self.quotients.get_latest(quotient)
     }
 
-    pub fn get_versioned(&self, quotient: u64) -> Option<&VersionedItem<T>> {
+    pub fn get_versioned(&self, quotient: u64) -> Option<RwLockReadGuard<'_, VersionedItem<T>>> {
         self.quotients.get_versioned(quotient)
     }
 }
@@ -326,7 +326,7 @@ impl<T> TreeMapVecNode<T> {
         self.dirty.store(true, Ordering::Release);
     }
 
-    pub fn get(&self, quotient: u64) -> Option<VersionedVecIter<'_, T>> {
+    pub fn get(&self, quotient: u64) -> Option<RwLockReadGuard<'_, VersionedVec<T>>> {
         self.quotients.get(quotient)
     }
 }
@@ -359,7 +359,7 @@ impl<T> QuotientsMap<T> {
             quotient,
             value,
             |value, quotient| {
-                quotient.value.write().unwrap().insert(version, value);
+                quotient.value.write().insert(version, value);
             },
             |value| {
                 Arc::new(Quotient {
@@ -375,16 +375,16 @@ impl<T> QuotientsMap<T> {
             // SAFETY: here we are changing the lifetime of the value by using
             // `std::mem::transmute`, which by definition is not safe, but given our use of
             // this value and how we destroy it, its actually safe in this context.
-            unsafe { std::mem::transmute(q.value.read().unwrap().latest()) }
+            unsafe { std::mem::transmute(q.value.read().latest()) }
         })
     }
 
-    fn get_versioned(&self, quotient: u64) -> Option<&VersionedItem<T>> {
+    fn get_versioned(&self, quotient: u64) -> Option<RwLockReadGuard<'_, VersionedItem<T>>> {
         self.map.lookup(&quotient).map(|q| {
             // SAFETY: here we are changing the lifetime of the value by using
             // `std::mem::transmute`, which by definition is not safe, but given our use of
             // this value and how we destroy it, its actually safe in this context.
-            unsafe { std::mem::transmute(&*q.value.read().unwrap()) }
+            unsafe { std::mem::transmute(q.value.read()) }
         })
     }
 }
@@ -395,7 +395,7 @@ impl<T> QuotientsMapVec<T> {
             quotient,
             value,
             |value, quotient| {
-                quotient.value.write().unwrap().push(version, value);
+                quotient.value.write().push(version, value);
             },
             |value| {
                 let mut vec = VersionedVec::new(version);
@@ -408,14 +408,12 @@ impl<T> QuotientsMapVec<T> {
         );
     }
 
-    fn get<'a>(&self, quotient: u64) -> Option<VersionedVecIter<'a, T>> {
-        self.map.lookup(&quotient).map(|q| {
-            unsafe {
-                std::mem::transmute::<&VersionedVec<T>, &'a VersionedVec<T>>(
-                    &*q.value.read().unwrap(),
-                )
-            }
-            .iter()
+    fn get(&self, quotient: u64) -> Option<RwLockReadGuard<'_, VersionedVec<T>>> {
+        self.map.lookup(&quotient).map(|q| unsafe {
+            std::mem::transmute::<
+                RwLockReadGuard<'_, VersionedVec<T>>,
+                RwLockReadGuard<'_, VersionedVec<T>>,
+            >(q.value.read())
         })
     }
 }
@@ -481,7 +479,7 @@ impl<K: TreeMapKey, V> TreeMap<K, V> {
         node.get_latest(key)
     }
 
-    pub fn get_versioned(&self, key: &K) -> Option<&VersionedItem<V>> {
+    pub fn get_versioned(&self, key: &K) -> Option<RwLockReadGuard<'_, VersionedItem<V>>> {
         let key = key.key();
         let node_pos = (key % 65536) as u32;
         let path = calculate_path(node_pos, 0);
@@ -538,7 +536,7 @@ impl<K: TreeMapKey, V> TreeMapVec<K, V> {
         node.push(version, key, value);
     }
 
-    pub fn get<'a>(&'a self, key: &K) -> Option<VersionedVecIter<'a, V>> {
+    pub fn get(&self, key: &K) -> Option<RwLockReadGuard<'_, VersionedVec<V>>> {
         let key = key.key();
         let node_pos = (key % 65536) as u32;
         let path = calculate_path(node_pos, 0);
@@ -603,7 +601,7 @@ mod tests {
         map.insert(1.into(), &0, 29);
         assert_eq!(map.get_latest(&0), Some(&29));
         assert_eq!(
-            map.get_versioned(&0),
+            map.get_versioned(&0).as_deref(),
             Some(&VersionedItem {
                 version: 0.into(),
                 serialized_at: RwLock::new(None),

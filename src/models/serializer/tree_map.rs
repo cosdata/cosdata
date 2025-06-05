@@ -1,7 +1,6 @@
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    RwLock,
-};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use parking_lot::RwLock;
 
 use crate::models::{
     atomic_array::AtomicArray,
@@ -23,7 +22,7 @@ impl<T: SimpleSerialize> PartitionedSerialize for TreeMapNode<T> {
         let file_idx = (self.node_idx % file_parts as u16) as u8;
         let bufman = bufmans.get(file_idx)?;
         let cursor = bufman.open_cursor()?;
-        let offset_read_guard = self.offset.read().map_err(|_| BufIoError::Locking)?;
+        let offset_read_guard = self.offset.read();
         if let Some(offset) = *offset_read_guard {
             bufman.seek_with_cursor(cursor, offset.0 as u64 + 2)?;
             for (idx, child) in self.children.items.iter().enumerate() {
@@ -47,7 +46,7 @@ impl<T: SimpleSerialize> PartitionedSerialize for TreeMapNode<T> {
             return Ok(offset.0);
         }
         drop(offset_read_guard);
-        let mut offset_write_guard = self.offset.write().map_err(|_| BufIoError::Locking)?;
+        let mut offset_write_guard = self.offset.write();
         if let Some(offset) = *offset_write_guard {
             bufman.seek_with_cursor(cursor, offset.0 as u64 + 2)?;
             for (idx, child) in self.children.items.iter().enumerate() {
@@ -136,7 +135,7 @@ impl<T: SimpleSerialize> PartitionedSerialize for TreeMapVecNode<T> {
         let file_idx = (self.node_idx % file_parts as u16) as u8;
         let bufman = bufmans.get(file_idx)?;
         let cursor = bufman.open_cursor()?;
-        let offset_read_guard = self.offset.read().map_err(|_| BufIoError::Locking)?;
+        let offset_read_guard = self.offset.read();
         if let Some(offset) = *offset_read_guard {
             bufman.seek_with_cursor(cursor, offset.0 as u64 + 2)?;
             for (idx, child) in self.children.items.iter().enumerate() {
@@ -160,7 +159,7 @@ impl<T: SimpleSerialize> PartitionedSerialize for TreeMapVecNode<T> {
             return Ok(offset.0);
         }
         drop(offset_read_guard);
-        let mut offset_write_guard = self.offset.write().map_err(|_| BufIoError::Locking)?;
+        let mut offset_write_guard = self.offset.write();
         if let Some(offset) = *offset_write_guard {
             bufman.seek_with_cursor(cursor, offset.0 as u64 + 2)?;
             for (idx, child) in self.children.items.iter().enumerate() {

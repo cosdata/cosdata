@@ -20,7 +20,9 @@ impl Display for CollectionsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CollectionsError::NotFound => write!(f, "Collection Not Found!"),
-            CollectionsError::AlreadyExists(name) => write!(f, "Collection with name '{}' already exists", name),
+            CollectionsError::AlreadyExists(name) => {
+                write!(f, "Collection with name '{}' already exists", name)
+            }
             CollectionsError::FailedToGetAppEnv => write!(f, "Failed to get App Env!"),
             CollectionsError::FailedToCreateCollection(msg) => {
                 write!(f, "Failed to create collection due to {}", msg)
