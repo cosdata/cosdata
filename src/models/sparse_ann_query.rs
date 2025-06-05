@@ -8,6 +8,7 @@ use std::cell::UnsafeCell;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::iter::Peekable;
+use std::sync::RwLockReadGuard;
 
 use super::inverted_index::InvertedIndexRoot;
 use super::tf_idf_index::{TFIDFIndexRoot, TermQuotient, VersionedVec, VersionedVecIter};
@@ -162,6 +163,7 @@ impl SparseAnnQueryBasic {
             .total_documents_count
             .load(std::sync::atomic::Ordering::Relaxed);
         let mut heads = BinaryHeap::new();
+        let mut locks = Vec::new();
 
         for (term_hash, _) in self.query_vector.entries {
             let dim_index = term_hash & (u16::MAX as u32);
@@ -173,6 +175,12 @@ impl SparseAnnQueryBasic {
                     let idf = get_idf(documents_count, documents.len() as u32);
 
                     let head = PostingListHead::new(&documents, idf);
+                    locks.push(unsafe {
+                        std::mem::transmute::<
+                            RwLockReadGuard<'_, VersionedVec<(u32, f32)>>,
+                            RwLockReadGuard<'static, VersionedVec<(u32, f32)>>,
+                        >(documents)
+                    });
                     heads.push(head);
                 }
             }
