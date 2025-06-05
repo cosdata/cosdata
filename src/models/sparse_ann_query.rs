@@ -178,7 +178,7 @@ impl SparseAnnQueryBasic {
                     locks.push(unsafe {
                         std::mem::transmute::<
                             RwLockReadGuard<'_, VersionedVec<(u32, f32)>>,
-                            RwLockReadGuard<'static, VersionedVec<(u32, f32)>>,
+                            RwLockReadGuard<'_, VersionedVec<(u32, f32)>>,
                         >(documents)
                     });
                     heads.push(head);
@@ -240,20 +240,19 @@ impl SparseAnnQueryBasic {
     }
 }
 
-struct PostingListHead {
-    iter: UnsafeCell<Peekable<VersionedVecIter<'static, (u32, f32)>>>,
+struct PostingListHead<'a> {
+    iter: UnsafeCell<Peekable<VersionedVecIter<'a, (u32, f32)>>>,
     pub idf: f32,
 }
 
-impl PostingListHead {
+impl<'a> PostingListHead<'a> {
     pub fn new(documents: &VersionedVec<(u32, f32)>, idf: f32) -> Self {
         Self {
             iter: UnsafeCell::new(
                 unsafe {
-                    std::mem::transmute::<
-                        &VersionedVec<(u32, f32)>,
-                        &'static VersionedVec<(u32, f32)>,
-                    >(documents)
+                    std::mem::transmute::<&VersionedVec<(u32, f32)>, &'a VersionedVec<(u32, f32)>>(
+                        documents,
+                    )
                 }
                 .iter()
                 .peekable(),
@@ -271,7 +270,7 @@ impl PostingListHead {
     }
 }
 
-impl Ord for PostingListHead {
+impl Ord for PostingListHead<'_> {
     fn cmp(&self, other: &Self) -> Ordering {
         let Some(s) = self.peek() else { unreachable!() };
 
@@ -283,15 +282,15 @@ impl Ord for PostingListHead {
     }
 }
 
-impl PartialOrd for PostingListHead {
+impl PartialOrd for PostingListHead<'_> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Eq for PostingListHead {}
+impl Eq for PostingListHead<'_> {}
 
-impl PartialEq for PostingListHead {
+impl PartialEq for PostingListHead<'_> {
     fn eq(&self, other: &Self) -> bool {
         let Some(s) = self.peek() else { unreachable!() };
 
