@@ -10,7 +10,7 @@ use std::collections::BinaryHeap;
 use std::iter::Peekable;
 
 use super::inverted_index::InvertedIndexRoot;
-use super::tf_idf_index::{TFIDFIndexRoot, TermInfo, TermQuotient, UnsafeVersionedVecIter};
+use super::tf_idf_index::{TFIDFIndexRoot, TermQuotient, VersionedVec, VersionedVecIter};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SparseAnnResult {
@@ -169,9 +169,10 @@ impl SparseAnnQueryBasic {
             if let Some(node) = index.find_node(dim_index) {
                 let data = unsafe { &*node.data }.try_get_data(&index.cache, node.dim_index)?;
                 if let Some(term) = data.map.lookup(&quotient) {
-                    let idf = get_idf(documents_count, term.documents.len() as u32);
+                    let documents = term.documents.read().unwrap();
+                    let idf = get_idf(documents_count, documents.len() as u32);
 
-                    let head = PostingListHead::new(&term, idf);
+                    let head = PostingListHead::new(&documents, idf);
                     heads.push(head);
                 }
             }
@@ -232,14 +233,23 @@ impl SparseAnnQueryBasic {
 }
 
 struct PostingListHead {
-    iter: UnsafeCell<Peekable<UnsafeVersionedVecIter<'static, (u32, f32)>>>,
+    iter: UnsafeCell<Peekable<VersionedVecIter<'static, (u32, f32)>>>,
     pub idf: f32,
 }
 
 impl PostingListHead {
-    pub fn new(term: &TermInfo, idf: f32) -> Self {
+    pub fn new(documents: &VersionedVec<(u32, f32)>, idf: f32) -> Self {
         Self {
-            iter: UnsafeCell::new(term.documents.iter().peekable()),
+            iter: UnsafeCell::new(
+                unsafe {
+                    std::mem::transmute::<
+                        &VersionedVec<(u32, f32)>,
+                        &'static VersionedVec<(u32, f32)>,
+                    >(documents)
+                }
+                .iter()
+                .peekable(),
+            ),
             idf,
         }
     }
