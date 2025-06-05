@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use parking_lot::{RwLock, RwLockReadGuard};
+use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use rustc_hash::FxHashMap;
 
 use crate::indexes::hnsw::offset_counter::{self, IndexFileId};
@@ -63,8 +63,7 @@ impl LatestNode {
             .version
             == version
         {
-            drop(latest_write_guard);
-            return Ok((self.latest.read(), false));
+            return Ok((RwLockWriteGuard::downgrade(latest_write_guard), false));
         }
 
         let current_node = unsafe { &**latest_write_guard }.try_get_data(cache)?;
@@ -103,11 +102,9 @@ impl LatestNode {
             .update_u32_with_cursor(cursor, *file_id)?;
         cache.latest_version_links_bufman.close_cursor(cursor)?;
 
-        drop(latest_write_guard);
-
         cache.unload(prev_lazy_item)?;
 
-        Ok((self.latest.read(), true))
+        Ok((RwLockWriteGuard::downgrade(latest_write_guard), true))
     }
 }
 
