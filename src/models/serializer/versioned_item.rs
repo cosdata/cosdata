@@ -1,33 +1,29 @@
-use std::{cell::UnsafeCell, sync::RwLock};
+use parking_lot::RwLock;
 
 use crate::models::{
     buffered_io::{BufIoError, BufferManager},
-    tree_map::UnsafeVersionedItem,
+    tree_map::VersionedItem,
     types::FileOffset,
     versioning::VersionNumber,
 };
 
 use super::SimpleSerialize;
 
-impl<T: SimpleSerialize> SimpleSerialize for UnsafeVersionedItem<T> {
+impl<T: SimpleSerialize> SimpleSerialize for VersionedItem<T> {
     fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
-        let next = unsafe { &*self.next.get() };
-        let next_offset = if let Some(next) = next {
+        let next_offset = if let Some(next) = &self.next {
             next.serialize(bufman, cursor)?
         } else {
             u32::MAX
         };
-        let offset_read_guard = self.serialized_at.read().map_err(|_| BufIoError::Locking)?;
+        let offset_read_guard = self.serialized_at.read();
         if let Some(FileOffset(offset)) = *offset_read_guard {
             bufman.seek_with_cursor(cursor, offset as u64 + 8)?;
             bufman.update_u32_with_cursor(cursor, next_offset)?;
             return Ok(offset);
         }
         drop(offset_read_guard);
-        let mut offset_write_guard = self
-            .serialized_at
-            .write()
-            .map_err(|_| BufIoError::Locking)?;
+        let mut offset_write_guard = self.serialized_at.write();
         if let Some(FileOffset(offset)) = *offset_write_guard {
             bufman.seek_with_cursor(cursor, offset as u64 + 8)?;
             bufman.update_u32_with_cursor(cursor, next_offset)?;
@@ -70,7 +66,7 @@ impl<T: SimpleSerialize> SimpleSerialize for UnsafeVersionedItem<T> {
             serialized_at: RwLock::new(Some(offset)),
             version,
             value,
-            next: UnsafeCell::new(next),
+            next,
         })
     }
 }

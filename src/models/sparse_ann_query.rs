@@ -8,9 +8,10 @@ use std::cell::UnsafeCell;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::iter::Peekable;
+use std::sync::RwLockReadGuard;
 
 use super::inverted_index::InvertedIndexRoot;
-use super::tf_idf_index::{TFIDFIndexRoot, TermInfo, TermQuotient, UnsafeVersionedVecIter};
+use super::tf_idf_index::{TFIDFIndexRoot, TermQuotient, VersionedVec, VersionedVecIter};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SparseAnnResult {
@@ -162,6 +163,7 @@ impl SparseAnnQueryBasic {
             .total_documents_count
             .load(std::sync::atomic::Ordering::Relaxed);
         let mut heads = BinaryHeap::new();
+        let mut locks = Vec::new();
 
         for (term_hash, _) in self.query_vector.entries {
             let dim_index = term_hash & (u16::MAX as u32);
@@ -169,9 +171,16 @@ impl SparseAnnQueryBasic {
             if let Some(node) = index.find_node(dim_index) {
                 let data = unsafe { &*node.data }.try_get_data(&index.cache, node.dim_index)?;
                 if let Some(term) = data.map.lookup(&quotient) {
-                    let idf = get_idf(documents_count, term.documents.len() as u32);
+                    let documents = term.documents.read().unwrap();
+                    let idf = get_idf(documents_count, documents.len() as u32);
 
-                    let head = PostingListHead::new(&term, idf);
+                    let head = PostingListHead::new(&documents, idf);
+                    locks.push(unsafe {
+                        std::mem::transmute::<
+                            RwLockReadGuard<'_, VersionedVec<(u32, f32)>>,
+                            RwLockReadGuard<'_, VersionedVec<(u32, f32)>>,
+                        >(documents)
+                    });
                     heads.push(head);
                 }
             }
@@ -231,15 +240,23 @@ impl SparseAnnQueryBasic {
     }
 }
 
-struct PostingListHead {
-    iter: UnsafeCell<Peekable<UnsafeVersionedVecIter<'static, (u32, f32)>>>,
+struct PostingListHead<'a> {
+    iter: UnsafeCell<Peekable<VersionedVecIter<'a, (u32, f32)>>>,
     pub idf: f32,
 }
 
-impl PostingListHead {
-    pub fn new(term: &TermInfo, idf: f32) -> Self {
+impl<'a> PostingListHead<'a> {
+    pub fn new(documents: &VersionedVec<(u32, f32)>, idf: f32) -> Self {
         Self {
-            iter: UnsafeCell::new(term.documents.iter().peekable()),
+            iter: UnsafeCell::new(
+                unsafe {
+                    std::mem::transmute::<&VersionedVec<(u32, f32)>, &'a VersionedVec<(u32, f32)>>(
+                        documents,
+                    )
+                }
+                .iter()
+                .peekable(),
+            ),
             idf,
         }
     }
@@ -253,7 +270,7 @@ impl PostingListHead {
     }
 }
 
-impl Ord for PostingListHead {
+impl Ord for PostingListHead<'_> {
     fn cmp(&self, other: &Self) -> Ordering {
         let Some(s) = self.peek() else { unreachable!() };
 
@@ -265,15 +282,15 @@ impl Ord for PostingListHead {
     }
 }
 
-impl PartialOrd for PostingListHead {
+impl PartialOrd for PostingListHead<'_> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Eq for PostingListHead {}
+impl Eq for PostingListHead<'_> {}
 
-impl PartialEq for PostingListHead {
+impl PartialEq for PostingListHead<'_> {
     fn eq(&self, other: &Self) -> bool {
         let Some(s) = self.peek() else { unreachable!() };
 

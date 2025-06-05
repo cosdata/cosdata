@@ -1,13 +1,15 @@
 use std::sync::{
     atomic::{AtomicU64, AtomicUsize, Ordering},
-    Arc, RwLock,
+    Arc,
 };
+
+use parking_lot::RwLock;
 
 use crate::models::{
     buffered_io::{BufIoError, BufferManager},
     common::TSHashTable,
-    tf_idf_index::UnsafeVersionedVec,
-    tree_map::{Quotient, QuotientVec, QuotientsMap, QuotientsMapVec, UnsafeVersionedItem},
+    tf_idf_index::VersionedVec,
+    tree_map::{Quotient, QuotientVec, QuotientsMap, QuotientsMapVec, VersionedItem},
     types::FileOffset,
 };
 
@@ -23,7 +25,7 @@ impl<T: SimpleSerialize> SimpleSerialize for QuotientsMap<T> {
             return Ok(u32::MAX);
         }
         let len = self.len.load(Ordering::Relaxed);
-        let offset_read_guard = self.offset.read().map_err(|_| BufIoError::Locking)?;
+        let offset_read_guard = self.offset.read();
         let total_chunks = list.len().div_ceil(CHUNK_SIZE);
         if let Some(offset) = *offset_read_guard {
             let serialized_upto = self.serialized_upto.load(Ordering::Relaxed);
@@ -37,7 +39,7 @@ impl<T: SimpleSerialize> SimpleSerialize for QuotientsMap<T> {
                     bufman.update_with_cursor(cursor, &[u8::MAX; 12])?;
                     continue;
                 };
-                let value_offset = v.value.serialize(bufman, cursor)?;
+                let value_offset = v.value.read().serialize(bufman, cursor)?;
                 bufman.seek_with_cursor(cursor, offset.0 as u64 + 8 + (i as u64 * 12))?;
                 bufman.update_u64_with_cursor(cursor, *k)?;
                 bufman.update_u32_with_cursor(cursor, value_offset)?;
@@ -53,7 +55,7 @@ impl<T: SimpleSerialize> SimpleSerialize for QuotientsMap<T> {
                         bufman.update_with_cursor(cursor, &[u8::MAX; 12])?;
                         continue;
                     };
-                    let value_offset = v.value.serialize(bufman, cursor)?;
+                    let value_offset = v.value.read().serialize(bufman, cursor)?;
                     bufman
                         .seek_with_cursor(cursor, current_chunk_offset as u64 + (i as u64 * 12))?;
                     bufman.update_u64_with_cursor(cursor, *k)?;
@@ -71,7 +73,7 @@ impl<T: SimpleSerialize> SimpleSerialize for QuotientsMap<T> {
                         continue;
                     };
                     buf.extend(k.to_le_bytes());
-                    let offset = v.value.serialize(bufman, cursor)?;
+                    let offset = v.value.read().serialize(bufman, cursor)?;
                     buf.extend(offset.to_le_bytes());
                 }
                 buf.extend([u8::MAX; 4]);
@@ -84,7 +86,7 @@ impl<T: SimpleSerialize> SimpleSerialize for QuotientsMap<T> {
             self.serialized_upto.store(list.len(), Ordering::Relaxed);
         }
         drop(offset_read_guard);
-        let mut offset_write_guard = self.offset.write().map_err(|_| BufIoError::Locking)?;
+        let mut offset_write_guard = self.offset.write();
         if let Some(offset) = *offset_write_guard {
             let serialized_upto = self.serialized_upto.load(Ordering::Relaxed);
             bufman.seek_with_cursor(cursor, offset.0 as u64)?;
@@ -97,7 +99,7 @@ impl<T: SimpleSerialize> SimpleSerialize for QuotientsMap<T> {
                     bufman.update_with_cursor(cursor, &[u8::MAX; 12])?;
                     continue;
                 };
-                let value_offset = v.value.serialize(bufman, cursor)?;
+                let value_offset = v.value.read().serialize(bufman, cursor)?;
                 bufman.seek_with_cursor(cursor, offset.0 as u64 + 8 + (i as u64 * 12))?;
                 bufman.update_u64_with_cursor(cursor, *k)?;
                 bufman.update_u32_with_cursor(cursor, value_offset)?;
@@ -113,7 +115,7 @@ impl<T: SimpleSerialize> SimpleSerialize for QuotientsMap<T> {
                         bufman.update_with_cursor(cursor, &[u8::MAX; 12])?;
                         continue;
                     };
-                    let value_offset = v.value.serialize(bufman, cursor)?;
+                    let value_offset = v.value.read().serialize(bufman, cursor)?;
                     bufman
                         .seek_with_cursor(cursor, current_chunk_offset as u64 + (i as u64 * 12))?;
                     bufman.update_u64_with_cursor(cursor, *k)?;
@@ -131,7 +133,7 @@ impl<T: SimpleSerialize> SimpleSerialize for QuotientsMap<T> {
                         continue;
                     };
                     buf.extend(k.to_le_bytes());
-                    let offset = v.value.serialize(bufman, cursor)?;
+                    let offset = v.value.read().serialize(bufman, cursor)?;
                     buf.extend(offset.to_le_bytes());
                 }
                 buf.extend([u8::MAX; 4]);
@@ -151,7 +153,7 @@ impl<T: SimpleSerialize> SimpleSerialize for QuotientsMap<T> {
                 continue;
             };
             chunk_buf.extend(k.to_le_bytes());
-            let offset = v.value.serialize(bufman, cursor)?;
+            let offset = v.value.read().serialize(bufman, cursor)?;
             chunk_buf.extend(offset.to_le_bytes());
         }
         chunk_buf.extend([u8::MAX; 4]);
@@ -166,7 +168,7 @@ impl<T: SimpleSerialize> SimpleSerialize for QuotientsMap<T> {
                     continue;
                 };
                 chunk_buf.extend(k.to_le_bytes());
-                let offset = v.value.serialize(bufman, cursor)?;
+                let offset = v.value.read().serialize(bufman, cursor)?;
                 chunk_buf.extend(offset.to_le_bytes());
             }
             chunk_buf.extend([u8::MAX; 4]);
@@ -205,10 +207,9 @@ impl<T: SimpleSerialize> SimpleSerialize for QuotientsMap<T> {
                 }
                 let key = bufman.read_u64_with_cursor(cursor)?;
                 let value_offset = bufman.read_u32_with_cursor(cursor)?;
-                let value =
-                    UnsafeVersionedItem::<T>::deserialize(bufman, FileOffset(value_offset))?;
+                let value = VersionedItem::<T>::deserialize(bufman, FileOffset(value_offset))?;
                 let q = Quotient {
-                    value,
+                    value: RwLock::new(value),
                     sequence_idx: i as u64,
                 };
                 map.insert(key, Arc::new(q));
@@ -238,7 +239,7 @@ impl<T: SimpleSerialize> SimpleSerialize for QuotientsMapVec<T> {
             return Ok(u32::MAX);
         }
         let len = self.len.load(Ordering::Relaxed);
-        let offset_read_guard = self.offset.read().map_err(|_| BufIoError::Locking)?;
+        let offset_read_guard = self.offset.read();
         let total_chunks = list.len().div_ceil(CHUNK_SIZE);
         if let Some(offset) = *offset_read_guard {
             let serialized_upto = self.serialized_upto.load(Ordering::Relaxed);
@@ -252,7 +253,7 @@ impl<T: SimpleSerialize> SimpleSerialize for QuotientsMapVec<T> {
                     bufman.update_with_cursor(cursor, &[u8::MAX; 12])?;
                     continue;
                 };
-                let value_offset = v.value.serialize(bufman, cursor)?;
+                let value_offset = v.value.read().serialize(bufman, cursor)?;
                 bufman.seek_with_cursor(cursor, offset.0 as u64 + 8 + (i as u64 * 12))?;
                 bufman.update_u64_with_cursor(cursor, *k)?;
                 bufman.update_u32_with_cursor(cursor, value_offset)?;
@@ -268,7 +269,7 @@ impl<T: SimpleSerialize> SimpleSerialize for QuotientsMapVec<T> {
                         bufman.update_with_cursor(cursor, &[u8::MAX; 12])?;
                         continue;
                     };
-                    let value_offset = v.value.serialize(bufman, cursor)?;
+                    let value_offset = v.value.read().serialize(bufman, cursor)?;
                     bufman
                         .seek_with_cursor(cursor, current_chunk_offset as u64 + (i as u64 * 12))?;
                     bufman.update_u64_with_cursor(cursor, *k)?;
@@ -286,7 +287,7 @@ impl<T: SimpleSerialize> SimpleSerialize for QuotientsMapVec<T> {
                         continue;
                     };
                     buf.extend(k.to_le_bytes());
-                    let offset = v.value.serialize(bufman, cursor)?;
+                    let offset = v.value.read().serialize(bufman, cursor)?;
                     buf.extend(offset.to_le_bytes());
                 }
                 buf.extend([u8::MAX; 4]);
@@ -299,7 +300,7 @@ impl<T: SimpleSerialize> SimpleSerialize for QuotientsMapVec<T> {
             self.serialized_upto.store(list.len(), Ordering::Relaxed);
         }
         drop(offset_read_guard);
-        let mut offset_write_guard = self.offset.write().map_err(|_| BufIoError::Locking)?;
+        let mut offset_write_guard = self.offset.write();
         if let Some(offset) = *offset_write_guard {
             let serialized_upto = self.serialized_upto.load(Ordering::Relaxed);
             bufman.seek_with_cursor(cursor, offset.0 as u64)?;
@@ -312,7 +313,7 @@ impl<T: SimpleSerialize> SimpleSerialize for QuotientsMapVec<T> {
                     bufman.update_with_cursor(cursor, &[u8::MAX; 12])?;
                     continue;
                 };
-                let value_offset = v.value.serialize(bufman, cursor)?;
+                let value_offset = v.value.read().serialize(bufman, cursor)?;
                 bufman.seek_with_cursor(cursor, offset.0 as u64 + 8 + (i as u64 * 12))?;
                 bufman.update_u64_with_cursor(cursor, *k)?;
                 bufman.update_u32_with_cursor(cursor, value_offset)?;
@@ -328,7 +329,7 @@ impl<T: SimpleSerialize> SimpleSerialize for QuotientsMapVec<T> {
                         bufman.update_with_cursor(cursor, &[u8::MAX; 12])?;
                         continue;
                     };
-                    let value_offset = v.value.serialize(bufman, cursor)?;
+                    let value_offset = v.value.read().serialize(bufman, cursor)?;
                     bufman
                         .seek_with_cursor(cursor, current_chunk_offset as u64 + (i as u64 * 12))?;
                     bufman.update_u64_with_cursor(cursor, *k)?;
@@ -346,7 +347,7 @@ impl<T: SimpleSerialize> SimpleSerialize for QuotientsMapVec<T> {
                         continue;
                     };
                     buf.extend(k.to_le_bytes());
-                    let offset = v.value.serialize(bufman, cursor)?;
+                    let offset = v.value.read().serialize(bufman, cursor)?;
                     buf.extend(offset.to_le_bytes());
                 }
                 buf.extend([u8::MAX; 4]);
@@ -366,7 +367,7 @@ impl<T: SimpleSerialize> SimpleSerialize for QuotientsMapVec<T> {
                 continue;
             };
             chunk_buf.extend(k.to_le_bytes());
-            let offset = v.value.serialize(bufman, cursor)?;
+            let offset = v.value.read().serialize(bufman, cursor)?;
             chunk_buf.extend(offset.to_le_bytes());
         }
         chunk_buf.extend([u8::MAX; 4]);
@@ -381,7 +382,7 @@ impl<T: SimpleSerialize> SimpleSerialize for QuotientsMapVec<T> {
                     continue;
                 };
                 chunk_buf.extend(k.to_le_bytes());
-                let offset = v.value.serialize(bufman, cursor)?;
+                let offset = v.value.read().serialize(bufman, cursor)?;
                 chunk_buf.extend(offset.to_le_bytes());
             }
             chunk_buf.extend([u8::MAX; 4]);
@@ -420,9 +421,9 @@ impl<T: SimpleSerialize> SimpleSerialize for QuotientsMapVec<T> {
                 }
                 let key = bufman.read_u64_with_cursor(cursor)?;
                 let value_offset = bufman.read_u32_with_cursor(cursor)?;
-                let value = UnsafeVersionedVec::<T>::deserialize(bufman, FileOffset(value_offset))?;
+                let value = VersionedVec::<T>::deserialize(bufman, FileOffset(value_offset))?;
                 let q = QuotientVec {
-                    value,
+                    value: RwLock::new(value),
                     sequence_idx: i as u64,
                 };
                 map.insert(key, Arc::new(q));

@@ -1,5 +1,4 @@
 use std::{
-    cell::UnsafeCell,
     fmt::Debug,
     fs::OpenOptions,
     path::PathBuf,
@@ -28,56 +27,52 @@ pub type TermQuotient = u16;
 // Outer map from term quotients to TermInfo
 pub type QuotientMap = TSHashTable<TermQuotient, Arc<TermInfo>>;
 
-pub struct UnsafeVersionedVec<T> {
+pub struct VersionedVec<T> {
     pub serialized_at: RwLock<Option<FileOffset>>,
     pub version: VersionNumber,
-    pub list: UnsafeCell<Vec<T>>,
-    pub next: UnsafeCell<Option<Box<UnsafeVersionedVec<T>>>>,
+    pub list: Vec<T>,
+    pub next: Option<Box<VersionedVec<T>>>,
 }
 
-unsafe impl<T: Send> Send for UnsafeVersionedVec<T> {}
-unsafe impl<T: Sync> Sync for UnsafeVersionedVec<T> {}
+unsafe impl<T: Send> Send for VersionedVec<T> {}
+unsafe impl<T: Sync> Sync for VersionedVec<T> {}
 
-impl<T> UnsafeVersionedVec<T> {
-    pub fn new(version: VersionNumber) -> UnsafeVersionedVec<T> {
+impl<T> VersionedVec<T> {
+    pub fn new(version: VersionNumber) -> VersionedVec<T> {
         Self {
             serialized_at: RwLock::new(None),
             version,
-            list: UnsafeCell::new(Vec::new()),
-            next: UnsafeCell::new(None),
+            list: Vec::new(),
+            next: None,
         }
     }
 
-    pub fn push(&self, version: VersionNumber, value: T) {
+    pub fn push(&mut self, version: VersionNumber, value: T) {
         if self.version == version {
-            return unsafe { &mut *self.list.get() }.push(value);
+            return self.list.push(value);
         }
 
-        let next = unsafe { &mut *self.next.get() };
-
-        if let Some(next) = next {
+        if let Some(next) = &mut self.next {
             next.push(version, value);
         } else {
-            let new_next = Box::new(Self::new(version));
+            let mut new_next = Box::new(Self::new(version));
             new_next.push(version, value);
-            *next = Some(new_next);
+            self.next = Some(new_next);
         }
     }
 
-    pub fn iter<'a>(&self) -> UnsafeVersionedVecIter<'a, T> {
-        let vec_ref = unsafe { &*self.list.get() };
-        let iter = vec_ref.iter();
-        UnsafeVersionedVecIter {
+    pub fn iter(&self) -> VersionedVecIter<'_, T> {
+        let iter = self.list.iter();
+        VersionedVecIter {
             current_iter: iter,
-            next: unsafe { &*self.next.get() }.as_deref(),
+            next: self.next.as_deref(),
         }
     }
 
     pub fn len(&self) -> usize {
-        let current_len = unsafe { &*self.list.get() }.len();
-        let next = unsafe { &*self.next.get() };
+        let current_len = self.list.len();
 
-        match next {
+        match &self.next {
             Some(next_node) => current_len + next_node.len(),
             None => current_len,
         }
@@ -89,55 +84,50 @@ impl<T> UnsafeVersionedVec<T> {
     }
 }
 
-impl UnsafeVersionedVec<(u32, f32)> {
-    pub fn push_sorted(&self, version: VersionNumber, value: (u32, f32)) {
+impl VersionedVec<(u32, f32)> {
+    pub fn push_sorted(&mut self, version: VersionNumber, value: (u32, f32)) {
         if self.version == version {
-            let list = unsafe { &mut *self.list.get() };
-            let mut i = list.len();
-            while i > 0 && list[i - 1].0 > value.0 {
+            let mut i = self.list.len();
+            while i > 0 && self.list[i - 1].0 > value.0 {
                 i -= 1;
             }
-            list.insert(i, value);
+            self.list.insert(i, value);
             return;
         }
 
-        let next = unsafe { &mut *self.next.get() };
-
-        if let Some(next) = next {
+        if let Some(next) = &mut self.next {
             next.push_sorted(version, value);
         } else {
-            let new_next = Box::new(Self::new(version));
+            let mut new_next = Box::new(Self::new(version));
             new_next.push_sorted(version, value);
-            *next = Some(new_next);
+            self.next = Some(new_next);
         }
     }
 }
 
-impl<T: PartialEq> PartialEq for UnsafeVersionedVec<T> {
+impl<T: PartialEq> PartialEq for VersionedVec<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.version == other.version
-            && unsafe { &*self.list.get() } == unsafe { &*other.list.get() }
-            && unsafe { &*self.next.get() } == unsafe { &*other.next.get() }
+        self.version == other.version && self.list == other.list && self.next == other.next
     }
 }
 
-impl<T: Debug> Debug for UnsafeVersionedVec<T> {
+impl<T: Debug> Debug for VersionedVec<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("UnsafeVersionedList")
             .field("version", &self.version)
-            .field("list", unsafe { &*self.list.get() })
-            .field("next", unsafe { &*self.next.get() })
+            .field("list", &self.list)
+            .field("next", &self.next)
             .finish()
     }
 }
 
 // Iterator over &T
-pub struct UnsafeVersionedVecIter<'a, T> {
+pub struct VersionedVecIter<'a, T> {
     current_iter: std::slice::Iter<'a, T>,
-    next: Option<&'a UnsafeVersionedVec<T>>,
+    next: Option<&'a VersionedVec<T>>,
 }
 
-impl<'a, T> Iterator for UnsafeVersionedVecIter<'a, T> {
+impl<'a, T> Iterator for VersionedVecIter<'a, T> {
     type Item = &'a T;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -146,9 +136,8 @@ impl<'a, T> Iterator for UnsafeVersionedVecIter<'a, T> {
         }
 
         if let Some(next_node) = self.next {
-            let vec_ref = unsafe { &*next_node.list.get() };
-            self.current_iter = vec_ref.iter();
-            self.next = unsafe { &*next_node.next.get() }.as_deref();
+            self.current_iter = next_node.list.iter();
+            self.next = next_node.next.as_deref();
             self.current_iter.next()
         } else {
             None
@@ -157,7 +146,7 @@ impl<'a, T> Iterator for UnsafeVersionedVecIter<'a, T> {
 }
 
 pub struct TermInfo {
-    pub documents: UnsafeVersionedVec<(u32, f32)>,
+    pub documents: RwLock<VersionedVec<(u32, f32)>>,
     pub sequence_idx: u16,
 }
 
@@ -165,7 +154,7 @@ impl TermInfo {
     #[allow(unused)]
     pub fn new(sequence_idx: u16, version: VersionNumber) -> Self {
         Self {
-            documents: UnsafeVersionedVec::new(version),
+            documents: RwLock::new(VersionedVec::new(version)),
             sequence_idx,
         }
     }
@@ -174,7 +163,8 @@ impl TermInfo {
 #[cfg(test)]
 impl PartialEq for TermInfo {
     fn eq(&self, other: &Self) -> bool {
-        self.documents == other.documents && self.sequence_idx == other.sequence_idx
+        *self.documents.read().unwrap() == *other.documents.read().unwrap()
+            && self.sequence_idx == other.sequence_idx
     }
 }
 
@@ -360,15 +350,18 @@ impl TFIDFIndexNode {
         data.map.modify_or_insert(
             quotient,
             |term| {
-                term.documents.push_sorted(version, (document_id, value));
+                term.documents
+                    .write()
+                    .unwrap()
+                    .push_sorted(version, (document_id, value));
             },
             || {
                 // Create new inner map if quotient not found
-                let documents = UnsafeVersionedVec::new(version);
+                let mut documents = VersionedVec::new(version);
                 let sequence_idx = data.map_len.fetch_add(1, Ordering::Relaxed);
                 documents.push(version, (document_id, value));
                 Arc::new(TermInfo {
-                    documents,
+                    documents: RwLock::new(documents),
                     sequence_idx,
                 })
             },

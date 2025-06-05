@@ -1,18 +1,17 @@
-use std::{cell::UnsafeCell, sync::RwLock};
+use std::sync::RwLock;
 
 use crate::models::{
     buffered_io::{BufIoError, BufferManager},
-    tf_idf_index::UnsafeVersionedVec,
+    tf_idf_index::VersionedVec,
     types::FileOffset,
     versioning::VersionNumber,
 };
 
 use super::SimpleSerialize;
 
-impl<T: SimpleSerialize> SimpleSerialize for UnsafeVersionedVec<T> {
+impl<T: SimpleSerialize> SimpleSerialize for VersionedVec<T> {
     fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
-        let next = unsafe { &*self.next.get() };
-        let next_offset = if let Some(next) = next {
+        let next_offset = if let Some(next) = &self.next {
             next.serialize(bufman, cursor)?
         } else {
             u32::MAX
@@ -33,14 +32,13 @@ impl<T: SimpleSerialize> SimpleSerialize for UnsafeVersionedVec<T> {
             bufman.update_u32_with_cursor(cursor, next_offset)?;
             return Ok(offset.0);
         }
-        let list = unsafe { &*self.list.get() };
-        let size = 4 * list.len() + 12;
+        let size = 4 * self.list.len() + 12;
         let mut buf = Vec::with_capacity(size);
         buf.extend(next_offset.to_le_bytes());
         buf.extend(self.version.to_le_bytes());
-        buf.extend((list.len() as u32).to_le_bytes());
+        buf.extend((self.list.len() as u32).to_le_bytes());
 
-        for el in list {
+        for el in &self.list {
             let serialized_offset = el.serialize(bufman, cursor)?;
             buf.extend(serialized_offset.to_le_bytes());
         }
@@ -77,8 +75,8 @@ impl<T: SimpleSerialize> SimpleSerialize for UnsafeVersionedVec<T> {
         Ok(Self {
             serialized_at: RwLock::new(Some(offset)),
             version,
-            list: UnsafeCell::new(list),
-            next: UnsafeCell::new(next),
+            list,
+            next,
         })
     }
 }
