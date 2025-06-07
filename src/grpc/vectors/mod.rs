@@ -47,8 +47,7 @@ crate::cfg_grpc! {
                 .get_latest(&VectorId::from(req.vector_id))
                 .ok_or_else(|| Status::not_found("Vector not found"))?;
             let vector = collection
-                .internal_to_external_map
-                .get_latest(internal_id)
+                .get_raw_emb_by_internal_id(internal_id)
                 .ok_or_else(|| Status::not_found("Vector not found"))?
                 .clone();
 

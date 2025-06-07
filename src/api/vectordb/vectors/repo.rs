@@ -41,8 +41,7 @@ pub(crate) async fn query_vectors(
         .iter()
         .map(|internal_id| {
             Ok(collection
-                .internal_to_external_map
-                .get_latest(internal_id)
+                .get_raw_emb_by_internal_id(internal_id)
                 .ok_or(VectorsError::NotFound)?
                 .clone()
                 .into())
@@ -65,8 +64,7 @@ pub(crate) async fn get_vector_by_id(
         .get_latest(&vector_id)
         .ok_or(VectorsError::NotFound)?;
     let vector = collection
-        .internal_to_external_map
-        .get_latest(internal_id)
+        .get_raw_emb_by_internal_id(internal_id)
         .ok_or(VectorsError::NotFound)?
         .clone();
     Ok(vector.into())
@@ -98,10 +96,7 @@ pub(crate) async fn check_vector_existence(
         } else {
             return Ok(false);
         };
-    Ok(collection
-        .internal_to_external_map
-        .get_latest(internal_id)
-        .is_some())
+    Ok(collection.get_raw_emb_by_internal_id(internal_id).is_some())
 }
 
 pub(crate) async fn fetch_vector_neighbors(

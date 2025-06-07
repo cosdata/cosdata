@@ -14,6 +14,7 @@ pub use query_filtering::{Filter, Operator, Predicate, QueryFilterDimensions};
 pub use schema::MetadataSchema;
 
 use crate::models::common::generate_level_probs;
+use crate::models::types::InternalId;
 
 pub const HIGH_WEIGHT: i32 = 1;
 
@@ -120,6 +121,10 @@ impl<'de> Deserialize<'de> for FieldValue {
 
 pub type MetadataFields = HashMap<FieldName, FieldValue>;
 
+/// Returns metadata dimensions based on the fields
+///
+/// Note that the base dimensions will be implicitly included as the
+/// first item in the returned vector
 pub fn fields_to_dimensions(
     schema: &MetadataSchema,
     metadata_fields: Option<&MetadataFields>,
@@ -203,6 +208,20 @@ pub fn pseudo_level_probs(num_levels: u8, num_pseudo_nodes: u16) -> Vec<(f64, u8
         result.push((0.0, i));
     }
     result
+}
+
+/// Returns vector values for pseudo node
+pub fn pseudo_node_vector(num_dims: usize) -> Vec<f32> {
+    vec![0.0; num_dims]
+}
+
+/// Returns the internal id for pseudo root node
+pub fn pseudo_root_id() -> InternalId {
+    // The last 258 IDs in the generate u32 internal IDs range are
+    // reserved for special cases, `u32::MAX` is for root node,
+    // `u32::MAX - 1` is for queries, and the range `[u32::MAX -
+    // 257, u32::MAX - 2]`
+    InternalId::from(u32::MAX - 257)
 }
 
 #[cfg(test)]

@@ -155,15 +155,47 @@ pub struct MetadataId(pub u8);
 
 #[derive(Debug, PartialEq)]
 pub struct NodePropMetadata {
+    pub replica_id: InternalId,
     pub vec: Arc<Metadata>,
     pub location: PropPersistRef,
 }
 
+/// Kinds of nodes in the HNSW/dense index
+///
+/// They are called 'replica nodes' because when metadata fields are
+/// supported by the index, one embedding may result in multiple nodes
+/// getting added to the HNSW graph.
 #[derive(Debug)]
 pub enum ReplicaNodeKind {
+    /// These are "static" nodes created at the time of index
+    /// initialization under the pseudo root node (See `RootNodeKind`
+    /// for more types of root nodes)
     Pseudo,
+    /// Nodes corresponding to the vector embeddings with metadata
+    /// dimensions either absent or default value (all 0s)
     Base,
+    /// Nodes corresponding to the vector embeddings with metadata
+    /// dimensions set
     Metadata,
+}
+
+impl ReplicaNodeKind {
+    /// Returns the kind of root node that this kind of replica must
+    /// be indexed under
+    pub fn root_node_kind(&self) -> RootNodeKind {
+        match self {
+            Self::Pseudo => RootNodeKind::Pseudo,
+            Self::Base => RootNodeKind::Main,
+            Self::Metadata => RootNodeKind::Pseudo,
+        }
+    }
+}
+
+/// Kinds of root nodes in HNSW/dense index
+#[derive(Debug)]
+pub enum RootNodeKind {
+    Pseudo,
+    Main,
 }
 
 #[derive(Debug)]
@@ -292,6 +324,15 @@ impl TreeMapKey for DocumentId {
     Deserialize,
 )]
 pub struct InternalId(u32);
+
+impl InternalId {
+    /// Increments an InternalId by 1 and returns a new instance
+    ///
+    /// The caller needs to ensure it doesn't result in overflow
+    pub fn inc(&self) -> Self {
+        InternalId::from(self.0 + 1)
+    }
+}
 
 impl From<u32> for InternalId {
     fn from(id: u32) -> Self {
@@ -817,6 +858,54 @@ impl CollectionsMap {
         latest_version_links.insert(root_ptr_offset, root_ptr);
         bufman.close_cursor(cursor)?;
 
+        let pseudo_root_ptr = match hnsw_index_data.pseudo_root_vec_ptr_offset {
+            Some(pseudo_root_ptr_offset) => {
+                let latest_version_links_cursor =
+                    cache.latest_version_links_bufman.open_cursor()?;
+                let pseudo_root_file_index = SharedLatestNode::deserialize_raw(
+                    &cache.latest_version_links_bufman, // not used
+                    &cache.latest_version_links_bufman,
+                    u64::MAX, // not used
+                    latest_version_links_cursor,
+                    pseudo_root_ptr_offset,
+                    IndexFileId::invalid(),
+                    &cache,
+                )?;
+                let bufman = cache.bufmans.get(pseudo_root_file_index.file_id)?;
+                let cursor = bufman.open_cursor()?;
+                let pseudo_root_node_raw = ProbNode::deserialize_raw(
+                    &bufman,
+                    &cache.latest_version_links_bufman,
+                    cursor,
+                    latest_version_links_cursor,
+                    pseudo_root_file_index.offset,
+                    pseudo_root_file_index.file_id,
+                    &cache,
+                )?;
+                let pseudo_root_node = ProbNode::build_from_raw(
+                    pseudo_root_node_raw,
+                    &cache,
+                    &mut pending_items,
+                    &mut latest_version_links,
+                    latest_version_links_cursor,
+                )?;
+                let pseudo_root = ProbLazyItem::new(
+                    pseudo_root_node,
+                    pseudo_root_file_index.file_id,
+                    pseudo_root_file_index.offset,
+                );
+                cache.registry.insert(
+                    HNSWIndexCache::combine_index(&pseudo_root_file_index),
+                    pseudo_root,
+                );
+                let pseudo_root_ptr = LatestNode::new(pseudo_root, pseudo_root_ptr_offset);
+                latest_version_links.insert(pseudo_root_ptr_offset, pseudo_root_ptr);
+                bufman.close_cursor(cursor)?;
+                Some(pseudo_root_ptr)
+            }
+            None => None,
+        };
+
         let (file_index_sender, file_index_receiver) = channel::unbounded::<FileIndex>();
         let (raw_node_sender, raw_node_receiver) =
             channel::unbounded::<(<ProbNode as RawDeserialize>::Raw, FileIndex)>();
@@ -907,6 +996,7 @@ impl CollectionsMap {
 
         let hnsw_index = HNSWIndex::new(
             root_ptr,
+            pseudo_root_ptr,
             hnsw_index_data.levels_prob,
             hnsw_index_data.dim,
             hnsw_index_data.quantization_metric,

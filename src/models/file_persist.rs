@@ -109,14 +109,19 @@ pub fn read_prop_value_from_file(
 
 #[derive(Deserialize, Serialize)]
 struct NodePropMetadataSerde {
+    pub replica_id: InternalId,
     pub vec: Arc<Metadata>,
 }
 
 pub fn write_prop_metadata_to_file(
+    replica_id: InternalId,
     vec: Arc<Metadata>,
     file: &mut File,
 ) -> Result<(FileOffset, BytesToRead), WaCustomError> {
-    let prop_metadata = NodePropMetadataSerde { vec: vec.clone() };
+    let prop_metadata = NodePropMetadataSerde {
+        replica_id,
+        vec: vec.clone(),
+    };
     let prop_bytes = serde_cbor::to_vec(&prop_metadata)
         .map_err(|e| WaCustomError::SerializationError(e.to_string()))?;
 
@@ -145,6 +150,7 @@ pub fn read_prop_metadata_from_file(
         .map_err(|e| BufIoError::Io(io::Error::new(io::ErrorKind::InvalidData, e.to_string())))?;
 
     Ok(NodePropMetadata {
+        replica_id: prop_metadata.replica_id,
         vec: prop_metadata.vec,
         location: (offset, bytes_to_read),
     })

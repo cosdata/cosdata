@@ -312,8 +312,7 @@ fn finalize_sparse_ann_results(
         let internal_id = InternalId::from(result.vector_id);
 
         let raw_embedding_ref = collection
-            .internal_to_external_map
-            .get_latest(&internal_id)
+            .get_raw_emb_by_internal_id(&internal_id)
             .ok_or_else(|| WaCustomError::NotFound("raw embedding not found".to_string()))?;
 
         let sparse_pairs = raw_embedding_ref.sparse_values.clone().ok_or_else(|| {

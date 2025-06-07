@@ -217,8 +217,7 @@ pub trait IndexOps: Send + Sync {
                     (id, document_id, score, text)
                 } else {
                     let raw_emb = collection
-                        .internal_to_external_map
-                        .get_latest(&internal_id)
+                        .get_raw_emb_by_internal_id(&internal_id)
                         .ok_or_else(|| {
                             WaCustomError::NotFound("raw embedding not found".to_string())
                         })?

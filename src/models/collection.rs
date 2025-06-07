@@ -274,6 +274,34 @@ impl Collection {
         self.tf_idf_index.read().clone()
     }
 
+    /// Returns the raw embedding mapped to an internal id
+    ///
+    /// It's recommended to call this method instead of directly
+    /// accessing the 'internal_to_external' field of this
+    /// struct. This method specially handles the case of the
+    /// collection supporting metadata filtering on hnsw index, in
+    /// which case not all internal_ids may be mapped with an
+    /// embedding. There are mappings only for base node ids. For
+    /// metadata replica nodes, this method first finds the base_node
+    /// id and uses that to obtain the raw vector embedding
+    pub fn get_raw_emb_by_internal_id(
+        &self,
+        internal_id: &InternalId,
+    ) -> Option<&RawVectorEmbedding> {
+        let mapped_internal_id = if let Some(hnsw_index) = self.get_hnsw_index() {
+            if self.meta.metadata_schema.is_some() {
+                let id = **internal_id;
+                InternalId::from(id - id % hnsw_index.max_replica_per_node as u32)
+            } else {
+                *internal_id
+            }
+        } else {
+            *internal_id
+        };
+        self.internal_to_external_map
+            .get_latest(&mapped_internal_id)
+    }
+
     pub fn run_upload(
         &self,
         embeddings: Vec<RawVectorEmbedding>,
@@ -319,9 +347,15 @@ impl Collection {
         transaction: &BackgroundCollectionTransaction,
         config: &Config,
     ) -> Result<(), WaCustomError> {
+        let num_nodes_per_emb = if let Some(hnsw_index) = &*self.hnsw_index.read() {
+            hnsw_index.max_replica_per_node as usize
+        } else {
+            1
+        };
+        let num_ids_to_reserve = embeddings.len() * num_nodes_per_emb;
         let id_start = self
             .internal_id_counter
-            .fetch_add(embeddings.len() as u32, Ordering::Relaxed);
+            .fetch_add(num_ids_to_reserve as u32, Ordering::Relaxed);
 
         let (dense_embs, sparse_embs, tf_idf_embs): (Vec<_>, Vec<_>, Vec<_>) =
             embeddings.into_iter().enumerate().fold(
@@ -336,7 +370,7 @@ impl Collection {
                         text,
                     } = embedding.clone();
 
-                    let internal_id = InternalId::from(id_start + i as u32);
+                    let internal_id = InternalId::from(id_start + (i * num_nodes_per_emb) as u32);
 
                     if let Some(values) = dense_values {
                         acc.0
