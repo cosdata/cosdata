@@ -20,3 +20,6 @@ venv
 datasets/
 data/
 .vscode/
+
+.env*
+!.env.example
