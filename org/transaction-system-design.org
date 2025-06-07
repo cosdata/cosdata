@@ -117,13 +117,37 @@ The serialization process is designed to be non-blocking for ongoing data ingest
 
 ** Interaction with Explicit Transactions
 
-The interaction between implicit and explicit transactions represents one of the most sophisticated aspects of Cosdata's transaction architecture. The system must coordinate between these two transaction types while maintaining strict ordering guarantees and ensuring that explicit transactions receive priority for resource allocation.
+The coordination between implicit and explicit transactions in Cosdata follows a unified version allocation system that treats both transaction types as equal participants in the version timeline. Rather than implementing priority-based resource allocation, the system uses an epoch-based version reservation mechanism that ensures consistent ordering while allowing both transaction types to operate independently.
 
-When an explicit transaction is initiated while implicit transactions are ongoing, the system implements a prioritization mechanism that ensures the explicit transaction can proceed without interference. This involves serializing any pending implicit transaction epochs to clear memory and computational resources for the explicit transaction's exclusive use. The serialization process for these interrupted epochs follows the same consistency guarantees as normal periodic serialization, ensuring no data loss or corruption.
+*** Epoch-Based Version Allocation
 
-During explicit transaction processing, implicit transactions can continue to accept new records and perform in-memory indexing. However, their serialization is deferred until the explicit transaction completes. This approach ensures that the explicit transaction receives full system resources while maintaining the immediate availability guarantees that implicit transactions provide.
+The system automatically allocates version numbers for implicit transactions at the beginning of each epoch, typically occurring at regular intervals such as every hour. When a new epoch begins, the system reserves the next available version number (N) for any implicit transaction records that may arrive during that epoch period. This pre-allocation ensures that streaming data can be immediately assigned to a logical version context even before any records actually arrive.
 
-The coordination between transaction types also extends to version number assignment. The system maintains a global version counter that both transaction types increment, ensuring that version numbers remain strictly ordered regardless of which transaction type created them. This unified versioning approach simplifies historical queries and maintains the system's append-only semantics across all transaction types.
+This epoch-based approach creates a predictable framework for version management where implicit transactions occupy reserved slots in the version timeline. The reservation system allows the database to maintain its append-only semantics while providing immediate version context for streaming data without requiring coordination with explicit transactions.
+
+*** Version Assignment During Mixed Transaction Scenarios
+
+The interaction between transaction types becomes more complex when explicit transactions overlap with implicit transaction epochs. Consider a scenario where an implicit transaction epoch begins and reserves version N, followed shortly by a client initiating an explicit transaction with hash identifier "123789abcd". The explicit transaction receives its unique hash immediately but does not receive a version number until it reaches the commit and indexing phase.
+
+During the explicit transaction's open and upsert phases, the system may transition to a new implicit transaction epoch, automatically reserving version N+1 for the next batch of streaming records. If the explicit transaction finally commits and enters the indexing queue, it receives version N+2, reflecting its actual position in the chronological sequence of committed changes.
+
+This version assignment approach ensures that the version timeline accurately reflects the order in which changes became permanent in the database, rather than the order in which transactions were initiated. The temporal gap between transaction initiation and version assignment allows for more accurate historical reconstruction and ensures that version numbers represent actual data availability rather than transaction intention.
+
+*** Transaction Lifecycle and Timeout Handling
+
+Explicit transactions implement a comprehensive lifecycle management system that includes automatic timeout mechanisms to prevent resource leaks and version number hoarding. When a client opens an explicit transaction, the system establishes a configurable timeout period, typically set to 15 minutes, during which the transaction must complete its entire lifecycle.
+
+If an explicit transaction exceeds its timeout period without receiving a commit command, the system automatically aborts the transaction and releases all associated resources. This automatic cleanup ensures that abandoned or forgotten transactions do not permanently consume system resources or create gaps in the version number sequence. The abort operation discards all buffered changes and removes the transaction from any processing queues without affecting the version numbering scheme.
+
+The timeout mechanism also prevents scenarios where long-running explicit transactions might block system operations or create unpredictable resource utilization patterns. By enforcing reasonable time limits, the system maintains predictable performance characteristics and ensures that both implicit and explicit transactions can proceed without indefinite delays.
+
+*** Version Number Continuity and Gap Prevention
+
+The system's design carefully prevents permanent gaps in the version number sequence through its handling of aborted transactions. When an explicit transaction is aborted, either through client request or automatic timeout, no version number is permanently allocated to that transaction. This approach ensures that the version timeline remains dense and continuous, with no missing version numbers that could complicate historical queries or audit operations.
+
+The gap prevention mechanism works by deferring version number assignment until the moment when changes become permanent in the database. Explicit transactions only receive version numbers when they successfully begin the indexing process, ensuring that every assigned version number corresponds to actual data modifications. Similarly, implicit transaction epochs only consume version numbers when they actually contain records to be indexed.
+
+This approach maintains the system's append-only guarantees while providing flexibility for transaction management. Applications can rely on the fact that version numbers form a continuous sequence with no gaps, simplifying historical analysis and ensuring that version-based queries can use simple numeric ranges without needing to account for missing versions.
 
 * Version Management and Historical Consistency
 
