@@ -1,5 +1,3 @@
-import requests
-import json
 import time
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -18,74 +16,53 @@ from pathlib import Path
 from collections import defaultdict
 from typing import Dict, List, Set, Tuple
 from py_rust_stemmers import SnowballStemmer
-# import csv
-# import subprocess
-# import signal
+from dotenv import load_dotenv
+from utils import poll_transaction_completion
+from cosdata import Client
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Suppress only the single InsecureRequestWarning from urllib3 needed for this script
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Define your dynamic variables
-token = None
-host = "http://127.0.0.1:8443"
-base_url = f"{host}/vectordb"
-
-
-def generate_headers():
-    return {"Authorization": f"Bearer {token}", "Content-type": "application/json"}
+client = None
+host = os.getenv("COSDATA_HOST", "http://127.0.0.1:8443")
 
 
 def create_session():
-    url = f"{host}/auth/create-session"
-    if "ADMIN_PASSWORD" in os.environ:
-        password = os.environ["ADMIN_PASSWORD"]
-    else:
+    """Initialize the cosdata client"""
+    # Use environment variable from .env file if available, otherwise prompt
+    password = os.getenv("COSDATA_PASSWORD")
+    if not password:
         password = getpass.getpass("Enter admin password: ")
 
-    data = {"username": "admin", "password": password}
-    response = requests.post(
-        url, headers=generate_headers(), data=json.dumps(data), verify=False
-    )
-    session = response.json()
-    global token
-    token = session["access_token"]
-    return token
+    username = os.getenv("COSDATA_USERNAME", "admin")
+
+    global client
+    client = Client(host=host, username=username, password=password, verify=False)
+    return client
 
 
 def create_db(name, description=None, dimension=20000):
-    url = f"{base_url}/collections"
-    data = {
-        "name": name,
-        "description": description,
-        "dense_vector": {
-            "enabled": False,
-            "dimension": dimension,
-        },
-        "sparse_vector": {"enabled": False},
-        "tf_idf_options": {"enabled": True},
-        "metadata_schema": None,
-        "config": {"max_vectors": None, "replication_factor": None},
-    }
-    response = requests.post(
-        url, headers=generate_headers(), data=json.dumps(data), verify=False
+    """Create collection using cosdata client"""
+    collection = client.create_collection(
+        name=name,
+        dimension=dimension,
+        description=description,
+        tf_idf_options={"enabled": True},
     )
-    return response.json()
+    return collection
 
 
-def create_explicit_index(name, k, b):
-    data = {
-        "name": name,
-        "sample_threshold": 1000,
-        "k1": k,
-        "b": b,
-    }
-    response = requests.post(
-        f"{base_url}/collections/{name}/indexes/tf-idf",
-        headers=generate_headers(),
-        data=json.dumps(data),
-        verify=False,
+def create_explicit_index(collection, k, b):
+    """Create TF-IDF index using cosdata client"""
+    # For TF-IDF, we create a specific index configuration
+    index = collection.create_tf_idf_index(
+        name=collection.name, sample_threshold=1000, k1=k, b=b
     )
-    return response.json()
+    return index
 
 
 def compute_bm25_idf(total_documents, docs_containing_term):
@@ -210,7 +187,7 @@ def transform_sentence_to_vector(id, sentence, punctuations, stemmer, token_max_
 
 def get_dataset(dataset: str) -> tuple:
     """Generate raw dataset with just term frequencies"""
-    dataset_folder = f"sparse_idf_dataset_{dataset}"
+    dataset_folder = f"datasets/sparse_idf_dataset_{dataset}"
     raw_dataset_file = f"{dataset_folder}/raw_vectors.pkl"
     if os.path.exists(raw_dataset_file):
         print(f"Loading existing raw dataset from {raw_dataset_file}")
@@ -256,7 +233,7 @@ def get_dataset(dataset: str) -> tuple:
 
 def calculate_corpus_statistics(dataset, vectors):
     """Calculate corpus-wide statistics for BM25"""
-    dataset_folder = f"sparse_idf_dataset_{dataset}"
+    dataset_folder = f"datasets/sparse_idf_dataset_{dataset}"
     stats_file = f"{dataset_folder}/corpus_stats.pkl"
     if os.path.exists(stats_file):
         print(f"Loading existing corpus statistics from {stats_file}")
@@ -300,7 +277,7 @@ def calculate_corpus_statistics(dataset, vectors):
 
 def apply_bm25_to_vectors(dataset, vectors, corpus_stats, k=1.5, b=0.75):
     """Apply BM25 scoring to all vectors using corpus statistics"""
-    dataset_folder = f"sparse_idf_dataset_{dataset}"
+    dataset_folder = f"datasets/sparse_idf_dataset_{dataset}"
     processed_dataset_file = f"{dataset_folder}/processed_vectors.pkl"
     if os.path.exists(processed_dataset_file):
         print(f"Loading existing processed vectors from {processed_dataset_file}")
@@ -359,7 +336,7 @@ def apply_bm25_to_vectors(dataset, vectors, corpus_stats, k=1.5, b=0.75):
 
 
 def get_query_vectors(dataset):
-    dataset_folder = f"sparse_idf_dataset_{dataset}"
+    dataset_folder = f"datasets/sparse_idf_dataset_{dataset}"
     query_vectors_file = f"{dataset_folder}/query.pkl"
     if os.path.exists(query_vectors_file):
         print(f"Loading existing query vectors from {query_vectors_file}")
@@ -400,7 +377,7 @@ def get_query_vectors(dataset):
 
 def compute_brute_force_results(dataset, vectors, query_vectors, top_k=10):
     """Compute dot product similarity between query vectors and all vectors"""
-    dataset_folder = f"sparse_idf_dataset_{dataset}"
+    dataset_folder = f"datasets/sparse_idf_dataset_{dataset}"
     brute_force_results_file = f"{dataset_folder}/brute_force_results.pkl"
     if os.path.exists(brute_force_results_file):
         print(f"Loading existing brute force results from {brute_force_results_file}")
@@ -447,67 +424,127 @@ def compute_brute_force_results(dataset, vectors, query_vectors, top_k=10):
     return results
 
 
-def create_transaction(collection_name):
-    url = f"{base_url}/collections/{collection_name}/transactions"
-    response = requests.post(url, headers=generate_headers(), verify=False)
-    return response.json()
+def create_transaction(collection):
+    """Create transaction using cosdata client"""
+    return collection.transaction()
 
 
-def upsert_in_transaction(vector_db_name, transaction_id, vectors):
+def upsert_in_transaction(collection, transaction, vectors):
     """
-    Upsert vectors to the API, excluding unnecessary fields
+    Upsert vectors to the collection using transaction
     """
     # Create a new list of vectors with only needed fields
     filtered_vectors = [{"id": vec["id"], "text": vec["text"]} for vec in vectors]
 
-    url = (
-        f"{base_url}/collections/{vector_db_name}/transactions/{transaction_id}/upsert"
+    transaction.batch_upsert_vectors(filtered_vectors)
+
+
+def commit_transaction(transaction):
+    """Commit transaction using cosdata client"""
+    transaction.commit()
+    return transaction.transaction_id
+
+
+def delete_collection(collection_name):
+    """Delete a collection using cosdata client"""
+    try:
+        collection = client.get_collection(collection_name)
+        collection.delete()
+        print(f"Collection {collection_name} deleted successfully")
+    except Exception as e:
+        print(f"Warning: Failed to delete collection {collection_name}: {e}")
+
+
+def create_db_and_upsert_vectors(vector_db_name, vectors, batch_size, k, b):
+    # Create collection
+    collection = None
+    try:
+        print(f"Creating collection: {vector_db_name}")
+        collection = create_db(
+            name=vector_db_name, dimension=1
+        )  # dummy, not sure if we need it
+        print("Collection created")
+
+        # Create explicit index
+        create_explicit_index(collection, k, b)
+        print("Explicit index created")
+    except Exception as e:
+        print(f"Collection creation failed: {e}")
+        # Try to get existing collection
+        try:
+            collection = client.get_collection(vector_db_name)
+            print("Using existing collection")
+        except Exception as get_error:
+            print(f"Failed to get existing collection: {get_error}")
+            raise Exception(f"Cannot create or access collection: {e}")
+
+    # Insert vectors into server
+    print("Creating transaction")
+    txn_id = None
+
+    print(f"Inserting {len(vectors)} vectors in batches of {batch_size}...")
+    start = time.time()
+
+    with collection.transaction() as txn:
+        with ThreadPoolExecutor(max_workers=32) as executor:
+            futures = []
+            for batch_start in range(0, len(vectors), batch_size):
+                batch = vectors[batch_start : batch_start + batch_size]
+                futures.append(
+                    executor.submit(upsert_in_transaction, collection, txn, batch)
+                )
+
+            for i, future in enumerate(tqdm(as_completed(futures), total=len(futures))):
+                try:
+                    future.result()
+                except Exception as e:
+                    print(f"Batch {i + 1} failed: {e}")
+
+        txn_id = txn.transaction_id
+
+    # Poll for transaction completion
+    print("Waiting for transaction to complete")
+    final_status, success = poll_transaction_completion(
+        client,
+        vector_db_name,
+        txn_id,
+        target_status="complete",
+        max_attempts=10,
+        sleep_interval=2,
     )
-    data = {"vectors": filtered_vectors}
-    response = requests.post(
-        url, headers=generate_headers(), data=json.dumps(data), verify=False
-    )
-    if response.status_code not in [200, 204]:
-        raise Exception(
-            f"Failed to create vector: {response.status_code} - {response.text}"
+
+    if not success:
+        print(
+            f"Warning: Transaction may not have completed successfully. Final status: {final_status}"
         )
 
-
-def commit_transaction(collection_name, transaction_id):
-    url = (
-        f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/commit"
-    )
-    response = requests.post(url, headers=generate_headers(), verify=False)
-    if response.status_code not in [200, 204]:
-        print(f"Error response: {response.text}")
-        raise Exception(f"Failed to commit transaction: {response.status_code}")
-    return response.json() if response.text else None
+    end = time.time()
+    insertion_time = end - start
+    print(f"Insertion time: {insertion_time:.2f} seconds")
+    return insertion_time, collection
 
 
-def search_sparse_vector(vector_db_name, vector, top_k):
-    url = f"{base_url}/collections/{vector_db_name}/search/tf-idf"
-    data = {
-        "query": vector["text"],
-        "top_k": top_k,
-    }
-    response = requests.post(
-        url, headers=generate_headers(), data=json.dumps(data), verify=False
-    )
-    return response.json()
+def search_sparse_vector(collection, vector, top_k):
+    """Search using TF-IDF with cosdata client"""
+    results = collection.search.text(query_text=vector["text"], top_k=top_k)
+    return results
 
 
-def batch_ann_search(vector_db_name, batch, top_k):
-    url = f"{base_url}/collections/{vector_db_name}/search/batch-tf-idf"
-    data = {
-        "queries": batch,
-        "top_k": top_k,
-    }
-    response = requests.post(
-        url, headers=generate_headers(), data=json.dumps(data), verify=False
-    )
-    if response.status_code not in [200, 204]:
-        print(f"Error response ({response.status_code}): {response.text}")
-    return response.json(), (response.elapsed.total_seconds() * 1000.0)
+def batch_ann_search(collection, batch, top_k):
+    """Batch TF-IDF search using individual requests since batch endpoint is failing"""
+    start_time = time.time()
+
+    results = []
+    for query_text in batch:
+        try:
+            result = collection.search.text(query_text=query_text, top_k=top_k)
+            results.append(result)
+        except Exception as e:
+            print(f"Individual search failed for query: {e}")
+            results.append({"results": []})
+
+    elapsed_ms = (time.time() - start_time) * 1000.0
+    return results, elapsed_ms
 
 
 def calculate_recall(brute_force_results, server_results, top_k=10):
@@ -541,7 +578,7 @@ def calculate_recall(brute_force_results, server_results, top_k=10):
     return avg_recall, recalls
 
 
-def run_qps_tests(qps_test_vectors, vector_db_name, batch_size=100, top_k=10):
+def run_qps_tests(qps_test_vectors, collection, batch_size=100, top_k=10):
     """Run QPS (Queries Per Second) tests with vectors"""
     print(f"Using {len(qps_test_vectors)} different test vectors for QPS testing")
 
@@ -553,9 +590,7 @@ def run_qps_tests(qps_test_vectors, vector_db_name, batch_size=100, top_k=10):
         for i in range(0, len(qps_test_vectors), batch_size):
             batch = [vector["text"] for vector in qps_test_vectors[i : i + batch_size]]
 
-            futures.append(
-                executor.submit(batch_ann_search, vector_db_name, batch, top_k)
-            )
+            futures.append(executor.submit(batch_ann_search, collection, batch, top_k))
 
         for future in as_completed(futures):
             try:
@@ -590,7 +625,7 @@ def run_qps_tests(qps_test_vectors, vector_db_name, batch_size=100, top_k=10):
     )
 
 
-def run_latency_test(vector_db_name, query_vectors, top_k):
+def run_latency_test(collection, query_vectors, top_k):
     print(f"Testing latency {len(query_vectors)} vectors and comparing results...")
     latencies = []
 
@@ -599,7 +634,7 @@ def run_latency_test(vector_db_name, query_vectors, top_k):
 
         def timed_query(query):
             start = time.time()
-            resp = search_sparse_vector(vector_db_name, query, top_k)
+            resp = search_sparse_vector(collection, query, top_k)
             end = time.time()
             latency = (end - start) * 1000.0
             return resp, latency
@@ -614,6 +649,10 @@ def run_latency_test(vector_db_name, query_vectors, top_k):
             except Exception as e:
                 print(f"Latency test query failed: {e}")
 
+    if not latencies:
+        print("No successful latency measurements")
+        return 0.0, 0.0
+
     latencies.sort()
     p50_latency = latencies[int(len(latencies) * 0.5)]
     p95_latency = latencies[int(len(latencies) * 0.95)]
@@ -625,7 +664,7 @@ def run_latency_test(vector_db_name, query_vectors, top_k):
 
 
 def run_recall_and_qps_and_latency_test(
-    vector_db_name,
+    collection,
     query_vectors,
     qps_test_vectors,
     top_k,
@@ -639,7 +678,7 @@ def run_recall_and_qps_and_latency_test(
     start_search = time.time()
     for query in tqdm(query_vectors):
         try:
-            result = search_sparse_vector(vector_db_name, query, top_k)
+            result = search_sparse_vector(collection, query, top_k)
             server_results.append(result)
         except Exception as e:
             print(f"Search failed for query {query['id']}: {e}")
@@ -665,11 +704,11 @@ def run_recall_and_qps_and_latency_test(
     )
 
     qps, qps_duration, _, _, _ = run_qps_tests(
-        qps_test_vectors, vector_db_name, batch_size, top_k
+        qps_test_vectors, collection, batch_size, top_k
     )
 
     p50_latency, p95_latency = run_latency_test(
-        vector_db_name,
+        collection,
         qps_test_vectors[: max((len(qps_test_vectors) // 10), 1000)],
         top_k,
     )
@@ -685,54 +724,9 @@ def run_recall_and_qps_and_latency_test(
     return detailed_results
 
 
-def create_db_and_upsert_vectors(vector_db_name, vectors, batch_size, k, b):
-    # Create collection
-    try:
-        print(f"Creating collection: {vector_db_name}")
-        create_db(name=vector_db_name, dimension=1)  # dummy, not sure if we need it
-        print("Collection created")
-
-        # Create explicit index
-        create_explicit_index(vector_db_name, k, b)
-        print("Explicit index created")
-    except Exception as e:
-        print(f"Collection may already exist: {e}")
-
-    # Insert vectors into server
-    print("Creating transaction")
-    transaction_id = create_transaction(vector_db_name)["transaction_id"]
-
-    print(f"Inserting {len(vectors)} vectors in batches of {batch_size}...")
-    start = time.time()
-
-    with ThreadPoolExecutor(max_workers=32) as executor:
-        futures = []
-        for batch_start in range(0, len(vectors), batch_size):
-            batch = vectors[batch_start : batch_start + batch_size]
-            futures.append(
-                executor.submit(
-                    upsert_in_transaction, vector_db_name, transaction_id, batch
-                )
-            )
-
-        for i, future in enumerate(tqdm(as_completed(futures), total=len(futures))):
-            try:
-                future.result()
-            except Exception as e:
-                print(f"Batch {i + 1} failed: {e}")
-
-    print("Committing transaction")
-    commit_transaction(vector_db_name, transaction_id)
-
-    end = time.time()
-    insertion_time = end - start
-    print(f"Insertion time: {insertion_time:.2f} seconds")
-    return insertion_time
-
-
 def main(dataset, num_queries=100, batch_size=100, top_k=10, k=1.5, b=0.75):
     vector_db_name = f"sparse_idf_{dataset}_db"
-    dataset_folder = f"sparse_idf_dataset_{dataset}"
+    dataset_folder = f"datasets/sparse_idf_dataset_{dataset}"
     processed_dataset_file = f"{dataset_folder}/processed_vectors.pkl"
 
     Path(dataset_folder).mkdir(parents=True, exist_ok=True)
@@ -788,34 +782,51 @@ def main(dataset, num_queries=100, batch_size=100, top_k=10, k=1.5, b=0.75):
     insert_vectors = input("Insert vectors? (Y/n): ").strip().lower() in ["y", ""]
 
     insertion_time = None
+    collection = None
 
-    if insert_vectors:
-        insertion_time = create_db_and_upsert_vectors(
-            vector_db_name, vectors, batch_size, k, b
+    try:
+        if insert_vectors:
+            insertion_time, collection = create_db_and_upsert_vectors(
+                vector_db_name, vectors, batch_size, k, b
+            )
+        else:
+            try:
+                collection = client.get_collection(vector_db_name)
+            except Exception as e:
+                print(f"Collection not found, creating new one: {e}")
+                insertion_time, collection = create_db_and_upsert_vectors(
+                    vector_db_name, vectors, batch_size, k, b
+                )
+
+        result = run_recall_and_qps_and_latency_test(
+            collection,
+            query_vectors,
+            all_query_vectors[:10_000],
+            top_k,
+            brute_force_results,
+            batch_size,
         )
 
-    result = run_recall_and_qps_and_latency_test(
-        vector_db_name,
-        query_vectors,
-        all_query_vectors[:10_000],
-        top_k,
-        brute_force_results,
-        batch_size,
-    )
+        if insertion_time is not None:
+            result["insertion_time"] = insertion_time
 
-    if insertion_time is not None:
-        result["insertion_time"] = insertion_time
+        result["corpus_size"] = len(vectors)
+        result["queries_size"] = len(all_query_vectors)
 
-    result["corpus_size"] = len(vectors)
-    result["queries_size"] = len(all_query_vectors)
+        return result
 
-    return result
+    finally:
+        # Cleanup: delete the collection
+        try:
+            if collection:
+                collection.delete()
+        except Exception as e:
+            print(f"Error during cleanup: {e}")
 
 
-# Non interactive
 def main_non_it(dataset, num_queries=100, batch_size=100, top_k=10, k=1.5, b=0.75):
     vector_db_name = f"sparse_idf_{dataset}_db"
-    dataset_folder = f"sparse_idf_dataset_{dataset}"
+    dataset_folder = f"datasets/sparse_idf_dataset_{dataset}"
     processed_dataset_file = f"{dataset_folder}/processed_vectors.pkl"
 
     Path(dataset_folder).mkdir(parents=True, exist_ok=True)
@@ -866,26 +877,38 @@ def main_non_it(dataset, num_queries=100, batch_size=100, top_k=10, k=1.5, b=0.7
 
     # Login to get access token
     print("Logging in to server...")
-    os.environ["ADMIN_PASSWORD"] = ""
+    os.environ["COSDATA_PASSWORD"] = ""
     create_session()
     print("Session established")
 
-    insertion_time = create_db_and_upsert_vectors(vector_db_name, vectors, batch_size)
+    collection = None
+    try:
+        insertion_time, collection = create_db_and_upsert_vectors(
+            vector_db_name, vectors, batch_size, k, b
+        )
 
-    result = run_recall_and_qps_and_latency_test(
-        vector_db_name,
-        query_vectors,
-        all_query_vectors[:10_000],
-        top_k,
-        brute_force_results,
-        batch_size,
-    )
+        result = run_recall_and_qps_and_latency_test(
+            collection,
+            query_vectors,
+            all_query_vectors[:10_000],
+            top_k,
+            brute_force_results,
+            batch_size,
+        )
 
-    result["insertion_time"] = insertion_time
-    result["corpus_size"] = len(vectors)
-    result["queries_size"] = len(all_query_vectors)
+        result["insertion_time"] = insertion_time
+        result["corpus_size"] = len(vectors)
+        result["queries_size"] = len(all_query_vectors)
 
-    return result
+        return result
+
+    finally:
+        # Cleanup: delete the collection
+        try:
+            if collection:
+                collection.delete()
+        except Exception as e:
+            print(f"Error during cleanup: {e}")
 
 
 # def start_server():

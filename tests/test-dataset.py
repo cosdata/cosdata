@@ -17,32 +17,18 @@ import shutil
 from pathlib import Path
 import sys
 from datasets import load_dataset
+from dotenv import load_dotenv
+from utils import poll_transaction_completion
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Suppress only the single InsecureRequestWarning from urllib3 needed for this script
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-def check_dependencies():
-    """Check if required dependencies are installed"""
-    try:
-        import pyarrow
-    except ImportError:
-        print("Error: pyarrow is required for parquet support.")
-        print("Please install it using: pip install pyarrow")
-        sys.exit(1)
-    
-    try:
-        import datasets
-    except ImportError:
-        print("Error: datasets is required for loading Hugging Face datasets.")
-        print("Please install it using: pip install datasets")
-        sys.exit(1)
-
-# Check dependencies at startup
-check_dependencies()
-
 # Define your dynamic variables
 token = None
-host = "http://127.0.0.1:8443"
+host = os.getenv("COSDATA_HOST", "http://127.0.0.1:8443")
 base_url = f"{host}/vectordb"
 
 # Dataset configurations with correct column names
@@ -269,17 +255,6 @@ def prompt_and_get_dataset_metadata():
     dataset = datasets[dataset_name]
     return (dataset_name, dataset, test_mode == 1)
 
-def load_brute_force_results(dataset_name):
-    csv_path = f"datasets/{dataset_name}/brute-force-results.csv"
-
-    try:
-        print("Attempting to load pre-computed brute force results...")
-        df = pd.read_csv(csv_path)
-        print(f"Successfully loaded results from {csv_path}")
-        return df.to_dict("records")
-    except FileNotFoundError:
-        return False
-
 def cosine_sim_matrix(A, B):
     """Compute cosine similarity between each row in A and each row in B"""
     A = A / np.linalg.norm(A, axis=1, keepdims=True)
@@ -289,10 +264,7 @@ def cosine_sim_matrix(A, B):
     return np.dot(A, B.T)
 
 def generate_brute_force_results(dataset_name, vector_list, quick_test=False):
-    """Load brute force results from CSV, or generate them if file doesn't exist"""
-    csv_path = f"datasets/{dataset_name}/brute-force-results.csv"
-    os.makedirs(f"datasets/{dataset_name}", exist_ok=True)
-
+    """Generate brute force results for similarity comparison"""
     total_vectors = len(vector_list)
     print(f"Total vectors for brute force computation: {total_vectors}")
 
@@ -327,28 +299,20 @@ def generate_brute_force_results(dataset_name, vector_list, quick_test=False):
             **{f"top{j+1}_sim": top_sims[j] for j in range(5)},
         })
 
-    df = pd.DataFrame(results)
-    df.to_csv(csv_path, index=False)
-    print(f"\nGenerated and saved results to {csv_path}")
+    print(f"\nGenerated brute force results for {len(results)} queries")
     return results
 
 def load_or_generate_brute_force_results(dataset_name, quick_test=False):
-    """Load brute force results from CSV, or generate them if file doesn't exist"""
-    # For quick test, always regenerate results
-    if quick_test:
-        print("Quick test mode: Regenerating brute force results with limited dataset")
-        vectors = read_dataset_from_parquet(dataset_name)
-        # Only use first 1000 vectors for quick test
-        vectors = vectors[:1000]
-        results = generate_brute_force_results(dataset_name, vectors, quick_test=True)
-        return results
-
-    # For full test, try to load from CSV first
-    results = load_brute_force_results(dataset_name)
-    if results:
-        return results
+    """Always generate brute force results"""
+    print("Generating brute force results...")
     vectors = read_dataset_from_parquet(dataset_name)
-    results = generate_brute_force_results(dataset_name, vectors, quick_test=False)
+    
+    # Limit vectors for quick test
+    if quick_test:
+        print("Quick test mode: Using first 1000 vectors for brute force computation")
+        vectors = vectors[:1000]
+    
+    results = generate_brute_force_results(dataset_name, vectors, quick_test=quick_test)
     del vectors
     return results
 
@@ -451,14 +415,6 @@ def read_single_parquet_file(path, dataset_name, file_index, base_id, quick_test
     except Exception as e:
         print(f"Error processing file {path}: {e}")
         return None
-
-def get_transaction_status(collection, txn_id):
-    host = collection.client.host
-    coll_name = collection.name
-    url = f"{host}/vectordb/collections/{coll_name}/transactions/{txn_id}/status"
-    resp = requests.get(url, headers=client._get_headers(), verify=False)
-    result = resp.json()
-    return result['status']
 
 def process_vectors_batch(vectors, collection, batch_size):
     """Process a batch of vectors and insert them into the database"""
@@ -593,19 +549,19 @@ def process_parquet_files(
     total_time = end_time - start_time
 
     print("Waiting for transactions to complete")
-    while len(txn_ids) > 0:
-        print(f"Transactions remaining: {len(txn_ids)}")
-        rem_txn_ids = []
-        for txn_id in txn_ids:
-            txn_status = get_transaction_status(collection, txn_id)
-            if txn_status != 'complete':
-                rem_txn_ids.append(txn_id)
-        txn_ids = rem_txn_ids
-        if len(txn_ids) == 0:
-            print("Time taken to wait for transactions to complete", end_time - time.time())
-            break
+    for txn_id in txn_ids:
+        print(f"Polling transaction {txn_id}...")
+        final_status, success = poll_transaction_completion(
+            client, collection.name, txn_id,
+            target_status='complete',
+            max_attempts=10,
+            sleep_interval=30
+        )
+        
+        if not success:
+            print(f"Transaction {txn_id} did not complete successfully. Final status: {final_status}")
         else:
-            time.sleep(60)
+            print(f"Transaction {txn_id} completed successfully")
 
     print("\nProcessing complete!")
     print(f"Total files processed: {file_count}")
@@ -751,19 +707,22 @@ def batch_ann_search(collection, vectors):
         raise
 
 if __name__ == "__main__":
-    # Get password securely
-    password = getpass.getpass("Enter your database password: ")
+    # Get password from .env file or prompt securely
+    password = os.getenv("COSDATA_PASSWORD")
+    if not password:
+        password = getpass.getpass("Enter your database password: ")
     
     # Initialize client
+    host = os.getenv("COSDATA_HOST", "http://127.0.0.1:8443")
+    username = os.getenv("COSDATA_USERNAME", "admin")
     client = Client(
-        host="http://127.0.0.1:8443",
-        username="admin",
+        host=host,
+        username=username,
         password=password,
         verify=False
     )
 
-    # Create database
-    vector_db_name = "testdb"
+    # Configuration
     batch_size = 100
     num_match_test_vectors = 100  # Number of vectors to test
     num_rps_test_vectors = 100_000
@@ -771,40 +730,68 @@ if __name__ == "__main__":
 
     dataset_name, dataset_metadata, quick_test = prompt_and_get_dataset_metadata()
 
+    # Create dynamic collection name based on dataset and test mode
+    test_mode_suffix = "quick" if quick_test else "full"
+    vector_db_name = f"{dataset_name}-{test_mode_suffix}"
+    print(f"Using collection name: {vector_db_name}")
+
     # Load or generate brute force results
     brute_force_results = load_or_generate_brute_force_results(dataset_name, quick_test)
     print(f"Loaded {len(brute_force_results)} pre-computed brute force results")
 
-    # Create collection
-    print("Creating collection...")
-    collection = client.create_collection(
-        name=vector_db_name,
-        dimension=dataset_metadata["dimension"],
-        description="Test collection for vector database"
-    )
+    collection = None
+    try:
+        # Create collection
+        print("Creating collection...")
+        collection = client.create_collection(
+            name=vector_db_name,
+            dimension=dataset_metadata["dimension"],
+            description=f"Test collection for {dataset_metadata['description']} - {test_mode_suffix} mode"
+        )
 
-    # Create index
-    print("Creating index...")
-    collection.create_index(
-        distance_metric="cosine",
-        num_layers=10,
-        max_cache_size=1000,
-        ef_construction=64,
-        ef_search=64,
-        neighbors_count=16,
-        level_0_neighbors_count=32
-    )
+        # Create index
+        print("Creating index...")
+        collection.create_index(
+            distance_metric="cosine",
+            num_layers=10,
+            max_cache_size=1000,
+            ef_construction=64,
+            ef_search=64,
+            neighbors_count=16,
+            level_0_neighbors_count=32
+        )
 
-    matches_test_vectors, rps_test_vectors = process_parquet_files(
-        dataset_name,
-        collection,
-        brute_force_results,
-        batch_size,
-        num_match_test_vectors,
-        num_rps_test_vectors,
-        quick_test
-    )
+        matches_test_vectors, rps_test_vectors = process_parquet_files(
+            dataset_name,
+            collection,
+            brute_force_results,
+            batch_size,
+            num_match_test_vectors,
+            num_rps_test_vectors,
+            quick_test
+        )
 
-    run_matching_tests(matches_test_vectors, collection, brute_force_results)
+        run_matching_tests(matches_test_vectors, collection, brute_force_results)
 
-    run_rps_tests(rps_test_vectors, collection, rps_batch_size)
+        run_rps_tests(rps_test_vectors, collection, rps_batch_size)
+
+        print("\nAll tests completed successfully!")
+
+    except Exception as e:
+        print(f"Test failed with error: {e}")
+        raise
+    finally:
+        # Cleanup
+        if collection is not None:
+            try:
+                # Ask user if they want to delete the collection
+                print(f"\nCollection '{vector_db_name}' was created for testing.")
+                delete_choice = input("Do you want to delete the test collection? (y/N): ").lower().strip()
+                
+                if delete_choice in ['y', 'yes']:
+                    collection.delete()
+                    print("Test collection deleted")
+                else:
+                    print(f"Test collection '{vector_db_name}' preserved for future use")
+            except Exception as e:
+                print(f"Error during cleanup: {e}")

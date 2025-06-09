@@ -17,6 +17,10 @@ import shutil
 from pathlib import Path
 import sys
 from datasets import load_dataset
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Suppress only the single InsecureRequestWarning from urllib3 needed for this script
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -731,13 +735,18 @@ def batch_ann_search(collection, vectors):
         raise
 
 if __name__ == "__main__":
-    # Get password securely
-    password = getpass.getpass("Enter your database password: ")
+    # Get credentials from .env file or prompt securely
+    password = os.getenv("COSDATA_PASSWORD")
+    if not password:
+        password = getpass.getpass("Enter your database password: ")
+    
+    host = os.getenv("COSDATA_HOST", "http://127.0.0.1:8443")
+    username = os.getenv("COSDATA_USERNAME", "admin")
     
     # Initialize client
     client = Client(
-        host="http://127.0.0.1:8443",
-        username="admin",
+        host=host,
+        username=username,
         password=password,
         verify=False
     )

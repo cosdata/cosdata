@@ -6,95 +6,80 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib3
 import random
-import getpass
 import pickle
 from tqdm import tqdm
-import heapq
 from pathlib import Path
+import cupy as cp
+from cupyx.scipy.sparse import csr_matrix
+from dotenv import load_dotenv
+from utils import poll_transaction_completion
+from cosdata import Client
+import getpass
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Suppress only the single InsecureRequestWarning from urllib3 needed for this script
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Define your dynamic variables
-token = None
-host = "http://127.0.0.1:8443"
-base_url = f"{host}/vectordb"
+client = None
+host = os.getenv("COSDATA_HOST", "http://127.0.0.1:8443")
 
 # Filenames for saving data
-DATASET_FILE = "sparse_dataset/vectors.pkl"
-QUERY_VECTORS_FILE = "sparse_dataset/query.pkl"
-BRUTE_FORCE_RESULTS_FILE = "sparse_dataset/brute_force_results.pkl"
+DATASET_FILE = "datasets/sparse_dataset/vectors.pkl"
+QUERY_VECTORS_FILE = "datasets/sparse_dataset/query.pkl"
+BRUTE_FORCE_RESULTS_FILE = "datasets/sparse_dataset/brute_force_results.pkl"
 
 
-def generate_headers():
-    return {"Authorization": f"Bearer {token}", "Content-type": "application/json"}
-
-
-# Function to login with credentials
 def create_session():
-    url = f"{host}/auth/create-session"
-    # Use environment variable if available, otherwise prompt
-    if "ADMIN_PASSWORD" in os.environ:
-        password = os.environ["ADMIN_PASSWORD"]
-    else:
+    """Initialize the cosdata client"""
+    # Use environment variable from .env file if available, otherwise prompt
+    password = os.getenv("COSDATA_PASSWORD")
+    if not password:
         password = getpass.getpass("Enter admin password: ")
 
-    data = {"username": "admin", "password": password}
-    response = requests.post(
-        url, headers=generate_headers(), data=json.dumps(data), verify=False
-    )
-    session = response.json()
-    global token
-    token = session["access_token"]
-    return token
+    username = os.getenv("COSDATA_USERNAME", "admin")
+
+    global client
+    client = Client(host=host, username=username, password=password, verify=False)
+    return client
 
 
 def create_db(name, description=None, dimension=20000):
-    url = f"{base_url}/collections"
-    data = {
-        "name": name,
-        "description": description,
-        "dense_vector": {
-            "enabled": False,
-            "dimension": dimension,
-        },
-        "sparse_vector": {"enabled": True},
-        "tf_idf_options": {"enabled": False},
-        "metadata_schema": None,
-        "config": {"max_vectors": None, "replication_factor": None},
-    }
-    response = requests.post(
-        url, headers=generate_headers(), data=json.dumps(data), verify=False
+    """Create collection using cosdata client"""
+    collection = client.create_collection(
+        name=name,
+        dimension=dimension,
+        description=description,
+        sparse_vector={"enabled": True},
+        dense_vector={"enabled": False, "dimension": dimension},
+        tf_idf_options={"enabled": False},
     )
-    return response.json()
+    return collection
 
 
-def create_explicit_index(name):
-    data = {
-        "name": name,  # Name of the index
-        "quantization": 64,
-        "sample_threshold": 1000,
-    }
-    response = requests.post(
-        f"{base_url}/collections/{name}/indexes/sparse",
-        headers=generate_headers(),
-        data=json.dumps(data),
-        verify=False,
+def create_explicit_index(collection):
+    """Create sparse index using cosdata client"""
+    index = collection.create_sparse_index(
+        name=collection.name,
+        quantization=64,
+        sample_threshold=1000,
     )
-    return response.json()
+    return index
 
 
-def create_transaction(collection_name):
-    url = f"{base_url}/collections/{collection_name}/transactions"
-    response = requests.post(url, headers=generate_headers(), verify=False)
-    return response.json()
+def create_transaction(collection):
+    """Create transaction using cosdata client"""
+    return collection.transaction()
 
 
-def upsert_in_transaction(vector_db_name, transaction_id, vectors):
-    url = (
-        f"{base_url}/collections/{vector_db_name}/transactions/{transaction_id}/upsert"
-    )
-    vectors = [
+def upsert_in_transaction(collection, transaction, vectors):
+    """
+    Upsert vectors to the collection using transaction
+    """
+    # Convert to the format expected by the client
+    formatted_vectors = [
         {
             "id": vector["id"],
             "sparse_values": vector["values"],
@@ -102,60 +87,52 @@ def upsert_in_transaction(vector_db_name, transaction_id, vectors):
         }
         for vector in vectors
     ]
-    data = {"vectors": vectors}
-    response = requests.post(
-        url, headers=generate_headers(), data=json.dumps(data), verify=False
+
+    transaction.batch_upsert_vectors(formatted_vectors)
+
+
+def commit_transaction(transaction):
+    """Commit transaction using cosdata client"""
+    transaction.commit()
+    return transaction.transaction_id
+
+
+def search_sparse_vector(collection, query_terms, top_k=10, early_terminate_threshold=0.0):
+    """Search using sparse vector with cosdata client"""
+    # query_terms should already be in the correct format from format_for_server_query
+    results = collection.search.sparse(
+        query_terms=query_terms,
+        top_k=top_k,
+        early_terminate_threshold=early_terminate_threshold,
     )
-    if response.status_code not in [200, 204]:
-        raise Exception(
-            f"Failed to create vector: {response.status_code} - {response.text}"
+    return results
+
+
+def batch_ann_search(collection, batch, top_k=10, early_terminate_threshold=0.0):
+    """Batch sparse search using cosdata client"""
+    try:
+        results = collection.search.batch_sparse(
+            query_terms_list=batch,
+            top_k=top_k,
+            early_terminate_threshold=early_terminate_threshold,
         )
-
-
-def commit_transaction(collection_name, transaction_id):
-    url = (
-        f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/commit"
-    )
-    response = requests.post(url, headers=generate_headers(), verify=False)
-    if response.status_code not in [200, 204]:
-        print(f"Error response: {response.text}")
-        raise Exception(f"Failed to commit transaction: {response.status_code}")
-    return response.json() if response.text else None
-
-
-def search_sparse_vector(
-    vector_db_name, vector, top_k=10, early_terminate_threshold=0.0
-):
-    url = f"{base_url}/collections/{vector_db_name}/search/sparse"
-    data = {
-        "query_terms": vector["values"],
-        "top_k": top_k,
-        "early_terminate_threshold": early_terminate_threshold,
-    }
-    response = requests.post(
-        url, headers=generate_headers(), data=json.dumps(data), verify=False
-    )
-
-    if response.status_code not in [200, 204]:
-        print(f"Error response: {response.text}")
-        raise Exception(f"Failed to search vector: {response.status_code}")
-
-    return response.json()
-
-
-def batch_ann_search(vector_db_name, batch, top_k=10, early_terminate_threshold=0.0):
-    url = f"{base_url}/collections/{vector_db_name}/search/batch-sparse"
-    data = {
-        "query_terms_list": batch,
-        "top_k": top_k,
-        "early_terminate_threshold": early_terminate_threshold,
-    }
-    response = requests.post(
-        url, headers=generate_headers(), data=json.dumps(data), verify=False
-    )
-    if response.status_code not in [200, 204]:
-        print(f"Error response ({response.status_code}): {response.text}")
-    return response.json()
+        return results
+    except Exception as e:
+        print(f"Error in batch search: {e}")
+        # Fallback to individual searches
+        results = []
+        for query_terms in batch:
+            try:
+                result = collection.search.sparse(
+                    query_terms=query_terms,
+                    top_k=top_k,
+                    early_terminate_threshold=early_terminate_threshold,
+                )
+                results.append(result)
+            except Exception as e2:
+                print(f"Individual search failed: {e2}")
+                results.append({"results": []})
+        return results
 
 
 def generate_random_sparse_vector(id, dimension, non_zero_dims):
@@ -214,7 +191,7 @@ def select_query_vectors(vectors, num_queries):
 
 
 def compute_brute_force_results(vectors, query_vectors, dimension, top_k=10):
-    """Compute dot product similarity between query vectors and all vectors"""
+    """Compute dot product similarity using GPU acceleration with CuPy, fallback to CPU"""
     if os.path.exists(BRUTE_FORCE_RESULTS_FILE):
         print(f"Loading existing brute force results from {BRUTE_FORCE_RESULTS_FILE}")
         with open(BRUTE_FORCE_RESULTS_FILE, "rb") as f:
@@ -225,61 +202,208 @@ def compute_brute_force_results(vectors, query_vectors, dimension, top_k=10):
     )
     results = []
 
-    for query in tqdm(query_vectors):
-        # Create a sparse row vector for the query
-        query_indices = query["indices"]
-        query_values = query["values"]
-
-        dot_products = []
-        for vec in vectors:
-            # Find common indices between query and vector
-            common_indices = list(set(query_indices) & set(vec["indices"]))
-
-            # Compute dot product only for common indices
-            dot_product = sum(
-                query_values[query_indices.index(idx)]
-                * vec["values"][vec["indices"].index(idx)]
-                for idx in common_indices
-            )
-
-            dot_products.append(dot_product)
-
-        # Get top-k results
-        top_indices = heapq.nlargest(
-            top_k, range(len(dot_products)), key=lambda i: dot_products[i]
-        )
-
-        # Filter out the query vector itself (if it's in the top results)
-        top_results = [
-            {"id": vectors[idx]["id"], "score": float(dot_products[idx])}
-            for idx in top_indices
-        ][:top_k]
-
-        results.append({"query_id": query["id"], "top_results": top_results})
+    try:
+        # Try GPU computation first
+        print("Attempting GPU computation...")
+        results = _compute_brute_force_gpu(vectors, query_vectors, dimension, top_k)
+    except Exception as e:
+        print(f"GPU computation failed: {e}")
+        print("Falling back to CPU computation...")
+        results = _compute_brute_force_cpu(vectors, query_vectors, dimension, top_k)
 
     # Save to disk
     with open(BRUTE_FORCE_RESULTS_FILE, "wb") as f:
         pickle.dump(results, f)
-
     print(f"Brute force results computed and saved to {BRUTE_FORCE_RESULTS_FILE}")
     return results
 
 
+def _compute_brute_force_cpu(vectors, query_vectors, dimension, top_k=10):
+    """CPU-based brute force computation using scipy.sparse"""
+    from scipy.sparse import csr_matrix as cpu_csr_matrix
+
+    results = []
+    n_vectors = len(vectors)
+    print("Building dataset sparse matrix on CPU...")
+
+    # Build dataset matrix
+    data_list = []
+    indices_list = []
+    indptr = [0]
+
+    for vec in tqdm(vectors):
+        data_list.extend(vec["values"])
+        indices_list.extend(vec["indices"])
+        indptr.append(len(data_list))
+
+    A = cpu_csr_matrix((data_list, indices_list, indptr), shape=(n_vectors, dimension))
+
+    print("Computing similarities...")
+    for i, query in enumerate(tqdm(query_vectors)):
+        # Build query vector
+        q_data = query["values"]
+        q_indices = query["indices"]
+        q_indptr = [0, len(q_data)]
+
+        Q = cpu_csr_matrix((q_data, q_indices, q_indptr), shape=(1, dimension))
+
+        # Compute dot products
+        scores = A.dot(Q.T).toarray().flatten()
+
+        # Get top-k
+        top_indices = np.argpartition(scores, -top_k)[-top_k:]
+        top_indices = top_indices[np.argsort(scores[top_indices])[::-1]]
+
+        top_results = []
+        for idx in top_indices:
+            top_results.append({"id": vectors[idx]["id"], "score": float(scores[idx])})
+
+        results.append({"query_id": query["id"], "top_results": top_results})
+
+    return results
+
+
+def _compute_brute_force_gpu(vectors, query_vectors, dimension, top_k=10):
+    """GPU-based brute force computation with better memory management"""
+    results = []
+    n_vectors = len(vectors)
+
+    # Check available GPU memory
+    mempool = cp.get_default_memory_pool()
+    available_memory = mempool.free_bytes() + mempool.total_bytes()
+    print(f"Available GPU memory: {available_memory / 1e9:.2f} GB")
+
+    # Process in smaller chunks if needed
+    max_vectors_per_chunk = min(100000, n_vectors)  # Limit chunk size
+
+    print("Building dataset sparse matrix on GPU in chunks...")
+
+    for chunk_start in tqdm(range(0, n_vectors, max_vectors_per_chunk)):
+        chunk_end = min(chunk_start + max_vectors_per_chunk, n_vectors)
+        chunk_vectors = vectors[chunk_start:chunk_end]
+
+        # Build chunk matrix
+        data_list = []
+        indices_list = []
+        indptr = [0]
+
+        for vec in chunk_vectors:
+            data_list.append(vec["values"])
+            indices_list.append(vec["indices"])
+            indptr.append(indptr[-1] + len(vec["indices"]))
+
+        # Use smaller data types to save memory
+        data_gpu = cp.concatenate([cp.array(v, dtype=cp.float32) for v in data_list])
+        indices_gpu = cp.concatenate(
+            [cp.array(v, dtype=cp.int32) for v in indices_list]
+        )
+        indptr_gpu = cp.array(indptr, dtype=cp.int32)
+
+        # Create CSR matrix for this chunk
+        A_chunk = csr_matrix(
+            (data_gpu, indices_gpu, indptr_gpu), shape=(len(chunk_vectors), dimension)
+        )
+
+        # Process queries against this chunk
+        for query in query_vectors:
+            # Build query vector
+            q_data = cp.array(query["values"], dtype=cp.float32)
+            q_indices = cp.array(query["indices"], dtype=cp.int32)
+            q_indptr = cp.array([0, len(q_data)], dtype=cp.int32)
+
+            Q = csr_matrix((q_data, q_indices, q_indptr), shape=(1, dimension))
+
+            # Compute dot products for this chunk
+            scores_chunk = A_chunk.dot(Q.T).toarray().flatten()
+
+            # Update results for this query
+            if chunk_start == 0:
+                # Initialize results for this query
+                query_idx = query_vectors.index(query)
+                if query_idx >= len(results):
+                    results.extend([None] * (query_idx + 1 - len(results)))
+                results[query_idx] = {
+                    "query_id": query["id"],
+                    "scores": scores_chunk.copy(),
+                    "vector_offset": chunk_start,
+                }
+            else:
+                # Combine with previous chunks
+                query_idx = query_vectors.index(query)
+                if results[query_idx] is not None:
+                    results[query_idx]["scores"] = cp.concatenate(
+                        [results[query_idx]["scores"], scores_chunk]
+                    )
+
+        # Clean up GPU memory
+        del A_chunk, data_gpu, indices_gpu, indptr_gpu
+        cp.get_default_memory_pool().free_all_blocks()
+
+    # Convert to final format with top-k
+    final_results = []
+    for result in results:
+        if result is None:
+            continue
+
+        scores = result["scores"].get()  # Transfer to CPU
+
+        # Get top-k
+        top_indices = np.argpartition(scores, -top_k)[-top_k:]
+        top_indices = top_indices[np.argsort(scores[top_indices])[::-1]]
+
+        top_results = []
+        for idx in top_indices:
+            top_results.append({"id": vectors[idx]["id"], "score": float(scores[idx])})
+
+        final_results.append(
+            {"query_id": result["query_id"], "top_results": top_results}
+        )
+
+    return final_results
+
+
 def format_for_server_query(vector):
     """Format a vector for server query"""
-    return {
-        "id": vector["id"],
-        "values": [[ind, val] for ind, val in zip(vector["indices"], vector["values"])],
-    }
-
+    # Return format expected by sparse search API: list of [index, value] tuples
+    return [[ind, val] for ind, val in zip(vector["indices"], vector["values"])]
 
 def calculate_recall(brute_force_results, server_results, top_k=10):
     """Calculate recall metrics"""
     recalls = []
 
-    for bf_result, server_result in zip(brute_force_results, server_results):
+    for i, (bf_result, server_result) in enumerate(
+        zip(brute_force_results, server_results)
+    ):
+        # Debug: Print first few server results to understand structure
+        if i < 3:
+            print(f"\nDebug - Query {i}:")
+            print(f"Brute force top 3: {bf_result['top_results'][:3]}")
+            print(f"Server result keys: {list(server_result.keys())}")
+            print(f"Server result: {server_result}")
+
         bf_ids = set(item["id"] for item in bf_result["top_results"])
-        server_ids = set(item["id"] for item in server_result["results"])
+
+        # Handle different possible server response structures
+        if "results" in server_result:
+            server_items = server_result["results"]
+        elif "vectors" in server_result:
+            server_items = server_result["vectors"]
+        else:
+            print(f"Warning: Unexpected server result structure: {server_result}")
+            server_items = []
+
+        # Extract IDs from server results - handle different possible structures
+        server_ids = set()
+        for item in server_items:
+            if isinstance(item, dict):
+                if "id" in item:
+                    server_ids.add(item["id"])
+                elif "vector_id" in item:
+                    server_ids.add(item["vector_id"])
+                else:
+                    print(f"Warning: Unknown server item structure: {item}")
+            else:
+                print(f"Warning: Server item is not a dict: {item}")
 
         if not bf_ids:
             continue  # Skip if brute force found no results
@@ -288,13 +412,20 @@ def calculate_recall(brute_force_results, server_results, top_k=10):
         recall = len(intersection) / len(bf_ids)
         recalls.append(recall)
 
+        # Debug: Print recall for first few queries
+        if i < 3:
+            print(f"BF IDs (first 5): {list(bf_ids)[:5]}")
+            print(f"Server IDs (first 5): {list(server_ids)[:5]}")
+            print(f"Intersection: {len(intersection)}")
+            print(f"Recall: {recall:.2%}")
+
     avg_recall = sum(recalls) / len(recalls) if recalls else 0
     return avg_recall, recalls
 
 
 def run_rps_tests(
     rps_test_vectors,
-    vector_db_name,
+    collection,
     batch_size=100,
     top_k=10,
     early_terminate_threshold=0.0,
@@ -309,13 +440,13 @@ def run_rps_tests(
         futures = []
         for i in range(0, len(rps_test_vectors), batch_size):
             batch = [
-                format_for_server_query(vector)["values"]
+                format_for_server_query(vector)
                 for vector in rps_test_vectors[i : i + batch_size]
             ]
             futures.append(
                 executor.submit(
                     batch_ann_search,
-                    vector_db_name,
+                    collection,
                     batch,
                     top_k,
                     early_terminate_threshold,
@@ -357,7 +488,7 @@ def main():
     top_k = 10
     early_terminate_threshold = 0.5
 
-    Path("sparse_dataset").mkdir(parents=True, exist_ok=True)
+    Path("datasets/sparse_dataset").mkdir(parents=True, exist_ok=True)
 
     # Generate or load dataset
     vectors = generate_dataset(num_vectors, dimension, max_non_zero_dims)
@@ -376,61 +507,99 @@ def main():
     print("Session established")
     insert_vectors = input("Insert vectors? (Y/n): ").strip().lower() in ["y", ""]
 
+    collection = None
     if insert_vectors:
         # Create collection
         try:
             print(f"Creating collection: {vector_db_name}")
-            create_db(name=vector_db_name, dimension=dimension)
+            collection = create_db(name=vector_db_name, dimension=dimension)
             print("Collection created")
 
             # Create explicit index
-            create_explicit_index(vector_db_name)
+            create_explicit_index(collection)
             print("Explicit index created")
         except Exception as e:
             print(f"Collection may already exist: {e}")
+            try:
+                collection = client.get_collection(vector_db_name)
+                print("Using existing collection")
+            except Exception as get_error:
+                print(f"Failed to get existing collection: {get_error}")
+                raise Exception(f"Cannot create or access collection: {e}")
 
-        # Insert vectors into server
-        print("Creating transaction")
-        transaction_id = create_transaction(vector_db_name)["transaction_id"]
-
+        # Insert vectors into server using a single transaction
+        print("Creating single transaction for all vectors")
         print(f"Inserting {num_vectors} vectors in batches of {batch_size}...")
         start = time.time()
 
-        with ThreadPoolExecutor(max_workers=32) as executor:
-            futures = []
-            for batch_start in range(0, num_vectors, batch_size):
-                batch = vectors[batch_start : batch_start + batch_size]
-                futures.append(
-                    executor.submit(
-                        upsert_in_transaction, vector_db_name, transaction_id, batch
+        # Create single transaction and process all batches within it
+        with collection.transaction() as txn:
+            with ThreadPoolExecutor(max_workers=32) as executor:
+                futures = []
+                for batch_start in range(0, num_vectors, batch_size):
+                    batch = vectors[batch_start : batch_start + batch_size]
+                    futures.append(
+                        executor.submit(upsert_in_transaction, collection, txn, batch)
                     )
-                )
 
-            for i, future in enumerate(tqdm(as_completed(futures), total=len(futures))):
-                try:
-                    future.result()
-                except Exception as e:
-                    print(f"Batch {i + 1} failed: {e}")
+                for i, future in enumerate(
+                    tqdm(as_completed(futures), total=len(futures))
+                ):
+                    try:
+                        future.result()
+                    except Exception as e:
+                        print(f"Batch {i + 1} failed: {e}")
 
-        print("Committing transaction")
-        commit_transaction(vector_db_name, transaction_id)
+            # Transaction is automatically committed when exiting the context manager
+            transaction_id = txn.transaction_id
 
         end = time.time()
         insertion_time = end - start
         print(f"Insertion time: {insertion_time:.2f} seconds")
+        print(f"Transaction committed with ID: {transaction_id}")
+
+        # Wait for indexing to complete
+        print("Waiting for indexing to complete...")
+        final_status, success = poll_transaction_completion(
+            client,
+            vector_db_name,
+            transaction_id,
+            target_status="complete",
+            max_attempts=30,  # Increase attempts for large dataset
+            sleep_interval=5,  # Longer sleep for indexing
+        )
+
+        if not success:
+            print(
+                f"Warning: Indexing may not have completed. Final status: {final_status}"
+            )
+        else:
+            print("Indexing completed successfully")
+    else:
+        try:
+            collection = client.get_collection(vector_db_name)
+            print("Using existing collection")
+        except Exception as e:
+            print(f"Collection not found: {e}")
+            return
 
     # Search vectors and compare results
     print(f"Searching {num_queries} vectors and comparing results...")
     server_results = []
 
     start_search = time.time()
-    for query in tqdm(query_vectors):
+    for i, query in enumerate(tqdm(query_vectors)):
         formatted_query = format_for_server_query(query)
         try:
             result = search_sparse_vector(
-                vector_db_name, formatted_query, top_k, early_terminate_threshold
+                collection, formatted_query, top_k, early_terminate_threshold
             )
             server_results.append(result)
+
+            if i == 0:
+                print("\nDebug - First search result structure:")
+                print(f"Result keys: {list(result.keys())}")
+                print(f"Result: {result}")
         except Exception as e:
             print(f"Search failed for query {query['id']}: {e}")
             server_results.append({"results": []})
@@ -460,14 +629,23 @@ def main():
         "search_time": search_time / num_queries,
     }
 
-    with open("sparse_dataset/vector_evaluation_results.pkl", "wb") as f:
+    with open("datasets/sparse_dataset/vector_evaluation_results.pkl", "wb") as f:
         pickle.dump(detailed_results, f)
 
-    print("Detailed results saved to sparse_dataset/vector_evaluation_results.pkl")
+    print(
+        "Detailed results saved to datasets/sparse_dataset/vector_evaluation_results.pkl"
+    )
 
     run_rps_tests(
-        vectors[:10_000], vector_db_name, batch_size, top_k, early_terminate_threshold
+        vectors[:10_000], collection, batch_size, top_k, early_terminate_threshold
     )
+
+    # Cleanup
+    try:
+        collection.delete()
+        print("Test collection deleted")
+    except Exception as e:
+        print(f"Error during cleanup: {e}")
 
 
 if __name__ == "__main__":
