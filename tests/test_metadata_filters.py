@@ -23,6 +23,7 @@ import json
 import random
 import numpy as np
 from functools import partial
+import time
 
 
 token = None
@@ -103,7 +104,7 @@ def gen_vectors(num, vcoll):
         vid = i + 1
         values = np.random.uniform(-1, 1, vcoll.num_dimensions).tolist()
         metadata = vcoll.gen_metadata_fields()
-        yield {"id": vid, "values": values, "metadata": metadata}
+        yield {"id": str(vid), "values": values, "metadata": metadata}
 
 
 def create_transaction(collection_name: str) -> str:
@@ -528,20 +529,24 @@ def cmd_insert_and_check(ctx, args):
     print("  Create index response:", create_index_response)
 
     num_to_insert = args.num_vecs
-    vectors = gen_vectors(num_to_insert, vcoll)
-    print(f"Inserting {num_to_insert} vectors")
-    vidx = insert_vectors(coll_id, vectors)
+    if num_to_insert > 0:
+        vectors = gen_vectors(num_to_insert, vcoll)
+        print(f"Inserting {num_to_insert} vectors")
+        vidx = insert_vectors(coll_id, vectors)
 
-    tcs = vcoll.test_cases(vidx)
+        tcs = vcoll.test_cases(vidx)
 
-    print("Running search queries")
-    search_and_compare(db_name, tcs)
+        # Wait for 10s for background indexing before running search
+        # queries
+        time.sleep(10)
+        print("Running search queries")
+        search_and_compare(db_name, tcs)
 
 
 def cmd_query(ctx, args):
     vec_id = args.vector_id
     vec = get_vector_by_id(ctx["vector_db_name"], vec_id)
-    values = vec["values"]
+    values = vec["dense_values"]
     print("Vector metadata:", vec["metadata"])
     metadata_filter = json.loads(args.metadata_filter) if args.metadata_filter else None
     res = search_ann(ctx["vector_db_name"], values, metadata_filter)

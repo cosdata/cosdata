@@ -49,9 +49,8 @@ impl DistanceFunction for CosineSimilarity {
                 cosine_similarity_mdims(x.metadata.unwrap(), y.metadata.unwrap())?
             }
             (ReplicaNodeKind::Pseudo, ReplicaNodeKind::Base) => {
-                // A base node should never match an existing pseudo
-                // node
-                CosineSimilarity(0.0)
+                // This case is not possible
+                unreachable!()
             }
             (ReplicaNodeKind::Pseudo, ReplicaNodeKind::Metadata) => {
                 let x_metadata = x.metadata.unwrap();
@@ -63,32 +62,12 @@ impl DistanceFunction for CosineSimilarity {
                     CosineSimilarity(1.0)
                 } else {
                     // Otherwise it should strongly mismatch.
-                    CosineSimilarity(0.0)
+                    CosineSimilarity(-1.0)
                 }
             }
             (ReplicaNodeKind::Base, ReplicaNodeKind::Pseudo) => {
-                // Safe use of unwrap as all nodes including the root
-                // node are expected to have metadata dimensions if
-                // metadata filtering is supported (because pseudo
-                // nodes exist only in that case)
-                let x_metadata = x.metadata.unwrap();
-                let y_metadata = y.metadata.unwrap();
-                let x_mdims = x_metadata
-                    .mbits
-                    .iter()
-                    .map(|i| *i as f32)
-                    .collect::<Vec<f32>>();
-                let y_mdims = y_metadata
-                    .mbits
-                    .iter()
-                    .map(|i| *i as f32)
-                    .collect::<Vec<f32>>();
-                let m_dot_product: f32 = dot_product_f32(&x_mdims, &y_mdims);
-                cosine_similarity(
-                    x.quantized_vec,
-                    y.quantized_vec,
-                    Some((x_metadata.mag, y_metadata.mag, m_dot_product)),
-                )?
+                // This case is not possible
+                unreachable!()
             }
             (ReplicaNodeKind::Base, ReplicaNodeKind::Base) => {
                 cosine_similarity(x.quantized_vec, y.quantized_vec, None)?
@@ -98,31 +77,14 @@ impl DistanceFunction for CosineSimilarity {
                 // definitely have metadata dimensions
                 let x_metadata = x.metadata.unwrap();
                 let y_metadata = y.metadata.unwrap();
-                // If the metadata dims match exactly, it's sufficient
-                // to calculate similarity for the quantized vector
-                // values.
-                if x_metadata.mbits == y_metadata.mbits {
+                // If the metadata dims match strongly, only then it
+                // makes sense to calculate similarity for the
+                // quantized vector values.
+                let mdims_cosim = cosine_similarity_mdims(x_metadata, y_metadata)?;
+                if mdims_cosim.0 > 0.99 {
                     cosine_similarity(x.quantized_vec, y.quantized_vec, None)?
                 } else {
-                    // Otherwise, we calculate the combined cosine
-                    // similarity for both quantized values and
-                    // metadata dims.
-                    let x_mdims = x_metadata
-                        .mbits
-                        .iter()
-                        .map(|i| *i as f32)
-                        .collect::<Vec<f32>>();
-                    let y_mdims = y_metadata
-                        .mbits
-                        .iter()
-                        .map(|i| *i as f32)
-                        .collect::<Vec<f32>>();
-                    let m_dot_product: f32 = dot_product_f32(&x_mdims, &y_mdims);
-                    cosine_similarity(
-                        x.quantized_vec,
-                        y.quantized_vec,
-                        Some((x_metadata.mag, y_metadata.mag, m_dot_product)),
-                    )?
+                    CosineSimilarity(-1.0)
                 }
             }
             (ReplicaNodeKind::Base, ReplicaNodeKind::Metadata) => CosineSimilarity(0.0),
@@ -131,9 +93,8 @@ impl DistanceFunction for CosineSimilarity {
                 unreachable!()
             }
             (ReplicaNodeKind::Metadata, ReplicaNodeKind::Base) => {
-                // @TODO(vineet): This case is actually shouldn't be
-                // possible. Check why it's happening.
-                CosineSimilarity(0.0)
+                // This case is not possible
+                unreachable!()
             }
         };
         Ok(sim)
