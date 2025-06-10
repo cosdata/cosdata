@@ -4,8 +4,13 @@ import numpy as np
 from cosdata import Client
 import getpass
 import json
-import requests
 import time
+import os
+from dotenv import load_dotenv
+from utils import poll_transaction_completion
+
+# Load environment variables from .env file
+load_dotenv()
 
 def format_vector(vector):
     """Format a vector for better readability"""
@@ -43,21 +48,18 @@ def format_vector(vector):
         return json.dumps(formatted, indent=2)
     return str(vector)
 
-def get_transaction_status(client, coll_name, txn_id):
-    host = client.host
-    url = f"{host}/vectordb/collections/{coll_name}/transactions/{txn_id}/status"
-    resp = requests.get(url, headers=client._get_headers(), verify=False)
-    result = resp.json()
-    return result['status']
-
 def test_basic_functionality():
-    # Get password securely
-    password = getpass.getpass("Enter your database password: ")
+    # Get password from .env file or prompt securely
+    password = os.getenv("COSDATA_PASSWORD")
+    if not password:
+        password = getpass.getpass("Enter your database password: ")
 
     # Initialize client
+    host = os.getenv("COSDATA_HOST", "http://127.0.0.1:8443")
+    username = os.getenv("COSDATA_USERNAME", "admin")
     client = Client(
-        host="http://127.0.0.1:8443",
-        username="admin",
+        host=host,
+        username=username,
         password=password,
         verify=False
     )
@@ -108,15 +110,15 @@ def test_basic_functionality():
         print("Vectors inserted successfully")
 
         print("Waiting for transaction to complete")
-        txn_status = 'indexing_in_progress'
-        remaining_attempts = 3
-        while txn_status != 'complete':
-            txn_status = get_transaction_status(client, collection_name, txn_id)
-            time.sleep(2)
-            remaining_attempts -= 1
-            if remaining_attempts == 0:
-                print("Max attempts waiting for transaction to complete exceeded")
-                break
+        final_status, success = poll_transaction_completion(
+            client, collection_name, txn_id, 
+            target_status='complete', 
+            max_attempts=3, 
+            sleep_interval=2
+        )
+        
+        if not success:
+            print(f"Transaction did not complete successfully. Final status: {final_status}")
 
         # Test search
         print("\nTesting search...")

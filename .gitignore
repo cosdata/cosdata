@@ -20,3 +20,9 @@ venv
 datasets/
 data/
 .vscode/
+
+.env*
+!.env.example
+
+__pycache__/
+*.pyc
