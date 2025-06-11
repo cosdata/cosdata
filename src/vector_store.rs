@@ -210,8 +210,8 @@ pub fn ann_search(
     };
 
     let mut z = if z.is_empty() {
-        let current_lazy_item = unsafe { &*current_lazy_item_latest_ptr }.latest();
-        let current_node = unsafe { &**current_lazy_item }.try_get_data(&hnsw_index.cache)?;
+        let current_lazy_item = unsafe { &*current_lazy_item_latest_ptr }.latest;
+        let current_node = unsafe { &*current_lazy_item }.try_get_data(&hnsw_index.cache)?;
         let cur_node_id = &current_node.prop_value.id;
         let dist = match query_filter_dims {
             // In case of metadata filters in query, we calculate the
@@ -263,10 +263,9 @@ pub fn ann_search(
     };
 
     let top_lazy_item_latest_ptr = z[0].0;
-    let top_lazy_item = unsafe { &*top_lazy_item_latest_ptr }.latest();
-    let top_node = unsafe { &**top_lazy_item }.try_get_data(&hnsw_index.cache)?;
+    let top_lazy_item = unsafe { &*top_lazy_item_latest_ptr }.latest;
+    let top_node = unsafe { &*top_lazy_item }.try_get_data(&hnsw_index.cache)?;
     let child = top_node.get_child();
-    drop(top_lazy_item);
 
     if cur_level.0 != 0 {
         let results = ann_search(
@@ -657,8 +656,8 @@ pub fn index_embedding(
     });
     skipm.insert(*prop_value.id);
 
-    let current_lazy_item = unsafe { &*current_lazy_item_latest_ptr }.latest();
-    let current_node = unsafe { &**current_lazy_item }.try_get_data(&hnsw_index.cache)?;
+    let current_lazy_item = unsafe { &*current_lazy_item_latest_ptr }.latest;
+    let current_node = unsafe { &*current_lazy_item }.try_get_data(&hnsw_index.cache)?;
 
     let cur_node_id = &current_node.prop_value.id;
 
@@ -700,13 +699,10 @@ pub fn index_embedding(
         z
     };
 
-    drop(current_lazy_item);
-
     let top_lazy_item_latest_ptr = z[0].0;
-    let top_lazy_item = unsafe { &*top_lazy_item_latest_ptr }.latest();
-    let top_node = unsafe { &**top_lazy_item }.try_get_data(&hnsw_index.cache)?;
+    let top_lazy_item = unsafe { &*top_lazy_item_latest_ptr }.latest;
+    let top_node = unsafe { &*top_lazy_item }.try_get_data(&hnsw_index.cache)?;
     let child = top_node.get_child();
-    drop(top_lazy_item);
 
     if cur_level.0 > max_level {
         // Just traverse down without creating nodes
@@ -749,8 +745,8 @@ pub fn index_embedding(
         );
 
         if let Some(parent_lazy_item_latest_ptr) = unsafe { parent_lazy_item_latest_ptr.as_ref() } {
-            let parent_lazy_item = parent_lazy_item_latest_ptr.latest();
-            unsafe { &**parent_lazy_item }
+            let parent_lazy_item = parent_lazy_item_latest_ptr.latest;
+            unsafe { &*parent_lazy_item }
                 .try_get_data(&hnsw_index.cache)
                 .unwrap()
                 .set_child(lazy_item_latest_ptr);
@@ -840,8 +836,8 @@ fn create_node_edges(
     let mut successful_edges = 0;
     let mut neighbors_to_update = Vec::new();
 
-    let lazy_item = unsafe { &*lazy_item_latest_ptr }.latest();
-    let node = unsafe { &**lazy_item }.try_get_data(&hnsw_index.cache)?;
+    let lazy_item = unsafe { &*lazy_item_latest_ptr }.latest;
+    let node = unsafe { &*lazy_item }.try_get_data(&hnsw_index.cache)?;
 
     // First loop: Handle neighbor connections and collect updates
     for (neighbor_lazy_item_latest_ptr, dist) in neighbors {
@@ -849,12 +845,18 @@ fn create_node_edges(
             break;
         }
 
-        let (neighbor_lazy_item, newly_created) = unsafe { &*neighbor_lazy_item_latest_ptr }
-            .get_or_create_version(version, &hnsw_index.cache, file_id, offset_counter)?;
+        let (neighbor_lazy_item, newly_created) = LatestNode::get_or_create_version(
+            neighbor_lazy_item_latest_ptr,
+            version,
+            &hnsw_index.versions_synchronization_map,
+            &hnsw_index.cache,
+            file_id,
+            offset_counter,
+        )?;
 
-        let neighbor_node = unsafe { &**neighbor_lazy_item }.try_get_data(&hnsw_index.cache)?;
+        let neighbor_node = unsafe { &*neighbor_lazy_item }.try_get_data(&hnsw_index.cache)?;
 
-        assert_eq!(neighbor_node.version, version);
+        assert_eq!(neighbor_node.version.load(Ordering::Relaxed), *version);
         let neighbor_inserted_idx = node.add_neighbor(
             neighbor_node.get_id(),
             neighbor_lazy_item_latest_ptr,
@@ -883,7 +885,7 @@ fn create_node_edges(
         };
 
         if newly_created {
-            write_lazy_item_to_file(&hnsw_index.cache, *neighbor_lazy_item, file_id)?;
+            write_lazy_item_to_file(&hnsw_index.cache, neighbor_lazy_item, file_id)?;
         } else if let Some((idx, dist)) = neighbour_update_info {
             neighbors_to_update.push((neighbor_lazy_item_latest_ptr, idx, dist));
         }
@@ -903,8 +905,8 @@ fn create_node_edges(
         );
 
         for (neighbor_lazy_item_latest_ptr, neighbor_idx, dist) in neighbors_to_update {
-            let neighbor_lazy_item = unsafe { &*neighbor_lazy_item_latest_ptr }.latest();
-            let offset = unsafe { &**neighbor_lazy_item }.file_index.offset;
+            let neighbor_lazy_item = unsafe { &*neighbor_lazy_item_latest_ptr }.latest;
+            let offset = unsafe { &*neighbor_lazy_item }.file_index.offset;
             let mut current_node_link_with_dist = Vec::with_capacity(13);
             current_node_link_with_dist.clone_from(&current_node_link);
             let (tag, value) = dist.get_tag_and_value();
@@ -941,8 +943,8 @@ fn traverse_find_nearest(
     let mut candidate_queue = BinaryHeap::new();
     let mut results = Vec::new();
 
-    let start_lazy_item = unsafe { &*start_lazy_item_latest_ptr }.latest();
-    let start_node = unsafe { &**start_lazy_item }.try_get_data(&hnsw_index.cache)?;
+    let start_lazy_item = unsafe { &*start_lazy_item_latest_ptr }.latest;
+    let start_node = unsafe { &*start_lazy_item }.try_get_data(&hnsw_index.cache)?;
 
     let fvec_data = VectorData {
         id: fvec_id,
@@ -959,7 +961,6 @@ fn traverse_find_nearest(
     let start_dist = distance_metric.calculate(&fvec_data, &start_vec_data, is_indexing)?;
 
     let start_id = *start_node.get_id();
-    drop(start_lazy_item);
     skipm.insert(start_id);
     candidate_queue.push((start_dist, start_lazy_item_latest_ptr));
 
@@ -969,9 +970,9 @@ fn traverse_find_nearest(
         }
         *nodes_visited += 1;
 
-        let current_lazy_item = unsafe { &*current_lazy_item_latest_ptr }.latest();
+        let current_lazy_item = unsafe { &*current_lazy_item_latest_ptr }.latest;
         results.push((dist, current_lazy_item_latest_ptr));
-        let current_node = unsafe { &**current_lazy_item }.try_get_data(&hnsw_index.cache)?;
+        let current_node = unsafe { &*current_lazy_item }.try_get_data(&hnsw_index.cache)?;
 
         let _lock = current_node.freeze();
         for neighbor in current_node
@@ -988,9 +989,9 @@ fn traverse_find_nearest(
             };
 
             if !skipm.is_member(*neighbor_id) {
-                let neighbor_lazy_item = unsafe { &*neighbor_lazy_item_latest_ptr }.latest();
+                let neighbor_lazy_item = unsafe { &*neighbor_lazy_item_latest_ptr }.latest;
                 let neighbor_node =
-                    unsafe { &**neighbor_lazy_item }.try_get_data(&hnsw_index.cache)?;
+                    unsafe { &*neighbor_lazy_item }.try_get_data(&hnsw_index.cache)?;
                 let neighbor_metadata =
                     neighbor_node.prop_metadata.clone().map(|pm| pm.vec.clone());
                 let neighbor_vec_data = VectorData {

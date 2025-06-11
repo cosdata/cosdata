@@ -27,14 +27,14 @@ impl HNSWIndexSerialize for SharedLatestNode {
             return Ok(u32::MAX);
         }
         let this = unsafe { &**self };
-        let file_index = unsafe { &**this.latest() }.file_index;
+        let file_index = unsafe { &*this.latest }.file_index;
         latest_version_links_bufman
             .seek_with_cursor(latest_version_links_cursor, this.file_offset.0 as u64)?;
         latest_version_links_bufman
             .update_u32_with_cursor(latest_version_links_cursor, file_index.offset.0)?;
         latest_version_links_bufman
             .update_u32_with_cursor(latest_version_links_cursor, *file_index.file_id)?;
-        this.latest().serialize(
+        this.latest.serialize(
             bufman,
             latest_version_links_bufman,
             cursor,

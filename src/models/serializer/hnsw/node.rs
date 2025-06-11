@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{atomic::Ordering, Arc};
 
 use rustc_hash::FxHashSet;
 
@@ -47,7 +47,7 @@ impl HNSWIndexSerialize for ProbNode {
         // Serialize basic fields
         buf.push(self.hnsw_level.0);
 
-        buf.extend(self.version.to_le_bytes());
+        buf.extend(self.version.load(Ordering::Relaxed).to_le_bytes());
 
         // Serialize prop_value
         let (FileOffset(offset), BytesToRead(length)) = &self.prop_value.location;

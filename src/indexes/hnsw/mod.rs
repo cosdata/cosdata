@@ -12,7 +12,7 @@ use crate::{
         cache_loader::HNSWIndexCache,
         collection::Collection,
         collection_transaction::BackgroundCollectionTransaction,
-        common::WaCustomError,
+        common::{TSHashTable, WaCustomError},
         meta_persist::store_values_range,
         prob_node::SharedLatestNode,
         types::{DistanceMetric, FileOffset, HNSWLevel, InternalId, MetaDb, QuantizationMetric},
@@ -69,6 +69,7 @@ pub struct HNSWIndex {
     pub sample_threshold: usize,
     pub max_replica_per_node: u8,
     pub offset_counter: RwLock<HNSWIndexFileOffsetCounter>,
+    pub versions_synchronization_map: TSHashTable<SharedLatestNode, ()>,
 }
 
 #[derive(Default)]
@@ -123,6 +124,7 @@ impl HNSWIndex {
             sample_threshold,
             max_replica_per_node,
             offset_counter: RwLock::new(offset_counter),
+            versions_synchronization_map: TSHashTable::new(16),
         }
     }
 

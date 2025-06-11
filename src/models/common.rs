@@ -388,8 +388,8 @@ pub fn remove_duplicates_and_filter(
     let mut collected = vec
         .into_iter()
         .filter_map(|(lazy_item_latest_ptr, similarity)| {
-            let lazy_item = unsafe { &*lazy_item_latest_ptr }.latest();
-            let node = unsafe { &**lazy_item }.try_get_data(cache).unwrap();
+            let lazy_item = unsafe { &*lazy_item_latest_ptr }.latest;
+            let node = unsafe { &*lazy_item }.try_get_data(cache).unwrap();
             let replica_id = node.get_id();
             let orig_id = replica_id / (hnsw_index.max_replica_per_node as u32);
             if !seen.insert(orig_id) {
@@ -631,6 +631,15 @@ impl<K: Eq + Hash, V> TSHashTable<K, V> {
                 Ok((new_v, false))
             }
         }
+    }
+
+    pub fn lock_key_and_try<F, R>(&self, k: K, f: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        let index = self.hash_key(&k);
+        let mut ht = self.hash_table_list[index].lock().unwrap();
+        f()
     }
 
     pub fn with_value<F, R>(&self, k: &K, f: F) -> Option<R>
