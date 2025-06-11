@@ -8,7 +8,7 @@ use crate::{
 use super::{
     dtos::{
         CreateCollectionDto, CreateCollectionDtoResponse, GetCollectionsDto,
-        GetCollectionsResponseDto, ListCollectionsResponseDto,
+        GetCollectionsResponseDto,
     },
     error::CollectionsError,
     repo,
@@ -104,8 +104,3 @@ pub(crate) async fn get_loaded_collections(
     Ok(ctx.collection_cache_manager.get_loaded_collections())
 }
 
-pub(crate) async fn list_collections(
-    ctx: Arc<AppContext>,
-) -> Result<ListCollectionsResponseDto, CollectionsError> {
-    repo::list_collections(ctx /*, query_params */).await
-}
