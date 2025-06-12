@@ -155,3 +155,15 @@ pub(crate) struct CollectionSummaryDto {
 pub(crate) struct ListCollectionsResponseDto {
     pub collections: Vec<CollectionSummaryDto>,
 }
+
+#[derive(Serialize, Debug, ToSchema)]
+pub(crate) struct CollectionWithVectorCountsDto {
+    pub name: String,
+    pub description: Option<String>,
+    pub dense_vector: DenseVectorOptions,
+    pub sparse_vector: SparseVectorOptions,
+    pub tf_idf_options: TFIDFOptions,
+    pub config: CollectionConfig,
+    pub store_raw_text: bool,
+    pub vectors_count: u64,
+}
