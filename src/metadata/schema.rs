@@ -306,7 +306,19 @@ impl MetadataSchema {
         Ok(result)
     }
 
-    pub fn pseudo_weighted_dimensions(&self, weight: i32) -> Vec<MetadataDimensions> {
+    /// Computes dimensions for the pseudo root node
+    pub fn pseudo_root_dimensions(&self, weight: i32) -> MetadataDimensions {
+        let total_dims = self.num_total_dims();
+        vec![weight; total_dims as usize]
+    }
+
+    // Computes dimensions for all non-root pseudo nodes
+    //
+    // In other words, the result will never include the dimensions
+    // for pseudo node (see `pseudo_root_dimensions` fn). There are
+    // two separate functions because the pseudo root node and other
+    // pseudo nodes are created in separate code paths.
+    pub fn pseudo_nonroot_dimensions(&self, weight: i32) -> Vec<MetadataDimensions> {
         // A hashmap of field names to the value_ids in asc
         // order. Will be constructed when iterting through the fields
         // for the first time.
@@ -342,7 +354,7 @@ impl MetadataSchema {
             combinations.append(&mut cs);
         }
 
-        let mut is_pseudo_root_created = self.fields.len() == 1 && self.conditions.is_empty();
+        let mut is_pseudo_root_included = self.fields.len() == 1 && self.conditions.is_empty();
 
         // Compute combinations for supported `And` conditions
         // i.e. only the fields that are part of a supported `And`
@@ -364,7 +376,7 @@ impl MetadataSchema {
                 // Check if the schema supports an `And` condition
                 // between all fields.
                 if cond_fields.len() == self.fields.len() {
-                    is_pseudo_root_created = true;
+                    is_pseudo_root_included = true;
                 }
             }
         }
@@ -373,24 +385,6 @@ impl MetadataSchema {
         // that if the combination that has max value ids for every
         // field exists, it ends up at the beginning of the vector
         combinations.sort_by_cached_key(|c| Reverse(c.iter().copied().sum::<u16>()));
-
-        // Explicitly add combination for the max cardinality of each
-        // field. This is required only if `is_all_and_supported` is
-        // false. In other words, if `And` condition between all
-        // fields is supported, then this combination must have been
-        // already been added.
-        if !is_pseudo_root_created {
-            let mut combination = Vec::with_capacity(num_fields);
-            for field in &self.fields {
-                let vids = field_value_ids.get(&field.name).unwrap();
-                // @SAFETY: It's safe to use unwrap here as we know
-                // that `vids` won't be empty.
-                let max_val = *vids.as_slice().last().unwrap();
-                combination.push(max_val);
-            }
-            // Insert this combination at the beginning of the vector
-            combinations.insert(0, combination);
-        }
 
         // Convert combinations of valid_ids into pseudo_dimensions
         // (binary_vec with high weight values)
@@ -420,7 +414,23 @@ impl MetadataSchema {
             pseudo_dimensions.push(dims);
         }
 
+        // There's a chance that pseudo root dimensions would also
+        // have been considered. Exclude it from the result
+        if is_pseudo_root_included {
+            let root_dims = self.pseudo_root_dimensions(weight);
+            pseudo_dimensions.retain(|dims| *dims != root_dims);
+        }
+
         pseudo_dimensions
+    }
+
+    // Computes all pseudo dimensions
+    pub fn pseudo_weighted_dimensions(&self, weight: i32) -> Vec<MetadataDimensions> {
+        let root_dims = self.pseudo_root_dimensions(weight);
+        let mut non_root_dims = self.pseudo_nonroot_dimensions(weight);
+        let mut result = vec![root_dims];
+        result.append(&mut non_root_dims);
+        result
     }
 
     pub fn get_field(&self, name: &str) -> Result<&MetadataField, Error> {
@@ -910,7 +920,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pseudo_weighted_dimensions() {
+    fn test_pseudo_dimensions() {
         let age_values = (1..=2).map(FieldValue::Int).collect();
         let age = MetadataField::new("age".to_owned(), age_values).unwrap();
 
@@ -930,23 +940,31 @@ mod tests {
 
         let schema = MetadataSchema::new(vec![age, color, group], conditions).unwrap();
 
-        let pwd = schema.pseudo_weighted_dimensions(1024);
+        let weight = 1024;
 
-        // Note that cardinality of age and color is 2 and 3
-        // respectively. But we're considering max_cardinality for the
-        // dimension size which happens to be 3 and 3. This is because
-        // the value 0 implicitly takes up one bit. So to represent 2
-        // age values, we need 3 bits and hence the max_cardinality is
-        // 3.
-        let exp_total = 23; // 13 (individual) + 9 (age x color) + 1 (all)
-        assert_eq!(exp_total, pwd.len());
+        let total_bits = schema.num_total_dims();
+        // Actual cardinalities = 2, 3, 4
+        // Considering 0 value for not-specified case = 3, 4, 5
+        // No. of bits required = 2, 2, 3 (total = 7)
+        assert_eq!(7, total_bits);
+
+        let root_dims = schema.pseudo_root_dimensions(weight);
+        assert_eq!(vec![weight; 7], root_dims);
+
+        let nonroot_dims = schema.pseudo_nonroot_dimensions(weight);
+        // No. of values supported in 7 bits = 2^2, 4, 8
+        // No. of non-zero values supported = 3, 3, 7 (total 13)
+        let exp_total = 22; // 13 (individual) + 9 (age x color)
+        assert_eq!(exp_total, nonroot_dims.len());
 
         let num_total_dims = schema.num_total_dims();
         assert_eq!(7, num_total_dims);
 
-        // The max pseudo node is at the beginning of the returned
-        // vector
-        assert_eq!(vec![1024; num_total_dims as usize], pwd[0]);
+        // The result doesn't contain the pseudo root dims
+        assert!(nonroot_dims
+            .iter()
+            .find(|dims| **dims == root_dims)
+            .is_none());
 
         // Test with only 1 field
         let status_values: HashSet<FieldValue> = vec!["todo", "done"]
@@ -957,10 +975,11 @@ mod tests {
 
         let schema = MetadataSchema::new(vec![status], vec![]).unwrap();
 
-        let pwd = schema.pseudo_weighted_dimensions(1);
+        let root_dims = schema.pseudo_root_dimensions(1);
+        assert_eq!(vec![1, 1], root_dims);
 
-        assert_eq!(3, pwd.len());
-        // [1, 1]
+        let nonroot_dims = schema.pseudo_nonroot_dimensions(1);
+        assert_eq!(2, nonroot_dims.len());
         // [1, 0]
         // [0, 1]
     }

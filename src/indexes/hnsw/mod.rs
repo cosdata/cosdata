@@ -29,8 +29,11 @@ use types::{HNSWHyperParams, QuantizedDenseVectorEmbedding};
 
 pub struct DenseInputEmbedding(
     pub InternalId,
+    /// Raw vector embedding
     pub Vec<f32>,
+    /// Optional metadata fields
     pub Option<MetadataFields>,
+    /// Boolean flag to indicate pseudo nodes
     pub bool,
 );
 
@@ -46,6 +49,7 @@ pub struct HNSWIndexData {
     pub levels_prob: Vec<(f64, u8)>,
     pub dim: usize,
     pub root_vec_ptr_offset: FileOffset,
+    pub pseudo_root_vec_ptr_offset: Option<FileOffset>,
     pub quantization_metric: QuantizationMetric,
     pub distance_metric: DistanceMetric,
     pub storage_type: StorageType,
@@ -54,6 +58,7 @@ pub struct HNSWIndexData {
 
 pub struct HNSWIndex {
     pub root_vec: SharedLatestNode,
+    pub pseudo_root_vec: Option<SharedLatestNode>,
     pub levels_prob: Vec<(f64, u8)>,
     pub dim: usize,
     pub quantization_metric: RwLock<QuantizationMetric>,
@@ -94,6 +99,7 @@ impl HNSWIndex {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         root_vec: SharedLatestNode,
+        pseudo_root_vec: Option<SharedLatestNode>,
         levels_prob: Vec<(f64, u8)>,
         dim: usize,
         quantization_metric: QuantizationMetric,
@@ -109,6 +115,7 @@ impl HNSWIndex {
     ) -> Self {
         Self {
             root_vec,
+            pseudo_root_vec,
             levels_prob,
             dim,
             quantization_metric: RwLock::new(quantization_metric),
@@ -132,9 +139,19 @@ impl HNSWIndex {
         self.root_vec
     }
 
+    pub fn get_pseudo_root_vec(&self) -> Option<SharedLatestNode> {
+        self.pseudo_root_vec
+    }
+
     /// Returns FileIndex (offset) corresponding to the root node.
     pub fn root_vec_ptr_offset(&self) -> FileOffset {
         unsafe { &*self.root_vec }.file_offset
+    }
+
+    /// Returns FileIndex (offset) corresponding to the pseudo root node.
+    pub fn pseudo_root_vec_ptr_offset(&self) -> Option<FileOffset> {
+        let node = unsafe { self.get_pseudo_root_vec().map(|node| &*node) };
+        node.map(|n| n.file_offset)
     }
 }
 
@@ -145,6 +162,8 @@ impl IndexOps for HNSWIndex {
     type Data = HNSWIndexData;
 
     fn validate_embedding(&self, embedding: Self::IndexingInput) -> Result<(), WaCustomError> {
+        // @TODO(vineet): Add validation for metadata fields (if
+        // applicable)
         if embedding.1.len() == self.dim {
             Ok(())
         } else {
@@ -304,11 +323,13 @@ impl IndexOps for HNSWIndex {
 
     fn get_data(&self) -> Self::Data {
         let offset = self.root_vec_ptr_offset();
+        let offset_pseudo = self.pseudo_root_vec_ptr_offset();
         Self::Data {
             hnsw_params: self.hnsw_params.read().unwrap().clone(),
             levels_prob: self.levels_prob.clone(),
             dim: self.dim,
             root_vec_ptr_offset: offset,
+            pseudo_root_vec_ptr_offset: offset_pseudo,
             quantization_metric: self.quantization_metric.read().unwrap().clone(),
             distance_metric: *self.distance_metric.read().unwrap(),
             storage_type: *self.storage_type.read().unwrap(),
@@ -337,17 +358,23 @@ impl IndexOps for HNSWIndex {
 
         let hnsw_params_guard = self.hnsw_params.read().unwrap();
 
-        let query_filter_dims = query.1.map(|filter| {
+        let query_filter_dims = query.1.as_ref().map(|filter| {
             let metadata_schema = collection.meta.metadata_schema.as_ref().unwrap();
-            filter_encoded_dimensions(metadata_schema, &filter).unwrap()
+            filter_encoded_dimensions(metadata_schema, filter).unwrap()
         });
+
+        let root_node = if query.1.is_some() {
+            self.get_pseudo_root_vec().unwrap()
+        } else {
+            self.get_root_vec()
+        };
 
         let results = ann_search(
             config,
             self,
             vec_emb,
             query_filter_dims.as_ref(),
-            self.get_root_vec(),
+            root_node,
             HNSWLevel(hnsw_params_guard.num_layers),
             &hnsw_params_guard,
         )?;

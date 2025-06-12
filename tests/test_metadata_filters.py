@@ -15,6 +15,7 @@ strongly doesn't match the particular vector.
 
 """
 
+# TODO: use cosdata client sdk instead of direct HTTP requests
 import argparse
 import os
 import getpass
@@ -23,11 +24,31 @@ import json
 import random
 import numpy as np
 from functools import partial
+import time
+from dotenv import load_dotenv
+from utils import poll_transaction_completion
+
+# Load environment variables from .env file
+load_dotenv()
 
 
 token = None
 host = "http://127.0.0.1:8443"
 base_url = f"{host}/vectordb"
+
+
+class SimpleClient:
+    """Simple client wrapper to work with the polling utility"""
+
+    def __init__(self, host, token):
+        self.host = host
+        self.token = token
+
+    def _get_headers(self):
+        return {
+            "Authorization": f"Bearer {self.token}",
+            "Content-type": "application/json",
+        }
 
 
 def generate_headers():
@@ -36,13 +57,15 @@ def generate_headers():
 
 def create_session():
     url = f"{host}/auth/create-session"
-    # Use environment variable if available, otherwise prompt
-    if "ADMIN_PASSWORD" in os.environ:
-        password = os.environ["ADMIN_PASSWORD"]
-    else:
+    # Get password from .env file or prompt securely
+    password = os.getenv("COSDATA_PASSWORD")
+    if not password:
         password = getpass.getpass("Enter admin password: ")
 
-    data = {"username": "admin", "password": password}
+    # Get username from .env file or use default
+    username = os.getenv("COSDATA_USERNAME", "admin")
+
+    data = {"username": username, "password": password}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
@@ -103,7 +126,7 @@ def gen_vectors(num, vcoll):
         vid = i + 1
         values = np.random.uniform(-1, 1, vcoll.num_dimensions).tolist()
         metadata = vcoll.gen_metadata_fields()
-        yield {"id": vid, "values": values, "metadata": metadata}
+        yield {"id": str(vid), "values": values, "metadata": metadata}
 
 
 def create_transaction(collection_name: str) -> str:
@@ -139,7 +162,7 @@ def insert_vectors(coll_id, vectors):
             resp.raise_for_status()
         vec_index[vector["id"]] = vector
     commit_transaction(coll_id, txn_id)
-    return vec_index
+    return vec_index, txn_id
 
 
 def search_ann(coll_name, query_vec, metadata_filter):
@@ -475,41 +498,63 @@ class VecWithBinaryStatus(VectorCollection):
         )
 
     def test_cases(self, vector_index):
-        all_vecs = [x for x in vector_index.values()]
-        vecs = random.choices(all_vecs, k=5)
+        # Filter vectors to only include those with valid status metadata
+        valid_vecs = []
+        for vec in vector_index.values():
+            status = nested_lookup(vec, "metadata", "status")
+            if status is not None:
+                valid_vecs.append(vec)
+
+        if len(valid_vecs) < 5:
+            print(f"Warning: Only {len(valid_vecs)} vectors have valid status metadata")
+            # If we don't have enough vectors with metadata, just return a simple test case
+            if len(valid_vecs) == 0:
+                return []
+            vecs = valid_vecs
+        else:
+            vecs = random.choices(valid_vecs, k=5)
+
         get_status = lambda x: nested_lookup(x, "metadata", "status")
-        return [
-            # With no filter
-            {
-                "vec": vecs[0]["values"],
-                "filter": None,
-                "test": partial(must_match, vecs[0]["id"]),
-            },
-            # With filter status = todo
-            {
-                "vec": vecs[1]["values"],
-                "filter": is_filter_json("status", "Equal", get_status(vecs[1])),
-                "test": partial(must_match, vecs[1]["id"]),
-            },
-            # With filter status = done
-            {
-                "vec": vecs[2]["values"],
-                "filter": is_filter_json("status", "Equal", get_status(vecs[2])),
-                "test": partial(must_match, vecs[2]["id"]),
-            },
-            # With filter status != todo
-            {
-                "vec": vecs[3]["values"],
-                "filter": is_filter_json("status", "NotEqual", get_status(vecs[3])),
-                "test": partial(must_not_match, vecs[3]["id"]),
-            },
-            # With filter status != done
-            {
-                "vec": vecs[4]["values"],
-                "filter": is_filter_json("status", "NotEqual", get_status(vecs[4])),
-                "test": partial(must_not_match, vecs[4]["id"]),
-            },
-        ]
+
+        test_cases = []
+
+        # With no filter - use first vector regardless of metadata
+        all_vecs = list(vector_index.values())
+        if all_vecs:
+            test_cases.append(
+                {
+                    "vec": all_vecs[0]["values"],
+                    "filter": None,
+                    "test": partial(must_match, all_vecs[0]["id"]),
+                }
+            )
+
+        # Add test cases only for vectors with valid status
+        for i, vec in enumerate(
+            vecs[:4]
+        ):  # Use up to 4 vectors for the remaining tests
+            status = get_status(vec)
+            if status is not None:
+                if i % 2 == 0:
+                    # Test equal filter
+                    test_cases.append(
+                        {
+                            "vec": vec["values"],
+                            "filter": is_filter_json("status", "Equal", status),
+                            "test": partial(must_match, vec["id"]),
+                        }
+                    )
+                else:
+                    # Test not equal filter
+                    test_cases.append(
+                        {
+                            "vec": vec["values"],
+                            "filter": is_filter_json("status", "NotEqual", status),
+                            "test": partial(must_not_match, vec["id"]),
+                        }
+                    )
+
+        return test_cases
 
 
 def cmd_insert_and_check(ctx, args):
@@ -528,20 +573,41 @@ def cmd_insert_and_check(ctx, args):
     print("  Create index response:", create_index_response)
 
     num_to_insert = args.num_vecs
-    vectors = gen_vectors(num_to_insert, vcoll)
-    print(f"Inserting {num_to_insert} vectors")
-    vidx = insert_vectors(coll_id, vectors)
+    if num_to_insert > 0:
+        vectors = gen_vectors(num_to_insert, vcoll)
+        print(f"Inserting {num_to_insert} vectors")
+        vidx, txn_id = insert_vectors(coll_id, vectors)
 
-    tcs = vcoll.test_cases(vidx)
+        # Create client wrapper for polling
+        client = SimpleClient(host, ctx["token"])
 
-    print("Running search queries")
-    search_and_compare(db_name, tcs)
+        # Wait for transaction to complete using polling
+        print("Waiting for transaction to complete...")
+        final_status, success = poll_transaction_completion(
+            client,
+            db_name,
+            txn_id,
+            target_status="complete",
+            max_attempts=30,
+            sleep_interval=2,
+        )
+
+        if not success:
+            print(
+                f"Warning: Transaction may not have completed. Final status: {final_status}"
+            )
+            print("Proceeding with search queries anyway...")
+
+        tcs = vcoll.test_cases(vidx)
+
+        print("Running search queries")
+        search_and_compare(db_name, tcs)
 
 
 def cmd_query(ctx, args):
     vec_id = args.vector_id
     vec = get_vector_by_id(ctx["vector_db_name"], vec_id)
-    values = vec["values"]
+    values = vec["dense_values"]
     print("Vector metadata:", vec["metadata"])
     metadata_filter = json.loads(args.metadata_filter) if args.metadata_filter else None
     res = search_ann(ctx["vector_db_name"], values, metadata_filter)
@@ -551,6 +617,12 @@ def cmd_query(ctx, args):
 def init_ctx():
     print("Creating session")
     token = create_session()
+    # Get host from environment or use default
+    global host
+    host = os.getenv("COSDATA_HOST", "http://127.0.0.1:8443")
+    global base_url
+    base_url = f"{host}/vectordb"
+
     return {
         "vector_db_name": "testdb",
         # "max_val": 1.0

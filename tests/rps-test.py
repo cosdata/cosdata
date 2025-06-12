@@ -7,13 +7,19 @@ import urllib3
 import random
 import getpass
 import os
+from tqdm import tqdm
+from dotenv import load_dotenv
+from utils import poll_transaction_completion
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Suppress only the single InsecureRequestWarning from urllib3 needed for this script
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Define your dynamic variables
 token = None
-host = "http://127.0.0.1:8443"
+host = os.getenv("COSDATA_HOST", "http://127.0.0.1:8443")
 base_url = f"{host}/vectordb"
 
 
@@ -23,13 +29,14 @@ def generate_headers():
 
 def create_session():
     url = f"{host}/auth/create-session"
-    # Use environment variable if available, otherwise prompt
-    if "ADMIN_PASSWORD" in os.environ:
-        password = os.environ["ADMIN_PASSWORD"]
-    else:
+    # Get credentials from environment variables
+    username = os.getenv("COSDATA_USERNAME", "admin")
+    password = os.getenv("COSDATA_PASSWORD")
+
+    if not password:
         password = getpass.getpass("Enter admin password: ")
 
-    data = {"username": "admin", "password": password}
+    data = {"username": username, "password": password}
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
@@ -129,12 +136,9 @@ def upsert_in_transaction(collection_name, transaction_id, vectors):
         {"id": vector["id"], "dense_values": vector["values"]} for vector in vectors
     ]
     data = {"vectors": vectors}
-    print(f"Request URL: {url}")
-    print(f"Request Vectors Count: {len(vectors)}")
     response = requests.post(
         url, headers=generate_headers(), data=json.dumps(data), verify=False
     )
-    print(f"Response Status: {response.status_code}")
     if response.status_code not in [200, 204]:
         raise Exception(f"Failed to create vector: {response.status_code}")
 
@@ -259,6 +263,20 @@ def generate_vectors(
     return vectors
 
 
+def get_transaction_status(collection_name, transaction_id):
+    """Get the status of a transaction"""
+    url = (
+        f"{base_url}/collections/{collection_name}/transactions/{transaction_id}/status"
+    )
+    response = requests.get(url, headers=generate_headers(), verify=False)
+    if response.status_code == 200:
+        result = response.json()
+        return result.get("status", "unknown")
+    else:
+        print(f"Failed to get transaction status: {response.status_code}")
+        return "unknown"
+
+
 if __name__ == "__main__":
     # Create database
     vector_db_name = "testdb"
@@ -285,9 +303,9 @@ if __name__ == "__main__":
     print("Create Collection(DB) Response:", create_collection_response)
     create_explicit_index(vector_db_name)
 
-    vectors = generate_vectors(
-        txn_count, batch_count, batch_size, dimensions, perturbation_degree
-    )
+    # Simplify vector generation - just create them as needed
+    total_vectors = txn_count * batch_count * batch_size
+    print(f"Will generate and process {total_vectors} vectors total")
 
     start_time = time.time()
 
@@ -300,30 +318,81 @@ if __name__ == "__main__":
             print(f"Created transaction: {transaction_id}")
 
             # Process vectors concurrently
+            print(
+                f"Processing transaction {req_ct + 1}/{txn_count} with {batch_count} batches of {batch_size} vectors each"
+            )
+
             with ThreadPoolExecutor(max_workers=64) as executor:
                 futures = []
-                for base_idx in range(batch_count):
-                    req_start = req_ct * batch_count * batch_size
-                    batch_start = req_start + base_idx * batch_size
-                    batch = vectors[batch_start : batch_start + batch_size]
-                    futures.append(
-                        executor.submit(
-                            upsert_in_transaction, vector_db_name, transaction_id, batch
-                        )
-                    )
 
-                # Collect results
-                for future in as_completed(futures):
-                    try:
-                        future.result()
-                    except Exception as e:
-                        print(f"Error in future: {e}")
+                # Submit all batches with progress bar
+                with tqdm(
+                    total=batch_count, desc=f"Submitting batches (txn {req_ct + 1})"
+                ) as pbar:
+                    for base_idx in range(batch_count):
+                        # Generate batch of vectors for this specific batch
+                        batch_start_id = (
+                            req_ct * batch_count * batch_size + base_idx * batch_size
+                        )
+                        batch_vectors = [
+                            generate_random_vector_with_id(batch_start_id + i, dimensions)
+                            for i in range(batch_size)
+                        ]
+
+                        futures.append(
+                            executor.submit(
+                                upsert_in_transaction,
+                                vector_db_name,
+                                transaction_id,
+                                batch_vectors,
+                            )
+                        )
+                        pbar.update(1)
+
+                # Collect results with progress bar
+                with tqdm(
+                    total=len(futures), desc=f"Processing batches (txn {req_ct + 1})"
+                ) as pbar:
+                    for future in as_completed(futures):
+                        try:
+                            future.result()
+                            pbar.update(1)
+                        except Exception as e:
+                            print(f"Error in future: {e}")
+                            pbar.update(1)
+
+            print(f"All batches completed for transaction {req_ct + 1}. Committing...")
 
             # Commit the transaction after all vectors are inserted
             commit_response = commit_transaction(vector_db_name, transaction_id)
             print(f"Committed transaction {transaction_id}: {commit_response}")
+
+            # Wait for transaction to complete processing using utility function
+            print(f"Waiting for transaction {transaction_id} to complete...")
+            
+            # Create a mock client object with required attributes
+            class MockClient:
+                def __init__(self, host, token):
+                    self.host = host
+                    self.token = token
+                
+                def _get_headers(self):
+                    return {"Authorization": f"Bearer {self.token}", "Content-type": "application/json"}
+            
+            mock_client = MockClient(host, token)
+            final_status, success = poll_transaction_completion(
+                mock_client, vector_db_name, transaction_id,
+                target_status='complete',
+                max_attempts=60,
+                sleep_interval=5
+            )
+
+            if not success:
+                print(
+                    f"Warning: Transaction {transaction_id} may not have completed within 60 attempts. Final status: {final_status}"
+                )
+
             transaction_id = None
-            # time.sleep(10)
 
         except Exception as e:
             print(f"Error in transaction: {e}")
@@ -343,33 +412,45 @@ if __name__ == "__main__":
     # Print elapsed time
     print(f"Elapsed time: {elapsed_time} seconds")
 
-    query_vectors = random.sample(vectors, query_batch_count * query_batch_size)
+    # Generate query vectors for RPS testing
+    print("Generating query vectors for RPS testing...")
+    query_vectors = []
+    
+    with tqdm(total=query_batch_count * query_batch_size, desc="Generating query vectors") as pbar:
+        for i in range(query_batch_count * query_batch_size):
+            # Generate random base vector and perturb it
+            base_vector = generate_random_vector_with_id(f"query_{i}", dimensions)
+            perturbed = perturb_vector(base_vector, perturbation_degree)
+            query_vectors.append(perturbed["values"])
+            pbar.update(1)
 
-    for i in range(len(query_vectors)):
-        query_vectors[i] = perturb_vector(query_vectors[i], perturbation_degree)[
-            "values"
-        ]
-
+    print(f"Starting RPS test with {len(query_vectors)} query vectors...")
     start_time = time.time()
 
     with ThreadPoolExecutor(max_workers=32) as executor:
         futures = []
-        for batch_idx in range(query_batch_count):
-            batch = query_vectors[
-                batch_idx * query_batch_size : batch_idx * query_batch_size
-                + query_batch_size
-            ]
-            futures.append(executor.submit(batch_ann_search, vector_db_name, batch))
+        
+        # Submit batch searches with progress bar
+        with tqdm(total=query_batch_count, desc="Submitting search batches") as pbar:
+            for batch_idx in range(query_batch_count):
+                batch = query_vectors[
+                    batch_idx * query_batch_size : (batch_idx + 1) * query_batch_size
+                ]
+                futures.append(executor.submit(batch_ann_search, vector_db_name, batch))
+                pbar.update(1)
 
-        for future in as_completed(futures):
-            try:
-                future.result()
-            except Exception as e:
-                print(f"Error in search: {e}")
+        # Collect search results with progress bar
+        with tqdm(total=len(futures), desc="Processing search results") as pbar:
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                    pbar.update(1)
+                except Exception as e:
+                    print(f"Error in search: {e}")
+                    pbar.update(1)
 
     end_time = time.time()
-
     elapsed_time = end_time - start_time
 
     print("RPS:", len(query_vectors) / elapsed_time)
-    print(f"Elapsed time: {elapsed_time} seconds")
+    print(f"Search elapsed time: {elapsed_time} seconds")

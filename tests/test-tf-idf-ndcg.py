@@ -8,20 +8,22 @@ from beir.retrieval.evaluation import EvaluateRetrieval
 import os
 import urllib3
 import getpass
-import requests
 import json
 from typing import List, Tuple, Dict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-# import subprocess
-# import signal
+from dotenv import load_dotenv
+from utils import poll_transaction_completion
+from cosdata import Client
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Suppress only the single InsecureRequestWarning from urllib3 needed for this script
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Define your dynamic variables
-TOKEN = None
-HOST = "http://127.0.0.1:8443"
-BASE_URL = f"{HOST}/vectordb"
+client = None
+host = os.getenv("COSDATA_HOST", "http://127.0.0.1:8443")
 
 type Document = Tuple[str, str]
 
@@ -114,95 +116,58 @@ def merge_cqa_dupstack(data_path: str, verbose: bool = False):
                         f.write(f"{qid}\t{cid}\t{score}\n")
 
 
-def generate_headers():
-    return {"Authorization": f"Bearer {TOKEN}", "Content-type": "application/json"}
-
-
 def create_session():
-    url = f"{HOST}/auth/create-session"
-    if "ADMIN_PASSWORD" in os.environ:
-        password = os.environ["ADMIN_PASSWORD"]
-    else:
+    """Initialize the cosdata client"""
+    # Use environment variable from .env file if available, otherwise prompt
+    password = os.getenv("COSDATA_PASSWORD")
+    if not password:
         password = getpass.getpass("Enter admin password: ")
 
-    data = {"username": "admin", "password": password}
-    response = requests.post(
-        url, headers=generate_headers(), data=json.dumps(data), verify=False
-    )
-    session = response.json()
-    global TOKEN
-    TOKEN = session["access_token"]
-    return TOKEN
+    username = os.getenv("COSDATA_USERNAME", "admin")
+
+    global client
+    client = Client(host=host, username=username, password=password, verify=False)
+    return client
 
 
 def create_db(name: str, description: str | None = None):
-    url = f"{BASE_URL}/collections"
-    data = {
-        "name": name,
-        "description": description,
-        "dense_vector": {
-            "enabled": False,
-            "dimension": 1,
-        },
-        "sparse_vector": {"enabled": False},
-        "tf_idf_options": {"enabled": True},
-        "metadata_schema": None,
-        "config": {"max_vectors": None, "replication_factor": None},
-    }
-    response = requests.post(
-        url, headers=generate_headers(), data=json.dumps(data), verify=False
+    """Create collection using cosdata client"""
+    collection = client.create_collection(
+        name=name,
+        description=description,
+        dimension=1,  # dummy dimension for TF-IDF only
+        tf_idf_options={"enabled": True},
     )
-    return response.json()
+    return collection
 
 
-def create_index(name: str, k1: float, b: float):
-    data = {
-        "name": name,
-        "sample_threshold": 1000,
-        "k1": k1,
-        "b": b,
-    }
-    response = requests.post(
-        f"{BASE_URL}/collections/{name}/indexes/tf-idf",
-        headers=generate_headers(),
-        data=json.dumps(data),
-        verify=False,
+def create_index(collection, k1: float, b: float):
+    """Create TF-IDF index using cosdata client"""
+    index = collection.create_tf_idf_index(
+        name=collection.name, sample_threshold=1000, k1=k1, b=b
     )
-    return response.json()
+    return index
 
 
-def create_transaction(collection_name: str) -> str:
-    url = f"{BASE_URL}/collections/{collection_name}/transactions"
-    response = requests.post(url, headers=generate_headers(), verify=False)
-    result = response.json()
-    return result["transaction_id"]
+def create_transaction(collection):
+    """Create transaction using cosdata client"""
+    return collection.transaction()
 
 
-def upsert_vectors(collection_name: str, txn_id: str, documents: List[Document]):
-    documents = [{"id": document[0], "text": document[1]} for document in documents]
-
-    url = f"{BASE_URL}/collections/{collection_name}/transactions/{txn_id}/upsert"
-    data = {"vectors": documents}
-    response = requests.post(
-        url, headers=generate_headers(), data=json.dumps(data), verify=False
-    )
-    if response.status_code not in [200, 204]:
-        raise Exception(
-            f"Failed to create vector: {response.status_code} - {response.text}"
-        )
+def upsert_vectors(collection, txn, documents: List[Document]):
+    """Upsert vectors to the collection using transaction"""
+    # Convert documents to the format expected by the client
+    vectors = [{"id": doc[0], "text": doc[1]} for doc in documents]
+    txn.batch_upsert_vectors(vectors)
 
 
-def index(
-    collection_name: str, txn_id: str, documents: List[Document], batch_size: int = 100
-) -> float:
+def index(collection, txn, documents: List[Document], batch_size: int = 100) -> float:
     start = time.time()
     with ThreadPoolExecutor(max_workers=32) as executor:
         futures = []
         for batch_start in range(0, len(documents), batch_size):
             batch = documents[batch_start : batch_start + batch_size]
-            futures.append(
-                executor.submit(upsert_vectors, collection_name, txn_id, batch)
-            )
+            futures.append(executor.submit(upsert_vectors, collection, txn, batch))
 
         for i, future in enumerate(tqdm(as_completed(futures), total=len(futures))):
             try:
@@ -213,52 +178,42 @@ def index(
     return end - start
 
 
-def commit_transaction(collection_name: str, txn_id: str):
-    url = f"{BASE_URL}/collections/{collection_name}/transactions/{txn_id}/commit"
-    response = requests.post(url, headers=generate_headers(), verify=False)
-    if response.status_code not in [200, 204]:
-        print(f"Error response: {response.text}")
-        raise Exception(f"Failed to commit transaction: {response.status_code}")
+def commit_transaction(txn):
+    """Commit transaction using cosdata client"""
+    txn.commit()
+    return txn.transaction_id
 
 
-def search_document(
-    collection_name: str, query: str, top_k: int
-) -> List[Tuple[str, float]]:
-    url = f"{BASE_URL}/collections/{collection_name}/search/tf-idf"
-    data = {
-        "query": query,
-        "top_k": top_k,
-    }
-    response = requests.post(
-        url, headers=generate_headers(), data=json.dumps(data), verify=False
-    )
-    return [(result["id"], result["score"]) for result in response.json()["results"]]
+def search_document(collection, query: str, top_k: int) -> List[Tuple[str, float]]:
+    """Search using TF-IDF with cosdata client"""
+    results = collection.search.text(query_text=query, top_k=top_k)
+    return [(result["id"], result["score"]) for result in results["results"]]
 
 
 def search_documents(
-    collection_name: str,
+    collection,
     queries: List[Tuple[str, str]],
     top_k: int,
 ) -> Dict[str, Dict[str, float]]:
     results = {}
     for query in tqdm(queries, desc="Searching vectors"):
         qid = query[0]
-        query_results = search_document(collection_name, query[1], top_k)
+        query_results = search_document(collection, query[1], top_k)
         results[qid] = {doc_id: score for doc_id, score in query_results}
     return results
 
 
-def batch_search_documents(collection_name: str, queries: List[str], top_k: int):
-    url = f"{BASE_URL}/collections/{collection_name}/search/batch-tf-idf"
-    data = {
-        "queries": queries,
-        "top_k": top_k,
-    }
-    response = requests.post(
-        url, headers=generate_headers(), data=json.dumps(data), verify=False
-    )
-    if response.status_code not in [200, 204]:
-        print(f"Error response ({response.status_code}): {response.text}")
+def batch_search_documents(collection, queries: List[str], top_k: int):
+    """Batch search using individual requests since batch endpoint pattern"""
+    results = []
+    for query_text in queries:
+        try:
+            result = collection.search.text(query_text=query_text, top_k=top_k)
+            results.append(result)
+        except Exception as e:
+            print(f"Individual search failed for query: {e}")
+            results.append({"results": []})
+    return results
 
 
 def preprocess_corpus(
@@ -268,7 +223,7 @@ def preprocess_corpus(
 
 
 def run_qps_test(
-    collection_name: str, qps_queries: List[str], batch_size: int, top_k: int
+    collection, qps_queries: List[str], batch_size: int, top_k: int
 ) -> Tuple[float, float, int, int, int]:
     start_time = time.perf_counter()
     results = []
@@ -279,7 +234,7 @@ def run_qps_test(
             batch = qps_queries[i : i + batch_size]
 
             futures.append(
-                executor.submit(batch_search_documents, collection_name, batch, top_k)
+                executor.submit(batch_search_documents, collection, batch, top_k)
             )
 
         for future in as_completed(futures):
@@ -307,9 +262,7 @@ def run_qps_test(
     return (qps, duration, successful_queries, failed_queries, total_queries)
 
 
-def run_latency_test(
-    collection_name: str, queries: List[str], top_k: int
-) -> Tuple[float, float]:
+def run_latency_test(collection, queries: List[str], top_k: int) -> Tuple[float, float]:
     latencies: List[float] = []
 
     with ThreadPoolExecutor(max_workers=16) as executor:
@@ -317,7 +270,7 @@ def run_latency_test(
 
         def timed_query(query: str) -> Tuple[List[Tuple[int, float]], float]:
             start = time.perf_counter()
-            response = search_document(collection_name, query, top_k)
+            response = search_document(collection, query, top_k)
             end = time.perf_counter()
             latency = (end - start) * 1000.0
             return response, latency
@@ -329,7 +282,11 @@ def run_latency_test(
                 _, latency = future.result()
                 latencies.append(latency)
             except Exception as e:
-                print(f"Lantency test query failed: {e}")
+                print(f"Latency test query failed: {e}")
+
+    if not latencies:
+        print("No successful latency measurements")
+        return 0.0, 0.0
 
     latencies.sort()
     p50_latency = latencies[int(len(latencies) * 0.5)]
@@ -348,7 +305,7 @@ def main(
     b: float = 0.75,
     batch_size: int = 100,
 ):
-    save_dir = f"sparse_idf_dataset_{dataset}"
+    save_dir = f"datasets/sparse_idf_dataset_{dataset}"
     collection_name = f"sparse_idf_{dataset}_db"
     #### Download dataset and unzip the dataset
     base_url = (
@@ -384,36 +341,73 @@ def main(
 
     vectors = preprocess_corpus(corpus)
 
+    # Initialize client session
     create_session()
-    create_db(collection_name)
-    create_index(collection_name, k1, b)
-    txn_id = create_transaction(collection_name)
-    indexing_time = index(collection_name, txn_id, vectors)
-    commit_transaction(collection_name, txn_id)
-    results = search_documents(collection_name, queries, top_k)
-    ndcg, _map, recall, _precision = EvaluateRetrieval.evaluate(qrels, results, [1, 10])
 
-    print("NDCG@10:", ndcg["NDCG@10"])
-    print("Recall@10:", recall["Recall@10"])
+    # Create collection and index
+    collection = create_db(collection_name)
+    create_index(collection, k1, b)
 
-    qps_queries = [v for (_, v) in qps_queries.items()][:10_000]
-    qps, _, _, _, _ = run_qps_test(collection_name, qps_queries, batch_size, top_k)
+    # Create transaction and index vectors
+    print("Creating transaction and indexing vectors...")
+    txn_id = None
+    with collection.transaction() as txn:
+        indexing_time = index(collection, txn, vectors)
+        txn_id = txn.transaction_id
 
-    p50_latency, p95_latency = run_latency_test(
-        collection_name, qps_queries[: max(len(qps_queries) // 10, 1000)], top_k
+    print("Waiting for TF-IDF indexing to complete...")
+    final_status, success = poll_transaction_completion(
+        client,
+        collection_name,
+        txn_id,
+        target_status="complete",
+        max_attempts=30,
+        sleep_interval=2,
     )
 
-    return {
-        "dataset": dataset,
-        "corpus_size": num_docs,
-        "queries_size": num_queries,
-        "insertion_time": indexing_time,
-        "recall": recall["Recall@10"],
-        "qps": qps,
-        "ndcg": ndcg["NDCG@10"],
-        "p50_latency": p50_latency,
-        "p95_latency": p95_latency,
-    }
+    if not success:
+        print(
+            f"TF-IDF indexing did not complete successfully. Final status: {final_status}"
+        )
+        return None
+
+    print("TF-IDF indexing completed, starting queries...")
+
+    try:
+        results = search_documents(collection, queries, top_k)
+        ndcg, _map, recall, _precision = EvaluateRetrieval.evaluate(
+            qrels, results, [1, 10]
+        )
+
+        print("NDCG@10:", ndcg["NDCG@10"])
+        print("Recall@10:", recall["Recall@10"])
+
+        qps_queries = [v for (_, v) in qps_queries.items()][:10_000]
+        qps, _, _, _, _ = run_qps_test(collection, qps_queries, batch_size, top_k)
+
+        p50_latency, p95_latency = run_latency_test(
+            collection, qps_queries[: max(len(qps_queries) // 10, 1000)], top_k
+        )
+
+        return {
+            "dataset": dataset,
+            "corpus_size": num_docs,
+            "queries_size": num_queries,
+            "insertion_time": indexing_time,
+            "recall": recall["Recall@10"],
+            "qps": qps,
+            "ndcg": ndcg["NDCG@10"],
+            "p50_latency": p50_latency,
+            "p95_latency": p95_latency,
+        }
+
+    finally:
+        # Cleanup: delete the collection
+        try:
+            collection.delete()
+            print("Test collection deleted")
+        except Exception as e:
+            print(f"Error during cleanup: {e}")
 
 
 # def start_server():

@@ -6,62 +6,72 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from cosdata import Client
 import json
 import getpass
+import os
+from dotenv import load_dotenv
+from utils import poll_transaction_completion
+
+# Load environment variables from .env file
+load_dotenv()
+
 
 def format_vector(vector):
     """Format a vector for better readability"""
     # Handle Vector class instances
-    if hasattr(vector, 'dense_values'):
+    if hasattr(vector, "dense_values"):
         dense_values = vector.dense_values
         if dense_values:
             # Show first 5 dimensions and total count
             preview = dense_values[:5]
             formatted = {
                 "id": vector.id,
-                "dense_values": f"{preview}... (total: {len(dense_values)} dimensions)"
+                "dense_values": f"{preview}... (total: {len(dense_values)} dimensions)",
             }
         else:
-            formatted = {
-                "id": vector.id,
-                "dense_values": "[]"
-            }
+            formatted = {"id": vector.id, "dense_values": "[]"}
         return json.dumps(formatted, indent=2)
     # Handle dictionary format
     elif isinstance(vector, dict):
-        dense_values = vector.get('dense_values', [])
+        dense_values = vector.get("dense_values", [])
         if dense_values:
             # Show first 5 dimensions and total count
             preview = dense_values[:5]
             formatted = {
                 "id": vector.get("id", "N/A"),
-                "dense_values": f"{preview}... (total: {len(dense_values)} dimensions)"
+                "dense_values": f"{preview}... (total: {len(dense_values)} dimensions)",
             }
         else:
-            formatted = {
-                "id": vector.get("id", "N/A"),
-                "dense_values": "[]"
-            }
+            formatted = {"id": vector.get("id", "N/A"), "dense_values": "[]"}
         return json.dumps(formatted, indent=2)
     return str(vector)
+
 
 def generate_random_vector(id: int, dimension: int) -> dict:
     values = np.random.uniform(-1, 1, dimension).tolist()
     return {
         "id": f"vec_{id}",
         "dense_values": values,
-        "document_id": f"doc_{id//10}"  # Group vectors into documents
+        "document_id": f"doc_{id // 10}",  # Group vectors into documents
     }
 
-def generate_perturbation(base_vector: dict, id: int, perturbation_degree: float) -> dict:
-    perturbation = np.random.uniform(-perturbation_degree, perturbation_degree, len(base_vector["dense_values"]))
+
+def generate_perturbation(
+    base_vector: dict, id: int, perturbation_degree: float
+) -> dict:
+    perturbation = np.random.uniform(
+        -perturbation_degree, perturbation_degree, len(base_vector["dense_values"])
+    )
     perturbed_values = np.array(base_vector["dense_values"]) + perturbation
     clamped_values = np.clip(perturbed_values, -1, 1)
     return {
         "id": f"vec_{id}",
         "dense_values": clamped_values.tolist(),
-        "document_id": f"doc_{id//10}"  # Group vectors into documents
+        "document_id": f"doc_{id // 10}",  # Group vectors into documents
     }
 
-def generate_batch(base_idx: int, batch_size: int, dimensions: int, perturbation_degree: float) -> list:
+
+def generate_batch(
+    base_idx: int, batch_size: int, dimensions: int, perturbation_degree: float
+) -> list:
     """Generate a batch of vectors"""
     batch_vectors = []
     base_vector = generate_random_vector(base_idx * batch_size, dimensions)
@@ -69,25 +79,23 @@ def generate_batch(base_idx: int, batch_size: int, dimensions: int, perturbation
 
     for i in range(batch_size - 1):
         perturbed_vector = generate_perturbation(
-            base_vector,
-            base_idx * batch_size + i + 1,
-            perturbation_degree
+            base_vector, base_idx * batch_size + i + 1, perturbation_degree
         )
         batch_vectors.append(perturbed_vector)
-    
+
     return batch_vectors
 
+
 def test_performance():
-    # Get password securely
-    password = getpass.getpass("Enter your database password: ")
-    
+    # Get password from .env file or prompt securely
+    password = os.getenv("COSDATA_PASSWORD")
+    if not password:
+        password = getpass.getpass("Enter your database password: ")
+
     # Initialize client
-    client = Client(
-        host="http://127.0.0.1:8443",
-        username="admin",
-        password=password,
-        verify=False
-    )
+    host = os.getenv("COSDATA_HOST", "http://127.0.0.1:8443")
+    username = os.getenv("COSDATA_USERNAME", "admin")
+    client = Client(host=host, username=username, password=password, verify=False)
 
     # Test parameters
     collection_name = "performance_test"
@@ -103,7 +111,7 @@ def test_performance():
         collection = client.create_collection(
             name=collection_name,
             dimension=dimensions,
-            description="Performance test collection"
+            description="Performance test collection",
         )
 
         # Create index
@@ -115,7 +123,7 @@ def test_performance():
             ef_construction=512,
             ef_search=256,
             neighbors_count=32,
-            level_0_neighbors_count=64
+            level_0_neighbors_count=64,
         )
 
         start_time = time.time()
@@ -127,7 +135,13 @@ def test_performance():
             futures = []
             for base_idx in range(batch_count):
                 futures.append(
-                    executor.submit(generate_batch, base_idx, batch_size, dimensions, perturbation_degree)
+                    executor.submit(
+                        generate_batch,
+                        base_idx,
+                        batch_size,
+                        dimensions,
+                        perturbation_degree,
+                    )
                 )
 
             # Collect all generated vectors
@@ -137,9 +151,26 @@ def test_performance():
 
         # Insert vectors in a single transaction
         print("Inserting vectors...")
+        txn_id = None
         with collection.transaction() as txn:
             txn.batch_upsert_vectors(test_vectors)
+            txn_id = txn.transaction_id
         print("Vectors inserted successfully")
+
+        print("Waiting for transaction to complete")
+        final_status, success = poll_transaction_completion(
+            client,
+            collection_name,
+            txn_id,
+            target_status="complete",
+            max_attempts=10,
+            sleep_interval=2,
+        )
+
+        if not success:
+            print(
+                f"Transaction did not complete successfully. Final status: {final_status}"
+            )
 
         end_time = time.time()
         elapsed_time = end_time - start_time
@@ -150,13 +181,11 @@ def test_performance():
         search_start_time = time.time()
         query_vector = test_vectors[0]["dense_values"]
         results = collection.search.dense(
-            query_vector=query_vector,
-            top_k=5,
-            return_raw_text=True
+            query_vector=query_vector, top_k=5, return_raw_text=True
         )
         search_end_time = time.time()
         print(f"Search time: {search_end_time - search_start_time:.4f} seconds")
-        
+
         print("\nSearch results:")
         for i, result in enumerate(results.get("results", []), 1):
             # Fetch the full vector for each result
@@ -174,6 +203,7 @@ def test_performance():
             print("Test collection deleted")
         except Exception as e:
             print(f"Error during cleanup: {e}")
+
 
 if __name__ == "__main__":
     test_performance()
