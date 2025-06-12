@@ -6,7 +6,10 @@ use super::error::VersionError;
 use crate::{
     app_context::AppContext,
     models::{
-        common::WaCustomError, meta_persist::retrieve_current_version, types::MetaDb,
+        collection_transaction::TransactionStatus,
+        common::WaCustomError, 
+        meta_persist::retrieve_current_version, 
+        types::MetaDb,
         versioning::VersionControl,
     },
 };
@@ -24,11 +27,40 @@ pub(crate) async fn list_versions(
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
     let current_version =
         retrieve_current_version(&lmdb).map_err(|e| VersionError::DatabaseError(e.to_string()))?;
+    
+    // Get the collection to access transaction status map
+    let collection = ctx
+        .ain_env
+        .collections_map
+        .get_collection(collection_id)
+        .ok_or_else(|| VersionError::DatabaseError("Collection not found".to_string()))?;
+    
     let versions = versions
         .into_iter()
-        .map(|meta| VersionMetadata {
-            version_number: meta.version,
-            vector_count: 0,
+        .map(|meta| {
+            // Get vector count from transaction status for this version
+            let vector_count = if let Some(status) = collection
+                .transaction_status_map
+                .get_latest(&meta.version)
+            {
+                let status = status.read();
+                match &*status {
+                    TransactionStatus::InProgress { progress, .. } => {
+                        progress.records_indexed as u64
+                    }
+                    TransactionStatus::Complete { summary, .. } => {
+                        summary.total_records_indexed as u64
+                    }
+                    TransactionStatus::NotStarted { .. } => 0,
+                }
+            } else {
+                0
+            };
+            
+            VersionMetadata {
+                version_number: meta.version,
+                vector_count,
+            }
         })
         .collect::<Vec<VersionMetadata>>();
     Ok(VersionListResponse {
@@ -49,9 +81,35 @@ pub(crate) async fn get_current_version(
         .get_current_version()
         .map_err(|e| VersionError::DatabaseError(e.to_string()))?;
 
+    // Get the collection to access transaction status map
+    let collection = ctx
+        .ain_env
+        .collections_map
+        .get_collection(collection_id)
+        .ok_or_else(|| VersionError::DatabaseError("Collection not found".to_string()))?;
+    
+    // Get vector count from transaction status for the current version
+    let vector_count = if let Some(status) = collection
+        .transaction_status_map
+        .get_latest(&version_number)
+    {
+        let status = status.read();
+        match &*status {
+            TransactionStatus::InProgress { progress, .. } => {
+                progress.records_indexed as u64
+            }
+            TransactionStatus::Complete { summary, .. } => {
+                summary.total_records_indexed as u64
+            }
+            TransactionStatus::NotStarted { .. } => 0,
+        }
+    } else {
+        0
+    };
+
     Ok(CurrentVersionResponse {
         version_number,
-        vector_count: 0,
+        vector_count,
     })
 }
 
