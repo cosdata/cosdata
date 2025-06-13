@@ -5,7 +5,7 @@ use crate::app_context::AppContext;
 use super::{
     dtos::{
         CreateCollectionDto, CreateCollectionDtoResponse, GetCollectionsDto,
-        GetCollectionsResponseDto,
+        GetCollectionsResponseDto, CollectionWithVectorCountsDto,
     },
     service,
 };
@@ -70,7 +70,7 @@ pub(crate) async fn get_collections(
         ("collection_id" = String, Path, description = "Collection identifier")
     ),
     responses(
-        (status = 200, description = "Collection information"),
+        (status = 200, description = "Collection information with vector counts", body = CollectionWithVectorCountsDto),
         (status = 400, description = "Collection not found"),
         (status = 500, description = "Server error")
     ),
@@ -80,8 +80,8 @@ pub(crate) async fn get_collection_by_id(
     collection_id: web::Path<String>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse> {
-    let collection = service::get_collection_by_id(ctx.into_inner(), &collection_id).await?;
-    Ok(HttpResponse::Ok().json(&collection.meta))
+    let collection_with_counts = service::get_collection_by_id(ctx.into_inner(), &collection_id).await?;
+    Ok(HttpResponse::Ok().json(collection_with_counts))
 }
 
 /// Get collection indexing status

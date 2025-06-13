@@ -8,7 +8,7 @@ use crate::{
 use super::{
     dtos::{
         CreateCollectionDto, CreateCollectionDtoResponse, GetCollectionsDto,
-        GetCollectionsResponseDto,
+        GetCollectionsResponseDto, CollectionWithVectorCountsDto,
     },
     error::CollectionsError,
     repo,
@@ -35,15 +35,31 @@ pub(crate) async fn get_collections(
     Ok(collections)
 }
 
-/// gets a collection by its id
+/// gets a collection with vector counts by its id
 ///
 /// currently collection_id = collection.name
 pub(crate) async fn get_collection_by_id(
     ctx: Arc<AppContext>,
     collection_id: &str,
-) -> Result<Arc<Collection>, CollectionsError> {
+) -> Result<CollectionWithVectorCountsDto, CollectionsError> {
     let collection = repo::get_collection_by_name(ctx, collection_id).await?;
-    Ok(collection)
+
+    // Get indexed vectors count from indexing status 
+    let indexing_status = collection
+        .indexing_status()
+        .map_err(CollectionsError::WaCustomError)?;
+    let vectors_count = indexing_status.status_summary.total_records_indexed_completed;
+
+    Ok(CollectionWithVectorCountsDto {
+        name: collection.meta.name.clone(),
+        description: collection.meta.description.clone(),
+        dense_vector: collection.meta.dense_vector.clone(),
+        sparse_vector: collection.meta.sparse_vector.clone(),
+        tf_idf_options: collection.meta.tf_idf_options.clone(),
+        config: collection.meta.config.clone(),
+        store_raw_text: collection.meta.store_raw_text,
+        vectors_count,
+    })
 }
 
 pub(crate) async fn get_collection_indexing_status(

@@ -144,3 +144,15 @@ mod tests {
         assert_eq!(vec!["myfield1", "myfield2"], cond.field_names);
     }
 }
+
+#[derive(Serialize, Debug, ToSchema)]
+pub(crate) struct CollectionWithVectorCountsDto {
+    pub name: String,
+    pub description: Option<String>,
+    pub dense_vector: DenseVectorOptions,
+    pub sparse_vector: SparseVectorOptions,
+    pub tf_idf_options: TFIDFOptions,
+    pub config: CollectionConfig,
+    pub store_raw_text: bool,
+    pub vectors_count: u64,
+}
