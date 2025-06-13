@@ -13,8 +13,7 @@ use crate::{
 
 use super::{
     dtos::{
-        CollectionSummaryDto, CreateCollectionDto, GetCollectionsDto, GetCollectionsResponseDto,
-        ListCollectionsResponseDto,
+        CreateCollectionDto, GetCollectionsDto, GetCollectionsResponseDto,
     },
     error::CollectionsError,
 };
@@ -160,23 +159,4 @@ pub(crate) async fn delete_collection_by_name(
         .map_err(CollectionsError::WaCustomError)?;
 
     Ok(collection)
-}
-
-pub(crate) async fn list_collections(
-    ctx: Arc<AppContext>,
-) -> Result<ListCollectionsResponseDto, CollectionsError> {
-    // Iterate over collections stored in the AppContext map
-    let summaries: Vec<CollectionSummaryDto> = ctx
-        .ain_env
-        .collections_map
-        .iter_collections()
-        .map(|collection_arc| CollectionSummaryDto {
-            name: collection_arc.meta.name.clone(),
-            description: collection_arc.meta.description.clone(),
-        })
-        .collect();
-
-    Ok(ListCollectionsResponseDto {
-        collections: summaries,
-    })
 }

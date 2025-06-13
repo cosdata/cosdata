@@ -51,8 +51,7 @@ pub struct AuthApiDoc;
         crate::api::vectordb::collections::controller::delete_collection_by_id,
         crate::api::vectordb::collections::controller::load_collection,
         crate::api::vectordb::collections::controller::unload_collection,
-        crate::api::vectordb::collections::controller::get_loaded_collections,
-        crate::api::vectordb::collections::controller::list_collections
+        crate::api::vectordb::collections::controller::get_loaded_collections
     ),
     components(
         schemas(
@@ -60,8 +59,6 @@ pub struct AuthApiDoc;
             crate::api::vectordb::collections::dtos::CreateCollectionDtoResponse,
             crate::api::vectordb::collections::dtos::GetCollectionsDto,
             crate::api::vectordb::collections::dtos::GetCollectionsResponseDto,
-            crate::api::vectordb::collections::dtos::ListCollectionsResponseDto,
-            crate::api::vectordb::collections::dtos::CollectionSummaryDto,
             crate::api::vectordb::collections::dtos::MetadataField,
             crate::api::vectordb::collections::dtos::MetadataSchemaParam,
             crate::api::vectordb::collections::dtos::SupportedCondition,
@@ -261,7 +258,6 @@ pub struct SyncTransactionsApiDoc;
         crate::api::vectordb::collections::controller::load_collection,
         crate::api::vectordb::collections::controller::unload_collection,
         crate::api::vectordb::collections::controller::get_loaded_collections,
-        crate::api::vectordb::collections::controller::list_collections,
         crate::api::vectordb::indexes::controller::create_dense_index,
         crate::api::vectordb::indexes::controller::create_sparse_index,
         crate::api::vectordb::indexes::controller::create_tf_idf_index,
@@ -300,8 +296,6 @@ pub struct SyncTransactionsApiDoc;
             crate::api::vectordb::collections::dtos::CreateCollectionDtoResponse,
             crate::api::vectordb::collections::dtos::GetCollectionsDto,
             crate::api::vectordb::collections::dtos::GetCollectionsResponseDto,
-            crate::api::vectordb::collections::dtos::ListCollectionsResponseDto,
-            crate::api::vectordb::collections::dtos::CollectionSummaryDto,
             crate::api::vectordb::collections::dtos::MetadataField,
             crate::api::vectordb::collections::dtos::MetadataSchemaParam,
             crate::api::vectordb::collections::dtos::SupportedCondition,

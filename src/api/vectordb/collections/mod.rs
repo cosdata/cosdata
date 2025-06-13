@@ -8,7 +8,6 @@ pub(crate) mod service;
 pub(crate) fn collections_module() -> Scope {
     web::scope("/collections")
         .route("", web::post().to(controller::create_collection))
-        .route("/list", web::get().to(controller::list_collections))
         .route("", web::get().to(controller::get_collections))
         .route("/loaded", web::get().to(controller::get_loaded_collections))
         .route(
