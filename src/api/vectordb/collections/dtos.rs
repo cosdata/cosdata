@@ -146,17 +146,6 @@ mod tests {
 }
 
 #[derive(Serialize, Debug, ToSchema)]
-pub(crate) struct CollectionSummaryDto {
-    pub name: String,
-    pub description: Option<String>,
-}
-
-#[derive(Serialize, Debug, ToSchema)]
-pub(crate) struct ListCollectionsResponseDto {
-    pub collections: Vec<CollectionSummaryDto>,
-}
-
-#[derive(Serialize, Debug, ToSchema)]
 pub(crate) struct CollectionWithVectorCountsDto {
     pub name: String,
     pub description: Option<String>,
