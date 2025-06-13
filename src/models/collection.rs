@@ -307,6 +307,17 @@ impl Collection {
         embeddings: Vec<RawVectorEmbedding>,
         transaction: &CollectionTransaction,
     ) -> Result<(), WaCustomError> {
+     
+       // Check if any of the IDs already exist in the transaction
+        for embedding in &embeddings {
+            if self.external_to_internal_map.get_latest(&embedding.id).is_some() {
+                return Err(WaCustomError::InvalidData(format!(
+                    "Vector ID already exists: {}",
+                    embedding.id
+                )));
+            }
+        }
+
         for embedding in embeddings.clone() {
             if let Some(dense_values) = embedding.dense_values {
                 if let Some(hnsw_index) = self.get_hnsw_index() {
