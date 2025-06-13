@@ -34,7 +34,10 @@ pub trait EqualityTest {
 impl EqualityTest for ProbNode {
     fn assert_eq(&self, other: &Self, tester: &mut EqualityTester) {
         assert_eq!(self.hnsw_level, other.hnsw_level);
-        assert_eq!(self.version, other.version);
+        assert_eq!(
+            self.version.load(Ordering::Relaxed),
+            other.version.load(Ordering::Relaxed)
+        );
         assert_eq!(self.prop_value, other.prop_value);
         assert_eq!(self.prop_metadata, other.prop_metadata);
 
@@ -88,7 +91,7 @@ impl EqualityTest for SharedLatestNode {
         }
         let this = unsafe { &**self };
         let other = unsafe { &**other };
-        this.latest().assert_eq(&other.latest(), tester);
+        this.latest.assert_eq(&other.latest, tester);
         assert_eq!(this.file_offset, other.file_offset);
     }
 }

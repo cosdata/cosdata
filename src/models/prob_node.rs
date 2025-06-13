@@ -2,12 +2,12 @@ use std::{
     collections::hash_map::Entry,
     ptr,
     sync::{
-        atomic::{AtomicPtr, Ordering},
+        atomic::{AtomicPtr, AtomicU32, Ordering},
         Arc,
     },
 };
 
-use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use parking_lot::{RwLock, RwLockReadGuard};
 use rustc_hash::FxHashMap;
 
 use crate::indexes::hnsw::offset_counter::{self, IndexFileId};
@@ -17,6 +17,7 @@ use self::offset_counter::HNSWIndexFileOffsetCounter;
 use super::{
     buffered_io::BufIoError,
     cache_loader::HNSWIndexCache,
+    common::TSHashTable,
     lazy_item::{FileIndex, ProbLazyItem},
     serializer::hnsw::RawDeserialize,
     types::{
@@ -29,82 +30,65 @@ use super::{
 pub type SharedNode = *mut ProbLazyItem<ProbNode>;
 
 pub struct LatestNode {
-    pub latest: RwLock<SharedNode>,
+    pub latest: SharedNode,
     pub file_offset: FileOffset,
 }
 
 impl LatestNode {
     pub fn new(latest: SharedNode, file_offset: FileOffset) -> SharedLatestNode {
         Box::into_raw(Box::new(Self {
-            latest: RwLock::new(latest),
+            latest,
             file_offset,
         }))
     }
 
-    pub fn latest(&self) -> RwLockReadGuard<'_, SharedNode> {
-        self.latest.read()
-    }
-
+    #[allow(invalid_reference_casting)]
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn get_or_create_version(
-        &self,
+        this: *mut Self,
         version: VersionNumber,
+        synchronization_map: &TSHashTable<SharedLatestNode, ()>,
         cache: &HNSWIndexCache,
         file_id: IndexFileId,
         offset_counter: &HNSWIndexFileOffsetCounter,
-    ) -> Result<(RwLockReadGuard<'_, SharedNode>, bool), BufIoError> {
-        let latest_read_guard = self.latest.read();
-        if unsafe { &**latest_read_guard }.try_get_data(cache)?.version == version {
-            return Ok((latest_read_guard, false));
+    ) -> Result<(SharedNode, bool), BufIoError> {
+        let self_ = unsafe { &*this };
+        let latest = unsafe { &*self_.latest };
+        let node = latest.try_get_data(cache)?;
+        if node.version.load(Ordering::Relaxed) == *version {
+            return Ok((self_.latest, false));
         }
-        drop(latest_read_guard);
-        let mut latest_write_guard = self.latest.write();
-        if unsafe { &**latest_write_guard }
-            .try_get_data(cache)?
-            .version
-            == version
-        {
-            return Ok((RwLockWriteGuard::downgrade(latest_write_guard), false));
-        }
+        synchronization_map.lock_key_and_try(this, || {
+            if node.version.load(Ordering::Relaxed) == *version {
+                return Ok((self_.latest, false));
+            }
 
-        let current_node = unsafe { &**latest_write_guard }.try_get_data(cache)?;
+            let offset = if node.hnsw_level.0 == 0 {
+                offset_counter.next_level_0_offset()
+            } else {
+                offset_counter.next_offset()
+            };
 
-        let new_node = ProbNode {
-            hnsw_level: current_node.hnsw_level,
-            version,
-            prop_value: current_node.prop_value.clone(),
-            prop_metadata: current_node.prop_metadata.clone(),
-            neighbors: current_node.clone_neighbors(),
-            parent: AtomicPtr::new(current_node.get_parent()),
-            child: AtomicPtr::new(current_node.get_child()),
-            lowest_index: RwLock::new(*current_node.lowest_index.read()),
-        };
+            unsafe {
+                *(&latest.file_index as *const _ as *mut _) = FileIndex { file_id, offset };
+            }
 
-        let offset = if current_node.hnsw_level.0 == 0 {
-            offset_counter.next_level_0_offset()
-        } else {
-            offset_counter.next_offset()
-        };
+            node.version.store(*version, Ordering::Release);
 
-        let new_lazy_item = ProbLazyItem::new(new_node, file_id, offset);
+            let cursor = cache.latest_version_links_bufman.open_cursor()?;
+            cache
+                .latest_version_links_bufman
+                .seek_with_cursor(cursor, self_.file_offset.0 as u64)?;
+            cache
+                .latest_version_links_bufman
+                .update_u32_with_cursor(cursor, offset.0)?;
+            cache
+                .latest_version_links_bufman
+                .update_u32_with_cursor(cursor, *file_id)?;
+            cache.latest_version_links_bufman.close_cursor(cursor)?;
 
-        let prev_lazy_item = *latest_write_guard;
-
-        *latest_write_guard = new_lazy_item;
-        let cursor = cache.latest_version_links_bufman.open_cursor()?;
-        cache
-            .latest_version_links_bufman
-            .seek_with_cursor(cursor, self.file_offset.0 as u64)?;
-        cache
-            .latest_version_links_bufman
-            .update_u32_with_cursor(cursor, offset.0)?;
-        cache
-            .latest_version_links_bufman
-            .update_u32_with_cursor(cursor, *file_id)?;
-        cache.latest_version_links_bufman.close_cursor(cursor)?;
-
-        cache.unload(prev_lazy_item)?;
-
-        Ok((RwLockWriteGuard::downgrade(latest_write_guard), true))
+            Ok((self_.latest, true))
+        })
     }
 }
 
@@ -114,7 +98,7 @@ pub type Neighbors = Box<[AtomicPtr<(InternalId, SharedLatestNode, MetricResult)
 
 pub struct ProbNode {
     pub hnsw_level: HNSWLevel,
-    pub version: VersionNumber,
+    pub version: AtomicU32,
     pub prop_value: Arc<NodePropValue>,
     pub prop_metadata: Option<Arc<NodePropMetadata>>,
     // Each neighbor is represented as (neighbor_id, neighbor_node, distance)
@@ -147,7 +131,7 @@ impl ProbNode {
 
         Self {
             hnsw_level,
-            version,
+            version: AtomicU32::new(*version),
             prop_value,
             prop_metadata,
             neighbors: neighbors.into_boxed_slice(),
@@ -186,7 +170,7 @@ impl ProbNode {
 
         Self {
             hnsw_level,
-            version,
+            version: AtomicU32::new(*version),
             prop_value,
             prop_metadata,
             neighbors,
@@ -279,7 +263,7 @@ impl ProbNode {
                 // Successful update
                 unsafe {
                     if let Some((_, node, _)) = old_ptr.as_ref() {
-                        (**(**node).latest())
+                        (*(**node).latest)
                             .try_get_data(cache)
                             .unwrap()
                             .remove_neighbor_by_id(self.get_id());

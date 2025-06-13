@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use half::f16;
+use serde::{Deserialize, Serialize};
 
 use super::{DistanceError, DistanceFunction};
 use crate::{models::types::VectorData, storage::Storage};
@@ -61,7 +61,7 @@ pub fn hamming_distance_u8(x: &[u8], y: &[u8]) -> HammingDistance {
     if x.len() != y.len() {
         return HammingDistance(f32::INFINITY);
     }
-    
+
     let distance = x
         .iter()
         .zip(y.iter())
@@ -74,15 +74,15 @@ pub fn hamming_distance_subbyte(x: &[Vec<u8>], y: &[Vec<u8>], resolution: u8) ->
     if x.len() != y.len() || resolution == 0 || resolution > 8 {
         return HammingDistance(f32::INFINITY);
     }
-    
+
     let mask = (1u8 << resolution) - 1;
     let mut total_distance = 0f32;
-    
+
     for (vec_x, vec_y) in x.iter().zip(y.iter()) {
         if vec_x.len() != vec_y.len() {
             return HammingDistance(f32::INFINITY);
         }
-        
+
         for (&byte_x, &byte_y) in vec_x.iter().zip(vec_y.iter()) {
             let bits_per_byte = 8 / resolution;
             for i in 0..bits_per_byte {
@@ -93,7 +93,7 @@ pub fn hamming_distance_subbyte(x: &[Vec<u8>], y: &[Vec<u8>], resolution: u8) ->
             }
         }
     }
-    
+
     HammingDistance(total_distance)
 }
 
@@ -101,7 +101,7 @@ pub fn hamming_distance_f16(x: &[f16], y: &[f16]) -> HammingDistance {
     if x.len() != y.len() {
         return HammingDistance(f32::INFINITY);
     }
-    
+
     let distance = x
         .iter()
         .zip(y.iter())
