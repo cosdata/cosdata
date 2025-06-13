@@ -4,13 +4,13 @@ use crate::app_context::AppContext;
 
 use super::{
     dtos::{
-        CollectionWithVectorCountsDto, CreateCollectionDto, CreateCollectionDtoResponse, 
-        GetCollectionsDto, GetCollectionsResponseDto, ListCollectionsResponseDto,
+        CreateCollectionDto, CreateCollectionDtoResponse, GetCollectionsDto,
+        GetCollectionsResponseDto, CollectionWithVectorCountsDto,
     },
     service,
 };
 use crate::api::openapi::CollectionIndexingStatusResponse;
-use crate::api::vectordb::collections::error::CollectionsError;
+// use crate::api::vectordb::collections::error::CollectionsError;
 
 /// Create a new collection
 ///
@@ -211,23 +211,4 @@ pub(crate) async fn unload_collection(
 pub(crate) async fn get_loaded_collections(ctx: web::Data<AppContext>) -> Result<HttpResponse> {
     let collections = service::get_loaded_collections(ctx.into_inner()).await?;
     Ok(HttpResponse::Ok().json(collections))
-}
-
-/// List all collections
-///
-/// Returns a list of all collections with summary information.
-#[utoipa::path(
-    get,
-    path = "/vectordb/collections/list",
-    responses(
-        (status = 200, description = "List of collections", body = ListCollectionsResponseDto),
-        (status = 500, description = "Server error")
-    ),
-    tag = "collections"
-)]
-pub(crate) async fn list_collections(
-    ctx: web::Data<AppContext>,
-) -> Result<HttpResponse, CollectionsError> {
-    let response_dto = service::list_collections(ctx.into_inner()).await?;
-    Ok(HttpResponse::Ok().json(response_dto))
 }
