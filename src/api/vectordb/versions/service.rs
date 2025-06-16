@@ -90,7 +90,7 @@ pub(crate) async fn get_current_version(
 
     // Get vector count from transaction status for the current version
     // This should be the cumulative total up to the current version
-    let vector_count = if let Some(indexing_status) = collection.indexing_status().ok() {
+    let vector_count = if let Ok(indexing_status) = collection.indexing_status() {
         indexing_status
             .status_summary
             .total_records_indexed_completed

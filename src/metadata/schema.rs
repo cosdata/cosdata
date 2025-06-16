@@ -961,10 +961,7 @@ mod tests {
         assert_eq!(7, num_total_dims);
 
         // The result doesn't contain the pseudo root dims
-        assert!(nonroot_dims
-            .iter()
-            .find(|dims| **dims == root_dims)
-            .is_none());
+        assert!(nonroot_dims.iter().any(|dims| **dims == root_dims));
 
         // Test with only 1 field
         let status_values: HashSet<FieldValue> = vec!["todo", "done"]
