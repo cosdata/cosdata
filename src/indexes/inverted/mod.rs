@@ -5,7 +5,7 @@ use crate::{
     models::{
         buffered_io::BufIoError,
         collection::Collection,
-        collection_transaction::BackgroundCollectionTransaction,
+        collection_transaction::BackgroundExplicitTransaction,
         common::WaCustomError,
         inverted_index::InvertedIndexRoot,
         meta_persist::store_values_upper_bound,
@@ -105,7 +105,7 @@ impl IndexOps for InvertedIndex {
         &self,
         _collection: &Collection,
         embeddings: Vec<Self::IndexingInput>,
-        transaction: &BackgroundCollectionTransaction,
+        transaction: &BackgroundExplicitTransaction,
         _config: &Config,
     ) -> Result<(), WaCustomError> {
         embeddings

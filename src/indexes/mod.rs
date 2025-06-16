@@ -9,7 +9,7 @@ use crate::{
     config_loader::Config,
     models::{
         collection::Collection,
-        collection_transaction::BackgroundCollectionTransaction,
+        collection_transaction::BackgroundExplicitTransaction,
         common::WaCustomError,
         types::{DocumentId, InternalId, MetaDb, VectorId},
     },
@@ -41,7 +41,7 @@ pub trait IndexOps: Send + Sync {
         &self,
         collection: &Collection,
         embeddings: Vec<Self::IndexingInput>,
-        transaction: &BackgroundCollectionTransaction,
+        transaction: &BackgroundExplicitTransaction,
         config: &Config,
     ) -> Result<(), WaCustomError> {
         let Some(embeddings) = self.sample_embeddings(&collection.lmdb, embeddings, config)? else {
@@ -55,14 +55,14 @@ pub trait IndexOps: Send + Sync {
         &self,
         collection: &Collection,
         embeddings: Vec<Self::IndexingInput>,
-        transaction: &BackgroundCollectionTransaction,
+        transaction: &BackgroundExplicitTransaction,
         config: &Config,
     ) -> Result<(), WaCustomError>;
 
     fn force_index(
         &self,
         collection: &Collection,
-        transaction: &BackgroundCollectionTransaction,
+        transaction: &BackgroundExplicitTransaction,
         config: &Config,
     ) -> Result<(), WaCustomError> {
         if !self.is_configured() {
@@ -133,7 +133,7 @@ pub trait IndexOps: Send + Sync {
     fn pre_commit_transaction(
         &self,
         collection: &Collection,
-        transaction: &BackgroundCollectionTransaction,
+        transaction: &BackgroundExplicitTransaction,
         config: &Config,
     ) -> Result<(), WaCustomError> {
         self.force_index(collection, transaction, config)?;

@@ -1,6 +1,6 @@
 use super::buffered_io::BufferManagerFactory;
 use super::collection_transaction::{
-    BackgroundCollectionTransaction, CollectionTransaction, TransactionStatus,
+    BackgroundExplicitTransaction, ExplicitTransaction, TransactionStatus,
 };
 use super::common::WaCustomError;
 use super::indexing_manager::IndexingManager;
@@ -102,7 +102,7 @@ pub struct Collection {
     pub meta: CollectionMetadata,
     pub lmdb: MetaDb,
     pub current_version: RwLock<VersionNumber>,
-    pub current_open_transaction: RwLock<Option<CollectionTransaction>>,
+    pub current_explicit_transaction: RwLock<Option<ExplicitTransaction>>,
     pub vcs: VersionControl,
     pub internal_to_external_map: TreeMap<InternalId, RawVectorEmbedding>,
     pub external_to_internal_map: TreeMap<VectorId, InternalId>,
@@ -178,7 +178,7 @@ impl Collection {
             },
             lmdb,
             current_version: RwLock::new(current_version),
-            current_open_transaction: RwLock::new(None),
+            current_explicit_transaction: RwLock::new(None),
             vcs,
             internal_to_external_map: TreeMap::new(internal_to_external_map_bufmans),
             external_to_internal_map: TreeMap::new(external_to_internal_map_bufmans),
@@ -305,12 +305,15 @@ impl Collection {
     pub fn run_upload(
         &self,
         embeddings: Vec<RawVectorEmbedding>,
-        transaction: &CollectionTransaction,
+        transaction: &ExplicitTransaction,
     ) -> Result<(), WaCustomError> {
-     
-       // Check if any of the IDs already exist in the transaction
+        // Check if any of the IDs already exist in the transaction
         for embedding in &embeddings {
-            if self.external_to_internal_map.get_latest(&embedding.id).is_some() {
+            if self
+                .external_to_internal_map
+                .get_latest(&embedding.id)
+                .is_some()
+            {
                 return Err(WaCustomError::InvalidData(format!(
                     "Vector ID already exists: {}",
                     embedding.id
@@ -355,7 +358,7 @@ impl Collection {
     pub fn index_embeddings(
         &self,
         embeddings: Vec<RawVectorEmbedding>,
-        transaction: &BackgroundCollectionTransaction,
+        transaction: &BackgroundExplicitTransaction,
         config: &Config,
     ) -> Result<(), WaCustomError> {
         let num_nodes_per_emb = if let Some(hnsw_index) = &*self.hnsw_index.read() {

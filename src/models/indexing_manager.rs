@@ -1,9 +1,7 @@
 use super::{
     buffered_io::BufIoError,
     collection::{Collection, RawVectorEmbedding},
-    collection_transaction::{
-        BackgroundCollectionTransaction, Progress, Summary, TransactionStatus,
-    },
+    collection_transaction::{BackgroundExplicitTransaction, Progress, Summary, TransactionStatus},
     common::WaCustomError,
     meta_persist::update_background_version,
     types::VectorId,
@@ -61,7 +59,7 @@ impl IndexingManager {
         threadpool: &ThreadPool,
         version: VersionNumber,
     ) -> Result<(), WaCustomError> {
-        let txn = BackgroundCollectionTransaction::from_version_id_and_number(collection, version);
+        let txn = BackgroundExplicitTransaction::from_version_id_and_number(collection, version);
         let wal = WALFile::new(&collection.get_path(), version)?;
         let vectors_count = wal.vectors_count();
         let status = collection
@@ -164,7 +162,7 @@ impl IndexingManager {
         config: &Config,
         embeddings: Vec<RawVectorEmbedding>,
     ) -> Result<(), WaCustomError> {
-        let txn = BackgroundCollectionTransaction::from_version_id_and_number(collection, version);
+        let txn = BackgroundExplicitTransaction::from_version_id_and_number(collection, version);
         let vectors_count = embeddings.len() as u32;
         let start = Utc::now();
         let status = TransactionStatus::InProgress {

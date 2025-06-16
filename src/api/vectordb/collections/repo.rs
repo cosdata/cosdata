@@ -12,9 +12,7 @@ use crate::{
 };
 
 use super::{
-    dtos::{
-        CreateCollectionDto, GetCollectionsDto, GetCollectionsResponseDto,
-    },
+    dtos::{CreateCollectionDto, GetCollectionsDto, GetCollectionsResponseDto},
     error::CollectionsError,
 };
 

@@ -23,11 +23,11 @@ pub(crate) async fn upsert_vectors(
         .get_collection(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
 
-    let mut current_open_transaction_guard = collection.current_open_transaction.write();
+    let mut current_open_transaction_guard = collection.current_explicit_transaction.write();
 
     while current_open_transaction_guard.is_some() {
         drop(current_open_transaction_guard);
-        current_open_transaction_guard = collection.current_open_transaction.write();
+        current_open_transaction_guard = collection.current_explicit_transaction.write();
     }
 
     let mut current_version = collection.current_version.write();
@@ -68,11 +68,11 @@ pub(crate) async fn delete_vector_by_id(
         .get_collection(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
 
-    let mut current_open_transaction_guard = collection.current_open_transaction.write();
+    let mut current_open_transaction_guard = collection.current_explicit_transaction.write();
 
     while current_open_transaction_guard.is_some() {
         drop(current_open_transaction_guard);
-        current_open_transaction_guard = collection.current_open_transaction.write();
+        current_open_transaction_guard = collection.current_explicit_transaction.write();
     }
 
     let mut current_version = collection.current_version.write();

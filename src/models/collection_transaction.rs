@@ -9,11 +9,11 @@ use super::{
     versioning::VersionNumber, wal::WALFile,
 };
 
-pub struct BackgroundCollectionTransaction {
+pub struct BackgroundExplicitTransaction {
     pub version: VersionNumber,
 }
 
-impl BackgroundCollectionTransaction {
+impl BackgroundExplicitTransaction {
     pub fn new(collection: &Collection) -> Result<Self, WaCustomError> {
         let current_version_number = retrieve_current_version(&collection.lmdb)?;
         let version_number = VersionNumber::from(*current_version_number + 1);
@@ -44,12 +44,12 @@ impl BackgroundCollectionTransaction {
     }
 }
 
-pub struct CollectionTransaction {
+pub struct ExplicitTransaction {
     pub version: VersionNumber,
     pub wal: WALFile,
 }
 
-impl CollectionTransaction {
+impl ExplicitTransaction {
     pub fn new(collection: &Collection) -> Result<Self, WaCustomError> {
         let current_version_number = collection.vcs.get_current_version()?;
         let version = VersionNumber::from(*current_version_number + 1);

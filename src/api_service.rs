@@ -9,7 +9,7 @@ use crate::metadata::{pseudo_level_probs, pseudo_node_vector, pseudo_root_id};
 use crate::models::buffered_io::{BufIoError, BufferManager, BufferManagerFactory};
 use crate::models::cache_loader::HNSWIndexCache;
 use crate::models::collection::Collection;
-use crate::models::collection_transaction::BackgroundCollectionTransaction;
+use crate::models::collection_transaction::BackgroundExplicitTransaction;
 use crate::models::common::*;
 use crate::models::meta_persist::store_values_range;
 use crate::models::prob_node::ProbNode;
@@ -201,10 +201,8 @@ pub async fn init_hnsw_index_for_collection(
         // base id for nonroot pseudo nodes is 1 more than the pseudo node
         let pseudo_vec = DenseInputEmbedding(pseudo_root_id(), pseudo_vals, None, true);
         let version_number = *collection.current_version.read();
-        let transaction = BackgroundCollectionTransaction::from_version_id_and_number(
-            &collection,
-            version_number,
-        );
+        let transaction =
+            BackgroundExplicitTransaction::from_version_id_and_number(&collection, version_number);
         // NOTE: We're directly calling `index_embeddings` instead of
         // `run_upload` because we want to skip sampling for pseudo
         // nodes

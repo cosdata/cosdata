@@ -11,7 +11,7 @@ use crate::{
     models::{
         cache_loader::HNSWIndexCache,
         collection::Collection,
-        collection_transaction::BackgroundCollectionTransaction,
+        collection_transaction::BackgroundExplicitTransaction,
         common::{TSHashTable, WaCustomError},
         meta_persist::store_values_range,
         prob_node::SharedLatestNode,
@@ -179,7 +179,7 @@ impl IndexOps for HNSWIndex {
         &self,
         collection: &Collection,
         embeddings: Vec<Self::IndexingInput>,
-        transaction: &BackgroundCollectionTransaction,
+        transaction: &BackgroundExplicitTransaction,
         config: &Config,
     ) -> Result<(), WaCustomError> {
         index_embeddings(config, collection, self, transaction, embeddings)

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::models::types::DocumentId;
 use crate::models::{
-    collection::Collection, collection_transaction::CollectionTransaction, types::VectorId,
+    collection::Collection, collection_transaction::ExplicitTransaction, types::VectorId,
 };
 
 use crate::app_context::AppContext;
@@ -14,7 +14,7 @@ use super::{
 
 pub(crate) fn create_vector_in_transaction(
     collection: &Collection,
-    transaction: &CollectionTransaction,
+    transaction: &ExplicitTransaction,
     create_vector_dto: CreateVectorDto,
 ) -> Result<(), VectorsError> {
     collection
@@ -72,7 +72,7 @@ pub(crate) async fn get_vector_by_id(
 
 pub(crate) fn upsert_vectors_in_transaction(
     collection: &Collection,
-    transaction: &CollectionTransaction,
+    transaction: &ExplicitTransaction,
     vectors: Vec<CreateVectorDto>,
 ) -> Result<(), VectorsError> {
     collection

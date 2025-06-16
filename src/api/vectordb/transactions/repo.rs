@@ -3,7 +3,7 @@ use std::sync::Arc;
 use self::vectors::dtos::CreateVectorDto;
 
 use super::{dtos::CreateTransactionResponseDto, error::TransactionError};
-use crate::models::collection_transaction::{CollectionTransaction, TransactionStatus};
+use crate::models::collection_transaction::{ExplicitTransaction, TransactionStatus};
 use crate::models::meta_persist::update_current_version;
 use crate::models::types::VectorId;
 use crate::models::versioning::VersionNumber;
@@ -22,13 +22,13 @@ pub(crate) async fn create_transaction(
         .get_collection(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
 
-    let mut current_open_transaction_guard = collection.current_open_transaction.write();
+    let mut current_open_transaction_guard = collection.current_explicit_transaction.write();
 
     if current_open_transaction_guard.is_some() {
         return Err(TransactionError::OnGoingTransaction);
     }
 
-    let transaction = CollectionTransaction::new(&collection)
+    let transaction = ExplicitTransaction::new(&collection)
         .map_err(|err| TransactionError::FailedToCreateTransaction(err.to_string()))?;
     let transaction_id = transaction.version;
 
@@ -54,7 +54,7 @@ pub(crate) async fn commit_transaction(
 
     let mut current_version_guard = collection.current_version.write();
 
-    let mut current_open_transaction_guard = collection.current_open_transaction.write();
+    let mut current_open_transaction_guard = collection.current_explicit_transaction.write();
     let Some(current_open_transaction) = current_open_transaction_guard.take() else {
         return Err(TransactionError::NotFound);
     };
@@ -113,7 +113,7 @@ pub(crate) async fn create_vector_in_transaction(
         .get_collection(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
 
-    let current_open_transaction_guard = collection.current_open_transaction.read();
+    let current_open_transaction_guard = collection.current_explicit_transaction.read();
     let Some(current_open_transaction) = &*current_open_transaction_guard else {
         return Err(TransactionError::NotFound);
     };
@@ -146,7 +146,7 @@ pub(crate) async fn abort_transaction(
         .get_collection(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
 
-    let mut current_open_transaction_guard = collection.current_open_transaction.write();
+    let mut current_open_transaction_guard = collection.current_explicit_transaction.write();
     let Some(current_open_transaction) = current_open_transaction_guard.take() else {
         return Err(TransactionError::NotFound);
     };
@@ -171,7 +171,7 @@ pub(crate) async fn delete_vector_by_id(
         .get_collection(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
 
-    let current_open_transaction_guard = collection.current_open_transaction.read();
+    let current_open_transaction_guard = collection.current_explicit_transaction.read();
     let Some(current_open_transaction) = &*current_open_transaction_guard else {
         return Err(TransactionError::NotFound);
     };
@@ -202,7 +202,7 @@ pub(crate) async fn upsert_vectors(
         .get_collection(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
 
-    let current_open_transaction_guard = collection.current_open_transaction.read();
+    let current_open_transaction_guard = collection.current_explicit_transaction.read();
     let Some(current_open_transaction) = &*current_open_transaction_guard else {
         return Err(TransactionError::NotFound);
     };

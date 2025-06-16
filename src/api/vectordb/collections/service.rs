@@ -7,8 +7,8 @@ use crate::{
 
 use super::{
     dtos::{
-        CreateCollectionDto, CreateCollectionDtoResponse, GetCollectionsDto,
-        GetCollectionsResponseDto, CollectionWithVectorCountsDto,
+        CollectionWithVectorCountsDto, CreateCollectionDto, CreateCollectionDtoResponse,
+        GetCollectionsDto, GetCollectionsResponseDto,
     },
     error::CollectionsError,
     repo,
@@ -44,11 +44,13 @@ pub(crate) async fn get_collection_by_id(
 ) -> Result<CollectionWithVectorCountsDto, CollectionsError> {
     let collection = repo::get_collection_by_name(ctx, collection_id).await?;
 
-    // Get indexed vectors count from indexing status 
+    // Get indexed vectors count from indexing status
     let indexing_status = collection
         .indexing_status()
         .map_err(CollectionsError::WaCustomError)?;
-    let vectors_count = indexing_status.status_summary.total_records_indexed_completed;
+    let vectors_count = indexing_status
+        .status_summary
+        .total_records_indexed_completed;
 
     Ok(CollectionWithVectorCountsDto {
         name: collection.meta.name.clone(),
@@ -119,4 +121,3 @@ pub(crate) async fn get_loaded_collections(
     // Just return the list of loaded collections directly
     Ok(ctx.collection_cache_manager.get_loaded_collections())
 }
-

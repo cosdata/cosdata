@@ -657,7 +657,7 @@ impl CollectionsMap {
                 meta: collection_meta,
                 lmdb,
                 current_version: parking_lot::RwLock::new(current_version),
-                current_open_transaction: parking_lot::RwLock::new(None),
+                current_explicit_transaction: parking_lot::RwLock::new(None),
                 vcs,
                 internal_to_external_map: TreeMap::deserialize(
                     internal_to_external_map_bufmans,

@@ -18,7 +18,7 @@ use crate::metadata::MetadataSchema;
 use crate::metadata::HIGH_WEIGHT;
 use crate::models::cache_loader::HNSWIndexCache;
 use crate::models::collection::Collection;
-use crate::models::collection_transaction::BackgroundCollectionTransaction;
+use crate::models::collection_transaction::BackgroundExplicitTransaction;
 use crate::models::common::*;
 use crate::models::dot_product::dot_product_f32;
 use crate::models::file_persist::*;
@@ -715,7 +715,7 @@ pub fn index_embeddings(
     config: &Config,
     collection: &Collection,
     hnsw_index: &HNSWIndex,
-    transaction: &BackgroundCollectionTransaction,
+    transaction: &BackgroundExplicitTransaction,
     vecs: Vec<DenseInputEmbedding>,
 ) -> Result<(), WaCustomError> {
     let hnsw_params_guard = hnsw_index.hnsw_params.read().unwrap();
