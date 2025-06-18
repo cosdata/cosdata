@@ -1,8 +1,5 @@
-#![allow(clippy::missing_safety_doc)]
-
 use std::arch::x86_64::*;
 
-#[allow(dead_code)]
 fn print_mm256i(name: &str, value: __m256i) {
     let mut array = [0u8; 32];
     unsafe {
@@ -81,7 +78,6 @@ unsafe fn accumulate_u32(x: __m256i) -> u32 {
     _mm_cvtsi128_si32(result) as u32
 }
 
-#[allow(dead_code)]
 #[target_feature(enable = "avx2")]
 unsafe fn accumulate_u64(x: __m256i) -> u64 {
     let zero = _mm256_setzero_si256();
@@ -210,7 +206,6 @@ unsafe fn count_ones_simd_avx2_256i(input: __m256i) -> u64 {
     _mm256_extract_epi64(sum_64, 0) as u64 + _mm256_extract_epi64(sum_64, 2) as u64
 }
 
-#[allow(dead_code)]
 #[target_feature(enable = "avx2")]
 unsafe fn quaternary_weighted_simd_avx2(data: *const u8, n: usize, lookup: &[u8; 32]) -> u64 {
     let mut i = 0;
@@ -253,7 +248,6 @@ unsafe fn quaternary_weighted_simd_avx2(data: *const u8, n: usize, lookup: &[u8;
 }
 
 // Outer function to create lookup table and call the SIMD function
-#[allow(dead_code)]
 #[target_feature(enable = "avx2")]
 unsafe fn quaternary_weighted_wrapper(data: &[u8]) -> u64 {
     let lookup: [u8; 32] = [
@@ -407,40 +401,10 @@ pub fn pack_octal_vectors(x_vec: &[Vec<u8>], y_vec: &[Vec<u8>]) -> Vec<u8> {
 }
 
 // Scalar implementation for comparison
-#[allow(dead_code)]
 fn scalar_u6_count_ones(data: &[u8]) -> u64 {
     data.iter()
         .map(|&byte| (byte & 0x3F).count_ones() as u64)
         .sum()
-}
-
-#[target_feature(enable = "avx2", enable = "fma")]
-pub unsafe fn dot_product_f32_simd(a: &[f32], b: &[f32]) -> f32 {
-    assert_eq!(a.len(), b.len(), "Vectors must have equal length");
-
-    let n = a.len();
-    let mut sum = _mm256_setzero_ps();
-
-    let chunks = n / 8;
-    for i in 0..chunks {
-        let offset = i * 8;
-        let va = _mm256_loadu_ps(a[offset..].as_ptr());
-        let vb = _mm256_loadu_ps(b[offset..].as_ptr());
-        sum = _mm256_fmadd_ps(va, vb, sum);
-    }
-
-    let temp = _mm256_hadd_ps(sum, sum);
-    let temp = _mm256_hadd_ps(temp, temp);
-    let sum_low = _mm256_castps256_ps128(temp);
-    let sum_high = _mm256_extractf128_ps(temp, 1);
-    let final_sum = _mm_add_ps(sum_low, sum_high);
-
-    let mut result = _mm_cvtss_f32(final_sum);
-    for i in (chunks * 8)..n {
-        result += a[i] * b[i];
-    }
-
-    result
 }
 
 #[cfg(test)]
@@ -619,7 +583,6 @@ mod tests {
                 non_simd_time += start.elapsed().as_secs_f64();
 
                 // SIMD version
-                #[allow(unused_assignments)]
                 unsafe {
                     if is_x86_feature_detected!("avx2") {
                         let start = Instant::now();
@@ -653,7 +616,6 @@ mod tests {
     }
 
     // Helper function to convert __m256i to Vec<u32>
-    #[allow(dead_code)]
     unsafe fn m256i_to_vec(v: __m256i) -> Vec<u32> {
         let mut result = vec![0u32; 8];
         _mm256_storeu_si256(result.as_mut_ptr() as *mut __m256i, v);
@@ -664,10 +626,6 @@ mod tests {
     unsafe fn vec_to_m256i(v: &[u32]) -> __m256i {
         assert!(v.len() >= 8);
         _mm256_loadu_si256(v.as_ptr() as *const __m256i)
-    }
-
-    fn scalar_combinations(data: &[u8]) -> u64 {
-        data.iter().map(|&byte| byte.count_ones() as u64).sum()
     }
 
     #[test]
@@ -814,4 +772,50 @@ mod tests {
             );
         }
     }
+}
+
+fn scalar_combinations(data: &[u8]) -> u64 {
+    data.iter().map(|&byte| byte.count_ones() as u64).sum()
+}
+
+fn generate_test_vectors(size: usize, pattern: u32) -> (Vec<Vec<u32>>, Vec<Vec<u32>>) {
+    let lsb = vec![pattern; size];
+    let msb = vec![pattern; size];
+    (vec![lsb.clone(), msb.clone()], vec![lsb, msb])
+}
+
+fn count_combinations_scalar(a_vec: &[Vec<u8>], b_vec: &[Vec<u8>]) -> [u64; 16] {
+    let mut counts = [0u64; 16];
+
+    // Ensure vectors are not empty and have the same length
+    assert!(a_vec.len() == 2 && b_vec.len() == 2);
+    let len = a_vec[0].len();
+    assert!(len == a_vec[1].len() && len == b_vec[0].len() && len == b_vec[1].len());
+
+    // Process each element in the vectors
+    for i in 0..len {
+        // Process each bit position in the u8 values
+        for bit_pos in 0..8 {
+            // Process each bit from 0 to 7
+            let bit_mask = 1 << bit_pos;
+
+            // Extract bits for this position
+            let a_lsb = (a_vec[0][i] & bit_mask) >> bit_pos;
+            let a_msb = ((a_vec[1][i] & bit_mask) >> bit_pos) << 1;
+            let b_lsb = ((b_vec[0][i] & bit_mask) >> bit_pos) << 2;
+            let b_msb = ((b_vec[1][i] & bit_mask) >> bit_pos) << 3;
+
+            // Compute the 4-bit index
+            let index = (a_msb | a_lsb | b_lsb | b_msb) as usize;
+
+            // Ensure the index is within bounds
+            if index < 16 {
+                counts[index] += 1;
+            } else {
+                eprintln!("Index out of bounds: {}", index);
+            }
+        }
+    }
+
+    counts
 }
