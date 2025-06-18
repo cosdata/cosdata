@@ -546,34 +546,16 @@ impl FilelessBufferManager {
         Ok(f32::from_le_bytes(buffer))
     }
 
-    pub fn read_i64_with_cursor(&self, cursor_id: u64) -> Result<i64, BufIoError> {
-        let mut buffer = [0u8; 8];
-        self.read_with_cursor(cursor_id, &mut buffer)?;
-        Ok(i64::from_le_bytes(buffer))
-    }
-
     pub fn read_i32_with_cursor(&self, cursor_id: u64) -> Result<i32, BufIoError> {
         let mut buffer = [0u8; 4];
         self.read_with_cursor(cursor_id, &mut buffer)?;
         Ok(i32::from_le_bytes(buffer))
     }
 
-    pub fn read_u64_with_cursor(&self, cursor_id: u64) -> Result<u64, BufIoError> {
-        let mut buffer = [0u8; 8];
-        self.read_with_cursor(cursor_id, &mut buffer)?;
-        Ok(u64::from_le_bytes(buffer))
-    }
-
     pub fn read_u32_with_cursor(&self, cursor_id: u64) -> Result<u32, BufIoError> {
         let mut buffer = [0u8; 4];
         self.read_with_cursor(cursor_id, &mut buffer)?;
         Ok(u32::from_le_bytes(buffer))
-    }
-
-    pub fn read_u16_with_cursor(&self, cursor_id: u64) -> Result<u16, BufIoError> {
-        let mut buffer = [0u8; 2];
-        self.read_with_cursor(cursor_id, &mut buffer)?;
-        Ok(u16::from_le_bytes(buffer))
     }
 
     pub fn read_u8_with_cursor(&self, cursor_id: u64) -> Result<u8, BufIoError> {
@@ -629,33 +611,9 @@ impl FilelessBufferManager {
         Ok(total_read)
     }
 
-    pub fn update_f32_with_cursor(&self, cursor_id: u64, value: f32) -> Result<u64, BufIoError> {
-        let buffer = value.to_le_bytes();
-        self.write_with_cursor(cursor_id, &buffer, false)
-    }
-
-    pub fn update_u64_with_cursor(&self, cursor_id: u64, value: u64) -> Result<u64, BufIoError> {
-        let buffer = value.to_le_bytes();
-        self.write_with_cursor(cursor_id, &buffer, false)
-    }
-
     pub fn update_u32_with_cursor(&self, cursor_id: u64, value: u32) -> Result<u64, BufIoError> {
         let buffer = value.to_le_bytes();
         self.write_with_cursor(cursor_id, &buffer, false)
-    }
-
-    pub fn update_u16_with_cursor(&self, cursor_id: u64, value: u16) -> Result<u64, BufIoError> {
-        let buffer = value.to_le_bytes();
-        self.write_with_cursor(cursor_id, &buffer, false)
-    }
-
-    pub fn update_u8_with_cursor(&self, cursor_id: u64, value: u8) -> Result<u64, BufIoError> {
-        let buffer = value.to_le_bytes();
-        self.write_with_cursor(cursor_id, &buffer, false)
-    }
-
-    pub fn update_with_cursor(&self, cursor_id: u64, buf: &[u8]) -> Result<u64, BufIoError> {
-        self.write_with_cursor(cursor_id, buf, false)
     }
 
     fn write_with_cursor(
