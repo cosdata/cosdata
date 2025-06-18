@@ -232,7 +232,8 @@ pub struct LazyItemArray<T: Clone + 'static, const N: usize> {
 
 #[derive(Clone)]
 pub struct VectorData {
-    pub data: Box<[u32; 64]>,
+    //pub data: Box<[u32; 64]>,
+    pub data: [u32; 64],
     pub is_serialized: bool,
 }
 
@@ -1154,14 +1155,16 @@ impl<T: Clone + 'static, const N: usize> LazyItemArray<T, N> {
 impl VectorData {
     pub fn new() -> Self {
         Self {
-            data: Box::new([u32::MAX; 64]),
+           // data: Box::new([u32::MAX; 64]),
+            data: [u32::MAX; 64], 
             is_serialized: false,
         }
     }
 
     pub fn from_array(data: [u32; 64], is_serialized: bool) -> Self {
         Self {
-            data: Box::new(data),
+            //data: Box::new(data),
+            data,
             is_serialized,
         }
     }
@@ -1208,7 +1211,7 @@ impl IncrementalSerializableGrowableData {
                     Hash::from(u32::MAX),
                     u16::MAX,
                     STM::new(
-                        VectorData::from_array(*data.data, data.is_serialized),
+                        VectorData::from_array(data.data, data.is_serialized),
                         1,
                         true,
                     ),
