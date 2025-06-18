@@ -1,7 +1,5 @@
 use super::buffered_io::BufferManagerFactory;
-use super::collection_transaction::{
-    BackgroundExplicitTransaction, ExplicitTransaction, TransactionStatus,
-};
+use super::collection_transaction::{ExplicitTransaction, ImplicitTransaction, TransactionStatus};
 use super::common::WaCustomError;
 use super::indexing_manager::IndexingManager;
 use super::meta_persist::store_highest_internal_id;
@@ -26,6 +24,7 @@ use serde_cbor::to_vec;
 use siphasher::sip::SipHasher24;
 use std::fs::create_dir_all;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::thread;
 use std::{fs, hash::Hasher, path::Path, sync::Arc};
 use utoipa::ToSchema;
 
@@ -102,7 +101,9 @@ pub struct Collection {
     pub meta: CollectionMetadata,
     pub lmdb: MetaDb,
     pub current_version: RwLock<VersionNumber>,
+    pub last_allotted_version: RwLock<VersionNumber>,
     pub current_explicit_transaction: RwLock<Option<ExplicitTransaction>>,
+    pub current_implicit_transaction: RwLock<ImplicitTransaction>,
     pub vcs: VersionControl,
     pub internal_to_external_map: TreeMap<InternalId, RawVectorEmbedding>,
     pub external_to_internal_map: TreeMap<VectorId, InternalId>,
@@ -178,7 +179,9 @@ impl Collection {
             },
             lmdb,
             current_version: RwLock::new(current_version),
+            last_allotted_version: RwLock::new(current_version),
             current_explicit_transaction: RwLock::new(None),
+            current_implicit_transaction: RwLock::new(ImplicitTransaction::default()),
             vcs,
             internal_to_external_map: TreeMap::new(internal_to_external_map_bufmans),
             external_to_internal_map: TreeMap::new(external_to_internal_map_bufmans),
@@ -196,6 +199,22 @@ impl Collection {
             ctx.config.clone(),
             ctx.threadpool.clone(),
         ));
+
+        #[allow(unreachable_code)]
+        {
+            let collection = collection.clone();
+            let config = ctx.config.clone();
+            thread::spawn(move || {
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(60 * 60));
+
+                    let _explicit_txn_guard = collection.current_explicit_transaction.write();
+                    let mut implicit_txn_guard = collection.current_implicit_transaction.write();
+                    std::mem::take(&mut *implicit_txn_guard).pre_commit(&collection, &config)?;
+                }
+                Ok::<_, WaCustomError>(())
+            });
+        }
 
         let collection_path = collection.get_path();
         fs::create_dir_all(&collection_path).map_err(|e| WaCustomError::FsError(e.to_string()))?;
@@ -358,7 +377,7 @@ impl Collection {
     pub fn index_embeddings(
         &self,
         embeddings: Vec<RawVectorEmbedding>,
-        transaction: &BackgroundExplicitTransaction,
+        version: VersionNumber,
         config: &Config,
     ) -> Result<(), WaCustomError> {
         let num_nodes_per_emb = if let Some(hnsw_index) = &*self.hnsw_index.read() {
@@ -401,20 +420,14 @@ impl Collection {
                         embedding.text = None;
                     }
 
-                    self.internal_to_external_map.insert(
-                        transaction.version,
-                        &internal_id,
-                        embedding,
-                    );
+                    self.internal_to_external_map
+                        .insert(version, &internal_id, embedding);
                     self.external_to_internal_map
-                        .insert(transaction.version, &id, internal_id);
+                        .insert(version, &id, internal_id);
 
                     if let Some(document_id) = document_id {
-                        self.document_to_internals_map.push(
-                            transaction.version,
-                            &document_id,
-                            internal_id,
-                        );
+                        self.document_to_internals_map
+                            .push(version, &document_id, internal_id);
                     }
 
                     acc
@@ -423,19 +436,19 @@ impl Collection {
 
         if !dense_embs.is_empty() {
             if let Some(hnsw_index) = &*self.hnsw_index.read() {
-                hnsw_index.run_upload(self, dense_embs, transaction, config)?;
+                hnsw_index.run_upload(self, dense_embs, version, config)?;
             }
         }
 
         if !sparse_embs.is_empty() {
             if let Some(inverted_index) = &*self.inverted_index.read() {
-                inverted_index.run_upload(self, sparse_embs, transaction, config)?;
+                inverted_index.run_upload(self, sparse_embs, version, config)?;
             }
         }
 
         if !tf_idf_embs.is_empty() {
             if let Some(tf_idf_index) = &*self.tf_idf_index.read() {
-                tf_idf_index.run_upload(self, tf_idf_embs, transaction, config)?;
+                tf_idf_index.run_upload(self, tf_idf_embs, version, config)?;
             }
         }
 
@@ -506,6 +519,7 @@ impl Collection {
                 TransactionStatus::InProgress {
                     progress,
                     last_updated,
+                    ..
                 } => {
                     last_synced = last_synced.max(*last_updated);
                     total_records_indexed_completed += progress.records_indexed as u64;
@@ -515,6 +529,7 @@ impl Collection {
                 TransactionStatus::Complete {
                     summary,
                     last_updated,
+                    ..
                 } => {
                     last_synced = last_synced.max(*last_updated);
                     total_records_indexed_completed += summary.total_records_indexed as u64;

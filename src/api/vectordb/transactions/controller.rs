@@ -1,9 +1,12 @@
 use actix_web::{web, HttpResponse};
 
-use crate::api::vectordb::vectors::dtos::CreateVectorDto;
 use crate::app_context::AppContext;
 use crate::models::collection_cache::CollectionCacheExt;
 use crate::models::collection_transaction::TransactionStatus;
+use crate::{
+    api::vectordb::vectors::dtos::CreateVectorDto,
+    models::collection_transaction::ExplicitTransactionID,
+};
 
 use super::{
     dtos::{CreateTransactionResponseDto, UpsertDto},
@@ -50,7 +53,7 @@ pub(crate) async fn create_transaction(
     tag = "transactions",
     params(
         ("collection_id" = String, Path, description = "Collection identifier"),
-        ("transaction_id" = u64, Path, description = "Transaction identifier")
+        ("transaction_id" = ExplicitTransactionID, Path, description = "Transaction identifier")
     ),
     responses(
         (status = 204, description = "Transaction committed successfully"),
@@ -58,7 +61,7 @@ pub(crate) async fn create_transaction(
     )
 )]
 pub(crate) async fn commit_transaction(
-    params: web::Path<(String, u32)>,
+    params: web::Path<(String, ExplicitTransactionID)>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse, TransactionError> {
     let (collection_id, transaction_id) = params.into_inner();
@@ -66,7 +69,7 @@ pub(crate) async fn commit_transaction(
     ctx.update_collection_for_transaction(&collection_id)
         .map_err(|e| TransactionError::FailedToCommitTransaction(format!("Cache error: {}", e)))?;
 
-    service::commit_transaction(ctx.into_inner(), &collection_id, transaction_id.into()).await?;
+    service::commit_transaction(ctx.into_inner(), &collection_id, transaction_id).await?;
     Ok(HttpResponse::NoContent().finish())
 }
 
@@ -79,7 +82,7 @@ pub(crate) async fn commit_transaction(
     tag = "transactions",
     params(
         ("collection_id" = String, Path, description = "Collection identifier"),
-        ("transaction_id" = u64, Path, description = "Transaction identifier")
+        ("transaction_id" = ExplicitTransactionID, Path, description = "Transaction identifier")
     ),
     responses(
         (status = 200, description = "Transaction status retrieved successfully", body = TransactionStatus),
@@ -88,7 +91,7 @@ pub(crate) async fn commit_transaction(
     )
 )]
 pub(crate) async fn get_transaction_status(
-    params: web::Path<(String, u32)>,
+    params: web::Path<(String, ExplicitTransactionID)>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse, TransactionError> {
     let (collection_id, transaction_id) = params.into_inner();
@@ -99,8 +102,7 @@ pub(crate) async fn get_transaction_status(
         })?;
 
     let status =
-        service::get_transaction_status(ctx.into_inner(), &collection_id, transaction_id.into())
-            .await?;
+        service::get_transaction_status(ctx.into_inner(), &collection_id, transaction_id).await?;
 
     Ok(HttpResponse::Ok().json(status))
 }
@@ -114,7 +116,7 @@ pub(crate) async fn get_transaction_status(
     tag = "transactions",
     params(
         ("collection_id" = String, Path, description = "Collection identifier"),
-        ("transaction_id" = u64, Path, description = "Transaction identifier")
+        ("transaction_id" = ExplicitTransactionID, Path, description = "Transaction identifier")
     ),
     request_body = CreateVectorDto,
     responses(
@@ -124,7 +126,7 @@ pub(crate) async fn get_transaction_status(
     )
 )]
 pub(crate) async fn create_vector_in_transaction(
-    params: web::Path<(String, u32)>,
+    params: web::Path<(String, ExplicitTransactionID)>,
     web::Json(create_vector_dto): web::Json<CreateVectorDto>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse, TransactionError> {
@@ -135,7 +137,7 @@ pub(crate) async fn create_vector_in_transaction(
     service::create_vector_in_transaction(
         ctx.into_inner(),
         &collection_id,
-        transaction_id.into(),
+        transaction_id,
         create_vector_dto,
     )
     .await?;
@@ -151,7 +153,7 @@ pub(crate) async fn create_vector_in_transaction(
     tag = "transactions",
     params(
         ("collection_id" = String, Path, description = "Collection identifier"),
-        ("transaction_id" = u64, Path, description = "Transaction identifier")
+        ("transaction_id" = ExplicitTransactionID, Path, description = "Transaction identifier")
     ),
     responses(
         (status = 204, description = "Transaction aborted successfully"),
@@ -160,14 +162,14 @@ pub(crate) async fn create_vector_in_transaction(
     )
 )]
 pub(crate) async fn abort_transaction(
-    params: web::Path<(String, u32)>,
+    params: web::Path<(String, ExplicitTransactionID)>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse, TransactionError> {
     let (collection_id, transaction_id) = params.into_inner();
 
     ctx.update_collection_for_transaction(&collection_id)
         .map_err(|e| TransactionError::FailedToCommitTransaction(format!("Cache error: {}", e)))?;
-    service::abort_transaction(ctx.into_inner(), &collection_id, transaction_id.into()).await?;
+    service::abort_transaction(ctx.into_inner(), &collection_id, transaction_id).await?;
     Ok(HttpResponse::NoContent().finish())
 }
 
@@ -180,7 +182,7 @@ pub(crate) async fn abort_transaction(
     tag = "transactions",
     params(
         ("collection_id" = String, Path, description = "Collection identifier"),
-        ("transaction_id" = u64, Path, description = "Transaction identifier"),
+        ("transaction_id" = ExplicitTransactionID, Path, description = "Transaction identifier"),
         ("vector_id" = String, Path, description = "Vector identifier")
     ),
     responses(
@@ -190,7 +192,7 @@ pub(crate) async fn abort_transaction(
     )
 )]
 pub(crate) async fn delete_vector_by_id(
-    path: web::Path<(String, u32, String)>,
+    path: web::Path<(String, ExplicitTransactionID, String)>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse, TransactionError> {
     let (collection_id, transaction_id, vector_id) = path.into_inner();
@@ -201,7 +203,7 @@ pub(crate) async fn delete_vector_by_id(
     service::delete_vector_by_id(
         ctx.into_inner(),
         &collection_id,
-        transaction_id.into(),
+        transaction_id,
         vector_id.into(),
     )
     .await?;
@@ -217,7 +219,7 @@ pub(crate) async fn delete_vector_by_id(
     tag = "transactions",
     params(
         ("collection_id" = String, Path, description = "Collection identifier"),
-        ("transaction_id" = u64, Path, description = "Transaction identifier")
+        ("transaction_id" = ExplicitTransactionID, Path, description = "Transaction identifier")
     ),
     request_body = UpsertDto,
     responses(
@@ -226,7 +228,7 @@ pub(crate) async fn delete_vector_by_id(
     )
 )]
 pub(crate) async fn upsert(
-    path: web::Path<(String, u32)>,
+    path: web::Path<(String, ExplicitTransactionID)>,
     ctx: web::Data<AppContext>,
     web::Json(upsert_dto): web::Json<UpsertDto>,
 ) -> Result<HttpResponse, TransactionError> {
@@ -238,7 +240,7 @@ pub(crate) async fn upsert(
     service::upsert_vectors(
         ctx.into_inner(),
         &collection_id,
-        transaction_id.into(),
+        transaction_id,
         upsert_dto.vectors,
     )
     .await?;

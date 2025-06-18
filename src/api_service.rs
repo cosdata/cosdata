@@ -206,7 +206,12 @@ pub async fn init_hnsw_index_for_collection(
         // NOTE: We're directly calling `index_embeddings` instead of
         // `run_upload` because we want to skip sampling for pseudo
         // nodes
-        hnsw_index.index_embeddings(&collection, vec![pseudo_vec], &transaction, &ctx.config)?;
+        hnsw_index.index_embeddings(
+            &collection,
+            vec![pseudo_vec],
+            transaction.version,
+            &ctx.config,
+        )?;
         transaction.pre_commit(&collection, &ctx.config)?;
     }
 

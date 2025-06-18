@@ -4,7 +4,6 @@ use crate::{
     models::{
         buffered_io::BufIoError,
         collection::Collection,
-        collection_transaction::BackgroundExplicitTransaction,
         common::WaCustomError,
         meta_persist::store_average_document_length,
         sparse_ann_query::SparseAnnQueryBasic,
@@ -126,14 +125,12 @@ impl IndexOps for TFIDFIndex {
         &self,
         _collection: &Collection,
         embeddings: Vec<Self::IndexingInput>,
-        transaction: &BackgroundExplicitTransaction,
+        version: VersionNumber,
         _config: &Config,
     ) -> Result<(), WaCustomError> {
         embeddings
             .into_iter()
-            .try_for_each(|TFIDFInputEmbedding(id, text)| {
-                self.insert(transaction.version, id, text)
-            })?;
+            .try_for_each(|TFIDFInputEmbedding(id, text)| self.insert(version, id, text))?;
         Ok(())
     }
 

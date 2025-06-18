@@ -9,9 +9,9 @@ use crate::{
     config_loader::Config,
     models::{
         collection::Collection,
-        collection_transaction::BackgroundExplicitTransaction,
         common::WaCustomError,
         types::{DocumentId, InternalId, MetaDb, VectorId},
+        versioning::VersionNumber,
     },
 };
 
@@ -41,35 +41,35 @@ pub trait IndexOps: Send + Sync {
         &self,
         collection: &Collection,
         embeddings: Vec<Self::IndexingInput>,
-        transaction: &BackgroundExplicitTransaction,
+        version: VersionNumber,
         config: &Config,
     ) -> Result<(), WaCustomError> {
         let Some(embeddings) = self.sample_embeddings(&collection.lmdb, embeddings, config)? else {
             return Ok(());
         };
 
-        self.index_embeddings(collection, embeddings, transaction, config)
+        self.index_embeddings(collection, embeddings, version, config)
     }
 
     fn index_embeddings(
         &self,
         collection: &Collection,
         embeddings: Vec<Self::IndexingInput>,
-        transaction: &BackgroundExplicitTransaction,
+        version: VersionNumber,
         config: &Config,
     ) -> Result<(), WaCustomError>;
 
     fn force_index(
         &self,
         collection: &Collection,
-        transaction: &BackgroundExplicitTransaction,
+        version: VersionNumber,
         config: &Config,
     ) -> Result<(), WaCustomError> {
         if !self.is_configured() {
             let mut embeddings_guard = self.embeddings_collected().write().unwrap();
             self.finalize_sampling(&collection.lmdb, config, &embeddings_guard)?;
             let embeddings = std::mem::take(&mut *embeddings_guard);
-            self.index_embeddings(collection, embeddings, transaction, config)?;
+            self.index_embeddings(collection, embeddings, version, config)?;
         }
         Ok(())
     }
@@ -133,10 +133,10 @@ pub trait IndexOps: Send + Sync {
     fn pre_commit_transaction(
         &self,
         collection: &Collection,
-        transaction: &BackgroundExplicitTransaction,
+        version: VersionNumber,
         config: &Config,
     ) -> Result<(), WaCustomError> {
-        self.force_index(collection, transaction, config)?;
+        self.force_index(collection, version, config)?;
         self.flush(collection)
     }
 

@@ -2,6 +2,7 @@ use super::{
     buffered_io::{BufIoError, BufferManagerFactory},
     cache_loader::HNSWIndexCache,
     collection::{Collection, CollectionMetadata},
+    collection_transaction::ImplicitTransaction,
     crypto::{DoubleSHA256Hash, SingleSHA256Hash},
     indexing_manager::IndexingManager,
     inverted_index::InvertedIndexRoot,
@@ -657,7 +658,11 @@ impl CollectionsMap {
                 meta: collection_meta,
                 lmdb,
                 current_version: parking_lot::RwLock::new(current_version),
+                last_allotted_version: parking_lot::RwLock::new(current_version),
                 current_explicit_transaction: parking_lot::RwLock::new(None),
+                current_implicit_transaction: parking_lot::RwLock::new(
+                    ImplicitTransaction::default(),
+                ),
                 vcs,
                 internal_to_external_map: TreeMap::deserialize(
                     internal_to_external_map_bufmans,
