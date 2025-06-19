@@ -699,11 +699,11 @@ impl CollectionsMap {
                 let all_versions = collection.vcs.get_versions()?;
                 let mut index = false;
                 for version_info in all_versions {
-                    if version_info.version == background_version {
-                        index = true;
-                    }
                     if index {
                         collection.trigger_indexing(version_info.version);
+                    }
+                    if version_info.version == background_version {
+                        index = true;
                     }
                 }
             }
@@ -1473,23 +1473,7 @@ pub fn get_app_env(
         .map_err(|err| WaCustomError::DatabaseError(err.to_string()))?;
 
     // Add more resilient error handling for collections_map loading
-    let collections_map = match CollectionsMap::load(env_arc.clone(), config, threadpool) {
-        Ok(map) => map,
-        Err(_e) => {
-            //println!("Warning: Failed to load collections map: {}", e);
-            //println!("Creating a new collections map...");
-            // Use the correct function signature for CollectionsMap::new
-            match CollectionsMap::new(env_arc.clone()) {
-                Ok(empty_map) => empty_map,
-                Err(err) => {
-                    return Err(WaCustomError::DatabaseError(format!(
-                        "Failed to create empty collections map: {}",
-                        err
-                    )));
-                }
-            }
-        }
-    };
+    let collections_map = CollectionsMap::load(env_arc.clone(), config, threadpool)?;
 
     let users_map = match UsersMap::new(env_arc.clone()) {
         Ok(map) => map,

@@ -20,6 +20,7 @@ use super::{
     collection::Collection,
     common::WaCustomError,
     durable_wal::DurableWALFile,
+    meta_persist::{update_background_version, update_current_version},
     versioning::VersionNumber,
     wal::{VectorOp, WALFile},
 };
@@ -177,7 +178,7 @@ impl Default for ImplicitTransaction {
 }
 
 impl ImplicitTransaction {
-    pub fn init(&self, collection: &Collection) -> Result<&ImplicitTransactionData, BufIoError> {
+    pub fn init(&self, collection: &Collection) -> Result<&ImplicitTransactionData, WaCustomError> {
         if let Some(data) = self.data.read().as_ref() {
             return Ok(unsafe {
                 mem::transmute::<&ImplicitTransactionData, &ImplicitTransactionData>(data)
@@ -208,6 +209,8 @@ impl ImplicitTransaction {
             thread_handle,
             channel: tx,
         });
+        collection.vcs.set_current_version(version, true)?;
+        update_current_version(&collection.lmdb, version)?;
         collection.transaction_status_map.insert(
             *last_allotted_version,
             &last_allotted_version,
@@ -234,7 +237,11 @@ impl ImplicitTransaction {
         Ok(self.init(collection)?.version)
     }
 
-    pub fn append_to_wal(&self, collection: &Collection, op: VectorOp) -> Result<(), BufIoError> {
+    pub fn append_to_wal(
+        &self,
+        collection: &Collection,
+        op: VectorOp,
+    ) -> Result<(), WaCustomError> {
         let data = self.init(collection)?;
         data.channel.send(op).unwrap();
         Ok(())
@@ -258,6 +265,7 @@ impl ImplicitTransaction {
         data.thread_handle.join().unwrap()?;
         fs::remove_file(collection.get_path().join(format!("{}.wal", *data.version)))
             .map_err(BufIoError::Io)?;
+        update_background_version(&collection.lmdb, data.version)?;
         let status = collection
             .transaction_status_map
             .get_latest(&data.version)
