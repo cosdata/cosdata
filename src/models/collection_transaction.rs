@@ -1,4 +1,4 @@
-use std::{fmt, fs, mem, ops::Deref};
+use std::{fmt, fs, mem, ops::Deref, sync::mpsc, thread};
 
 use chrono::{DateTime, Utc};
 use parking_lot::RwLock;
@@ -158,29 +158,56 @@ impl ExplicitTransaction {
     }
 }
 
+pub struct ImplicitTransactionData {
+    version: VersionNumber,
+    thread_handle: thread::JoinHandle<Result<(), WaCustomError>>,
+    channel: mpsc::Sender<VectorOp>,
+}
+
 pub struct ImplicitTransaction {
-    version_and_wal: RwLock<Option<(VersionNumber, DurableWALFile)>>,
+    data: RwLock<Option<ImplicitTransactionData>>,
 }
 
 impl Default for ImplicitTransaction {
     fn default() -> Self {
         Self {
-            version_and_wal: RwLock::new(None),
+            data: RwLock::new(None),
         }
     }
 }
 
 impl ImplicitTransaction {
-    pub fn init(&self, collection: &Collection) -> Result<VersionNumber, BufIoError> {
-        if let Some(version_and_wal) = self.version_and_wal.read().as_ref() {
-            return Ok(version_and_wal.0);
+    pub fn init(&self, collection: &Collection) -> Result<&ImplicitTransactionData, BufIoError> {
+        if let Some(data) = self.data.read().as_ref() {
+            return Ok(unsafe {
+                mem::transmute::<&ImplicitTransactionData, &ImplicitTransactionData>(data)
+            });
         }
-        let mut version = self.version_and_wal.write();
+        let mut data = self.data.write();
+        if let Some(data) = &*data {
+            return Ok(unsafe {
+                mem::transmute::<&ImplicitTransactionData, &ImplicitTransactionData>(data)
+            });
+        }
         let mut last_allotted_version = collection.last_allotted_version.write();
         *last_allotted_version = VersionNumber::from(**last_allotted_version + 1);
         let wal = DurableWALFile::new(&collection.get_path(), *last_allotted_version)?;
         wal.flush()?;
-        *version = Some((*last_allotted_version, wal));
+        let (tx, rx) = mpsc::channel();
+        let version = *last_allotted_version;
+        let wal = DurableWALFile::new(&collection.get_path(), version)?;
+        let thread_handle = thread::spawn(move || {
+            let mut wal = wal;
+            for op in rx {
+                wal.append(op)?;
+            }
+            Ok(())
+        });
+        *data = Some(ImplicitTransactionData {
+            version,
+            thread_handle,
+            channel: tx,
+        });
         collection.transaction_status_map.insert(
             *last_allotted_version,
             &last_allotted_version,
@@ -196,37 +223,44 @@ impl ImplicitTransaction {
                 last_updated: Utc::now(),
             }),
         );
-        Ok(*last_allotted_version)
+        Ok(unsafe {
+            mem::transmute::<&ImplicitTransactionData, &ImplicitTransactionData>(
+                data.as_ref().unwrap(),
+            )
+        })
+    }
+
+    pub fn version(&self, collection: &Collection) -> Result<VersionNumber, WaCustomError> {
+        Ok(self.init(collection)?.version)
     }
 
     pub fn append_to_wal(&self, collection: &Collection, op: VectorOp) -> Result<(), BufIoError> {
-        self.init(collection)?;
-        let version_and_wal = self.version_and_wal.read();
-        let version_and_wal = version_and_wal.as_ref().unwrap();
-        version_and_wal.1.append(op)?;
+        let data = self.init(collection)?;
+        data.channel.send(op).unwrap();
         Ok(())
     }
 
     pub fn pre_commit(self, collection: &Collection, config: &Config) -> Result<(), WaCustomError> {
-        let Some((version, wal)) = self.version_and_wal.into_inner() else {
+        let Some(data) = self.data.into_inner() else {
             return Ok(());
         };
         if let Some(hnsw_index) = &*collection.hnsw_index.read() {
-            hnsw_index.pre_commit_transaction(collection, version, config)?;
+            hnsw_index.pre_commit_transaction(collection, data.version, config)?;
         }
         if let Some(inverted_index) = &*collection.inverted_index.read() {
-            inverted_index.pre_commit_transaction(collection, version, config)?;
+            inverted_index.pre_commit_transaction(collection, data.version, config)?;
         }
         if let Some(tf_idf_index) = &*collection.tf_idf_index.read() {
-            tf_idf_index.pre_commit_transaction(collection, version, config)?;
+            tf_idf_index.pre_commit_transaction(collection, data.version, config)?;
         }
         collection.flush(config)?;
-        drop(wal);
-        fs::remove_file(collection.get_path().join(format!("{}.wal", *version)))
+        drop(data.channel);
+        data.thread_handle.join().unwrap()?;
+        fs::remove_file(collection.get_path().join(format!("{}.wal", *data.version)))
             .map_err(BufIoError::Io)?;
         let status = collection
             .transaction_status_map
-            .get_latest(&version)
+            .get_latest(&data.version)
             .unwrap();
         status.write().complete();
         Ok(())

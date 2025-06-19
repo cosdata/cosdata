@@ -172,7 +172,7 @@ impl IndexingManager {
         embeddings: Vec<RawVectorEmbedding>,
     ) -> Result<(), WaCustomError> {
         let vectors_count = embeddings.len() as u32;
-        let version = transaction.init(collection)?;
+        let version = transaction.version(collection)?;
         transaction.append_to_wal(collection, VectorOp::Upsert(embeddings.clone()))?;
         let status = collection
             .transaction_status_map

@@ -1,97 +1,67 @@
-use std::{
-    fs::{File, OpenOptions},
-    io::{self, Seek, SeekFrom, Write},
-    path::Path,
-    sync::{
-        atomic::{AtomicU32, Ordering},
-        Arc, Mutex,
-    },
-};
+use std::{fs::OpenOptions, path::Path, sync::Arc};
 
 use crate::metadata::FieldValue;
 
-use super::{versioning::VersionNumber, wal::VectorOp};
+use super::{
+    buffered_io::{BufIoError, BufferManager},
+    serializer::write_len,
+    versioning::VersionNumber,
+    wal::VectorOp,
+};
 
 pub struct DurableWALFile {
-    file: Arc<Mutex<File>>,
-    vectors_count: AtomicU32,
-    write_position: AtomicU32,
-}
-
-/// Writes a u16 length to the buffer using custom encoding
-fn write_len(buf: &mut Vec<u8>, len: u16) {
-    if len <= 0x7F {
-        buf.push(len as u8);
-    } else {
-        let msb = ((len >> 8) as u8 & 0x7F) | 0x80;
-        let lsb = len as u8;
-        buf.push(msb);
-        buf.push(lsb);
-    }
+    bufman: BufferManager,
+    cursor: u64,
+    vectors_count: u32,
 }
 
 impl DurableWALFile {
-    /// Creates a new WAL file in a temporary location
-    pub fn new(root_path: &Path, version: VersionNumber) -> Result<Self, io::Error> {
-        let file_path = root_path.join(format!("{}.wal", *version));
-        let mut file = OpenOptions::new()
+    pub fn new(root_path: &Path, version: VersionNumber) -> Result<Self, BufIoError> {
+        let file_path: Arc<Path> = root_path.join(format!("{}.wal", *version)).into();
+
+        let file = OpenOptions::new()
             .write(true)
+            .read(true)
             .create(true)
             .truncate(false)
             .open(&file_path)?;
-
-        // Write initial vectors_count (0)
-        let buf = [0u8; 4];
-        file.write_all(&buf)?;
-        file.flush()?;
+        let bufman = BufferManager::new(file, 8192)?;
+        let cursor = bufman.open_cursor()?;
+        bufman.update_u32_with_cursor(cursor, 0)?;
 
         Ok(Self {
-            file: Arc::new(Mutex::new(file)),
-            vectors_count: AtomicU32::new(0),
-            write_position: AtomicU32::new(4), // After 4-byte header
+            bufman,
+            cursor,
+            vectors_count: 0,
         })
     }
 
-    /// Persists the WAL to its final location and ensures durability
-    pub fn flush(&self) -> Result<(), io::Error> {
-        let mut file = self.file.lock().unwrap();
-
-        // Update header with current vectors count
-        file.seek(SeekFrom::Start(0))?;
-        file.write_all(&self.vectors_count.load(Ordering::Relaxed).to_le_bytes())?;
-
-        // Ensure all data is persisted
-        file.flush()?;
-        file.sync_all()?;
-
-        Ok(())
+    pub fn flush(self) -> Result<(), BufIoError> {
+        let cursor = self.bufman.open_cursor()?;
+        self.bufman
+            .update_u32_with_cursor(cursor, self.vectors_count)?;
+        self.bufman.close_cursor(cursor)?;
+        self.bufman.flush()
     }
 
-    /// Appends an operation to the WAL with immediate durability
-    pub fn append(&self, op: VectorOp) -> Result<(), io::Error> {
-        let mut buf = Vec::with_capacity(1024);
+    pub fn append(&mut self, op: VectorOp) -> Result<(), BufIoError> {
+        let mut buf = Vec::new();
 
-        // Reserve space for length header (4 bytes)
-        buf.extend([0u8; 4]);
+        buf.extend([u8::MAX; 4]);
 
-        match &op {
+        match op {
             VectorOp::Upsert(vectors) => {
-                self.vectors_count
-                    .fetch_add(vectors.len() as u32, Ordering::Relaxed);
-
+                self.vectors_count += vectors.len() as u32;
                 write_len(&mut buf, vectors.len() as u16);
-
-                for vector in vectors {
+                for vector in &*vectors {
                     write_len(&mut buf, vector.id.len() as u16);
                     buf.extend(vector.id.as_bytes());
-
                     if let Some(document_id) = &vector.document_id {
                         write_len(&mut buf, document_id.len() as u16);
                         buf.extend(document_id.as_bytes());
                     } else {
                         write_len(&mut buf, 0);
                     }
-
                     if let Some(dense_values) = &vector.dense_values {
                         write_len(&mut buf, dense_values.len() as u16);
                         for val in dense_values {
@@ -100,7 +70,6 @@ impl DurableWALFile {
                     } else {
                         write_len(&mut buf, 0);
                     }
-
                     if let Some(metadata) = &vector.metadata {
                         write_len(&mut buf, metadata.len() as u16);
                         for (field, val) in metadata {
@@ -140,36 +109,23 @@ impl DurableWALFile {
                         write_len(&mut buf, 0);
                     }
                 }
-
-                // Update length header (without tag)
                 let len = buf.len() as u32 - 4;
                 buf[0..4].copy_from_slice(&len.to_le_bytes());
             }
             VectorOp::Delete(id) => {
                 write_len(&mut buf, id.len() as u16);
                 buf.extend(id.as_bytes());
-
-                // Update length header with delete tag
                 let len = buf.len() as u32 - 4;
                 buf[0..4].copy_from_slice(&(len | (1u32 << 31)).to_le_bytes());
             }
         }
 
-        // Write with lock protection and ensure durability
-        let mut file = self.file.lock().unwrap();
-
-        // Seek to current write position
-        let pos = self.write_position.load(Ordering::Acquire);
-        file.seek(SeekFrom::Start(pos as u64))?;
-
-        // Write data
-        file.write_all(&buf)?;
-        file.flush()?; // Ensure write hits disk
-
-        // Update write position
-        self.write_position
-            .fetch_add(buf.len() as u32, Ordering::Release);
-
+        self.bufman.write_to_end_of_file(self.cursor, &buf)?;
+        let cursor = self.bufman.open_cursor()?;
+        self.bufman
+            .update_u32_with_cursor(cursor, self.vectors_count)?;
+        self.bufman.close_cursor(cursor)?;
+        self.bufman.flush()?;
         Ok(())
     }
 }
@@ -231,7 +187,7 @@ mod tests {
 
         let vectors: Vec<_> = (0..3).map(|_| random_vector()).collect();
 
-        let wal = DurableWALFile::new(dir.path(), VersionNumber::from(version)).unwrap();
+        let mut wal = DurableWALFile::new(dir.path(), VersionNumber::from(version)).unwrap();
         wal.append(VectorOp::Upsert(vectors.clone())).unwrap();
         wal.flush().unwrap();
 
@@ -252,7 +208,7 @@ mod tests {
         let version = 0;
         let id = VectorId::from(random_string(10));
 
-        let wal = DurableWALFile::new(dir.path(), VersionNumber::from(version)).unwrap();
+        let mut wal = DurableWALFile::new(dir.path(), VersionNumber::from(version)).unwrap();
         wal.append(VectorOp::Delete(id.clone())).unwrap();
         wal.flush().unwrap();
 
@@ -273,7 +229,7 @@ mod tests {
         let vecs: Vec<_> = (0..2).map(|_| random_vector()).collect();
         let del_id = VectorId::from(random_string(10));
 
-        let wal = DurableWALFile::new(dir.path(), VersionNumber::from(version)).unwrap();
+        let mut wal = DurableWALFile::new(dir.path(), VersionNumber::from(version)).unwrap();
         wal.append(VectorOp::Upsert(vecs.clone())).unwrap();
         wal.append(VectorOp::Delete(del_id.clone())).unwrap();
         wal.flush().unwrap();
@@ -311,7 +267,7 @@ mod tests {
             })
             .collect();
 
-        let wal = DurableWALFile::new(dir.path(), VersionNumber::from(version)).unwrap();
+        let mut wal = DurableWALFile::new(dir.path(), VersionNumber::from(version)).unwrap();
         for op in &entries {
             wal.append(op.clone()).unwrap();
         }
@@ -340,7 +296,7 @@ mod tests {
         let id = VectorId::from("test_id".to_string());
 
         {
-            let wal = DurableWALFile::new(dir.path(), VersionNumber::from(version)).unwrap();
+            let mut wal = DurableWALFile::new(dir.path(), VersionNumber::from(version)).unwrap();
             wal.append(VectorOp::Delete(id.clone())).unwrap();
             // No explicit flush, but append should flush
         }

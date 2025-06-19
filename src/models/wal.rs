@@ -120,7 +120,7 @@ impl WALFile {
         self.vectors_count.load(Ordering::Relaxed)
     }
 
-    pub fn flush(&self, root_path: &Path, version: VersionNumber) -> Result<(), BufIoError> {
+    pub fn flush(self, root_path: &Path, version: VersionNumber) -> Result<(), BufIoError> {
         let cursor = self.bufman.open_cursor()?;
         self.bufman
             .update_u32_with_cursor(cursor, self.vectors_count.load(Ordering::Acquire))?;
@@ -145,7 +145,7 @@ impl WALFile {
                 self.vectors_count
                     .fetch_add(vectors.len() as u32, Ordering::Relaxed);
                 write_len(&mut buf, vectors.len() as u16);
-                for vector in vectors {
+                for vector in &*vectors {
                     write_len(&mut buf, vector.id.len() as u16);
                     buf.extend(vector.id.as_bytes());
                     if let Some(document_id) = &vector.document_id {
