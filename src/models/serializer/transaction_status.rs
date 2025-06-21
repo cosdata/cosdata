@@ -21,6 +21,7 @@ impl SimpleSerialize for TransactionStatus {
             }
             TransactionStatus::InProgress {
                 progress,
+                started_at,
                 last_updated,
             } => {
                 buf.push(1);
@@ -29,16 +30,19 @@ impl SimpleSerialize for TransactionStatus {
                 buf.extend_from_slice(&progress.total_records.to_le_bytes());
                 buf.extend_from_slice(&progress.rate_per_second.to_le_bytes());
                 buf.extend_from_slice(&progress.estimated_time_remaining_seconds.to_le_bytes());
+                buf.extend_from_slice(&started_at.timestamp().to_le_bytes());
                 buf.extend_from_slice(&last_updated.timestamp().to_le_bytes());
             }
             TransactionStatus::Complete {
                 summary,
+                started_at,
                 last_updated,
             } => {
                 buf.push(2);
                 buf.extend_from_slice(&summary.total_records_indexed.to_le_bytes());
                 buf.extend_from_slice(&summary.duration_seconds.to_le_bytes());
                 buf.extend_from_slice(&summary.average_rate_per_second.to_le_bytes());
+                buf.extend_from_slice(&started_at.timestamp().to_le_bytes());
                 buf.extend_from_slice(&last_updated.timestamp().to_le_bytes());
             }
         }
@@ -65,10 +69,20 @@ impl SimpleSerialize for TransactionStatus {
                 let total_records = bufman.read_u32_with_cursor(cursor)?;
                 let rate_per_second = bufman.read_f32_with_cursor(cursor)?;
                 let estimated_time_remaining_seconds = bufman.read_u32_with_cursor(cursor)?;
-                let timestamp = bufman.read_i64_with_cursor(cursor)?;
-                let last_updated = Utc.timestamp_opt(timestamp, 0).single().ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidData, "Invalid timestamp")
-                })?;
+                let started_at_timestamp = bufman.read_i64_with_cursor(cursor)?;
+                let last_updated_timestamp = bufman.read_i64_with_cursor(cursor)?;
+                let started_at = Utc
+                    .timestamp_opt(started_at_timestamp, 0)
+                    .single()
+                    .ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::InvalidData, "Invalid timestamp")
+                    })?;
+                let last_updated = Utc
+                    .timestamp_opt(last_updated_timestamp, 0)
+                    .single()
+                    .ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::InvalidData, "Invalid timestamp")
+                    })?;
 
                 Ok(Self::InProgress {
                     progress: Progress {
@@ -78,6 +92,7 @@ impl SimpleSerialize for TransactionStatus {
                         rate_per_second,
                         estimated_time_remaining_seconds,
                     },
+                    started_at,
                     last_updated,
                 })
             }
@@ -85,10 +100,20 @@ impl SimpleSerialize for TransactionStatus {
                 let total_records_indexed = bufman.read_u32_with_cursor(cursor)?;
                 let duration_seconds = bufman.read_u32_with_cursor(cursor)?;
                 let average_rate_per_second = bufman.read_f32_with_cursor(cursor)?;
-                let timestamp = bufman.read_i64_with_cursor(cursor)?;
-                let last_updated = Utc.timestamp_opt(timestamp, 0).single().ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidData, "Invalid timestamp")
-                })?;
+                let started_at_timestamp = bufman.read_i64_with_cursor(cursor)?;
+                let started_at = Utc
+                    .timestamp_opt(started_at_timestamp, 0)
+                    .single()
+                    .ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::InvalidData, "Invalid timestamp")
+                    })?;
+                let last_updated_timestamp = bufman.read_i64_with_cursor(cursor)?;
+                let last_updated = Utc
+                    .timestamp_opt(last_updated_timestamp, 0)
+                    .single()
+                    .ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::InvalidData, "Invalid timestamp")
+                    })?;
 
                 Ok(Self::Complete {
                     summary: Summary {
@@ -96,6 +121,7 @@ impl SimpleSerialize for TransactionStatus {
                         duration_seconds,
                         average_rate_per_second,
                     },
+                    started_at,
                     last_updated,
                 })
             }

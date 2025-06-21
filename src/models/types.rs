@@ -2,6 +2,7 @@ use super::{
     buffered_io::{BufIoError, BufferManagerFactory},
     cache_loader::HNSWIndexCache,
     collection::{Collection, CollectionMetadata},
+    collection_transaction::ImplicitTransaction,
     crypto::{DoubleSHA256Hash, SingleSHA256Hash},
     indexing_manager::IndexingManager,
     inverted_index::InvertedIndexRoot,
@@ -38,6 +39,7 @@ use crate::{
     metadata::{schema::MetadataDimensions, QueryFilterDimensions, HIGH_WEIGHT},
     models::{
         buffered_io::BufferManager,
+        collection_transaction::TransactionStatus,
         common::*,
         lazy_item::{FileIndex, ProbLazyItem},
         meta_persist::retrieve_values_range,
@@ -50,6 +52,7 @@ use crate::{
     },
     storage::Storage,
 };
+use chrono::Utc;
 use crossbeam::channel;
 use dashmap::DashMap;
 use lmdb::{Cursor, Database, DatabaseFlags, Environment, Transaction, WriteFlags};
@@ -657,7 +660,11 @@ impl CollectionsMap {
                 meta: collection_meta,
                 lmdb,
                 current_version: parking_lot::RwLock::new(current_version),
-                current_open_transaction: parking_lot::RwLock::new(None),
+                last_allotted_version: parking_lot::RwLock::new(current_version),
+                current_explicit_transaction: parking_lot::RwLock::new(None),
+                current_implicit_transaction: parking_lot::RwLock::new(
+                    ImplicitTransaction::default(),
+                ),
                 vcs,
                 internal_to_external_map: TreeMap::deserialize(
                     internal_to_external_map_bufmans,
@@ -694,11 +701,30 @@ impl CollectionsMap {
                 let all_versions = collection.vcs.get_versions()?;
                 let mut index = false;
                 for version_info in all_versions {
+                    if index {
+                        if collection
+                            .transaction_status_map
+                            .get_latest(&version_info.version)
+                            .is_none()
+                        {
+                            collection.transaction_status_map.insert(
+                                version_info.version,
+                                &version_info.version,
+                                parking_lot::RwLock::new(TransactionStatus::NotStarted {
+                                    last_updated: Utc::now(),
+                                }),
+                            );
+                        }
+                        IndexingManager::index_version(
+                            &collection,
+                            &config,
+                            &threadpool,
+                            version_info.version,
+                        )
+                        .unwrap();
+                    }
                     if version_info.version == background_version {
                         index = true;
-                    }
-                    if index {
-                        collection.trigger_indexing(version_info.version);
                     }
                 }
             }
@@ -1468,23 +1494,7 @@ pub fn get_app_env(
         .map_err(|err| WaCustomError::DatabaseError(err.to_string()))?;
 
     // Add more resilient error handling for collections_map loading
-    let collections_map = match CollectionsMap::load(env_arc.clone(), config, threadpool) {
-        Ok(map) => map,
-        Err(_e) => {
-            //println!("Warning: Failed to load collections map: {}", e);
-            //println!("Creating a new collections map...");
-            // Use the correct function signature for CollectionsMap::new
-            match CollectionsMap::new(env_arc.clone()) {
-                Ok(empty_map) => empty_map,
-                Err(err) => {
-                    return Err(WaCustomError::DatabaseError(format!(
-                        "Failed to create empty collections map: {}",
-                        err
-                    )));
-                }
-            }
-        }
-    };
+    let collections_map = CollectionsMap::load(env_arc.clone(), config, threadpool)?;
 
     let users_map = match UsersMap::new(env_arc.clone()) {
         Ok(map) => map,

@@ -14,9 +14,8 @@ use parking_lot::Mutex;
 use crate::{indexes::inverted::types::SparsePair, metadata::FieldValue};
 
 use super::{
-    buffered_io::{BufIoError, BufferManager},
+    buffered_io::{BufIoError, FilelessBufferManager},
     collection::RawVectorEmbedding,
-    serializer::{read_len, read_opt_string, read_string, write_len},
     types::{DocumentId, VectorId},
     versioning::VersionNumber,
 };
@@ -28,24 +27,82 @@ pub enum VectorOp {
 }
 
 pub struct WALFile {
-    bufman: BufferManager,
+    bufman: FilelessBufferManager,
     cursor: u64,
     read_lock: Mutex<()>,
     vectors_count: AtomicU32,
 }
 
+/// Writes a u16 length to the buffer using custom encoding:
+/// - If the value fits in 7 bits (<= 127), write it directly as one byte.
+/// - Otherwise, set the MSB of the first byte to 1, store the top 7 bits,
+///   and follow with a byte for the lower 8 bits.
+pub fn write_len(buf: &mut Vec<u8>, len: u16) {
+    if len <= 0x7F {
+        buf.push(len as u8);
+    } else {
+        let msb = ((len >> 8) as u8 & 0x7F) | 0x80; // Set highest bit
+        let lsb = len as u8;
+        buf.push(msb);
+        buf.push(lsb);
+    }
+}
+
+/// Reads a u16 length from the buffer using the same encoding.
+pub fn read_len(bufman: &FilelessBufferManager, cursor: u64) -> Result<u16, BufIoError> {
+    let first = bufman.read_u8_with_cursor(cursor)?;
+    if first & 0x80 == 0 {
+        Ok(first as u16)
+    } else {
+        let msb = (first & 0x7F) as u16;
+        let lsb = bufman.read_u8_with_cursor(cursor)? as u16;
+        Ok((msb << 8) | lsb)
+    }
+}
+
+pub fn read_string(bufman: &FilelessBufferManager, cursor: u64) -> Result<String, BufIoError> {
+    let len = read_len(bufman, cursor)? as usize;
+    let mut buf = vec![0; len];
+    bufman.read_with_cursor(cursor, &mut buf)?;
+    String::from_utf8(buf)
+        .map_err(|err| BufIoError::Io(io::Error::new(io::ErrorKind::InvalidData, err)))
+}
+
+pub fn read_opt_string(
+    bufman: &FilelessBufferManager,
+    cursor: u64,
+) -> Result<Option<String>, BufIoError> {
+    let len = read_len(bufman, cursor)? as usize;
+    if len == 0 {
+        return Ok(None);
+    }
+    let mut buf = vec![0; len];
+    bufman.read_with_cursor(cursor, &mut buf)?;
+    let str = String::from_utf8(buf)
+        .map_err(|err| BufIoError::Io(io::Error::new(io::ErrorKind::InvalidData, err)))?;
+    Ok(Some(str))
+}
+
 impl WALFile {
-    pub fn new(root_path: &Path, version: VersionNumber) -> Result<Self, BufIoError> {
+    pub fn new() -> Result<Self, BufIoError> {
+        let bufman = FilelessBufferManager::new(8192)?;
+        let cursor = bufman.open_cursor()?;
+        bufman.update_u32_with_cursor(cursor, 0)?;
+
+        Ok(Self {
+            bufman,
+            cursor,
+            read_lock: Mutex::new(()),
+            vectors_count: AtomicU32::new(0),
+        })
+    }
+
+    pub fn from_existing(root_path: &Path, version: VersionNumber) -> Result<Self, BufIoError> {
         let file_path: Arc<Path> = root_path.join(format!("{}.wal", *version)).into();
 
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&file_path)?;
+        let mut file = OpenOptions::new().read(true).open(&file_path)?;
 
-        let bufman = BufferManager::new(file, 8192)?;
+        let bufman = FilelessBufferManager::from_file(&mut file, 8192)?;
         let cursor = bufman.open_cursor()?;
         let vectors_count = bufman.read_u32_with_cursor(cursor)?;
         bufman.seek_with_cursor(cursor, 0)?;
@@ -63,12 +120,19 @@ impl WALFile {
         self.vectors_count.load(Ordering::Relaxed)
     }
 
-    pub fn flush(&self) -> Result<(), BufIoError> {
+    pub fn flush(self, root_path: &Path, version: VersionNumber) -> Result<(), BufIoError> {
         let cursor = self.bufman.open_cursor()?;
         self.bufman
             .update_u32_with_cursor(cursor, self.vectors_count.load(Ordering::Acquire))?;
         self.bufman.close_cursor(cursor)?;
-        self.bufman.flush()
+        let file_path: Arc<Path> = root_path.join(format!("{}.wal", *version)).into();
+
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&file_path)?;
+        self.bufman.flush(&mut file)
     }
 
     pub fn append(&self, op: VectorOp) -> Result<(), BufIoError> {
@@ -81,7 +145,7 @@ impl WALFile {
                 self.vectors_count
                     .fetch_add(vectors.len() as u32, Ordering::Relaxed);
                 write_len(&mut buf, vectors.len() as u16);
-                for vector in vectors {
+                for vector in &*vectors {
                     write_len(&mut buf, vector.id.len() as u16);
                     buf.extend(vector.id.as_bytes());
                     if let Some(document_id) = &vector.document_id {
@@ -306,8 +370,8 @@ mod tests {
         }
     }
 
-    fn reopen_wal(dir: &std::path::Path, version: u32) -> WALFile {
-        WALFile::new(dir, VersionNumber::from(version)).unwrap()
+    fn reopen_wal(dir: &std::path::Path, txn_id: u32) -> WALFile {
+        WALFile::from_existing(dir, VersionNumber::from(txn_id)).unwrap()
     }
 
     #[test]
@@ -316,10 +380,11 @@ mod tests {
         let version = 0;
 
         {
-            let wal = WALFile::new(dir.path(), VersionNumber::from(version)).unwrap();
+            let wal = WALFile::new().unwrap();
             let vectors: Vec<_> = (0..3).map(|_| random_vector()).collect();
             wal.append(VectorOp::Upsert(vectors.clone())).unwrap();
-            wal.flush().unwrap();
+            wal.flush(dir.as_ref(), VersionNumber::from(version))
+                .unwrap();
         }
 
         {
@@ -341,9 +406,10 @@ mod tests {
         let id = VectorId::from(random_string(10));
 
         {
-            let wal = WALFile::new(dir.path(), VersionNumber::from(version)).unwrap();
+            let wal = WALFile::new().unwrap();
             wal.append(VectorOp::Delete(id.clone())).unwrap();
-            wal.flush().unwrap();
+            wal.flush(dir.as_ref(), VersionNumber::from(version))
+                .unwrap();
         }
 
         {
@@ -358,20 +424,21 @@ mod tests {
     #[test]
     fn test_mixed_ops_persistence() {
         let dir = tempdir().unwrap();
-        let version = 0;
+        let txn_id = 0;
 
         let vecs: Vec<_> = (0..2).map(|_| random_vector()).collect();
         let del_id = VectorId::from(random_string(10));
 
         {
-            let wal = WALFile::new(dir.path(), VersionNumber::from(version)).unwrap();
+            let wal = WALFile::new().unwrap();
             wal.append(VectorOp::Upsert(vecs.clone())).unwrap();
             wal.append(VectorOp::Delete(del_id.clone())).unwrap();
-            wal.flush().unwrap();
+            wal.flush(dir.as_ref(), VersionNumber::from(txn_id))
+                .unwrap();
         }
 
         {
-            let wal = reopen_wal(dir.path(), version);
+            let wal = reopen_wal(dir.path(), txn_id);
             match wal.read().unwrap() {
                 Some(VectorOp::Upsert(read_vecs)) => assert_eq!(read_vecs.len(), 2),
                 _ => panic!("Expected VectorOp::Upsert"),
@@ -399,11 +466,12 @@ mod tests {
             .collect();
 
         {
-            let wal = WALFile::new(dir.path(), VersionNumber::from(version)).unwrap();
+            let wal = WALFile::new().unwrap();
             for op in &entries {
                 wal.append(op.clone()).unwrap();
             }
-            wal.flush().unwrap();
+            wal.flush(dir.as_ref(), VersionNumber::from(version))
+                .unwrap();
         }
 
         {

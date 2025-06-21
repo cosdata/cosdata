@@ -11,11 +11,11 @@ use crate::{
     models::{
         cache_loader::HNSWIndexCache,
         collection::Collection,
-        collection_transaction::BackgroundCollectionTransaction,
         common::{TSHashTable, WaCustomError},
         meta_persist::store_values_range,
         prob_node::SharedLatestNode,
         types::{DistanceMetric, FileOffset, HNSWLevel, InternalId, MetaDb, QuantizationMetric},
+        versioning::VersionNumber,
     },
     quantization::{Quantization, StorageType},
     vector_store::{ann_search, finalize_ann_results, index_embeddings},
@@ -179,10 +179,10 @@ impl IndexOps for HNSWIndex {
         &self,
         collection: &Collection,
         embeddings: Vec<Self::IndexingInput>,
-        transaction: &BackgroundCollectionTransaction,
+        version: VersionNumber,
         config: &Config,
     ) -> Result<(), WaCustomError> {
-        index_embeddings(config, collection, self, transaction, embeddings)
+        index_embeddings(config, collection, self, version, embeddings)
     }
 
     fn sample_embedding(&self, embedding: &Self::IndexingInput) {

@@ -5,16 +5,14 @@ use crate::{
     models::{
         collection::{Collection, CollectionIndexingStatus},
         common::WaCustomError,
-        meta_persist::update_current_version,
+        meta_persist::{update_background_version, update_current_version},
         types::MetaDb,
         versioning::VersionControl,
     },
 };
 
 use super::{
-    dtos::{
-        CreateCollectionDto, GetCollectionsDto, GetCollectionsResponseDto,
-    },
+    dtos::{CreateCollectionDto, GetCollectionsDto, GetCollectionsResponseDto},
     error::CollectionsError,
 };
 
@@ -84,6 +82,7 @@ pub(crate) async fn create_collection(
         .flush(&ctx.config)
         .map_err(CollectionsError::WaCustomError)?;
     update_current_version(&collection.lmdb, hash).map_err(CollectionsError::WaCustomError)?;
+    update_background_version(&collection.lmdb, hash).map_err(CollectionsError::WaCustomError)?;
     Ok(collection)
 }
 

@@ -18,7 +18,6 @@ use crate::metadata::MetadataSchema;
 use crate::metadata::HIGH_WEIGHT;
 use crate::models::cache_loader::HNSWIndexCache;
 use crate::models::collection::Collection;
-use crate::models::collection_transaction::BackgroundCollectionTransaction;
 use crate::models::common::*;
 use crate::models::dot_product::dot_product_f32;
 use crate::models::file_persist::*;
@@ -715,7 +714,7 @@ pub fn index_embeddings(
     config: &Config,
     collection: &Collection,
     hnsw_index: &HNSWIndex,
-    transaction: &BackgroundCollectionTransaction,
+    version: VersionNumber,
     vecs: Vec<DenseInputEmbedding>,
 ) -> Result<(), WaCustomError> {
     let hnsw_params_guard = hnsw_index.hnsw_params.read().unwrap();
@@ -766,7 +765,7 @@ pub fn index_embeddings(
             emb.prop_metadata,
             root_entry,
             highest_level,
-            transaction.version,
+            version,
             file_id,
             &hnsw_params_guard,
             max_level, // Pass max_level to let index_embedding control node creation

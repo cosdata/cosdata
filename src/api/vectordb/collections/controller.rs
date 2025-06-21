@@ -4,8 +4,8 @@ use crate::app_context::AppContext;
 
 use super::{
     dtos::{
-        CreateCollectionDto, CreateCollectionDtoResponse, GetCollectionsDto,
-        GetCollectionsResponseDto, CollectionWithVectorCountsDto,
+        CollectionWithVectorCountsDto, CreateCollectionDto, CreateCollectionDtoResponse,
+        GetCollectionsDto, GetCollectionsResponseDto,
     },
     service,
 };
@@ -80,7 +80,8 @@ pub(crate) async fn get_collection_by_id(
     collection_id: web::Path<String>,
     ctx: web::Data<AppContext>,
 ) -> Result<HttpResponse> {
-    let collection_with_counts = service::get_collection_by_id(ctx.into_inner(), &collection_id).await?;
+    let collection_with_counts =
+        service::get_collection_by_id(ctx.into_inner(), &collection_id).await?;
     Ok(HttpResponse::Ok().json(collection_with_counts))
 }
 

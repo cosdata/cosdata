@@ -441,6 +441,296 @@ impl BufferManager {
     }
 }
 
+pub struct FilelessBufferManager {
+    regions: DashMap<u64, Arc<FilelessBufferRegion>>,
+    cursors: RwLock<HashMap<u64, Cursor>>,
+    next_cursor_id: AtomicU64,
+    file_size: RwLock<u64>,
+    buffer_size: usize,
+}
+
+struct FilelessBufferRegion {
+    start: u64,
+    buffer: RwLock<Vec<u8>>,
+    dirty: AtomicBool,
+    end: AtomicUsize,
+}
+
+impl FilelessBufferRegion {
+    fn new(start: u64, buffer_size: usize) -> Self {
+        Self {
+            start,
+            buffer: RwLock::new(vec![0; buffer_size]),
+            dirty: AtomicBool::new(false),
+            end: AtomicUsize::new(0),
+        }
+    }
+
+    fn should_flush(&self) -> bool {
+        self.dirty.load(Ordering::SeqCst)
+    }
+
+    fn flush(&self, file: &mut File) -> Result<(), BufIoError> {
+        file.seek(SeekFrom::Start(self.start))
+            .map_err(BufIoError::Io)?;
+        let buffer = self.buffer.read().map_err(|_| BufIoError::Locking)?;
+        let end = self.end.load(Ordering::SeqCst);
+        file.write_all(&buffer[..end]).map_err(BufIoError::Io)?;
+        self.dirty.store(false, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+impl FilelessBufferManager {
+    pub fn new(buffer_size: usize) -> Result<Self, BufIoError> {
+        Ok(Self {
+            regions: DashMap::new(),
+            cursors: RwLock::new(HashMap::new()),
+            next_cursor_id: AtomicU64::new(0),
+            file_size: RwLock::new(0),
+            buffer_size,
+        })
+    }
+
+    pub fn from_file(file: &mut File, buffer_size: usize) -> Result<Self, BufIoError> {
+        let file_size = file.seek(SeekFrom::End(0))?;
+
+        let mut offset = 0;
+        let regions = DashMap::new();
+
+        while offset < file_size {
+            let mut region = FilelessBufferRegion::new(offset, buffer_size);
+            file.seek(SeekFrom::Start(offset))?;
+            let buffer = region.buffer.get_mut().map_err(|_| BufIoError::Locking)?;
+            let bytes_read = file.read(&mut buffer[..]).map_err(BufIoError::Io)?;
+            region.end.store(bytes_read, Ordering::SeqCst);
+            regions.insert(offset, Arc::new(region));
+            offset += buffer_size as u64;
+        }
+
+        file.seek(SeekFrom::Start(0))?;
+
+        Ok(Self {
+            regions,
+            cursors: RwLock::new(HashMap::new()),
+            next_cursor_id: AtomicU64::new(0),
+            file_size: RwLock::new(file_size),
+            buffer_size,
+        })
+    }
+
+    pub fn open_cursor(&self) -> Result<u64, BufIoError> {
+        let cursor_id = self.next_cursor_id.fetch_add(1, Ordering::SeqCst);
+        let mut cursors = self.cursors.write().map_err(|_| BufIoError::Locking)?;
+        cursors.insert(cursor_id, Cursor::new());
+        Ok(cursor_id)
+    }
+
+    pub fn close_cursor(&self, cursor_id: u64) -> Result<(), BufIoError> {
+        let mut cursors = self.cursors.write().map_err(|_| BufIoError::Locking)?;
+        cursors.remove(&cursor_id);
+        Ok(())
+    }
+
+    fn get_or_create_region(&self, position: u64) -> Arc<FilelessBufferRegion> {
+        let start = position - (position % self.buffer_size as u64);
+        self.regions
+            .entry(start)
+            .or_insert_with(|| Arc::new(FilelessBufferRegion::new(start, self.buffer_size)))
+            .clone()
+    }
+
+    pub fn read_f32_with_cursor(&self, cursor_id: u64) -> Result<f32, BufIoError> {
+        let mut buffer = [0u8; 4];
+        self.read_with_cursor(cursor_id, &mut buffer)?;
+        Ok(f32::from_le_bytes(buffer))
+    }
+
+    pub fn read_i32_with_cursor(&self, cursor_id: u64) -> Result<i32, BufIoError> {
+        let mut buffer = [0u8; 4];
+        self.read_with_cursor(cursor_id, &mut buffer)?;
+        Ok(i32::from_le_bytes(buffer))
+    }
+
+    pub fn read_u32_with_cursor(&self, cursor_id: u64) -> Result<u32, BufIoError> {
+        let mut buffer = [0u8; 4];
+        self.read_with_cursor(cursor_id, &mut buffer)?;
+        Ok(u32::from_le_bytes(buffer))
+    }
+
+    pub fn read_u8_with_cursor(&self, cursor_id: u64) -> Result<u8, BufIoError> {
+        let mut buffer = [0u8; 1];
+        self.read_with_cursor(cursor_id, &mut buffer)?;
+        Ok(u8::from_le_bytes(buffer))
+    }
+
+    pub fn cursor_position(&self, cursor_id: u64) -> Result<u64, BufIoError> {
+        let cursors = self.cursors.read().map_err(|_| BufIoError::Locking)?;
+        cursors
+            .get(&cursor_id)
+            .map(|cursor| cursor.position)
+            .ok_or(BufIoError::InvalidCursor(cursor_id))
+    }
+
+    pub fn read_with_cursor(&self, cursor_id: u64, buf: &mut [u8]) -> Result<usize, BufIoError> {
+        let mut curr_pos = {
+            let cursors = self.cursors.read().map_err(|_| BufIoError::Locking)?;
+            let cursor = cursors
+                .get(&cursor_id)
+                .ok_or(BufIoError::InvalidCursor(cursor_id))?;
+            cursor.position
+        };
+
+        let mut total_read = 0;
+        while total_read < buf.len() {
+            let region = self.get_or_create_region(curr_pos);
+            let buffer = region.buffer.read().map_err(|_| BufIoError::Locking)?;
+            let buffer_pos = (curr_pos - region.start) as usize;
+            let available = region.end.load(Ordering::SeqCst) - buffer_pos;
+            if available == 0 {
+                if total_read == 0
+                    && curr_pos >= *self.file_size.read().map_err(|_| BufIoError::Locking)?
+                {
+                    return Ok(0); // EOF
+                }
+                break;
+            }
+            let to_read = (buf.len() - total_read).min(available);
+            buf[total_read..total_read + to_read]
+                .copy_from_slice(&buffer[buffer_pos..buffer_pos + to_read]);
+            total_read += to_read;
+            curr_pos += to_read as u64;
+        }
+
+        let mut cursors = self.cursors.write().map_err(|_| BufIoError::Locking)?;
+        let cursor = cursors
+            .get_mut(&cursor_id)
+            .ok_or(BufIoError::InvalidCursor(cursor_id))?;
+        cursor.position = curr_pos;
+
+        Ok(total_read)
+    }
+
+    pub fn update_u32_with_cursor(&self, cursor_id: u64, value: u32) -> Result<u64, BufIoError> {
+        let buffer = value.to_le_bytes();
+        self.write_with_cursor(cursor_id, &buffer, false)
+    }
+
+    fn write_with_cursor(
+        &self,
+        cursor_id: u64,
+        buf: &[u8],
+        append: bool,
+    ) -> Result<u64, BufIoError> {
+        let curr_pos = {
+            let cursors = self.cursors.read().map_err(|_| BufIoError::Locking)?;
+            let cursor = cursors
+                .get(&cursor_id)
+                .ok_or(BufIoError::InvalidCursor(cursor_id))?;
+            cursor.position
+        };
+
+        let input_size = buf.len();
+
+        // Take write lock early to cover the entire write operation that might affect file size
+        let mut file_size_guard = self.file_size.write().map_err(|_| BufIoError::Locking)?;
+        let will_cross_eof = append || curr_pos + input_size as u64 >= *file_size_guard;
+        let mut curr_pos = if append {
+            curr_pos.max(*file_size_guard)
+        } else {
+            curr_pos
+        };
+        let start_pos = curr_pos;
+
+        if will_cross_eof {
+            let mut total_written = 0;
+            while total_written < input_size {
+                let region = self.get_or_create_region(curr_pos);
+                {
+                    let mut buffer = region.buffer.write().map_err(|_| BufIoError::Locking)?;
+                    let buffer_pos = (curr_pos - region.start) as usize;
+                    let available = self.buffer_size - buffer_pos;
+                    let to_write = (input_size - total_written).min(available);
+                    buffer[buffer_pos..buffer_pos + to_write]
+                        .copy_from_slice(&buf[total_written..total_written + to_write]);
+                    region.end.store(
+                        (buffer_pos + to_write).max(region.end.load(Ordering::SeqCst)),
+                        Ordering::SeqCst,
+                    );
+                    region.dirty.store(true, Ordering::SeqCst);
+                    total_written += to_write;
+                    curr_pos += to_write as u64;
+                }
+            }
+            // Update file size using max to prevent shrinking
+            *file_size_guard = (*file_size_guard).max(curr_pos);
+        } else {
+            // Normal write within existing file bounds
+            let mut total_written = 0;
+            while total_written < input_size {
+                let region = self.get_or_create_region(curr_pos);
+                {
+                    let mut buffer = region.buffer.write().map_err(|_| BufIoError::Locking)?;
+                    let buffer_pos = (curr_pos - region.start) as usize;
+                    let available = self.buffer_size - buffer_pos;
+                    let to_write = (input_size - total_written).min(available);
+                    buffer[buffer_pos..buffer_pos + to_write]
+                        .copy_from_slice(&buf[total_written..total_written + to_write]);
+                    region.end.store(
+                        (buffer_pos + to_write).max(region.end.load(Ordering::SeqCst)),
+                        Ordering::SeqCst,
+                    );
+                    region.dirty.store(true, Ordering::SeqCst);
+                    total_written += to_write;
+                    curr_pos += to_write as u64;
+                }
+            }
+            // Even for normal writes, we need to check if we accidentally crossed EOF
+            *file_size_guard = (*file_size_guard).max(curr_pos);
+        }
+
+        // Drop file_size_guard before updating cursor
+        drop(file_size_guard);
+
+        let mut cursors = self.cursors.write().map_err(|_| BufIoError::Locking)?;
+        let cursor = cursors
+            .get_mut(&cursor_id)
+            .ok_or(BufIoError::InvalidCursor(cursor_id))?;
+        cursor.position = curr_pos;
+
+        Ok(start_pos)
+    }
+
+    pub fn write_to_end_of_file(&self, cursor_id: u64, buf: &[u8]) -> Result<u64, BufIoError> {
+        self.write_with_cursor(cursor_id, buf, true)
+    }
+
+    pub fn seek_with_cursor(&self, cursor_id: u64, pos: u64) -> Result<(), BufIoError> {
+        let mut cursors = self.cursors.write().map_err(|_| BufIoError::Locking)?;
+        let cursor = cursors
+            .get_mut(&cursor_id)
+            .ok_or(BufIoError::InvalidCursor(cursor_id))?;
+
+        cursor.position = pos;
+        Ok(())
+    }
+
+    pub fn flush(&self, file: &mut File) -> Result<(), BufIoError> {
+        for region in self.regions.iter() {
+            if region.should_flush() {
+                region.flush(file)?;
+            }
+        }
+        file.flush()?;
+        file.sync_all()?;
+        Ok(())
+    }
+
+    pub fn file_size(&self) -> u64 {
+        *self.file_size.read().unwrap()
+    }
+}
+
 #[cfg(test)]
 mod tests {
 

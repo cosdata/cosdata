@@ -12,10 +12,10 @@ macro_rules! key {
         prefixed_key.extend_from_slice(&$embedding_id.to_le_bytes());
         prefixed_key
     }};
-    (b:$branch_id:expr) => {{
-        let mut key = Vec::with_capacity(9); // prefix = 1 byte, BranchId = 8 bytes
+    (t:$txn_id:expr) => {{
+        let mut key = Vec::with_capacity(9); // prefix = 1 byte, ExplicitTransactionID = 4 bytes
         key.push(2);
-        key.extend_from_slice(&$branch_id.to_le_bytes());
+        key.extend_from_slice(&$txn_id.to_le_bytes());
         key
     }};
     // misc/metadata

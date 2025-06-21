@@ -7,6 +7,7 @@ pub mod collection_transaction;
 pub mod common;
 pub mod crypto;
 pub mod dot_product;
+pub mod durable_wal;
 pub mod encoding_format;
 pub mod file_persist;
 pub mod fixedset;
