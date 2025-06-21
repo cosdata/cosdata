@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use crate::indexes::hnsw::offset_counter::IndexFileId;
 use crate::models::buffered_io::BufferManagerFactory;
+use crate::models::collection::RawVectorEmbedding;
 use crate::models::inverted_index::InvertedIndexNode;
 use crate::models::page::Pagepool;
 use crate::models::page::VersionedPagepool;
@@ -14,6 +15,7 @@ use crate::models::types::*;
 use crate::models::versioning::VersionNumber;
 use crate::storage::Storage;
 use half::f16;
+use rand::distributions::Alphanumeric;
 use rand::Rng;
 use tempfile::tempdir;
 use tempfile::TempDir;
@@ -405,4 +407,79 @@ fn test_tree_map_vec_incremental_serialization_with_multiple_versions() {
     let deserialized = TreeMapVec::<u64, u16>::deserialize(bufmans, 8).unwrap();
 
     assert_eq!(map, deserialized);
+}
+
+#[test]
+fn test_tree_double_serialization_raw_vec() {
+    let dir = tempdir().unwrap();
+    let bufmans = BufferManagerFactory::new(
+        dir.as_ref().into(),
+        |root, idx| root.join(format!("{}.tree-map", idx)),
+        8192,
+    );
+    let mut rng = rand::thread_rng();
+    let map: TreeMap<InternalId, RawVectorEmbedding> = TreeMap::new(bufmans);
+
+    map.serialize(8).unwrap();
+
+    let deserialized = TreeMap::deserialize(map.bufmans, 8).unwrap();
+
+    for i in 0..1000 {
+        deserialized.insert(
+            VersionNumber::from(1),
+            &InternalId::from(i),
+            random_raw_vector_embedding(&mut rng),
+        );
+    }
+
+    deserialized.serialize(8).unwrap();
+
+    TreeMap::<InternalId, RawVectorEmbedding>::deserialize(deserialized.bufmans, 8).unwrap();
+}
+
+#[test]
+fn test_tree_double_serialization_u64() {
+    let dir = tempdir().unwrap();
+    let bufmans = BufferManagerFactory::new(
+        dir.as_ref().into(),
+        |root, idx| root.join(format!("{}.tree-map", idx)),
+        8192,
+    );
+    let mut rng = rand::thread_rng();
+    let map: TreeMap<InternalId, u64> = TreeMap::new(bufmans);
+    println!("first serialization:");
+
+    map.serialize(8).unwrap();
+    println!("\nfirst deserialization:");
+
+    let deserialized = TreeMap::<InternalId, u64>::deserialize(map.bufmans, 8).unwrap();
+
+    for i in 0..1000 {
+        deserialized.insert(VersionNumber::from(1), &InternalId::from(i), rng.gen());
+    }
+
+    deserialized.serialize(8).unwrap();
+
+    TreeMap::<InternalId, u64>::deserialize(deserialized.bufmans, 8).unwrap();
+}
+
+fn random_raw_vector_embedding(rng: &mut impl Rng) -> RawVectorEmbedding {
+    let id_len = rng.gen_range(10..20);
+    RawVectorEmbedding {
+        id: VectorId::from(
+            rng.sample_iter(&Alphanumeric)
+                .take(id_len)
+                .map(char::from)
+                .collect::<String>(),
+        ),
+        document_id: None,
+        dense_values: Some(
+            (0..rng.gen_range(100u32..200u32))
+                .map(|_| rng.gen_range(-1.0..1.0))
+                .collect(),
+        ),
+        metadata: None,
+        sparse_values: None,
+        text: None,
+    }
 }

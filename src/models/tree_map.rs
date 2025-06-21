@@ -25,7 +25,7 @@ pub trait TreeMapKey: std::hash::Hash + Eq {
 
 pub struct TreeMap<K, V> {
     pub(crate) root: TreeMapNode<V>,
-    bufmans: BufferManagerFactory<u8>,
+    pub(crate) bufmans: BufferManagerFactory<u8>,
     _marker: PhantomData<K>,
 }
 
