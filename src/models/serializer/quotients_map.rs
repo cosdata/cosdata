@@ -188,7 +188,7 @@ impl<T: SimpleSerialize> SimpleSerialize for QuotientsMap<T> {
         if offset.0 == u32::MAX {
             return Ok(Self {
                 map: TSHashTable::new(16),
-                offset: RwLock::new(Some(offset)),
+                offset: RwLock::new(None),
                 len: AtomicU64::new(0),
                 serialized_upto: AtomicUsize::new(0),
             });
@@ -402,7 +402,7 @@ impl<T: SimpleSerialize> SimpleSerialize for QuotientsMapVec<T> {
         if offset.0 == u32::MAX {
             return Ok(Self {
                 map: TSHashTable::new(16),
-                offset: RwLock::new(Some(offset)),
+                offset: RwLock::new(None),
                 len: AtomicU64::new(0),
                 serialized_upto: AtomicUsize::new(0),
             });

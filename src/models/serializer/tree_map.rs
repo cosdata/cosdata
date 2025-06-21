@@ -37,7 +37,7 @@ impl<T: SimpleSerialize> PartitionedSerialize for TreeMapNode<T> {
                 bufman.update_u32_with_cursor(cursor, child_offset)?;
             }
 
-            if self.dirty.swap(true, Ordering::Relaxed) {
+            if self.dirty.swap(false, Ordering::Relaxed) {
                 let quotient_offset = self.quotients.serialize(&bufman, cursor)?;
                 bufman.seek_with_cursor(cursor, offset.0 as u64 + 34)?;
                 bufman.update_u32_with_cursor(cursor, quotient_offset)?;
@@ -61,7 +61,7 @@ impl<T: SimpleSerialize> PartitionedSerialize for TreeMapNode<T> {
                 bufman.update_u32_with_cursor(cursor, child_offset)?;
             }
 
-            if self.dirty.swap(true, Ordering::Relaxed) {
+            if self.dirty.swap(false, Ordering::Relaxed) {
                 let quotient_offset = self.quotients.serialize(&bufman, cursor)?;
                 bufman.seek_with_cursor(cursor, offset.0 as u64 + 34)?;
                 bufman.update_u32_with_cursor(cursor, quotient_offset)?;
@@ -84,6 +84,7 @@ impl<T: SimpleSerialize> PartitionedSerialize for TreeMapNode<T> {
         buf.extend(quotient_offset.to_le_bytes());
         let start = bufman.write_to_end_of_file(cursor, &buf)? as u32;
         bufman.close_cursor(cursor)?;
+        self.dirty.store(false, Ordering::Release);
         *offset_write_guard = Some(FileOffset(start));
         Ok(start)
     }
@@ -150,7 +151,7 @@ impl<T: SimpleSerialize> PartitionedSerialize for TreeMapVecNode<T> {
                 bufman.update_u32_with_cursor(cursor, child_offset)?;
             }
 
-            if self.dirty.swap(true, Ordering::Relaxed) {
+            if self.dirty.swap(false, Ordering::Relaxed) {
                 let quotient_offset = self.quotients.serialize(&bufman, cursor)?;
                 bufman.seek_with_cursor(cursor, offset.0 as u64 + 34)?;
                 bufman.update_u32_with_cursor(cursor, quotient_offset)?;
@@ -174,7 +175,7 @@ impl<T: SimpleSerialize> PartitionedSerialize for TreeMapVecNode<T> {
                 bufman.update_u32_with_cursor(cursor, child_offset)?;
             }
 
-            if self.dirty.swap(true, Ordering::Relaxed) {
+            if self.dirty.swap(false, Ordering::Relaxed) {
                 let quotient_offset = self.quotients.serialize(&bufman, cursor)?;
                 bufman.seek_with_cursor(cursor, offset.0 as u64 + 34)?;
                 bufman.update_u32_with_cursor(cursor, quotient_offset)?;
@@ -197,6 +198,7 @@ impl<T: SimpleSerialize> PartitionedSerialize for TreeMapVecNode<T> {
         buf.extend(quotient_offset.to_le_bytes());
         let start = bufman.write_to_end_of_file(cursor, &buf)? as u32;
         bufman.close_cursor(cursor)?;
+        self.dirty.store(false, Ordering::Release);
         *offset_write_guard = Some(FileOffset(start));
         Ok(start)
     }
