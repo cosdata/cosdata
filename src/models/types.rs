@@ -39,6 +39,7 @@ use crate::{
     metadata::{schema::MetadataDimensions, QueryFilterDimensions, HIGH_WEIGHT},
     models::{
         buffered_io::BufferManager,
+        collection_transaction::TransactionStatus,
         common::*,
         lazy_item::{FileIndex, ProbLazyItem},
         meta_persist::retrieve_values_range,
@@ -51,6 +52,7 @@ use crate::{
     },
     storage::Storage,
 };
+use chrono::Utc;
 use crossbeam::channel;
 use dashmap::DashMap;
 use lmdb::{Cursor, Database, DatabaseFlags, Environment, Transaction, WriteFlags};
@@ -700,7 +702,26 @@ impl CollectionsMap {
                 let mut index = false;
                 for version_info in all_versions {
                     if index {
-                        collection.trigger_indexing(version_info.version);
+                        if collection
+                            .transaction_status_map
+                            .get_latest(&version_info.version)
+                            .is_none()
+                        {
+                            collection.transaction_status_map.insert(
+                                version_info.version,
+                                &version_info.version,
+                                parking_lot::RwLock::new(TransactionStatus::NotStarted {
+                                    last_updated: Utc::now(),
+                                }),
+                            );
+                        }
+                        IndexingManager::index_version(
+                            &collection,
+                            &config,
+                            &threadpool,
+                            version_info.version,
+                        )
+                        .unwrap();
                     }
                     if version_info.version == background_version {
                         index = true;
