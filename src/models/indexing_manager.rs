@@ -55,7 +55,7 @@ impl IndexingManager {
         self.channel.send(version).unwrap()
     }
 
-    fn index_version(
+    pub fn index_version(
         collection: &Collection,
         config: &Config,
         threadpool: &ThreadPool,
@@ -148,10 +148,6 @@ impl IndexingManager {
         let end = Utc::now();
         let delta = end - start;
         let delta_seconds = (delta.num_seconds() as u32).max(1);
-        txn.pre_commit(collection, config)?;
-        update_background_version(&collection.lmdb, version)?;
-        fs::remove_file(collection.get_path().join(format!("{}.wal", *version)))
-            .map_err(BufIoError::Io)?;
         let total_records_indexed = records_indexed.load(Ordering::Relaxed);
         *status.write() = TransactionStatus::Complete {
             started_at: start,
@@ -162,6 +158,11 @@ impl IndexingManager {
             },
             last_updated: end,
         };
+        txn.pre_commit(collection, config)?;
+        update_background_version(&collection.lmdb, version)?;
+        fs::remove_file(collection.get_path().join(format!("{}.wal", *version)))
+            .map_err(BufIoError::Io)
+            .unwrap();
         Ok(())
     }
 
