@@ -12,12 +12,6 @@ macro_rules! key {
         prefixed_key.extend_from_slice(&$embedding_id.to_le_bytes());
         prefixed_key
     }};
-    (t:$txn_id:expr) => {{
-        let mut key = Vec::with_capacity(9); // prefix = 1 byte, ExplicitTransactionID = 4 bytes
-        key.push(2);
-        key.extend_from_slice(&$txn_id.to_le_bytes());
-        key
-    }};
     // misc/metadata
     (m:$name:ident) => {{
         let key = stringify!($name).as_bytes();

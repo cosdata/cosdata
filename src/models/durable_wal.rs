@@ -12,7 +12,9 @@ use super::{
 pub struct DurableWALFile {
     bufman: BufferManager,
     cursor: u64,
-    vectors_count: u32,
+    records_upserted: u32,
+    records_deleted: u32,
+    total_operations: u32,
 }
 
 impl DurableWALFile {
@@ -28,18 +30,38 @@ impl DurableWALFile {
         let bufman = BufferManager::new(file, 8192)?;
         let cursor = bufman.open_cursor()?;
         bufman.update_u32_with_cursor(cursor, 0)?;
+        bufman.update_u32_with_cursor(cursor, 0)?;
+        bufman.update_u32_with_cursor(cursor, 0)?;
 
         Ok(Self {
             bufman,
             cursor,
-            vectors_count: 0,
+            records_upserted: 0,
+            records_deleted: 0,
+            total_operations: 0,
         })
+    }
+
+    pub fn records_upserted(&self) -> u32 {
+        self.records_upserted
+    }
+
+    pub fn records_deleted(&self) -> u32 {
+        self.records_deleted
+    }
+
+    pub fn total_operations(&self) -> u32 {
+        self.total_operations
     }
 
     pub fn flush(self) -> Result<(), BufIoError> {
         let cursor = self.bufman.open_cursor()?;
         self.bufman
-            .update_u32_with_cursor(cursor, self.vectors_count)?;
+            .update_u32_with_cursor(cursor, self.records_upserted)?;
+        self.bufman
+            .update_u32_with_cursor(cursor, self.records_deleted)?;
+        self.bufman
+            .update_u32_with_cursor(cursor, self.total_operations)?;
         self.bufman.close_cursor(cursor)?;
         self.bufman.flush()
     }
@@ -51,7 +73,7 @@ impl DurableWALFile {
 
         match op {
             VectorOp::Upsert(vectors) => {
-                self.vectors_count += vectors.len() as u32;
+                self.records_upserted += vectors.len() as u32;
                 write_len(&mut buf, vectors.len() as u16);
                 for vector in &*vectors {
                     write_len(&mut buf, vector.id.len() as u16);
@@ -123,7 +145,11 @@ impl DurableWALFile {
         self.bufman.write_to_end_of_file(self.cursor, &buf)?;
         let cursor = self.bufman.open_cursor()?;
         self.bufman
-            .update_u32_with_cursor(cursor, self.vectors_count)?;
+            .update_u32_with_cursor(cursor, self.records_upserted)?;
+        self.bufman
+            .update_u32_with_cursor(cursor, self.records_deleted)?;
+        self.bufman
+            .update_u32_with_cursor(cursor, self.total_operations)?;
         self.bufman.close_cursor(cursor)?;
         self.bufman.flush()?;
         Ok(())

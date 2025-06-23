@@ -6,9 +6,7 @@ use super::{dtos::CreateTransactionResponseDto, error::TransactionError};
 use crate::models::collection_transaction::{
     ExplicitTransaction, ExplicitTransactionID, TransactionStatus,
 };
-use crate::models::meta_persist::{
-    retrieve_version_from_txn_id, store_txn_id_to_version_mapping, update_current_version,
-};
+use crate::models::meta_persist::update_current_version;
 use crate::models::types::VectorId;
 use crate::models::versioning::VersionNumber;
 use crate::models::wal::VectorOp;
@@ -73,21 +71,29 @@ pub(crate) async fn commit_transaction(
 
     let allotted_version = *last_allotted_version;
 
+    let records_upserted = current_open_transaction.wal.records_upserted();
+    let records_deleted = current_open_transaction.wal.records_deleted();
+    let total_operations = current_open_transaction.wal.total_operations();
+
     current_open_transaction
         .pre_commit(&collection, allotted_version)
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
 
     *current_version_guard = allotted_version;
 
-    store_txn_id_to_version_mapping(&collection.lmdb, current_transaction_id, allotted_version)
-        .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
     collection
         .vcs
-        .set_current_version(allotted_version, false)
+        .set_current_version_explicit(
+            allotted_version,
+            current_transaction_id,
+            records_upserted,
+            records_deleted,
+            total_operations,
+        )
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
     update_current_version(&collection.lmdb, allotted_version)
         .map_err(|err| TransactionError::FailedToCommitTransaction(err.to_string()))?;
-    collection.trigger_indexing(allotted_version);
+    collection.trigger_indexing(current_transaction_id, allotted_version);
 
     Ok(())
 }
@@ -103,13 +109,9 @@ pub(crate) async fn get_transaction_status(
         .get_collection(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
 
-    let version = retrieve_version_from_txn_id(&collection.lmdb, transaction_id)
-        .map_err(|err| TransactionError::FailedToGetTransactionStatus(err.to_string()))?
-        .ok_or(TransactionError::NotFound)?;
-
     let status = collection
         .transaction_status_map
-        .get_latest(&version)
+        .get_latest(&transaction_id)
         .ok_or(TransactionError::NotFound)?
         .read();
 

@@ -21,6 +21,7 @@ use super::{
     common::WaCustomError,
     durable_wal::DurableWALFile,
     meta_persist::{update_background_version, update_current_version},
+    tree_map::TreeMapKey,
     versioning::VersionNumber,
     wal::{VectorOp, WALFile},
 };
@@ -55,6 +56,12 @@ impl BackgroundExplicitTransaction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ExplicitTransactionID(u32);
+
+impl TreeMapKey for ExplicitTransactionID {
+    fn key(&self) -> u64 {
+        self.0 as u64
+    }
+}
 
 impl ToSchema for ExplicitTransactionID {
     fn name() -> std::borrow::Cow<'static, str> {
@@ -143,6 +150,13 @@ impl ExplicitTransaction {
         let mut current_implicit_txn = collection.current_implicit_transaction.write();
         mem::take(&mut *current_implicit_txn).pre_commit(collection, config)?;
         let id = ExplicitTransactionID(random());
+        collection.transaction_status_map.insert(
+            *collection.current_version.read(),
+            &id,
+            RwLock::new(TransactionStatus::NotStarted {
+                last_updated: Utc::now(),
+            }),
+        );
         Ok(Self {
             id,
             wal: WALFile::new()?,
@@ -161,7 +175,7 @@ impl ExplicitTransaction {
 
 pub struct ImplicitTransactionData {
     version: VersionNumber,
-    thread_handle: thread::JoinHandle<Result<(), WaCustomError>>,
+    thread_handle: thread::JoinHandle<Result<DurableWALFile, WaCustomError>>,
     channel: mpsc::Sender<VectorOp>,
 }
 
@@ -202,30 +216,17 @@ impl ImplicitTransaction {
             for op in rx {
                 wal.append(op)?;
             }
-            Ok(())
+            Ok(wal)
         });
         *data = Some(ImplicitTransactionData {
             version,
             thread_handle,
             channel: tx,
         });
-        collection.vcs.set_current_version(version, true)?;
+        collection
+            .vcs
+            .set_current_version_implicit(version, random())?;
         update_current_version(&collection.lmdb, version)?;
-        collection.transaction_status_map.insert(
-            *last_allotted_version,
-            &last_allotted_version,
-            RwLock::new(TransactionStatus::InProgress {
-                progress: Progress {
-                    percentage_done: 0.0,
-                    records_indexed: 0,
-                    total_records: 0,
-                    rate_per_second: 0.0,
-                    estimated_time_remaining_seconds: u32::MAX,
-                },
-                started_at: Utc::now(),
-                last_updated: Utc::now(),
-            }),
-        );
         Ok(unsafe {
             mem::transmute::<&ImplicitTransactionData, &ImplicitTransactionData>(
                 data.as_ref().unwrap(),
@@ -262,20 +263,48 @@ impl ImplicitTransaction {
         }
         collection.flush(config)?;
         drop(data.channel);
-        data.thread_handle.join().unwrap()?;
+        let wal = data.thread_handle.join().unwrap()?;
+        update_background_version(&collection.lmdb, data.version)?;
+        collection.vcs.update_version_metadata(
+            data.version,
+            wal.records_upserted(),
+            wal.records_deleted(),
+            wal.total_operations(),
+        )?;
+        drop(wal);
         fs::remove_file(collection.get_path().join(format!("{}.wal", *data.version)))
             .map_err(BufIoError::Io)?;
-        update_background_version(&collection.lmdb, data.version)?;
-        let status = collection
-            .transaction_status_map
-            .get_latest(&data.version)
-            .unwrap();
-        status.write().complete();
         Ok(())
     }
 }
 
 const NOT_STARTED_MESSAGE: &str = "Indexing has not started yet.";
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ProcessingStats {
+    pub records_upserted: u32,
+    pub records_deleted: u32,
+
+    pub total_operations: u32,
+
+    // Derived fields
+    pub percentage_complete: f32,
+
+    // Timing (optional during progress, required when complete)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub processing_time_seconds: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub average_throughput: Option<f32>, // records per second
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_processing_rate: Option<f32>, // current rate (for progress)
+    #[schema(value_type = String, example = "2023-01-01T12:00:00Z")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub estimated_completion: Option<DateTime<Utc>>, // only for progress
+
+    // Set when complete
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version_created: Option<VersionNumber>,
+}
 
 #[derive(Debug, Clone, ToSchema)]
 pub enum TransactionStatus {
@@ -284,18 +313,18 @@ pub enum TransactionStatus {
         last_updated: DateTime<Utc>,
     },
     InProgress {
-        progress: Progress,
+        stats: ProcessingStats,
         #[schema(value_type = String, example = "2023-01-01T12:00:00Z")]
         started_at: DateTime<Utc>,
         #[schema(value_type = String, example = "2023-01-01T12:00:00Z")]
         last_updated: DateTime<Utc>,
     },
     Complete {
-        summary: Summary,
+        stats: ProcessingStats,
         #[schema(value_type = String, example = "2023-01-01T12:00:00Z")]
         started_at: DateTime<Utc>,
         #[schema(value_type = String, example = "2023-01-01T12:00:00Z")]
-        last_updated: DateTime<Utc>,
+        completed_at: DateTime<Utc>,
     },
 }
 
@@ -303,16 +332,16 @@ impl TransactionStatus {
     pub fn vector_count(&self) -> u32 {
         match self {
             Self::NotStarted { .. } => 0,
-            Self::InProgress { progress, .. } => progress.records_indexed,
-            Self::Complete { summary, .. } => summary.total_records_indexed,
+            Self::InProgress { stats, .. } => stats.records_upserted,
+            Self::Complete { stats, .. } => stats.records_upserted,
         }
     }
 
     pub fn increment_vector_count(&mut self, count: u32) {
         match self {
             Self::NotStarted { .. } => {}
-            Self::InProgress { progress, .. } => progress.records_indexed += count,
-            Self::Complete { summary, .. } => summary.total_records_indexed += count,
+            Self::InProgress { stats, .. } => stats.records_upserted += count,
+            Self::Complete { stats, .. } => stats.records_upserted += count,
         }
     }
 
@@ -320,40 +349,52 @@ impl TransactionStatus {
         match self {
             Self::NotStarted { last_updated } => *last_updated = Utc::now(),
             Self::InProgress { last_updated, .. } => *last_updated = Utc::now(),
-            Self::Complete { last_updated, .. } => *last_updated = Utc::now(),
+            _ => {}
         }
     }
 
-    pub fn complete(&mut self) {
+    pub fn complete(&mut self, version_created: VersionNumber) {
         match self {
             Self::NotStarted { .. } => {
                 *self = Self::Complete {
-                    summary: Summary {
-                        total_records_indexed: 0,
-                        duration_seconds: 0,
-                        average_rate_per_second: 0.0,
+                    stats: ProcessingStats {
+                        total_operations: 0,
+                        records_upserted: 0,
+                        records_deleted: 0,
+                        percentage_complete: 100.0,
+                        processing_time_seconds: Some(0),
+                        average_throughput: Some(1.0),
+                        current_processing_rate: None,
+                        estimated_completion: None,
+                        version_created: Some(version_created),
                     },
                     started_at: Utc::now(),
-                    last_updated: Utc::now(),
+                    completed_at: Utc::now(),
                 }
             }
             Self::InProgress {
-                progress,
-                started_at,
-                ..
+                stats, started_at, ..
             } => {
+                let completed_at = Utc::now();
+                let processing_time_seconds = (completed_at - *started_at).num_seconds() as u32;
                 *self = Self::Complete {
-                    summary: Summary {
-                        total_records_indexed: progress.records_indexed,
-                        duration_seconds: (Utc::now() - *started_at).num_seconds() as u32,
-                        average_rate_per_second: progress.records_indexed as f32
-                            / ((Utc::now() - *started_at).num_seconds() as u32).max(1) as f32,
+                    stats: ProcessingStats {
+                        version_created: Some(version_created),
+                        processing_time_seconds: Some(processing_time_seconds),
+                        average_throughput: Some(
+                            stats.records_upserted as f32 / processing_time_seconds as f32,
+                        ),
+                        current_processing_rate: None,
+                        estimated_completion: None,
+                        ..stats.clone()
                     },
                     started_at: *started_at,
-                    last_updated: Utc::now(),
+                    completed_at,
                 }
             }
-            Self::Complete { .. } => {}
+            Self::Complete { stats, .. } => {
+                stats.version_created = Some(version_created);
+            }
         }
     }
 }
@@ -381,7 +422,7 @@ impl Serialize for TransactionStatus {
     {
         match self {
             Self::NotStarted { last_updated } => {
-                let mut s = serializer.serialize_struct("IndexStatus", 3)?;
+                let mut s = serializer.serialize_struct("TransactionStatus", 3)?;
                 s.serialize_field("status", "not_started")?;
                 s.serialize_field("message", NOT_STARTED_MESSAGE)?;
                 s.serialize_field("last_updated", last_updated)?;
@@ -389,24 +430,24 @@ impl Serialize for TransactionStatus {
             }
             Self::InProgress {
                 started_at,
-                progress,
+                stats,
                 last_updated,
             } => {
-                let mut s = serializer.serialize_struct("IndexStatus", 3)?;
+                let mut s = serializer.serialize_struct("TransactionStatus", 3)?;
                 s.serialize_field("status", "indexing_in_progress")?;
-                s.serialize_field("progress", progress)?;
+                s.serialize_field("stats", stats)?;
                 s.serialize_field("started_at", started_at)?;
                 s.serialize_field("last_updated", last_updated)?;
                 s.end()
             }
             Self::Complete {
                 started_at,
-                summary,
-                last_updated,
+                stats,
+                completed_at: last_updated,
             } => {
-                let mut s = serializer.serialize_struct("IndexStatus", 3)?;
+                let mut s = serializer.serialize_struct("TransactionStatus", 3)?;
                 s.serialize_field("status", "complete")?;
-                s.serialize_field("summary", summary)?;
+                s.serialize_field("stats", stats)?;
                 s.serialize_field("started_at", started_at)?;
                 s.serialize_field("last_updated", last_updated)?;
                 s.end()

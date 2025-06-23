@@ -6,7 +6,6 @@ use lmdb::{Cursor, Database, DatabaseFlags, Environment, Transaction, WriteFlags
 use serde_cbor::from_slice;
 
 use super::collection::CollectionMetadata;
-use super::collection_transaction::ExplicitTransactionID;
 
 /// updates the current version of a collection
 pub fn update_current_version(
@@ -56,55 +55,6 @@ pub fn update_background_version(
     })?;
 
     Ok(())
-}
-
-pub fn store_txn_id_to_version_mapping(
-    lmdb: &MetaDb,
-    txn_id: ExplicitTransactionID,
-    version: VersionNumber,
-) -> Result<(), WaCustomError> {
-    let env = lmdb.env.clone();
-    let db = lmdb.db;
-
-    let mut txn = env.begin_rw_txn()?;
-
-    let key = key!(t:txn_id);
-    let bytes = version.to_le_bytes();
-
-    txn.put(db, &key, &bytes, WriteFlags::empty())?;
-
-    txn.commit()?;
-
-    Ok(())
-}
-
-pub fn retrieve_version_from_txn_id(
-    lmdb: &MetaDb,
-    txn_id: ExplicitTransactionID,
-) -> Result<Option<VersionNumber>, WaCustomError> {
-    let env = lmdb.env.clone();
-    let db = lmdb.db;
-
-    let txn = env.begin_ro_txn()?;
-
-    let key = key!(t:txn_id);
-
-    let result = txn.get(db, &key);
-
-    if matches!(result, Err(lmdb::Error::NotFound)) {
-        return Ok(None);
-    }
-
-    let bytes = result?;
-
-    let bytes: [u8; 4] = bytes.try_into().map_err(|_| {
-        WaCustomError::DeserializationError(
-            "Failed to deserialize Hash: length mismatch".to_string(),
-        )
-    })?;
-    let version = VersionNumber::from(u32::from_le_bytes(bytes));
-
-    Ok(Some(version))
 }
 
 pub fn store_values_range(lmdb: &MetaDb, range: (f32, f32)) -> lmdb::Result<()> {

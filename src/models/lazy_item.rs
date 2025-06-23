@@ -50,15 +50,15 @@ impl<T: Debug> Debug for ProbLazyItem<T> {
 
 #[allow(unused)]
 impl<T> ProbLazyItem<T> {
-   pub fn new(data: T, file_id: IndexFileId, offset: FileOffset) -> *mut Self {
+    pub fn new(data: T, file_id: IndexFileId, offset: FileOffset) -> *mut Self {
         let mut boxed = Box::new(Self {
             data: AtomicPtr::new(ptr::null_mut()),
             file_index: FileIndex { offset, file_id },
         });
-        
+
         let data_ptr = Box::into_raw(Box::new(data));
         boxed.data.store(data_ptr, Ordering::Release);
-        
+
         Box::into_raw(boxed)
     }
 
