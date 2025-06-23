@@ -1,12 +1,14 @@
 use super::buffered_io::BufferManagerFactory;
-use super::collection_transaction::{ExplicitTransaction, ImplicitTransaction, TransactionStatus};
+use super::collection_transaction::{
+    ExplicitTransaction, ExplicitTransactionID, ImplicitTransaction, TransactionStatus,
+};
 use super::common::WaCustomError;
 use super::indexing_manager::IndexingManager;
 use super::meta_persist::store_highest_internal_id;
 use super::paths::get_data_path;
 use super::tree_map::{TreeMap, TreeMapVec};
 use super::types::{get_collections_path, DocumentId, InternalId, MetaDb, VectorId};
-use super::versioning::{VersionControl, VersionNumber};
+use super::versioning::{VersionControl, VersionNumber, VersionSource};
 use super::wal::VectorOp;
 use crate::app_context::AppContext;
 use crate::config_loader::Config;
@@ -23,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use serde_cbor::to_vec;
 use siphasher::sip::SipHasher24;
 use std::fs::create_dir_all;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::thread;
 use std::{fs, hash::Hasher, path::Path, sync::Arc};
 use utoipa::ToSchema;
@@ -108,7 +110,7 @@ pub struct Collection {
     pub internal_to_external_map: TreeMap<InternalId, RawVectorEmbedding>,
     pub external_to_internal_map: TreeMap<VectorId, InternalId>,
     pub document_to_internals_map: TreeMapVec<DocumentId, InternalId>,
-    pub transaction_status_map: TreeMap<VersionNumber, RwLock<TransactionStatus>>,
+    pub transaction_status_map: TreeMap<ExplicitTransactionID, RwLock<TransactionStatus>>,
     pub internal_id_counter: AtomicU32,
     pub hnsw_index: RwLock<Option<Arc<HNSWIndex>>>,
     pub inverted_index: RwLock<Option<Arc<InvertedIndex>>>,
@@ -118,6 +120,7 @@ pub struct Collection {
     // indexing manager, because `IndexingManager`'s constructor also requires
     // a reference to the collection
     pub indexing_manager: RwLock<Option<IndexingManager>>,
+    pub is_indexing: AtomicBool,
 }
 
 impl Collection {
@@ -192,6 +195,7 @@ impl Collection {
             inverted_index: RwLock::new(None),
             tf_idf_index: RwLock::new(None),
             indexing_manager: RwLock::new(None),
+            is_indexing: AtomicBool::new(false),
         });
 
         *collection.indexing_manager.write() = Some(IndexingManager::new(
@@ -220,6 +224,10 @@ impl Collection {
         fs::create_dir_all(&collection_path).map_err(|e| WaCustomError::FsError(e.to_string()))?;
 
         Ok(collection)
+    }
+
+    pub fn is_indexing(&self) -> bool {
+        self.is_indexing.load(Ordering::Relaxed)
     }
 
     /// Computes the SipHash of the collection name
@@ -455,28 +463,12 @@ impl Collection {
         Ok(())
     }
 
-    pub fn trigger_indexing(&self, version: VersionNumber) {
-        self.transaction_status_map.insert(
-            version,
-            &version,
-            RwLock::new(TransactionStatus::NotStarted {
-                last_updated: Utc::now(),
-            }),
-        );
+    pub fn trigger_indexing(&self, txn_id: ExplicitTransactionID, version: VersionNumber) {
         self.indexing_manager
             .read()
             .as_ref()
             .unwrap()
-            .trigger(version);
-    }
-
-    pub fn get_latest_transaction_status(&self) -> Option<TransactionStatus> {
-        Some(
-            self.transaction_status_map
-                .get_latest(&self.current_version.read())?
-                .read()
-                .clone(),
-        )
+            .trigger(txn_id, version);
     }
 
     pub fn flush(&self, config: &Config) -> Result<(), WaCustomError> {
@@ -503,10 +495,10 @@ impl Collection {
         let mut rate_per_second_acc = 0.0;
 
         for version_info in self.vcs.get_versions()? {
-            let Some(status) = self
-                .transaction_status_map
-                .get_latest(&version_info.version)
-            else {
+            let VersionSource::Explicit { transaction_id } = version_info.source else {
+                continue;
+            };
+            let Some(status) = self.transaction_status_map.get_latest(&transaction_id) else {
                 continue;
             };
             total_transactions += 1;
@@ -517,23 +509,23 @@ impl Collection {
                     not_started_transactions += 1;
                 }
                 TransactionStatus::InProgress {
-                    progress,
+                    stats,
                     last_updated,
                     ..
                 } => {
                     last_synced = last_synced.max(*last_updated);
-                    total_records_indexed_completed += progress.records_indexed as u64;
-                    rate_per_second_acc += progress.rate_per_second;
+                    total_records_indexed_completed += stats.records_upserted as u64;
+                    rate_per_second_acc += stats.current_processing_rate.unwrap();
                     in_progress_transactions += 1;
                 }
                 TransactionStatus::Complete {
-                    summary,
-                    last_updated,
+                    stats,
+                    completed_at: last_updated,
                     ..
                 } => {
                     last_synced = last_synced.max(*last_updated);
-                    total_records_indexed_completed += summary.total_records_indexed as u64;
-                    rate_per_second_acc += summary.average_rate_per_second;
+                    total_records_indexed_completed += stats.records_upserted as u64;
+                    rate_per_second_acc += stats.average_throughput.unwrap();
                     completed_transactions += 1;
                 }
             }

@@ -1,4 +1,5 @@
 use crate::macros::key;
+use chrono::{DateTime, Utc};
 use lmdb::{Cursor, Database, Environment, Transaction, WriteFlags};
 use serde::Serialize;
 use std::ops::Deref;
@@ -6,10 +7,11 @@ use std::sync::Arc;
 
 use utoipa::ToSchema;
 
+use super::collection_transaction::ExplicitTransactionID;
 use super::tree_map::TreeMapKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, ToSchema)]
-#[schema(value_type = i32, description = "Version number")]
+#[schema(value_type = u32, description = "Version number")]
 pub struct VersionNumber(u32);
 
 impl From<u32> for VersionNumber {
@@ -33,36 +35,125 @@ impl TreeMapKey for VersionNumber {
 }
 
 #[derive(Debug, Clone)]
+pub enum VersionSource {
+    /// Created by an explicit transaction
+    Explicit {
+        transaction_id: ExplicitTransactionID,
+    },
+    /// Created by implicit transaction epoch
+    Implicit { epoch_id: u32 },
+}
+
+#[derive(Debug, Clone)]
 pub struct VersionInfo {
     pub version: VersionNumber,
-    pub implicit: bool,
+    pub source: VersionSource,
+
+    // Timing information
+    pub created_at: DateTime<Utc>,
+
+    // Operation statistics
+    pub records_upserted: u32,
+    pub records_deleted: u32,
+    pub total_operations: u32,
 }
 
 impl VersionInfo {
-    pub fn new(version: VersionNumber, implicit: bool) -> Self {
-        Self { version, implicit }
+    pub fn new_implicit(
+        version: VersionNumber,
+        epoch_id: u32,
+        created_at: DateTime<Utc>,
+        records_upserted: u32,
+        records_deleted: u32,
+        total_operations: u32,
+    ) -> Self {
+        Self {
+            version,
+            source: VersionSource::Implicit { epoch_id },
+            created_at,
+            records_upserted,
+            records_deleted,
+            total_operations,
+        }
+    }
+
+    pub fn new_explicit(
+        version: VersionNumber,
+        transaction_id: ExplicitTransactionID,
+        created_at: DateTime<Utc>,
+        records_upserted: u32,
+        records_deleted: u32,
+        total_operations: u32,
+    ) -> Self {
+        Self {
+            version,
+            source: VersionSource::Explicit { transaction_id },
+            created_at,
+            records_upserted,
+            records_deleted,
+            total_operations,
+        }
     }
 
     fn serialize(&self) -> Vec<u8> {
-        let mut result = Vec::with_capacity(5);
+        let mut result = Vec::with_capacity(29);
 
         result.extend_from_slice(&self.version.to_le_bytes());
-        result.push(self.implicit as u8);
+        match self.source {
+            VersionSource::Explicit { transaction_id } => {
+                result.push(0);
+                result.extend_from_slice(&transaction_id.to_le_bytes());
+            }
+            VersionSource::Implicit { epoch_id } => {
+                result.push(1);
+                result.extend_from_slice(&epoch_id.to_le_bytes());
+            }
+        }
+
+        result.extend_from_slice(&self.created_at.timestamp().to_le_bytes());
+
+        result.extend_from_slice(&self.records_upserted.to_le_bytes());
+        result.extend_from_slice(&self.records_deleted.to_le_bytes());
+        result.extend_from_slice(&self.total_operations.to_le_bytes());
 
         result
     }
 
     fn deserialize(bytes: &[u8]) -> Result<Self, &'static str> {
-        if bytes.len() != 5 {
-            return Err("Input must be exactly 5 bytes");
+        if bytes.len() != 29 {
+            return Err("Input must be exactly 29 bytes");
         }
 
         let version = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
-        let implicit = bytes[4] != 0;
+        let explicit = bytes[4] == 0;
+
+        let source = if explicit {
+            VersionSource::Explicit {
+                transaction_id: ExplicitTransactionID::from(u32::from_le_bytes(
+                    bytes[5..9].try_into().unwrap(),
+                )),
+            }
+        } else {
+            VersionSource::Implicit {
+                epoch_id: u32::from_le_bytes(bytes[5..9].try_into().unwrap()),
+            }
+        };
+
+        let created_at_timestamp = i64::from_le_bytes(bytes[9..17].try_into().unwrap());
+        let created_at =
+            DateTime::from_timestamp(created_at_timestamp, 0).ok_or("Invalid Timestamp")?;
+
+        let records_upserted = u32::from_le_bytes(bytes[17..21].try_into().unwrap());
+        let records_deleted = u32::from_le_bytes(bytes[21..25].try_into().unwrap());
+        let total_operations = u32::from_le_bytes(bytes[25..29].try_into().unwrap());
 
         Ok(VersionInfo {
             version: VersionNumber(version),
-            implicit,
+            source,
+            created_at,
+            records_upserted,
+            records_deleted,
+            total_operations,
         })
     }
 }
@@ -72,11 +163,10 @@ pub struct VersionControl {
     pub db: Database,
 }
 
-#[allow(unused)]
 impl VersionControl {
     pub fn new(env: Arc<Environment>, db: Database) -> lmdb::Result<(Self, VersionNumber)> {
         let version = VersionNumber(0);
-        let version_meta = VersionInfo::new(version, false);
+        let version_meta = VersionInfo::new_implicit(version, u32::MAX, Utc::now(), 0, 0, 0);
 
         let version_key = key!(v:version);
         let current_version_key = key!(m:current_version);
@@ -121,12 +211,26 @@ impl VersionControl {
         Ok(version)
     }
 
-    pub fn set_current_version(&self, version: VersionNumber, implicit: bool) -> lmdb::Result<()> {
+    pub fn set_current_version_explicit(
+        &self,
+        version: VersionNumber,
+        transaction_id: ExplicitTransactionID,
+        records_upserted: u32,
+        records_deleted: u32,
+        total_operations: u32,
+    ) -> lmdb::Result<()> {
         let mut txn = self.env.begin_rw_txn()?;
         let current_version_key = key!(m:current_version);
         let version_key = key!(v:version);
 
-        let version_info = VersionInfo::new(version, implicit);
+        let version_info = VersionInfo::new_explicit(
+            version,
+            transaction_id,
+            Utc::now(),
+            records_upserted,
+            records_deleted,
+            total_operations,
+        );
         let version_info_serialized = version_info.serialize();
 
         txn.put(
@@ -146,6 +250,69 @@ impl VersionControl {
         Ok(())
     }
 
+    pub fn set_current_version_implicit(
+        &self,
+        version: VersionNumber,
+        epoch_id: u32,
+    ) -> lmdb::Result<()> {
+        let mut txn = self.env.begin_rw_txn()?;
+        let current_version_key = key!(m:current_version);
+        let version_key = key!(v:version);
+
+        let version_info = VersionInfo::new_implicit(version, epoch_id, Utc::now(), 0, 0, 0);
+        let version_info_serialized = version_info.serialize();
+
+        txn.put(
+            self.db,
+            &current_version_key,
+            &version.to_le_bytes(),
+            WriteFlags::empty(),
+        )?;
+        txn.put(
+            self.db,
+            &version_key,
+            &version_info_serialized,
+            WriteFlags::empty(),
+        )?;
+
+        txn.commit()?;
+        Ok(())
+    }
+
+    pub fn update_version_metadata(
+        &self,
+        version: VersionNumber,
+        records_upserted: u32,
+        records_deleted: u32,
+        total_operations: u32,
+    ) -> lmdb::Result<()> {
+        let mut txn = self.env.begin_rw_txn()?;
+        let version_key = key!(v:version);
+
+        let bytes = txn.get(self.db, &version_key)?;
+        let mut version_info = VersionInfo::deserialize(bytes).unwrap();
+        version_info.records_upserted = records_upserted;
+        version_info.records_deleted = records_deleted;
+        version_info.total_operations = total_operations;
+        txn.put(
+            self.db,
+            &version_key,
+            &version_info.serialize(),
+            WriteFlags::empty(),
+        )?;
+
+        txn.commit()?;
+        Ok(())
+    }
+
+    pub fn get_version(&self, version: VersionNumber) -> lmdb::Result<VersionInfo> {
+        let txn = self.env.begin_ro_txn()?;
+        let version_key = key!(v:version);
+        let bytes = txn.get(self.db, &version_key)?;
+        let info = VersionInfo::deserialize(bytes).unwrap();
+        Ok(info)
+    }
+
     pub fn get_versions(&self) -> lmdb::Result<Vec<VersionInfo>> {
         let txn = self.env.begin_ro_txn()?;
         let mut cursor = txn.open_ro_cursor(self.db)?;
@@ -160,7 +327,6 @@ impl VersionControl {
                 break;
             }
 
-            let hash = VersionNumber::from(u32::from_le_bytes(k[1..].try_into().unwrap()));
             versions.push(VersionInfo::deserialize(v).map_err(|_| lmdb::Error::Corrupted)?);
         }
         versions.sort_unstable_by_key(|v| *v.version);

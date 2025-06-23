@@ -15,7 +15,7 @@ use super::{
     prob_node::ProbNode,
     tf_idf_index::TFIDFIndexRoot,
     tree_map::{TreeMap, TreeMapKey, TreeMapVec},
-    versioning::VersionControl,
+    versioning::{VersionControl, VersionNumber},
 };
 use crate::{
     args::CosdataArgs,
@@ -39,7 +39,6 @@ use crate::{
     metadata::{schema::MetadataDimensions, QueryFilterDimensions, HIGH_WEIGHT},
     models::{
         buffered_io::BufferManager,
-        collection_transaction::TransactionStatus,
         common::*,
         lazy_item::{FileIndex, ProbLazyItem},
         meta_persist::retrieve_values_range,
@@ -52,7 +51,6 @@ use crate::{
     },
     storage::Storage,
 };
-use chrono::Utc;
 use crossbeam::channel;
 use dashmap::DashMap;
 use lmdb::{Cursor, Database, DatabaseFlags, Environment, Transaction, WriteFlags};
@@ -687,6 +685,7 @@ impl CollectionsMap {
                 inverted_index: parking_lot::RwLock::new(inverted_index),
                 tf_idf_index: parking_lot::RwLock::new(tf_idf_index),
                 indexing_manager: parking_lot::RwLock::new(None),
+                is_indexing: AtomicBool::new(false),
             });
 
             *collection.indexing_manager.write() = Some(IndexingManager::new(
@@ -698,34 +697,15 @@ impl CollectionsMap {
             let background_version = retrieve_background_version(&collection.lmdb)?;
 
             if background_version != current_version {
-                let all_versions = collection.vcs.get_versions()?;
-                let mut index = false;
-                for version_info in all_versions {
-                    if index {
-                        if collection
-                            .transaction_status_map
-                            .get_latest(&version_info.version)
-                            .is_none()
-                        {
-                            collection.transaction_status_map.insert(
-                                version_info.version,
-                                &version_info.version,
-                                parking_lot::RwLock::new(TransactionStatus::NotStarted {
-                                    last_updated: Utc::now(),
-                                }),
-                            );
-                        }
-                        IndexingManager::index_version(
-                            &collection,
-                            &config,
-                            &threadpool,
-                            version_info.version,
-                        )
-                        .unwrap();
-                    }
-                    if version_info.version == background_version {
-                        index = true;
-                    }
+                for version in *background_version..*current_version {
+                    let version = VersionNumber::from(version + 1);
+                    IndexingManager::index_version_on_restart(
+                        &collection,
+                        &config,
+                        &threadpool,
+                        version,
+                    )
+                    .unwrap();
                 }
             }
 

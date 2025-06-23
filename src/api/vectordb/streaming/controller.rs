@@ -13,8 +13,8 @@ use crate::{
 /// A transaction is created, vectors are upserted, and the transaction is committed in a single request.
 #[utoipa::path(
     post,
-    path = "/vectordb/collections/{collection_id}/sync_transaction/upsert",
-    tag = "sync_transactions",
+    path = "/vectordb/collections/{collection_id}/streaming/upsert",
+    tag = "streaming",
     params(
         ("collection_id" = String, Path, description = "Collection ID")
     ),
@@ -46,8 +46,8 @@ pub(crate) async fn upsert(
 /// A transaction is created, vector is deleted, and the transaction is committed in a single request.
 #[utoipa::path(
     delete,
-    path = "/vectordb/collections/{collection_id}/sync_transaction/vectors/{vector_id}",
-    tag = "sync_transactions",
+    path = "/vectordb/collections/{collection_id}/streaming/vectors/{vector_id}",
+    tag = "streaming",
     params(
         ("collection_id" = String, Path, description = "Collection ID"),
         ("vector_id" = String, Path, description = "Vector ID to delete")

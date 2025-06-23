@@ -463,7 +463,7 @@ def process_vectors_batch(vectors, collection, batch_size):
         for vector in vectors:
             vector["id"] = str(vector["id"])
 
-        url = f"{collection.client.base_url}/collections/{collection.name}/sync_transaction/upsert"
+        url = f"{collection.client.base_url}/collections/{collection.name}/streaming/upsert"
         for batch_start in range(0, len(vectors), 200):
             batch = vectors[batch_start:batch_start+200]
             data = {"vectors": batch}

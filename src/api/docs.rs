@@ -1,6 +1,6 @@
 use crate::api::openapi::{
-    AuthApiDoc, CollectionsApiDoc, CombinedApiDoc, IndexesApiDoc, SearchApiDoc,
-    SyncTransactionsApiDoc, TransactionsApiDoc, VectorsApiDoc, VersionsApiDoc,
+    AuthApiDoc, CollectionsApiDoc, CombinedApiDoc, IndexesApiDoc, SearchApiDoc, StreamingApiDoc,
+    TransactionsApiDoc, VectorsApiDoc, VersionsApiDoc,
 };
 use actix_web::{web, HttpResponse, Scope};
 use utoipa::OpenApi;
@@ -25,8 +25,8 @@ pub(crate) fn api_docs_module() -> Scope {
             web::get().to(versions_openapi_json),
         )
         .route(
-            "/sync_transactions/openapi.json",
-            web::get().to(sync_transactions_openapi_json),
+            "/streaming/openapi.json",
+            web::get().to(streaming_openapi_json),
         )
 }
 
@@ -62,6 +62,6 @@ async fn versions_openapi_json() -> HttpResponse {
     HttpResponse::Ok().json(VersionsApiDoc::openapi())
 }
 
-async fn sync_transactions_openapi_json() -> HttpResponse {
-    HttpResponse::Ok().json(SyncTransactionsApiDoc::openapi())
+async fn streaming_openapi_json() -> HttpResponse {
+    HttpResponse::Ok().json(StreamingApiDoc::openapi())
 }

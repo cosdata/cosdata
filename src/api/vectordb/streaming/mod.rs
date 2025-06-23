@@ -4,8 +4,8 @@ mod service;
 
 use actix_web::{web, Scope};
 
-pub(crate) fn sync_transactions_module() -> Scope {
-    web::scope("/collections/{collection_id}/sync_transaction")
+pub(crate) fn streaming_module() -> Scope {
+    web::scope("/collections/{collection_id}/streaming")
         .route("/upsert", web::post().to(controller::upsert))
         .route(
             "/vectors/{vector_id}",

@@ -30,7 +30,9 @@ pub struct WALFile {
     bufman: FilelessBufferManager,
     cursor: u64,
     read_lock: Mutex<()>,
-    vectors_count: AtomicU32,
+    records_upserted: AtomicU32,
+    records_deleted: AtomicU32,
+    total_operations: AtomicU32,
 }
 
 /// Writes a u16 length to the buffer using custom encoding:
@@ -88,12 +90,16 @@ impl WALFile {
         let bufman = FilelessBufferManager::new(8192)?;
         let cursor = bufman.open_cursor()?;
         bufman.update_u32_with_cursor(cursor, 0)?;
+        bufman.update_u32_with_cursor(cursor, 0)?;
+        bufman.update_u32_with_cursor(cursor, 0)?;
 
         Ok(Self {
             bufman,
             cursor,
             read_lock: Mutex::new(()),
-            vectors_count: AtomicU32::new(0),
+            records_upserted: AtomicU32::new(0),
+            records_deleted: AtomicU32::new(0),
+            total_operations: AtomicU32::new(0),
         })
     }
 
@@ -104,26 +110,44 @@ impl WALFile {
 
         let bufman = FilelessBufferManager::from_file(&mut file, 8192)?;
         let cursor = bufman.open_cursor()?;
-        let vectors_count = bufman.read_u32_with_cursor(cursor)?;
+        let records_upserted = bufman.read_u32_with_cursor(cursor)?;
+        let records_deleted = bufman.read_u32_with_cursor(cursor)?;
+        let total_operations = bufman.read_u32_with_cursor(cursor)?;
         bufman.seek_with_cursor(cursor, 0)?;
-        bufman.update_u32_with_cursor(cursor, vectors_count)?;
+        bufman.update_u32_with_cursor(cursor, records_upserted)?;
+        bufman.update_u32_with_cursor(cursor, records_deleted)?;
+        bufman.update_u32_with_cursor(cursor, total_operations)?;
 
         Ok(Self {
             bufman,
             cursor,
             read_lock: Mutex::new(()),
-            vectors_count: AtomicU32::new(vectors_count),
+            records_upserted: AtomicU32::new(records_upserted),
+            records_deleted: AtomicU32::new(records_deleted),
+            total_operations: AtomicU32::new(total_operations),
         })
     }
 
-    pub fn vectors_count(&self) -> u32 {
-        self.vectors_count.load(Ordering::Relaxed)
+    pub fn records_upserted(&self) -> u32 {
+        self.records_upserted.load(Ordering::Relaxed)
+    }
+
+    pub fn records_deleted(&self) -> u32 {
+        self.records_deleted.load(Ordering::Relaxed)
+    }
+
+    pub fn total_operations(&self) -> u32 {
+        self.total_operations.load(Ordering::Relaxed)
     }
 
     pub fn flush(self, root_path: &Path, version: VersionNumber) -> Result<(), BufIoError> {
         let cursor = self.bufman.open_cursor()?;
         self.bufman
-            .update_u32_with_cursor(cursor, self.vectors_count.load(Ordering::Acquire))?;
+            .update_u32_with_cursor(cursor, self.records_upserted.load(Ordering::Acquire))?;
+        self.bufman
+            .update_u32_with_cursor(cursor, self.records_deleted.load(Ordering::Acquire))?;
+        self.bufman
+            .update_u32_with_cursor(cursor, self.total_operations.load(Ordering::Acquire))?;
         self.bufman.close_cursor(cursor)?;
         let file_path: Arc<Path> = root_path.join(format!("{}.wal", *version)).into();
 
@@ -142,7 +166,7 @@ impl WALFile {
 
         match op {
             VectorOp::Upsert(vectors) => {
-                self.vectors_count
+                self.records_upserted
                     .fetch_add(vectors.len() as u32, Ordering::Relaxed);
                 write_len(&mut buf, vectors.len() as u16);
                 for vector in &*vectors {
@@ -205,12 +229,14 @@ impl WALFile {
                 buf[0..4].copy_from_slice(&len.to_le_bytes());
             }
             VectorOp::Delete(id) => {
+                self.records_deleted.fetch_add(1, Ordering::Relaxed);
                 write_len(&mut buf, id.len() as u16);
                 buf.extend(id.as_bytes());
                 let len = buf.len() as u32 - 4;
                 buf[0..4].copy_from_slice(&(len | (1u32 << 31)).to_le_bytes());
             }
         }
+        self.total_operations.fetch_add(1, Ordering::Relaxed);
 
         self.bufman.write_to_end_of_file(self.cursor, &buf)?;
         Ok(())
