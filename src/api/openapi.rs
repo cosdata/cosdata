@@ -226,12 +226,12 @@ pub struct TransactionsApiDoc;
 )]
 pub struct VectorsApiDoc;
 
-/// API documentation for sync transaction endpoints
+/// API documentation for streaming endpoints
 #[derive(OpenApi)]
 #[openapi(
     paths(
-        crate::api::vectordb::sync_transaction::controller::upsert,
-        crate::api::vectordb::sync_transaction::controller::delete_vector_by_id
+        crate::api::vectordb::streaming::controller::upsert,
+        crate::api::vectordb::streaming::controller::delete_vector_by_id
     ),
     components(
         schemas(
@@ -239,11 +239,11 @@ pub struct VectorsApiDoc;
         )
     ),
     tags(
-        (name = "sync_transactions", description = "Synchronous transaction endpoints")
+        (name = "streaming", description = "Streaming endpoints")
     ),
-    modifiers(&SyncTransactionsApiDoc)
+    modifiers(&StreamingApiDoc)
 )]
-pub struct SyncTransactionsApiDoc;
+pub struct StreamingApiDoc;
 
 /// Combined API documentation
 #[derive(OpenApi)]
@@ -284,8 +284,8 @@ pub struct SyncTransactionsApiDoc;
         crate::api::vectordb::transactions::controller::delete_vector_by_id,
         crate::api::vectordb::transactions::controller::abort_transaction,
         crate::api::vectordb::transactions::controller::upsert,
-        crate::api::vectordb::sync_transaction::controller::upsert,
-        crate::api::vectordb::sync_transaction::controller::delete_vector_by_id
+        crate::api::vectordb::streaming::controller::upsert,
+        crate::api::vectordb::streaming::controller::delete_vector_by_id
     ),
     components(
         schemas(
@@ -358,7 +358,7 @@ pub struct SyncTransactionsApiDoc;
         (name = "vectors", description = "Vector management endpoints"),
         (name = "versions", description = "Version management endpoints"),
         (name = "transactions", description = "Transaction management endpoints"),
-        (name = "sync_transactions", description = "Synchronous transaction endpoints")
+        (name = "streaming", description = "Streaming endpoints")
     ),
     modifiers(&CombinedApiDoc)
 )]
@@ -406,7 +406,7 @@ impl utoipa::Modify for VersionsApiDoc {
     }
 }
 
-impl utoipa::Modify for SyncTransactionsApiDoc {
+impl utoipa::Modify for StreamingApiDoc {
     fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
         openapi.info = api_info();
     }
