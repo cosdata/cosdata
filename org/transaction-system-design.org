@@ -1,25 +1,45 @@
 #+TITLE: Cosdata Transaction System Design
 #+AUTHOR: Nithin Mani
 #+DATE: 2025-06-06
-#+DESCRIPTION: Formal design document for explicit and implicit transaction systems in Cosdata
+#+DESCRIPTION: Formal design document for explicit transaction systems and streaming data ingestion in Cosdata
 
 * Overview
 
-Cosdata implements a dual-transaction architecture designed to address two fundamentally different data ingestion patterns while maintaining strict append-only semantics and monotonic version control. The system recognizes that modern applications require both atomic batch processing capabilities for large corpus imports and real-time streaming data ingestion with immediate searchability. To meet these diverse requirements, Cosdata provides explicit transactions for controlled, atomic operations and implicit transactions for high-throughput streaming scenarios.
+Cosdata implements a dual-ingestion architecture designed to address two fundamentally different data ingestion patterns while maintaining strict append-only semantics and monotonic version control. The system recognizes that modern applications require both atomic batch processing capabilities for large corpus imports and real-time streaming data ingestion with immediate searchability. To meet these diverse requirements, Cosdata provides explicit transactions for controlled, atomic operations and streaming data ingestion for high-throughput real-time scenarios.
 
-The architecture maintains the core principle that all data modifications result in new versions rather than in-place updates, ensuring complete historical immutability and enabling time-travel queries across any point in the database's evolution. Both transaction types contribute to a single, linearly ordered version history using monotonically increasing version numbers, eliminating the complexity of branching version trees while preserving full auditability.
+The architecture maintains the core principle that all data modifications result in new versions rather than in-place updates, ensuring complete historical immutability and enabling time-travel queries across any point in the database's evolution. Both ingestion patterns contribute to a single, linearly ordered version history using monotonically increasing version numbers, eliminating the complexity of branching version trees while preserving full auditability.
+
+** Conceptual Distinction: Transactions vs Streaming Data
+
+The system makes a clear conceptual distinction between two types of data ingestion:
+
+*** Transactions (Explicit Only)
+- **Purpose**: Atomic batch operations for logically cohesive datasets
+- **Lifecycle**: Managed resources with open → upsert → commit phases
+- **Guarantees**: All-or-nothing semantics with rollback capability
+- **Use Cases**: Large corpus imports, dataset migrations, bulk operations
+- **API Pattern**: RESTful resource management with transaction IDs
+
+*** Streaming Data
+- **Purpose**: Real-time individual record ingestion with immediate availability
+- **Lifecycle**: Fire-and-forget operations with immediate indexing
+- **Guarantees**: Immediate searchability with eventual persistence
+- **Use Cases**: Live feeds, monitoring data, incremental updates
+- **API Pattern**: Direct upsert endpoints without transaction management
+
+Both approaches create versions in the same linear timeline, but through fundamentally different mechanisms and with different consistency guarantees.
 
 * Explicit Transactions
 
 ** Conceptual Foundation
 
-Explicit transactions serve applications that need to import logically cohesive datasets as atomic units. This transaction model is particularly valuable when dealing with large corpora for vector semantic search or full-text indexing where partial imports would compromise the logical integrity of the dataset. The explicit transaction ensures that either all records in a corpus are successfully indexed and made available, or none are, providing strong consistency guarantees.
+Explicit transactions serve applications that need to import logically cohesive datasets as atomic units. This ingestion model is particularly valuable when dealing with large corpora for vector semantic search or full-text indexing where partial imports would compromise the logical integrity of the dataset. The transaction ensures that either all records in a corpus are successfully indexed and made available, or none are, providing strong consistency guarantees.
 
 The design philosophy behind explicit transactions recognizes that importing large datasets is fundamentally different from real-time data streaming. Large imports benefit from batch processing optimizations, can tolerate longer processing times, and require clear success or failure semantics. Users importing research papers, product catalogs, or knowledge bases need confidence that their entire dataset is consistently available for querying once the import process completes.
 
 ** Transaction Lifecycle and Resource Management
 
-Explicit transactions follow the resource-based REST API pattern described in the transactions.org specification, treating each transaction as a first-class resource with its own lifecycle. When a client initiates an explicit transaction, the system creates a new transaction resource identified by a unique hash / string. This identifier serves as the primary key for all subsequent operations within the transaction scope.
+Explicit transactions follow the resource-based REST API pattern, treating each transaction as a first-class resource with its own lifecycle. When a client initiates an explicit transaction, the system creates a new transaction resource identified by a unique hash string. This identifier serves as the primary key for all subsequent operations within the transaction scope.
 
 The transaction begins in an open state where it accepts data operations but performs no indexing. All upsert, update, and delete operations are buffered within the transaction context and written to a dedicated Write-Ahead Log (WAL) file. This buffering approach allows the system to optimize the eventual indexing process by analyzing the complete dataset before beginning index construction, potentially identifying opportunities for batch optimizations and conflict resolution.
 
@@ -37,7 +57,7 @@ During the indexing phase, the system assigns a single version number to represe
 
 The explicit transaction system provides comprehensive observability into the indexing process through detailed status APIs. These endpoints expose real-time metrics including the percentage of records processed, current processing rate, estimated completion time, and overall transaction state. This level of detail enables clients to provide meaningful progress updates to end users and make informed decisions about system resource allocation.
 
-The status information evolves through several distinct phases. Initially, transactions report a "not_started" status while queued for processing. Once indexing begins, the status transitions to "indexing_in_progress" with detailed progress metrics updated continuously. The system calculates processing rates and time estimates based on recent performance, providing accurate predictions for completion times. Upon successful completion, the transaction reports a "complete" status with summary statistics including total processing time and average throughput rates.
+The status information evolves through several distinct phases. Initially, transactions report a "not_started" status while queued for processing. Once indexing begins, the status transitions to "in_progress" with detailed progress metrics updated continuously. The system calculates processing rates and time estimates based on recent performance, providing accurate predictions for completion times. Upon successful completion, the transaction reports a "complete" status with summary statistics including total processing time and average throughput rates.
 
 This observability extends beyond individual transactions to provide system-wide visibility into transaction queues and resource utilization. Administrators can monitor the number of pending transactions, system performance metrics, and resource consumption patterns to optimize system configuration and capacity planning.
 
@@ -79,59 +99,80 @@ This architecture provides several important benefits. Clients experience predic
 
 The queue-based design also provides natural backpressure mechanisms. If the background indexing pipeline becomes saturated, the system can implement flow control by delaying acceptance of new transaction commits until sufficient queue capacity becomes available. This approach ensures that the system remains stable under high load while providing clear feedback to clients about system capacity constraints.
 
-* Implicit Transactions
+* Streaming Data Ingestion
 
 ** Design Philosophy and Use Cases
 
-Implicit transactions represent a fundamentally different approach to data ingestion, optimized for streaming scenarios where individual records must become immediately searchable upon insertion. This transaction model serves applications like real-time monitoring systems, live content feeds, and streaming analytics where the value of data diminishes rapidly if not immediately accessible.
+Streaming data ingestion represents a fundamentally different approach to data management, optimized for scenarios where individual records must become immediately searchable upon insertion. This ingestion model serves applications like real-time monitoring systems, live content feeds, and streaming analytics where the value of data diminishes rapidly if not immediately accessible.
 
-The implicit transaction design recognizes that streaming data ingestion has different requirements than batch imports. Individual records are typically small, arrive at irregular intervals, and must be processed with minimal latency. Creating explicit transactions for each record would introduce unnecessary overhead and create excessive noise in the version history, making historical analysis more difficult and consuming system resources inefficiently.
+The streaming data design recognizes that real-time data ingestion has different requirements than batch imports. Individual records are typically small, arrive at irregular intervals, and must be processed with minimal latency. Managing explicit transactions for each record would introduce unnecessary overhead and create excessive noise in the version history, making historical analysis more difficult and consuming system resources inefficiently.
 
-Rather than requiring clients to manage transaction boundaries, implicit transactions automatically handle the complexity of batching records for efficient processing while maintaining the immediate availability that streaming applications require. This approach abstracts away the transactional complexity while preserving the system's append-only semantics and version control capabilities.
+Rather than requiring clients to manage transaction boundaries, streaming data ingestion automatically handles the complexity of batching records for efficient processing while maintaining the immediate availability that streaming applications require. This approach abstracts away transactional complexity while preserving the system's append-only semantics and version control capabilities.
+
+** API Design for Streaming Operations
+
+Streaming data operations use a simplified API design that prioritizes ease of use and minimal latency:
+
+*** Streaming Upsert Endpoint
+#+BEGIN_EXAMPLE
+POST /vectordb/collections/{collection_id}/streaming/upsert
+#+END_EXAMPLE
+
+*** Streaming Update Endpoint  
+#+BEGIN_EXAMPLE
+PUT /vectordb/collections/{collection_id}/streaming/update/{record_id}
+#+END_EXAMPLE
+
+*** Streaming Delete Endpoint
+#+BEGIN_EXAMPLE
+DELETE /vectordb/collections/{collection_id}/streaming/delete/{record_id}
+#+END_EXAMPLE
+
+These endpoints provide immediate acknowledgment and searchability without requiring transaction management overhead. Each operation is atomic at the record level and immediately available for querying upon successful completion.
 
 ** Immediate Indexing and Availability
 
-The implicit transaction system prioritizes data availability above all other concerns. When a client submits a record to the =/synctxn/upsert= endpoint, the system immediately writes the record to its dedicated Write-Ahead Log and performs in-memory indexing. By the time the client receives a 200 OK response, the record is fully searchable through all relevant indexes, including vector similarity search, full-text search, and any configured sparse indexes.
+The streaming data system prioritizes data availability above all other concerns. When a client submits a record to a streaming endpoint, the system immediately writes the record to its dedicated Write-Ahead Log and performs in-memory indexing. By the time the client receives a 200 OK response, the record is fully searchable through all relevant indexes, including vector similarity search, full-text search, and any configured sparse indexes.
 
 This immediate availability is achieved through careful separation of durability and persistence concerns. The WAL write ensures that the record is durable and will survive system failures, while the in-memory indexing ensures immediate searchability. The separation of these concerns allows the system to optimize each independently, providing both strong durability guarantees and minimal latency.
 
 The in-memory indexing process updates all relevant data structures immediately, ensuring that subsequent queries will include the newly inserted records. This includes updating vector indexes for similarity search, text indexes for full-text search, and any key-value mappings required for efficient retrieval. The system maintains these in-memory structures with the same consistency guarantees as persistent indexes, ensuring that immediate searches return accurate and complete results.
 
-** Epoch-Based WAL Management
+** Epoch-Based WAL Management and Version Creation
 
-Implicit transactions utilize a sophisticated epoch-based Write-Ahead Log system that balances durability requirements with efficient resource utilization. Unlike explicit transactions that maintain individual WAL files, implicit transactions share a common WAL that is organized into epochs representing distinct time periods or record count thresholds.
+Streaming data utilizes a sophisticated epoch-based Write-Ahead Log system that balances durability requirements with efficient resource utilization. Unlike explicit transactions that maintain individual WAL files, streaming operations share a common WAL that is organized into epochs representing distinct time periods or record count thresholds.
 
 The epoch-based approach allows the system to batch WAL writes efficiently while maintaining strict ordering guarantees. Records within an epoch are guaranteed to be written in the order they were received, but the system can optimize disk I/O by batching multiple records into single write operations. This batching significantly improves throughput for high-volume streaming scenarios while preserving the ordering information necessary for recovery operations.
 
-Each epoch represents a logical boundary for serialization operations. When the system determines that an epoch should be serialized to persistent storage, all records within that epoch are processed together and assigned a single version number. This batching approach reduces the total number of versions created while ensuring that related records that arrived within similar timeframes are logically grouped together in the version history.
+Each epoch represents a logical boundary for version creation operations. When the system determines that an epoch should be serialized to persistent storage, all records within that epoch are processed together and assigned a single version number. This batching approach reduces the total number of versions created while ensuring that related records that arrived within similar timeframes are logically grouped together in the version history.
 
 ** Periodic Serialization and Version Creation
 
-The implicit transaction system implements a sophisticated periodic serialization mechanism that balances the need for persistent storage with system performance. Rather than immediately persisting every record to disk, the system accumulates records in memory and periodically serializes batches to create new persistent versions.
+The streaming data system implements a sophisticated periodic serialization mechanism that balances the need for persistent storage with system performance. Rather than immediately persisting every record to disk, the system accumulates records in memory and periodically serializes batches to create new persistent versions.
 
-The serialization process considers multiple factors when determining when to create a new version. Time-based triggers ensure that records don't remain in memory indefinitely, while volume-based triggers prevent memory exhaustion during high-throughput periods. The system also monitors query patterns and can trigger early serialization if it detects that historical queries are frequently accessing recent but not-yet-serialized data.
+The serialization process considers multiple factors when determining when to create a new version from an epoch. Time-based triggers ensure that records don't remain in memory indefinitely, while volume-based triggers prevent memory exhaustion during high-throughput periods. The system also monitors query patterns and can trigger early serialization if it detects that historical queries are frequently accessing recent but not-yet-serialized data.
 
 During serialization, the system creates comprehensive persistent indexes from the accumulated in-memory structures. This process involves writing updated vector indexes, text indexes, and metadata structures to disk while maintaining strict consistency with the existing version history. The new version receives a monotonically increasing version number and becomes available for historical queries once the serialization process completes.
 
 The serialization process is designed to be non-blocking for ongoing data ingestion. New records continue to be accepted and indexed in memory while previous epochs are being serialized, ensuring that the system maintains consistent throughput regardless of serialization activity.
 
-** Interaction with Explicit Transactions
+** Interaction Between Transactions and Streaming Data
 
-The coordination between implicit and explicit transactions in Cosdata follows a unified version allocation system that treats both transaction types as equal participants in the version timeline. Rather than implementing priority-based resource allocation, the system uses an epoch-based version reservation mechanism that ensures consistent ordering while allowing both transaction types to operate independently.
+The coordination between explicit transactions and streaming data ingestion in Cosdata follows a unified version allocation system that treats both ingestion types as equal participants in the version timeline. Rather than implementing priority-based resource allocation, the system uses an epoch-based version reservation mechanism that ensures consistent ordering while allowing both ingestion types to operate independently.
 
 *** Epoch-Based Version Allocation
 
-The system automatically allocates version numbers for implicit transactions at the beginning of each epoch, typically occurring at regular intervals such as every hour. When a new epoch begins, the system reserves the next available version number (N) for any implicit transaction records that may arrive during that epoch period. This pre-allocation ensures that streaming data can be immediately assigned to a logical version context even before any records actually arrive.
+The system automatically allocates version numbers for streaming data at the beginning of each epoch, typically occurring at regular intervals such as every hour. When a new epoch begins, the system reserves the next available version number (N) for any streaming records that may arrive during that epoch period. This pre-allocation ensures that streaming data can be immediately assigned to a logical version context even before any records actually arrive.
 
-This epoch-based approach creates a predictable framework for version management where implicit transactions occupy reserved slots in the version timeline. The reservation system allows the database to maintain its append-only semantics while providing immediate version context for streaming data without requiring coordination with explicit transactions.
+This epoch-based approach creates a predictable framework for version management where streaming data occupies reserved slots in the version timeline. The reservation system allows the database to maintain its append-only semantics while providing immediate version context for streaming data without requiring coordination with explicit transactions.
 
-*** Version Assignment During Mixed Transaction Scenarios
+*** Version Assignment During Mixed Ingestion Scenarios
 
-The interaction between transaction types becomes more complex when explicit transactions overlap with implicit transaction epochs. Consider a scenario where an implicit transaction epoch begins and reserves version N, followed shortly by a client initiating an explicit transaction with hash identifier "123789abcd". The explicit transaction receives its unique hash immediately but does not receive a version number until it reaches the commit and indexing phase.
+The interaction between ingestion types becomes more complex when explicit transactions overlap with streaming data epochs. Consider a scenario where a streaming data epoch begins and reserves version N, followed shortly by a client initiating an explicit transaction with hash identifier "123789abcd". The explicit transaction receives its unique hash immediately but does not receive a version number until it reaches the commit and indexing phase.
 
-During the explicit transaction's open and upsert phases, the system may transition to a new implicit transaction epoch, automatically reserving version N+1 for the next batch of streaming records. If the explicit transaction finally commits and enters the indexing queue, it receives version N+2, reflecting its actual position in the chronological sequence of committed changes.
+During the explicit transaction's open and upsert phases, the system may transition to a new streaming data epoch, automatically reserving version N+1 for the next batch of streaming records. If the explicit transaction finally commits and enters the indexing queue, it receives version N+2, reflecting its actual position in the chronological sequence of committed changes.
 
-This version assignment approach ensures that the version timeline accurately reflects the order in which changes became permanent in the database, rather than the order in which transactions were initiated. The temporal gap between transaction initiation and version assignment allows for more accurate historical reconstruction and ensures that version numbers represent actual data availability rather than transaction intention.
+This version assignment approach ensures that the version timeline accurately reflects the order in which changes became permanent in the database, rather than the order in which operations were initiated. The temporal gap between transaction initiation and version assignment allows for more accurate historical reconstruction and ensures that version numbers represent actual data availability rather than operation intention.
 
 *** Transaction Lifecycle and Timeout Handling
 
@@ -139,29 +180,166 @@ Explicit transactions implement a comprehensive lifecycle management system that
 
 If an explicit transaction exceeds its timeout period without receiving a commit command, the system automatically aborts the transaction and releases all associated resources. This automatic cleanup ensures that abandoned or forgotten transactions do not permanently consume system resources or create gaps in the version number sequence. The abort operation discards all buffered changes and removes the transaction from any processing queues without affecting the version numbering scheme.
 
-The timeout mechanism also prevents scenarios where long-running explicit transactions might block system operations or create unpredictable resource utilization patterns. By enforcing reasonable time limits, the system maintains predictable performance characteristics and ensures that both implicit and explicit transactions can proceed without indefinite delays.
+The timeout mechanism also prevents scenarios where long-running explicit transactions might block system operations or create unpredictable resource utilization patterns. By enforcing reasonable time limits, the system maintains predictable performance characteristics and ensures that both explicit transactions and streaming data ingestion can proceed without indefinite delays.
 
 *** Version Number Continuity and Gap Prevention
 
 The system's design carefully prevents permanent gaps in the version number sequence through its handling of aborted transactions. When an explicit transaction is aborted, either through client request or automatic timeout, no version number is permanently allocated to that transaction. This approach ensures that the version timeline remains dense and continuous, with no missing version numbers that could complicate historical queries or audit operations.
 
-The gap prevention mechanism works by deferring version number assignment until the moment when changes become permanent in the database. Explicit transactions only receive version numbers when they successfully begin the indexing process, ensuring that every assigned version number corresponds to actual data modifications. Similarly, implicit transaction epochs only consume version numbers when they actually contain records to be indexed.
+The gap prevention mechanism works by deferring version number assignment until the moment when changes become permanent in the database. Explicit transactions only receive version numbers when they successfully begin the indexing process, ensuring that every assigned version number corresponds to actual data modifications. Similarly, streaming data epochs only consume version numbers when they actually contain records to be indexed.
 
-This approach maintains the system's append-only guarantees while providing flexibility for transaction management. Applications can rely on the fact that version numbers form a continuous sequence with no gaps, simplifying historical analysis and ensuring that version-based queries can use simple numeric ranges without needing to account for missing versions.
+This approach maintains the system's append-only guarantees while providing flexibility for ingestion management. Applications can rely on the fact that version numbers form a continuous sequence with no gaps, simplifying historical analysis and ensuring that version-based queries can use simple numeric ranges without needing to account for missing versions.
+
+* Data Structure Design and Implementation
+
+** Rust Type System for Transactions and Versions
+
+Cosdata implements a clean separation between transaction management and version history through carefully designed Rust data structures that reflect the conceptual distinctions outlined in this document.
+
+*** Core Identifiers and Version Management
+
+#+BEGIN_SRC rust
+
+/// Unique identifier for explicit transactions (32-bit hex string)
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TransactionId(pub String);
+
+/// Monotonically increasing version identifier
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct VersionNumber(pub u32);
+#+END_SRC
+
+The type system enforces the conceptual separation by using distinct identifier types for transactions (hash-based strings for user reference) and versions (monotonic integers for temporal ordering).
+
+*** Transaction Lifecycle Management
+
+#+BEGIN_SRC rust
+/// Processing statistics for explicit transactions (works for both progress and completion)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessingStats {
+    pub records_processed: u32,
+    pub total_records: u32,
+    
+    // Derived fields
+    pub percentage_complete: f32,
+    
+    // Timing (optional during progress, required when complete)
+    pub processing_time_seconds: Option<u32>,
+    pub average_throughput: Option<f32>, // records per second
+    pub current_processing_rate: Option<f32>, // current rate (for progress)
+    pub estimated_completion: Option<DateTime<Utc>>, // only for progress
+    
+    // Set when complete
+    pub version_created: Option<VersionNumber>,
+}
+
+/// Detailed status information for explicit transactions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum TransactionStatus {
+    NotStarted {
+        #[serde(with = "chrono::serde::ts_seconds")]
+        last_updated: DateTime<Utc>,
+    },
+    InProgress {
+        stats: ProcessingStats,
+        #[serde(with = "chrono::serde::ts_seconds")]
+        started_at: DateTime<Utc>,
+        #[serde(with = "chrono::serde::ts_seconds")]
+        last_updated: DateTime<Utc>,
+    },
+    Complete {
+        stats: ProcessingStats,
+        #[serde(with = "chrono::serde::ts_seconds")]
+        started_at: DateTime<Utc>,
+        #[serde(with = "chrono::serde::ts_seconds")]
+        completed_at: DateTime<Utc>,
+    },
+}
+
+/// Represents an explicit transaction (PERSISTED PERMANENTLY)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExplicitTransaction {
+    pub id: TransactionId,
+    pub status: TransactionStatus,
+    #[serde(with = "chrono::serde::ts_seconds")]
+    pub created_at: DateTime<Utc>,
+    #[serde(with = "chrono::serde::ts_seconds")]
+    pub timeout_at: DateTime<Utc>,
+}
+#+END_SRC
+
+The transaction structures focus on lifecycle management, progress tracking, and operational observability. The unified `ProcessingStats` structure evolves naturally from progress tracking during indexing to final summary statistics upon completion.
+
+*** Version History and Provenance Tracking
+
+#+BEGIN_SRC rust
+/// Type of ingestion that created this version
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum VersionSource {
+    /// Created by an explicit transaction
+    Explicit { 
+        transaction_id: TransactionId 
+    },
+    /// Created by streaming data epoch
+    Streaming { 
+        epoch_id: u32 
+    },
+}
+
+/// Immutable version record (PERSISTED PERMANENTLY)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Version {
+    pub number: VersionNumber,
+    pub source: VersionSource,
+    
+    // Timing information
+    #[serde(with = "chrono::serde::ts_seconds")]
+    pub created_at: DateTime<Utc>,
+    
+    // Operation statistics
+    pub records_upserted: u32,
+    pub records_deleted: u32,
+    pub total_operations: u32,
+    
+    // Additional metadata
+    pub size_bytes: Option<u64>,
+    pub checksum: Option<String>,
+}
+#+END_SRC
+
+Version structures focus purely on the historical data timeline, with minimal metadata required for temporal queries and audit operations. The `VersionSource` enum cleanly distinguishes between explicit transactions and streaming data epochs while providing appropriate traceability information.
+
+** Persistence and Queryability Design
+
+The system persists both `ExplicitTransaction` and `Version` records permanently, but for fundamentally different purposes:
+
+*** ExplicitTransaction Persistence
+- **Purpose**: Operational audit trail and performance analysis
+- **Queries**: "Show all transactions from last week", "Why did transaction X fail?", "What's the average processing time?"
+- **Retention**: Permanent with optional archival policies
+- **Access Patterns**: Admin dashboards, debugging tools, performance monitoring
+
+*** Version Persistence  
+- **Purpose**: Historical data timeline and temporal queries
+- **Queries**: "Show data at version 150", "What changed between versions 100-200?", "List all versions from explicit transactions"
+- **Retention**: Permanent as core database functionality
+- **Access Patterns**: Time-travel queries, audit reports, data lineage tracking
+
+This dual persistence model provides complete observability while maintaining clean separation of concerns between process management and data evolution tracking.
 
 * Version Management and Historical Consistency
 
 ** Unified Version Control Architecture
 
-Cosdata's transaction system implements a unified version control architecture that treats all data modifications, regardless of transaction type, as contributions to a single, linear version history. This approach eliminates the complexity of parallel version streams while ensuring that historical queries can access any point in the database's evolution with complete consistency.
+Cosdata's ingestion system implements a unified version control architecture that treats all data modifications, regardless of ingestion type, as contributions to a single, linear version history. This approach eliminates the complexity of parallel version streams while ensuring that historical queries can access any point in the database's evolution with complete consistency.
 
-The version numbering system uses simple, monotonically increasing 32-bit integers that provide a total ordering of all changes in the system. This simplification from the previous hash-based versioning system improves performance and reduces memory overhead while maintaining all necessary functionality for historical queries and audit operations.
+The version numbering system uses simple, monotonically increasing 32-bit integers that provide a total ordering of all changes in the system. This simplification improves performance and reduces memory overhead while maintaining all necessary functionality for historical queries and audit operations.
 
-Each version represents a complete, immutable snapshot of the database at a specific point in time. Explicit transactions create versions that represent entire corpus imports, while implicit transactions create versions that represent batches of streaming records. Despite these different granularities, all versions participate in the same linear ordering, ensuring consistent semantics for historical operations.
+Each version represents a complete, immutable snapshot of the database at a specific point in time. Explicit transactions create versions that represent entire corpus imports, while streaming data creates versions that represent batches of individual records processed within epochs. Despite these different granularities, all versions participate in the same linear ordering, ensuring consistent semantics for historical operations.
 
 ** Ordering Guarantees and Consistency
 
-The system provides specific ordering guarantees that balance performance with consistency requirements. Within individual transactions, records are not guaranteed to maintain strict insertion order, allowing the system to optimize indexing operations for better performance. However, version numbers are strictly ordered across all transaction types, ensuring that the overall evolution of the database follows a predictable sequence.
+The system provides specific ordering guarantees that balance performance with consistency requirements. Within individual transactions, records are not guaranteed to maintain strict insertion order, allowing the system to optimize indexing operations for better performance. However, version numbers are strictly ordered across all ingestion types, ensuring that the overall evolution of the database follows a predictable sequence.
 
 This ordering model reflects the reality that most applications care more about the logical consistency of dataset versions than about the specific ordering of individual records within those versions. By relaxing intra-transaction ordering requirements, the system can parallelize indexing operations and apply various optimization techniques that significantly improve throughput.
 
@@ -169,14 +347,16 @@ The append-only nature of the version system ensures that once a version is crea
 
 * Integration with Context-Based Querying
 
-The transaction system integrates seamlessly with Cosdata's context-based versioning system to provide powerful historical query capabilities. Each committed transaction, whether explicit or implicit, creates new version contexts that can be accessed independently through the context API.
+The ingestion system integrates seamlessly with Cosdata's context-based versioning system to provide powerful historical query capabilities. Each committed transaction and each serialized streaming data epoch creates new version contexts that can be accessed independently through the context API.
 
-This integration allows applications to perform sophisticated temporal queries, comparing results across different versions or analyzing the evolution of data over time. The combination of the transaction system's version creation with the context system's query isolation provides a powerful foundation for applications that require audit trails, temporal analysis, or reproducible research results.
+This integration allows applications to perform sophisticated temporal queries, comparing results across different versions or analyzing the evolution of data over time. The combination of the ingestion system's version creation with the context system's query isolation provides a powerful foundation for applications that require audit trails, temporal analysis, or reproducible research results.
 
-The context system's lightweight, immutable snapshots complement the transaction system's append-only architecture, ensuring that historical queries do not interfere with ongoing data ingestion operations. This separation of concerns allows the system to optimize each component independently while maintaining strong consistency guarantees across the entire architecture.
+The context system's lightweight, immutable snapshots complement the ingestion system's append-only architecture, ensuring that historical queries do not interfere with ongoing data ingestion operations. This separation of concerns allows the system to optimize each component independently while maintaining strong consistency guarantees across the entire architecture.
 
 * Conclusion
 
-Cosdata's dual-transaction architecture represents a sophisticated approach to balancing the competing demands of atomic batch processing and real-time streaming data ingestion. By implementing explicit transactions for controlled, atomic operations and implicit transactions for immediate data availability, the system serves a broad range of application requirements while maintaining strict consistency and historical integrity.
+Cosdata's dual-ingestion architecture represents a sophisticated approach to balancing the competing demands of atomic batch processing and real-time streaming data availability. By implementing explicit transactions for controlled, atomic operations and streaming data ingestion for immediate data availability, the system serves a broad range of application requirements while maintaining strict consistency and historical integrity.
 
-The careful coordination between these transaction types, combined with the unified version control system and context-based querying capabilities, creates a powerful platform for applications that require both real-time responsiveness and historical analysis capabilities. This architecture positions Cosdata to serve as a foundation for next-generation applications that demand both immediate data availability and comprehensive historical access.
+The careful coordination between these ingestion types, combined with the unified version control system and context-based querying capabilities, creates a powerful platform for applications that require both real-time responsiveness and historical analysis capabilities. The clean separation between transaction management (process audit) and version history (data timeline) provides operational observability while maintaining conceptual clarity and implementation simplicity.
+
+This architecture positions Cosdata to serve as a foundation for next-generation applications that demand both immediate data availability and comprehensive historical access, with clear operational visibility into both real-time streaming performance and batch processing efficiency.
