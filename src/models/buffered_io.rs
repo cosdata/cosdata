@@ -525,10 +525,11 @@ impl FilelessBufferManager {
         buffer_size: usize,
         root_path: &Path,
         mapping_fn: impl Fn(&Path) -> Option<(VersionNumber, u64)>,
+        latest_version: VersionNumber,
     ) -> Result<Self, BufIoError> {
         let regions = DashMap::new();
         let mut file_size = 0;
-        let mut region_versions_map = FxHashMap::<u64, VersionNumber>::default();
+        let mut region_versions_map = FxHashMap::<u64, (VersionNumber, PathBuf)>::default();
 
         for entry in fs::read_dir(root_path)? {
             let entry = entry?;
@@ -536,12 +537,18 @@ impl FilelessBufferManager {
             let Some((version, region_id)) = mapping_fn(&path) else {
                 continue;
             };
-            if let Some(existing_version) = region_versions_map.get(&region_id) {
+            if *version > *latest_version {
+                continue;
+            }
+            if let Some((existing_version, _)) = region_versions_map.get(&region_id) {
                 if **existing_version > *version {
                     continue;
                 }
             }
-            region_versions_map.insert(region_id, version);
+            region_versions_map.insert(region_id, (version, path));
+        }
+
+        for (region_id, (_, path)) in region_versions_map {
             let offset = region_id * buffer_size as u64;
             let mut file = OpenOptions::new().read(true).open(path)?;
             let mut region = FilelessBufferRegion::new(offset, buffer_size);
