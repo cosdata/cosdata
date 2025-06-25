@@ -21,6 +21,7 @@ use std::sync::TryLockError;
 use std::sync::{Arc, Mutex, RwLock, Weak};
 
 pub struct HNSWIndexCache {
+    metadata_registry: DashMap<u64, Weak<NodePropMetadata>>,
     pub registry: LRUCache<u64, SharedNode>,
     props_registry: DashMap<u64, Weak<NodePropValue>>,
     pub bufmans: BufferManagerFactory<IndexFileId>,
@@ -43,6 +44,7 @@ unsafe impl Send for HNSWIndexCache {}
 unsafe impl Sync for HNSWIndexCache {}
 
 impl HNSWIndexCache {
+    
     pub fn new(
         bufmans: BufferManagerFactory<IndexFileId>,
         latest_version_links_bufman: BufferManager,
@@ -51,7 +53,7 @@ impl HNSWIndexCache {
     ) -> Self {
         let registry = LRUCache::with_prob_eviction(100_000_000, 0.03125);
         let props_registry = DashMap::new();
-
+        let metadata_registry = DashMap::new();
         Self {
             registry,
             props_registry,
@@ -61,6 +63,8 @@ impl HNSWIndexCache {
             distance_metric,
             loading_items: TSHashTable::new(16),
             batch_load_lock: Mutex::new(()),
+            metadata_registry, 
+                
         }
     }
 
@@ -117,18 +121,28 @@ impl HNSWIndexCache {
     /// @NOTE: Right now, every call reads from the prop file, there's
     /// no caching implemented
     ///
-    /// @TODO: Implement caching for prop_metadata as well
     pub fn get_prop_metadata(
         &self,
         offset: FileOffset,
         length: BytesToRead,
     ) -> Result<Arc<NodePropMetadata>, BufIoError> {
+        let key = Self::get_prop_key(offset, length);
+        if let Some(metadata) = self
+            .metadata_registry
+            .get(&key)
+            .and_then(|metadata| metadata.upgrade())
+        {
+            return Ok(metadata);
+        }       
+
         let mut prop_file_guard = self.prop_file.write().unwrap();
         let metadata = Arc::new(read_prop_metadata_from_file(
             (offset, length),
             &mut prop_file_guard,
         )?);
         drop(prop_file_guard);
+        let weak = Arc::downgrade(&metadata);
+        self.metadata_registry.insert(key, weak);
         Ok(metadata)
     }
 
@@ -140,7 +154,11 @@ impl HNSWIndexCache {
             let prop_key =
                 Self::get_prop_key(node.prop_value.location.0, node.prop_value.location.1);
             self.props_registry
-                .insert(prop_key, Arc::downgrade(&node.prop_value));
+                .insert(prop_key, Arc::downgrade(&node.prop_value));           
+            if let Some(ref metadata) = node.prop_metadata {
+                let metadata_key = Self::get_prop_key(metadata.location.0, metadata.location.1);
+                self.metadata_registry.insert(metadata_key, Arc::downgrade(metadata));
+            }
         }
         self.registry.insert(combined_index, item);
     }
