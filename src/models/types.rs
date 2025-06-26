@@ -38,7 +38,7 @@ use crate::{
     },
     metadata::{schema::MetadataDimensions, QueryFilterDimensions, HIGH_WEIGHT},
     models::{
-        buffered_io::BufferManager,
+        buffered_io::{BufferManager, FilelessBufferManager},
         common::*,
         lazy_item::{FileIndex, ProbLazyItem},
         meta_persist::retrieve_values_range,
@@ -73,6 +73,7 @@ use std::{
     thread,
     time::Instant,
 };
+use tempfile::tempfile;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct HNSWLevel(pub u8);
@@ -601,6 +602,7 @@ impl CollectionsMap {
                             .metadata_schema
                             .as_ref()
                             .map_or(1, |schema| schema.max_num_replicas()),
+                        current_version,
                     )
                     .unwrap()
                     .map(Arc::new)
@@ -726,6 +728,7 @@ impl CollectionsMap {
         lmdb: &MetaDb,
         config: &Config,
         max_replicas_per_node: u8,
+        current_version: VersionNumber,
     ) -> Result<Option<HNSWIndex>, WaCustomError> {
         let collection_path: Arc<Path> = get_collections_path().join(&collection_meta.name).into();
         let index_path = collection_path.join("dense_hnsw");
@@ -766,19 +769,43 @@ impl CollectionsMap {
             8192,
         );
 
-        let latest_version_links_file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(index_path.join("latest.version"))
-            .map_err(BufIoError::Io)?;
-        let latest_version_links_bufman =
-            BufferManager::new(latest_version_links_file, 8192).map_err(BufIoError::Io)?;
+        let latest_version_links_bufman = if config.enable_context_history {
+            FilelessBufferManager::from_versioned(
+                8192,
+                &index_path,
+                |path| {
+                    let file_name = path.file_name()?.to_str()?;
+                    let parts: Vec<&str> = file_name.split(".").collect();
+                    if parts.len() != 2 {
+                        return None;
+                    }
+                    let region_version_combined = parts[0];
+                    let parts: Vec<&str> = region_version_combined.split("-").collect();
+
+                    if parts.len() != 2 {
+                        return None;
+                    }
+
+                    let region_id = parts[0].parse().ok()?;
+                    let version = VersionNumber::from(parts[1].parse::<u32>().ok()?);
+
+                    Some((version, region_id))
+                },
+                current_version,
+            )?
+        } else {
+            let mut file = OpenOptions::new()
+                .read(true)
+                .open(index_path.join("nodes.ptr"))
+                .map_err(BufIoError::Io)?;
+            FilelessBufferManager::from_file(&mut file, 8192)?
+        };
         let distance_metric = Arc::new(RwLock::new(hnsw_index_data.distance_metric));
         let cache = HNSWIndexCache::new(
             index_manager,
             latest_version_links_bufman,
+            index_path.clone(),
+            config.enable_context_history,
             prop_file,
             distance_metric.clone(),
         );
@@ -829,8 +856,10 @@ impl CollectionsMap {
 
         let root_ptr_offset = hnsw_index_data.root_vec_ptr_offset;
         let latest_version_links_cursor = cache.latest_version_links_bufman.open_cursor()?;
+        let temp_file = tempfile().map_err(BufIoError::Io)?;
+        let dummy_bufman = BufferManager::new(temp_file, 8192).map_err(BufIoError::Io)?;
         let root_file_index = SharedLatestNode::deserialize_raw(
-            &cache.latest_version_links_bufman, // not used
+            &dummy_bufman, // not used
             &cache.latest_version_links_bufman,
             u64::MAX, // not used
             latest_version_links_cursor,
@@ -852,6 +881,7 @@ impl CollectionsMap {
         let root_node = ProbNode::build_from_raw(
             root_node_raw,
             &cache,
+            &dummy_bufman,
             &mut pending_items,
             &mut latest_version_links,
             latest_version_links_cursor,
@@ -869,7 +899,7 @@ impl CollectionsMap {
                 let latest_version_links_cursor =
                     cache.latest_version_links_bufman.open_cursor()?;
                 let pseudo_root_file_index = SharedLatestNode::deserialize_raw(
-                    &cache.latest_version_links_bufman, // not used
+                    &dummy_bufman, // not used
                     &cache.latest_version_links_bufman,
                     u64::MAX, // not used
                     latest_version_links_cursor,
@@ -891,6 +921,7 @@ impl CollectionsMap {
                 let pseudo_root_node = ProbNode::build_from_raw(
                     pseudo_root_node_raw,
                     &cache,
+                    &dummy_bufman,
                     &mut pending_items,
                     &mut latest_version_links,
                     latest_version_links_cursor,
@@ -973,6 +1004,7 @@ impl CollectionsMap {
                     let node = ProbNode::build_from_raw(
                         raw,
                         cache,
+                        &dummy_bufman,
                         &mut pending_items,
                         &mut latest_version_links,
                         latest_version_links_cursor,

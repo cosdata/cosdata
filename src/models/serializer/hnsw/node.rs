@@ -5,7 +5,7 @@ use rustc_hash::FxHashSet;
 use crate::{
     indexes::hnsw::offset_counter::IndexFileId,
     models::{
-        buffered_io::{BufIoError, BufferManager},
+        buffered_io::{BufIoError, BufferManager, FilelessBufferManager},
         cache_loader::HNSWIndexCache,
         lazy_item::FileIndex,
         prob_node::{Neighbors, ProbNode, SharedLatestNode},
@@ -34,7 +34,7 @@ impl HNSWIndexSerialize for ProbNode {
     fn serialize(
         &self,
         bufman: &BufferManager,
-        latest_version_links_bufman: &BufferManager,
+        latest_version_links_bufman: &FilelessBufferManager,
         cursor: u64,
         latest_version_links_cursor: u64,
     ) -> Result<u32, BufIoError> {
@@ -102,7 +102,7 @@ impl HNSWIndexSerialize for ProbNode {
 
     fn deserialize(
         bufman: &BufferManager,
-        latest_version_links_bufman: &BufferManager,
+        latest_version_links_bufman: &FilelessBufferManager,
         file_index: FileIndex,
         cache: &HNSWIndexCache,
         max_loads: u16,
@@ -204,7 +204,7 @@ impl RawDeserialize for ProbNode {
 
     fn deserialize_raw(
         bufman: &BufferManager,
-        latest_version_links_bufman: &BufferManager,
+        latest_version_links_bufman: &FilelessBufferManager,
         cursor: u64,
         latest_version_links_cursor: u64,
         FileOffset(offset): FileOffset,

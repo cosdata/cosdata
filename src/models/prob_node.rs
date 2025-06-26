@@ -15,7 +15,7 @@ use crate::indexes::hnsw::offset_counter::{self, IndexFileId};
 use self::offset_counter::HNSWIndexFileOffsetCounter;
 
 use super::{
-    buffered_io::BufIoError,
+    buffered_io::{BufIoError, BufferManager},
     cache_loader::HNSWIndexCache,
     common::TSHashTable,
     lazy_item::{FileIndex, ProbLazyItem},
@@ -348,6 +348,7 @@ impl ProbNode {
     pub fn build_from_raw(
         raw: <Self as RawDeserialize>::Raw,
         cache: &HNSWIndexCache,
+        dummy_bufman: &BufferManager,
         pending_items: &mut FxHashMap<FileIndex, SharedNode>,
         latest_version_links: &mut FxHashMap<FileOffset, SharedLatestNode>,
         latest_version_links_cursor: u64,
@@ -367,7 +368,7 @@ impl ProbNode {
                 Entry::Occupied(entry) => *entry.get(),
                 Entry::Vacant(entry) => {
                     let file_index = SharedLatestNode::deserialize_raw(
-                        &cache.latest_version_links_bufman, // not used
+                        dummy_bufman, // not used
                         &cache.latest_version_links_bufman,
                         u64::MAX, // not used
                         latest_version_links_cursor,
@@ -397,7 +398,7 @@ impl ProbNode {
                 Entry::Occupied(entry) => *entry.get(),
                 Entry::Vacant(entry) => {
                     let file_index = SharedLatestNode::deserialize_raw(
-                        &cache.latest_version_links_bufman, // not used
+                        dummy_bufman, // not used
                         &cache.latest_version_links_bufman,
                         u64::MAX, // not used
                         latest_version_links_cursor,
@@ -432,7 +433,7 @@ impl ProbNode {
                             Entry::Occupied(entry) => *entry.get(),
                             Entry::Vacant(entry) => {
                                 let file_index = SharedLatestNode::deserialize_raw(
-                                    &cache.latest_version_links_bufman, // not used
+                                    dummy_bufman, // not used
                                     &cache.latest_version_links_bufman,
                                     u64::MAX, // not used
                                     latest_version_links_cursor,

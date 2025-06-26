@@ -128,7 +128,7 @@ pub trait IndexOps: Send + Sync {
     fn is_configured(&self) -> bool;
 
     // save everything to disk
-    fn flush(&self, collection: &Collection) -> Result<(), WaCustomError>;
+    fn flush(&self, collection: &Collection, version: VersionNumber) -> Result<(), WaCustomError>;
 
     fn pre_commit_transaction(
         &self,
@@ -137,7 +137,7 @@ pub trait IndexOps: Send + Sync {
         config: &Config,
     ) -> Result<(), WaCustomError> {
         self.force_index(collection, version, config)?;
-        self.flush(collection)
+        self.flush(collection, version)
     }
 
     fn get_key_for_name(name: &str) -> u64 {
