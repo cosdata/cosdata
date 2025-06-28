@@ -316,8 +316,8 @@ impl IndexOps for HNSWIndex {
         self.is_configured.load(Ordering::Acquire)
     }
 
-    fn flush(&self, _: &Collection) -> Result<(), WaCustomError> {
-        self.cache.flush_all()?;
+    fn flush(&self, _: &Collection, version: VersionNumber) -> Result<(), WaCustomError> {
+        self.cache.flush_all(version)?;
         Ok(())
     }
 

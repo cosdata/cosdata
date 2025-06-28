@@ -182,7 +182,11 @@ impl IndexOps for TFIDFIndex {
         self.is_configured.load(Ordering::Acquire)
     }
 
-    fn flush(&self, _collection: &Collection) -> Result<(), WaCustomError> {
+    fn flush(
+        &self,
+        _collection: &Collection,
+        _version: VersionNumber,
+    ) -> Result<(), WaCustomError> {
         self.root.serialize()?;
         self.root.cache.flush_all()?;
         Ok(())

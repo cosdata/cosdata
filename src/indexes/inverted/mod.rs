@@ -230,7 +230,7 @@ impl IndexOps for InvertedIndex {
         self.is_configured.load(Ordering::Acquire)
     }
 
-    fn flush(&self, _: &Collection) -> Result<(), WaCustomError> {
+    fn flush(&self, _: &Collection, _version: VersionNumber) -> Result<(), WaCustomError> {
         self.root.serialize()?;
         self.root.cache.flush_all()?;
         Ok(())

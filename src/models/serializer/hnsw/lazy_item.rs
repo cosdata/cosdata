@@ -1,7 +1,7 @@
 use rustc_hash::FxHashSet;
 
 use crate::models::{
-    buffered_io::{BufIoError, BufferManager},
+    buffered_io::{BufIoError, BufferManager, FilelessBufferManager},
     cache_loader::HNSWIndexCache,
     lazy_item::FileIndex,
     prob_node::SharedNode,
@@ -13,7 +13,7 @@ impl HNSWIndexSerialize for SharedNode {
     fn serialize(
         &self,
         bufman: &BufferManager,
-        latest_version_links_bufman: &BufferManager,
+        latest_version_links_bufman: &FilelessBufferManager,
         cursor: u64,
         latest_version_links_cursor: u64,
     ) -> Result<u32, BufIoError> {
@@ -35,7 +35,7 @@ impl HNSWIndexSerialize for SharedNode {
 
     fn deserialize(
         _bufman: &BufferManager,
-        _latest_version_links_bufman: &BufferManager,
+        _latest_version_links_bufman: &FilelessBufferManager,
         file_index: FileIndex,
         cache: &HNSWIndexCache,
         max_loads: u16,

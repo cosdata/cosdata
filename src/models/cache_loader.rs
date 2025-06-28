@@ -1,6 +1,6 @@
 use crate::indexes::hnsw::offset_counter::IndexFileId;
 
-use super::buffered_io::{BufIoError, BufferManager, BufferManagerFactory};
+use super::buffered_io::{BufIoError, BufferManager, BufferManagerFactory, FilelessBufferManager};
 use super::common::TSHashTable;
 use super::file_persist::{read_prop_metadata_from_file, read_prop_value_from_file};
 use super::inverted_index::InvertedIndexNodeData;
@@ -12,10 +12,12 @@ use super::serializer::inverted::InvertedIndexSerialize;
 use super::serializer::tf_idf::TFIDFIndexSerialize;
 use super::tf_idf_index::TFIDFIndexNodeData;
 use super::types::*;
+use super::versioning::VersionNumber;
 use dashmap::DashMap;
 use rustc_hash::FxHashSet;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::Write;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicU32;
 use std::sync::TryLockError;
 use std::sync::{Arc, Mutex, RwLock, Weak};
@@ -24,7 +26,9 @@ pub struct HNSWIndexCache {
     pub registry: LRUCache<u64, SharedNode>,
     props_registry: DashMap<u64, Weak<NodePropValue>>,
     pub bufmans: BufferManagerFactory<IndexFileId>,
-    pub latest_version_links_bufman: BufferManager,
+    pub latest_version_links_bufman: FilelessBufferManager,
+    root_path: PathBuf,
+    enable_context_history: bool,
     pub prop_file: RwLock<File>,
     loading_items: TSHashTable<u64, Arc<Mutex<bool>>>,
     pub distance_metric: Arc<RwLock<DistanceMetric>>,
@@ -45,7 +49,9 @@ unsafe impl Sync for HNSWIndexCache {}
 impl HNSWIndexCache {
     pub fn new(
         bufmans: BufferManagerFactory<IndexFileId>,
-        latest_version_links_bufman: BufferManager,
+        latest_version_links_bufman: FilelessBufferManager,
+        root_path: PathBuf,
+        enable_context_history: bool,
         prop_file: RwLock<File>,
         distance_metric: Arc<RwLock<DistanceMetric>>,
     ) -> Self {
@@ -57,6 +63,8 @@ impl HNSWIndexCache {
             props_registry,
             bufmans,
             latest_version_links_bufman,
+            root_path,
+            enable_context_history,
             prop_file,
             distance_metric,
             loading_items: TSHashTable::new(16),
@@ -78,14 +86,28 @@ impl HNSWIndexCache {
         Ok(())
     }
 
-    pub fn flush_all(&self) -> Result<(), BufIoError> {
+    pub fn flush_all(&self, version: VersionNumber) -> Result<(), BufIoError> {
         self.bufmans.flush_all()?;
         self.prop_file
             .write()
             .map_err(|_| BufIoError::Locking)?
             .flush()
             .map_err(BufIoError::Io)?;
-        self.latest_version_links_bufman.flush()
+        if self.enable_context_history {
+            self.latest_version_links_bufman
+                .flush_versioned(|region_id| {
+                    self.root_path
+                        .join(format!("{}-{}.ptr", region_id, *version))
+                })
+        } else {
+            let mut file = OpenOptions::new()
+                .read(false)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(self.root_path.join("nodes.ptr"))?;
+            self.latest_version_links_bufman.flush(&mut file)
+        }
     }
 
     pub fn get_prop(
