@@ -6,7 +6,7 @@ use crate::indexes::inverted::InvertedIndex;
 use crate::indexes::tf_idf::TFIDFIndex;
 use crate::indexes::IndexOps;
 use crate::metadata::{pseudo_level_probs, pseudo_node_vector, pseudo_root_id};
-use crate::models::buffered_io::{BufIoError, BufferManager, BufferManagerFactory};
+use crate::models::buffered_io::{BufferManagerFactory, FilelessBufferManager};
 use crate::models::cache_loader::HNSWIndexCache;
 use crate::models::collection::Collection;
 use crate::models::collection_transaction::BackgroundExplicitTransaction;
@@ -14,9 +14,10 @@ use crate::models::common::*;
 use crate::models::meta_persist::store_values_range;
 use crate::models::prob_node::ProbNode;
 use crate::models::types::*;
+use crate::models::versioning::VersionNumber;
 use crate::quantization::StorageType;
 use crate::vector_store::*;
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 
@@ -63,21 +64,15 @@ pub async fn init_hnsw_index_for_collection(
         |root, ver: &IndexFileId| root.join(format!("{}.index", **ver)),
         ProbNode::get_serialized_size(hnsw_params.neighbors_count) * 1000,
     );
-    let latest_version_links_file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(index_path.join("latest.version"))
-        .map_err(BufIoError::Io)?;
-    let latest_version_links_bufman =
-        BufferManager::new(latest_version_links_file, 8192).map_err(BufIoError::Io)?;
+    let latest_version_links_bufman = FilelessBufferManager::new(8192)?;
 
     let distance_metric = Arc::new(RwLock::new(distance_metric));
 
     let cache = HNSWIndexCache::new(
         index_manager,
         latest_version_links_bufman,
+        index_path.clone(),
+        ctx.config.enable_context_history,
         prop_file,
         distance_metric.clone(),
     );
@@ -107,7 +102,7 @@ pub async fn init_hnsw_index_for_collection(
         collection.meta.metadata_schema.as_ref(),
     )?;
 
-    cache.flush_all()?;
+    cache.flush_all(VersionNumber::from(0))?;
     // ---------------------------
     // -- TODO level entry ratio
     // ---------------------------

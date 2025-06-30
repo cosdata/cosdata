@@ -1,14 +1,16 @@
 use dashmap::DashMap;
+use rustc_hash::FxHashMap;
 use std::collections::HashMap;
-use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::hash::Hash;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
+use std::{fmt, fs};
 
 use super::lru_cache::LRUCache;
+use super::versioning::VersionNumber;
 
 #[derive(Debug)]
 pub enum BufIoError {
@@ -519,6 +521,54 @@ impl FilelessBufferManager {
         })
     }
 
+    pub fn from_versioned(
+        buffer_size: usize,
+        root_path: &Path,
+        mapping_fn: impl Fn(&Path) -> Option<(VersionNumber, u64)>,
+        latest_version: VersionNumber,
+    ) -> Result<Self, BufIoError> {
+        let regions = DashMap::new();
+        let mut file_size = 0;
+        let mut region_versions_map = FxHashMap::<u64, (VersionNumber, PathBuf)>::default();
+
+        for entry in fs::read_dir(root_path)? {
+            let entry = entry?;
+            let path = entry.path();
+            let Some((version, region_id)) = mapping_fn(&path) else {
+                continue;
+            };
+            if *version > *latest_version {
+                continue;
+            }
+            if let Some((existing_version, _)) = region_versions_map.get(&region_id) {
+                if **existing_version > *version {
+                    continue;
+                }
+            }
+            region_versions_map.insert(region_id, (version, path));
+        }
+
+        for (region_id, (_, path)) in region_versions_map {
+            let offset = region_id * buffer_size as u64;
+            let mut file = OpenOptions::new().read(true).open(path)?;
+            let mut region = FilelessBufferRegion::new(offset, buffer_size);
+            let buffer = region.buffer.get_mut().map_err(|_| BufIoError::Locking)?;
+            let bytes_read = file.read(&mut buffer[..]).map_err(BufIoError::Io)?;
+            region.end.store(bytes_read, Ordering::SeqCst);
+            regions.insert(offset, Arc::new(region));
+            let end = offset + bytes_read as u64;
+            file_size = file_size.max(end);
+        }
+
+        Ok(Self {
+            regions,
+            cursors: RwLock::new(HashMap::new()),
+            next_cursor_id: AtomicU64::new(0),
+            file_size: RwLock::new(file_size),
+            buffer_size,
+        })
+    }
+
     pub fn open_cursor(&self) -> Result<u64, BufIoError> {
         let cursor_id = self.next_cursor_id.fetch_add(1, Ordering::SeqCst);
         let mut cursors = self.cursors.write().map_err(|_| BufIoError::Locking)?;
@@ -723,6 +773,26 @@ impl FilelessBufferManager {
         }
         file.flush()?;
         file.sync_all()?;
+        Ok(())
+    }
+
+    pub fn flush_versioned(&self, mapping_fn: impl Fn(u64) -> PathBuf) -> Result<(), BufIoError> {
+        for region in self.regions.iter() {
+            if region.should_flush() {
+                let path = mapping_fn(region.start / self.buffer_size as u64);
+                let mut file = OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(false)
+                    .open(path)?;
+                let buffer = region.buffer.read().map_err(|_| BufIoError::Locking)?;
+                let end = region.end.load(Ordering::SeqCst);
+                file.write_all(&buffer[..end]).map_err(BufIoError::Io)?;
+                region.dirty.store(false, Ordering::SeqCst);
+                file.flush()?;
+                file.sync_all()?;
+            }
+        }
         Ok(())
     }
 
