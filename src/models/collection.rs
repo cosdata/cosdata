@@ -210,7 +210,7 @@ impl Collection {
             let config = ctx.config.clone();
             thread::spawn(move || {
                 loop {
-                    std::thread::sleep(std::time::Duration::from_secs(60 * 60));
+                    std::thread::sleep(std::time::Duration::from_secs(config.epoch_time));
 
                     let _explicit_txn_guard = collection.current_explicit_transaction.write();
                     let mut implicit_txn_guard = collection.current_implicit_transaction.write();
@@ -334,44 +334,31 @@ impl Collection {
         embeddings: Vec<RawVectorEmbedding>,
         transaction: &ExplicitTransaction,
     ) -> Result<(), WaCustomError> {
-        // Check if any of the IDs already exist in the transaction
+        // Validate all vectors before processing
         for embedding in &embeddings {
-            if self
-                .external_to_internal_map
-                .get_latest(&embedding.id)
-                .is_some()
-            {
-                return Err(WaCustomError::InvalidData(format!(
-                    "Vector ID already exists: {}",
-                    embedding.id
-                )));
-            }
-        }
-
-        for embedding in embeddings.clone() {
-            if let Some(dense_values) = embedding.dense_values {
+            if let Some(dense_values) = &embedding.dense_values {
                 if let Some(hnsw_index) = self.get_hnsw_index() {
                     let dense_emb = DenseInputEmbedding(
                         InternalId::from(u32::MAX),
-                        dense_values,
-                        embedding.metadata,
+                        dense_values.clone(),
+                        embedding.metadata.clone(),
                         false,
                     );
                     hnsw_index.validate_embedding(dense_emb)?;
                 }
             }
 
-            if let Some(sparse_values) = embedding.sparse_values {
+            if let Some(sparse_values) = &embedding.sparse_values {
                 if let Some(inverted_index) = self.get_inverted_index() {
                     let sparse_emb =
-                        SparseInputEmbedding(InternalId::from(u32::MAX), sparse_values);
+                        SparseInputEmbedding(InternalId::from(u32::MAX), sparse_values.clone());
                     inverted_index.validate_embedding(sparse_emb)?;
                 }
             }
 
-            if let Some(text) = embedding.text {
+            if let Some(text) = &embedding.text {
                 if let Some(tf_idf_index) = self.get_tf_idf_index() {
-                    let tf_idf_emb = TFIDFInputEmbedding(InternalId::from(u32::MAX), text);
+                    let tf_idf_emb = TFIDFInputEmbedding(InternalId::from(u32::MAX), text.clone());
                     tf_idf_index.validate_embedding(tf_idf_emb)?;
                 }
             }
@@ -388,6 +375,7 @@ impl Collection {
         version: VersionNumber,
         config: &Config,
     ) -> Result<(), WaCustomError> {
+        // Always process all vectors - no change detection
         let num_nodes_per_emb = if let Some(hnsw_index) = &*self.hnsw_index.read() {
             hnsw_index.max_replica_per_node as usize
         } else {
