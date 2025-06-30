@@ -7,6 +7,7 @@ rerank_sparse_with_raw_values = false
 tree_map_serialized_parts = 8
 index_file_min_size = 1_000_000 # in bytes
 epoch_time = 3600 # epoch duration in seconds (default: 1 hour = 3600 seconds)
+enable_context_history = true
 
 [server]
 host = "127.0.0.1"

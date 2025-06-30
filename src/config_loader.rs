@@ -22,6 +22,7 @@ pub struct Config {
     pub rerank_sparse_with_raw_values: bool,
     pub index_file_min_size: u32,
     pub epoch_time: u64,
+    pub enable_context_history: bool,
     #[serde(default)]
     pub cache: CacheConfig,
 }

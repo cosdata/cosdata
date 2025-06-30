@@ -1,6 +1,6 @@
 use crate::indexes::hnsw::offset_counter::IndexFileId;
 
-use super::buffered_io::{BufIoError, BufferManager, BufferManagerFactory};
+use super::buffered_io::{BufIoError, BufferManager, BufferManagerFactory, FilelessBufferManager};
 use super::common::TSHashTable;
 use super::file_persist::{read_prop_metadata_from_file, read_prop_value_from_file};
 use super::inverted_index::InvertedIndexNodeData;
@@ -12,19 +12,24 @@ use super::serializer::inverted::InvertedIndexSerialize;
 use super::serializer::tf_idf::TFIDFIndexSerialize;
 use super::tf_idf_index::TFIDFIndexNodeData;
 use super::types::*;
+use super::versioning::VersionNumber;
 use dashmap::DashMap;
 use rustc_hash::FxHashSet;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::Write;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicU32;
 use std::sync::TryLockError;
 use std::sync::{Arc, Mutex, RwLock, Weak};
 
 pub struct HNSWIndexCache {
+    metadata_registry: DashMap<u64, Weak<NodePropMetadata>>,
     pub registry: LRUCache<u64, SharedNode>,
     props_registry: DashMap<u64, Weak<NodePropValue>>,
     pub bufmans: BufferManagerFactory<IndexFileId>,
-    pub latest_version_links_bufman: BufferManager,
+    pub latest_version_links_bufman: FilelessBufferManager,
+    root_path: PathBuf,
+    enable_context_history: bool,
     pub prop_file: RwLock<File>,
     loading_items: TSHashTable<u64, Arc<Mutex<bool>>>,
     pub distance_metric: Arc<RwLock<DistanceMetric>>,
@@ -43,24 +48,31 @@ unsafe impl Send for HNSWIndexCache {}
 unsafe impl Sync for HNSWIndexCache {}
 
 impl HNSWIndexCache {
+    
     pub fn new(
         bufmans: BufferManagerFactory<IndexFileId>,
-        latest_version_links_bufman: BufferManager,
+        latest_version_links_bufman: FilelessBufferManager,
+        root_path: PathBuf,
+        enable_context_history: bool,
         prop_file: RwLock<File>,
         distance_metric: Arc<RwLock<DistanceMetric>>,
     ) -> Self {
         let registry = LRUCache::with_prob_eviction(100_000_000, 0.03125);
         let props_registry = DashMap::new();
-
+        let metadata_registry = DashMap::new();
         Self {
             registry,
             props_registry,
             bufmans,
             latest_version_links_bufman,
+            root_path,
+            enable_context_history,
             prop_file,
             distance_metric,
             loading_items: TSHashTable::new(16),
             batch_load_lock: Mutex::new(()),
+            metadata_registry, 
+                
         }
     }
 
@@ -78,14 +90,28 @@ impl HNSWIndexCache {
         Ok(())
     }
 
-    pub fn flush_all(&self) -> Result<(), BufIoError> {
+    pub fn flush_all(&self, version: VersionNumber) -> Result<(), BufIoError> {
         self.bufmans.flush_all()?;
         self.prop_file
             .write()
             .map_err(|_| BufIoError::Locking)?
             .flush()
             .map_err(BufIoError::Io)?;
-        self.latest_version_links_bufman.flush()
+        if self.enable_context_history {
+            self.latest_version_links_bufman
+                .flush_versioned(|region_id| {
+                    self.root_path
+                        .join(format!("{}-{}.ptr", region_id, *version))
+                })
+        } else {
+            let mut file = OpenOptions::new()
+                .read(false)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(self.root_path.join("nodes.ptr"))?;
+            self.latest_version_links_bufman.flush(&mut file)
+        }
     }
 
     pub fn get_prop(
@@ -117,18 +143,28 @@ impl HNSWIndexCache {
     /// @NOTE: Right now, every call reads from the prop file, there's
     /// no caching implemented
     ///
-    /// @TODO: Implement caching for prop_metadata as well
     pub fn get_prop_metadata(
         &self,
         offset: FileOffset,
         length: BytesToRead,
     ) -> Result<Arc<NodePropMetadata>, BufIoError> {
+        let key = Self::get_prop_key(offset, length);
+        if let Some(metadata) = self
+            .metadata_registry
+            .get(&key)
+            .and_then(|metadata| metadata.upgrade())
+        {
+            return Ok(metadata);
+        }       
+
         let mut prop_file_guard = self.prop_file.write().unwrap();
         let metadata = Arc::new(read_prop_metadata_from_file(
             (offset, length),
             &mut prop_file_guard,
         )?);
         drop(prop_file_guard);
+        let weak = Arc::downgrade(&metadata);
+        self.metadata_registry.insert(key, weak);
         Ok(metadata)
     }
 
@@ -140,7 +176,11 @@ impl HNSWIndexCache {
             let prop_key =
                 Self::get_prop_key(node.prop_value.location.0, node.prop_value.location.1);
             self.props_registry
-                .insert(prop_key, Arc::downgrade(&node.prop_value));
+                .insert(prop_key, Arc::downgrade(&node.prop_value));           
+            if let Some(ref metadata) = node.prop_metadata {
+                let metadata_key = Self::get_prop_key(metadata.location.0, metadata.location.1);
+                self.metadata_registry.insert(metadata_key, Arc::downgrade(metadata));
+            }
         }
         self.registry.insert(combined_index, item);
     }

@@ -3,7 +3,7 @@ use crate::{
     distance::cosine::CosineSimilarity,
     indexes::hnsw::offset_counter::IndexFileId,
     models::{
-        buffered_io::{BufferManager, BufferManagerFactory},
+        buffered_io::{BufferManager, BufferManagerFactory, FilelessBufferManager},
         cache_loader::HNSWIndexCache,
         file_persist::write_prop_value_to_file,
         lazy_item::{FileIndex, ProbLazyItem},
@@ -118,19 +118,6 @@ impl EqualityTester {
     }
 }
 
-fn get_cache(
-    bufmans: BufferManagerFactory<IndexFileId>,
-    latest_version_links_bufman: BufferManager,
-    prop_file: RwLock<File>,
-) -> Arc<HNSWIndexCache> {
-    Arc::new(HNSWIndexCache::new(
-        bufmans,
-        latest_version_links_bufman,
-        prop_file,
-        Arc::new(RwLock::new(DistanceMetric::Cosine)),
-    ))
-}
-
 fn create_prob_node(id: u32, version: VersionNumber, prop_file: &RwLock<File>) -> ProbNode {
     let id = InternalId::from(id);
     let value = Storage::UnsignedByte {
@@ -167,14 +154,7 @@ fn setup_test(
         |root, ver: &IndexFileId| root.join(format!("{}.index", **ver)),
         ProbNode::get_serialized_size(8),
     );
-    let latest_version_links_file = OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(dir.as_ref().join("latest.version"))
-        .unwrap();
-    let latest_version_links_bufman = BufferManager::new(latest_version_links_file, 8192).unwrap();
+    let latest_version_links_bufman = FilelessBufferManager::new(8192).unwrap();
     let prop_file = RwLock::new(
         OpenOptions::new()
             .create(true)
@@ -185,7 +165,14 @@ fn setup_test(
     );
     let bufman = bufmans.get(root_version_file_id).unwrap();
     let cursor = bufman.open_cursor().unwrap();
-    let cache = get_cache(bufmans, latest_version_links_bufman, prop_file);
+    let cache = Arc::new(HNSWIndexCache::new(
+        bufmans,
+        latest_version_links_bufman,
+        dir.as_ref().to_path_buf(),
+        true,
+        prop_file,
+        Arc::new(RwLock::new(DistanceMetric::Cosine)),
+    ));
     (cache, bufman, cursor, dir)
 }
 
