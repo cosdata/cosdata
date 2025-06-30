@@ -18,6 +18,7 @@ pub(crate) enum TransactionError {
     FailedToCommitTransaction(String),
     FailedToCreateVector(String),
     FailedToDeleteVector(String),
+    DuplicateVectorId(String),
     NotImplemented,
 }
 
@@ -47,6 +48,9 @@ impl Display for TransactionError {
             Self::FailedToDeleteVector(msg) => {
                 write!(f, "Failed to delete vector in transaction due to: {}", msg)
             }
+            Self::DuplicateVectorId(msg) => {
+                write!(f, "Duplicate vector ID detected: {}", msg)
+            }
         }
     }
 }
@@ -69,7 +73,8 @@ impl ResponseError for TransactionError {
             Self::OnGoingTransaction => StatusCode::CONFLICT,
             Self::NotImplemented => StatusCode::BAD_REQUEST,
             Self::FailedToCreateVector(_) => StatusCode::BAD_REQUEST,
-            Self::FailedToDeleteVector(_) => StatusCode::BAD_REQUEST,
+            Self::FailedToDeleteVector(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::DuplicateVectorId(_) => StatusCode::BAD_REQUEST,
         }
     }
 }

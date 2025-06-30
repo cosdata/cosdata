@@ -21,6 +21,7 @@ use crate::{
     request_body = UpsertDto,
     responses(
         (status = 200, description = "Vectors upserted successfully"),
+        (status = 400, description = "Bad request - duplicate vector ID or validation error"),
         (status = 404, description = "Collection not found"),
         (status = 500, description = "Internal server error")
     )

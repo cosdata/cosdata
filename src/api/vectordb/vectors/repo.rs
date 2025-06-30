@@ -1,5 +1,5 @@
 use std::sync::Arc;
-
+use crate::models::common::WaCustomError;
 use crate::models::types::DocumentId;
 use crate::models::{
     collection::Collection, collection_transaction::ExplicitTransaction, types::VectorId,
@@ -11,15 +11,20 @@ use super::{
     dtos::{CreateVectorDto, SimilarVector},
     error::VectorsError,
 };
+use crate::api::vectordb::transactions::error::TransactionError;
 
 pub(crate) fn create_vector_in_transaction(
     collection: &Collection,
     transaction: &ExplicitTransaction,
     create_vector_dto: CreateVectorDto,
-) -> Result<(), VectorsError> {
-    collection
-        .run_upload(vec![create_vector_dto.into()], transaction)
-        .map_err(VectorsError::WaCustom)
+) -> Result<(), TransactionError> {
+    match collection.run_upload(vec![create_vector_dto.into()], transaction) {
+        Ok(_) => Ok(()),
+        Err(WaCustomError::InvalidData(msg)) if msg.starts_with("Vector ID already exists") => {
+            Err(TransactionError::DuplicateVectorId(msg))
+        }
+        Err(e) => Err(TransactionError::FailedToCreateVector(e.to_string())),
+    }
 }
 
 pub(crate) async fn query_vectors(
@@ -74,10 +79,14 @@ pub(crate) fn upsert_vectors_in_transaction(
     collection: &Collection,
     transaction: &ExplicitTransaction,
     vectors: Vec<CreateVectorDto>,
-) -> Result<(), VectorsError> {
-    collection
-        .run_upload(vectors.into_iter().map(Into::into).collect(), transaction)
-        .map_err(VectorsError::WaCustom)
+) -> Result<(), TransactionError> {
+    match collection.run_upload(vectors.into_iter().map(Into::into).collect(), transaction) {
+        Ok(_) => Ok(()),
+        Err(WaCustomError::InvalidData(msg)) if msg.starts_with("Vector ID already exists") => {
+            Err(TransactionError::DuplicateVectorId(msg))
+        }
+        Err(e) => Err(TransactionError::FailedToCreateVector(e.to_string())),
+    }
 }
 
 pub(crate) async fn check_vector_existence(

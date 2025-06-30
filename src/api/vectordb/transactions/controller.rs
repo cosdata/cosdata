@@ -175,20 +175,20 @@ pub(crate) async fn abort_transaction(
 
 /// Delete a vector in a transaction
 ///
-/// Deletes a vector by its ID as part of an ongoing transaction.
+/// Deletes a vector from a transaction.
 #[utoipa::path(
     delete,
     path = "/vectordb/collections/{collection_id}/transactions/{transaction_id}/vectors/{vector_id}",
     tag = "transactions",
     params(
-        ("collection_id" = String, Path, description = "Collection identifier"),
-        ("transaction_id" = ExplicitTransactionID, Path, description = "Transaction identifier"),
-        ("vector_id" = String, Path, description = "Vector identifier")
+        ("collection_id" = String, Path, description = "ID (name) of the collection containing the transaction"),
+        ("transaction_id" = ExplicitTransactionID, Path, description = "ID of the transaction containing the vector"),
+        ("vector_id" = String, Path, description = "ID of the vector to delete")
     ),
     responses(
-        (status = 204, description = "Vector deleted successfully"),
-        (status = 400, description = "Failed to delete vector"),
-        (status = 404, description = "Transaction or vector not found")
+        (status = 204, description = "No Content. Vector deleted successfully"),
+        (status = 400, description = "Bad Request. Collection, transaction, or vector not found"),
+        (status = 500, description = "Server Error. Failed to delete vector")
     )
 )]
 pub(crate) async fn delete_vector_by_id(
