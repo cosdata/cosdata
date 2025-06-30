@@ -11,6 +11,7 @@ use crate::{
 ///
 /// This API provides a simplified way to upsert vectors without managing transaction lifecycle.
 /// A transaction is created, vectors are upserted, and the transaction is committed in a single request.
+/// This operation will insert new vectors or update existing ones based on the vector ID.
 #[utoipa::path(
     post,
     path = "/vectordb/collections/{collection_id}/streaming/upsert",
@@ -21,7 +22,7 @@ use crate::{
     request_body = UpsertDto,
     responses(
         (status = 200, description = "Vectors upserted successfully"),
-        (status = 400, description = "Bad request - duplicate vector ID or validation error"),
+        (status = 400, description = "Bad request - validation error"),
         (status = 404, description = "Collection not found"),
         (status = 500, description = "Internal server error")
     )

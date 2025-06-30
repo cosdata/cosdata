@@ -17,20 +17,6 @@ pub(crate) async fn upsert_vectors(
         .get_collection(collection_id)
         .ok_or(TransactionError::CollectionNotFound)?;
 
-    // Check for duplicate vector IDs in the collection
-    for vector in &vectors {
-        if collection
-            .external_to_internal_map
-            .get_latest(&vector.id)
-            .is_some()
-        {
-            return Err(TransactionError::DuplicateVectorId(format!(
-                "Vector ID already exists in collection: {}",
-                vector.id
-            )));
-        }
-    }
-
     let txn = collection.current_implicit_transaction.read();
 
     IndexingManager::implicit_txn_upsert(

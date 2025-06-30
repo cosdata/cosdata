@@ -213,6 +213,7 @@ pub(crate) async fn delete_vector_by_id(
 /// Upsert vectors in a transaction
 ///
 /// Creates or updates multiple vectors in a single operation as part of an ongoing transaction.
+/// This operation will insert new vectors or update existing ones based on the vector ID.
 #[utoipa::path(
     post,
     path = "/vectordb/collections/{collection_id}/transactions/{transaction_id}/upsert",

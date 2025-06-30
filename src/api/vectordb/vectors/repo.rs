@@ -82,9 +82,6 @@ pub(crate) fn upsert_vectors_in_transaction(
 ) -> Result<(), TransactionError> {
     match collection.run_upload(vectors.into_iter().map(Into::into).collect(), transaction) {
         Ok(_) => Ok(()),
-        Err(WaCustomError::InvalidData(msg)) if msg.starts_with("Vector ID already exists") => {
-            Err(TransactionError::DuplicateVectorId(msg))
-        }
         Err(e) => Err(TransactionError::FailedToCreateVector(e.to_string())),
     }
 }
