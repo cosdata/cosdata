@@ -329,74 +329,13 @@ impl Collection {
             .get_latest(&mapped_internal_id)
     }
 
-    /// Check if there are actual changes between two vector embeddings
-    fn has_vector_changes(&self, existing: &RawVectorEmbedding, new: &RawVectorEmbedding) -> bool {
-        // Compare dense values
-        if existing.dense_values != new.dense_values {
-            return true;
-        }
-        
-        // Compare sparse values
-        if existing.sparse_values != new.sparse_values {
-            return true;
-        }
-        
-        // Compare text
-        if existing.text != new.text {
-            return true;
-        }
-        
-        // Compare document_id
-        if existing.document_id != new.document_id {
-            return true;
-        }
-        
-        // Compare metadata
-        if existing.metadata != new.metadata {
-            return true;
-        }
-        
-        // No changes detected
-        false
-    }
-
     pub fn run_upload(
         &self,
         embeddings: Vec<RawVectorEmbedding>,
         transaction: &ExplicitTransaction,
     ) -> Result<(), WaCustomError> {
-        // Implement proper upsert logic
-        let mut vectors_to_upsert = Vec::new();
-        
-        for embedding in embeddings {
-            // Check if vector already exists
-            if let Some(existing_internal_id) = self.external_to_internal_map.get_latest(&embedding.id) {
-                if let Some(existing_embedding) = self.get_raw_emb_by_internal_id(existing_internal_id) {
-                    // Vector exists - check if there are actual changes
-                    if self.has_vector_changes(existing_embedding, &embedding) {
-                        // There are changes, so we need to update
-                        vectors_to_upsert.push(embedding);
-                    }
-                    // If no changes, skip this vector (no-op)
-                } else {
-                    // Internal ID exists but no embedding found - this is an error state
-                    return Err(WaCustomError::DatabaseError(
-                        format!("Vector ID exists but embedding not found: {}", embedding.id)
-                    ));
-                }
-            } else {
-                // Vector doesn't exist - insert it
-                vectors_to_upsert.push(embedding);
-            }
-        }
-
-        // If no vectors need to be upserted, return early
-        if vectors_to_upsert.is_empty() {
-            return Ok(());
-        }
-
-        // Validate the vectors that will be upserted
-        for embedding in &vectors_to_upsert {
+        // Validate all vectors before processing
+        for embedding in &embeddings {
             if let Some(dense_values) = &embedding.dense_values {
                 if let Some(hnsw_index) = self.get_hnsw_index() {
                     let dense_emb = DenseInputEmbedding(
@@ -425,7 +364,7 @@ impl Collection {
             }
         }
 
-        transaction.wal.append(VectorOp::Upsert(vectors_to_upsert))?;
+        transaction.wal.append(VectorOp::Upsert(embeddings))?;
 
         Ok(())
     }
@@ -436,48 +375,19 @@ impl Collection {
         version: VersionNumber,
         config: &Config,
     ) -> Result<(), WaCustomError> {
-        // Implement proper upsert logic for implicit transactions
-        let mut vectors_to_index = Vec::new();
-        
-        for embedding in embeddings {
-            // Check if vector already exists
-            if let Some(existing_internal_id) = self.external_to_internal_map.get_latest(&embedding.id) {
-                if let Some(existing_embedding) = self.get_raw_emb_by_internal_id(existing_internal_id) {
-                    // Vector exists - check if there are actual changes
-                    if self.has_vector_changes(existing_embedding, &embedding) {
-                        // There are changes, so we need to update
-                        vectors_to_index.push(embedding);
-                    }
-                    // If no changes, skip this vector (no-op)
-                } else {
-                    // Internal ID exists but no embedding found - this is an error state
-                    return Err(WaCustomError::DatabaseError(
-                        format!("Vector ID exists but embedding not found: {}", embedding.id)
-                    ));
-                }
-            } else {
-                // Vector doesn't exist - insert it
-                vectors_to_index.push(embedding);
-            }
-        }
-
-        // If no vectors need to be indexed, return early
-        if vectors_to_index.is_empty() {
-            return Ok(());
-        }
-
+        // Always process all vectors - no change detection
         let num_nodes_per_emb = if let Some(hnsw_index) = &*self.hnsw_index.read() {
             hnsw_index.max_replica_per_node as usize
         } else {
             1
         };
-        let num_ids_to_reserve = vectors_to_index.len() * num_nodes_per_emb;
+        let num_ids_to_reserve = embeddings.len() * num_nodes_per_emb;
         let id_start = self
             .internal_id_counter
             .fetch_add(num_ids_to_reserve as u32, Ordering::Relaxed);
 
         let (dense_embs, sparse_embs, tf_idf_embs): (Vec<_>, Vec<_>, Vec<_>) =
-            vectors_to_index.into_iter().enumerate().fold(
+            embeddings.into_iter().enumerate().fold(
                 (Vec::new(), Vec::new(), Vec::new()),
                 |mut acc, (i, mut embedding)| {
                     let RawVectorEmbedding {
