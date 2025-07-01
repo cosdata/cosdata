@@ -210,7 +210,7 @@ impl Collection {
             let config = ctx.config.clone();
             thread::spawn(move || {
                 loop {
-                    std::thread::sleep(std::time::Duration::from_secs(60 * 60));
+                    std::thread::sleep(std::time::Duration::from_secs(config.epoch_length));
 
                     let _explicit_txn_guard = collection.current_explicit_transaction.write();
                     let mut implicit_txn_guard = collection.current_implicit_transaction.write();
