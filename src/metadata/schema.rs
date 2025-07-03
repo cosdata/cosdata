@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use crate::metadata::gen_combinations;
 
 use super::{
-    decimal_to_binary_vec, nearest_power_of_two, Error, FieldName, FieldValue, MetadataFields,
+    nearest_power_of_two, Error, FieldName, FieldValue, MetadataFields,
+    decimal_to_binary_vec_memoized, gen_combinations_optimized,
 };
 use std::{
     cmp::Reverse,
@@ -255,6 +255,7 @@ impl MetadataSchema {
             }
             result.push(m);
         }
+
         result
     }
 
@@ -272,8 +273,17 @@ impl MetadataSchema {
         fields: &HashMap<FieldName, FieldValue>,
         weight: i32,
     ) -> Result<Vec<MetadataDimensions>, Error> {
+        // Create a cache key for this specific call
+        let cache_key = format!("{:?}_{}", fields, weight);
+        let dimensions_cache = super::get_dimensions_cache();
+        
+        // Check if result is already cached
+        if let Some(cached_result) = dimensions_cache.get(&(cache_key.clone(), None)) {
+            return Ok(cached_result.clone());
+        }
+        
         let field_combinations = self.input_field_combinations(fields);
-        // We cache the results of calling fn `decimal_to_binary_vec`
+        // We cache the results of calling fn `decimal_to_binary_vec_memoized`
         // as there's a chance it would get called multiple times for
         // the same input
         let mut cache: HashMap<(u16, usize), Vec<i32>> = HashMap::new();
@@ -288,7 +298,7 @@ impl MetadataSchema {
                         match cache.get(&(value_id, size)) {
                             Some(r) => r.clone(),
                             None => {
-                                let dims = decimal_to_binary_vec(value_id, size)
+                                let dims = decimal_to_binary_vec_memoized(value_id, size)
                                     .iter()
                                     .map(|x| (*x as i32) * weight)
                                     .collect::<Vec<i32>>();
@@ -303,6 +313,10 @@ impl MetadataSchema {
             }
             result.push(dims);
         }
+        
+        // Cache the result
+        dimensions_cache.insert((cache_key, None), result.clone());
+        
         Ok(result)
     }
 
@@ -319,6 +333,15 @@ impl MetadataSchema {
     // two separate functions because the pseudo root node and other
     // pseudo nodes are created in separate code paths.
     pub fn pseudo_nonroot_dimensions(&self, weight: i32) -> Vec<MetadataDimensions> {
+        // Create a cache key for this specific call
+        let cache_key = format!("pseudo_nonroot_{:?}_{}", self.fields, weight);
+        let dimensions_cache = super::get_dimensions_cache();
+        
+        // Check if result is already cached
+        if let Some(cached_result) = dimensions_cache.get(&(cache_key.clone(), Some("pseudo_nonroot".to_string()))) {
+            return cached_result.clone();
+        }
+        
         // A hashmap of field names to the value_ids in asc
         // order. Will be constructed when iterting through the fields
         // for the first time.
@@ -350,7 +373,7 @@ impl MetadataSchema {
                     vs.push(vec![0]);
                 }
             }
-            let mut cs = gen_combinations(&vs);
+            let mut cs = gen_combinations_optimized(&vs);
             combinations.append(&mut cs);
         }
 
@@ -370,7 +393,7 @@ impl MetadataSchema {
                         vs.push(vec![0]);
                     }
                 }
-                let mut cs = gen_combinations(&vs);
+                let mut cs = gen_combinations_optimized(&vs);
                 combinations.append(&mut cs);
 
                 // Check if the schema supports an `And` condition
@@ -389,7 +412,7 @@ impl MetadataSchema {
         // Convert combinations of valid_ids into pseudo_dimensions
         // (binary_vec with high weight values)
         let mut pseudo_dimensions = Vec::with_capacity(combinations.len());
-        // We cache the results of calling fn `decimal_to_binary_vec`
+        // We cache the results of calling fn `decimal_to_binary_vec_memoized`
         // as there's a chance it would get called multiple times for
         // the same input
         let mut cache: HashMap<(u16, usize), Vec<i32>> = HashMap::new();
@@ -401,7 +424,7 @@ impl MetadataSchema {
                 let mut field_dims = match cache.get(&(*value_id, size)) {
                     Some(r) => r.clone(),
                     None => {
-                        let r = decimal_to_binary_vec(*value_id, size)
+                        let r = decimal_to_binary_vec_memoized(*value_id, size)
                             .iter()
                             .map(|x| (*x as i32) * weight)
                             .collect::<Vec<i32>>();
@@ -420,6 +443,9 @@ impl MetadataSchema {
             let root_dims = self.pseudo_root_dimensions(weight);
             pseudo_dimensions.retain(|dims| *dims != root_dims);
         }
+        
+        // Cache the result
+        dimensions_cache.insert((cache_key, Some("pseudo_nonroot".to_string())), pseudo_dimensions.clone());
 
         pseudo_dimensions
     }
