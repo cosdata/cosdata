@@ -399,22 +399,6 @@ impl TransactionStatus {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
-pub struct Progress {
-    pub percentage_done: f32,
-    pub records_indexed: u32,
-    pub total_records: u32,
-    pub rate_per_second: f32,
-    pub estimated_time_remaining_seconds: u32,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
-pub struct Summary {
-    pub total_records_indexed: u32,
-    pub duration_seconds: u32,
-    pub average_rate_per_second: f32,
-}
-
 impl Serialize for TransactionStatus {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where

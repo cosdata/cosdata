@@ -192,8 +192,7 @@ pub struct VersionsApiDoc;
             crate::api::vectordb::transactions::dtos::CreateTransactionResponseDto,
             crate::api::vectordb::transactions::dtos::UpsertDto,
             crate::models::collection_transaction::TransactionStatus,
-            crate::models::collection_transaction::Progress,
-            crate::models::collection_transaction::Summary
+            crate::models::collection_transaction::ProcessingStats
         )
     ),
     tags(
@@ -346,8 +345,7 @@ pub struct StreamingApiDoc;
             crate::api::vectordb::transactions::dtos::CreateTransactionResponseDto,
             crate::api::vectordb::transactions::dtos::UpsertDto,
             crate::models::collection_transaction::TransactionStatus,
-            crate::models::collection_transaction::Progress,
-            crate::models::collection_transaction::Summary
+            crate::models::collection_transaction::ProcessingStats
         )
     ),
     tags(
