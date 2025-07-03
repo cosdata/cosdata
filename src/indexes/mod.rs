@@ -124,7 +124,7 @@ pub trait IndexOps: Send + Sync {
 
     fn sample_threshold(&self) -> usize;
 
-    // is this index configured? true is the sampling is done
+    // is this index configured? true if the sampling is done
     fn is_configured(&self) -> bool;
 
     // save everything to disk
