@@ -48,7 +48,6 @@ unsafe impl Send for HNSWIndexCache {}
 unsafe impl Sync for HNSWIndexCache {}
 
 impl HNSWIndexCache {
-    
     pub fn new(
         bufmans: BufferManagerFactory<IndexFileId>,
         latest_version_links_bufman: FilelessBufferManager,
@@ -71,8 +70,7 @@ impl HNSWIndexCache {
             distance_metric,
             loading_items: TSHashTable::new(16),
             batch_load_lock: Mutex::new(()),
-            metadata_registry, 
-                
+            metadata_registry,
         }
     }
 
@@ -155,7 +153,7 @@ impl HNSWIndexCache {
             .and_then(|metadata| metadata.upgrade())
         {
             return Ok(metadata);
-        }       
+        }
 
         let mut prop_file_guard = self.prop_file.write().unwrap();
         let metadata = Arc::new(read_prop_metadata_from_file(
@@ -176,10 +174,11 @@ impl HNSWIndexCache {
             let prop_key =
                 Self::get_prop_key(node.prop_value.location.0, node.prop_value.location.1);
             self.props_registry
-                .insert(prop_key, Arc::downgrade(&node.prop_value));           
+                .insert(prop_key, Arc::downgrade(&node.prop_value));
             if let Some(ref metadata) = node.prop_metadata {
                 let metadata_key = Self::get_prop_key(metadata.location.0, metadata.location.1);
-                self.metadata_registry.insert(metadata_key, Arc::downgrade(metadata));
+                self.metadata_registry
+                    .insert(metadata_key, Arc::downgrade(metadata));
             }
         }
         self.registry.insert(combined_index, item);
