@@ -18,7 +18,7 @@ use crate::{
         versioning::VersionNumber,
     },
     quantization::{Quantization, StorageType},
-    vector_store::{ann_search, finalize_ann_results, index_embeddings},
+    vector_store::{ann_search, delete_embedding, finalize_ann_results, index_embeddings},
 };
 use offset_counter::HNSWIndexFileOffsetCounter;
 use std::sync::{
@@ -183,6 +183,16 @@ impl IndexOps for HNSWIndex {
         config: &Config,
     ) -> Result<(), WaCustomError> {
         index_embeddings(config, collection, self, version, embeddings)
+    }
+
+    fn delete_embedding(
+        &self,
+        collection: &Collection,
+        id: InternalId,
+        version: VersionNumber,
+        config: &Config,
+    ) -> Result<(), WaCustomError> {
+        delete_embedding(config, collection, self, version, id)
     }
 
     fn sample_embedding(&self, embedding: &Self::IndexingInput) {

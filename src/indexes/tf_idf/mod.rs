@@ -134,6 +134,17 @@ impl IndexOps for TFIDFIndex {
         Ok(())
     }
 
+    fn delete_embedding(
+        &self,
+        _collection: &Collection,
+        _id: InternalId,
+        _version: VersionNumber,
+        _config: &Config,
+    ) -> Result<(), WaCustomError> {
+        // TODO(a-rustacean): impl delete
+        todo!()
+    }
+
     fn sample_embedding(&self, embedding: &Self::IndexingInput) {
         let len = count_tokens(&embedding.1, 40);
         self.sampling_data

@@ -1201,3 +1201,173 @@ fn traverse_find_nearest(
 
     Ok(results.into_iter().map(|(sim, node)| (node, sim)).collect())
 }
+
+pub fn delete_embedding(
+    config: &Config,
+    collection: &Collection,
+    hnsw_index: &HNSWIndex,
+    version: VersionNumber,
+    id: InternalId,
+) -> Result<(), WaCustomError> {
+    let Some(raw_emb) = collection.get_raw_emb_by_internal_id(&id) else {
+        return Ok(());
+    };
+    let Some(raw_vec) = &raw_emb.dense_values else {
+        return Ok(());
+    };
+
+    let quantized_vec = hnsw_index.quantization_metric.read().unwrap().quantize(
+        raw_vec,
+        *hnsw_index.storage_type.read().unwrap(),
+        *hnsw_index.values_range.read().unwrap(),
+    )?;
+
+    let mut cur_entry = hnsw_index.get_root_vec();
+
+    let hnsw_params = hnsw_index.hnsw_params.read().unwrap();
+    let distance_metric = *hnsw_index.distance_metric.read().unwrap();
+    let offset_counter = hnsw_index.offset_counter.read().unwrap();
+    let file_id = offset_counter.file_id();
+
+    for level in (0..=hnsw_params.num_layers).rev() {
+        let mut skipm = PerformantFixedSet::new(if level == 0 {
+            hnsw_params.level_0_neighbors_count
+        } else {
+            hnsw_params.neighbors_count
+        });
+        let mut results = traverse_find_nearest(
+            config,
+            hnsw_index,
+            cur_entry,
+            &quantized_vec,
+            Some(&id),
+            None,
+            &mut 0,
+            &mut skipm,
+            &distance_metric,
+            false,
+            512,
+        )?;
+
+        if results.is_empty() {
+            cur_entry = unsafe { &*(*cur_entry).latest }
+                .try_get_data(&hnsw_index.cache)?
+                .get_child();
+            continue;
+        } else {
+            cur_entry = unsafe { &*(*results[0].0).latest }
+                .try_get_data(&hnsw_index.cache)?
+                .get_child();
+        }
+
+        let mut idx = None;
+
+        for (i, (lazy_item_latest_ptr, _)) in results.iter().enumerate() {
+            let node =
+                unsafe { &*(**lazy_item_latest_ptr).latest }.try_get_data(&hnsw_index.cache)?;
+            if node.get_id() == id {
+                idx = Some(i);
+                break;
+            }
+        }
+
+        let Some(idx) = idx else {
+            continue;
+        };
+
+        let (lazy_item_latest_ptr, _) = results.swap_remove(idx);
+        let lazy_item = unsafe { &*lazy_item_latest_ptr }.latest;
+        let node = unsafe { &*lazy_item }.try_get_data(&hnsw_index.cache)?;
+
+        let _lock = node.lowest_index.write();
+
+        for neighbor in node.get_neighbors_raw() {
+            let neighbor_lazy_item_latest_ptr = unsafe {
+                if let Some((_, neighbor_lazy_item_latest_ptr, _)) =
+                    neighbor.load(Ordering::Relaxed).as_ref()
+                {
+                    *neighbor_lazy_item_latest_ptr
+                } else {
+                    continue;
+                }
+            };
+
+            let (neighbor_lazy_item, newly_created) = LatestNode::get_or_create_version(
+                neighbor_lazy_item_latest_ptr,
+                version,
+                &hnsw_index.versions_synchronization_map,
+                &hnsw_index.cache,
+                file_id,
+                &offset_counter,
+            )?;
+
+            let neighbor_node = unsafe { &*neighbor_lazy_item }.try_get_data(&hnsw_index.cache)?;
+
+            let removed = neighbor_node.remove_neighbor_by_id(id);
+
+            if removed && neighbor_node.is_neighbors_empty() {
+                let neighbor_id = neighbor_node.get_id();
+                let neighbor_metadata =
+                    neighbor_node.prop_metadata.clone().map(|pm| pm.vec.clone());
+                let neighbor_vec = VectorData {
+                    id: Some(&neighbor_id),
+                    quantized_vec: &neighbor_node.prop_value.vec,
+                    metadata: neighbor_metadata.as_deref(),
+                };
+                let mut results = results.clone();
+                let mut neighbor_idx = None;
+                for (idx, (lazy_item_latest_ptr, _)) in results.iter().enumerate() {
+                    let node = unsafe { &*(**lazy_item_latest_ptr).latest }
+                        .try_get_data(&hnsw_index.cache)?;
+                    if node.get_id() == neighbor_node.get_id() {
+                        neighbor_idx = Some(idx);
+                        break;
+                    }
+                }
+                if let Some(idx) = neighbor_idx {
+                    results.swap_remove(idx);
+                }
+                for (lazy_item_latest_ptr, score) in results.iter_mut() {
+                    let node = unsafe { &*(**lazy_item_latest_ptr).latest }
+                        .try_get_data(&hnsw_index.cache)?;
+                    let metadata = node.prop_metadata.clone().map(|pm| pm.vec.clone());
+                    let node_id = node.get_id();
+                    let vec_data = VectorData {
+                        id: Some(&node_id),
+                        quantized_vec: &node.prop_value.vec,
+                        metadata: metadata.as_deref(),
+                    };
+                    *score = distance_metric.calculate(&neighbor_vec, &vec_data, false)?;
+                }
+
+                results.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+
+                create_node_edges(
+                    hnsw_index,
+                    neighbor_lazy_item_latest_ptr,
+                    results,
+                    version,
+                    file_id,
+                    if level == 0 {
+                        hnsw_params.level_0_neighbors_count
+                    } else {
+                        hnsw_params.neighbors_count
+                    },
+                    &offset_counter,
+                    distance_metric,
+                )?;
+            }
+
+            if newly_created {
+                write_lazy_item_to_file(&hnsw_index.cache, neighbor_lazy_item, file_id)?;
+            }
+        }
+
+        unsafe {
+            drop(Box::from_raw(lazy_item));
+            drop(Box::from_raw(lazy_item_latest_ptr));
+        }
+    }
+
+    Ok(())
+}

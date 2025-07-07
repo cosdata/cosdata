@@ -463,6 +463,35 @@ impl Collection {
         Ok(())
     }
 
+    pub fn delete_embedding(
+        &self,
+        vector_id: VectorId,
+        version: VersionNumber,
+        config: &Config,
+    ) -> Result<(), WaCustomError> {
+        let Some(internal_id) = self
+            .external_to_internal_map
+            .get_latest(&vector_id)
+            .cloned()
+        else {
+            return Ok(());
+        };
+
+        if let Some(hnsw_index) = self.get_hnsw_index() {
+            hnsw_index.delete_embedding(self, internal_id, version, config)?;
+        }
+
+        if let Some(inverted_index) = self.get_inverted_index() {
+            inverted_index.delete_embedding(self, internal_id, version, config)?;
+        }
+
+        if let Some(tf_idf_index) = self.get_tf_idf_index() {
+            tf_idf_index.delete_embedding(self, internal_id, version, config)?;
+        }
+
+        Ok(())
+    }
+
     pub fn trigger_indexing(&self, txn_id: ExplicitTransactionID, version: VersionNumber) {
         self.indexing_manager
             .read()

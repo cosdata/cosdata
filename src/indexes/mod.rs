@@ -59,6 +59,14 @@ pub trait IndexOps: Send + Sync {
         config: &Config,
     ) -> Result<(), WaCustomError>;
 
+    fn delete_embedding(
+        &self,
+        collection: &Collection,
+        id: InternalId,
+        version: VersionNumber,
+        config: &Config,
+    ) -> Result<(), WaCustomError>;
+
     fn force_index(
         &self,
         collection: &Collection,

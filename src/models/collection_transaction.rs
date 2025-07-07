@@ -226,6 +226,7 @@ impl ImplicitTransaction {
         collection
             .vcs
             .set_current_version_implicit(version, random())?;
+        *collection.current_version.write() = version;
         update_current_version(&collection.lmdb, version)?;
         Ok(unsafe {
             mem::transmute::<&ImplicitTransactionData, &ImplicitTransactionData>(

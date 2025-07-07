@@ -113,6 +113,17 @@ impl IndexOps for InvertedIndex {
         Ok(())
     }
 
+    fn delete_embedding(
+        &self,
+        _collection: &Collection,
+        _id: InternalId,
+        _version: VersionNumber,
+        _config: &Config,
+    ) -> Result<(), WaCustomError> {
+        // TODO(a-rustacean): impl delete
+        todo!()
+    }
+
     fn sample_embedding(&self, embedding: &Self::IndexingInput) {
         for pair in &embedding.1 {
             let value = pair.1;
