@@ -18,7 +18,6 @@ pub mod kmeans;
 pub mod lazy_item;
 pub mod lru_cache;
 pub mod meta_persist;
-pub mod page;
 pub mod paths;
 pub mod prob_node;
 pub mod rpc;

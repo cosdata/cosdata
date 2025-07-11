@@ -17,7 +17,7 @@ use super::{TFIDFIndexSerialize, TF_IDF_INDEX_DATA_CHUNK_SIZE};
 //   2 bytes for data map len +                      | 6
 //   INVERTED_INDEX_DATA_CHUNK_SIZE * (              |
 //     2 bytes for quotient +                        |
-//     4 bytes of pagepool                           |
+//     4 bytes of versioned vec                      |
 //   ) +                                             | INVERTED_INDEX_DATA_CHUNK_SIZE * 6 + 6
 //   4 byte for next data chunk                      | INVERTED_INDEX_DATA_CHUNK_SIZE * 6 + 10
 //   16 * 4 bytes for dimension offsets +            | INVERTED_INDEX_DATA_CHUNK_SIZE * 6 + 74

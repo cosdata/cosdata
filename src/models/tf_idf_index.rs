@@ -37,6 +37,18 @@ pub struct VersionedVec<T> {
 unsafe impl<T: Send> Send for VersionedVec<T> {}
 unsafe impl<T: Sync> Sync for VersionedVec<T> {}
 
+#[cfg(test)]
+impl<T: Clone> Clone for VersionedVec<T> {
+    fn clone(&self) -> Self {
+        Self {
+            serialized_at: RwLock::new(*self.serialized_at.read().unwrap()),
+            version: self.version,
+            list: self.list.clone(),
+            next: self.next.clone(),
+        }
+    }
+}
+
 impl<T> VersionedVec<T> {
     pub fn new(version: VersionNumber) -> VersionedVec<T> {
         Self {

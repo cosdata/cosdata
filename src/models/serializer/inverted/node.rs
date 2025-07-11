@@ -19,7 +19,7 @@ use super::InvertedIndexSerialize;
 //   4 byte for dim index +                          | 4
 //   1 byte for implicit flag & quantization         | 5
 //   quantization value *                            |
-//   4 bytes for pagepool offset +                   | qv * 4 + 5
+//   4 bytes for versioned vec offset +              | qv * 4 + 5
 //   16 * 4 bytes for dimension offsets +            | qv * 4 + 69
 impl InvertedIndexSerialize for InvertedIndexNode {
     fn serialize(

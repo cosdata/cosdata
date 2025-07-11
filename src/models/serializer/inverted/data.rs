@@ -3,8 +3,8 @@ use crate::models::{
     cache_loader::InvertedIndexCache,
     common::TSHashTable,
     inverted_index::InvertedIndexNodeData,
-    page::VersionedPagepool,
     serializer::SimpleSerialize,
+    tf_idf_index::VersionedVec,
     types::FileOffset,
 };
 
@@ -23,12 +23,17 @@ impl InvertedIndexSerialize for InvertedIndexNodeData {
         let data_bufman = data_bufmans.get(data_file_idx)?;
         let data_cursor = data_bufman.open_cursor()?;
         for i in 0..=self.max_key {
-            let Some(pool) = self.map.lookup(&i) else {
+            let optional_result = self.map.with_value(&i, |pool| {
+                let offset = pool.serialize(&data_bufman, data_cursor)?;
+                dim_bufman.update_u32_with_cursor(cursor, offset)
+            });
+
+            if let Some(result) = optional_result {
+                result?;
+            } else {
                 dim_bufman.update_u32_with_cursor(cursor, u32::MAX)?;
                 continue;
             };
-            let offset = pool.serialize(&data_bufman, data_cursor)?;
-            dim_bufman.update_u32_with_cursor(cursor, offset)?;
         }
         Ok(start as u32)
     }
@@ -54,7 +59,7 @@ impl InvertedIndexSerialize for InvertedIndexNodeData {
             if offset == u32::MAX {
                 continue;
             }
-            let pool = VersionedPagepool::deserialize(&data_bufman, FileOffset(offset))?;
+            let pool = VersionedVec::deserialize(&data_bufman, FileOffset(offset))?;
             map.insert(i, pool);
         }
         dim_bufman.close_cursor(cursor)?;

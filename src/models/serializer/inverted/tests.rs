@@ -1,14 +1,14 @@
 use std::{fs::OpenOptions, sync::Arc};
 
-use rand::Rng;
+use rand::{distributions::Standard, prelude::Distribution, Rng};
 use tempfile::{tempdir, TempDir};
 
 use crate::models::{
     buffered_io::{BufferManager, BufferManagerFactory},
     cache_loader::InvertedIndexCache,
     inverted_index::{InvertedIndexNode, InvertedIndexNodeData, InvertedIndexRoot},
-    page::VersionedPagepool,
     serializer::inverted::InvertedIndexSerialize,
+    tf_idf_index::VersionedVec,
     types::FileOffset,
     versioning::VersionNumber,
 };
@@ -48,24 +48,26 @@ fn setup_test() -> (
     (dim_bufman, data_bufmans, cache, cursor, dir)
 }
 
-fn get_random_versioned_pagepool<const LEN: usize>(
-    rng: &mut impl Rng,
-    version: VersionNumber,
-) -> VersionedPagepool<LEN> {
-    let pool = VersionedPagepool::new(version);
+fn get_random_versioned_vec<T>(rng: &mut impl Rng, version: VersionNumber) -> VersionedVec<T>
+where
+    Standard: Distribution<T>,
+{
+    let mut pool = VersionedVec::new(version);
     let count = rng.gen_range(20..50);
-    add_random_items_to_versioned_pagepool(rng, &pool, count, version);
+    add_random_items_to_versioned_vec(rng, &mut pool, count, version);
     pool
 }
 
-fn add_random_items_to_versioned_pagepool<const LEN: usize>(
+fn add_random_items_to_versioned_vec<T>(
     rng: &mut impl Rng,
-    pool: &VersionedPagepool<LEN>,
+    pool: &mut VersionedVec<T>,
     count: usize,
     version: VersionNumber,
-) {
+) where
+    Standard: Distribution<T>,
+{
     for _ in 0..count {
-        pool.push(version, rng.gen_range(0..u32::MAX));
+        pool.push(version, rng.gen());
     }
 }
 
@@ -78,7 +80,7 @@ fn test_inverted_index_data_serialization() {
     for i in (0..32).map(|x| x * 2) {
         table
             .map
-            .insert(i, get_random_versioned_pagepool(&mut rng, 0.into()));
+            .insert(i, get_random_versioned_vec(&mut rng, 0.into()));
     }
 
     let (dim_bufman, data_bufmans, cache, cursor, _temp_dir) = setup_test();
@@ -117,7 +119,7 @@ fn test_inverted_index_data_incremental_serialization_with_updated_values() {
     for i in (0..32).map(|x| x * 2) {
         table
             .map
-            .insert(i, get_random_versioned_pagepool(&mut rng, 0.into()));
+            .insert(i, get_random_versioned_vec(&mut rng, 0.into()));
     }
 
     let (dim_bufman, data_bufmans, cache, cursor, _temp_dir) = setup_test();
@@ -127,9 +129,9 @@ fn test_inverted_index_data_incremental_serialization_with_updated_values() {
         .unwrap();
 
     for i in (0..32).map(|x| x * 2) {
-        table.map.with_value(&i, |pool| {
+        table.map.with_value_mut(&i, |pool| {
             let mut rng = rand::thread_rng();
-            add_random_items_to_versioned_pagepool(&mut rng, pool, 100, 0.into());
+            add_random_items_to_versioned_vec(&mut rng, pool, 100, 1.into());
         });
     }
     dim_bufman.seek_with_cursor(cursor, offset as u64).unwrap();
@@ -167,7 +169,7 @@ fn test_inverted_index_data_incremental_serialization_with_new_entries() {
     for i in (0..32).map(|x| x * 2) {
         table
             .map
-            .insert(i, get_random_versioned_pagepool(&mut rng, 0.into()));
+            .insert(i, get_random_versioned_vec(&mut rng, 0.into()));
     }
 
     let (dim_bufman, data_bufmans, cache, cursor, _temp_dir) = setup_test();
@@ -179,7 +181,7 @@ fn test_inverted_index_data_incremental_serialization_with_new_entries() {
     for i in (0..32).map(|x| (x * 2) + 1) {
         table
             .map
-            .insert(i, get_random_versioned_pagepool(&mut rng, 0.into()));
+            .insert(i, get_random_versioned_vec(&mut rng, 1.into()));
     }
     dim_bufman.seek_with_cursor(cursor, offset as u64).unwrap();
     let offset = table
@@ -272,91 +274,6 @@ fn test_inverted_index_node_incremental_serialization() {
                 rng.gen_range(0.0..1.0),
                 rng.gen_range(0..u32::MAX),
                 &cache,
-                0.into(),
-                1.0,
-            )
-            .unwrap();
-    }
-
-    let offset = inverted_index_node
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, cursor)
-        .unwrap();
-
-    dim_bufman.close_cursor(cursor).unwrap();
-
-    let deserialized = InvertedIndexNode::deserialize(
-        &dim_bufman,
-        &data_bufmans,
-        FileOffset(offset),
-        0,
-        8,
-        &cache,
-    )
-    .unwrap();
-
-    assert_eq!(inverted_index_node, deserialized);
-}
-
-#[test]
-fn test_inverted_index_node_incremental_serialization_with_multiple_versions() {
-    let mut rng = rand::thread_rng();
-    let inverted_index_node = InvertedIndexNode::new(0, false, 6, FileOffset(0));
-    let (dim_bufman, data_bufmans, cache, cursor, _temp_dir) = setup_test();
-
-    for _ in 0..300 {
-        inverted_index_node
-            .insert(
-                rng.gen_range(0.0..1.0),
-                rng.gen_range(0..u32::MAX),
-                &cache,
-                0.into(),
-                1.0,
-            )
-            .unwrap();
-    }
-
-    let _offset = inverted_index_node
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, cursor)
-        .unwrap();
-
-    for _ in 0..300 {
-        inverted_index_node
-            .insert(
-                rng.gen_range(0.0..1.0),
-                rng.gen_range(0..u32::MAX),
-                &cache,
-                0.into(),
-                1.0,
-            )
-            .unwrap();
-    }
-
-    let _offset = inverted_index_node
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, cursor)
-        .unwrap();
-
-    for _ in 0..300 {
-        inverted_index_node
-            .insert(
-                rng.gen_range(0.0..1.0),
-                rng.gen_range(0..u32::MAX),
-                &cache,
-                1.into(),
-                1.0,
-            )
-            .unwrap();
-    }
-
-    let _offset = inverted_index_node
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, cursor)
-        .unwrap();
-
-    for _ in 0..300 {
-        inverted_index_node
-            .insert(
-                rng.gen_range(0.0..1.0),
-                rng.gen_range(0..u32::MAX),
-                &cache,
                 1.into(),
                 1.0,
             )
@@ -410,7 +327,7 @@ fn test_inverted_index_root_serialization() {
 }
 
 #[test]
-fn test_inverted_root_index_incremental_serialization() {
+fn test_inverted_index_root_incremental_serialization() {
     let temp_dir = tempdir().unwrap();
     let mut rng = rand::thread_rng();
     let inverted_index = InvertedIndexRoot::new(temp_dir.as_ref().into(), 6, 8).unwrap();
@@ -435,90 +352,7 @@ fn test_inverted_root_index_incremental_serialization() {
                 rng.gen_range(0..1000),
                 rng.gen_range(0.0..1.0),
                 rng.gen_range(0..u32::MAX),
-                0.into(),
-                1.0,
-            )
-            .unwrap();
-    }
-
-    inverted_index.serialize().unwrap();
-    inverted_index.cache.dim_bufman.flush().unwrap();
-    inverted_index.cache.data_bufmans.flush_all().unwrap();
-
-    let deserialized = InvertedIndexRoot::deserialize(temp_dir.as_ref().into(), 6, 8).unwrap();
-
-    assert_eq!(inverted_index, deserialized);
-}
-
-#[test]
-fn test_inverted_index_root_incremental_serialization_with_multiple_versions() {
-    let temp_dir = tempdir().unwrap();
-    let mut rng = rand::thread_rng();
-    let inverted_index = InvertedIndexRoot::new(temp_dir.as_ref().into(), 6, 8).unwrap();
-
-    for _ in 0..100000 {
-        inverted_index
-            .insert(
-                rng.gen_range(0..1000),
-                rng.gen_range(0.0..1.0),
-                rng.gen_range(0..u32::MAX),
-                0.into(),
-                1.0,
-            )
-            .unwrap();
-    }
-
-    inverted_index.serialize().unwrap();
-
-    for _ in 0..100000 {
-        inverted_index
-            .insert(
-                rng.gen_range(0..1000),
-                rng.gen_range(0.0..1.0),
-                rng.gen_range(0..u32::MAX),
-                0.into(),
-                1.0,
-            )
-            .unwrap();
-    }
-
-    inverted_index.serialize().unwrap();
-
-    for _ in 0..100000 {
-        inverted_index
-            .insert(
-                rng.gen_range(0..1000),
-                rng.gen_range(0.0..1.0),
-                rng.gen_range(0..u32::MAX),
                 1.into(),
-                1.0,
-            )
-            .unwrap();
-    }
-
-    inverted_index.serialize().unwrap();
-
-    for _ in 0..100000 {
-        inverted_index
-            .insert(
-                rng.gen_range(0..1000),
-                rng.gen_range(0.0..1.0),
-                rng.gen_range(0..u32::MAX),
-                1.into(),
-                1.0,
-            )
-            .unwrap();
-    }
-
-    inverted_index.serialize().unwrap();
-
-    for _ in 0..100000 {
-        inverted_index
-            .insert(
-                rng.gen_range(0..1000),
-                rng.gen_range(0.0..1.0),
-                rng.gen_range(0..u32::MAX),
-                2.into(),
                 1.0,
             )
             .unwrap();

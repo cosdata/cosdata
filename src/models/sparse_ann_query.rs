@@ -94,17 +94,15 @@ impl SparseAnnQueryBasic {
                 // High quantized value
                 // Iterate through the full list of values for this dimension
                 for key in (0..=one_quantized).rev() {
-                    let pagepool = unsafe { &*node.data }
+                    unsafe { &*node.data }
                         .try_get_data(&index.cache, node.dim_index)?
                         .map
-                        .lookup(&key);
-                    if let Some(pagepool) = pagepool {
-                        for x in pagepool.iter() {
-                            let vec_id = x;
-                            let dot_product = dot_products.entry(vec_id).or_insert(0u32);
-                            *dot_product += quantized_query_value * key as u32;
-                        }
-                    }
+                        .with_value(&key, |vec| {
+                            for vec_id in vec.iter() {
+                                let dot_product = dot_products.entry(*vec_id).or_insert(0u32);
+                                *dot_product += quantized_query_value * key as u32;
+                            }
+                        });
                 }
             } else {
                 // Low quantized value
@@ -112,22 +110,15 @@ impl SparseAnnQueryBasic {
                 // of quantized keys (i.e. 48..64 for 6 bit quantization).
 
                 for key in (early_terminate_value..=one_quantized).rev() {
-                    let mut current_versioned_pagepool = unsafe { &*node.data }
+                    unsafe { &*node.data }
                         .try_get_data(&index.cache, node.dim_index)?
                         .map
-                        .lookup(&key);
-                    while let Some(versioned_pagepool) = current_versioned_pagepool {
-                        for x in versioned_pagepool.pagepool.inner.read().unwrap().iter() {
-                            for x in x.iter() {
-                                let vec_id = *x;
-
-                                let dot_product = dot_products.entry(vec_id).or_insert(0u32);
+                        .with_value(&key, |vec| {
+                            for vec_id in vec.iter() {
+                                let dot_product = dot_products.entry(*vec_id).or_insert(0u32);
                                 *dot_product += quantized_query_value * key as u32;
                             }
-                        }
-                        current_versioned_pagepool =
-                            versioned_pagepool.next.read().unwrap().clone();
-                    }
+                        });
                 }
             }
         }

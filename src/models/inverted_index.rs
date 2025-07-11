@@ -16,19 +16,16 @@ use super::{
     cache_loader::InvertedIndexCache,
     common::TSHashTable,
     lazy_item::ProbLazyItem,
-    page::VersionedPagepool,
     serializer::inverted::InvertedIndexSerialize,
+    tf_idf_index::VersionedVec,
     types::{FileOffset, SparseVector},
     utils::calculate_path,
     versioning::VersionNumber,
 };
 
-// Size of a page in the hash table
-pub const PAGE_SIZE: usize = 32;
-
 #[cfg_attr(test, derive(PartialEq, Debug))]
 pub struct InvertedIndexNodeData {
-    pub map: TSHashTable<u8, VersionedPagepool<PAGE_SIZE>>,
+    pub map: TSHashTable<u8, VersionedVec<u32>>,
     pub max_key: u8,
 }
 
@@ -197,7 +194,7 @@ impl InvertedIndexNode {
                     list.push(version, vector_id);
                 },
                 || {
-                    let pool = VersionedPagepool::new(version);
+                    let mut pool = VersionedVec::new(version);
                     pool.push(version, vector_id);
                     pool
                 },

@@ -5,9 +5,8 @@ use crate::indexes::hnsw::offset_counter::IndexFileId;
 use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::collection::RawVectorEmbedding;
 use crate::models::inverted_index::InvertedIndexNode;
-use crate::models::page::Pagepool;
-use crate::models::page::VersionedPagepool;
 use crate::models::serializer::*;
+use crate::models::tf_idf_index::VersionedVec;
 use crate::models::tree_map::QuotientsMap;
 use crate::models::tree_map::TreeMap;
 use crate::models::tree_map::TreeMapVec;
@@ -16,6 +15,8 @@ use crate::models::versioning::VersionNumber;
 use crate::storage::Storage;
 use half::f16;
 use rand::distributions::Alphanumeric;
+use rand::distributions::Standard;
+use rand::prelude::Distribution;
 use rand::Rng;
 use tempfile::tempdir;
 use tempfile::TempDir;
@@ -73,134 +74,60 @@ fn test_storage_serialization() {
     }
 }
 
-fn get_random_pagepool<const LEN: usize>(rng: &mut impl Rng) -> Pagepool<LEN> {
-    let pool = Pagepool::default();
+fn get_random_versioned_vec<T>(rng: &mut impl Rng, version: VersionNumber) -> VersionedVec<T>
+where
+    Standard: Distribution<T>,
+{
+    let mut pool = VersionedVec::new(version);
     let count = rng.gen_range(20..50);
-    add_random_items_to_pagepool(rng, &pool, count);
+    add_random_items_to_versioned_vec(rng, &mut pool, count, version);
     pool
 }
 
-fn get_random_versioned_pagepool<const LEN: usize>(
+fn add_random_items_to_versioned_vec<T>(
     rng: &mut impl Rng,
-    version: VersionNumber,
-) -> VersionedPagepool<LEN> {
-    let pool = VersionedPagepool::new(version);
-    let count = rng.gen_range(20..50);
-    add_random_items_to_versioned_pagepool(rng, &pool, count, version);
-    pool
-}
-
-fn add_random_items_to_pagepool<const LEN: usize>(
-    rng: &mut impl Rng,
-    pool: &Pagepool<LEN>,
-    count: usize,
-) {
-    for _ in 0..count {
-        pool.push(rng.gen_range(0..u32::MAX));
-    }
-}
-
-fn add_random_items_to_versioned_pagepool<const LEN: usize>(
-    rng: &mut impl Rng,
-    pool: &VersionedPagepool<LEN>,
+    pool: &mut VersionedVec<T>,
     count: usize,
     version: VersionNumber,
-) {
+) where
+    Standard: Distribution<T>,
+{
     for _ in 0..count {
-        pool.push(version, rng.gen_range(0..u32::MAX));
+        pool.push(version, rng.gen());
     }
 }
 
 #[test]
-fn test_pagepool_serialization() {
+fn test_versioned_vec_serialization() {
     let mut rng = rand::thread_rng();
-    let page_pool = get_random_pagepool(&mut rng);
+    let vec: VersionedVec<u32> = get_random_versioned_vec(&mut rng, 0.into());
 
     let (bufman, cursor, _temp_dir) = setup_test();
-    let offset = page_pool.serialize(&bufman, cursor).unwrap();
+    let offset = vec.serialize(&bufman, cursor).unwrap();
 
     bufman.close_cursor(cursor).unwrap();
 
-    let deserialized = Pagepool::<10>::deserialize(&bufman, FileOffset(offset)).unwrap();
+    let deserialized = VersionedVec::<u32>::deserialize(&bufman, FileOffset(offset)).unwrap();
 
-    assert_eq!(page_pool, deserialized);
+    assert_eq!(vec, deserialized);
 }
 
 #[test]
-fn test_pagepool_incremental_serialization() {
+fn test_versioned_vec_incremental_serialization() {
     let mut rng = rand::thread_rng();
-    let page_pool = get_random_pagepool(&mut rng);
+    let mut vec: VersionedVec<u32> = get_random_versioned_vec(&mut rng, 0.into());
 
     let (bufman, cursor, _temp_dir) = setup_test();
-    let _offset = page_pool.serialize(&bufman, cursor).unwrap();
+    let _offset = vec.serialize(&bufman, cursor).unwrap();
 
-    add_random_items_to_pagepool(&mut rng, &page_pool, 100);
+    add_random_items_to_versioned_vec(&mut rng, &mut vec, 100, 1.into());
 
-    let offset = page_pool.serialize(&bufman, cursor).unwrap();
+    let offset = vec.serialize(&bufman, cursor).unwrap();
     bufman.close_cursor(cursor).unwrap();
 
-    let deserialized = Pagepool::<10>::deserialize(&bufman, FileOffset(offset)).unwrap();
+    let deserialized = VersionedVec::<u32>::deserialize(&bufman, FileOffset(offset)).unwrap();
 
-    assert_eq!(page_pool, deserialized);
-}
-
-#[test]
-fn test_versioned_pagepool_serialization() {
-    let mut rng = rand::thread_rng();
-    let page_pool: VersionedPagepool<10> = get_random_versioned_pagepool(&mut rng, 0.into());
-
-    let (bufman, cursor, _temp_dir) = setup_test();
-    let offset = page_pool.serialize(&bufman, cursor).unwrap();
-
-    bufman.close_cursor(cursor).unwrap();
-
-    let deserialized = VersionedPagepool::<10>::deserialize(&bufman, FileOffset(offset)).unwrap();
-
-    assert_eq!(page_pool, deserialized);
-}
-
-#[test]
-fn test_versioned_pagepool_incremental_serialization() {
-    let mut rng = rand::thread_rng();
-    let page_pool = get_random_versioned_pagepool(&mut rng, 0.into());
-
-    let (bufman, cursor, _temp_dir) = setup_test();
-    let _offset = page_pool.serialize(&bufman, cursor).unwrap();
-
-    add_random_items_to_versioned_pagepool(&mut rng, &page_pool, 100, 0.into());
-
-    let offset = page_pool.serialize(&bufman, cursor).unwrap();
-    bufman.close_cursor(cursor).unwrap();
-
-    let deserialized = VersionedPagepool::<10>::deserialize(&bufman, FileOffset(offset)).unwrap();
-
-    assert_eq!(page_pool, deserialized);
-}
-
-#[test]
-fn test_versioned_pagepool_incremental_serialization2() {
-    let mut rng = rand::thread_rng();
-    let page_pool = get_random_versioned_pagepool(&mut rng, 0.into());
-
-    let (bufman, cursor, _temp_dir) = setup_test();
-    let _offset = page_pool.serialize(&bufman, cursor).unwrap();
-
-    add_random_items_to_versioned_pagepool(&mut rng, &page_pool, 100, 0.into());
-
-    let _offset = page_pool.serialize(&bufman, cursor).unwrap();
-
-    add_random_items_to_versioned_pagepool(&mut rng, &page_pool, 100, 1.into());
-
-    let _offset = page_pool.serialize(&bufman, cursor).unwrap();
-
-    add_random_items_to_versioned_pagepool(&mut rng, &page_pool, 100, 1.into());
-
-    let offset = page_pool.serialize(&bufman, cursor).unwrap();
-    bufman.close_cursor(cursor).unwrap();
-
-    let deserialized = VersionedPagepool::<10>::deserialize(&bufman, FileOffset(offset)).unwrap();
-
-    assert_eq!(page_pool, deserialized);
+    assert_eq!(vec, deserialized);
 }
 
 #[test]

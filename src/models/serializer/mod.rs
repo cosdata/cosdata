@@ -3,15 +3,12 @@ pub mod inverted;
 pub mod tf_idf;
 
 mod metric_distance;
-mod page;
-mod pagepool;
 mod quotients_map;
 mod raw_vector_embedding;
 mod storage;
 mod transaction_status;
 mod tree_map;
 mod versioned_item;
-mod versioned_pagepool;
 mod versioned_vec;
 
 #[cfg(test)]
@@ -201,5 +198,15 @@ impl<T: SimpleSerialize> SimpleSerialize for RwLock<T> {
 
     fn deserialize(bufman: &BufferManager, offset: FileOffset) -> Result<Self, BufIoError> {
         Ok(Self::new(T::deserialize(bufman, offset)?))
+    }
+}
+
+impl SimpleSerialize for u32 {
+    fn serialize(&self, _bufman: &BufferManager, _cursor: u64) -> Result<u32, BufIoError> {
+        Ok(*self)
+    }
+
+    fn deserialize(_bufman: &BufferManager, offset: FileOffset) -> Result<Self, BufIoError> {
+        Ok(offset.0)
     }
 }
