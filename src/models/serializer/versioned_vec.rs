@@ -2,14 +2,18 @@ use std::sync::RwLock;
 
 use crate::models::{
     buffered_io::{BufIoError, BufferManager},
-    tf_idf_index::VersionedVec,
     types::FileOffset,
+    versioned_vec::{VersionedVec, VersionedVecItem},
     versioning::VersionNumber,
 };
 
 use super::SimpleSerialize;
 
-impl<T: SimpleSerialize> SimpleSerialize for VersionedVec<T> {
+impl<T> SimpleSerialize for VersionedVec<T>
+where
+    T: SimpleSerialize + VersionedVecItem,
+    <T as VersionedVecItem>::Id: SimpleSerialize,
+{
     fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
         let next_offset = if let Some(next) = &self.next {
             next.serialize(bufman, cursor)?
@@ -32,13 +36,19 @@ impl<T: SimpleSerialize> SimpleSerialize for VersionedVec<T> {
             bufman.update_u32_with_cursor(cursor, next_offset)?;
             return Ok(offset.0);
         }
-        let size = 4 * self.list.len() + 12;
+        let size = 4 * self.list.len() + 4 * self.deleted.len() + 16;
         let mut buf = Vec::with_capacity(size);
         buf.extend(next_offset.to_le_bytes());
         buf.extend(self.version.to_le_bytes());
         buf.extend((self.list.len() as u32).to_le_bytes());
+        buf.extend((self.deleted.len() as u32).to_le_bytes());
 
         for el in &self.list {
+            let serialized_offset = el.serialize(bufman, cursor)?;
+            buf.extend(serialized_offset.to_le_bytes());
+        }
+
+        for el in &self.deleted {
             let serialized_offset = el.serialize(bufman, cursor)?;
             buf.extend(serialized_offset.to_le_bytes());
         }
@@ -55,12 +65,20 @@ impl<T: SimpleSerialize> SimpleSerialize for VersionedVec<T> {
         let next_offset = bufman.read_u32_with_cursor(cursor)?;
         let version = VersionNumber::from(bufman.read_u32_with_cursor(cursor)?);
         let len = bufman.read_u32_with_cursor(cursor)? as usize;
+        let deleted_len = bufman.read_u32_with_cursor(cursor)? as usize;
         let mut list = Vec::with_capacity(len);
+        let mut deleted = Vec::with_capacity(len);
 
         for _ in 0..len {
             let el_offset = bufman.read_u32_with_cursor(cursor)?;
             let el = T::deserialize(bufman, FileOffset(el_offset))?;
             list.push(el);
+        }
+
+        for _ in 0..deleted_len {
+            let el_offset = bufman.read_u32_with_cursor(cursor)?;
+            let el = <T as VersionedVecItem>::Id::deserialize(bufman, FileOffset(el_offset))?;
+            deleted.push(el);
         }
 
         let next = if next_offset == u32::MAX {
@@ -76,6 +94,7 @@ impl<T: SimpleSerialize> SimpleSerialize for VersionedVec<T> {
             serialized_at: RwLock::new(Some(offset)),
             version,
             list,
+            deleted,
             next,
         })
     }

@@ -6,11 +6,12 @@ use crate::models::buffered_io::BufferManagerFactory;
 use crate::models::collection::RawVectorEmbedding;
 use crate::models::inverted_index::InvertedIndexNode;
 use crate::models::serializer::*;
-use crate::models::tf_idf_index::VersionedVec;
 use crate::models::tree_map::QuotientsMap;
 use crate::models::tree_map::TreeMap;
 use crate::models::tree_map::TreeMapVec;
 use crate::models::types::*;
+use crate::models::versioned_vec::VersionedVec;
+use crate::models::versioned_vec::VersionedVecItem;
 use crate::models::versioning::VersionNumber;
 use crate::storage::Storage;
 use half::f16;
@@ -76,24 +77,30 @@ fn test_storage_serialization() {
 
 fn get_random_versioned_vec<T>(rng: &mut impl Rng, version: VersionNumber) -> VersionedVec<T>
 where
-    Standard: Distribution<T>,
+    T: VersionedVecItem,
+    Standard: Distribution<T> + Distribution<<T as VersionedVecItem>::Id>,
 {
-    let mut pool = VersionedVec::new(version);
+    let mut vec = VersionedVec::new(version);
     let count = rng.gen_range(20..50);
-    add_random_items_to_versioned_vec(rng, &mut pool, count, version);
-    pool
+    add_random_items_to_versioned_vec(rng, &mut vec, count, version);
+    vec
 }
 
 fn add_random_items_to_versioned_vec<T>(
     rng: &mut impl Rng,
-    pool: &mut VersionedVec<T>,
+    vec: &mut VersionedVec<T>,
     count: usize,
     version: VersionNumber,
 ) where
-    Standard: Distribution<T>,
+    T: VersionedVecItem,
+    Standard: Distribution<T> + Distribution<<T as VersionedVecItem>::Id>,
 {
     for _ in 0..count {
-        pool.push(version, rng.gen());
+        vec.push(version, rng.gen());
+    }
+
+    for _ in 0..count {
+        vec.delete(version, rng.gen());
     }
 }
 

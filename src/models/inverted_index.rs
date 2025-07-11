@@ -17,9 +17,9 @@ use super::{
     common::TSHashTable,
     lazy_item::ProbLazyItem,
     serializer::inverted::InvertedIndexSerialize,
-    tf_idf_index::VersionedVec,
     types::{FileOffset, SparseVector},
     utils::calculate_path,
+    versioned_vec::VersionedVec,
     versioning::VersionNumber,
 };
 
@@ -203,6 +203,27 @@ impl InvertedIndexNode {
         Ok(())
     }
 
+    /// Delete a value from the index at the specified dimension index.
+    /// Finds the quantized value and (soft) deletes the vec_id
+    pub fn delete(
+        &self,
+        value: f32,
+        vector_id: u32,
+        cache: &InvertedIndexCache,
+        version: VersionNumber,
+        values_upper_bound: f32,
+    ) -> Result<(), BufIoError> {
+        let quantized_value = self.quantize(value, values_upper_bound);
+        unsafe { &*self.data }
+            .try_get_data(cache, self.dim_index)?
+            .map
+            .with_value_mut(&quantized_value, |list| {
+                list.delete(version, vector_id);
+            });
+        self.is_dirty.store(true, Ordering::Release);
+        Ok(())
+    }
+
     /// See [`crate::models::serializer::inverted::node`] for how its calculated
     pub fn get_serialized_size(quantization_bits: u8) -> u32 {
         let qv = 1u32 << quantization_bits;
@@ -256,7 +277,7 @@ impl InvertedIndexRoot {
         Some(current_node)
     }
 
-    //Inserts vec_id, quantized value u8 at particular node based on path
+    // Inserts vec_id, quantized value u8 at particular node based on path
     pub fn insert(
         &self,
         dim_index: u32,
@@ -271,8 +292,25 @@ impl InvertedIndexRoot {
                 .fetch_add(self.node_size, Ordering::Relaxed)
         });
         assert_eq!(node.dim_index, dim_index);
-        //value will be quantized while being inserted into the Node.
+        // value will be quantized while being inserted into the Node.
         node.insert(value, vector_id, &self.cache, version, values_upper_bound)
+    }
+
+    pub fn delete(
+        &self,
+        dim_index: u32,
+        value: f32,
+        vector_id: u32,
+        version: VersionNumber,
+        values_upper_bound: f32,
+    ) -> Result<(), BufIoError> {
+        let node_optional = self.find_node(dim_index);
+        let Some(node) = node_optional else {
+            return Ok(());
+        };
+        assert_eq!(node.dim_index, dim_index);
+        // value will be quantized while being deleted from the Node.
+        node.delete(value, vector_id, &self.cache, version, values_upper_bound)
     }
 
     /// Adds a sparse vector to the index.

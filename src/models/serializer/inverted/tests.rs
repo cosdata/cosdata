@@ -8,8 +8,8 @@ use crate::models::{
     cache_loader::InvertedIndexCache,
     inverted_index::{InvertedIndexNode, InvertedIndexNodeData, InvertedIndexRoot},
     serializer::inverted::InvertedIndexSerialize,
-    tf_idf_index::VersionedVec,
     types::FileOffset,
+    versioned_vec::{VersionedVec, VersionedVecItem},
     versioning::VersionNumber,
 };
 
@@ -50,24 +50,30 @@ fn setup_test() -> (
 
 fn get_random_versioned_vec<T>(rng: &mut impl Rng, version: VersionNumber) -> VersionedVec<T>
 where
-    Standard: Distribution<T>,
+    T: VersionedVecItem,
+    Standard: Distribution<T> + Distribution<<T as VersionedVecItem>::Id>,
 {
-    let mut pool = VersionedVec::new(version);
+    let mut vec = VersionedVec::new(version);
     let count = rng.gen_range(20..50);
-    add_random_items_to_versioned_vec(rng, &mut pool, count, version);
-    pool
+    add_random_items_to_versioned_vec(rng, &mut vec, count, version);
+    vec
 }
 
 fn add_random_items_to_versioned_vec<T>(
     rng: &mut impl Rng,
-    pool: &mut VersionedVec<T>,
+    vec: &mut VersionedVec<T>,
     count: usize,
     version: VersionNumber,
 ) where
-    Standard: Distribution<T>,
+    T: VersionedVecItem,
+    Standard: Distribution<T> + Distribution<<T as VersionedVecItem>::Id>,
 {
     for _ in 0..count {
-        pool.push(version, rng.gen());
+        vec.push(version, rng.gen());
+    }
+
+    for _ in 0..count {
+        vec.delete(version, rng.gen());
     }
 }
 

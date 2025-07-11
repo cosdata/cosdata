@@ -88,6 +88,25 @@ impl InvertedIndex {
         }
         Ok(())
     }
+
+    pub fn mark_embedding_as_deleted(
+        &self,
+        id: InternalId,
+        pairs: &[SparsePair],
+        version: VersionNumber,
+    ) -> Result<(), BufIoError> {
+        let id = id.into();
+        for pair in pairs {
+            self.root.delete(
+                pair.0,
+                pair.1,
+                id,
+                version,
+                *self.values_upper_bound.read().unwrap(),
+            )?;
+        }
+        Ok(())
+    }
 }
 
 impl IndexOps for InvertedIndex {
@@ -115,13 +134,19 @@ impl IndexOps for InvertedIndex {
 
     fn delete_embedding(
         &self,
-        _collection: &Collection,
-        _id: InternalId,
-        _version: VersionNumber,
+        collection: &Collection,
+        id: InternalId,
+        version: VersionNumber,
         _config: &Config,
     ) -> Result<(), WaCustomError> {
-        // TODO(a-rustacean): impl delete
-        todo!()
+        let Some(raw_emb) = collection.get_raw_emb_by_internal_id(&id) else {
+            return Ok(());
+        };
+        let Some(pairs) = &raw_emb.sparse_values else {
+            return Ok(());
+        };
+        self.mark_embedding_as_deleted(id, pairs, version)?;
+        Ok(())
     }
 
     fn sample_embedding(&self, embedding: &Self::IndexingInput) {

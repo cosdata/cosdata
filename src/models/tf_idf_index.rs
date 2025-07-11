@@ -1,5 +1,4 @@
 use std::{
-    fmt::Debug,
     fs::OpenOptions,
     path::PathBuf,
     sync::{
@@ -19,6 +18,7 @@ use super::{
     serializer::tf_idf::{TFIDFIndexSerialize, TF_IDF_INDEX_DATA_CHUNK_SIZE},
     types::FileOffset,
     utils::calculate_path,
+    versioned_vec::VersionedVec,
     versioning::VersionNumber,
 };
 
@@ -26,136 +26,6 @@ use super::{
 pub type TermQuotient = u16;
 // Outer map from term quotients to TermInfo
 pub type QuotientMap = TSHashTable<TermQuotient, Arc<TermInfo>>;
-
-pub struct VersionedVec<T> {
-    pub serialized_at: RwLock<Option<FileOffset>>,
-    pub version: VersionNumber,
-    pub list: Vec<T>,
-    pub next: Option<Box<VersionedVec<T>>>,
-}
-
-unsafe impl<T: Send> Send for VersionedVec<T> {}
-unsafe impl<T: Sync> Sync for VersionedVec<T> {}
-
-#[cfg(test)]
-impl<T: Clone> Clone for VersionedVec<T> {
-    fn clone(&self) -> Self {
-        Self {
-            serialized_at: RwLock::new(*self.serialized_at.read().unwrap()),
-            version: self.version,
-            list: self.list.clone(),
-            next: self.next.clone(),
-        }
-    }
-}
-
-impl<T> VersionedVec<T> {
-    pub fn new(version: VersionNumber) -> VersionedVec<T> {
-        Self {
-            serialized_at: RwLock::new(None),
-            version,
-            list: Vec::new(),
-            next: None,
-        }
-    }
-
-    pub fn push(&mut self, version: VersionNumber, value: T) {
-        if self.version == version {
-            return self.list.push(value);
-        }
-
-        if let Some(next) = &mut self.next {
-            next.push(version, value);
-        } else {
-            let mut new_next = Box::new(Self::new(version));
-            new_next.push(version, value);
-            self.next = Some(new_next);
-        }
-    }
-
-    pub fn iter(&self) -> VersionedVecIter<'_, T> {
-        let iter = self.list.iter();
-        VersionedVecIter {
-            current_iter: iter,
-            next: self.next.as_deref(),
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        let current_len = self.list.len();
-
-        match &self.next {
-            Some(next_node) => current_len + next_node.len(),
-            None => current_len,
-        }
-    }
-
-    #[allow(unused)]
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-impl VersionedVec<(u32, f32)> {
-    pub fn push_sorted(&mut self, version: VersionNumber, value: (u32, f32)) {
-        if self.version == version {
-            let mut i = self.list.len();
-            while i > 0 && self.list[i - 1].0 > value.0 {
-                i -= 1;
-            }
-            self.list.insert(i, value);
-            return;
-        }
-
-        if let Some(next) = &mut self.next {
-            next.push_sorted(version, value);
-        } else {
-            let mut new_next = Box::new(Self::new(version));
-            new_next.push_sorted(version, value);
-            self.next = Some(new_next);
-        }
-    }
-}
-
-impl<T: PartialEq> PartialEq for VersionedVec<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.version == other.version && self.list == other.list && self.next == other.next
-    }
-}
-
-impl<T: Debug> Debug for VersionedVec<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("UnsafeVersionedList")
-            .field("version", &self.version)
-            .field("list", &self.list)
-            .field("next", &self.next)
-            .finish()
-    }
-}
-
-// Iterator over &T
-pub struct VersionedVecIter<'a, T> {
-    current_iter: std::slice::Iter<'a, T>,
-    next: Option<&'a VersionedVec<T>>,
-}
-
-impl<'a, T> Iterator for VersionedVecIter<'a, T> {
-    type Item = &'a T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Some(item) = self.current_iter.next() {
-            return Some(item);
-        }
-
-        if let Some(next_node) = self.next {
-            self.current_iter = next_node.list.iter();
-            self.next = next_node.next.as_deref();
-            self.current_iter.next()
-        } else {
-            None
-        }
-    }
-}
 
 pub struct TermInfo {
     pub documents: RwLock<VersionedVec<(u32, f32)>>,
@@ -384,6 +254,25 @@ impl TFIDFIndexNode {
         Ok(())
     }
 
+    pub fn delete(
+        &self,
+        quotient: TermQuotient,
+        document_id: u32,
+        cache: &TFIDFIndexCache,
+        version: VersionNumber,
+    ) -> Result<(), BufIoError> {
+        // Get node data
+        let data = unsafe { &*self.data }.try_get_data(cache, self.dim_index)?;
+        // Get or create inner map for this quotient
+        data.map.with_value_mut(&quotient, |term| {
+            term.documents.write().unwrap().delete(version, document_id);
+        });
+
+        // Mark node as dirty
+        self.is_dirty.store(true, Ordering::Release);
+        Ok(())
+    }
+
     /// See [`crate::models::serializer::tf_idf::node`] for how its calculated
     pub fn get_serialized_size() -> u32 {
         TF_IDF_INDEX_DATA_CHUNK_SIZE as u32 * 6 + 74
@@ -432,7 +321,7 @@ impl TFIDFIndexRoot {
         Some(current_node)
     }
 
-    // Inserts vec_id, quantized value u8 at particular node based on path
+    // Inserts vec_id, value at particular node based on path
     pub fn insert(
         &self,
         hash_dim: u32,
@@ -451,8 +340,25 @@ impl TFIDFIndexRoot {
                 .fetch_add(TFIDFIndexNode::get_serialized_size(), Ordering::Relaxed)
         });
         debug_assert_eq!(node.dim_index, storage_dim);
-        // value will be quantized while being inserted into the Node.
         node.insert(quotient, value, document_id, &self.cache, version)
+    }
+
+    pub fn delete(
+        &self,
+        hash_dim: u32,
+        document_id: u32,
+        version: VersionNumber,
+    ) -> Result<(), BufIoError> {
+        // Split the hash dimension
+        let storage_dim = hash_dim & (u16::MAX as u32);
+        let quotient = (hash_dim >> 16) as TermQuotient;
+
+        let optional_node = self.find_node(storage_dim);
+        let Some(node) = optional_node else {
+            return Ok(());
+        };
+        debug_assert_eq!(node.dim_index, storage_dim);
+        node.delete(quotient, document_id, &self.cache, version)
     }
 
     pub fn serialize(&self) -> Result<(), BufIoError> {

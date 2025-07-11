@@ -4,8 +4,8 @@ use crate::models::{
     common::TSHashTable,
     inverted_index::InvertedIndexNodeData,
     serializer::SimpleSerialize,
-    tf_idf_index::VersionedVec,
     types::FileOffset,
+    versioned_vec::VersionedVec,
 };
 
 use super::InvertedIndexSerialize;

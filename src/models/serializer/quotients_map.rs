@@ -8,9 +8,9 @@ use parking_lot::RwLock;
 use crate::models::{
     buffered_io::{BufIoError, BufferManager},
     common::TSHashTable,
-    tf_idf_index::VersionedVec,
     tree_map::{Quotient, QuotientVec, QuotientsMap, QuotientsMapVec, VersionedItem},
     types::FileOffset,
+    versioned_vec::{VersionedVec, VersionedVecItem},
 };
 
 use super::SimpleSerialize;
@@ -231,7 +231,11 @@ impl<T: SimpleSerialize> SimpleSerialize for QuotientsMap<T> {
     }
 }
 
-impl<T: SimpleSerialize> SimpleSerialize for QuotientsMapVec<T> {
+impl<T> SimpleSerialize for QuotientsMapVec<T>
+where
+    T: SimpleSerialize + VersionedVecItem,
+    <T as VersionedVecItem>::Id: SimpleSerialize,
+{
     fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
         let mut list = self.map.to_list();
         list.sort_unstable_by_key(|(_, q)| q.sequence_idx);

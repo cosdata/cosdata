@@ -109,6 +109,33 @@ impl TFIDFIndex {
 
         Ok(())
     }
+
+    pub fn mark_embedding_as_deleted(
+        &self,
+        version: VersionNumber,
+        id: InternalId,
+        text: &str,
+    ) -> Result<(), BufIoError> {
+        self.root
+            .total_documents_count
+            .fetch_sub(1, Ordering::Relaxed);
+
+        let terms = process_text(
+            text,
+            40,
+            *self.average_document_length.read().unwrap(),
+            self.k1,
+            self.b,
+        );
+
+        let id = id.into();
+
+        for (term_hash, _) in terms {
+            self.root.delete(term_hash, id, version)?;
+        }
+
+        Ok(())
+    }
 }
 
 impl IndexOps for TFIDFIndex {
@@ -136,13 +163,19 @@ impl IndexOps for TFIDFIndex {
 
     fn delete_embedding(
         &self,
-        _collection: &Collection,
-        _id: InternalId,
-        _version: VersionNumber,
+        collection: &Collection,
+        id: InternalId,
+        version: VersionNumber,
         _config: &Config,
     ) -> Result<(), WaCustomError> {
-        // TODO(a-rustacean): impl delete
-        todo!()
+        let Some(raw_emb) = collection.get_raw_emb_by_internal_id(&id) else {
+            return Ok(());
+        };
+        let Some(text) = &raw_emb.text else {
+            return Ok(());
+        };
+        self.mark_embedding_as_deleted(version, id, text)?;
+        Ok(())
     }
 
     fn sample_embedding(&self, embedding: &Self::IndexingInput) {

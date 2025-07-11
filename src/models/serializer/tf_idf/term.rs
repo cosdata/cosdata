@@ -4,8 +4,9 @@ use crate::models::{
     buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
     cache_loader::TFIDFIndexCache,
     serializer::SimpleSerialize,
-    tf_idf_index::{TermInfo, VersionedVec},
+    tf_idf_index::TermInfo,
     types::FileOffset,
+    versioned_vec::VersionedVec,
 };
 
 use super::TFIDFIndexSerialize;

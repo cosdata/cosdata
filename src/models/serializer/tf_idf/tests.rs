@@ -13,8 +13,9 @@ use crate::models::{
     buffered_io::{BufferManager, BufferManagerFactory},
     cache_loader::TFIDFIndexCache,
     serializer::tf_idf::TF_IDF_INDEX_DATA_CHUNK_SIZE,
-    tf_idf_index::{TFIDFIndexNode, TFIDFIndexNodeData, TFIDFIndexRoot, TermInfo, VersionedVec},
+    tf_idf_index::{TFIDFIndexNode, TFIDFIndexNodeData, TFIDFIndexRoot, TermInfo},
     types::FileOffset,
+    versioned_vec::VersionedVec,
     versioning::VersionNumber,
 };
 

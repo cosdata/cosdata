@@ -13,9 +13,9 @@ use super::{
     buffered_io::{BufIoError, BufferManagerFactory},
     common::TSHashTable,
     serializer::{PartitionedSerialize, SimpleSerialize},
-    tf_idf_index::VersionedVec,
     types::FileOffset,
     utils::calculate_path,
+    versioned_vec::{VersionedVec, VersionedVecItem},
     versioning::VersionNumber,
 };
 
@@ -29,7 +29,7 @@ pub struct TreeMap<K, V> {
     _marker: PhantomData<K>,
 }
 
-pub struct TreeMapVec<K, V> {
+pub struct TreeMapVec<K, V: VersionedVecItem> {
     pub(crate) root: TreeMapVecNode<V>,
     bufmans: BufferManagerFactory<u8>,
     _marker: PhantomData<K>,
@@ -43,7 +43,7 @@ pub struct TreeMapNode<T> {
     pub dirty: AtomicBool,
 }
 
-pub struct TreeMapVecNode<T> {
+pub struct TreeMapVecNode<T: VersionedVecItem> {
     pub node_idx: u16,
     pub offset: RwLock<Option<FileOffset>>,
     pub quotients: QuotientsMapVec<T>,
@@ -58,7 +58,7 @@ pub struct QuotientsMap<T> {
     pub serialized_upto: AtomicUsize,
 }
 
-pub struct QuotientsMapVec<T> {
+pub struct QuotientsMapVec<T: VersionedVecItem> {
     pub offset: RwLock<Option<FileOffset>>,
     pub map: TSHashTable<u64, Arc<QuotientVec<T>>>,
     pub len: AtomicU64,
@@ -70,7 +70,7 @@ pub struct Quotient<T> {
     pub value: RwLock<VersionedItem<T>>,
 }
 
-pub struct QuotientVec<T> {
+pub struct QuotientVec<T: VersionedVecItem> {
     pub sequence_idx: u64,
     pub value: RwLock<VersionedVec<T>>,
 }
@@ -92,7 +92,11 @@ impl<T: PartialEq> PartialEq for TreeMapNode<T> {
 }
 
 #[cfg(test)]
-impl<T: PartialEq> PartialEq for TreeMapVecNode<T> {
+impl<T> PartialEq for TreeMapVecNode<T>
+where
+    T: PartialEq + VersionedVecItem,
+    <T as VersionedVecItem>::Id: PartialEq,
+{
     fn eq(&self, other: &Self) -> bool {
         *self.offset.read() == *other.offset.read()
             && self.quotients == other.quotients
@@ -112,7 +116,11 @@ impl<T: std::fmt::Debug> std::fmt::Debug for TreeMapNode<T> {
 }
 
 #[cfg(test)]
-impl<T: std::fmt::Debug> std::fmt::Debug for TreeMapVecNode<T> {
+impl<T> std::fmt::Debug for TreeMapVecNode<T>
+where
+    T: std::fmt::Debug + VersionedVecItem,
+    <T as VersionedVecItem>::Id: std::fmt::Debug,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TreeMapVecNode")
             .field("offset", &*self.offset.read())
@@ -133,7 +141,11 @@ impl<T: PartialEq> PartialEq for QuotientsMap<T> {
 }
 
 #[cfg(test)]
-impl<T: PartialEq> PartialEq for QuotientsMapVec<T> {
+impl<T> PartialEq for QuotientsMapVec<T>
+where
+    T: PartialEq + VersionedVecItem,
+    <T as VersionedVecItem>::Id: PartialEq,
+{
     fn eq(&self, other: &Self) -> bool {
         self.map == other.map
             && self.len.load(Ordering::Relaxed) == other.len.load(Ordering::Relaxed)
@@ -157,7 +169,11 @@ impl<T: std::fmt::Debug> std::fmt::Debug for QuotientsMap<T> {
 }
 
 #[cfg(test)]
-impl<T: std::fmt::Debug> std::fmt::Debug for QuotientsMapVec<T> {
+impl<T> std::fmt::Debug for QuotientsMapVec<T>
+where
+    T: std::fmt::Debug + VersionedVecItem,
+    <T as VersionedVecItem>::Id: std::fmt::Debug,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("QuotientMapVec")
             .field("map", &self.map)
@@ -178,7 +194,11 @@ impl<T: PartialEq> PartialEq for Quotient<T> {
 }
 
 #[cfg(test)]
-impl<T: PartialEq> PartialEq for QuotientVec<T> {
+impl<T> PartialEq for QuotientVec<T>
+where
+    T: PartialEq + VersionedVecItem,
+    <T as VersionedVecItem>::Id: PartialEq,
+{
     fn eq(&self, other: &Self) -> bool {
         self.sequence_idx == other.sequence_idx && *self.value.read() == *other.value.read()
     }
@@ -195,7 +215,11 @@ impl<T: std::fmt::Debug> std::fmt::Debug for Quotient<T> {
 }
 
 #[cfg(test)]
-impl<T: std::fmt::Debug> std::fmt::Debug for QuotientVec<T> {
+impl<T> std::fmt::Debug for QuotientVec<T>
+where
+    T: std::fmt::Debug + VersionedVecItem,
+    <T as VersionedVecItem>::Id: std::fmt::Debug,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("QuotientVec")
             .field("sequence_idx", &self.sequence_idx)
@@ -298,7 +322,7 @@ impl<T> TreeMapNode<T> {
     }
 }
 
-impl<T> TreeMapVecNode<T> {
+impl<T: VersionedVecItem> TreeMapVecNode<T> {
     pub fn new(node_idx: u16) -> Self {
         Self {
             node_idx,
@@ -342,7 +366,7 @@ impl<T> Default for QuotientsMap<T> {
     }
 }
 
-impl<T> Default for QuotientsMapVec<T> {
+impl<T: VersionedVecItem> Default for QuotientsMapVec<T> {
     fn default() -> Self {
         Self {
             offset: RwLock::new(None),
@@ -389,7 +413,7 @@ impl<T> QuotientsMap<T> {
     }
 }
 
-impl<T> QuotientsMapVec<T> {
+impl<T: VersionedVecItem> QuotientsMapVec<T> {
     pub fn push(&self, version: VersionNumber, quotient: u64, value: T) {
         self.map.modify_or_insert_with_value(
             quotient,
@@ -426,7 +450,11 @@ impl<K: TreeMapKey + Clone, V: PartialEq> PartialEq for TreeMap<K, V> {
 }
 
 #[cfg(test)]
-impl<K: TreeMapKey + Clone, V: PartialEq> PartialEq for TreeMapVec<K, V> {
+impl<K: TreeMapKey + Clone, V> PartialEq for TreeMapVec<K, V>
+where
+    V: PartialEq + VersionedVecItem,
+    <V as VersionedVecItem>::Id: PartialEq,
+{
     fn eq(&self, other: &Self) -> bool {
         self.root == other.root
     }
@@ -442,8 +470,10 @@ impl<K: std::fmt::Debug + TreeMapKey + Clone + Ord, V: std::fmt::Debug> std::fmt
 }
 
 #[cfg(test)]
-impl<K: std::fmt::Debug + TreeMapKey + Clone + Ord, V: std::fmt::Debug> std::fmt::Debug
-    for TreeMapVec<K, V>
+impl<K: std::fmt::Debug + TreeMapKey + Clone + Ord, V> std::fmt::Debug for TreeMapVec<K, V>
+where
+    V: std::fmt::Debug + VersionedVecItem,
+    <V as VersionedVecItem>::Id: std::fmt::Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TreeMapVec")
@@ -517,7 +547,7 @@ impl<K, V: SimpleSerialize> TreeMap<K, V> {
     }
 }
 
-impl<K: TreeMapKey, V> TreeMapVec<K, V> {
+impl<K: TreeMapKey, V: VersionedVecItem> TreeMapVec<K, V> {
     pub fn new(bufmans: BufferManagerFactory<u8>) -> Self {
         Self {
             root: TreeMapVecNode::new(0),
@@ -525,9 +555,7 @@ impl<K: TreeMapKey, V> TreeMapVec<K, V> {
             _marker: PhantomData,
         }
     }
-}
 
-impl<K: TreeMapKey, V> TreeMapVec<K, V> {
     pub fn push(&self, version: VersionNumber, key: &K, value: V) {
         let key = key.key();
         let node_pos = (key % 65536) as u32;
@@ -545,7 +573,11 @@ impl<K: TreeMapKey, V> TreeMapVec<K, V> {
     }
 }
 
-impl<K, V: SimpleSerialize> TreeMapVec<K, V> {
+impl<K, V> TreeMapVec<K, V>
+where
+    V: SimpleSerialize + VersionedVecItem,
+    <V as VersionedVecItem>::Id: SimpleSerialize,
+{
     pub fn serialize(&self, file_parts: u8) -> Result<(), BufIoError> {
         let bufman = self.bufmans.get(0)?;
         let cursor = bufman.open_cursor()?;

@@ -7,6 +7,7 @@ use crate::models::{
     buffered_io::{BufIoError, BufferManagerFactory},
     tree_map::{QuotientsMap, QuotientsMapVec, TreeMapNode, TreeMapVecNode},
     types::FileOffset,
+    versioned_vec::VersionedVecItem,
 };
 
 use super::{PartitionedSerialize, SimpleSerialize};
@@ -125,7 +126,11 @@ impl<T: SimpleSerialize> PartitionedSerialize for TreeMapNode<T> {
     }
 }
 
-impl<T: SimpleSerialize> PartitionedSerialize for TreeMapVecNode<T> {
+impl<T> PartitionedSerialize for TreeMapVecNode<T>
+where
+    T: SimpleSerialize + VersionedVecItem,
+    <T as VersionedVecItem>::Id: SimpleSerialize,
+{
     fn serialize(
         &self,
         bufmans: &BufferManagerFactory<u8>,

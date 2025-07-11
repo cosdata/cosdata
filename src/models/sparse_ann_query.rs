@@ -4,6 +4,7 @@ use serde::Serialize;
 use crate::models::buffered_io::BufIoError;
 
 use crate::models::types::SparseVector;
+use crate::models::versioned_vec::VersionedVec;
 use std::cell::UnsafeCell;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
@@ -11,7 +12,8 @@ use std::iter::Peekable;
 use std::sync::RwLockReadGuard;
 
 use super::inverted_index::InvertedIndexRoot;
-use super::tf_idf_index::{TFIDFIndexRoot, TermQuotient, VersionedVec, VersionedVecIter};
+use super::tf_idf_index::{TFIDFIndexRoot, TermQuotient};
+use super::versioned_vec::VersionedVecIter;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SparseAnnResult {

@@ -29,5 +29,6 @@ pub mod tree_map;
 pub mod types;
 pub mod user;
 pub mod utils;
+pub mod versioned_vec;
 pub mod versioning;
 pub mod wal;
