@@ -22,7 +22,7 @@ use crate::models::common::*;
 use crate::models::dot_product::dot_product_f32;
 use crate::models::file_persist::*;
 use crate::models::fixedset::PerformantFixedSet;
-use crate::models::lazy_item::ProbLazyItem;
+use crate::models::lazy_item::LazyItem;
 use crate::models::prob_node::LatestNode;
 use crate::models::prob_node::ProbNode;
 use crate::models::prob_node::SharedLatestNode;
@@ -96,7 +96,7 @@ pub fn create_root_node(
 
     let file_id = offset_counter.file_id();
 
-    let mut root = ProbLazyItem::new(
+    let mut root = LazyItem::new(
         ProbNode::new(
             HNSWLevel(0),
             version,
@@ -127,7 +127,7 @@ pub fn create_root_node(
             distance_metric,
         );
 
-        let lazy_node = ProbLazyItem::new(current_node, file_id, offset_counter.next_offset());
+        let lazy_node = LazyItem::new(current_node, file_id, offset_counter.next_offset());
 
         let lazy_node_ptr =
             LatestNode::new(lazy_node, offset_counter.next_latest_version_link_offset());
@@ -200,7 +200,7 @@ pub fn create_pseudo_root_node(
 
     let file_id = offset_counter.file_id();
 
-    let mut root = ProbLazyItem::new(
+    let mut root = LazyItem::new(
         ProbNode::new(
             HNSWLevel(0),
             version_hash,
@@ -231,7 +231,7 @@ pub fn create_pseudo_root_node(
             distance_metric,
         );
 
-        let lazy_node = ProbLazyItem::new(current_node, file_id, offset_counter.next_offset());
+        let lazy_node = LazyItem::new(current_node, file_id, offset_counter.next_offset());
 
         let lazy_node_ptr =
             LatestNode::new(lazy_node, offset_counter.next_latest_version_link_offset());
@@ -967,7 +967,7 @@ fn create_node(
         distance_metric,
     );
 
-    let lazy_item = ProbLazyItem::new(node, file_id, offset);
+    let lazy_item = LazyItem::new(node, file_id, offset);
     LatestNode::new(lazy_item, offset_counter.next_latest_version_link_offset())
 }
 

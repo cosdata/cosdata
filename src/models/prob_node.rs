@@ -18,7 +18,7 @@ use super::{
     buffered_io::{BufIoError, BufferManager},
     cache_loader::HNSWIndexCache,
     common::TSHashTable,
-    lazy_item::{FileIndex, ProbLazyItem},
+    lazy_item::{FileIndex, LazyItem},
     serializer::hnsw::RawDeserialize,
     types::{
         DistanceMetric, FileOffset, HNSWLevel, InternalId, MetricResult, NodePropMetadata,
@@ -27,7 +27,7 @@ use super::{
     versioning::VersionNumber,
 };
 
-pub type SharedNode = *mut ProbLazyItem<ProbNode>;
+pub type SharedNode = *mut LazyItem<ProbNode>;
 
 pub struct LatestNode {
     pub latest: SharedNode,
@@ -390,7 +390,7 @@ impl ProbNode {
                         .unwrap_or_else(|| {
                             *pending_items
                                 .entry(file_index)
-                                .or_insert_with(|| ProbLazyItem::new_pending(file_index))
+                                .or_insert_with(|| LazyItem::new_pending(file_index))
                         });
                     let ptr = LatestNode::new(item, parent_offset);
                     entry.insert(ptr);
@@ -420,7 +420,7 @@ impl ProbNode {
                         .unwrap_or_else(|| {
                             *pending_items
                                 .entry(file_index)
-                                .or_insert_with(|| ProbLazyItem::new_pending(file_index))
+                                .or_insert_with(|| LazyItem::new_pending(file_index))
                         });
                     let ptr = LatestNode::new(item, child_offset);
                     entry.insert(ptr);
@@ -453,9 +453,9 @@ impl ProbNode {
                                     .registry
                                     .get(&HNSWIndexCache::combine_index(&file_index))
                                     .unwrap_or_else(|| {
-                                        *pending_items.entry(file_index).or_insert_with(|| {
-                                            ProbLazyItem::new_pending(file_index)
-                                        })
+                                        *pending_items
+                                            .entry(file_index)
+                                            .or_insert_with(|| LazyItem::new_pending(file_index))
                                     });
                                 let ptr = LatestNode::new(item, neighbor_offset);
                                 entry.insert(ptr);

@@ -3,14 +3,14 @@ use std::sync::atomic::AtomicU32;
 use crate::models::{
     buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
     cache_loader::TFIDFIndexCache,
-    lazy_item::ProbLazyItem,
+    lazy_item::LazyItem,
     tf_idf_index::TFIDFIndexNodeData,
     types::FileOffset,
 };
 
 use super::TFIDFIndexSerialize;
 
-impl TFIDFIndexSerialize for *mut ProbLazyItem<TFIDFIndexNodeData> {
+impl TFIDFIndexSerialize for *mut LazyItem<TFIDFIndexNodeData> {
     fn serialize(
         &self,
         dim_bufman: &BufferManager,

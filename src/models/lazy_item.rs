@@ -26,20 +26,20 @@ pub struct FileIndex {
     pub file_id: IndexFileId,
 }
 
-pub struct ProbLazyItem<T> {
+pub struct LazyItem<T> {
     data: AtomicPtr<T>,
     pub file_index: FileIndex,
 }
 
-impl<T: PartialEq> PartialEq for ProbLazyItem<T> {
+impl<T: PartialEq> PartialEq for LazyItem<T> {
     fn eq(&self, other: &Self) -> bool {
         unsafe { *self.data.load(Ordering::Relaxed) == *other.data.load(Ordering::Relaxed) }
     }
 }
 
-impl<T: Debug> Debug for ProbLazyItem<T> {
+impl<T: Debug> Debug for LazyItem<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ProbLazyItem")
+        f.debug_struct("LazyItem")
             .field("data", unsafe {
                 &self.data.load(Ordering::Relaxed).as_ref()
             })
@@ -49,7 +49,7 @@ impl<T: Debug> Debug for ProbLazyItem<T> {
 }
 
 #[allow(unused)]
-impl<T> ProbLazyItem<T> {
+impl<T> LazyItem<T> {
     pub fn new(data: T, file_id: IndexFileId, offset: FileOffset) -> *mut Self {
         let mut boxed = Box::new(Self {
             data: AtomicPtr::new(ptr::null_mut()),
@@ -108,7 +108,7 @@ impl<T> ProbLazyItem<T> {
     }
 }
 
-impl ProbLazyItem<ProbNode> {
+impl LazyItem<ProbNode> {
     pub fn try_get_data<'a>(&self, cache: &HNSWIndexCache) -> Result<&'a ProbNode, BufIoError> {
         unsafe {
             if let Some(data) = self.data.load(Ordering::Relaxed).as_ref() {
@@ -119,7 +119,7 @@ impl ProbLazyItem<ProbNode> {
     }
 }
 
-impl ProbLazyItem<InvertedIndexNodeData> {
+impl LazyItem<InvertedIndexNodeData> {
     pub fn try_get_data<'a>(
         &self,
         cache: &InvertedIndexCache,
@@ -137,7 +137,7 @@ impl ProbLazyItem<InvertedIndexNodeData> {
     }
 }
 
-impl ProbLazyItem<TFIDFIndexNodeData> {
+impl LazyItem<TFIDFIndexNodeData> {
     pub fn try_get_data<'a>(
         &self,
         cache: &TFIDFIndexCache,
@@ -155,7 +155,7 @@ impl ProbLazyItem<TFIDFIndexNodeData> {
     }
 }
 
-impl<T> Drop for ProbLazyItem<T> {
+impl<T> Drop for LazyItem<T> {
     fn drop(&mut self) {
         let data_ptr = self.data.load(Ordering::SeqCst);
         unsafe {

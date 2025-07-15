@@ -14,7 +14,7 @@ use super::{
     buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
     cache_loader::TFIDFIndexCache,
     common::TSHashTable,
-    lazy_item::ProbLazyItem,
+    lazy_item::LazyItem,
     serializer::tf_idf::{TFIDFIndexSerialize, TF_IDF_INDEX_DATA_CHUNK_SIZE},
     types::FileOffset,
     utils::calculate_path,
@@ -112,7 +112,7 @@ pub struct TFIDFIndexNode {
     pub is_dirty: AtomicBool,
     pub file_offset: FileOffset,
     pub dim_index: u32,
-    pub data: *mut ProbLazyItem<TFIDFIndexNodeData>,
+    pub data: *mut LazyItem<TFIDFIndexNodeData>,
     pub children: AtomicArray<TFIDFIndexNode, 16>,
 }
 
@@ -176,7 +176,7 @@ unsafe impl Sync for TFIDFIndexRoot {}
 
 impl TFIDFIndexNode {
     pub fn new(dim_index: u32, file_offset: FileOffset) -> Self {
-        let data = ProbLazyItem::new(
+        let data = LazyItem::new(
             TFIDFIndexNodeData::new(),
             IndexFileId::invalid(),
             FileOffset(file_offset.0 + 4),

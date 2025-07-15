@@ -4,7 +4,7 @@ use crate::models::{
     atomic_array::AtomicArray,
     buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
     cache_loader::TFIDFIndexCache,
-    lazy_item::ProbLazyItem,
+    lazy_item::LazyItem,
     tf_idf_index::{TFIDFIndexNode, TFIDFIndexNodeData},
     types::FileOffset,
 };
@@ -106,7 +106,7 @@ impl TFIDFIndexSerialize for TFIDFIndexNode {
         dim_bufman.seek_with_cursor(cursor, file_offset.0 as u64)?;
         let dim_index = dim_bufman.read_u32_with_cursor(cursor)?;
         let data_file_idx = (dim_index % data_file_parts as u32) as u8;
-        let data = <*mut ProbLazyItem<TFIDFIndexNodeData>>::deserialize(
+        let data = <*mut LazyItem<TFIDFIndexNodeData>>::deserialize(
             dim_bufman,
             data_bufmans,
             FileOffset(file_offset.0 + 4),

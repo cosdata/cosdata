@@ -4,7 +4,7 @@ use super::buffered_io::{BufIoError, BufferManager, BufferManagerFactory, Filele
 use super::common::TSHashTable;
 use super::file_persist::{read_prop_metadata_from_file, read_prop_value_from_file};
 use super::inverted_index::InvertedIndexNodeData;
-use super::lazy_item::{FileIndex, ProbLazyItem};
+use super::lazy_item::{FileIndex, LazyItem};
 use super::lru_cache::LRUCache;
 use super::prob_node::{ProbNode, SharedNode};
 use super::serializer::hnsw::HNSWIndexSerialize;
@@ -197,7 +197,7 @@ impl HNSWIndexCache {
         }
 
         if max_loads == 0 || !skipm.insert(combined_index) {
-            return Ok(ProbLazyItem::new_pending(file_index));
+            return Ok(LazyItem::new_pending(file_index));
         }
 
         let mut mutex = self
@@ -233,7 +233,7 @@ impl HNSWIndexCache {
             max_loads - 1,
             skipm,
         )?;
-        let item = ProbLazyItem::new(data, file_index.file_id, file_index.offset);
+        let item = LazyItem::new(data, file_index.file_id, file_index.offset);
 
         self.registry.insert(combined_index, item);
         *load_complete = true;
@@ -278,7 +278,7 @@ impl HNSWIndexCache {
 }
 
 pub struct InvertedIndexCache {
-    registry: LRUCache<u64, *mut ProbLazyItem<InvertedIndexNodeData>>,
+    registry: LRUCache<u64, *mut LazyItem<InvertedIndexNodeData>>,
     pub dim_bufman: Arc<BufferManager>,
     pub data_bufmans: Arc<BufferManagerFactory<u8>>,
     loading_data: TSHashTable<u64, Arc<Mutex<bool>>>,
@@ -291,7 +291,7 @@ unsafe impl Sync for InvertedIndexCache {}
 impl InvertedIndexCache {
     pub fn new(
         dim_bufman: Arc<BufferManager>,
-        data_bufmans: Arc<BufferManagerFactory<u8>>,
+        data_bufmans: Arc<BufferManagerFactory<VersionNumber>>,
         data_file_parts: u8,
     ) -> Self {
         let data_registry = LRUCache::with_prob_eviction(100_000_000, 0.03125);
@@ -309,7 +309,7 @@ impl InvertedIndexCache {
         &self,
         file_offset: FileOffset,
         data_file_idx: u8,
-    ) -> Result<*mut ProbLazyItem<InvertedIndexNodeData>, BufIoError> {
+    ) -> Result<*mut LazyItem<InvertedIndexNodeData>, BufIoError> {
         let combined_index = Self::combine_index(file_offset, 0);
 
         if let Some(item) = self.registry.get(&combined_index) {
@@ -349,7 +349,7 @@ impl InvertedIndexCache {
             self,
         )?;
 
-        let item = ProbLazyItem::new(data, IndexFileId::invalid(), file_offset);
+        let item = LazyItem::new(data, IndexFileId::invalid(), file_offset);
 
         self.registry.insert(combined_index, item);
 
@@ -386,7 +386,7 @@ impl InvertedIndexCache {
 }
 
 pub struct TFIDFIndexCache {
-    registry: LRUCache<u64, *mut ProbLazyItem<TFIDFIndexNodeData>>,
+    registry: LRUCache<u64, *mut LazyItem<TFIDFIndexNodeData>>,
     pub dim_bufman: Arc<BufferManager>,
     pub data_bufmans: Arc<BufferManagerFactory<u8>>,
     pub offset_counter: AtomicU32,
@@ -420,7 +420,7 @@ impl TFIDFIndexCache {
         &self,
         file_offset: FileOffset,
         data_file_idx: u8,
-    ) -> Result<*mut ProbLazyItem<TFIDFIndexNodeData>, BufIoError> {
+    ) -> Result<*mut LazyItem<TFIDFIndexNodeData>, BufIoError> {
         let combined_index = Self::combine_index(file_offset, 0);
 
         if let Some(item) = self.registry.get(&combined_index) {
@@ -460,7 +460,7 @@ impl TFIDFIndexCache {
             self,
         )?;
 
-        let item = ProbLazyItem::new(data, IndexFileId::invalid(), file_offset);
+        let item = LazyItem::new(data, IndexFileId::invalid(), file_offset);
 
         self.registry.insert(combined_index, item);
 

@@ -40,7 +40,7 @@ use crate::{
     models::{
         buffered_io::{BufferManager, FilelessBufferManager},
         common::*,
-        lazy_item::{FileIndex, ProbLazyItem},
+        lazy_item::{FileIndex, LazyItem},
         meta_persist::retrieve_values_range,
         prob_node::{LatestNode, SharedLatestNode},
         serializer::hnsw::RawDeserialize,
@@ -886,7 +886,7 @@ impl CollectionsMap {
             &mut latest_version_links,
             latest_version_links_cursor,
         )?;
-        let root = ProbLazyItem::new(root_node, root_file_index.file_id, root_file_index.offset);
+        let root = LazyItem::new(root_node, root_file_index.file_id, root_file_index.offset);
         cache
             .registry
             .insert(HNSWIndexCache::combine_index(&root_file_index), root);
@@ -926,7 +926,7 @@ impl CollectionsMap {
                     &mut latest_version_links,
                     latest_version_links_cursor,
                 )?;
-                let pseudo_root = ProbLazyItem::new(
+                let pseudo_root = LazyItem::new(
                     pseudo_root_node,
                     pseudo_root_file_index.file_id,
                     pseudo_root_file_index.offset,

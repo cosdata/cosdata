@@ -2,13 +2,13 @@ use crate::models::{
     buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
     cache_loader::InvertedIndexCache,
     inverted_index::InvertedIndexNodeData,
-    lazy_item::ProbLazyItem,
+    lazy_item::LazyItem,
     types::FileOffset,
 };
 
 use super::InvertedIndexSerialize;
 
-impl InvertedIndexSerialize for *mut ProbLazyItem<InvertedIndexNodeData> {
+impl InvertedIndexSerialize for *mut LazyItem<InvertedIndexNodeData> {
     fn serialize(
         &self,
         dim_bufman: &BufferManager,

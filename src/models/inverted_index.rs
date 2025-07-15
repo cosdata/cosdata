@@ -15,7 +15,7 @@ use super::{
     buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
     cache_loader::InvertedIndexCache,
     common::TSHashTable,
-    lazy_item::ProbLazyItem,
+    lazy_item::LazyItem,
     serializer::inverted::InvertedIndexSerialize,
     types::{FileOffset, SparseVector},
     utils::calculate_path,
@@ -46,7 +46,7 @@ pub struct InvertedIndexNode {
     pub implicit: bool,
     // (4, 5, 6)
     pub quantization_bits: u8,
-    pub data: *mut ProbLazyItem<InvertedIndexNodeData>,
+    pub data: *mut LazyItem<InvertedIndexNodeData>,
     pub children: AtomicArray<InvertedIndexNode, 16>,
 }
 
@@ -121,7 +121,7 @@ impl InvertedIndexNode {
         quantization_bits: u8,
         file_offset: FileOffset,
     ) -> Self {
-        let data = ProbLazyItem::new(
+        let data = LazyItem::new(
             InvertedIndexNodeData::new(quantization_bits),
             IndexFileId::invalid(),
             FileOffset(file_offset.0 + 5),
