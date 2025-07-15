@@ -8,7 +8,7 @@ use crate::models::{
 
 use super::InvertedIndexSerialize;
 
-impl InvertedIndexSerialize for *mut LazyItem<InvertedIndexNodeData> {
+impl InvertedIndexSerialize for *mut LazyItem<InvertedIndexNodeData, ()> {
     fn serialize(
         &self,
         dim_bufman: &BufferManager,

@@ -23,7 +23,7 @@ use std::{
 use tempfile::{tempdir, TempDir};
 
 pub struct EqualityTester {
-    checked: HashSet<(*mut LazyItem<ProbNode>, *mut LazyItem<ProbNode>)>,
+    checked: HashSet<(SharedNode, SharedNode)>,
     cache: Arc<HNSWIndexCache>,
 }
 

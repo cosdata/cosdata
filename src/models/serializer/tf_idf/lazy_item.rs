@@ -10,7 +10,7 @@ use crate::models::{
 
 use super::TFIDFIndexSerialize;
 
-impl TFIDFIndexSerialize for *mut LazyItem<TFIDFIndexNodeData> {
+impl TFIDFIndexSerialize for *mut LazyItem<TFIDFIndexNodeData, ()> {
     fn serialize(
         &self,
         dim_bufman: &BufferManager,

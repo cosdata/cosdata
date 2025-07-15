@@ -8,8 +8,6 @@ use std::{
     },
 };
 
-use crate::indexes::hnsw::offset_counter::IndexFileId;
-
 use super::{
     atomic_array::AtomicArray,
     buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
@@ -46,7 +44,7 @@ pub struct InvertedIndexNode {
     pub implicit: bool,
     // (4, 5, 6)
     pub quantization_bits: u8,
-    pub data: *mut LazyItem<InvertedIndexNodeData>,
+    pub data: *mut LazyItem<InvertedIndexNodeData, ()>,
     pub children: AtomicArray<InvertedIndexNode, 16>,
 }
 
@@ -123,7 +121,7 @@ impl InvertedIndexNode {
     ) -> Self {
         let data = LazyItem::new(
             InvertedIndexNodeData::new(quantization_bits),
-            IndexFileId::invalid(),
+            (),
             FileOffset(file_offset.0 + 5),
         );
 

@@ -1,10 +1,13 @@
 use rustc_hash::FxHashSet;
 
-use crate::models::{
-    buffered_io::{BufIoError, BufferManager, FilelessBufferManager},
-    cache_loader::HNSWIndexCache,
-    lazy_item::FileIndex,
-    prob_node::SharedNode,
+use crate::{
+    indexes::hnsw::offset_counter::IndexFileId,
+    models::{
+        buffered_io::{BufIoError, BufferManager, FilelessBufferManager},
+        cache_loader::HNSWIndexCache,
+        lazy_item::FileIndex,
+        prob_node::SharedNode,
+    },
 };
 
 use super::HNSWIndexSerialize;
@@ -36,7 +39,7 @@ impl HNSWIndexSerialize for SharedNode {
     fn deserialize(
         _bufman: &BufferManager,
         _latest_version_links_bufman: &FilelessBufferManager,
-        file_index: FileIndex,
+        file_index: FileIndex<IndexFileId>,
         cache: &HNSWIndexCache,
         max_loads: u16,
         skipm: &mut FxHashSet<u64>,

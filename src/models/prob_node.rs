@@ -27,7 +27,7 @@ use super::{
     versioning::VersionNumber,
 };
 
-pub type SharedNode = *mut LazyItem<ProbNode>;
+pub type SharedNode = *mut LazyItem<ProbNode, IndexFileId>;
 
 pub struct LatestNode {
     pub latest: SharedNode,
@@ -357,7 +357,7 @@ impl ProbNode {
         raw: <Self as RawDeserialize>::Raw,
         cache: &HNSWIndexCache,
         dummy_bufman: &BufferManager,
-        pending_items: &mut FxHashMap<FileIndex, SharedNode>,
+        pending_items: &mut FxHashMap<FileIndex<IndexFileId>, SharedNode>,
         latest_version_links: &mut FxHashMap<FileOffset, SharedLatestNode>,
         latest_version_links_cursor: u64,
     ) -> Result<Self, BufIoError> {

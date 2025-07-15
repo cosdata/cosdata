@@ -102,7 +102,7 @@ impl InvertedIndexSerialize for InvertedIndexNode {
         let qb = quantization_bits as u32;
         let qv = 1u32 << qb;
         let data_file_idx = (dim_index % data_file_parts as u32) as u8;
-        let data = <*mut LazyItem<InvertedIndexNodeData>>::deserialize(
+        let data = <*mut LazyItem<InvertedIndexNodeData, ()>>::deserialize(
             dim_bufman,
             data_bufmans,
             FileOffset(file_offset.0 + 5),

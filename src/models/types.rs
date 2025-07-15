@@ -943,9 +943,10 @@ impl CollectionsMap {
             None => None,
         };
 
-        let (file_index_sender, file_index_receiver) = channel::unbounded::<FileIndex>();
+        let (file_index_sender, file_index_receiver) =
+            channel::unbounded::<FileIndex<IndexFileId>>();
         let (raw_node_sender, raw_node_receiver) =
-            channel::unbounded::<(<ProbNode as RawDeserialize>::Raw, FileIndex)>();
+            channel::unbounded::<(<ProbNode as RawDeserialize>::Raw, FileIndex<IndexFileId>)>();
 
         thread::scope(|s| {
             let mut handles = Vec::new();

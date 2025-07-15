@@ -7,8 +7,6 @@ use std::{
     },
 };
 
-use crate::indexes::hnsw::offset_counter::IndexFileId;
-
 use super::{
     atomic_array::AtomicArray,
     buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
@@ -112,7 +110,7 @@ pub struct TFIDFIndexNode {
     pub is_dirty: AtomicBool,
     pub file_offset: FileOffset,
     pub dim_index: u32,
-    pub data: *mut LazyItem<TFIDFIndexNodeData>,
+    pub data: *mut LazyItem<TFIDFIndexNodeData, ()>,
     pub children: AtomicArray<TFIDFIndexNode, 16>,
 }
 
@@ -176,11 +174,7 @@ unsafe impl Sync for TFIDFIndexRoot {}
 
 impl TFIDFIndexNode {
     pub fn new(dim_index: u32, file_offset: FileOffset) -> Self {
-        let data = LazyItem::new(
-            TFIDFIndexNodeData::new(),
-            IndexFileId::invalid(),
-            FileOffset(file_offset.0 + 4),
-        );
+        let data = LazyItem::new(TFIDFIndexNodeData::new(), (), FileOffset(file_offset.0 + 4));
 
         Self {
             is_serialized: AtomicBool::new(false),

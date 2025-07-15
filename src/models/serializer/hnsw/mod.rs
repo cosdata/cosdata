@@ -29,7 +29,7 @@ pub trait HNSWIndexSerialize: Sized {
     fn deserialize(
         bufman: &BufferManager,
         latest_version_links_bufman: &FilelessBufferManager,
-        file_index: FileIndex,
+        file_index: FileIndex<IndexFileId>,
         cache: &HNSWIndexCache,
         max_loads: u16,
         skipm: &mut FxHashSet<u64>,

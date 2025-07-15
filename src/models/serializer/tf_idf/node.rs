@@ -106,7 +106,7 @@ impl TFIDFIndexSerialize for TFIDFIndexNode {
         dim_bufman.seek_with_cursor(cursor, file_offset.0 as u64)?;
         let dim_index = dim_bufman.read_u32_with_cursor(cursor)?;
         let data_file_idx = (dim_index % data_file_parts as u32) as u8;
-        let data = <*mut LazyItem<TFIDFIndexNodeData>>::deserialize(
+        let data = <*mut LazyItem<TFIDFIndexNodeData, ()>>::deserialize(
             dim_bufman,
             data_bufmans,
             FileOffset(file_offset.0 + 4),
