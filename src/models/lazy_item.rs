@@ -127,7 +127,6 @@ impl LazyItem<InvertedIndexNodeData, ()> {
     pub fn try_get_data<'a>(
         &self,
         cache: &InvertedIndexCache,
-        dim: u32,
     ) -> Result<&'a InvertedIndexNodeData, BufIoError> {
         unsafe {
             if let Some(data) = self.data.load(Ordering::Relaxed).as_ref() {
@@ -135,7 +134,7 @@ impl LazyItem<InvertedIndexNodeData, ()> {
             }
 
             let offset = self.file_index.offset;
-            (*(cache.get_data(offset)?)).try_get_data(cache, dim)
+            (*(cache.get_data(offset)?)).try_get_data(cache)
         }
     }
 }

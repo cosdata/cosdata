@@ -97,7 +97,7 @@ impl SparseAnnQueryBasic {
                 // Iterate through the full list of values for this dimension
                 for key in (0..=one_quantized).rev() {
                     unsafe { &*node.data }
-                        .try_get_data(&index.cache, node.dim_index)?
+                        .try_get_data(&index.cache)?
                         .map
                         .with_value(&key, |vec| {
                             for vec_id in vec.iter() {
@@ -113,7 +113,7 @@ impl SparseAnnQueryBasic {
 
                 for key in (early_terminate_value..=one_quantized).rev() {
                     unsafe { &*node.data }
-                        .try_get_data(&index.cache, node.dim_index)?
+                        .try_get_data(&index.cache)?
                         .map
                         .with_value(&key, |vec| {
                             for vec_id in vec.iter() {

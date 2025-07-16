@@ -183,7 +183,7 @@ impl InvertedIndexNode {
     ) -> Result<(), BufIoError> {
         let quantized_value = self.quantize(value, values_upper_bound);
         unsafe { &*self.data }
-            .try_get_data(cache, self.dim_index)?
+            .try_get_data(cache)?
             .map
             .modify_or_insert(
                 quantized_value,
@@ -212,7 +212,7 @@ impl InvertedIndexNode {
     ) -> Result<(), BufIoError> {
         let quantized_value = self.quantize(value, values_upper_bound);
         unsafe { &*self.data }
-            .try_get_data(cache, self.dim_index)?
+            .try_get_data(cache)?
             .map
             .with_value_mut(&quantized_value, |list| {
                 list.delete(version, vector_id);

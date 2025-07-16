@@ -1,3 +1,5 @@
+#![allow(clippy::only_used_in_recursion)]
+
 use std::sync::RwLock;
 
 use crate::models::{
