@@ -621,7 +621,7 @@ impl CollectionsMap {
 
             let tf_idf_index = if collection_meta.tf_idf_options.enabled {
                 collections_map
-                    .load_tf_idf_index(&collection_meta, &lmdb, &config)?
+                    .load_tf_idf_index(&collection_meta, &lmdb)?
                     .map(Arc::new)
             } else {
                 None
@@ -1097,7 +1097,6 @@ impl CollectionsMap {
         &self,
         collection_meta: &CollectionMetadata,
         lmdb: &MetaDb,
-        config: &Config,
     ) -> Result<Option<TFIDFIndex>, WaCustomError> {
         let collection_path: Arc<Path> = get_collections_path().join(&collection_meta.name).into();
         let index_path = collection_path.join("tf_idf_index");
@@ -1117,7 +1116,7 @@ impl CollectionsMap {
 
         let average_document_length = retrieve_average_document_length(lmdb)?;
         let inverted_index = TFIDFIndex {
-            root: TFIDFIndexRoot::deserialize(index_path, config.inverted_index_data_file_parts)?,
+            root: TFIDFIndexRoot::deserialize(index_path)?,
             average_document_length: RwLock::new(average_document_length.unwrap_or(1.0)),
             is_configured: AtomicBool::new(average_document_length.is_some()),
             documents: RwLock::new(Vec::new()),

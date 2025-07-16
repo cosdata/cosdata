@@ -162,7 +162,7 @@ impl SparseAnnQueryBasic {
             let dim_index = term_hash & (u16::MAX as u32);
             let quotient = (term_hash >> 16) as TermQuotient;
             if let Some(node) = index.find_node(dim_index) {
-                let data = unsafe { &*node.data }.try_get_data(&index.cache, node.dim_index)?;
+                let data = unsafe { &*node.data }.try_get_data(&index.cache)?;
                 if let Some(term) = data.map.lookup(&quotient) {
                     let documents = term.documents.read().unwrap();
                     let idf = get_idf(documents_count, documents.len() as u32);

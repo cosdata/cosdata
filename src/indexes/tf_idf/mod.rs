@@ -63,12 +63,11 @@ unsafe impl Sync for TFIDFIndex {}
 impl TFIDFIndex {
     pub fn new(
         root_path: PathBuf,
-        data_file_parts: u8,
         sample_threshold: usize,
         k1: f32,
         b: f32,
     ) -> Result<Self, BufIoError> {
-        let root = TFIDFIndexRoot::new(root_path, data_file_parts)?;
+        let root = TFIDFIndexRoot::new(root_path)?;
 
         Ok(Self {
             root,

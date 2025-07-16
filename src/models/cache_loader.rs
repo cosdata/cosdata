@@ -382,10 +382,9 @@ impl InvertedIndexCache {
 pub struct TFIDFIndexCache {
     registry: LRUCache<u64, *mut LazyItem<TFIDFIndexNodeData, ()>>,
     pub dim_bufman: Arc<BufferManager>,
-    pub data_bufmans: Arc<BufferManagerFactory<u8>>,
+    pub data_bufmans: Arc<BufferManagerFactory<VersionNumber>>,
     pub offset_counter: AtomicU32,
     loading_data: TSHashTable<u64, Arc<Mutex<bool>>>,
-    pub data_file_parts: u8,
 }
 
 unsafe impl Send for TFIDFIndexCache {}
@@ -394,9 +393,8 @@ unsafe impl Sync for TFIDFIndexCache {}
 impl TFIDFIndexCache {
     pub fn new(
         dim_bufman: Arc<BufferManager>,
-        data_bufmans: Arc<BufferManagerFactory<u8>>,
+        data_bufmans: Arc<BufferManagerFactory<VersionNumber>>,
         offset_counter: AtomicU32,
-        data_file_parts: u8,
     ) -> Self {
         let data_registry = LRUCache::with_prob_eviction(100_000_000, 0.03125);
 
@@ -406,14 +404,12 @@ impl TFIDFIndexCache {
             data_bufmans,
             offset_counter,
             loading_data: TSHashTable::new(16),
-            data_file_parts,
         }
     }
 
     pub fn get_data(
         &self,
         file_offset: FileOffset,
-        data_file_idx: u8,
     ) -> Result<*mut LazyItem<TFIDFIndexNodeData, ()>, BufIoError> {
         let combined_index = Self::combine_index(file_offset, 0);
 
@@ -449,8 +445,7 @@ impl TFIDFIndexCache {
             &self.dim_bufman,
             &self.data_bufmans,
             file_offset,
-            data_file_idx,
-            self.data_file_parts,
+            VersionNumber::from(u32::MAX), // not used
             self,
         )?;
 
@@ -472,14 +467,13 @@ impl TFIDFIndexCache {
     pub fn load_item<T: TFIDFIndexSerialize>(
         &self,
         file_offset: FileOffset,
-        data_file_idx: u8,
+        version: VersionNumber,
     ) -> Result<T, BufIoError> {
         T::deserialize(
             &self.dim_bufman,
             &self.data_bufmans,
             file_offset,
-            data_file_idx,
-            self.data_file_parts,
+            version,
             self,
         )
     }

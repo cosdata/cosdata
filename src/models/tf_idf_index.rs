@@ -140,7 +140,6 @@ pub struct TFIDFIndexRoot {
     pub cache: TFIDFIndexCache,
     // total number of documents in the index
     pub total_documents_count: AtomicU32,
-    pub data_file_parts: u8,
 }
 
 #[cfg(test)]
@@ -149,7 +148,6 @@ impl PartialEq for TFIDFIndexRoot {
         self.root == other.root
             && self.total_documents_count.load(Ordering::Relaxed)
                 == other.total_documents_count.load(Ordering::Relaxed)
-            && self.data_file_parts == other.data_file_parts
     }
 }
 
@@ -162,7 +160,6 @@ impl std::fmt::Debug for TFIDFIndexRoot {
                 "total_documents_count",
                 &self.total_documents_count.load(Ordering::Relaxed),
             )
-            .field("data_file_parts", &self.data_file_parts)
             .finish()
     }
 }
@@ -221,7 +218,7 @@ impl TFIDFIndexNode {
         version: VersionNumber,
     ) -> Result<(), BufIoError> {
         // Get node data
-        let data = unsafe { &*self.data }.try_get_data(cache, self.dim_index)?;
+        let data = unsafe { &*self.data }.try_get_data(cache)?;
         // Get or create inner map for this quotient
         data.map.modify_or_insert(
             quotient,
@@ -256,7 +253,7 @@ impl TFIDFIndexNode {
         version: VersionNumber,
     ) -> Result<(), BufIoError> {
         // Get node data
-        let data = unsafe { &*self.data }.try_get_data(cache, self.dim_index)?;
+        let data = unsafe { &*self.data }.try_get_data(cache)?;
         // Get or create inner map for this quotient
         data.map.with_value_mut(&quotient, |term| {
             term.documents.write().unwrap().delete(version, document_id);
@@ -269,12 +266,12 @@ impl TFIDFIndexNode {
 
     /// See [`crate::models::serializer::tf_idf::node`] for how its calculated
     pub fn get_serialized_size() -> u32 {
-        TF_IDF_INDEX_DATA_CHUNK_SIZE as u32 * 6 + 74
+        TF_IDF_INDEX_DATA_CHUNK_SIZE as u32 * 10 + 74
     }
 }
 
 impl TFIDFIndexRoot {
-    pub fn new(root_path: PathBuf, data_file_parts: u8) -> Result<Self, BufIoError> {
+    pub fn new(root_path: PathBuf) -> Result<Self, BufIoError> {
         let dim_file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -286,16 +283,15 @@ impl TFIDFIndexRoot {
         let offset_counter = AtomicU32::new(node_size + 4);
         let data_bufmans = Arc::new(BufferManagerFactory::new(
             root_path.clone().into(),
-            |root, idx: &u8| root.join(format!("{}.idat", idx)),
+            |root, version: &VersionNumber| root.join(format!("{}.idat", **version)),
             8192,
         ));
-        let cache = TFIDFIndexCache::new(dim_bufman, data_bufmans, offset_counter, data_file_parts);
+        let cache = TFIDFIndexCache::new(dim_bufman, data_bufmans, offset_counter);
 
         Ok(TFIDFIndexRoot {
             root: TFIDFIndexNode::new(0, FileOffset(4)),
             cache,
             total_documents_count: AtomicU32::new(0),
-            data_file_parts,
         })
     }
 
@@ -364,15 +360,13 @@ impl TFIDFIndexRoot {
             &self.cache.dim_bufman,
             &self.cache.data_bufmans,
             &self.cache.offset_counter,
-            0,
-            self.data_file_parts,
             cursor,
         )?;
         self.cache.dim_bufman.close_cursor(cursor)?;
         Ok(())
     }
 
-    pub fn deserialize(root_path: PathBuf, data_file_parts: u8) -> Result<Self, BufIoError> {
+    pub fn deserialize(root_path: PathBuf) -> Result<Self, BufIoError> {
         let dim_file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -384,16 +378,15 @@ impl TFIDFIndexRoot {
         let offset_counter = AtomicU32::new(dim_bufman.file_size() as u32);
         let data_bufmans = Arc::new(BufferManagerFactory::new(
             root_path.clone().into(),
-            |root, idx: &u8| root.join(format!("{}.idat", idx)),
+            |root, version: &VersionNumber| root.join(format!("{}.idat", **version)),
             8192,
         ));
-        let cache = TFIDFIndexCache::new(dim_bufman, data_bufmans, offset_counter, data_file_parts);
+        let cache = TFIDFIndexCache::new(dim_bufman, data_bufmans, offset_counter);
         let root = TFIDFIndexNode::deserialize(
             &cache.dim_bufman,
             &cache.data_bufmans,
             FileOffset(4),
-            0,
-            data_file_parts,
+            VersionNumber::from(u32::MAX), // not used
             &cache,
         )?;
         let cursor = cache.dim_bufman.open_cursor()?;
@@ -404,7 +397,6 @@ impl TFIDFIndexRoot {
             root,
             cache,
             total_documents_count,
-            data_file_parts,
         })
     }
 }
