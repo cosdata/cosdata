@@ -613,7 +613,7 @@ impl CollectionsMap {
             // if collection has inverted index load it from the lmdb
             let inverted_index = if collection_meta.sparse_vector.enabled {
                 collections_map
-                    .load_inverted_index(&collection_meta, &lmdb, &config)?
+                    .load_inverted_index(&collection_meta, &lmdb)?
                     .map(Arc::new)
             } else {
                 None
@@ -1058,7 +1058,6 @@ impl CollectionsMap {
         &self,
         collection_meta: &CollectionMetadata,
         lmdb: &MetaDb,
-        config: &Config,
     ) -> Result<Option<InvertedIndex>, WaCustomError> {
         let collection_path: Arc<Path> = get_collections_path().join(&collection_meta.name).into();
         let index_path = collection_path.join("sparse_inverted_index");
@@ -1081,7 +1080,6 @@ impl CollectionsMap {
             root: InvertedIndexRoot::deserialize(
                 index_path,
                 inverted_index_data.quantization_bits,
-                config.inverted_index_data_file_parts,
             )?,
             values_upper_bound: RwLock::new(values_upper_bound.unwrap_or(1.0)),
             is_configured: AtomicBool::new(values_upper_bound.is_some()),

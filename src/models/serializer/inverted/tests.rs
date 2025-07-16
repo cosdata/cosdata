@@ -15,14 +15,14 @@ use crate::models::{
 
 fn get_cache(
     dim_bufman: Arc<BufferManager>,
-    data_bufmans: Arc<BufferManagerFactory<u8>>,
+    data_bufmans: Arc<BufferManagerFactory<VersionNumber>>,
 ) -> InvertedIndexCache {
-    InvertedIndexCache::new(dim_bufman, data_bufmans, 8)
+    InvertedIndexCache::new(dim_bufman, data_bufmans)
 }
 
 fn setup_test() -> (
     Arc<BufferManager>,
-    Arc<BufferManagerFactory<u8>>,
+    Arc<BufferManagerFactory<VersionNumber>>,
     InvertedIndexCache,
     u64,
     TempDir,
@@ -40,7 +40,7 @@ fn setup_test() -> (
     );
     let data_bufmans = Arc::new(BufferManagerFactory::new(
         dir.as_ref().into(),
-        |root, idx: &u8| root.join(format!("{}.idat", idx)),
+        |root, version: &VersionNumber| root.join(format!("{}.idat", **version)),
         InvertedIndexNode::get_serialized_size(6) as usize,
     ));
     let cache = get_cache(dim_bufman.clone(), data_bufmans.clone());
@@ -91,17 +91,14 @@ fn test_inverted_index_data_serialization() {
 
     let (dim_bufman, data_bufmans, cache, cursor, _temp_dir) = setup_test();
     dim_bufman.update_u8_with_cursor(cursor, 6).unwrap();
-    let offset = table
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, cursor)
-        .unwrap();
+    let offset = table.serialize(&dim_bufman, &data_bufmans, cursor).unwrap();
     dim_bufman.close_cursor(cursor).unwrap();
 
     let deserialized = InvertedIndexNodeData::deserialize(
         &dim_bufman,
         &data_bufmans,
         FileOffset(offset),
-        0,
-        8,
+        VersionNumber::from(u32::MAX), // not used
         &cache,
     )
     .unwrap();
@@ -130,9 +127,7 @@ fn test_inverted_index_data_incremental_serialization_with_updated_values() {
 
     let (dim_bufman, data_bufmans, cache, cursor, _temp_dir) = setup_test();
     dim_bufman.update_u8_with_cursor(cursor, 6).unwrap();
-    let offset = table
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, cursor)
-        .unwrap();
+    let offset = table.serialize(&dim_bufman, &data_bufmans, cursor).unwrap();
 
     for i in (0..32).map(|x| x * 2) {
         table.map.with_value_mut(&i, |pool| {
@@ -141,17 +136,14 @@ fn test_inverted_index_data_incremental_serialization_with_updated_values() {
         });
     }
     dim_bufman.seek_with_cursor(cursor, offset as u64).unwrap();
-    let offset = table
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, cursor)
-        .unwrap();
+    let offset = table.serialize(&dim_bufman, &data_bufmans, cursor).unwrap();
     dim_bufman.close_cursor(cursor).unwrap();
 
     let deserialized = InvertedIndexNodeData::deserialize(
         &dim_bufman,
         &data_bufmans,
         FileOffset(offset),
-        0,
-        8,
+        VersionNumber::from(u32::MAX), // not used
         &cache,
     )
     .unwrap();
@@ -180,9 +172,7 @@ fn test_inverted_index_data_incremental_serialization_with_new_entries() {
 
     let (dim_bufman, data_bufmans, cache, cursor, _temp_dir) = setup_test();
     dim_bufman.update_u8_with_cursor(cursor, 6).unwrap();
-    let offset = table
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, cursor)
-        .unwrap();
+    let offset = table.serialize(&dim_bufman, &data_bufmans, cursor).unwrap();
 
     for i in (0..32).map(|x| (x * 2) + 1) {
         table
@@ -190,17 +180,14 @@ fn test_inverted_index_data_incremental_serialization_with_new_entries() {
             .insert(i, get_random_versioned_vec(&mut rng, 1.into()));
     }
     dim_bufman.seek_with_cursor(cursor, offset as u64).unwrap();
-    let offset = table
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, cursor)
-        .unwrap();
+    let offset = table.serialize(&dim_bufman, &data_bufmans, cursor).unwrap();
     dim_bufman.close_cursor(cursor).unwrap();
 
     let deserialized = InvertedIndexNodeData::deserialize(
         &dim_bufman,
         &data_bufmans,
         FileOffset(offset),
-        0,
-        8,
+        VersionNumber::from(u32::MAX), // not used
         &cache,
     )
     .unwrap();
@@ -234,7 +221,7 @@ fn test_inverted_index_node_serialization() {
     }
 
     let offset = inverted_index_node
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, cursor)
+        .serialize(&dim_bufman, &data_bufmans, cursor)
         .unwrap();
 
     dim_bufman.close_cursor(cursor).unwrap();
@@ -243,8 +230,7 @@ fn test_inverted_index_node_serialization() {
         &dim_bufman,
         &data_bufmans,
         FileOffset(offset),
-        0,
-        8,
+        VersionNumber::from(u32::MAX), // not used
         &cache,
     )
     .unwrap();
@@ -271,7 +257,7 @@ fn test_inverted_index_node_incremental_serialization() {
     }
 
     let _offset = inverted_index_node
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, cursor)
+        .serialize(&dim_bufman, &data_bufmans, cursor)
         .unwrap();
 
     for _ in 0..300 {
@@ -287,7 +273,7 @@ fn test_inverted_index_node_incremental_serialization() {
     }
 
     let offset = inverted_index_node
-        .serialize(&dim_bufman, &data_bufmans, 0, 8, cursor)
+        .serialize(&dim_bufman, &data_bufmans, cursor)
         .unwrap();
 
     dim_bufman.close_cursor(cursor).unwrap();
@@ -296,8 +282,7 @@ fn test_inverted_index_node_incremental_serialization() {
         &dim_bufman,
         &data_bufmans,
         FileOffset(offset),
-        0,
-        8,
+        VersionNumber::from(u32::MAX), // not used
         &cache,
     )
     .unwrap();
@@ -309,7 +294,7 @@ fn test_inverted_index_node_incremental_serialization() {
 fn test_inverted_index_root_serialization() {
     let temp_dir = tempdir().unwrap();
     let mut rng = rand::thread_rng();
-    let inverted_index = InvertedIndexRoot::new(temp_dir.as_ref().into(), 6, 8).unwrap();
+    let inverted_index = InvertedIndexRoot::new(temp_dir.as_ref().into(), 6).unwrap();
 
     for _ in 0..100000 {
         inverted_index
@@ -327,7 +312,7 @@ fn test_inverted_index_root_serialization() {
     inverted_index.cache.dim_bufman.flush().unwrap();
     inverted_index.cache.data_bufmans.flush_all().unwrap();
 
-    let deserialized = InvertedIndexRoot::deserialize(temp_dir.as_ref().into(), 6, 8).unwrap();
+    let deserialized = InvertedIndexRoot::deserialize(temp_dir.as_ref().into(), 6).unwrap();
 
     assert_eq!(inverted_index, deserialized);
 }
@@ -336,7 +321,7 @@ fn test_inverted_index_root_serialization() {
 fn test_inverted_index_root_incremental_serialization() {
     let temp_dir = tempdir().unwrap();
     let mut rng = rand::thread_rng();
-    let inverted_index = InvertedIndexRoot::new(temp_dir.as_ref().into(), 6, 8).unwrap();
+    let inverted_index = InvertedIndexRoot::new(temp_dir.as_ref().into(), 6).unwrap();
 
     for _ in 0..100000 {
         inverted_index
@@ -382,7 +367,7 @@ fn test_inverted_index_root_incremental_serialization() {
     inverted_index.cache.dim_bufman.flush().unwrap();
     inverted_index.cache.data_bufmans.flush_all().unwrap();
 
-    let deserialized = InvertedIndexRoot::deserialize(temp_dir.as_ref().into(), 6, 8).unwrap();
+    let deserialized = InvertedIndexRoot::deserialize(temp_dir.as_ref().into(), 6).unwrap();
 
     assert_eq!(inverted_index, deserialized);
 }

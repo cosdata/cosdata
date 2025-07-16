@@ -2,6 +2,7 @@ mod atomic_array;
 mod data;
 mod lazy_item;
 mod node;
+mod versioned_vec;
 
 #[cfg(test)]
 mod tests;
@@ -10,24 +11,22 @@ use crate::models::{
     buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
     cache_loader::InvertedIndexCache,
     types::FileOffset,
+    versioning::VersionNumber,
 };
 
 pub trait InvertedIndexSerialize: Sized {
     fn serialize(
         &self,
         dim_bufman: &BufferManager,
-        data_bufmans: &BufferManagerFactory<u8>,
-        data_file_idx: u8,
-        data_file_parts: u8,
+        data_bufmans: &BufferManagerFactory<VersionNumber>,
         cursor: u64,
     ) -> Result<u32, BufIoError>;
 
     fn deserialize(
         dim_bufman: &BufferManager,
-        data_bufmans: &BufferManagerFactory<u8>,
+        data_bufmans: &BufferManagerFactory<VersionNumber>,
         file_offset: FileOffset,
-        data_file_idx: u8,
-        data_file_parts: u8,
+        version: VersionNumber,
         cache: &InvertedIndexCache,
     ) -> Result<Self, BufIoError>;
 }

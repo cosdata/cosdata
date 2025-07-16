@@ -55,9 +55,8 @@ impl InvertedIndex {
         root_path: PathBuf,
         quantization_bits: u8,
         sample_threshold: usize,
-        data_file_parts: u8,
     ) -> Result<Self, BufIoError> {
-        let root = InvertedIndexRoot::new(root_path, quantization_bits, data_file_parts)?;
+        let root = InvertedIndexRoot::new(root_path, quantization_bits)?;
 
         Ok(Self {
             root,

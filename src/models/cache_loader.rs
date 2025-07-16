@@ -280,9 +280,8 @@ impl HNSWIndexCache {
 pub struct InvertedIndexCache {
     registry: LRUCache<u64, *mut LazyItem<InvertedIndexNodeData, ()>>,
     pub dim_bufman: Arc<BufferManager>,
-    pub data_bufmans: Arc<BufferManagerFactory<u8>>,
+    pub data_bufmans: Arc<BufferManagerFactory<VersionNumber>>,
     loading_data: TSHashTable<u64, Arc<Mutex<bool>>>,
-    pub data_file_parts: u8,
 }
 
 unsafe impl Send for InvertedIndexCache {}
@@ -291,8 +290,7 @@ unsafe impl Sync for InvertedIndexCache {}
 impl InvertedIndexCache {
     pub fn new(
         dim_bufman: Arc<BufferManager>,
-        data_bufmans: Arc<BufferManagerFactory<u8>>,
-        data_file_parts: u8,
+        data_bufmans: Arc<BufferManagerFactory<VersionNumber>>,
     ) -> Self {
         let data_registry = LRUCache::with_prob_eviction(100_000_000, 0.03125);
 
@@ -301,14 +299,12 @@ impl InvertedIndexCache {
             dim_bufman,
             data_bufmans,
             loading_data: TSHashTable::new(16),
-            data_file_parts,
         }
     }
 
     pub fn get_data(
         &self,
         file_offset: FileOffset,
-        data_file_idx: u8,
     ) -> Result<*mut LazyItem<InvertedIndexNodeData, ()>, BufIoError> {
         let combined_index = Self::combine_index(file_offset, 0);
 
@@ -344,8 +340,7 @@ impl InvertedIndexCache {
             &self.dim_bufman,
             &self.data_bufmans,
             file_offset,
-            data_file_idx,
-            self.data_file_parts,
+            VersionNumber::from(u32::MAX), // not used
             self,
         )?;
 
@@ -367,14 +362,13 @@ impl InvertedIndexCache {
     pub fn load_item<T: InvertedIndexSerialize>(
         &self,
         file_offset: FileOffset,
-        data_file_idx: u8,
+        version: VersionNumber,
     ) -> Result<T, BufIoError> {
         T::deserialize(
             &self.dim_bufman,
             &self.data_bufmans,
             file_offset,
-            data_file_idx,
-            self.data_file_parts,
+            version,
             self,
         )
     }
