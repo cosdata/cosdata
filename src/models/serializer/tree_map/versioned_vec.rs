@@ -57,8 +57,8 @@ where
         }
         let size = 4 * self.list.len() + 4 * self.deleted.len() + 20;
         let mut buf = Vec::with_capacity(size);
-        buf.extend(next_offset.to_be_bytes());
-        buf.extend(next_version.to_be_bytes());
+        buf.extend(next_offset.to_le_bytes());
+        buf.extend(next_version.to_le_bytes());
         buf.extend(self.version.to_le_bytes());
         buf.extend((self.list.len() as u32).to_le_bytes());
         buf.extend((self.deleted.len() as u32).to_le_bytes());
