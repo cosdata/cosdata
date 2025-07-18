@@ -8,7 +8,7 @@ use siphasher::sip::SipHasher24;
 use crate::{
     config_loader::Config,
     models::{
-        collection::Collection,
+        collection::{Collection, RawVectorEmbedding},
         common::WaCustomError,
         types::{DocumentId, InternalId, MetaDb, VectorId},
         versioning::VersionNumber,
@@ -61,8 +61,8 @@ pub trait IndexOps: Send + Sync {
 
     fn delete_embedding(
         &self,
-        collection: &Collection,
         id: InternalId,
+        raw_emb: &RawVectorEmbedding,
         version: VersionNumber,
         config: &Config,
     ) -> Result<(), WaCustomError>;

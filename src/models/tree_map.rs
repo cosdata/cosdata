@@ -80,7 +80,7 @@ pub struct QuotientVec<T: VersionedVecItem> {
 pub struct VersionedItem<T> {
     pub serialized_at: RwLock<Option<FileOffset>>,
     pub version: VersionNumber,
-    pub value: T,
+    pub value: Option<T>,
     pub next: Option<Box<Self>>,
 }
 
@@ -253,13 +253,26 @@ impl<T> VersionedItem<T> {
         Self {
             serialized_at: RwLock::new(None),
             version,
-            value,
+            value: Some(value),
+            next: None,
+        }
+    }
+
+    fn new_delete(version: VersionNumber) -> Self {
+        Self {
+            serialized_at: RwLock::new(None),
+            version,
+            value: None,
             next: None,
         }
     }
 
     pub fn insert(&mut self, version: VersionNumber, value: T) {
         self.insert_inner(Box::new(Self::new(version, value)));
+    }
+
+    pub fn delete(&mut self, version: VersionNumber) {
+        self.insert_inner(Box::new(Self::new_delete(version)));
     }
 
     fn insert_inner(&mut self, version: Box<Self>) {
@@ -270,12 +283,12 @@ impl<T> VersionedItem<T> {
         self.next = Some(version);
     }
 
-    pub fn latest(&self) -> &T {
+    pub fn latest(&self) -> Option<&T> {
         if let Some(next) = &self.next {
             return next.latest();
         }
 
-        &self.value
+        self.value.as_ref()
     }
 
     pub fn latest_item(&self) -> &Self {
@@ -315,6 +328,11 @@ impl<T> TreeMapNode<T> {
         self.dirty.store(true, Ordering::Release);
     }
 
+    pub fn delete(&self, version: VersionNumber, quotient: u64) {
+        self.quotients.delete(version, quotient);
+        self.dirty.store(true, Ordering::Release);
+    }
+
     pub fn get_latest(&self, quotient: u64) -> Option<&T> {
         self.quotients.get_latest(quotient)
     }
@@ -349,6 +367,11 @@ impl<T: VersionedVecItem> TreeMapVecNode<T> {
 
     pub fn push(&self, version: VersionNumber, quotient: u64, value: T) {
         self.quotients.push(version, quotient, value);
+        self.dirty.store(true, Ordering::Release);
+    }
+
+    pub fn delete(&self, version: VersionNumber, quotient: u64, id: T::Id) {
+        self.quotients.delete(version, quotient, id);
         self.dirty.store(true, Ordering::Release);
     }
 
@@ -396,13 +419,21 @@ impl<T> QuotientsMap<T> {
         );
     }
 
+    pub fn delete(&self, version: VersionNumber, quotient: u64) {
+        self.map.with_value(&quotient, |quotient| {
+            quotient.value.write().delete(version);
+        });
+    }
+
     fn get_latest(&self, quotient: u64) -> Option<&T> {
-        self.map.lookup(&quotient).map(|q| {
+        let op_val = self.map.lookup(&quotient).map(|q| {
             // SAFETY: here we are changing the lifetime of the value by using
             // `std::mem::transmute`, which by definition is not safe, but given our use of
             // this value and how we destroy it, its actually safe in this context.
-            unsafe { std::mem::transmute(q.value.read().latest()) }
-        })
+            unsafe { std::mem::transmute::<Option<&T>, Option<&T>>(q.value.read().latest()) }
+        });
+
+        op_val.and_then(|op_val| op_val)
     }
 
     fn get_versioned(&self, quotient: u64) -> Option<RwLockReadGuard<'_, VersionedItem<T>>> {
@@ -432,6 +463,12 @@ impl<T: VersionedVecItem> QuotientsMapVec<T> {
                 })
             },
         );
+    }
+
+    pub fn delete(&self, version: VersionNumber, quotient: u64, id: T::Id) {
+        self.map.with_value(&quotient, |quotient| {
+            quotient.value.write().delete(version, id);
+        });
     }
 
     fn get(&self, quotient: u64) -> Option<RwLockReadGuard<'_, VersionedVec<T>>> {
@@ -496,15 +533,21 @@ impl<K: TreeMapKey, V> TreeMap<K, V> {
             _marker: PhantomData,
         }
     }
-}
 
-impl<K: TreeMapKey, V> TreeMap<K, V> {
     pub fn insert(&self, version: VersionNumber, key: &K, value: V) {
         let key = key.key();
         let node_pos = (key % 65536) as u32;
         let path = calculate_path(node_pos, 0);
         let node = self.root.find_or_create_node(&path);
         node.insert(version, key, value);
+    }
+
+    pub fn delete(&self, version: VersionNumber, key: &K) {
+        let key = key.key();
+        let node_pos = (key & 65536) as u32;
+        let path = calculate_path(node_pos, 0);
+        let node = self.root.find_or_create_node(&path);
+        node.delete(version, key);
     }
 
     pub fn get_latest(&self, key: &K) -> Option<&V> {
@@ -579,6 +622,14 @@ impl<K: TreeMapKey, V: VersionedVecItem> TreeMapVec<K, V> {
         let path = calculate_path(node_pos, 0);
         let node = self.root.find_or_create_node(&path);
         node.push(version, key, value);
+    }
+
+    pub fn delete(&self, version: VersionNumber, key: &K, id: V::Id) {
+        let key = key.key();
+        let node_pos = (key % 65536) as u32;
+        let path = calculate_path(node_pos, 0);
+        let node = self.root.find_or_create_node(&path);
+        node.delete(version, key, id);
     }
 
     pub fn get(&self, key: &K) -> Option<RwLockReadGuard<'_, VersionedVec<V>>> {
@@ -671,7 +722,7 @@ mod tests {
             Some(&VersionedItem {
                 version: 0.into(),
                 serialized_at: RwLock::new(None),
-                value: 23,
+                value: Some(23),
                 next: Some(Box::new(VersionedItem::new(1.into(), 29)))
             })
         );

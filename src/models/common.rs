@@ -644,9 +644,9 @@ impl<K: Eq + Hash, V> TSHashTable<K, V> {
         f()
     }
 
-    pub fn with_value<F, R>(&self, k: &K, mut f: F) -> Option<R>
+    pub fn with_value<F, R>(&self, k: &K, f: F) -> Option<R>
     where
-        F: FnMut(&V) -> R,
+        F: FnOnce(&V) -> R,
     {
         let index = self.hash_key(k);
         let ht = self.hash_table_list[index].lock().unwrap();

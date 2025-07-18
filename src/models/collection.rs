@@ -533,16 +533,27 @@ impl Collection {
             return Ok(());
         };
 
+        let Some(raw_emb) = self.internal_to_external_map.get_latest(&internal_id) else {
+            return Ok(());
+        };
+
         if let Some(hnsw_index) = self.get_hnsw_index() {
-            hnsw_index.delete_embedding(self, internal_id, version, config)?;
+            hnsw_index.delete_embedding(internal_id, raw_emb, version, config)?;
         }
 
         if let Some(inverted_index) = self.get_inverted_index() {
-            inverted_index.delete_embedding(self, internal_id, version, config)?;
+            inverted_index.delete_embedding(internal_id, raw_emb, version, config)?;
         }
 
         if let Some(tf_idf_index) = self.get_tf_idf_index() {
-            tf_idf_index.delete_embedding(self, internal_id, version, config)?;
+            tf_idf_index.delete_embedding(internal_id, raw_emb, version, config)?;
+        }
+
+        self.internal_to_external_map.delete(version, &internal_id);
+        self.external_to_internal_map.delete(version, &vector_id);
+        if let Some(document_id) = &raw_emb.document_id {
+            self.document_to_internals_map
+                .delete(version, document_id, internal_id);
         }
 
         Ok(())

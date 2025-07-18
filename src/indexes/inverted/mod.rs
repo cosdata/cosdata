@@ -4,7 +4,7 @@ use crate::{
     config_loader::Config,
     models::{
         buffered_io::BufIoError,
-        collection::Collection,
+        collection::{Collection, RawVectorEmbedding},
         common::WaCustomError,
         inverted_index::InvertedIndexRoot,
         meta_persist::store_values_upper_bound,
@@ -133,14 +133,11 @@ impl IndexOps for InvertedIndex {
 
     fn delete_embedding(
         &self,
-        collection: &Collection,
         id: InternalId,
+        raw_emb: &RawVectorEmbedding,
         version: VersionNumber,
         _config: &Config,
     ) -> Result<(), WaCustomError> {
-        let Some(raw_emb) = collection.get_raw_emb_by_internal_id(&id) else {
-            return Ok(());
-        };
         let Some(pairs) = &raw_emb.sparse_values else {
             return Ok(());
         };

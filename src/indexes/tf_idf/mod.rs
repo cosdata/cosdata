@@ -3,7 +3,7 @@ use crate::{
     config_loader::Config,
     models::{
         buffered_io::BufIoError,
-        collection::Collection,
+        collection::{Collection, RawVectorEmbedding},
         common::WaCustomError,
         meta_persist::store_average_document_length,
         sparse_ann_query::SparseAnnQueryBasic,
@@ -162,14 +162,11 @@ impl IndexOps for TFIDFIndex {
 
     fn delete_embedding(
         &self,
-        collection: &Collection,
         id: InternalId,
+        raw_emb: &RawVectorEmbedding,
         version: VersionNumber,
         _config: &Config,
     ) -> Result<(), WaCustomError> {
-        let Some(raw_emb) = collection.get_raw_emb_by_internal_id(&id) else {
-            return Ok(());
-        };
         let Some(text) = &raw_emb.text else {
             return Ok(());
         };

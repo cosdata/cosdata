@@ -10,7 +10,7 @@ use crate::{
     },
     models::{
         cache_loader::HNSWIndexCache,
-        collection::Collection,
+        collection::{Collection, RawVectorEmbedding},
         common::{TSHashTable, WaCustomError},
         meta_persist::store_values_range,
         prob_node::SharedLatestNode,
@@ -187,12 +187,12 @@ impl IndexOps for HNSWIndex {
 
     fn delete_embedding(
         &self,
-        collection: &Collection,
         id: InternalId,
+        raw_emb: &RawVectorEmbedding,
         version: VersionNumber,
         config: &Config,
     ) -> Result<(), WaCustomError> {
-        delete_embedding(config, collection, self, version, id)
+        delete_embedding(config, self, version, id, raw_emb)
     }
 
     fn sample_embedding(&self, embedding: &Self::IndexingInput) {

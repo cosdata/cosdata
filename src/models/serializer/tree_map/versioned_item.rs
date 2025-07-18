@@ -53,7 +53,11 @@ impl<T: SimpleSerialize> TreeMapSerialize for VersionedItem<T> {
         let bufman = data_bufmans.get(self.version)?;
         let cursor = bufman.open_cursor()?;
 
-        let value_offset = self.value.serialize(&bufman, cursor)?;
+        let value_offset = if let Some(value) = &self.value {
+            value.serialize(&bufman, cursor)?
+        } else {
+            u32::MAX
+        };
 
         buf.extend(next_offset.to_le_bytes());
         buf.extend(next_version.to_le_bytes());
@@ -82,7 +86,11 @@ impl<T: SimpleSerialize> TreeMapSerialize for VersionedItem<T> {
         let version = VersionNumber::from(bufman.read_u32_with_cursor(cursor)?);
         let value_offset = bufman.read_u32_with_cursor(cursor)?;
         bufman.close_cursor(cursor)?;
-        let value = T::deserialize(&bufman, FileOffset(value_offset))?;
+        let value = if value_offset == u32::MAX {
+            None
+        } else {
+            Some(T::deserialize(&bufman, FileOffset(value_offset))?)
+        };
         let next = if next_offset == u32::MAX {
             None
         } else {

@@ -18,6 +18,7 @@ use crate::metadata::MetadataSchema;
 use crate::metadata::HIGH_WEIGHT;
 use crate::models::cache_loader::HNSWIndexCache;
 use crate::models::collection::Collection;
+use crate::models::collection::RawVectorEmbedding;
 use crate::models::common::*;
 use crate::models::dot_product::dot_product_f32;
 use crate::models::file_persist::*;
@@ -1204,14 +1205,11 @@ fn traverse_find_nearest(
 
 pub fn delete_embedding(
     config: &Config,
-    collection: &Collection,
     hnsw_index: &HNSWIndex,
     version: VersionNumber,
     id: InternalId,
+    raw_emb: &RawVectorEmbedding,
 ) -> Result<(), WaCustomError> {
-    let Some(raw_emb) = collection.get_raw_emb_by_internal_id(&id) else {
-        return Ok(());
-    };
     let Some(raw_vec) = &raw_emb.dense_values else {
         return Ok(());
     };
