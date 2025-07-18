@@ -1,15 +1,12 @@
 pub mod hnsw;
 pub mod inverted;
 pub mod tf_idf;
+pub mod tree_map;
 
 mod metric_distance;
-mod quotients_map;
 mod raw_vector_embedding;
 mod storage;
 mod transaction_status;
-mod tree_map;
-mod versioned_item;
-mod versioned_vec;
 
 #[cfg(test)]
 mod tests;
@@ -18,7 +15,7 @@ use std::io;
 
 use parking_lot::RwLock;
 
-use super::buffered_io::{BufIoError, BufferManager, BufferManagerFactory};
+use super::buffered_io::{BufIoError, BufferManager};
 use super::types::{DocumentId, FileOffset, InternalId, VectorId};
 
 /// Writes a u16 length to the buffer using custom encoding:
@@ -71,23 +68,6 @@ pub fn read_opt_string(bufman: &BufferManager, cursor: u64) -> Result<Option<Str
 pub trait SimpleSerialize: Sized {
     fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError>;
     fn deserialize(bufman: &BufferManager, offset: FileOffset) -> Result<Self, BufIoError>;
-}
-
-pub trait PartitionedSerialize: Sized {
-    fn serialize(
-        &self,
-        bufmans: &BufferManagerFactory<u8>,
-        file_parts: u8,
-        file_idx: u8,
-        cursor: u64,
-    ) -> Result<u32, BufIoError>;
-
-    fn deserialize(
-        bufmans: &BufferManagerFactory<u8>,
-        file_parts: u8,
-        file_idx: u8,
-        file_offset: FileOffset,
-    ) -> Result<Self, BufIoError>;
 }
 
 impl SimpleSerialize for u16 {

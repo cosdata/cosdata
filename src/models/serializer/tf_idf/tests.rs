@@ -6,7 +6,7 @@ use std::{
     },
 };
 
-use rand::Rng;
+use rand::{distributions::Standard, prelude::Distribution, Rng};
 use tempfile::{tempdir, TempDir};
 
 use crate::models::{
@@ -15,7 +15,7 @@ use crate::models::{
     serializer::tf_idf::TF_IDF_INDEX_DATA_CHUNK_SIZE,
     tf_idf_index::{TFIDFIndexNode, TFIDFIndexNodeData, TFIDFIndexRoot, TermInfo},
     types::FileOffset,
-    versioned_vec::VersionedVec,
+    versioned_vec::{VersionedVec, VersionedVecItem},
     versioning::VersionNumber,
 };
 
@@ -113,6 +113,35 @@ fn add_random_items_to_tf_idf_index_data(
                 })
             },
         );
+    }
+}
+
+fn get_random_versioned_vec<T>(rng: &mut impl Rng, version: VersionNumber) -> VersionedVec<T>
+where
+    T: VersionedVecItem,
+    Standard: Distribution<T> + Distribution<<T as VersionedVecItem>::Id>,
+{
+    let mut vec = VersionedVec::new(version);
+    let count = rng.gen_range(20..50);
+    add_random_items_to_versioned_vec(rng, &mut vec, count, version);
+    vec
+}
+
+fn add_random_items_to_versioned_vec<T>(
+    rng: &mut impl Rng,
+    vec: &mut VersionedVec<T>,
+    count: usize,
+    version: VersionNumber,
+) where
+    T: VersionedVecItem,
+    Standard: Distribution<T> + Distribution<<T as VersionedVecItem>::Id>,
+{
+    for _ in 0..count {
+        vec.push(version, rng.gen());
+    }
+
+    for _ in 0..count {
+        vec.delete(version, rng.gen());
     }
 }
 
@@ -483,4 +512,59 @@ fn test_tf_idf_index_root_incremental_serialization() {
     let deserialized = TFIDFIndexRoot::deserialize(temp_dir.as_ref().into()).unwrap();
 
     assert_eq!(tf_idf_index, deserialized);
+}
+
+#[test]
+fn test_versioned_vec_serialization() {
+    let mut rng = rand::thread_rng();
+    let vec: VersionedVec<u32> = get_random_versioned_vec(&mut rng, 0.into());
+
+    let (dim_bufman, data_bufmans, cache, cursor, _temp_dir) = setup_test();
+    let offset_counter = AtomicU32::new(0);
+    let offset = vec
+        .serialize(&dim_bufman, &data_bufmans, &offset_counter, cursor)
+        .unwrap();
+
+    dim_bufman.close_cursor(cursor).unwrap();
+
+    let deserialized = VersionedVec::<u32>::deserialize(
+        &dim_bufman,
+        &data_bufmans,
+        FileOffset(offset),
+        VersionNumber::from(0),
+        &cache,
+    )
+    .unwrap();
+
+    assert_eq!(vec, deserialized);
+}
+
+#[test]
+fn test_versioned_vec_incremental_serialization() {
+    let mut rng = rand::thread_rng();
+    let mut vec: VersionedVec<u32> = get_random_versioned_vec(&mut rng, 0.into());
+
+    let (dim_bufman, data_bufmans, cache, cursor, _temp_dir) = setup_test();
+    let offset_counter = AtomicU32::new(0);
+    let _offset = vec
+        .serialize(&dim_bufman, &data_bufmans, &offset_counter, cursor)
+        .unwrap();
+
+    add_random_items_to_versioned_vec(&mut rng, &mut vec, 100, 1.into());
+
+    let offset = vec
+        .serialize(&dim_bufman, &data_bufmans, &offset_counter, cursor)
+        .unwrap();
+    dim_bufman.close_cursor(cursor).unwrap();
+
+    let deserialized = VersionedVec::<u32>::deserialize(
+        &dim_bufman,
+        &data_bufmans,
+        FileOffset(offset),
+        VersionNumber::from(0),
+        &cache,
+    )
+    .unwrap();
+
+    assert_eq!(vec, deserialized);
 }

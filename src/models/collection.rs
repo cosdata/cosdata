@@ -1,4 +1,4 @@
-use super::buffered_io::BufferManagerFactory;
+use super::buffered_io::{BufIoError, BufferManager, BufferManagerFactory};
 use super::collection_transaction::{
     ExplicitTransaction, ExplicitTransactionID, ImplicitTransaction, TransactionStatus,
 };
@@ -24,7 +24,7 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_cbor::to_vec;
 use siphasher::sip::SipHasher24;
-use std::fs::create_dir_all;
+use std::fs::{create_dir_all, OpenOptions};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::thread;
 use std::{fs, hash::Hasher, path::Path, sync::Arc};
@@ -145,27 +145,71 @@ impl Collection {
 
         let collections_path: Arc<Path> = get_collections_path().join(&name).into();
 
-        let internal_to_external_map_bufmans = BufferManagerFactory::new(
+        let internal_to_external_map_dim_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .create(true)
+            .open(collections_path.join("itoe.dim"))
+            .map_err(BufIoError::Io)?;
+
+        let internal_to_external_map_dim_bufman =
+            BufferManager::new(internal_to_external_map_dim_file, 8192).map_err(BufIoError::Io)?;
+
+        let internal_to_external_map_data_bufmans = BufferManagerFactory::new(
             collections_path.clone(),
-            |root, part| root.join(format!("{}.itoe", part)),
+            |root, version: &VersionNumber| root.join(format!("itoe.{}.data", **version)),
             8192,
         );
 
-        let external_to_internal_map_bufmans = BufferManagerFactory::new(
+        let external_to_internal_map_dim_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .create(true)
+            .open(collections_path.join("etoi.dim"))
+            .map_err(BufIoError::Io)?;
+
+        let external_to_internal_map_dim_bufman =
+            BufferManager::new(external_to_internal_map_dim_file, 8192).map_err(BufIoError::Io)?;
+
+        let external_to_internal_map_data_bufmans = BufferManagerFactory::new(
             collections_path.clone(),
-            |root, part| root.join(format!("{}.etoi", part)),
+            |root, version: &VersionNumber| root.join(format!("etoi.{}.data", **version)),
             8192,
         );
 
-        let document_to_internals_map_bufmans = BufferManagerFactory::new(
+        let document_to_internals_map_dim_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .create(true)
+            .open(collections_path.join("dtoi.dim"))
+            .map_err(BufIoError::Io)?;
+
+        let document_to_internals_map_dim_bufman =
+            BufferManager::new(document_to_internals_map_dim_file, 8192).map_err(BufIoError::Io)?;
+
+        let document_to_internals_map_data_bufmans = BufferManagerFactory::new(
             collections_path.clone(),
-            |root, part| root.join(format!("{}.dtoi", part)),
+            |root, version: &VersionNumber| root.join(format!("dtoi.{}.data", **version)),
             8192,
         );
 
-        let transaction_status_map_bufmans = BufferManagerFactory::new(
-            collections_path,
-            |root, part| root.join(format!("{}.txn_status", part)),
+        let transaction_status_map_dim_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .create(true)
+            .open(collections_path.join("dtoi.dim"))
+            .map_err(BufIoError::Io)?;
+
+        let transaction_status_map_dim_bufman =
+            BufferManager::new(transaction_status_map_dim_file, 8192).map_err(BufIoError::Io)?;
+
+        let transaction_status_map_data_bufmans = BufferManagerFactory::new(
+            collections_path.clone(),
+            |root, version: &VersionNumber| root.join(format!("txn_status.{}.data", **version)),
             8192,
         );
 
@@ -186,10 +230,22 @@ impl Collection {
             current_explicit_transaction: RwLock::new(None),
             current_implicit_transaction: RwLock::new(ImplicitTransaction::default()),
             vcs,
-            internal_to_external_map: TreeMap::new(internal_to_external_map_bufmans),
-            external_to_internal_map: TreeMap::new(external_to_internal_map_bufmans),
-            document_to_internals_map: TreeMapVec::new(document_to_internals_map_bufmans),
-            transaction_status_map: TreeMap::new(transaction_status_map_bufmans),
+            internal_to_external_map: TreeMap::new(
+                internal_to_external_map_dim_bufman,
+                internal_to_external_map_data_bufmans,
+            ),
+            external_to_internal_map: TreeMap::new(
+                external_to_internal_map_dim_bufman,
+                external_to_internal_map_data_bufmans,
+            ),
+            document_to_internals_map: TreeMapVec::new(
+                document_to_internals_map_dim_bufman,
+                document_to_internals_map_data_bufmans,
+            ),
+            transaction_status_map: TreeMap::new(
+                transaction_status_map_dim_bufman,
+                transaction_status_map_data_bufmans,
+            ),
             internal_id_counter: AtomicU32::new(0),
             hnsw_index: RwLock::new(None),
             inverted_index: RwLock::new(None),
@@ -500,15 +556,11 @@ impl Collection {
             .trigger(txn_id, version);
     }
 
-    pub fn flush(&self, config: &Config) -> Result<(), WaCustomError> {
-        self.internal_to_external_map
-            .serialize(config.tree_map_serialized_parts)?;
-        self.external_to_internal_map
-            .serialize(config.tree_map_serialized_parts)?;
-        self.document_to_internals_map
-            .serialize(config.tree_map_serialized_parts)?;
-        self.transaction_status_map
-            .serialize(config.tree_map_serialized_parts)?;
+    pub fn flush(&self) -> Result<(), WaCustomError> {
+        self.internal_to_external_map.serialize()?;
+        self.external_to_internal_map.serialize()?;
+        self.document_to_internals_map.serialize()?;
+        self.transaction_status_map.serialize()?;
         store_highest_internal_id(&self.lmdb, self.internal_id_counter.load(Ordering::Relaxed))?;
         Ok(())
     }

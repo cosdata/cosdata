@@ -49,7 +49,7 @@ impl BackgroundExplicitTransaction {
         if let Some(tf_idf_index) = &*collection.tf_idf_index.read() {
             tf_idf_index.pre_commit_transaction(collection, self.version, config)?;
         }
-        collection.flush(config)?;
+        collection.flush()?;
         Ok(())
     }
 }
@@ -262,7 +262,7 @@ impl ImplicitTransaction {
         if let Some(tf_idf_index) = &*collection.tf_idf_index.read() {
             tf_idf_index.pre_commit_transaction(collection, data.version, config)?;
         }
-        collection.flush(config)?;
+        collection.flush()?;
         drop(data.channel);
         let wal = data.thread_handle.join().unwrap()?;
         update_background_version(&collection.lmdb, data.version)?;

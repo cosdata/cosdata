@@ -10,9 +10,9 @@ use parking_lot::{RwLock, RwLockReadGuard};
 
 use super::{
     atomic_array::AtomicArray,
-    buffered_io::{BufIoError, BufferManagerFactory},
+    buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
     common::TSHashTable,
-    serializer::{PartitionedSerialize, SimpleSerialize},
+    serializer::{tree_map::TreeMapSerialize, SimpleSerialize},
     types::FileOffset,
     utils::calculate_path,
     versioned_vec::{VersionedVec, VersionedVecItem},
@@ -25,13 +25,15 @@ pub trait TreeMapKey: std::hash::Hash + Eq {
 
 pub struct TreeMap<K, V> {
     pub(crate) root: TreeMapNode<V>,
-    pub(crate) bufmans: BufferManagerFactory<u8>,
+    pub(crate) dim_bufman: BufferManager,
+    pub(crate) data_bufmans: BufferManagerFactory<VersionNumber>,
     _marker: PhantomData<K>,
 }
 
 pub struct TreeMapVec<K, V: VersionedVecItem> {
     pub(crate) root: TreeMapVecNode<V>,
-    bufmans: BufferManagerFactory<u8>,
+    dim_bufman: BufferManager,
+    data_bufmans: BufferManagerFactory<VersionNumber>,
     _marker: PhantomData<K>,
 }
 
@@ -483,10 +485,14 @@ where
 }
 
 impl<K: TreeMapKey, V> TreeMap<K, V> {
-    pub fn new(bufmans: BufferManagerFactory<u8>) -> Self {
+    pub fn new(
+        dim_bufman: BufferManager,
+        data_bufmans: BufferManagerFactory<VersionNumber>,
+    ) -> Self {
         Self {
             root: TreeMapNode::new(0),
-            bufmans,
+            dim_bufman,
+            data_bufmans,
             _marker: PhantomData,
         }
     }
@@ -519,39 +525,50 @@ impl<K: TreeMapKey, V> TreeMap<K, V> {
 }
 
 impl<K, V: SimpleSerialize> TreeMap<K, V> {
-    pub fn serialize(&self, file_parts: u8) -> Result<(), BufIoError> {
-        let bufman = self.bufmans.get(0)?;
-        let cursor = bufman.open_cursor()?;
-        bufman.update_u32_with_cursor(cursor, u32::MAX)?;
-        let offset = self.root.serialize(&self.bufmans, file_parts, 0, 0)?;
-        bufman.seek_with_cursor(cursor, 0)?;
-        bufman.update_u32_with_cursor(cursor, offset)?;
-        bufman.close_cursor(cursor)?;
-        self.bufmans.flush_all()?;
+    pub fn serialize(&self) -> Result<(), BufIoError> {
+        let cursor = self.dim_bufman.open_cursor()?;
+        self.dim_bufman.update_u32_with_cursor(cursor, u32::MAX)?;
+        let offset = self
+            .root
+            .serialize(&self.dim_bufman, &self.data_bufmans, cursor)?;
+        self.dim_bufman.seek_with_cursor(cursor, 0)?;
+        self.dim_bufman.update_u32_with_cursor(cursor, offset)?;
+        self.dim_bufman.close_cursor(cursor)?;
+        self.dim_bufman.flush()?;
+        self.data_bufmans.flush_all()?;
         Ok(())
     }
 
     pub fn deserialize(
-        bufmans: BufferManagerFactory<u8>,
-        file_parts: u8,
+        dim_bufman: BufferManager,
+        data_bufmans: BufferManagerFactory<VersionNumber>,
     ) -> Result<Self, BufIoError> {
-        let bufman = bufmans.get(0)?;
-        let cursor = bufman.open_cursor()?;
-        let offset = bufman.read_u32_with_cursor(cursor)?;
-        bufman.close_cursor(cursor)?;
+        let cursor = dim_bufman.open_cursor()?;
+        let offset = dim_bufman.read_u32_with_cursor(cursor)?;
+        dim_bufman.close_cursor(cursor)?;
         Ok(Self {
-            root: TreeMapNode::deserialize(&bufmans, file_parts, 0, FileOffset(offset))?,
-            bufmans,
+            root: TreeMapNode::deserialize(
+                &dim_bufman,
+                &data_bufmans,
+                FileOffset(offset),
+                VersionNumber::from(u32::MAX), // not used
+            )?,
+            dim_bufman,
+            data_bufmans,
             _marker: PhantomData,
         })
     }
 }
 
 impl<K: TreeMapKey, V: VersionedVecItem> TreeMapVec<K, V> {
-    pub fn new(bufmans: BufferManagerFactory<u8>) -> Self {
+    pub fn new(
+        dim_bufman: BufferManager,
+        data_bufmans: BufferManagerFactory<VersionNumber>,
+    ) -> Self {
         Self {
             root: TreeMapVecNode::new(0),
-            bufmans,
+            dim_bufman,
+            data_bufmans,
             _marker: PhantomData,
         }
     }
@@ -578,29 +595,36 @@ where
     V: SimpleSerialize + VersionedVecItem,
     <V as VersionedVecItem>::Id: SimpleSerialize,
 {
-    pub fn serialize(&self, file_parts: u8) -> Result<(), BufIoError> {
-        let bufman = self.bufmans.get(0)?;
-        let cursor = bufman.open_cursor()?;
-        bufman.update_u32_with_cursor(cursor, u32::MAX)?;
-        let offset = self.root.serialize(&self.bufmans, file_parts, 0, 0)?;
-        bufman.seek_with_cursor(cursor, 0)?;
-        bufman.update_u32_with_cursor(cursor, offset)?;
-        bufman.close_cursor(cursor)?;
-        self.bufmans.flush_all()?;
+    pub fn serialize(&self) -> Result<(), BufIoError> {
+        let cursor = self.dim_bufman.open_cursor()?;
+        self.dim_bufman.update_u32_with_cursor(cursor, u32::MAX)?;
+        let offset = self
+            .root
+            .serialize(&self.dim_bufman, &self.data_bufmans, cursor)?;
+        self.dim_bufman.seek_with_cursor(cursor, 0)?;
+        self.dim_bufman.update_u32_with_cursor(cursor, offset)?;
+        self.dim_bufman.close_cursor(cursor)?;
+        self.dim_bufman.flush()?;
+        self.data_bufmans.flush_all()?;
         Ok(())
     }
 
     pub fn deserialize(
-        bufmans: BufferManagerFactory<u8>,
-        file_parts: u8,
+        dim_bufman: BufferManager,
+        data_bufmans: BufferManagerFactory<VersionNumber>,
     ) -> Result<Self, BufIoError> {
-        let bufman = bufmans.get(0)?;
-        let cursor = bufman.open_cursor()?;
-        let offset = bufman.read_u32_with_cursor(cursor)?;
-        bufman.close_cursor(cursor)?;
+        let cursor = dim_bufman.open_cursor()?;
+        let offset = dim_bufman.read_u32_with_cursor(cursor)?;
+        dim_bufman.close_cursor(cursor)?;
         Ok(Self {
-            root: TreeMapVecNode::deserialize(&bufmans, file_parts, 0, FileOffset(offset))?,
-            bufmans,
+            root: TreeMapVecNode::deserialize(
+                &dim_bufman,
+                &data_bufmans,
+                FileOffset(offset),
+                VersionNumber::from(u32::MAX), // not used
+            )?,
+            dim_bufman,
+            data_bufmans,
             _marker: PhantomData,
         })
     }
@@ -614,6 +638,8 @@ impl TreeMapKey for u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::OpenOptions;
+
     use tempfile::tempdir;
 
     use super::*;
@@ -621,12 +647,20 @@ mod tests {
     #[test]
     fn tests_basic_usage() {
         let tempdir = tempdir().unwrap();
-        let bufmans = BufferManagerFactory::new(
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .create(true)
+            .open(tempdir.as_ref().join("tree_map.dim"))
+            .unwrap();
+        let dim_bufman = BufferManager::new(file, 8192).unwrap();
+        let data_bufmans = BufferManagerFactory::new(
             tempdir.as_ref().into(),
-            |root, part| root.join(format!("{}.tree-map", part)),
+            |root, version: &VersionNumber| root.join(format!("tree_map.{}.data", **version)),
             8192,
         );
-        let map: TreeMap<u64, u64> = TreeMap::new(bufmans);
+        let map: TreeMap<u64, u64> = TreeMap::new(dim_bufman, data_bufmans);
         map.insert(0.into(), &65536, 0);
         map.insert(0.into(), &0, 23);
         assert_eq!(map.get_latest(&0), Some(&23));

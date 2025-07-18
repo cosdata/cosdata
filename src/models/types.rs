@@ -630,27 +630,75 @@ impl CollectionsMap {
             let collections_path: Arc<Path> =
                 get_collections_path().join(&collection_meta.name).into();
 
-            let internal_to_external_map_bufmans = BufferManagerFactory::new(
+            let internal_to_external_map_dim_file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .truncate(false)
+                .create(true)
+                .open(collections_path.join("itoe.dim"))
+                .map_err(BufIoError::Io)?;
+
+            let internal_to_external_map_dim_bufman =
+                BufferManager::new(internal_to_external_map_dim_file, 8192)
+                    .map_err(BufIoError::Io)?;
+
+            let internal_to_external_map_data_bufmans = BufferManagerFactory::new(
                 collections_path.clone(),
-                |root, part| root.join(format!("{}.itoe", part)),
+                |root, version: &VersionNumber| root.join(format!("itoe.{}.data", **version)),
                 8192,
             );
 
-            let external_to_internal_map_bufmans = BufferManagerFactory::new(
+            let external_to_internal_map_dim_file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .truncate(false)
+                .create(true)
+                .open(collections_path.join("etoi.dim"))
+                .map_err(BufIoError::Io)?;
+
+            let external_to_internal_map_dim_bufman =
+                BufferManager::new(external_to_internal_map_dim_file, 8192)
+                    .map_err(BufIoError::Io)?;
+
+            let external_to_internal_map_data_bufmans = BufferManagerFactory::new(
                 collections_path.clone(),
-                |root, part| root.join(format!("{}.etoi", part)),
+                |root, version: &VersionNumber| root.join(format!("etoi.{}.data", **version)),
                 8192,
             );
 
-            let document_to_internals_map_bufmans = BufferManagerFactory::new(
+            let document_to_internals_map_dim_file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .truncate(false)
+                .create(true)
+                .open(collections_path.join("dtoi.dim"))
+                .map_err(BufIoError::Io)?;
+
+            let document_to_internals_map_dim_bufman =
+                BufferManager::new(document_to_internals_map_dim_file, 8192)
+                    .map_err(BufIoError::Io)?;
+
+            let document_to_internals_map_data_bufmans = BufferManagerFactory::new(
                 collections_path.clone(),
-                |root, part| root.join(format!("{}.dtoi", part)),
+                |root, version: &VersionNumber| root.join(format!("dtoi.{}.data", **version)),
                 8192,
             );
 
-            let transaction_status_map_bufmans = BufferManagerFactory::new(
+            let transaction_status_map_dim_file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .truncate(false)
+                .create(true)
+                .open(collections_path.join("dtoi.dim"))
+                .map_err(BufIoError::Io)?;
+
+            let transaction_status_map_dim_bufman =
+                BufferManager::new(transaction_status_map_dim_file, 8192)
+                    .map_err(BufIoError::Io)?;
+
+            let transaction_status_map_data_bufmans = BufferManagerFactory::new(
                 collections_path.clone(),
-                |root, part| root.join(format!("{}.txn_status", part)),
+                |root, version: &VersionNumber| root.join(format!("txn_status.{}.data", **version)),
                 8192,
             );
 
@@ -667,20 +715,20 @@ impl CollectionsMap {
                 ),
                 vcs,
                 internal_to_external_map: TreeMap::deserialize(
-                    internal_to_external_map_bufmans,
-                    config.tree_map_serialized_parts,
+                    internal_to_external_map_dim_bufman,
+                    internal_to_external_map_data_bufmans,
                 )?,
                 external_to_internal_map: TreeMap::deserialize(
-                    external_to_internal_map_bufmans,
-                    config.tree_map_serialized_parts,
+                    external_to_internal_map_dim_bufman,
+                    external_to_internal_map_data_bufmans,
                 )?,
                 document_to_internals_map: TreeMapVec::deserialize(
-                    document_to_internals_map_bufmans,
-                    config.tree_map_serialized_parts,
+                    document_to_internals_map_dim_bufman,
+                    document_to_internals_map_data_bufmans,
                 )?,
                 transaction_status_map: TreeMap::deserialize(
-                    transaction_status_map_bufmans,
-                    config.tree_map_serialized_parts,
+                    transaction_status_map_dim_bufman,
+                    transaction_status_map_data_bufmans,
                 )?,
                 internal_id_counter: AtomicU32::new(id_counter_value),
                 hnsw_index: parking_lot::RwLock::new(hnsw_index),
