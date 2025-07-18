@@ -143,21 +143,22 @@ impl Collection {
             return Err(WaCustomError::InvalidParams);
         }
 
-        let collections_path: Arc<Path> = get_collections_path().join(&name).into();
+        let collection_path: Arc<Path> = get_collections_path().join(&name).into();
+        fs::create_dir_all(&collection_path).map_err(|e| WaCustomError::FsError(e.to_string()))?;
 
         let internal_to_external_map_dim_file = OpenOptions::new()
             .read(true)
             .write(true)
             .truncate(false)
             .create(true)
-            .open(collections_path.join("itoe.dim"))
+            .open(collection_path.join("itoe.dim"))
             .map_err(BufIoError::Io)?;
 
         let internal_to_external_map_dim_bufman =
             BufferManager::new(internal_to_external_map_dim_file, 8192).map_err(BufIoError::Io)?;
 
         let internal_to_external_map_data_bufmans = BufferManagerFactory::new(
-            collections_path.clone(),
+            collection_path.clone(),
             |root, version: &VersionNumber| root.join(format!("itoe.{}.data", **version)),
             8192,
         );
@@ -167,14 +168,14 @@ impl Collection {
             .write(true)
             .truncate(false)
             .create(true)
-            .open(collections_path.join("etoi.dim"))
+            .open(collection_path.join("etoi.dim"))
             .map_err(BufIoError::Io)?;
 
         let external_to_internal_map_dim_bufman =
             BufferManager::new(external_to_internal_map_dim_file, 8192).map_err(BufIoError::Io)?;
 
         let external_to_internal_map_data_bufmans = BufferManagerFactory::new(
-            collections_path.clone(),
+            collection_path.clone(),
             |root, version: &VersionNumber| root.join(format!("etoi.{}.data", **version)),
             8192,
         );
@@ -184,14 +185,14 @@ impl Collection {
             .write(true)
             .truncate(false)
             .create(true)
-            .open(collections_path.join("dtoi.dim"))
+            .open(collection_path.join("dtoi.dim"))
             .map_err(BufIoError::Io)?;
 
         let document_to_internals_map_dim_bufman =
             BufferManager::new(document_to_internals_map_dim_file, 8192).map_err(BufIoError::Io)?;
 
         let document_to_internals_map_data_bufmans = BufferManagerFactory::new(
-            collections_path.clone(),
+            collection_path.clone(),
             |root, version: &VersionNumber| root.join(format!("dtoi.{}.data", **version)),
             8192,
         );
@@ -201,14 +202,14 @@ impl Collection {
             .write(true)
             .truncate(false)
             .create(true)
-            .open(collections_path.join("dtoi.dim"))
+            .open(collection_path.join("dtoi.dim"))
             .map_err(BufIoError::Io)?;
 
         let transaction_status_map_dim_bufman =
             BufferManager::new(transaction_status_map_dim_file, 8192).map_err(BufIoError::Io)?;
 
         let transaction_status_map_data_bufmans = BufferManagerFactory::new(
-            collections_path.clone(),
+            collection_path.clone(),
             |root, version: &VersionNumber| root.join(format!("txn_status.{}.data", **version)),
             8192,
         );
@@ -275,9 +276,6 @@ impl Collection {
                 Ok::<_, WaCustomError>(())
             });
         }
-
-        let collection_path = collection.get_path();
-        fs::create_dir_all(&collection_path).map_err(|e| WaCustomError::FsError(e.to_string()))?;
 
         Ok(collection)
     }
