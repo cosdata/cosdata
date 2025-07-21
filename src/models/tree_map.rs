@@ -544,7 +544,7 @@ impl<K: TreeMapKey, V> TreeMap<K, V> {
 
     pub fn delete(&self, version: VersionNumber, key: &K) {
         let key = key.key();
-        let node_pos = (key & 65536) as u32;
+        let node_pos = (key % 65536) as u32;
         let path = calculate_path(node_pos, 0);
         let node = self.root.find_or_create_node(&path);
         node.delete(version, key);
