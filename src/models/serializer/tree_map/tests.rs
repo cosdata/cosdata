@@ -11,7 +11,7 @@ use crate::models::{
     buffered_io::{BufferManager, BufferManagerFactory},
     collection::RawVectorEmbedding,
     serializer::tree_map::TreeMapSerialize,
-    tree_map::{QuotientsMap, TreeMap, TreeMapVec},
+    tree_map::{QuotientsMap, QuotientsMapVec, TreeMap, TreeMapVec},
     types::{FileOffset, InternalId, VectorId},
     versioned_vec::{VersionedVec, VersionedVecItem},
     versioning::VersionNumber,
@@ -135,6 +135,50 @@ fn test_quotients_serialization() {
 }
 
 #[test]
+fn test_quotients_vec_serialization() {
+    let (dim_bufman, data_bufmans, cursor, _temp_dir) = setup_test();
+    let mut rng = rand::thread_rng();
+    let quotients_vec = QuotientsMapVec::default();
+    for _ in 0..10000 {
+        quotients_vec.push(
+            0.into(),
+            rng.gen_range(0..u64::MAX),
+            rng.gen_range(0..u16::MAX),
+        );
+    }
+    let offset = quotients_vec
+        .serialize(&dim_bufman, &data_bufmans, cursor)
+        .unwrap();
+    let deserialized = QuotientsMapVec::deserialize(
+        &dim_bufman,
+        &data_bufmans,
+        FileOffset(offset),
+        VersionNumber::from(u32::MAX), // not used
+    )
+    .unwrap();
+
+    assert_eq!(quotients_vec, deserialized);
+}
+
+#[test]
+fn test_empty_quotients_vec_serialization() {
+    let (dim_bufman, data_bufmans, cursor, _temp_dir) = setup_test();
+    let quotients_vec = QuotientsMapVec::<InternalId>::default();
+    let offset = quotients_vec
+        .serialize(&dim_bufman, &data_bufmans, cursor)
+        .unwrap();
+    let deserialized = QuotientsMapVec::deserialize(
+        &dim_bufman,
+        &data_bufmans,
+        FileOffset(offset),
+        VersionNumber::from(u32::MAX), // not used
+    )
+    .unwrap();
+
+    assert_eq!(quotients_vec, deserialized);
+}
+
+#[test]
 fn test_quotients_incremental_serialization() {
     let (dim_bufman, data_bufmans, cursor, _temp_dir) = setup_test();
     let mut rng = rand::thread_rng();
@@ -146,13 +190,13 @@ fn test_quotients_incremental_serialization() {
         .serialize(&dim_bufman, &data_bufmans, cursor)
         .unwrap();
     for i in 1000..2001 {
-        quotients_map.insert(0.into(), i, rng.gen_range(0..u16::MAX));
+        quotients_map.insert(1.into(), i, rng.gen_range(0..u16::MAX));
     }
     let _offset = quotients_map
         .serialize(&dim_bufman, &data_bufmans, cursor)
         .unwrap();
     for i in 2001..3000 {
-        quotients_map.insert(0.into(), i, rng.gen_range(0..u16::MAX));
+        quotients_map.insert(2.into(), i, rng.gen_range(0..u16::MAX));
     }
     let offset = quotients_map
         .serialize(&dim_bufman, &data_bufmans, cursor)
@@ -166,6 +210,40 @@ fn test_quotients_incremental_serialization() {
     .unwrap();
 
     assert_eq!(quotients_map, deserialized);
+}
+
+#[test]
+fn test_quotients_vec_incremental_serialization() {
+    let (dim_bufman, data_bufmans, cursor, _temp_dir) = setup_test();
+    let mut rng = rand::thread_rng();
+    let quotients_vec = QuotientsMapVec::default();
+    for i in 0..1000 {
+        quotients_vec.push(0.into(), i, rng.gen_range(0..u16::MAX));
+    }
+    let _offset = quotients_vec
+        .serialize(&dim_bufman, &data_bufmans, cursor)
+        .unwrap();
+    for i in 1000..2001 {
+        quotients_vec.push(1.into(), i, rng.gen_range(0..u16::MAX));
+    }
+    let _offset = quotients_vec
+        .serialize(&dim_bufman, &data_bufmans, cursor)
+        .unwrap();
+    for i in 2001..3000 {
+        quotients_vec.push(2.into(), i, rng.gen_range(0..u16::MAX));
+    }
+    let offset = quotients_vec
+        .serialize(&dim_bufman, &data_bufmans, cursor)
+        .unwrap();
+    let deserialized = QuotientsMapVec::deserialize(
+        &dim_bufman,
+        &data_bufmans,
+        FileOffset(offset),
+        VersionNumber::from(u32::MAX), // not used
+    )
+    .unwrap();
+
+    assert_eq!(quotients_vec, deserialized);
 }
 
 #[test]
@@ -236,6 +314,28 @@ fn test_tree_map_serialization() {
 }
 
 #[test]
+fn test_tree_map_vec_serialization() {
+    let (dim_bufman, data_bufmans, _cursor, temp_dir) = setup_test();
+    let mut rng = rand::thread_rng();
+    let map = TreeMapVec::new(dim_bufman, data_bufmans);
+
+    for i in 0..10000 {
+        map.push(0.into(), &(i / 10), rng.gen_range(0..u16::MAX));
+    }
+
+    // edge case
+    map.push(0.into(), &u64::MAX, rng.gen_range(0..u16::MAX));
+
+    map.serialize().unwrap();
+
+    let (dim_bufman, data_bufmans) = setup_test_in_dir(temp_dir.as_ref());
+
+    let deserialized = TreeMapVec::<u64, u16>::deserialize(dim_bufman, data_bufmans).unwrap();
+
+    assert_eq!(map, deserialized);
+}
+
+#[test]
 fn test_tree_map_incremental_serialization() {
     let (dim_bufman, data_bufmans, _cursor, temp_dir) = setup_test();
     let mut rng = rand::thread_rng();
@@ -251,13 +351,13 @@ fn test_tree_map_incremental_serialization() {
     map.serialize().unwrap();
 
     for i in 1000..2001 {
-        map.insert(0.into(), &i, rng.gen_range(0..u16::MAX));
+        map.insert(1.into(), &i, rng.gen_range(0..u16::MAX));
     }
 
     map.serialize().unwrap();
 
     for i in 2001..3000 {
-        map.insert(0.into(), &i, rng.gen_range(0..u16::MAX));
+        map.insert(2.into(), &i, rng.gen_range(0..u16::MAX));
     }
 
     map.serialize().unwrap();
@@ -265,6 +365,40 @@ fn test_tree_map_incremental_serialization() {
     let (dim_bufman, data_bufmans) = setup_test_in_dir(temp_dir.as_ref());
 
     let deserialized = TreeMap::<u64, u16>::deserialize(dim_bufman, data_bufmans).unwrap();
+
+    assert_eq!(map, deserialized);
+}
+
+#[test]
+fn test_tree_map_vec_incremental_serialization() {
+    let (dim_bufman, data_bufmans, _cursor, temp_dir) = setup_test();
+    let mut rng = rand::thread_rng();
+    let map = TreeMapVec::new(dim_bufman, data_bufmans);
+
+    for i in 0..10000 {
+        map.push(0.into(), &(i / 10), rng.gen_range(0..u16::MAX));
+    }
+
+    // edge case
+    map.push(0.into(), &u64::MAX, rng.gen_range(0..u16::MAX));
+
+    map.serialize().unwrap();
+
+    for i in 5000..15000 {
+        map.push(1.into(), &(i / 10), rng.gen_range(0..u16::MAX));
+    }
+
+    map.serialize().unwrap();
+
+    for i in 10000..20000 {
+        map.push(2.into(), &(i / 10), rng.gen_range(0..u16::MAX));
+    }
+
+    map.serialize().unwrap();
+
+    let (dim_bufman, data_bufmans) = setup_test_in_dir(temp_dir.as_ref());
+
+    let deserialized = TreeMapVec::<u64, u16>::deserialize(dim_bufman, data_bufmans).unwrap();
 
     assert_eq!(map, deserialized);
 }

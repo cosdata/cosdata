@@ -32,8 +32,8 @@ pub struct TreeMap<K, V> {
 
 pub struct TreeMapVec<K, V: VersionedVecItem> {
     pub(crate) root: TreeMapVecNode<V>,
-    dim_bufman: BufferManager,
-    data_bufmans: BufferManagerFactory<VersionNumber>,
+    pub(crate) dim_bufman: BufferManager,
+    pub(crate) data_bufmans: BufferManagerFactory<VersionNumber>,
     _marker: PhantomData<K>,
 }
 
