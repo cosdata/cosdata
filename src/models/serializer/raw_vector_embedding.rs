@@ -15,16 +15,16 @@ use super::{read_len, read_opt_string, read_string, write_len, SimpleSerialize};
 impl SimpleSerialize for RawVectorEmbedding {
     fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
         let mut buf = Vec::new();
-        write_len(&mut buf, self.id.len() as u16);
+        write_len(&mut buf, self.id.len() as u32);
         buf.extend(self.id.as_bytes());
         if let Some(document_id) = &self.document_id {
-            write_len(&mut buf, document_id.len() as u16);
+            write_len(&mut buf, document_id.len() as u32);
             buf.extend(document_id.as_bytes());
         } else {
             write_len(&mut buf, 0);
         }
         if let Some(dense_values) = &self.dense_values {
-            write_len(&mut buf, dense_values.len() as u16);
+            write_len(&mut buf, dense_values.len() as u32);
             for val in dense_values {
                 buf.extend(val.to_le_bytes());
             }
@@ -32,9 +32,9 @@ impl SimpleSerialize for RawVectorEmbedding {
             write_len(&mut buf, 0);
         }
         if let Some(metadata) = &self.metadata {
-            write_len(&mut buf, metadata.len() as u16);
+            write_len(&mut buf, metadata.len() as u32);
             for (field, val) in metadata {
-                write_len(&mut buf, field.len() as u16);
+                write_len(&mut buf, field.len() as u32);
                 buf.extend(field.as_bytes());
 
                 match val {
@@ -44,7 +44,7 @@ impl SimpleSerialize for RawVectorEmbedding {
                     }
                     FieldValue::String(str) => {
                         buf.push(1);
-                        write_len(&mut buf, str.len() as u16);
+                        write_len(&mut buf, str.len() as u32);
                         buf.extend(str.as_bytes());
                     }
                 }
@@ -54,7 +54,7 @@ impl SimpleSerialize for RawVectorEmbedding {
         }
 
         if let Some(sparse_values) = &self.sparse_values {
-            write_len(&mut buf, sparse_values.len() as u16);
+            write_len(&mut buf, sparse_values.len() as u32);
             for pair in sparse_values {
                 buf.extend(pair.0.to_le_bytes());
                 buf.extend(pair.1.to_le_bytes());
@@ -64,7 +64,7 @@ impl SimpleSerialize for RawVectorEmbedding {
         }
 
         if let Some(text) = &self.text {
-            write_len(&mut buf, text.len() as u16);
+            write_len(&mut buf, text.len() as u32);
             buf.extend(text.as_bytes());
         } else {
             write_len(&mut buf, 0);
