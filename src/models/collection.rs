@@ -202,7 +202,7 @@ impl Collection {
             .write(true)
             .truncate(false)
             .create(true)
-            .open(collection_path.join("dtoi.dim"))
+            .open(collection_path.join("txn_status.dim"))
             .map_err(BufIoError::Io)?;
 
         let transaction_status_map_dim_bufman =
