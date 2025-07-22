@@ -62,6 +62,7 @@ fn get_random_versioned_vec<T>(rng: &mut impl Rng, version: VersionNumber) -> Ve
 where
     T: VersionedVecItem,
     Standard: Distribution<T> + Distribution<<T as VersionedVecItem>::Id>,
+    <T as VersionedVecItem>::Id: Eq,
 {
     let mut vec = VersionedVec::new(version);
     let count = rng.gen_range(20..50);
@@ -77,6 +78,7 @@ fn add_random_items_to_versioned_vec<T>(
 ) where
     T: VersionedVecItem,
     Standard: Distribution<T> + Distribution<<T as VersionedVecItem>::Id>,
+    <T as VersionedVecItem>::Id: Eq,
 {
     for _ in 0..count {
         vec.push(version, rng.gen());

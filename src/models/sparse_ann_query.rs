@@ -101,7 +101,7 @@ impl SparseAnnQueryBasic {
                         .map
                         .with_value(&key, |vec| {
                             for vec_id in vec.iter() {
-                                let dot_product = dot_products.entry(*vec_id).or_insert(0u32);
+                                let dot_product = dot_products.entry(vec_id).or_insert(0u32);
                                 *dot_product += quantized_query_value * key as u32;
                             }
                         });
@@ -117,7 +117,7 @@ impl SparseAnnQueryBasic {
                         .map
                         .with_value(&key, |vec| {
                             for vec_id in vec.iter() {
-                                let dot_product = dot_products.entry(*vec_id).or_insert(0u32);
+                                let dot_product = dot_products.entry(vec_id).or_insert(0u32);
                                 *dot_product += quantized_query_value * key as u32;
                             }
                         });
@@ -182,7 +182,7 @@ impl SparseAnnQueryBasic {
         let mut buckets = [(u32::MAX, f32::NEG_INFINITY); BUCKETS];
 
         while let Some(mut head) = heads.pop() {
-            let Some((doc_id, tf)) = head.pop().copied() else {
+            let Some((doc_id, tf)) = head.pop() else {
                 continue;
             };
 
@@ -254,11 +254,11 @@ impl<'a> PostingListHead<'a> {
         }
     }
 
-    pub fn pop(&mut self) -> Option<&(u32, f32)> {
+    pub fn pop(&mut self) -> Option<(u32, f32)> {
         self.iter.get_mut().next()
     }
 
-    pub fn peek(&self) -> Option<&&(u32, f32)> {
+    pub fn peek(&self) -> Option<&(u32, f32)> {
         unsafe { &mut *self.iter.get() }.peek()
     }
 }

@@ -11,7 +11,7 @@ use crate::models::{
     serializer::SimpleSerialize,
     tree_map::{Quotient, QuotientVec, QuotientsMap, QuotientsMapVec, VersionedItem},
     types::FileOffset,
-    versioned_vec::{VersionedVec, VersionedVecItem},
+    versioned_vec::VersionedVec,
     versioning::VersionNumber,
 };
 
@@ -267,11 +267,7 @@ impl<T: SimpleSerialize> TreeMapSerialize for QuotientsMap<T> {
     }
 }
 
-impl<T> TreeMapSerialize for QuotientsMapVec<T>
-where
-    T: SimpleSerialize + VersionedVecItem,
-    <T as VersionedVecItem>::Id: SimpleSerialize,
-{
+impl<T> TreeMapSerialize for QuotientsMapVec<T> {
     fn serialize(
         &self,
         dim_bufman: &BufferManager,
