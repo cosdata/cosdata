@@ -6,15 +6,16 @@ use std::{
     },
 };
 
-use rand::Rng;
+use rand::{distributions::Standard, prelude::Distribution, Rng};
 use tempfile::{tempdir, TempDir};
 
 use crate::models::{
     buffered_io::{BufferManager, BufferManagerFactory},
     cache_loader::TFIDFIndexCache,
     serializer::tf_idf::TF_IDF_INDEX_DATA_CHUNK_SIZE,
-    tf_idf_index::{TFIDFIndexNode, TFIDFIndexNodeData, TFIDFIndexRoot, TermInfo, VersionedVec},
+    tf_idf_index::{TFIDFIndexNode, TFIDFIndexNodeData, TFIDFIndexRoot, TermInfo},
     types::FileOffset,
+    versioned_vec::{VersionedVec, VersionedVecItem},
     versioning::VersionNumber,
 };
 
@@ -22,14 +23,14 @@ use super::TFIDFIndexSerialize;
 
 fn get_cache(
     dim_bufman: Arc<BufferManager>,
-    data_bufmans: Arc<BufferManagerFactory<u8>>,
+    data_bufmans: Arc<BufferManagerFactory<VersionNumber>>,
 ) -> TFIDFIndexCache {
-    TFIDFIndexCache::new(dim_bufman, data_bufmans, AtomicU32::new(0), 8)
+    TFIDFIndexCache::new(dim_bufman, data_bufmans, AtomicU32::new(0))
 }
 
 fn setup_test() -> (
     Arc<BufferManager>,
-    Arc<BufferManagerFactory<u8>>,
+    Arc<BufferManagerFactory<VersionNumber>>,
     TFIDFIndexCache,
     u64,
     TempDir,
@@ -47,7 +48,7 @@ fn setup_test() -> (
     );
     let data_bufmans = Arc::new(BufferManagerFactory::new(
         dir.as_ref().into(),
-        |root, idx: &u8| root.join(format!("{}.idat", idx)),
+        |root, version: &VersionNumber| root.join(format!("{}.idat", **version)),
         TFIDFIndexNode::get_serialized_size() as usize,
     ));
     let cache = get_cache(dim_bufman.clone(), data_bufmans.clone());
@@ -115,6 +116,37 @@ fn add_random_items_to_tf_idf_index_data(
     }
 }
 
+fn get_random_versioned_vec<T>(rng: &mut impl Rng, version: VersionNumber) -> VersionedVec<T>
+where
+    T: VersionedVecItem,
+    Standard: Distribution<T> + Distribution<<T as VersionedVecItem>::Id>,
+    <T as VersionedVecItem>::Id: Eq,
+{
+    let mut vec = VersionedVec::new(version);
+    let count = rng.gen_range(20..50);
+    add_random_items_to_versioned_vec(rng, &mut vec, count, version);
+    vec
+}
+
+fn add_random_items_to_versioned_vec<T>(
+    rng: &mut impl Rng,
+    vec: &mut VersionedVec<T>,
+    count: usize,
+    version: VersionNumber,
+) where
+    T: VersionedVecItem,
+    Standard: Distribution<T> + Distribution<<T as VersionedVecItem>::Id>,
+    <T as VersionedVecItem>::Id: Eq,
+{
+    for _ in 0..count {
+        vec.push(version, rng.gen());
+    }
+
+    for _ in 0..count {
+        vec.delete(version, rng.gen());
+    }
+}
+
 #[test]
 fn test_term_info_serialization() {
     let (dim_bufman, data_bufmans, cache, cursor, _temp) = setup_test();
@@ -125,12 +157,17 @@ fn test_term_info_serialization() {
     let offset_counter = AtomicU32::new(0);
 
     let offset = term_info
-        .serialize(&dim_bufman, &data_bufmans, &offset_counter, 0, 8, cursor)
+        .serialize(&dim_bufman, &data_bufmans, &offset_counter, cursor)
         .unwrap();
 
-    let mut deserialized =
-        TermInfo::deserialize(&dim_bufman, &data_bufmans, FileOffset(offset), 0, 8, &cache)
-            .unwrap();
+    let mut deserialized = TermInfo::deserialize(
+        &dim_bufman,
+        &data_bufmans,
+        FileOffset(offset),
+        VersionNumber::from(0),
+        &cache,
+    )
+    .unwrap();
 
     deserialized.sequence_idx = term_info.sequence_idx;
 
@@ -148,19 +185,24 @@ fn test_term_info_incremental_serialization_with_updated_values() {
     let offset_counter = AtomicU32::new(0);
 
     let _offset = term_info
-        .serialize(&dim_bufman, &data_bufmans, &offset_counter, 0, 8, cursor)
+        .serialize(&dim_bufman, &data_bufmans, &offset_counter, cursor)
         .unwrap();
 
     let count = rng.gen_range(100..200);
     add_random_items_to_term_info(&mut rng, &term_info, count, 1.into());
 
     let offset = term_info
-        .serialize(&dim_bufman, &data_bufmans, &offset_counter, 0, 8, cursor)
+        .serialize(&dim_bufman, &data_bufmans, &offset_counter, cursor)
         .unwrap();
 
-    let mut deserialized =
-        TermInfo::deserialize(&dim_bufman, &data_bufmans, FileOffset(offset), 0, 8, &cache)
-            .unwrap();
+    let mut deserialized = TermInfo::deserialize(
+        &dim_bufman,
+        &data_bufmans,
+        FileOffset(offset),
+        VersionNumber::from(0),
+        &cache,
+    )
+    .unwrap();
 
     deserialized.sequence_idx = term_info.sequence_idx;
 
@@ -175,10 +217,10 @@ fn test_tf_idf_index_data_serialization() {
 
     let data = get_random_tf_idf_index_data(&mut rng, 0.into());
 
-    let offset_counter = AtomicU32::new(TF_IDF_INDEX_DATA_CHUNK_SIZE as u32 * 6 + 6);
+    let offset_counter = AtomicU32::new(TF_IDF_INDEX_DATA_CHUNK_SIZE as u32 * 10 + 6);
 
     let offset = data
-        .serialize(&dim_bufman, &data_bufmans, &offset_counter, 0, 8, cursor)
+        .serialize(&dim_bufman, &data_bufmans, &offset_counter, cursor)
         .unwrap();
 
     dim_bufman.close_cursor(cursor).unwrap();
@@ -187,8 +229,7 @@ fn test_tf_idf_index_data_serialization() {
         &dim_bufman,
         &data_bufmans,
         FileOffset(offset),
-        0,
-        8,
+        VersionNumber::from(u32::MAX), // not used
         &cache,
     )
     .unwrap();
@@ -203,10 +244,10 @@ fn test_tf_idf_index_data_incremental_serialization() {
 
     let data = get_random_tf_idf_index_data(&mut rng, 0.into());
 
-    let offset_counter = AtomicU32::new(TF_IDF_INDEX_DATA_CHUNK_SIZE as u32 * 6 + 6);
+    let offset_counter = AtomicU32::new(TF_IDF_INDEX_DATA_CHUNK_SIZE as u32 * 10 + 6);
 
     let offset = data
-        .serialize(&dim_bufman, &data_bufmans, &offset_counter, 0, 8, cursor)
+        .serialize(&dim_bufman, &data_bufmans, &offset_counter, cursor)
         .unwrap();
 
     let count = rng.gen_range(1000..2000);
@@ -216,7 +257,7 @@ fn test_tf_idf_index_data_incremental_serialization() {
     dim_bufman.seek_with_cursor(cursor, offset as u64).unwrap();
 
     let offset = data
-        .serialize(&dim_bufman, &data_bufmans, &offset_counter, 0, 8, cursor)
+        .serialize(&dim_bufman, &data_bufmans, &offset_counter, cursor)
         .unwrap();
 
     dim_bufman.close_cursor(cursor).unwrap();
@@ -225,8 +266,7 @@ fn test_tf_idf_index_data_incremental_serialization() {
         &dim_bufman,
         &data_bufmans,
         FileOffset(offset),
-        0,
-        8,
+        VersionNumber::from(u32::MAX), // not used
         &cache,
     )
     .unwrap();
@@ -255,14 +295,19 @@ fn test_tf_idf_index_node_serialization() {
     let offset_counter = AtomicU32::new(TFIDFIndexNode::get_serialized_size());
 
     let offset = tf_idf_index_node
-        .serialize(&dim_bufman, &data_bufmans, &offset_counter, 0, 8, cursor)
+        .serialize(&dim_bufman, &data_bufmans, &offset_counter, cursor)
         .unwrap();
 
     dim_bufman.close_cursor(cursor).unwrap();
 
-    let deserialized =
-        TFIDFIndexNode::deserialize(&dim_bufman, &data_bufmans, FileOffset(offset), 0, 8, &cache)
-            .unwrap();
+    let deserialized = TFIDFIndexNode::deserialize(
+        &dim_bufman,
+        &data_bufmans,
+        FileOffset(offset),
+        VersionNumber::from(u32::MAX),
+        &cache,
+    )
+    .unwrap();
 
     assert_eq!(tf_idf_index_node, deserialized);
 }
@@ -288,7 +333,7 @@ fn test_tf_idf_index_node_incremental_serialization() {
     let offset_counter = AtomicU32::new(TFIDFIndexNode::get_serialized_size());
 
     let _offset = tf_idf_index_node
-        .serialize(&dim_bufman, &data_bufmans, &offset_counter, 0, 8, cursor)
+        .serialize(&dim_bufman, &data_bufmans, &offset_counter, cursor)
         .unwrap();
 
     for _ in 0..300 {
@@ -304,7 +349,7 @@ fn test_tf_idf_index_node_incremental_serialization() {
     }
 
     let _offset = tf_idf_index_node
-        .serialize(&dim_bufman, &data_bufmans, &offset_counter, 0, 8, cursor)
+        .serialize(&dim_bufman, &data_bufmans, &offset_counter, cursor)
         .unwrap();
 
     for _ in 0..300 {
@@ -320,7 +365,7 @@ fn test_tf_idf_index_node_incremental_serialization() {
     }
 
     let _offset = tf_idf_index_node
-        .serialize(&dim_bufman, &data_bufmans, &offset_counter, 0, 8, cursor)
+        .serialize(&dim_bufman, &data_bufmans, &offset_counter, cursor)
         .unwrap();
 
     for _ in 0..300 {
@@ -336,14 +381,19 @@ fn test_tf_idf_index_node_incremental_serialization() {
     }
 
     let offset = tf_idf_index_node
-        .serialize(&dim_bufman, &data_bufmans, &offset_counter, 0, 8, cursor)
+        .serialize(&dim_bufman, &data_bufmans, &offset_counter, cursor)
         .unwrap();
 
     dim_bufman.close_cursor(cursor).unwrap();
 
-    let deserialized =
-        TFIDFIndexNode::deserialize(&dim_bufman, &data_bufmans, FileOffset(offset), 0, 8, &cache)
-            .unwrap();
+    let deserialized = TFIDFIndexNode::deserialize(
+        &dim_bufman,
+        &data_bufmans,
+        FileOffset(offset),
+        VersionNumber::from(u32::MAX),
+        &cache,
+    )
+    .unwrap();
 
     assert_eq!(tf_idf_index_node, deserialized);
 }
@@ -352,7 +402,7 @@ fn test_tf_idf_index_node_incremental_serialization() {
 fn test_tf_idf_index_root_serialization() {
     let temp_dir = tempdir().unwrap();
     let mut rng = rand::thread_rng();
-    let tf_idf_index = TFIDFIndexRoot::new(temp_dir.as_ref().into(), 8).unwrap();
+    let tf_idf_index = TFIDFIndexRoot::new(temp_dir.as_ref().into()).unwrap();
 
     for _ in 0..1000 {
         tf_idf_index
@@ -369,7 +419,7 @@ fn test_tf_idf_index_root_serialization() {
     tf_idf_index.cache.dim_bufman.flush().unwrap();
     tf_idf_index.cache.data_bufmans.flush_all().unwrap();
 
-    let deserialized = TFIDFIndexRoot::deserialize(temp_dir.as_ref().into(), 8).unwrap();
+    let deserialized = TFIDFIndexRoot::deserialize(temp_dir.as_ref().into()).unwrap();
 
     assert_eq!(tf_idf_index, deserialized);
 }
@@ -378,7 +428,7 @@ fn test_tf_idf_index_root_serialization() {
 fn test_tf_idf_index_root_incremental_serialization() {
     let temp_dir = tempdir().unwrap();
     let mut rng = rand::thread_rng();
-    let tf_idf_index = TFIDFIndexRoot::new(temp_dir.as_ref().into(), 8).unwrap();
+    let tf_idf_index = TFIDFIndexRoot::new(temp_dir.as_ref().into()).unwrap();
 
     for _ in 0..100 {
         tf_idf_index
@@ -461,7 +511,62 @@ fn test_tf_idf_index_root_incremental_serialization() {
     tf_idf_index.cache.dim_bufman.flush().unwrap();
     tf_idf_index.cache.data_bufmans.flush_all().unwrap();
 
-    let deserialized = TFIDFIndexRoot::deserialize(temp_dir.as_ref().into(), 8).unwrap();
+    let deserialized = TFIDFIndexRoot::deserialize(temp_dir.as_ref().into()).unwrap();
 
     assert_eq!(tf_idf_index, deserialized);
+}
+
+#[test]
+fn test_versioned_vec_serialization() {
+    let mut rng = rand::thread_rng();
+    let vec: VersionedVec<u32> = get_random_versioned_vec(&mut rng, 0.into());
+
+    let (dim_bufman, data_bufmans, cache, cursor, _temp_dir) = setup_test();
+    let offset_counter = AtomicU32::new(0);
+    let offset = vec
+        .serialize(&dim_bufman, &data_bufmans, &offset_counter, cursor)
+        .unwrap();
+
+    dim_bufman.close_cursor(cursor).unwrap();
+
+    let deserialized = VersionedVec::<u32>::deserialize(
+        &dim_bufman,
+        &data_bufmans,
+        FileOffset(offset),
+        VersionNumber::from(0),
+        &cache,
+    )
+    .unwrap();
+
+    assert_eq!(vec, deserialized);
+}
+
+#[test]
+fn test_versioned_vec_incremental_serialization() {
+    let mut rng = rand::thread_rng();
+    let mut vec: VersionedVec<u32> = get_random_versioned_vec(&mut rng, 0.into());
+
+    let (dim_bufman, data_bufmans, cache, cursor, _temp_dir) = setup_test();
+    let offset_counter = AtomicU32::new(0);
+    let _offset = vec
+        .serialize(&dim_bufman, &data_bufmans, &offset_counter, cursor)
+        .unwrap();
+
+    add_random_items_to_versioned_vec(&mut rng, &mut vec, 100, 1.into());
+
+    let offset = vec
+        .serialize(&dim_bufman, &data_bufmans, &offset_counter, cursor)
+        .unwrap();
+    dim_bufman.close_cursor(cursor).unwrap();
+
+    let deserialized = VersionedVec::<u32>::deserialize(
+        &dim_bufman,
+        &data_bufmans,
+        FileOffset(offset),
+        VersionNumber::from(0),
+        &cache,
+    )
+    .unwrap();
+
+    assert_eq!(vec, deserialized);
 }

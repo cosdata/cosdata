@@ -4,7 +4,7 @@ use crate::{
     config_loader::Config,
     models::{
         buffered_io::BufIoError,
-        collection::Collection,
+        collection::{Collection, RawVectorEmbedding},
         common::WaCustomError,
         inverted_index::InvertedIndexRoot,
         meta_persist::store_values_upper_bound,
@@ -55,9 +55,8 @@ impl InvertedIndex {
         root_path: PathBuf,
         quantization_bits: u8,
         sample_threshold: usize,
-        data_file_parts: u8,
     ) -> Result<Self, BufIoError> {
-        let root = InvertedIndexRoot::new(root_path, quantization_bits, data_file_parts)?;
+        let root = InvertedIndexRoot::new(root_path, quantization_bits)?;
 
         Ok(Self {
             root,
@@ -79,6 +78,25 @@ impl InvertedIndex {
         let id = id.into();
         for pair in &pairs {
             self.root.insert(
+                pair.0,
+                pair.1,
+                id,
+                version,
+                *self.values_upper_bound.read().unwrap(),
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn mark_embedding_as_deleted(
+        &self,
+        id: InternalId,
+        pairs: &[SparsePair],
+        version: VersionNumber,
+    ) -> Result<(), BufIoError> {
+        let id = id.into();
+        for pair in pairs {
+            self.root.delete(
                 pair.0,
                 pair.1,
                 id,
@@ -110,6 +128,20 @@ impl IndexOps for InvertedIndex {
         embeddings
             .into_iter()
             .try_for_each(|SparseInputEmbedding(id, pairs)| self.insert(id, pairs, version))?;
+        Ok(())
+    }
+
+    fn delete_embedding(
+        &self,
+        id: InternalId,
+        raw_emb: &RawVectorEmbedding,
+        version: VersionNumber,
+        _config: &Config,
+    ) -> Result<(), WaCustomError> {
+        let Some(pairs) = &raw_emb.sparse_values else {
+            return Ok(());
+        };
+        self.mark_embedding_as_deleted(id, pairs, version)?;
         Ok(())
     }
 

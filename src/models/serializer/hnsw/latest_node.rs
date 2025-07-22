@@ -46,7 +46,7 @@ impl HNSWIndexSerialize for SharedLatestNode {
     fn deserialize(
         bufman: &BufferManager,
         latest_version_links_bufman: &FilelessBufferManager,
-        file_index: FileIndex,
+        file_index: FileIndex<IndexFileId>,
         cache: &HNSWIndexCache,
         max_loads: u16,
         skipm: &mut FxHashSet<u64>,
@@ -73,7 +73,7 @@ impl HNSWIndexSerialize for SharedLatestNode {
 }
 
 impl RawDeserialize for SharedLatestNode {
-    type Raw = FileIndex;
+    type Raw = FileIndex<IndexFileId>;
 
     fn deserialize_raw(
         _bufman: &BufferManager,

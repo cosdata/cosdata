@@ -6,7 +6,7 @@ use crate::{
         buffered_io::{BufferManager, BufferManagerFactory, FilelessBufferManager},
         cache_loader::HNSWIndexCache,
         file_persist::write_prop_value_to_file,
-        lazy_item::{FileIndex, ProbLazyItem},
+        lazy_item::{FileIndex, LazyItem},
         prob_node::{LatestNode, Neighbors, ProbNode, SharedLatestNode, SharedNode},
         types::{DistanceMetric, FileOffset, HNSWLevel, InternalId, MetricResult, NodePropValue},
         versioning::VersionNumber,
@@ -23,7 +23,7 @@ use std::{
 use tempfile::{tempdir, TempDir};
 
 pub struct EqualityTester {
-    checked: HashSet<(*mut ProbLazyItem<ProbNode>, *mut ProbLazyItem<ProbNode>)>,
+    checked: HashSet<(SharedNode, SharedNode)>,
     cache: Arc<HNSWIndexCache>,
 }
 
@@ -183,7 +183,7 @@ fn test_lazy_item_serialization() {
     let (cache, bufman, cursor, _temp_dir) = setup_test(root_version_file_id);
     let node = create_prob_node(0, root_version, &cache.prop_file);
 
-    let lazy_item = ProbLazyItem::new(node, root_version_file_id, FileOffset(0));
+    let lazy_item = LazyItem::new(node, root_version_file_id, FileOffset(0));
 
     let offset = lazy_item
         .serialize(
@@ -262,7 +262,7 @@ fn test_prob_node_serialization_with_neighbors() {
     let mut nodes = Vec::new();
 
     let node = create_prob_node(0, root_version, &cache.prop_file);
-    let lazy_node = ProbLazyItem::new(node, root_version_file_id, FileOffset(0));
+    let lazy_node = LazyItem::new(node, root_version_file_id, FileOffset(0));
     let lazy_node_ptr = LatestNode::new(lazy_node, FileOffset(0));
     let node_size = ProbNode::get_serialized_size(8) as u32;
 
@@ -271,7 +271,7 @@ fn test_prob_node_serialization_with_neighbors() {
     for i in 1..11 {
         let neighbor_node = create_prob_node(i, root_version, &cache.prop_file);
 
-        let lazy_item = ProbLazyItem::new(
+        let lazy_item = LazyItem::new(
             neighbor_node,
             root_version_file_id,
             FileOffset(node_size * i),
@@ -337,8 +337,8 @@ fn test_prob_lazy_item_cyclic_serialization() {
     let node1 = create_prob_node(1, root_version, &cache.prop_file);
     let node_size = ProbNode::get_serialized_size(8) as u32;
 
-    let lazy0 = ProbLazyItem::new(node0, root_version_file_id, FileOffset(0));
-    let lazy1 = ProbLazyItem::new(node1, root_version_file_id, FileOffset(node_size));
+    let lazy0 = LazyItem::new(node0, root_version_file_id, FileOffset(0));
+    let lazy1 = LazyItem::new(node1, root_version_file_id, FileOffset(node_size));
 
     let lazy0_ptr = LatestNode::new(lazy0, FileOffset(0));
     let lazy1_ptr = LatestNode::new(lazy1, FileOffset(8));
