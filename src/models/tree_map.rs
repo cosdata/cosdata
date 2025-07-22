@@ -10,12 +10,12 @@ use parking_lot::{RwLock, RwLockReadGuard};
 
 use super::{
     atomic_array::AtomicArray,
-    buffered_io::{BufIoError, BufferManagerFactory},
+    buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
     common::TSHashTable,
-    serializer::{PartitionedSerialize, SimpleSerialize},
-    tf_idf_index::VersionedVec,
+    serializer::{tree_map::TreeMapSerialize, SimpleSerialize},
     types::FileOffset,
     utils::calculate_path,
+    versioned_vec::{VersionedVec, VersionedVecItem},
     versioning::VersionNumber,
 };
 
@@ -25,13 +25,15 @@ pub trait TreeMapKey: std::hash::Hash + Eq {
 
 pub struct TreeMap<K, V> {
     pub(crate) root: TreeMapNode<V>,
-    pub(crate) bufmans: BufferManagerFactory<u8>,
+    pub(crate) dim_bufman: BufferManager,
+    pub(crate) data_bufmans: BufferManagerFactory<VersionNumber>,
     _marker: PhantomData<K>,
 }
 
 pub struct TreeMapVec<K, V> {
     pub(crate) root: TreeMapVecNode<V>,
-    bufmans: BufferManagerFactory<u8>,
+    pub(crate) dim_bufman: BufferManager,
+    pub(crate) data_bufmans: BufferManagerFactory<VersionNumber>,
     _marker: PhantomData<K>,
 }
 
@@ -78,7 +80,7 @@ pub struct QuotientVec<T> {
 pub struct VersionedItem<T> {
     pub serialized_at: RwLock<Option<FileOffset>>,
     pub version: VersionNumber,
-    pub value: T,
+    pub value: Option<T>,
     pub next: Option<Box<Self>>,
 }
 
@@ -92,7 +94,7 @@ impl<T: PartialEq> PartialEq for TreeMapNode<T> {
 }
 
 #[cfg(test)]
-impl<T: PartialEq> PartialEq for TreeMapVecNode<T> {
+impl<T> PartialEq for TreeMapVecNode<T> {
     fn eq(&self, other: &Self) -> bool {
         *self.offset.read() == *other.offset.read()
             && self.quotients == other.quotients
@@ -112,7 +114,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for TreeMapNode<T> {
 }
 
 #[cfg(test)]
-impl<T: std::fmt::Debug> std::fmt::Debug for TreeMapVecNode<T> {
+impl<T> std::fmt::Debug for TreeMapVecNode<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TreeMapVecNode")
             .field("offset", &*self.offset.read())
@@ -133,7 +135,7 @@ impl<T: PartialEq> PartialEq for QuotientsMap<T> {
 }
 
 #[cfg(test)]
-impl<T: PartialEq> PartialEq for QuotientsMapVec<T> {
+impl<T> PartialEq for QuotientsMapVec<T> {
     fn eq(&self, other: &Self) -> bool {
         self.map == other.map
             && self.len.load(Ordering::Relaxed) == other.len.load(Ordering::Relaxed)
@@ -157,7 +159,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for QuotientsMap<T> {
 }
 
 #[cfg(test)]
-impl<T: std::fmt::Debug> std::fmt::Debug for QuotientsMapVec<T> {
+impl<T> std::fmt::Debug for QuotientsMapVec<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("QuotientMapVec")
             .field("map", &self.map)
@@ -178,7 +180,7 @@ impl<T: PartialEq> PartialEq for Quotient<T> {
 }
 
 #[cfg(test)]
-impl<T: PartialEq> PartialEq for QuotientVec<T> {
+impl<T> PartialEq for QuotientVec<T> {
     fn eq(&self, other: &Self) -> bool {
         self.sequence_idx == other.sequence_idx && *self.value.read() == *other.value.read()
     }
@@ -195,7 +197,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for Quotient<T> {
 }
 
 #[cfg(test)]
-impl<T: std::fmt::Debug> std::fmt::Debug for QuotientVec<T> {
+impl<T> std::fmt::Debug for QuotientVec<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("QuotientVec")
             .field("sequence_idx", &self.sequence_idx)
@@ -227,13 +229,26 @@ impl<T> VersionedItem<T> {
         Self {
             serialized_at: RwLock::new(None),
             version,
-            value,
+            value: Some(value),
+            next: None,
+        }
+    }
+
+    fn new_delete(version: VersionNumber) -> Self {
+        Self {
+            serialized_at: RwLock::new(None),
+            version,
+            value: None,
             next: None,
         }
     }
 
     pub fn insert(&mut self, version: VersionNumber, value: T) {
         self.insert_inner(Box::new(Self::new(version, value)));
+    }
+
+    pub fn delete(&mut self, version: VersionNumber) {
+        self.insert_inner(Box::new(Self::new_delete(version)));
     }
 
     fn insert_inner(&mut self, version: Box<Self>) {
@@ -244,12 +259,12 @@ impl<T> VersionedItem<T> {
         self.next = Some(version);
     }
 
-    pub fn latest(&self) -> &T {
+    pub fn latest(&self) -> Option<&T> {
         if let Some(next) = &self.next {
             return next.latest();
         }
 
-        &self.value
+        self.value.as_ref()
     }
 
     pub fn latest_item(&self) -> &Self {
@@ -289,6 +304,11 @@ impl<T> TreeMapNode<T> {
         self.dirty.store(true, Ordering::Release);
     }
 
+    pub fn delete(&self, version: VersionNumber, quotient: u64) {
+        self.quotients.delete(version, quotient);
+        self.dirty.store(true, Ordering::Release);
+    }
+
     pub fn get_latest(&self, quotient: u64) -> Option<&T> {
         self.quotients.get_latest(quotient)
     }
@@ -298,7 +318,7 @@ impl<T> TreeMapNode<T> {
     }
 }
 
-impl<T> TreeMapVecNode<T> {
+impl<T: VersionedVecItem> TreeMapVecNode<T> {
     pub fn new(node_idx: u16) -> Self {
         Self {
             node_idx,
@@ -326,6 +346,14 @@ impl<T> TreeMapVecNode<T> {
         self.dirty.store(true, Ordering::Release);
     }
 
+    pub fn delete(&self, version: VersionNumber, quotient: u64, id: T::Id)
+    where
+        T::Id: Eq,
+    {
+        self.quotients.delete(version, quotient, id);
+        self.dirty.store(true, Ordering::Release);
+    }
+
     pub fn get(&self, quotient: u64) -> Option<RwLockReadGuard<'_, VersionedVec<T>>> {
         self.quotients.get(quotient)
     }
@@ -342,7 +370,7 @@ impl<T> Default for QuotientsMap<T> {
     }
 }
 
-impl<T> Default for QuotientsMapVec<T> {
+impl<T: VersionedVecItem> Default for QuotientsMapVec<T> {
     fn default() -> Self {
         Self {
             offset: RwLock::new(None),
@@ -370,13 +398,21 @@ impl<T> QuotientsMap<T> {
         );
     }
 
+    pub fn delete(&self, version: VersionNumber, quotient: u64) {
+        self.map.with_value(&quotient, |quotient| {
+            quotient.value.write().delete(version);
+        });
+    }
+
     fn get_latest(&self, quotient: u64) -> Option<&T> {
-        self.map.lookup(&quotient).map(|q| {
+        let op_val = self.map.lookup(&quotient).map(|q| {
             // SAFETY: here we are changing the lifetime of the value by using
             // `std::mem::transmute`, which by definition is not safe, but given our use of
             // this value and how we destroy it, its actually safe in this context.
-            unsafe { std::mem::transmute(q.value.read().latest()) }
-        })
+            unsafe { std::mem::transmute::<Option<&T>, Option<&T>>(q.value.read().latest()) }
+        });
+
+        op_val.and_then(|op_val| op_val)
     }
 
     fn get_versioned(&self, quotient: u64) -> Option<RwLockReadGuard<'_, VersionedItem<T>>> {
@@ -389,7 +425,7 @@ impl<T> QuotientsMap<T> {
     }
 }
 
-impl<T> QuotientsMapVec<T> {
+impl<T: VersionedVecItem> QuotientsMapVec<T> {
     pub fn push(&self, version: VersionNumber, quotient: u64, value: T) {
         self.map.modify_or_insert_with_value(
             quotient,
@@ -406,6 +442,15 @@ impl<T> QuotientsMapVec<T> {
                 })
             },
         );
+    }
+
+    pub fn delete(&self, version: VersionNumber, quotient: u64, id: T::Id)
+    where
+        T::Id: Eq,
+    {
+        self.map.with_value(&quotient, |quotient| {
+            quotient.value.write().delete(version, id);
+        });
     }
 
     fn get(&self, quotient: u64) -> Option<RwLockReadGuard<'_, VersionedVec<T>>> {
@@ -426,7 +471,7 @@ impl<K: TreeMapKey + Clone, V: PartialEq> PartialEq for TreeMap<K, V> {
 }
 
 #[cfg(test)]
-impl<K: TreeMapKey + Clone, V: PartialEq> PartialEq for TreeMapVec<K, V> {
+impl<K: TreeMapKey + Clone, V> PartialEq for TreeMapVec<K, V> {
     fn eq(&self, other: &Self) -> bool {
         self.root == other.root
     }
@@ -442,8 +487,10 @@ impl<K: std::fmt::Debug + TreeMapKey + Clone + Ord, V: std::fmt::Debug> std::fmt
 }
 
 #[cfg(test)]
-impl<K: std::fmt::Debug + TreeMapKey + Clone + Ord, V: std::fmt::Debug> std::fmt::Debug
-    for TreeMapVec<K, V>
+impl<K: std::fmt::Debug + TreeMapKey + Clone + Ord, V> std::fmt::Debug for TreeMapVec<K, V>
+where
+    V: std::fmt::Debug + VersionedVecItem,
+    <V as VersionedVecItem>::Id: std::fmt::Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TreeMapVec")
@@ -453,22 +500,32 @@ impl<K: std::fmt::Debug + TreeMapKey + Clone + Ord, V: std::fmt::Debug> std::fmt
 }
 
 impl<K: TreeMapKey, V> TreeMap<K, V> {
-    pub fn new(bufmans: BufferManagerFactory<u8>) -> Self {
+    pub fn new(
+        dim_bufman: BufferManager,
+        data_bufmans: BufferManagerFactory<VersionNumber>,
+    ) -> Self {
         Self {
             root: TreeMapNode::new(0),
-            bufmans,
+            dim_bufman,
+            data_bufmans,
             _marker: PhantomData,
         }
     }
-}
 
-impl<K: TreeMapKey, V> TreeMap<K, V> {
     pub fn insert(&self, version: VersionNumber, key: &K, value: V) {
         let key = key.key();
         let node_pos = (key % 65536) as u32;
         let path = calculate_path(node_pos, 0);
         let node = self.root.find_or_create_node(&path);
         node.insert(version, key, value);
+    }
+
+    pub fn delete(&self, version: VersionNumber, key: &K) {
+        let key = key.key();
+        let node_pos = (key % 65536) as u32;
+        let path = calculate_path(node_pos, 0);
+        let node = self.root.find_or_create_node(&path);
+        node.delete(version, key);
     }
 
     pub fn get_latest(&self, key: &K) -> Option<&V> {
@@ -489,51 +546,71 @@ impl<K: TreeMapKey, V> TreeMap<K, V> {
 }
 
 impl<K, V: SimpleSerialize> TreeMap<K, V> {
-    pub fn serialize(&self, file_parts: u8) -> Result<(), BufIoError> {
-        let bufman = self.bufmans.get(0)?;
-        let cursor = bufman.open_cursor()?;
-        bufman.update_u32_with_cursor(cursor, u32::MAX)?;
-        let offset = self.root.serialize(&self.bufmans, file_parts, 0, 0)?;
-        bufman.seek_with_cursor(cursor, 0)?;
-        bufman.update_u32_with_cursor(cursor, offset)?;
-        bufman.close_cursor(cursor)?;
-        self.bufmans.flush_all()?;
+    pub fn serialize(&self) -> Result<(), BufIoError> {
+        let cursor = self.dim_bufman.open_cursor()?;
+        self.dim_bufman.update_u32_with_cursor(cursor, u32::MAX)?;
+        let offset = self
+            .root
+            .serialize(&self.dim_bufman, &self.data_bufmans, cursor)?;
+        self.dim_bufman.seek_with_cursor(cursor, 0)?;
+        self.dim_bufman.update_u32_with_cursor(cursor, offset)?;
+        self.dim_bufman.close_cursor(cursor)?;
+        self.dim_bufman.flush()?;
+        self.data_bufmans.flush_all()?;
         Ok(())
     }
 
     pub fn deserialize(
-        bufmans: BufferManagerFactory<u8>,
-        file_parts: u8,
+        dim_bufman: BufferManager,
+        data_bufmans: BufferManagerFactory<VersionNumber>,
     ) -> Result<Self, BufIoError> {
-        let bufman = bufmans.get(0)?;
-        let cursor = bufman.open_cursor()?;
-        let offset = bufman.read_u32_with_cursor(cursor)?;
-        bufman.close_cursor(cursor)?;
+        let cursor = dim_bufman.open_cursor()?;
+        let offset = dim_bufman.read_u32_with_cursor(cursor)?;
+        dim_bufman.close_cursor(cursor)?;
         Ok(Self {
-            root: TreeMapNode::deserialize(&bufmans, file_parts, 0, FileOffset(offset))?,
-            bufmans,
+            root: TreeMapNode::deserialize(
+                &dim_bufman,
+                &data_bufmans,
+                FileOffset(offset),
+                VersionNumber::from(u32::MAX), // not used
+            )?,
+            dim_bufman,
+            data_bufmans,
             _marker: PhantomData,
         })
     }
 }
 
-impl<K: TreeMapKey, V> TreeMapVec<K, V> {
-    pub fn new(bufmans: BufferManagerFactory<u8>) -> Self {
+impl<K: TreeMapKey, V: VersionedVecItem> TreeMapVec<K, V> {
+    pub fn new(
+        dim_bufman: BufferManager,
+        data_bufmans: BufferManagerFactory<VersionNumber>,
+    ) -> Self {
         Self {
             root: TreeMapVecNode::new(0),
-            bufmans,
+            dim_bufman,
+            data_bufmans,
             _marker: PhantomData,
         }
     }
-}
 
-impl<K: TreeMapKey, V> TreeMapVec<K, V> {
     pub fn push(&self, version: VersionNumber, key: &K, value: V) {
         let key = key.key();
         let node_pos = (key % 65536) as u32;
         let path = calculate_path(node_pos, 0);
         let node = self.root.find_or_create_node(&path);
         node.push(version, key, value);
+    }
+
+    pub fn delete(&self, version: VersionNumber, key: &K, id: V::Id)
+    where
+        V::Id: Eq,
+    {
+        let key = key.key();
+        let node_pos = (key % 65536) as u32;
+        let path = calculate_path(node_pos, 0);
+        let node = self.root.find_or_create_node(&path);
+        node.delete(version, key, id);
     }
 
     pub fn get(&self, key: &K) -> Option<RwLockReadGuard<'_, VersionedVec<V>>> {
@@ -545,30 +622,41 @@ impl<K: TreeMapKey, V> TreeMapVec<K, V> {
     }
 }
 
-impl<K, V: SimpleSerialize> TreeMapVec<K, V> {
-    pub fn serialize(&self, file_parts: u8) -> Result<(), BufIoError> {
-        let bufman = self.bufmans.get(0)?;
-        let cursor = bufman.open_cursor()?;
-        bufman.update_u32_with_cursor(cursor, u32::MAX)?;
-        let offset = self.root.serialize(&self.bufmans, file_parts, 0, 0)?;
-        bufman.seek_with_cursor(cursor, 0)?;
-        bufman.update_u32_with_cursor(cursor, offset)?;
-        bufman.close_cursor(cursor)?;
-        self.bufmans.flush_all()?;
+impl<K, V> TreeMapVec<K, V>
+where
+    V: SimpleSerialize + VersionedVecItem,
+    <V as VersionedVecItem>::Id: SimpleSerialize,
+{
+    pub fn serialize(&self) -> Result<(), BufIoError> {
+        let cursor = self.dim_bufman.open_cursor()?;
+        self.dim_bufman.update_u32_with_cursor(cursor, u32::MAX)?;
+        let offset = self
+            .root
+            .serialize(&self.dim_bufman, &self.data_bufmans, cursor)?;
+        self.dim_bufman.seek_with_cursor(cursor, 0)?;
+        self.dim_bufman.update_u32_with_cursor(cursor, offset)?;
+        self.dim_bufman.close_cursor(cursor)?;
+        self.dim_bufman.flush()?;
+        self.data_bufmans.flush_all()?;
         Ok(())
     }
 
     pub fn deserialize(
-        bufmans: BufferManagerFactory<u8>,
-        file_parts: u8,
+        dim_bufman: BufferManager,
+        data_bufmans: BufferManagerFactory<VersionNumber>,
     ) -> Result<Self, BufIoError> {
-        let bufman = bufmans.get(0)?;
-        let cursor = bufman.open_cursor()?;
-        let offset = bufman.read_u32_with_cursor(cursor)?;
-        bufman.close_cursor(cursor)?;
+        let cursor = dim_bufman.open_cursor()?;
+        let offset = dim_bufman.read_u32_with_cursor(cursor)?;
+        dim_bufman.close_cursor(cursor)?;
         Ok(Self {
-            root: TreeMapVecNode::deserialize(&bufmans, file_parts, 0, FileOffset(offset))?,
-            bufmans,
+            root: TreeMapVecNode::deserialize(
+                &dim_bufman,
+                &data_bufmans,
+                FileOffset(offset),
+                VersionNumber::from(u32::MAX), // not used
+            )?,
+            dim_bufman,
+            data_bufmans,
             _marker: PhantomData,
         })
     }
@@ -582,6 +670,8 @@ impl TreeMapKey for u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::OpenOptions;
+
     use tempfile::tempdir;
 
     use super::*;
@@ -589,12 +679,20 @@ mod tests {
     #[test]
     fn tests_basic_usage() {
         let tempdir = tempdir().unwrap();
-        let bufmans = BufferManagerFactory::new(
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .create(true)
+            .open(tempdir.as_ref().join("tree_map.dim"))
+            .unwrap();
+        let dim_bufman = BufferManager::new(file, 8192).unwrap();
+        let data_bufmans = BufferManagerFactory::new(
             tempdir.as_ref().into(),
-            |root, part| root.join(format!("{}.tree-map", part)),
+            |root, version: &VersionNumber| root.join(format!("tree_map.{}.data", **version)),
             8192,
         );
-        let map: TreeMap<u64, u64> = TreeMap::new(bufmans);
+        let map: TreeMap<u64, u64> = TreeMap::new(dim_bufman, data_bufmans);
         map.insert(0.into(), &65536, 0);
         map.insert(0.into(), &0, 23);
         assert_eq!(map.get_latest(&0), Some(&23));
@@ -605,7 +703,7 @@ mod tests {
             Some(&VersionedItem {
                 version: 0.into(),
                 serialized_at: RwLock::new(None),
-                value: 23,
+                value: Some(23),
                 next: Some(Box::new(VersionedItem::new(1.into(), 29)))
             })
         );

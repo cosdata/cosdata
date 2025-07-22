@@ -1,18 +1,12 @@
 pub mod hnsw;
 pub mod inverted;
 pub mod tf_idf;
+pub mod tree_map;
 
 mod metric_distance;
-mod page;
-mod pagepool;
-mod quotients_map;
 mod raw_vector_embedding;
 mod storage;
 mod transaction_status;
-mod tree_map;
-mod versioned_item;
-mod versioned_pagepool;
-mod versioned_vec;
 
 #[cfg(test)]
 mod tests;
@@ -21,34 +15,45 @@ use std::io;
 
 use parking_lot::RwLock;
 
-use super::buffered_io::{BufIoError, BufferManager, BufferManagerFactory};
+use super::buffered_io::{BufIoError, BufferManager};
 use super::types::{DocumentId, FileOffset, InternalId, VectorId};
 
-/// Writes a u16 length to the buffer using custom encoding:
-/// - If the value fits in 7 bits (<= 127), write it directly as one byte.
-/// - Otherwise, set the MSB of the first byte to 1, store the top 7 bits,
-///   and follow with a byte for the lower 8 bits.
-pub fn write_len(buf: &mut Vec<u8>, len: u16) {
-    if len <= 0x7F {
+/// Encode `len` into 1–3 bytes:
+/// - 1 byte if < 2⁷  
+/// - 2 bytes if < 2¹⁴  
+/// - 3 bytes otherwise (uses all 8 bits of the final byte, giving 22 bits total)
+pub fn write_len(buf: &mut Vec<u8>, len: u32) {
+    if len < (1 << 7) {
+        // [0vvvvvvv]
         buf.push(len as u8);
+    } else if len < (1 << 14) {
+        // [1vvvvvvv] [0vvvvvvv]
+        buf.push(((len) as u8 & 0x7F) | 0x80);
+        buf.push((len >> 7) as u8);
     } else {
-        let msb = ((len >> 8) as u8 & 0x7F) | 0x80; // Set highest bit
-        let lsb = len as u8;
-        buf.push(msb);
-        buf.push(lsb);
+        // [1vvvvvvv] [1vvvvvvv] [vvvvvvvv]
+        buf.push(((len) as u8 & 0x7F) | 0x80);
+        buf.push(((len >> 7) as u8 & 0x7F) | 0x80);
+        buf.push((len >> 14) as u8);
     }
 }
 
-/// Reads a u16 length from the buffer using the same encoding.
-pub fn read_len(bufman: &BufferManager, cursor: u64) -> Result<u16, BufIoError> {
-    let first = bufman.read_u8_with_cursor(cursor)?;
-    if first & 0x80 == 0 {
-        Ok(first as u16)
-    } else {
-        let msb = (first & 0x7F) as u16;
-        let lsb = bufman.read_u8_with_cursor(cursor)? as u16;
-        Ok((msb << 8) | lsb)
+/// Decode a 1–3 byte varint back to `u32`. Any bits beyond 22 are ignored.
+pub fn read_len(bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
+    let b0 = bufman.read_u8_with_cursor(cursor)? as u32;
+    if b0 & 0x80 == 0 {
+        return Ok(b0);
     }
+
+    let b1 = bufman.read_u8_with_cursor(cursor)? as u32;
+    let low14 = (b0 & 0x7F) | ((b1 & 0x7F) << 7);
+    if b1 & 0x80 == 0 {
+        return Ok(low14);
+    }
+
+    let b2 = bufman.read_u8_with_cursor(cursor)? as u32;
+    // here we take all 8 bits of b2 as the highest part
+    Ok(low14 | (b2 << 14))
 }
 
 pub fn read_string(bufman: &BufferManager, cursor: u64) -> Result<String, BufIoError> {
@@ -74,23 +79,6 @@ pub fn read_opt_string(bufman: &BufferManager, cursor: u64) -> Result<Option<Str
 pub trait SimpleSerialize: Sized {
     fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError>;
     fn deserialize(bufman: &BufferManager, offset: FileOffset) -> Result<Self, BufIoError>;
-}
-
-pub trait PartitionedSerialize: Sized {
-    fn serialize(
-        &self,
-        bufmans: &BufferManagerFactory<u8>,
-        file_parts: u8,
-        file_idx: u8,
-        cursor: u64,
-    ) -> Result<u32, BufIoError>;
-
-    fn deserialize(
-        bufmans: &BufferManagerFactory<u8>,
-        file_parts: u8,
-        file_idx: u8,
-        file_offset: FileOffset,
-    ) -> Result<Self, BufIoError>;
 }
 
 impl SimpleSerialize for u16 {
@@ -130,7 +118,7 @@ impl SimpleSerialize for InternalId {
 impl SimpleSerialize for VectorId {
     fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
         let mut buf = Vec::new();
-        write_len(&mut buf, self.len() as u16);
+        write_len(&mut buf, self.len() as u32);
         buf.extend(self.as_bytes());
         Ok(bufman.write_to_end_of_file(cursor, &buf)? as u32)
     }
@@ -147,7 +135,7 @@ impl SimpleSerialize for VectorId {
 impl SimpleSerialize for DocumentId {
     fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
         let mut buf = Vec::new();
-        write_len(&mut buf, self.len() as u16);
+        write_len(&mut buf, self.len() as u32);
         buf.extend(self.as_bytes());
         Ok(bufman.write_to_end_of_file(cursor, &buf)? as u32)
     }
@@ -201,5 +189,15 @@ impl<T: SimpleSerialize> SimpleSerialize for RwLock<T> {
 
     fn deserialize(bufman: &BufferManager, offset: FileOffset) -> Result<Self, BufIoError> {
         Ok(Self::new(T::deserialize(bufman, offset)?))
+    }
+}
+
+impl SimpleSerialize for u32 {
+    fn serialize(&self, _bufman: &BufferManager, _cursor: u64) -> Result<u32, BufIoError> {
+        Ok(*self)
+    }
+
+    fn deserialize(_bufman: &BufferManager, offset: FileOffset) -> Result<Self, BufIoError> {
+        Ok(offset.0)
     }
 }

@@ -40,7 +40,7 @@ use crate::{
     models::{
         buffered_io::{BufferManager, FilelessBufferManager},
         common::*,
-        lazy_item::{FileIndex, ProbLazyItem},
+        lazy_item::{FileIndex, LazyItem},
         meta_persist::retrieve_values_range,
         prob_node::{LatestNode, SharedLatestNode},
         serializer::hnsw::RawDeserialize,
@@ -613,7 +613,7 @@ impl CollectionsMap {
             // if collection has inverted index load it from the lmdb
             let inverted_index = if collection_meta.sparse_vector.enabled {
                 collections_map
-                    .load_inverted_index(&collection_meta, &lmdb, &config)?
+                    .load_inverted_index(&collection_meta, &lmdb)?
                     .map(Arc::new)
             } else {
                 None
@@ -621,36 +621,84 @@ impl CollectionsMap {
 
             let tf_idf_index = if collection_meta.tf_idf_options.enabled {
                 collections_map
-                    .load_tf_idf_index(&collection_meta, &lmdb, &config)?
+                    .load_tf_idf_index(&collection_meta, &lmdb)?
                     .map(Arc::new)
             } else {
                 None
             };
 
-            let collections_path: Arc<Path> =
+            let collection_path: Arc<Path> =
                 get_collections_path().join(&collection_meta.name).into();
 
-            let internal_to_external_map_bufmans = BufferManagerFactory::new(
-                collections_path.clone(),
-                |root, part| root.join(format!("{}.itoe", part)),
+            let internal_to_external_map_dim_file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .truncate(false)
+                .create(true)
+                .open(collection_path.join("itoe.dim"))
+                .map_err(BufIoError::Io)?;
+
+            let internal_to_external_map_dim_bufman =
+                BufferManager::new(internal_to_external_map_dim_file, 8192)
+                    .map_err(BufIoError::Io)?;
+
+            let internal_to_external_map_data_bufmans = BufferManagerFactory::new(
+                collection_path.clone(),
+                |root, version: &VersionNumber| root.join(format!("itoe.{}.data", **version)),
                 8192,
             );
 
-            let external_to_internal_map_bufmans = BufferManagerFactory::new(
-                collections_path.clone(),
-                |root, part| root.join(format!("{}.etoi", part)),
+            let external_to_internal_map_dim_file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .truncate(false)
+                .create(true)
+                .open(collection_path.join("etoi.dim"))
+                .map_err(BufIoError::Io)?;
+
+            let external_to_internal_map_dim_bufman =
+                BufferManager::new(external_to_internal_map_dim_file, 8192)
+                    .map_err(BufIoError::Io)?;
+
+            let external_to_internal_map_data_bufmans = BufferManagerFactory::new(
+                collection_path.clone(),
+                |root, version: &VersionNumber| root.join(format!("etoi.{}.data", **version)),
                 8192,
             );
 
-            let document_to_internals_map_bufmans = BufferManagerFactory::new(
-                collections_path.clone(),
-                |root, part| root.join(format!("{}.dtoi", part)),
+            let document_to_internals_map_dim_file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .truncate(false)
+                .create(true)
+                .open(collection_path.join("dtoi.dim"))
+                .map_err(BufIoError::Io)?;
+
+            let document_to_internals_map_dim_bufman =
+                BufferManager::new(document_to_internals_map_dim_file, 8192)
+                    .map_err(BufIoError::Io)?;
+
+            let document_to_internals_map_data_bufmans = BufferManagerFactory::new(
+                collection_path.clone(),
+                |root, version: &VersionNumber| root.join(format!("dtoi.{}.data", **version)),
                 8192,
             );
 
-            let transaction_status_map_bufmans = BufferManagerFactory::new(
-                collections_path.clone(),
-                |root, part| root.join(format!("{}.txn_status", part)),
+            let transaction_status_map_dim_file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .truncate(false)
+                .create(true)
+                .open(collection_path.join("txn_status.dim"))
+                .map_err(BufIoError::Io)?;
+
+            let transaction_status_map_dim_bufman =
+                BufferManager::new(transaction_status_map_dim_file, 8192)
+                    .map_err(BufIoError::Io)?;
+
+            let transaction_status_map_data_bufmans = BufferManagerFactory::new(
+                collection_path.clone(),
+                |root, version: &VersionNumber| root.join(format!("txn_status.{}.data", **version)),
                 8192,
             );
 
@@ -667,20 +715,20 @@ impl CollectionsMap {
                 ),
                 vcs,
                 internal_to_external_map: TreeMap::deserialize(
-                    internal_to_external_map_bufmans,
-                    config.tree_map_serialized_parts,
+                    internal_to_external_map_dim_bufman,
+                    internal_to_external_map_data_bufmans,
                 )?,
                 external_to_internal_map: TreeMap::deserialize(
-                    external_to_internal_map_bufmans,
-                    config.tree_map_serialized_parts,
+                    external_to_internal_map_dim_bufman,
+                    external_to_internal_map_data_bufmans,
                 )?,
                 document_to_internals_map: TreeMapVec::deserialize(
-                    document_to_internals_map_bufmans,
-                    config.tree_map_serialized_parts,
+                    document_to_internals_map_dim_bufman,
+                    document_to_internals_map_data_bufmans,
                 )?,
                 transaction_status_map: TreeMap::deserialize(
-                    transaction_status_map_bufmans,
-                    config.tree_map_serialized_parts,
+                    transaction_status_map_dim_bufman,
+                    transaction_status_map_data_bufmans,
                 )?,
                 internal_id_counter: AtomicU32::new(id_counter_value),
                 hnsw_index: parking_lot::RwLock::new(hnsw_index),
@@ -886,7 +934,7 @@ impl CollectionsMap {
             &mut latest_version_links,
             latest_version_links_cursor,
         )?;
-        let root = ProbLazyItem::new(root_node, root_file_index.file_id, root_file_index.offset);
+        let root = LazyItem::new(root_node, root_file_index.file_id, root_file_index.offset);
         cache
             .registry
             .insert(HNSWIndexCache::combine_index(&root_file_index), root);
@@ -926,7 +974,7 @@ impl CollectionsMap {
                     &mut latest_version_links,
                     latest_version_links_cursor,
                 )?;
-                let pseudo_root = ProbLazyItem::new(
+                let pseudo_root = LazyItem::new(
                     pseudo_root_node,
                     pseudo_root_file_index.file_id,
                     pseudo_root_file_index.offset,
@@ -943,9 +991,10 @@ impl CollectionsMap {
             None => None,
         };
 
-        let (file_index_sender, file_index_receiver) = channel::unbounded::<FileIndex>();
+        let (file_index_sender, file_index_receiver) =
+            channel::unbounded::<FileIndex<IndexFileId>>();
         let (raw_node_sender, raw_node_receiver) =
-            channel::unbounded::<(<ProbNode as RawDeserialize>::Raw, FileIndex)>();
+            channel::unbounded::<(<ProbNode as RawDeserialize>::Raw, FileIndex<IndexFileId>)>();
 
         thread::scope(|s| {
             let mut handles = Vec::new();
@@ -1057,7 +1106,6 @@ impl CollectionsMap {
         &self,
         collection_meta: &CollectionMetadata,
         lmdb: &MetaDb,
-        config: &Config,
     ) -> Result<Option<InvertedIndex>, WaCustomError> {
         let collection_path: Arc<Path> = get_collections_path().join(&collection_meta.name).into();
         let index_path = collection_path.join("sparse_inverted_index");
@@ -1080,7 +1128,6 @@ impl CollectionsMap {
             root: InvertedIndexRoot::deserialize(
                 index_path,
                 inverted_index_data.quantization_bits,
-                config.inverted_index_data_file_parts,
             )?,
             values_upper_bound: RwLock::new(values_upper_bound.unwrap_or(1.0)),
             is_configured: AtomicBool::new(values_upper_bound.is_some()),
@@ -1098,7 +1145,6 @@ impl CollectionsMap {
         &self,
         collection_meta: &CollectionMetadata,
         lmdb: &MetaDb,
-        config: &Config,
     ) -> Result<Option<TFIDFIndex>, WaCustomError> {
         let collection_path: Arc<Path> = get_collections_path().join(&collection_meta.name).into();
         let index_path = collection_path.join("tf_idf_index");
@@ -1118,7 +1164,7 @@ impl CollectionsMap {
 
         let average_document_length = retrieve_average_document_length(lmdb)?;
         let inverted_index = TFIDFIndex {
-            root: TFIDFIndexRoot::deserialize(index_path, config.inverted_index_data_file_parts)?,
+            root: TFIDFIndexRoot::deserialize(index_path)?,
             average_document_length: RwLock::new(average_document_length.unwrap_or(1.0)),
             is_configured: AtomicBool::new(average_document_length.is_some()),
             documents: RwLock::new(Vec::new()),

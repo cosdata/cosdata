@@ -1,4 +1,4 @@
-use super::buffered_io::BufferManagerFactory;
+use super::buffered_io::{BufIoError, BufferManager, BufferManagerFactory};
 use super::collection_transaction::{
     ExplicitTransaction, ExplicitTransactionID, ImplicitTransaction, TransactionStatus,
 };
@@ -24,7 +24,7 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_cbor::to_vec;
 use siphasher::sip::SipHasher24;
-use std::fs::create_dir_all;
+use std::fs::{create_dir_all, OpenOptions};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::thread;
 use std::{fs, hash::Hasher, path::Path, sync::Arc};
@@ -143,29 +143,74 @@ impl Collection {
             return Err(WaCustomError::InvalidParams);
         }
 
-        let collections_path: Arc<Path> = get_collections_path().join(&name).into();
+        let collection_path: Arc<Path> = get_collections_path().join(&name).into();
+        fs::create_dir_all(&collection_path).map_err(|e| WaCustomError::FsError(e.to_string()))?;
 
-        let internal_to_external_map_bufmans = BufferManagerFactory::new(
-            collections_path.clone(),
-            |root, part| root.join(format!("{}.itoe", part)),
+        let internal_to_external_map_dim_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .create(true)
+            .open(collection_path.join("itoe.dim"))
+            .map_err(BufIoError::Io)?;
+
+        let internal_to_external_map_dim_bufman =
+            BufferManager::new(internal_to_external_map_dim_file, 8192).map_err(BufIoError::Io)?;
+
+        let internal_to_external_map_data_bufmans = BufferManagerFactory::new(
+            collection_path.clone(),
+            |root, version: &VersionNumber| root.join(format!("itoe.{}.data", **version)),
             8192,
         );
 
-        let external_to_internal_map_bufmans = BufferManagerFactory::new(
-            collections_path.clone(),
-            |root, part| root.join(format!("{}.etoi", part)),
+        let external_to_internal_map_dim_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .create(true)
+            .open(collection_path.join("etoi.dim"))
+            .map_err(BufIoError::Io)?;
+
+        let external_to_internal_map_dim_bufman =
+            BufferManager::new(external_to_internal_map_dim_file, 8192).map_err(BufIoError::Io)?;
+
+        let external_to_internal_map_data_bufmans = BufferManagerFactory::new(
+            collection_path.clone(),
+            |root, version: &VersionNumber| root.join(format!("etoi.{}.data", **version)),
             8192,
         );
 
-        let document_to_internals_map_bufmans = BufferManagerFactory::new(
-            collections_path.clone(),
-            |root, part| root.join(format!("{}.dtoi", part)),
+        let document_to_internals_map_dim_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .create(true)
+            .open(collection_path.join("dtoi.dim"))
+            .map_err(BufIoError::Io)?;
+
+        let document_to_internals_map_dim_bufman =
+            BufferManager::new(document_to_internals_map_dim_file, 8192).map_err(BufIoError::Io)?;
+
+        let document_to_internals_map_data_bufmans = BufferManagerFactory::new(
+            collection_path.clone(),
+            |root, version: &VersionNumber| root.join(format!("dtoi.{}.data", **version)),
             8192,
         );
 
-        let transaction_status_map_bufmans = BufferManagerFactory::new(
-            collections_path,
-            |root, part| root.join(format!("{}.txn_status", part)),
+        let transaction_status_map_dim_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .create(true)
+            .open(collection_path.join("txn_status.dim"))
+            .map_err(BufIoError::Io)?;
+
+        let transaction_status_map_dim_bufman =
+            BufferManager::new(transaction_status_map_dim_file, 8192).map_err(BufIoError::Io)?;
+
+        let transaction_status_map_data_bufmans = BufferManagerFactory::new(
+            collection_path.clone(),
+            |root, version: &VersionNumber| root.join(format!("txn_status.{}.data", **version)),
             8192,
         );
 
@@ -186,10 +231,22 @@ impl Collection {
             current_explicit_transaction: RwLock::new(None),
             current_implicit_transaction: RwLock::new(ImplicitTransaction::default()),
             vcs,
-            internal_to_external_map: TreeMap::new(internal_to_external_map_bufmans),
-            external_to_internal_map: TreeMap::new(external_to_internal_map_bufmans),
-            document_to_internals_map: TreeMapVec::new(document_to_internals_map_bufmans),
-            transaction_status_map: TreeMap::new(transaction_status_map_bufmans),
+            internal_to_external_map: TreeMap::new(
+                internal_to_external_map_dim_bufman,
+                internal_to_external_map_data_bufmans,
+            ),
+            external_to_internal_map: TreeMap::new(
+                external_to_internal_map_dim_bufman,
+                external_to_internal_map_data_bufmans,
+            ),
+            document_to_internals_map: TreeMapVec::new(
+                document_to_internals_map_dim_bufman,
+                document_to_internals_map_data_bufmans,
+            ),
+            transaction_status_map: TreeMap::new(
+                transaction_status_map_dim_bufman,
+                transaction_status_map_data_bufmans,
+            ),
             internal_id_counter: AtomicU32::new(0),
             hnsw_index: RwLock::new(None),
             inverted_index: RwLock::new(None),
@@ -219,9 +276,6 @@ impl Collection {
                 Ok::<_, WaCustomError>(())
             });
         }
-
-        let collection_path = collection.get_path();
-        fs::create_dir_all(&collection_path).map_err(|e| WaCustomError::FsError(e.to_string()))?;
 
         Ok(collection)
     }
@@ -463,6 +517,46 @@ impl Collection {
         Ok(())
     }
 
+    pub fn delete_embedding(
+        &self,
+        vector_id: VectorId,
+        version: VersionNumber,
+        config: &Config,
+    ) -> Result<(), WaCustomError> {
+        let Some(internal_id) = self
+            .external_to_internal_map
+            .get_latest(&vector_id)
+            .cloned()
+        else {
+            return Ok(());
+        };
+
+        let Some(raw_emb) = self.internal_to_external_map.get_latest(&internal_id) else {
+            return Ok(());
+        };
+
+        if let Some(hnsw_index) = self.get_hnsw_index() {
+            hnsw_index.delete_embedding(internal_id, raw_emb, version, config)?;
+        }
+
+        if let Some(inverted_index) = self.get_inverted_index() {
+            inverted_index.delete_embedding(internal_id, raw_emb, version, config)?;
+        }
+
+        if let Some(tf_idf_index) = self.get_tf_idf_index() {
+            tf_idf_index.delete_embedding(internal_id, raw_emb, version, config)?;
+        }
+
+        self.internal_to_external_map.delete(version, &internal_id);
+        self.external_to_internal_map.delete(version, &vector_id);
+        if let Some(document_id) = &raw_emb.document_id {
+            self.document_to_internals_map
+                .delete(version, document_id, internal_id);
+        }
+
+        Ok(())
+    }
+
     pub fn trigger_indexing(&self, txn_id: ExplicitTransactionID, version: VersionNumber) {
         self.indexing_manager
             .read()
@@ -471,15 +565,11 @@ impl Collection {
             .trigger(txn_id, version);
     }
 
-    pub fn flush(&self, config: &Config) -> Result<(), WaCustomError> {
-        self.internal_to_external_map
-            .serialize(config.tree_map_serialized_parts)?;
-        self.external_to_internal_map
-            .serialize(config.tree_map_serialized_parts)?;
-        self.document_to_internals_map
-            .serialize(config.tree_map_serialized_parts)?;
-        self.transaction_status_map
-            .serialize(config.tree_map_serialized_parts)?;
+    pub fn flush(&self) -> Result<(), WaCustomError> {
+        self.internal_to_external_map.serialize()?;
+        self.external_to_internal_map.serialize()?;
+        self.document_to_internals_map.serialize()?;
+        self.transaction_status_map.serialize()?;
         store_highest_internal_id(&self.lmdb, self.internal_id_counter.load(Ordering::Relaxed))?;
         Ok(())
     }

@@ -18,7 +18,7 @@ use super::{
     buffered_io::{BufIoError, BufferManager},
     cache_loader::HNSWIndexCache,
     common::TSHashTable,
-    lazy_item::{FileIndex, ProbLazyItem},
+    lazy_item::{FileIndex, LazyItem},
     serializer::hnsw::RawDeserialize,
     types::{
         DistanceMetric, FileOffset, HNSWLevel, InternalId, MetricResult, NodePropMetadata,
@@ -27,7 +27,7 @@ use super::{
     versioning::VersionNumber,
 };
 
-pub type SharedNode = *mut ProbLazyItem<ProbNode>;
+pub type SharedNode = *mut LazyItem<ProbNode, IndexFileId>;
 
 pub struct LatestNode {
     pub latest: SharedNode,
@@ -105,7 +105,7 @@ pub struct ProbNode {
     neighbors: Neighbors,
     parent: AtomicPtr<LatestNode>,
     child: AtomicPtr<LatestNode>,
-    lowest_index: RwLock<(u8, MetricResult)>,
+    pub lowest_index: RwLock<(u8, MetricResult)>,
 }
 
 unsafe impl Send for ProbNode {}
@@ -282,7 +282,7 @@ impl ProbNode {
         }
     }
 
-    pub fn remove_neighbor_by_id(&self, id: InternalId) {
+    pub fn remove_neighbor_by_id(&self, id: InternalId) -> bool {
         let _lock = self.freeze();
         for neighbor in &self.neighbors {
             let res = neighbor.fetch_update(Ordering::Release, Ordering::Acquire, |nbr| {
@@ -299,9 +299,17 @@ impl ProbNode {
                 unsafe {
                     drop(Box::from_raw(nbr));
                 }
-                break;
+                return true;
             }
         }
+        false
+    }
+
+    pub fn is_neighbors_empty(&self) -> bool {
+        let _lock = self.freeze();
+        self.neighbors
+            .iter()
+            .all(|neighbor| neighbor.load(Ordering::Relaxed).is_null())
     }
 
     pub fn remove_neighbor_by_index_and_id(&self, index: u8, id: InternalId) {
@@ -349,7 +357,7 @@ impl ProbNode {
         raw: <Self as RawDeserialize>::Raw,
         cache: &HNSWIndexCache,
         dummy_bufman: &BufferManager,
-        pending_items: &mut FxHashMap<FileIndex, SharedNode>,
+        pending_items: &mut FxHashMap<FileIndex<IndexFileId>, SharedNode>,
         latest_version_links: &mut FxHashMap<FileOffset, SharedLatestNode>,
         latest_version_links_cursor: u64,
     ) -> Result<Self, BufIoError> {
@@ -382,7 +390,7 @@ impl ProbNode {
                         .unwrap_or_else(|| {
                             *pending_items
                                 .entry(file_index)
-                                .or_insert_with(|| ProbLazyItem::new_pending(file_index))
+                                .or_insert_with(|| LazyItem::new_pending(file_index))
                         });
                     let ptr = LatestNode::new(item, parent_offset);
                     entry.insert(ptr);
@@ -412,7 +420,7 @@ impl ProbNode {
                         .unwrap_or_else(|| {
                             *pending_items
                                 .entry(file_index)
-                                .or_insert_with(|| ProbLazyItem::new_pending(file_index))
+                                .or_insert_with(|| LazyItem::new_pending(file_index))
                         });
                     let ptr = LatestNode::new(item, child_offset);
                     entry.insert(ptr);
@@ -445,9 +453,9 @@ impl ProbNode {
                                     .registry
                                     .get(&HNSWIndexCache::combine_index(&file_index))
                                     .unwrap_or_else(|| {
-                                        *pending_items.entry(file_index).or_insert_with(|| {
-                                            ProbLazyItem::new_pending(file_index)
-                                        })
+                                        *pending_items
+                                            .entry(file_index)
+                                            .or_insert_with(|| LazyItem::new_pending(file_index))
                                     });
                                 let ptr = LatestNode::new(item, neighbor_offset);
                                 entry.insert(ptr);

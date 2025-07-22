@@ -41,7 +41,7 @@ pub(crate) async fn query_vectors(
         .iter()
         .map(|internal_id| {
             Ok(collection
-                .get_raw_emb_by_internal_id(internal_id)
+                .get_raw_emb_by_internal_id(&internal_id)
                 .ok_or(VectorsError::NotFound)?
                 .clone()
                 .into())

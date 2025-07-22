@@ -3,7 +3,7 @@ use crate::{
     config_loader::Config,
     models::{
         buffered_io::BufIoError,
-        collection::Collection,
+        collection::{Collection, RawVectorEmbedding},
         common::WaCustomError,
         meta_persist::store_average_document_length,
         sparse_ann_query::SparseAnnQueryBasic,
@@ -63,12 +63,11 @@ unsafe impl Sync for TFIDFIndex {}
 impl TFIDFIndex {
     pub fn new(
         root_path: PathBuf,
-        data_file_parts: u8,
         sample_threshold: usize,
         k1: f32,
         b: f32,
     ) -> Result<Self, BufIoError> {
-        let root = TFIDFIndexRoot::new(root_path, data_file_parts)?;
+        let root = TFIDFIndexRoot::new(root_path)?;
 
         Ok(Self {
             root,
@@ -109,6 +108,33 @@ impl TFIDFIndex {
 
         Ok(())
     }
+
+    pub fn mark_embedding_as_deleted(
+        &self,
+        version: VersionNumber,
+        id: InternalId,
+        text: &str,
+    ) -> Result<(), BufIoError> {
+        self.root
+            .total_documents_count
+            .fetch_sub(1, Ordering::Relaxed);
+
+        let terms = process_text(
+            text,
+            40,
+            *self.average_document_length.read().unwrap(),
+            self.k1,
+            self.b,
+        );
+
+        let id = id.into();
+
+        for (term_hash, _) in terms {
+            self.root.delete(term_hash, id, version)?;
+        }
+
+        Ok(())
+    }
 }
 
 impl IndexOps for TFIDFIndex {
@@ -131,6 +157,20 @@ impl IndexOps for TFIDFIndex {
         embeddings
             .into_iter()
             .try_for_each(|TFIDFInputEmbedding(id, text)| self.insert(version, id, text))?;
+        Ok(())
+    }
+
+    fn delete_embedding(
+        &self,
+        id: InternalId,
+        raw_emb: &RawVectorEmbedding,
+        version: VersionNumber,
+        _config: &Config,
+    ) -> Result<(), WaCustomError> {
+        let Some(text) = &raw_emb.text else {
+            return Ok(());
+        };
+        self.mark_embedding_as_deleted(version, id, text)?;
         Ok(())
     }
 

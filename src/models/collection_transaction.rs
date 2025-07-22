@@ -49,7 +49,7 @@ impl BackgroundExplicitTransaction {
         if let Some(tf_idf_index) = &*collection.tf_idf_index.read() {
             tf_idf_index.pre_commit_transaction(collection, self.version, config)?;
         }
-        collection.flush(config)?;
+        collection.flush()?;
         Ok(())
     }
 }
@@ -226,6 +226,7 @@ impl ImplicitTransaction {
         collection
             .vcs
             .set_current_version_implicit(version, random())?;
+        *collection.current_version.write() = version;
         update_current_version(&collection.lmdb, version)?;
         Ok(unsafe {
             mem::transmute::<&ImplicitTransactionData, &ImplicitTransactionData>(
@@ -261,7 +262,7 @@ impl ImplicitTransaction {
         if let Some(tf_idf_index) = &*collection.tf_idf_index.read() {
             tf_idf_index.pre_commit_transaction(collection, data.version, config)?;
         }
-        collection.flush(config)?;
+        collection.flush()?;
         drop(data.channel);
         let wal = data.thread_handle.join().unwrap()?;
         update_background_version(&collection.lmdb, data.version)?;
@@ -397,22 +398,6 @@ impl TransactionStatus {
             }
         }
     }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
-pub struct Progress {
-    pub percentage_done: f32,
-    pub records_indexed: u32,
-    pub total_records: u32,
-    pub rate_per_second: f32,
-    pub estimated_time_remaining_seconds: u32,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
-pub struct Summary {
-    pub total_records_indexed: u32,
-    pub duration_seconds: u32,
-    pub average_rate_per_second: f32,
 }
 
 impl Serialize for TransactionStatus {

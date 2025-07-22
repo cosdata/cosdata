@@ -91,76 +91,88 @@ impl IndexingManager {
         };
         let records_indexed = AtomicU32::new(0);
         let errors = RwLock::new(Vec::new());
+        let mut vectors_to_be_deleted = Vec::new();
         threadpool.scope(|s| {
             while let Some(op) = wal.read()? {
-                s.spawn(|_| {
-                    let fallible = || match op {
-                        VectorOp::Upsert(embeddings) => {
-                            let len = embeddings.len() as u32;
-                            match config.indexing.mode {
-                                VectorsIndexingMode::Sequential => {
-                                    collection.index_embeddings(embeddings, txn.version, config)?;
+                match op {
+                    VectorOp::Upsert(embeddings) => {
+                        s.spawn(|_| {
+                            let fallible = || {
+                                let len = embeddings.len() as u32;
+                                match config.indexing.mode {
+                                    VectorsIndexingMode::Sequential => {
+                                        collection.index_embeddings(
+                                            embeddings,
+                                            txn.version,
+                                            config,
+                                        )?;
+                                    }
+                                    VectorsIndexingMode::Batch { batch_size } => {
+                                        embeddings
+                                            .into_par_iter()
+                                            .chunks(batch_size)
+                                            .try_for_each(|embeddings| {
+                                                collection.index_embeddings(
+                                                    embeddings,
+                                                    txn.version,
+                                                    config,
+                                                )
+                                            })?;
+                                    }
                                 }
-                                VectorsIndexingMode::Batch { batch_size } => {
-                                    embeddings.into_par_iter().chunks(batch_size).try_for_each(
-                                        |embeddings| {
-                                            collection.index_embeddings(
-                                                embeddings,
-                                                txn.version,
-                                                config,
-                                            )
-                                        },
-                                    )?;
-                                }
-                            }
-                            let old_count = records_indexed.fetch_add(len, Ordering::AcqRel);
-                            let new_count = old_count + len;
-                            let now = Utc::now();
-                            let delta = now - start;
-                            let delta_seconds = (delta.num_seconds() as u32).max(1);
-                            let rate_per_second = new_count as f32 / delta_seconds as f32;
-                            let mut status = status.write();
-                            *status = TransactionStatus::InProgress {
-                                started_at: start,
-                                stats: ProcessingStats {
-                                    records_upserted: new_count,
-                                    // TODO(a-rustacean): fix when delete op is implemented
-                                    records_deleted: 0,
-                                    total_operations,
-                                    percentage_complete: (new_count as f32
-                                        / total_records_upserted as f32)
-                                        * 100.0,
-                                    processing_time_seconds: None,
-                                    average_throughput: None,
-                                    current_processing_rate: Some(rate_per_second),
-                                    estimated_completion: Some(
-                                        Utc::now()
-                                            + Duration::seconds(
-                                                ((total_records_upserted - new_count) as f32
-                                                    / rate_per_second)
-                                                    as i64,
-                                            ),
-                                    ),
-                                    version_created: Some(version),
-                                },
-                                last_updated: now,
+                                let old_count = records_indexed.fetch_add(len, Ordering::AcqRel);
+                                let new_count = old_count + len;
+                                let now = Utc::now();
+                                let delta = now - start;
+                                let delta_seconds = (delta.num_seconds() as u32).max(1);
+                                let rate_per_second = new_count as f32 / delta_seconds as f32;
+                                let mut status = status.write();
+                                *status = TransactionStatus::InProgress {
+                                    started_at: start,
+                                    stats: ProcessingStats {
+                                        records_upserted: new_count,
+                                        records_deleted: 0,
+                                        total_operations,
+                                        percentage_complete: (new_count as f32
+                                            / total_records_upserted as f32)
+                                            * 100.0,
+                                        processing_time_seconds: None,
+                                        average_throughput: None,
+                                        current_processing_rate: Some(rate_per_second),
+                                        estimated_completion: Some(
+                                            Utc::now()
+                                                + Duration::seconds(
+                                                    ((total_records_upserted - new_count) as f32
+                                                        / rate_per_second)
+                                                        as i64,
+                                                ),
+                                        ),
+                                        version_created: Some(version),
+                                    },
+                                    last_updated: now,
+                                };
+
+                                Ok::<_, WaCustomError>(())
                             };
 
-                            Ok::<_, WaCustomError>(())
-                        }
-                        VectorOp::Delete(_vector_id) => unimplemented!(),
-                    };
-
-                    if let Err(err) = fallible() {
-                        errors.write().push(err);
+                            if let Err(err) = fallible() {
+                                errors.write().push(err);
+                            }
+                        });
                     }
-                });
+                    VectorOp::Delete(vector_id) => {
+                        vectors_to_be_deleted.push(vector_id);
+                    }
+                }
             }
             Ok::<_, WaCustomError>(())
         })?;
         let errors = errors.into_inner();
         if let Some(err) = errors.into_iter().next() {
             return Err(err);
+        }
+        for vector_id in vectors_to_be_deleted {
+            collection.delete_embedding(vector_id, txn.version, config)?;
         }
         status.write().complete(version);
         txn.pre_commit(collection, config)?;
@@ -279,12 +291,15 @@ impl IndexingManager {
     }
 
     pub fn implicit_txn_delete(
-        _collection: &Collection,
-        _transaction: &ImplicitTransaction,
-        _config: &Config,
-        _vector_id: VectorId,
+        collection: &Collection,
+        transaction: &ImplicitTransaction,
+        config: &Config,
+        vector_id: VectorId,
     ) -> Result<(), WaCustomError> {
-        unimplemented!()
+        let version = transaction.version(collection)?;
+        transaction.append_to_wal(collection, VectorOp::Delete(vector_id.clone()))?;
+        collection.delete_embedding(vector_id, version, config)?;
+        Ok(())
     }
 }
 

@@ -646,11 +646,20 @@ impl<K: Eq + Hash, V> TSHashTable<K, V> {
 
     pub fn with_value<F, R>(&self, k: &K, f: F) -> Option<R>
     where
-        F: Fn(&V) -> R,
+        F: FnOnce(&V) -> R,
     {
         let index = self.hash_key(k);
         let ht = self.hash_table_list[index].lock().unwrap();
         ht.get(k).map(f)
+    }
+
+    pub fn with_value_mut<F, R>(&self, k: &K, f: F) -> Option<R>
+    where
+        F: Fn(&mut V) -> R,
+    {
+        let index = self.hash_key(k);
+        let mut ht = self.hash_table_list[index].lock().unwrap();
+        ht.get_mut(k).map(f)
     }
 
     pub fn map_m<F>(&self, f: F)

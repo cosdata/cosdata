@@ -10,16 +10,15 @@ use crate::models::{
     common::TSHashTable,
     tf_idf_index::{TFIDFIndexNodeData, TermInfo},
     types::FileOffset,
+    versioning::VersionNumber,
 };
 
 impl TFIDFIndexSerialize for TFIDFIndexNodeData {
     fn serialize(
         &self,
         dim_bufman: &BufferManager,
-        data_bufmans: &BufferManagerFactory<u8>,
+        data_bufmans: &BufferManagerFactory<VersionNumber>,
         offset_counter: &AtomicU32,
-        data_file_idx: u8,
-        data_file_parts: u8,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
         let start = dim_bufman.cursor_position(cursor)? as u32;
@@ -38,29 +37,24 @@ impl TFIDFIndexSerialize for TFIDFIndexNodeData {
             {
                 let current_offset = dim_bufman.cursor_position(cursor)?;
                 if *num_entries_serialized > i as u16 {
-                    list[i].1.serialize(
-                        dim_bufman,
-                        data_bufmans,
-                        offset_counter,
-                        data_file_idx,
-                        data_file_parts,
-                        cursor,
-                    )?;
-                    dim_bufman.seek_with_cursor(cursor, current_offset + 6)?;
+                    list[i]
+                        .1
+                        .serialize(dim_bufman, data_bufmans, offset_counter, cursor)?;
+                    dim_bufman.seek_with_cursor(cursor, current_offset + 10)?;
                 } else if let Some((quotient, term)) = list.get(i) {
-                    let offset = term.serialize(
-                        dim_bufman,
-                        data_bufmans,
-                        offset_counter,
-                        data_file_idx,
-                        data_file_parts,
-                        cursor,
-                    )?;
+                    let offset =
+                        term.serialize(dim_bufman, data_bufmans, offset_counter, cursor)?;
+                    let version = term
+                        .documents
+                        .read()
+                        .map_err(|_| BufIoError::Locking)?
+                        .version;
                     dim_bufman.seek_with_cursor(cursor, current_offset)?;
                     dim_bufman.update_u16_with_cursor(cursor, *quotient)?;
                     dim_bufman.update_u32_with_cursor(cursor, offset)?;
+                    dim_bufman.update_u32_with_cursor(cursor, *version)?;
                 } else {
-                    dim_bufman.update_with_cursor(cursor, &[u8::MAX; 6])?;
+                    dim_bufman.update_with_cursor(cursor, &[u8::MAX; 10])?;
                 }
             }
             if *num_entries_serialized > ((chunk_idx + 1) * TF_IDF_INDEX_DATA_CHUNK_SIZE) as u16 {
@@ -70,7 +64,7 @@ impl TFIDFIndexSerialize for TFIDFIndexNodeData {
                 dim_bufman.update_with_cursor(cursor, &[u8::MAX; 4])?;
             } else {
                 let offset = offset_counter.fetch_add(
-                    (6 * TF_IDF_INDEX_DATA_CHUNK_SIZE + 4) as u32,
+                    (10 * TF_IDF_INDEX_DATA_CHUNK_SIZE + 4) as u32,
                     Ordering::Relaxed,
                 );
                 dim_bufman.update_u32_with_cursor(cursor, offset)?;
@@ -85,10 +79,9 @@ impl TFIDFIndexSerialize for TFIDFIndexNodeData {
 
     fn deserialize(
         dim_bufman: &BufferManager,
-        data_bufmans: &BufferManagerFactory<u8>,
+        data_bufmans: &BufferManagerFactory<VersionNumber>,
         file_offset: FileOffset,
-        data_file_idx: u8,
-        data_file_parts: u8,
+        _version: VersionNumber,
         cache: &TFIDFIndexCache,
     ) -> Result<Self, BufIoError> {
         let cursor = dim_bufman.open_cursor()?;
@@ -107,12 +100,12 @@ impl TFIDFIndexSerialize for TFIDFIndexNodeData {
                 }
                 let quotient = dim_bufman.read_u16_with_cursor(cursor)?;
                 let term_offset = dim_bufman.read_u32_with_cursor(cursor)?;
+                let term_version = dim_bufman.read_u32_with_cursor(cursor)?;
                 let mut term = TermInfo::deserialize(
                     dim_bufman,
                     data_bufmans,
                     FileOffset(term_offset),
-                    data_file_idx,
-                    data_file_parts,
+                    VersionNumber::from(term_version),
                     cache,
                 )?;
                 term.sequence_idx = i as u16;
