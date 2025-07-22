@@ -8,7 +8,7 @@ use siphasher::sip::SipHasher24;
 use crate::{
     config_loader::Config,
     models::{
-        collection::Collection,
+        collection::{Collection, RawVectorEmbedding},
         common::WaCustomError,
         types::{DocumentId, InternalId, MetaDb, VectorId},
         versioning::VersionNumber,
@@ -55,6 +55,14 @@ pub trait IndexOps: Send + Sync {
         &self,
         collection: &Collection,
         embeddings: Vec<Self::IndexingInput>,
+        version: VersionNumber,
+        config: &Config,
+    ) -> Result<(), WaCustomError>;
+
+    fn delete_embedding(
+        &self,
+        id: InternalId,
+        raw_emb: &RawVectorEmbedding,
         version: VersionNumber,
         config: &Config,
     ) -> Result<(), WaCustomError>;
@@ -124,7 +132,7 @@ pub trait IndexOps: Send + Sync {
 
     fn sample_threshold(&self) -> usize;
 
-    // is this index configured? true is the sampling is done
+    // is this index configured? true if the sampling is done
     fn is_configured(&self) -> bool;
 
     // save everything to disk

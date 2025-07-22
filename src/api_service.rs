@@ -228,7 +228,6 @@ pub async fn init_inverted_index_for_collection(
         index_path.clone(),
         quantization_bits,
         sample_threshold,
-        ctx.config.inverted_index_data_file_parts,
     )?);
 
     ctx.ain_env
@@ -251,7 +250,6 @@ pub async fn init_tf_idf_index_for_collection(
 
     let index = Arc::new(TFIDFIndex::new(
         index_path.clone(),
-        ctx.config.inverted_index_data_file_parts,
         sample_threshold,
         k1,
         b,

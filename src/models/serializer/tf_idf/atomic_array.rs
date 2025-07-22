@@ -5,6 +5,7 @@ use crate::models::{
     buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
     cache_loader::TFIDFIndexCache,
     types::FileOffset,
+    versioning::VersionNumber,
 };
 
 use super::TFIDFIndexSerialize;
@@ -13,10 +14,8 @@ impl<T: TFIDFIndexSerialize, const N: usize> TFIDFIndexSerialize for AtomicArray
     fn serialize(
         &self,
         dim_bufman: &BufferManager,
-        data_bufmans: &BufferManagerFactory<u8>,
+        data_bufmans: &BufferManagerFactory<VersionNumber>,
         offset_counter: &AtomicU32,
-        data_file_idx: u8,
-        data_file_parts: u8,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
         let start = dim_bufman.cursor_position(cursor)?;
@@ -31,14 +30,7 @@ impl<T: TFIDFIndexSerialize, const N: usize> TFIDFIndexSerialize for AtomicArray
 
             let item = unsafe { &*item_ptr };
             let current_pos = dim_bufman.cursor_position(cursor)?;
-            let item_offset = item.serialize(
-                dim_bufman,
-                data_bufmans,
-                offset_counter,
-                data_file_idx,
-                data_file_parts,
-                cursor,
-            )?;
+            let item_offset = item.serialize(dim_bufman, data_bufmans, offset_counter, cursor)?;
             dim_bufman.seek_with_cursor(cursor, current_pos)?;
 
             dim_bufman.update_u32_with_cursor(cursor, item_offset)?;
@@ -49,10 +41,9 @@ impl<T: TFIDFIndexSerialize, const N: usize> TFIDFIndexSerialize for AtomicArray
 
     fn deserialize(
         dim_bufman: &BufferManager,
-        data_bufmans: &BufferManagerFactory<u8>,
+        data_bufmans: &BufferManagerFactory<VersionNumber>,
         file_offset: FileOffset,
-        data_file_idx: u8,
-        data_file_parts: u8,
+        version: VersionNumber,
         cache: &TFIDFIndexCache,
     ) -> Result<Self, BufIoError> {
         let cursor = dim_bufman.open_cursor()?;
@@ -70,8 +61,7 @@ impl<T: TFIDFIndexSerialize, const N: usize> TFIDFIndexSerialize for AtomicArray
                 dim_bufman,
                 data_bufmans,
                 FileOffset(offset),
-                data_file_idx,
-                data_file_parts,
+                version,
                 cache,
             )?));
             array.insert(i, item);

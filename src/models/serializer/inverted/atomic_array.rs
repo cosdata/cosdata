@@ -3,6 +3,7 @@ use crate::models::{
     buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
     cache_loader::InvertedIndexCache,
     types::FileOffset,
+    versioning::VersionNumber,
 };
 
 use super::InvertedIndexSerialize;
@@ -11,9 +12,7 @@ impl<T: InvertedIndexSerialize, const N: usize> InvertedIndexSerialize for Atomi
     fn serialize(
         &self,
         dim_bufman: &BufferManager,
-        data_bufmans: &BufferManagerFactory<u8>,
-        data_file_idx: u8,
-        data_file_parts: u8,
+        data_bufmans: &BufferManagerFactory<VersionNumber>,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
         let start = dim_bufman.cursor_position(cursor)?;
@@ -28,13 +27,7 @@ impl<T: InvertedIndexSerialize, const N: usize> InvertedIndexSerialize for Atomi
 
             let item = unsafe { &*item_ptr };
             let current_pos = dim_bufman.cursor_position(cursor)?;
-            let item_offset = item.serialize(
-                dim_bufman,
-                data_bufmans,
-                data_file_idx,
-                data_file_parts,
-                cursor,
-            )?;
+            let item_offset = item.serialize(dim_bufman, data_bufmans, cursor)?;
             dim_bufman.seek_with_cursor(cursor, current_pos)?;
 
             dim_bufman.update_u32_with_cursor(cursor, item_offset)?;
@@ -45,10 +38,9 @@ impl<T: InvertedIndexSerialize, const N: usize> InvertedIndexSerialize for Atomi
 
     fn deserialize(
         dim_bufman: &BufferManager,
-        data_bufmans: &BufferManagerFactory<u8>,
+        data_bufmans: &BufferManagerFactory<VersionNumber>,
         file_offset: FileOffset,
-        data_file_idx: u8,
-        data_file_parts: u8,
+        version: VersionNumber,
         cache: &InvertedIndexCache,
     ) -> Result<Self, BufIoError> {
         let cursor = dim_bufman.open_cursor()?;
@@ -66,8 +58,7 @@ impl<T: InvertedIndexSerialize, const N: usize> InvertedIndexSerialize for Atomi
                 dim_bufman,
                 data_bufmans,
                 FileOffset(offset),
-                data_file_idx,
-                data_file_parts,
+                version,
                 cache,
             )?));
             array.insert(i, item);

@@ -4,6 +4,7 @@ use serde::Serialize;
 use crate::models::buffered_io::BufIoError;
 
 use crate::models::types::SparseVector;
+use crate::models::versioned_vec::VersionedVec;
 use std::cell::UnsafeCell;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
@@ -11,7 +12,8 @@ use std::iter::Peekable;
 use std::sync::RwLockReadGuard;
 
 use super::inverted_index::InvertedIndexRoot;
-use super::tf_idf_index::{TFIDFIndexRoot, TermQuotient, VersionedVec, VersionedVecIter};
+use super::tf_idf_index::{TFIDFIndexRoot, TermQuotient};
+use super::versioned_vec::VersionedVecIter;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SparseAnnResult {
@@ -94,17 +96,15 @@ impl SparseAnnQueryBasic {
                 // High quantized value
                 // Iterate through the full list of values for this dimension
                 for key in (0..=one_quantized).rev() {
-                    let pagepool = unsafe { &*node.data }
-                        .try_get_data(&index.cache, node.dim_index)?
+                    unsafe { &*node.data }
+                        .try_get_data(&index.cache)?
                         .map
-                        .lookup(&key);
-                    if let Some(pagepool) = pagepool {
-                        for x in pagepool.iter() {
-                            let vec_id = x;
-                            let dot_product = dot_products.entry(vec_id).or_insert(0u32);
-                            *dot_product += quantized_query_value * key as u32;
-                        }
-                    }
+                        .with_value(&key, |vec| {
+                            for vec_id in vec.iter() {
+                                let dot_product = dot_products.entry(vec_id).or_insert(0u32);
+                                *dot_product += quantized_query_value * key as u32;
+                            }
+                        });
                 }
             } else {
                 // Low quantized value
@@ -112,22 +112,15 @@ impl SparseAnnQueryBasic {
                 // of quantized keys (i.e. 48..64 for 6 bit quantization).
 
                 for key in (early_terminate_value..=one_quantized).rev() {
-                    let mut current_versioned_pagepool = unsafe { &*node.data }
-                        .try_get_data(&index.cache, node.dim_index)?
+                    unsafe { &*node.data }
+                        .try_get_data(&index.cache)?
                         .map
-                        .lookup(&key);
-                    while let Some(versioned_pagepool) = current_versioned_pagepool {
-                        for x in versioned_pagepool.pagepool.inner.read().unwrap().iter() {
-                            for x in x.iter() {
-                                let vec_id = *x;
-
+                        .with_value(&key, |vec| {
+                            for vec_id in vec.iter() {
                                 let dot_product = dot_products.entry(vec_id).or_insert(0u32);
                                 *dot_product += quantized_query_value * key as u32;
                             }
-                        }
-                        current_versioned_pagepool =
-                            versioned_pagepool.next.read().unwrap().clone();
-                    }
+                        });
                 }
             }
         }
@@ -169,7 +162,7 @@ impl SparseAnnQueryBasic {
             let dim_index = term_hash & (u16::MAX as u32);
             let quotient = (term_hash >> 16) as TermQuotient;
             if let Some(node) = index.find_node(dim_index) {
-                let data = unsafe { &*node.data }.try_get_data(&index.cache, node.dim_index)?;
+                let data = unsafe { &*node.data }.try_get_data(&index.cache)?;
                 if let Some(term) = data.map.lookup(&quotient) {
                     let documents = term.documents.read().unwrap();
                     let idf = get_idf(documents_count, documents.len() as u32);
@@ -189,7 +182,7 @@ impl SparseAnnQueryBasic {
         let mut buckets = [(u32::MAX, f32::NEG_INFINITY); BUCKETS];
 
         while let Some(mut head) = heads.pop() {
-            let Some((doc_id, tf)) = head.pop().copied() else {
+            let Some((doc_id, tf)) = head.pop() else {
                 continue;
             };
 
@@ -261,11 +254,11 @@ impl<'a> PostingListHead<'a> {
         }
     }
 
-    pub fn pop(&mut self) -> Option<&(u32, f32)> {
+    pub fn pop(&mut self) -> Option<(u32, f32)> {
         self.iter.get_mut().next()
     }
 
-    pub fn peek(&self) -> Option<&&(u32, f32)> {
+    pub fn peek(&self) -> Option<&(u32, f32)> {
         unsafe { &mut *self.iter.get() }.peek()
     }
 }

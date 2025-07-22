@@ -24,7 +24,7 @@ pub struct Config {
     pub enable_context_history: bool,
     #[serde(default)]
     pub cache: CacheConfig,
-    pub epoch_length: u64
+    pub epoch_length: u64,
 }
 
 #[derive(Deserialize, Clone)]

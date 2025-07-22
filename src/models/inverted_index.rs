@@ -8,27 +8,22 @@ use std::{
     },
 };
 
-use crate::indexes::hnsw::offset_counter::IndexFileId;
-
 use super::{
     atomic_array::AtomicArray,
     buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
     cache_loader::InvertedIndexCache,
     common::TSHashTable,
-    lazy_item::ProbLazyItem,
-    page::VersionedPagepool,
+    lazy_item::LazyItem,
     serializer::inverted::InvertedIndexSerialize,
     types::{FileOffset, SparseVector},
     utils::calculate_path,
+    versioned_vec::VersionedVec,
     versioning::VersionNumber,
 };
 
-// Size of a page in the hash table
-pub const PAGE_SIZE: usize = 32;
-
 #[cfg_attr(test, derive(PartialEq, Debug))]
 pub struct InvertedIndexNodeData {
-    pub map: TSHashTable<u8, VersionedPagepool<PAGE_SIZE>>,
+    pub map: TSHashTable<u8, VersionedVec<u32>>,
     pub max_key: u8,
 }
 
@@ -49,7 +44,7 @@ pub struct InvertedIndexNode {
     pub implicit: bool,
     // (4, 5, 6)
     pub quantization_bits: u8,
-    pub data: *mut ProbLazyItem<InvertedIndexNodeData>,
+    pub data: *mut LazyItem<InvertedIndexNodeData, ()>,
     pub children: AtomicArray<InvertedIndexNode, 16>,
 }
 
@@ -82,7 +77,6 @@ impl std::fmt::Debug for InvertedIndexNode {
 pub struct InvertedIndexRoot {
     pub root: InvertedIndexNode,
     pub cache: InvertedIndexCache,
-    pub data_file_parts: u8,
     pub offset_counter: AtomicU32,
     pub node_size: u32,
 }
@@ -124,9 +118,9 @@ impl InvertedIndexNode {
         quantization_bits: u8,
         file_offset: FileOffset,
     ) -> Self {
-        let data = ProbLazyItem::new(
+        let data = LazyItem::new(
             InvertedIndexNodeData::new(quantization_bits),
-            IndexFileId::invalid(),
+            (),
             FileOffset(file_offset.0 + 5),
         );
 
@@ -189,7 +183,7 @@ impl InvertedIndexNode {
     ) -> Result<(), BufIoError> {
         let quantized_value = self.quantize(value, values_upper_bound);
         unsafe { &*self.data }
-            .try_get_data(cache, self.dim_index)?
+            .try_get_data(cache)?
             .map
             .modify_or_insert(
                 quantized_value,
@@ -197,7 +191,7 @@ impl InvertedIndexNode {
                     list.push(version, vector_id);
                 },
                 || {
-                    let pool = VersionedPagepool::new(version);
+                    let mut pool = VersionedVec::new(version);
                     pool.push(version, vector_id);
                     pool
                 },
@@ -206,20 +200,37 @@ impl InvertedIndexNode {
         Ok(())
     }
 
+    /// Delete a value from the index at the specified dimension index.
+    /// Finds the quantized value and (soft) deletes the vec_id
+    pub fn delete(
+        &self,
+        value: f32,
+        vector_id: u32,
+        cache: &InvertedIndexCache,
+        version: VersionNumber,
+        values_upper_bound: f32,
+    ) -> Result<(), BufIoError> {
+        let quantized_value = self.quantize(value, values_upper_bound);
+        unsafe { &*self.data }
+            .try_get_data(cache)?
+            .map
+            .with_value_mut(&quantized_value, |list| {
+                list.delete(version, vector_id);
+            });
+        self.is_dirty.store(true, Ordering::Release);
+        Ok(())
+    }
+
     /// See [`crate::models::serializer::inverted::node`] for how its calculated
     pub fn get_serialized_size(quantization_bits: u8) -> u32 {
         let qv = 1u32 << quantization_bits;
 
-        qv * 4 + 69
+        qv * 8 + 69
     }
 }
 
 impl InvertedIndexRoot {
-    pub fn new(
-        root_path: PathBuf,
-        quantization_bits: u8,
-        data_file_parts: u8,
-    ) -> Result<Self, BufIoError> {
+    pub fn new(root_path: PathBuf, quantization_bits: u8) -> Result<Self, BufIoError> {
         let dim_file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -231,15 +242,14 @@ impl InvertedIndexRoot {
         let offset_counter = AtomicU32::new(node_size);
         let data_bufmans = Arc::new(BufferManagerFactory::new(
             root_path.into(),
-            |root, idx: &u8| root.join(format!("{}.idat", idx)),
+            |root, version: &VersionNumber| root.join(format!("{}.idat", **version)),
             8192,
         ));
-        let cache = InvertedIndexCache::new(dim_bufman, data_bufmans, data_file_parts);
+        let cache = InvertedIndexCache::new(dim_bufman, data_bufmans);
 
         Ok(InvertedIndexRoot {
             root: InvertedIndexNode::new(0, false, quantization_bits, FileOffset(0)),
             cache,
-            data_file_parts,
             offset_counter,
             node_size,
         })
@@ -259,7 +269,7 @@ impl InvertedIndexRoot {
         Some(current_node)
     }
 
-    //Inserts vec_id, quantized value u8 at particular node based on path
+    // Inserts vec_id, quantized value u8 at particular node based on path
     pub fn insert(
         &self,
         dim_index: u32,
@@ -274,8 +284,25 @@ impl InvertedIndexRoot {
                 .fetch_add(self.node_size, Ordering::Relaxed)
         });
         assert_eq!(node.dim_index, dim_index);
-        //value will be quantized while being inserted into the Node.
+        // value will be quantized while being inserted into the Node.
         node.insert(value, vector_id, &self.cache, version, values_upper_bound)
+    }
+
+    pub fn delete(
+        &self,
+        dim_index: u32,
+        value: f32,
+        vector_id: u32,
+        version: VersionNumber,
+        values_upper_bound: f32,
+    ) -> Result<(), BufIoError> {
+        let node_optional = self.find_node(dim_index);
+        let Some(node) = node_optional else {
+            return Ok(());
+        };
+        assert_eq!(node.dim_index, dim_index);
+        // value will be quantized while being deleted from the Node.
+        node.delete(value, vector_id, &self.cache, version, values_upper_bound)
     }
 
     /// Adds a sparse vector to the index.
@@ -301,22 +328,13 @@ impl InvertedIndexRoot {
 
     pub fn serialize(&self) -> Result<(), BufIoError> {
         let cursor = self.cache.dim_bufman.open_cursor()?;
-        self.root.serialize(
-            &self.cache.dim_bufman,
-            &self.cache.data_bufmans,
-            0,
-            self.data_file_parts,
-            cursor,
-        )?;
+        self.root
+            .serialize(&self.cache.dim_bufman, &self.cache.data_bufmans, cursor)?;
         self.cache.dim_bufman.close_cursor(cursor)?;
         Ok(())
     }
 
-    pub fn deserialize(
-        root_path: PathBuf,
-        quantization_bits: u8,
-        data_file_parts: u8,
-    ) -> Result<Self, BufIoError> {
+    pub fn deserialize(root_path: PathBuf, quantization_bits: u8) -> Result<Self, BufIoError> {
         let dim_file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -328,22 +346,20 @@ impl InvertedIndexRoot {
         let offset_counter = AtomicU32::new(dim_bufman.file_size() as u32);
         let data_bufmans = Arc::new(BufferManagerFactory::new(
             root_path.into(),
-            |root, idx: &u8| root.join(format!("{}.idat", idx)),
+            |root, version: &VersionNumber| root.join(format!("{}.idat", **version)),
             8192,
         ));
-        let cache = InvertedIndexCache::new(dim_bufman, data_bufmans, data_file_parts);
+        let cache = InvertedIndexCache::new(dim_bufman, data_bufmans);
 
         Ok(Self {
             root: InvertedIndexNode::deserialize(
                 &cache.dim_bufman,
                 &cache.data_bufmans,
                 FileOffset(0),
-                0,
-                data_file_parts,
+                VersionNumber::from(u32::MAX), // not used
                 &cache,
             )?,
             cache,
-            data_file_parts,
             offset_counter,
             node_size,
         })

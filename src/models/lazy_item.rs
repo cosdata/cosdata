@@ -21,25 +21,29 @@ use crate::{
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
-pub struct FileIndex {
+pub struct FileIndex<FileId> {
     pub offset: FileOffset,
-    pub file_id: IndexFileId,
+    pub file_id: FileId,
 }
 
-pub struct ProbLazyItem<T> {
+pub struct LazyItem<T, FileId> {
     data: AtomicPtr<T>,
-    pub file_index: FileIndex,
+    pub file_index: FileIndex<FileId>,
 }
 
-impl<T: PartialEq> PartialEq for ProbLazyItem<T> {
+impl<T: PartialEq, FileId: PartialEq> PartialEq for LazyItem<T, FileId> {
     fn eq(&self, other: &Self) -> bool {
-        unsafe { *self.data.load(Ordering::Relaxed) == *other.data.load(Ordering::Relaxed) }
+        unsafe {
+            self.data.load(Ordering::Relaxed).as_ref()
+                == other.data.load(Ordering::Relaxed).as_ref()
+                && self.file_index == other.file_index
+        }
     }
 }
 
-impl<T: Debug> Debug for ProbLazyItem<T> {
+impl<T: Debug, FileId: Debug> Debug for LazyItem<T, FileId> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ProbLazyItem")
+        f.debug_struct("LazyItem")
             .field("data", unsafe {
                 &self.data.load(Ordering::Relaxed).as_ref()
             })
@@ -49,8 +53,8 @@ impl<T: Debug> Debug for ProbLazyItem<T> {
 }
 
 #[allow(unused)]
-impl<T> ProbLazyItem<T> {
-    pub fn new(data: T, file_id: IndexFileId, offset: FileOffset) -> *mut Self {
+impl<T, FileId> LazyItem<T, FileId> {
+    pub fn new(data: T, file_id: FileId, offset: FileOffset) -> *mut Self {
         let mut boxed = Box::new(Self {
             data: AtomicPtr::new(ptr::null_mut()),
             file_index: FileIndex { offset, file_id },
@@ -62,7 +66,7 @@ impl<T> ProbLazyItem<T> {
         Box::into_raw(boxed)
     }
 
-    pub fn new_pending(file_index: FileIndex) -> *mut Self {
+    pub fn new_pending(file_index: FileIndex<FileId>) -> *mut Self {
         Box::into_raw(Box::new(Self {
             data: AtomicPtr::new(ptr::null_mut()),
             file_index,
@@ -108,7 +112,7 @@ impl<T> ProbLazyItem<T> {
     }
 }
 
-impl ProbLazyItem<ProbNode> {
+impl LazyItem<ProbNode, IndexFileId> {
     pub fn try_get_data<'a>(&self, cache: &HNSWIndexCache) -> Result<&'a ProbNode, BufIoError> {
         unsafe {
             if let Some(data) = self.data.load(Ordering::Relaxed).as_ref() {
@@ -119,11 +123,10 @@ impl ProbLazyItem<ProbNode> {
     }
 }
 
-impl ProbLazyItem<InvertedIndexNodeData> {
+impl LazyItem<InvertedIndexNodeData, ()> {
     pub fn try_get_data<'a>(
         &self,
         cache: &InvertedIndexCache,
-        dim: u32,
     ) -> Result<&'a InvertedIndexNodeData, BufIoError> {
         unsafe {
             if let Some(data) = self.data.load(Ordering::Relaxed).as_ref() {
@@ -131,17 +134,15 @@ impl ProbLazyItem<InvertedIndexNodeData> {
             }
 
             let offset = self.file_index.offset;
-            (*(cache.get_data(offset, (dim % cache.data_file_parts as u32) as u8)?))
-                .try_get_data(cache, dim)
+            (*(cache.get_data(offset)?)).try_get_data(cache)
         }
     }
 }
 
-impl ProbLazyItem<TFIDFIndexNodeData> {
+impl LazyItem<TFIDFIndexNodeData, ()> {
     pub fn try_get_data<'a>(
         &self,
         cache: &TFIDFIndexCache,
-        dim: u32,
     ) -> Result<&'a TFIDFIndexNodeData, BufIoError> {
         unsafe {
             if let Some(data) = self.data.load(Ordering::Relaxed).as_ref() {
@@ -149,13 +150,12 @@ impl ProbLazyItem<TFIDFIndexNodeData> {
             }
 
             let offset = self.file_index.offset;
-            (*(cache.get_data(offset, (dim % cache.data_file_parts as u32) as u8)?))
-                .try_get_data(cache, dim)
+            (*(cache.get_data(offset)?)).try_get_data(cache)
         }
     }
 }
 
-impl<T> Drop for ProbLazyItem<T> {
+impl<T, FileId> Drop for LazyItem<T, FileId> {
     fn drop(&mut self) {
         let data_ptr = self.data.load(Ordering::SeqCst);
         unsafe {

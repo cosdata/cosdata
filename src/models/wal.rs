@@ -35,31 +35,42 @@ pub struct WALFile {
     total_operations: AtomicU32,
 }
 
-/// Writes a u16 length to the buffer using custom encoding:
-/// - If the value fits in 7 bits (<= 127), write it directly as one byte.
-/// - Otherwise, set the MSB of the first byte to 1, store the top 7 bits,
-///   and follow with a byte for the lower 8 bits.
-pub fn write_len(buf: &mut Vec<u8>, len: u16) {
-    if len <= 0x7F {
+/// Encode `len` into 1–3 bytes:
+/// - 1 byte if < 2⁷  
+/// - 2 bytes if < 2¹⁴  
+/// - 3 bytes otherwise (uses all 8 bits of the final byte, giving 22 bits total)
+pub fn write_len(buf: &mut Vec<u8>, len: u32) {
+    if len < (1 << 7) {
+        // [0vvvvvvv]
         buf.push(len as u8);
+    } else if len < (1 << 14) {
+        // [1vvvvvvv] [0vvvvvvv]
+        buf.push(((len) as u8 & 0x7F) | 0x80);
+        buf.push((len >> 7) as u8);
     } else {
-        let msb = ((len >> 8) as u8 & 0x7F) | 0x80; // Set highest bit
-        let lsb = len as u8;
-        buf.push(msb);
-        buf.push(lsb);
+        // [1vvvvvvv] [1vvvvvvv] [vvvvvvvv]
+        buf.push(((len) as u8 & 0x7F) | 0x80);
+        buf.push(((len >> 7) as u8 & 0x7F) | 0x80);
+        buf.push((len >> 14) as u8);
     }
 }
 
-/// Reads a u16 length from the buffer using the same encoding.
-pub fn read_len(bufman: &FilelessBufferManager, cursor: u64) -> Result<u16, BufIoError> {
-    let first = bufman.read_u8_with_cursor(cursor)?;
-    if first & 0x80 == 0 {
-        Ok(first as u16)
-    } else {
-        let msb = (first & 0x7F) as u16;
-        let lsb = bufman.read_u8_with_cursor(cursor)? as u16;
-        Ok((msb << 8) | lsb)
+/// Decode a 1–3 byte varint back to `u32`. Any bits beyond 22 are ignored.
+pub fn read_len(bufman: &FilelessBufferManager, cursor: u64) -> Result<u32, BufIoError> {
+    let b0 = bufman.read_u8_with_cursor(cursor)? as u32;
+    if b0 & 0x80 == 0 {
+        return Ok(b0);
     }
+
+    let b1 = bufman.read_u8_with_cursor(cursor)? as u32;
+    let low14 = (b0 & 0x7F) | ((b1 & 0x7F) << 7);
+    if b1 & 0x80 == 0 {
+        return Ok(low14);
+    }
+
+    let b2 = bufman.read_u8_with_cursor(cursor)? as u32;
+    // here we take all 8 bits of b2 as the highest part
+    Ok(low14 | (b2 << 14))
 }
 
 pub fn read_string(bufman: &FilelessBufferManager, cursor: u64) -> Result<String, BufIoError> {
@@ -168,18 +179,18 @@ impl WALFile {
             VectorOp::Upsert(vectors) => {
                 self.records_upserted
                     .fetch_add(vectors.len() as u32, Ordering::Relaxed);
-                write_len(&mut buf, vectors.len() as u16);
+                write_len(&mut buf, vectors.len() as u32);
                 for vector in &*vectors {
-                    write_len(&mut buf, vector.id.len() as u16);
+                    write_len(&mut buf, vector.id.len() as u32);
                     buf.extend(vector.id.as_bytes());
                     if let Some(document_id) = &vector.document_id {
-                        write_len(&mut buf, document_id.len() as u16);
+                        write_len(&mut buf, document_id.len() as u32);
                         buf.extend(document_id.as_bytes());
                     } else {
                         write_len(&mut buf, 0);
                     }
                     if let Some(dense_values) = &vector.dense_values {
-                        write_len(&mut buf, dense_values.len() as u16);
+                        write_len(&mut buf, dense_values.len() as u32);
                         for val in dense_values {
                             buf.extend(val.to_le_bytes());
                         }
@@ -187,9 +198,9 @@ impl WALFile {
                         write_len(&mut buf, 0);
                     }
                     if let Some(metadata) = &vector.metadata {
-                        write_len(&mut buf, metadata.len() as u16);
+                        write_len(&mut buf, metadata.len() as u32);
                         for (field, val) in metadata {
-                            write_len(&mut buf, field.len() as u16);
+                            write_len(&mut buf, field.len() as u32);
                             buf.extend(field.as_bytes());
 
                             match val {
@@ -199,7 +210,7 @@ impl WALFile {
                                 }
                                 FieldValue::String(str) => {
                                     buf.push(1);
-                                    write_len(&mut buf, str.len() as u16);
+                                    write_len(&mut buf, str.len() as u32);
                                     buf.extend(str.as_bytes());
                                 }
                             }
@@ -209,7 +220,7 @@ impl WALFile {
                     }
 
                     if let Some(sparse_values) = &vector.sparse_values {
-                        write_len(&mut buf, sparse_values.len() as u16);
+                        write_len(&mut buf, sparse_values.len() as u32);
                         for pair in sparse_values {
                             buf.extend(pair.0.to_le_bytes());
                             buf.extend(pair.1.to_le_bytes());
@@ -219,7 +230,7 @@ impl WALFile {
                     }
 
                     if let Some(text) = &vector.text {
-                        write_len(&mut buf, text.len() as u16);
+                        write_len(&mut buf, text.len() as u32);
                         buf.extend(text.as_bytes());
                     } else {
                         write_len(&mut buf, 0);
@@ -230,7 +241,7 @@ impl WALFile {
             }
             VectorOp::Delete(id) => {
                 self.records_deleted.fetch_add(1, Ordering::Relaxed);
-                write_len(&mut buf, id.len() as u16);
+                write_len(&mut buf, id.len() as u32);
                 buf.extend(id.as_bytes());
                 let len = buf.len() as u32 - 4;
                 buf[0..4].copy_from_slice(&(len | (1u32 << 31)).to_le_bytes());

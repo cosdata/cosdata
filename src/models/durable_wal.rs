@@ -74,18 +74,18 @@ impl DurableWALFile {
         match op {
             VectorOp::Upsert(vectors) => {
                 self.records_upserted += vectors.len() as u32;
-                write_len(&mut buf, vectors.len() as u16);
+                write_len(&mut buf, vectors.len() as u32);
                 for vector in &*vectors {
-                    write_len(&mut buf, vector.id.len() as u16);
+                    write_len(&mut buf, vector.id.len() as u32);
                     buf.extend(vector.id.as_bytes());
                     if let Some(document_id) = &vector.document_id {
-                        write_len(&mut buf, document_id.len() as u16);
+                        write_len(&mut buf, document_id.len() as u32);
                         buf.extend(document_id.as_bytes());
                     } else {
                         write_len(&mut buf, 0);
                     }
                     if let Some(dense_values) = &vector.dense_values {
-                        write_len(&mut buf, dense_values.len() as u16);
+                        write_len(&mut buf, dense_values.len() as u32);
                         for val in dense_values {
                             buf.extend(val.to_le_bytes());
                         }
@@ -93,9 +93,9 @@ impl DurableWALFile {
                         write_len(&mut buf, 0);
                     }
                     if let Some(metadata) = &vector.metadata {
-                        write_len(&mut buf, metadata.len() as u16);
+                        write_len(&mut buf, metadata.len() as u32);
                         for (field, val) in metadata {
-                            write_len(&mut buf, field.len() as u16);
+                            write_len(&mut buf, field.len() as u32);
                             buf.extend(field.as_bytes());
 
                             match val {
@@ -105,7 +105,7 @@ impl DurableWALFile {
                                 }
                                 FieldValue::String(str) => {
                                     buf.push(1);
-                                    write_len(&mut buf, str.len() as u16);
+                                    write_len(&mut buf, str.len() as u32);
                                     buf.extend(str.as_bytes());
                                 }
                             }
@@ -115,7 +115,7 @@ impl DurableWALFile {
                     }
 
                     if let Some(sparse_values) = &vector.sparse_values {
-                        write_len(&mut buf, sparse_values.len() as u16);
+                        write_len(&mut buf, sparse_values.len() as u32);
                         for pair in sparse_values {
                             buf.extend(pair.0.to_le_bytes());
                             buf.extend(pair.1.to_le_bytes());
@@ -125,7 +125,7 @@ impl DurableWALFile {
                     }
 
                     if let Some(text) = &vector.text {
-                        write_len(&mut buf, text.len() as u16);
+                        write_len(&mut buf, text.len() as u32);
                         buf.extend(text.as_bytes());
                     } else {
                         write_len(&mut buf, 0);
@@ -135,7 +135,7 @@ impl DurableWALFile {
                 buf[0..4].copy_from_slice(&len.to_le_bytes());
             }
             VectorOp::Delete(id) => {
-                write_len(&mut buf, id.len() as u16);
+                write_len(&mut buf, id.len() as u32);
                 buf.extend(id.as_bytes());
                 let len = buf.len() as u32 - 4;
                 buf[0..4].copy_from_slice(&(len | (1u32 << 31)).to_le_bytes());

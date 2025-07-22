@@ -10,7 +10,7 @@ use crate::{
     },
     models::{
         cache_loader::HNSWIndexCache,
-        collection::Collection,
+        collection::{Collection, RawVectorEmbedding},
         common::{TSHashTable, WaCustomError},
         meta_persist::store_values_range,
         prob_node::SharedLatestNode,
@@ -18,7 +18,7 @@ use crate::{
         versioning::VersionNumber,
     },
     quantization::{Quantization, StorageType},
-    vector_store::{ann_search, finalize_ann_results, index_embeddings},
+    vector_store::{ann_search, delete_embedding, finalize_ann_results, index_embeddings},
 };
 use offset_counter::HNSWIndexFileOffsetCounter;
 use std::sync::{
@@ -183,6 +183,16 @@ impl IndexOps for HNSWIndex {
         config: &Config,
     ) -> Result<(), WaCustomError> {
         index_embeddings(config, collection, self, version, embeddings)
+    }
+
+    fn delete_embedding(
+        &self,
+        id: InternalId,
+        raw_emb: &RawVectorEmbedding,
+        version: VersionNumber,
+        config: &Config,
+    ) -> Result<(), WaCustomError> {
+        delete_embedding(config, self, version, id, raw_emb)
     }
 
     fn sample_embedding(&self, embedding: &Self::IndexingInput) {
