@@ -583,10 +583,7 @@ def cmd_insert_and_check(ctx, args):
 
         # Wait for transaction to complete using polling
         print("Waiting for transaction to complete...")
-        final_status, success = poll_transaction_completion(
-            client,
-            db_name,
-            txn_id,
+        final_status, success = txn_id.poll_completion(
             target_status="complete",
             max_attempts=30,
             sleep_interval=2,

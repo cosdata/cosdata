@@ -437,8 +437,7 @@ if __name__ == "__main__":
                     return {"Authorization": f"Bearer {self.token}", "Content-type": "application/json"}
             
             mock_client = MockClient(host, token)
-            final_status, success = poll_transaction_completion(
-                mock_client, vector_db_name, transaction_id,
+            final_status, success = transaction_id.poll_completion(
                 target_status='complete',
                 max_attempts=60,
                 sleep_interval=5

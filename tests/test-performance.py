@@ -8,7 +8,7 @@ import json
 import getpass
 import os
 from dotenv import load_dotenv
-from utils import poll_transaction_completion
+
 
 # Load environment variables from .env file
 load_dotenv()
@@ -158,7 +158,7 @@ def test_performance():
         print("Vectors inserted successfully")
 
         print("Waiting for transaction to complete")
-        final_status, success = poll_transaction_completion(
+        final_status, success = txn_id.poll_completion(
             client,
             collection_name,
             txn_id,
