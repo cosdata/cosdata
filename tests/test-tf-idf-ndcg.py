@@ -12,7 +12,6 @@ import json
 from typing import List, Tuple, Dict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
-from utils import poll_transaction_completion
 from cosdata import Client
 
 # Load environment variables from .env file
@@ -356,10 +355,7 @@ def main(
         txn_id = txn.transaction_id
 
     print("Waiting for TF-IDF indexing to complete...")
-    final_status, success = poll_transaction_completion(
-        client,
-        collection_name,
-        txn_id,
+    final_status, success = txn_id.poll_completion(
         target_status="complete",
         max_attempts=30,
         sleep_interval=2,

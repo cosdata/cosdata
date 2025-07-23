@@ -18,7 +18,6 @@ from pathlib import Path
 import sys
 from datasets import load_dataset
 from dotenv import load_dotenv
-from utils import poll_transaction_completion
 
 # Load environment variables from .env file
 load_dotenv()
@@ -39,7 +38,7 @@ datasets = {
         "size": 100_000,
         "dimension": 768,
         "dataset_id": "ashraq/cohere-wiki-embedding-100k",
-        "description": "Cohere Wikipedia embeddings dataset (100k vectors)"
+        "description": "Cohere Wikipedia embeddings dataset (100k vectors)",
     },
     "million-text-embeddings": {
         "id": None,
@@ -47,14 +46,14 @@ datasets = {
         "size": 1_000_000,
         "dimension": 768,
         "dataset_id": "Sreenath/million-text-embeddings",
-        "description": "Million text embeddings dataset"
+        "description": "Million text embeddings dataset",
     },
     "arxiv-embeddings-ada-002": {
         "id": "id",
         "embeddings": "embeddings",
         "size": 1_000_000,
         "dataset_id": "Tychos/arxiv-embeddings-ada-002",
-        "description": "ArXiv paper embeddings using Ada-002"
+        "description": "ArXiv paper embeddings using Ada-002",
     },
     "dbpedia-entities-openai-1M": {
         "id": "id",
@@ -62,7 +61,7 @@ datasets = {
         "size": 1_000_000,
         "dimension": 1536,
         "dataset_id": "KShivendu/dbpedia-entities-openai-1M",
-        "description": "DBpedia entity embeddings using OpenAI"
+        "description": "DBpedia entity embeddings using OpenAI",
     },
     "glove-100": {
         "id": "id",
@@ -70,57 +69,67 @@ datasets = {
         "size": 1_200_000,
         "dimension": 100,
         "dataset_id": "open-vdb/glove-100-angular",
-        "description": "GloVe 100-dimensional word embeddings"
+        "description": "GloVe 100-dimensional word embeddings",
     },
 }
+
 
 def download_huggingface_dataset(dataset_id, destination):
     """Download a dataset from Hugging Face using their API"""
     # First, get the parquet file URL
-    parquet_url = f"https://huggingface.co/api/datasets/{dataset_id}/parquet/default/train"
+    parquet_url = (
+        f"https://huggingface.co/api/datasets/{dataset_id}/parquet/default/train"
+    )
     response = requests.get(parquet_url)
     response.raise_for_status()
     parquet_info = response.json()
-    
+
     if not parquet_info or not isinstance(parquet_info, list) or not parquet_info:
         raise Exception(f"No parquet files found for dataset {dataset_id}")
-    
+
     # Get the first parquet file URL
     parquet_file_url = parquet_info[0]["url"]
-    
+
     # Download the parquet file
     print(f"Downloading parquet file from {parquet_file_url}")
     response = requests.get(parquet_file_url, stream=True)
     response.raise_for_status()
-    
-    total_size = int(response.headers.get('content-length', 0))
-    
-    with open(destination, 'wb') as f, tqdm(
-        desc=os.path.basename(destination),
-        total=total_size,
-        unit='iB',
-        unit_scale=True,
-        unit_divisor=1024,
-    ) as pbar:
+
+    total_size = int(response.headers.get("content-length", 0))
+
+    with (
+        open(destination, "wb") as f,
+        tqdm(
+            desc=os.path.basename(destination),
+            total=total_size,
+            unit="iB",
+            unit_scale=True,
+            unit_divisor=1024,
+        ) as pbar,
+    ):
         for data in response.iter_content(chunk_size=1024):
             size = f.write(data)
             pbar.update(size)
+
 
 def download_file(url, destination):
     """Download a file with progress bar"""
     try:
         response = requests.get(url, stream=True)
         response.raise_for_status()  # Raise an exception for bad status codes
-        
-        total_size = int(response.headers.get('content-length', 0))
-        
-        with open(destination, 'wb') as f, tqdm(
-            desc=os.path.basename(destination),
-            total=total_size,
-            unit='iB',
-            unit_scale=True,
-            unit_divisor=1024,
-        ) as pbar:
+
+        total_size = int(response.headers.get("content-length", 0))
+
+        with (
+            open(destination, "wb") as f,
+            tqdm(
+                desc=os.path.basename(destination),
+                total=total_size,
+                unit="iB",
+                unit_scale=True,
+                unit_divisor=1024,
+            ) as pbar,
+        ):
             for data in response.iter_content(chunk_size=1024):
                 size = f.write(data)
                 pbar.update(size)
@@ -130,51 +139,56 @@ def download_file(url, destination):
             os.remove(destination)
         raise
 
+
 def prepare_glove_dataset(dataset_dir):
     """Prepare GloVe dataset by converting it to parquet format"""
     zip_path = os.path.join(dataset_dir, "glove.6B.zip")
     if not os.path.exists(zip_path):
         print("Downloading GloVe dataset...")
         download_file(datasets["glove-100"]["url"], zip_path)
-    
+
     print("Extracting GloVe dataset...")
-    with gzip.open(zip_path, 'rb') as f_in:
-        with open(os.path.join(dataset_dir, "glove.6B.100d.txt"), 'wb') as f_out:
+    with gzip.open(zip_path, "rb") as f_in:
+        with open(os.path.join(dataset_dir, "glove.6B.100d.txt"), "wb") as f_out:
             shutil.copyfileobj(f_in, f_out)
-    
+
     print("Converting GloVe to parquet format...")
     # Read the GloVe text file
     data = []
-    with open(os.path.join(dataset_dir, "glove.6B.100d.txt"), 'r', encoding='utf-8') as f:
+    with open(
+        os.path.join(dataset_dir, "glove.6B.100d.txt"), "r", encoding="utf-8"
+    ) as f:
         for line in f:
             values = line.split()
             word = values[0]
             vector = [float(x) for x in values[1:]]
             data.append({"id": word, "embeddings": vector})
-    
+
     # Convert to DataFrame and save as parquet
     df = pd.DataFrame(data)
     df.to_parquet(os.path.join(dataset_dir, "test0.parquet"))
-    
+
     # Clean up temporary files
     os.remove(os.path.join(dataset_dir, "glove.6B.100d.txt"))
     os.remove(zip_path)
+
 
 def prepare_dataset(dataset_name):
     """Download and prepare a dataset"""
     dataset_dir = os.path.join("datasets", dataset_name)
     dataset_config = datasets[dataset_name]
     parquet_path = os.path.join(dataset_dir, "test0.parquet")
-    
+
     print(f"Downloading {dataset_name}...")
     prepare_huggingface_dataset(dataset_config["dataset_id"], parquet_path)
-    
+
     print(f"Dataset {dataset_name} is ready at {dataset_dir}")
+
 
 def prepare_huggingface_dataset(dataset_id, destination):
     """Download and prepare a dataset from Hugging Face"""
     print(f"Loading dataset {dataset_id} from Hugging Face...")
-    
+
     try:
         # Try loading with default config first
         dataset = load_dataset(dataset_id, split="train")
@@ -182,35 +196,44 @@ def prepare_huggingface_dataset(dataset_id, destination):
         if "Config name is missing" in str(e):
             # If config is required, try with 'train' config
             print("Config name required, using 'train' config...")
-            dataset = load_dataset(dataset_id, 'train', split="train")
+            dataset = load_dataset(dataset_id, "train", split="train")
         else:
             raise
-    
+
     # Convert to pandas DataFrame
     df = dataset.to_pandas()
-    
+
     # Print dataset structure
     print("\nDataset Structure:")
     print(f"Columns: {df.columns.tolist()}")
     print(f"First row sample: {df.iloc[0].to_dict()}")
     print(f"Number of rows: {len(df)}")
-    
+
     # Ensure the required columns exist
     if "id" not in df.columns:
         df["id"] = range(len(df))
-    
+
     if "dense_values" not in df.columns:
         # Find the embedding column
-        embedding_cols = [col for col in df.columns if "emb" in col.lower() or "embedding" in col.lower() or "vector" in col.lower()]
+        embedding_cols = [
+            col
+            for col in df.columns
+            if "emb" in col.lower()
+            or "embedding" in col.lower()
+            or "vector" in col.lower()
+        ]
         if not embedding_cols:
-            raise ValueError(f"No embedding column found in dataset {dataset_id}. Available columns: {df.columns.tolist()}")
+            raise ValueError(
+                f"No embedding column found in dataset {dataset_id}. Available columns: {df.columns.tolist()}"
+            )
         df["dense_values"] = df[embedding_cols[0]]
-    
+
     # Save as parquet
     print(f"\nSaving dataset to {destination}")
     df.to_parquet(destination)
-    
+
     print(f"Dataset saved successfully with {len(df)} rows")
+
 
 def ensure_dataset_available(dataset_name):
     """Ensure a dataset is downloaded and ready to use"""
@@ -219,19 +242,20 @@ def ensure_dataset_available(dataset_name):
     if not os.path.exists(datasets_dir):
         os.makedirs(datasets_dir)
         print(f"Created datasets directory at {os.path.abspath(datasets_dir)}")
-    
+
     # Create dataset-specific directory if it doesn't exist
     dataset_dir = os.path.join(datasets_dir, dataset_name)
     if not os.path.exists(dataset_dir):
         os.makedirs(dataset_dir)
         print(f"Created dataset directory at {os.path.abspath(dataset_dir)}")
-    
+
     # Check if dataset files exist
-    if not any(f.endswith('.parquet') for f in os.listdir(dataset_dir)):
+    if not any(f.endswith(".parquet") for f in os.listdir(dataset_dir)):
         print(f"Dataset {dataset_name} not found. Downloading...")
         prepare_dataset(dataset_name)
     else:
         print(f"Dataset {dataset_name} is already available at {dataset_dir}")
+
 
 def prompt_and_get_dataset_metadata():
     print("\nChoose a dataset to test with:")
@@ -242,18 +266,19 @@ def prompt_and_get_dataset_metadata():
     dataset_idx = int(input("Select: ")) - 1
     dataset_name = dataset_names[dataset_idx]
     print(f"Reading {dataset_name} ...")
-    
+
     # Ask for test mode
     print("\nChoose test mode:")
     print("1) Quick test (smaller dataset, faster)")
     print("2) Full test (complete dataset, slower)")
     test_mode = int(input("Select (1 or 2): "))
-    
+
     # Ensure dataset is available
     ensure_dataset_available(dataset_name)
-    
+
     dataset = datasets[dataset_name]
     return (dataset_name, dataset, test_mode == 1)
+
 
 def cosine_sim_matrix(A, B):
     """Compute cosine similarity between each row in A and each row in B"""
@@ -262,6 +287,7 @@ def cosine_sim_matrix(A, B):
     A[np.isnan(A)] = 0
     B[np.isnan(B)] = 0
     return np.dot(A, B.T)
+
 
 def generate_brute_force_results(dataset_name, vector_list, quick_test=False):
     """Generate brute force results for similarity comparison"""
@@ -285,7 +311,9 @@ def generate_brute_force_results(dataset_name, vector_list, quick_test=False):
     results = []
     for i, sims in enumerate(sim_matrix):
         if i % 10 == 0:
-            print(f"Processing query vector {i + 1}/{num_test_vectors}, ID: {test_ids[i]}")
+            print(
+                f"Processing query vector {i + 1}/{num_test_vectors}, ID: {test_ids[i]}"
+            )
 
         top5_idx = np.argpartition(-sims, 5)[:5]
         top5_sorted = top5_idx[np.argsort(-sims[top5_idx])]
@@ -293,36 +321,41 @@ def generate_brute_force_results(dataset_name, vector_list, quick_test=False):
         top_ids = [ids[j] for j in top5_sorted]
         top_sims = [sims[j] for j in top5_sorted]
 
-        results.append({
-            "query_id": test_ids[i],
-            **{f"top{j+1}_id": top_ids[j] for j in range(5)},
-            **{f"top{j+1}_sim": top_sims[j] for j in range(5)},
-        })
+        results.append(
+            {
+                "query_id": test_ids[i],
+                **{f"top{j + 1}_id": top_ids[j] for j in range(5)},
+                **{f"top{j + 1}_sim": top_sims[j] for j in range(5)},
+            }
+        )
 
     print(f"\nGenerated brute force results for {len(results)} queries")
     return results
+
 
 def load_or_generate_brute_force_results(dataset_name, quick_test=False):
     """Always generate brute force results"""
     print("Generating brute force results...")
     vectors = read_dataset_from_parquet(dataset_name)
-    
+
     # Limit vectors for quick test
     if quick_test:
         print("Quick test mode: Using first 1000 vectors for brute force computation")
         vectors = vectors[:1000]
-    
+
     results = generate_brute_force_results(dataset_name, vectors, quick_test=quick_test)
     del vectors
     return results
+
 
 def pre_process_vector(id, values):
     corrected_values = [float(v) for v in values]
     return {
         "id": str(id),  # Keep as string for server compatibility
         "dense_values": corrected_values,
-        "document_id": f"doc_{id//10}"  # Group vectors into documents
+        "document_id": f"doc_{id // 10}",  # Group vectors into documents
     }
+
 
 def read_dataset_from_parquet(dataset_name):
     """Read dataset from parquet files in the datasets directory"""
@@ -382,6 +415,7 @@ def read_dataset_from_parquet(dataset_name):
 
     return vectors
 
+
 def read_single_parquet_file(path, dataset_name, file_index, base_id, quick_test=False):
     """Read and process a single parquet file"""
     try:
@@ -416,6 +450,7 @@ def read_single_parquet_file(path, dataset_name, file_index, base_id, quick_test
         print(f"Error processing file {path}: {e}")
         return None
 
+
 def process_vectors_batch(vectors, collection, batch_size):
     """Process a batch of vectors and insert them into the database"""
     try:
@@ -431,6 +466,7 @@ def process_vectors_batch(vectors, collection, batch_size):
         print(f"Error processing batch: {e}")
         return None
 
+
 def process_parquet_files(
     dataset_name,
     collection,
@@ -438,7 +474,7 @@ def process_parquet_files(
     batch_size=100,
     matches_sample_size=100,
     rps_sample_size=100000,
-    quick_test=False
+    quick_test=False,
 ):
     """
     Process parquet files asynchronously and upsert vectors to the server.
@@ -456,12 +492,16 @@ def process_parquet_files(
     id_counter = 0
     matches_test_vectors = []
     rps_test_vectors = []
-    
+
     # For quick test, use the first 10 vectors as test vectors
     if quick_test:
-        matches_test_vector_ids_set = set(str(result["query_id"]) for result in brute_force_results[:10])
+        matches_test_vector_ids_set = set(
+            str(result["query_id"]) for result in brute_force_results[:10]
+        )
     else:
-        matches_test_vector_ids_set = set(str(result["query_id"]) for result in brute_force_results)
+        matches_test_vector_ids_set = set(
+            str(result["query_id"]) for result in brute_force_results
+        )
 
     def get_next_file_path(count):
         return os.path.join("datasets", dataset_name, f"test{count}.parquet")
@@ -473,7 +513,9 @@ def process_parquet_files(
     with ThreadPoolExecutor(max_workers=3) as executor:
         current_path = get_next_file_path(file_count)
         if not os.path.exists(current_path):
-            print(f"No parquet files found in {os.path.abspath(os.path.dirname(current_path))}")
+            print(
+                f"No parquet files found in {os.path.abspath(os.path.dirname(current_path))}"
+            )
             return matches_test_vectors, rps_test_vectors
 
         future = executor.submit(
@@ -482,7 +524,7 @@ def process_parquet_files(
             dataset_name,
             file_count,
             id_counter,
-            quick_test
+            quick_test,
         )
 
         while True:
@@ -501,7 +543,7 @@ def process_parquet_files(
                         dataset_name,
                         file_count,
                         id_counter,
-                        quick_test
+                        quick_test,
                     )
 
                 if len(matches_test_vectors) < matches_sample_size:
@@ -551,15 +593,14 @@ def process_parquet_files(
     print("Waiting for transactions to complete")
     for txn_id in txn_ids:
         print(f"Polling transaction {txn_id}...")
-        final_status, success = poll_transaction_completion(
-            client, collection.name, txn_id,
-            target_status='complete',
-            max_attempts=10,
-            sleep_interval=30
+        final_status, success = txn_id.poll_completion(
+            target_status="complete", max_attempts=10, sleep_interval=30
         )
-        
+
         if not success:
-            print(f"Transaction {txn_id} did not complete successfully. Final status: {final_status}")
+            print(
+                f"Transaction {txn_id} did not complete successfully. Final status: {final_status}"
+            )
         else:
             print(f"Transaction {txn_id} completed successfully")
 
@@ -576,6 +617,7 @@ def process_parquet_files(
 
     return matches_test_vectors, rps_test_vectors
 
+
 def run_matching_tests(test_vectors, collection, brute_force_results):
     """Run matching accuracy tests and measure query latencies"""
     print(f"\nStarting similarity search tests with {len(test_vectors)} queries...")
@@ -589,15 +631,14 @@ def run_matching_tests(test_vectors, collection, brute_force_results):
             test_vec = next(
                 test_vec
                 for test_vec in brute_force_results
-                if str(query_vec["id"]) == str(test_vec["query_id"])  # Compare as strings
+                if str(query_vec["id"])
+                == str(test_vec["query_id"])  # Compare as strings
             )
 
             # Measure query latency
             query_start_time = time.time()
             results = collection.search.dense(
-                query_vector=query_vec["dense_values"],
-                top_k=5,
-                return_raw_text=True
+                query_vector=query_vec["dense_values"], top_k=5, return_raw_text=True
             )
             query_end_time = time.time()
             query_latency = (query_end_time - query_start_time) * 1000  # Convert to ms
@@ -608,10 +649,14 @@ def run_matching_tests(test_vectors, collection, brute_force_results):
                 print(f"\nQuery {i + 1} (Vector ID: {query_id}):")
                 print(f"Query latency: {query_latency:.2f} ms")
 
-                server_top5 = [str(match["id"]) for match in results["results"][:5]]  # Convert to string
+                server_top5 = [
+                    str(match["id"]) for match in results["results"][:5]
+                ]  # Convert to string
                 print("Server top 5:", server_top5)
 
-                brute_force_top5 = [str(test_vec[f"top{j}_id"]) for j in range(1, 6)]  # Convert to string
+                brute_force_top5 = [
+                    str(test_vec[f"top{j}_id"]) for j in range(1, 6)
+                ]  # Convert to string
                 print("Brute force top 5:", brute_force_top5)
 
                 matches = sum(1 for id in server_top5 if id in brute_force_top5)
@@ -651,6 +696,7 @@ def run_matching_tests(test_vectors, collection, brute_force_results):
     else:
         print("No valid queries completed")
 
+
 def run_rps_tests(rps_test_vectors, collection, batch_size=100):
     """Run RPS (Requests Per Second) tests"""
     print(f"Using {len(rps_test_vectors)} different test vectors for RPS testing")
@@ -688,17 +734,13 @@ def run_rps_tests(rps_test_vectors, collection, batch_size=100):
     print(f"Requests Per Second (RPS): {rps:.2f}")
     print(f"Success Rate: {(successful_requests / total_requests * 100):.2f}%")
 
+
 def batch_ann_search(collection, vectors):
     """Perform batch ANN search using the Client class"""
     try:
         # Format the vectors for batch search
-        queries = [
-            {
-                "vector": vector["dense_values"],
-                "top_k": 5
-            } for vector in vectors
-        ]
-        
+        queries = [{"vector": vector["dense_values"], "top_k": 5} for vector in vectors]
+
         # Use the collection's search method
         results = collection.search.batch_dense(queries)
         return results
@@ -706,21 +748,17 @@ def batch_ann_search(collection, vectors):
         print(f"Error in batch search: {e}")
         raise
 
+
 if __name__ == "__main__":
     # Get password from .env file or prompt securely
     password = os.getenv("COSDATA_PASSWORD")
     if not password:
         password = getpass.getpass("Enter your database password: ")
-    
+
     # Initialize client
     host = os.getenv("COSDATA_HOST", "http://127.0.0.1:8443")
     username = os.getenv("COSDATA_USERNAME", "admin")
-    client = Client(
-        host=host,
-        username=username,
-        password=password,
-        verify=False
-    )
+    client = Client(host=host, username=username, password=password, verify=False)
 
     # Configuration
     batch_size = 100
@@ -746,7 +784,7 @@ if __name__ == "__main__":
         collection = client.create_collection(
             name=vector_db_name,
             dimension=dataset_metadata["dimension"],
-            description=f"Test collection for {dataset_metadata['description']} - {test_mode_suffix} mode"
+            description=f"Test collection for {dataset_metadata['description']} - {test_mode_suffix} mode",
         )
 
         # Create index
@@ -758,7 +796,7 @@ if __name__ == "__main__":
             ef_construction=64,
             ef_search=64,
             neighbors_count=16,
-            level_0_neighbors_count=32
+            level_0_neighbors_count=32,
         )
 
         matches_test_vectors, rps_test_vectors = process_parquet_files(
@@ -768,7 +806,7 @@ if __name__ == "__main__":
             batch_size,
             num_match_test_vectors,
             num_rps_test_vectors,
-            quick_test
+            quick_test,
         )
 
         run_matching_tests(matches_test_vectors, collection, brute_force_results)
@@ -786,12 +824,18 @@ if __name__ == "__main__":
             try:
                 # Ask user if they want to delete the collection
                 print(f"\nCollection '{vector_db_name}' was created for testing.")
-                delete_choice = input("Do you want to delete the test collection? (y/N): ").lower().strip()
-                
-                if delete_choice in ['y', 'yes']:
+                delete_choice = (
+                    input("Do you want to delete the test collection? (y/N): ")
+                    .lower()
+                    .strip()
+                )
+
+                if delete_choice in ["y", "yes"]:
                     collection.delete()
                     print("Test collection deleted")
                 else:
-                    print(f"Test collection '{vector_db_name}' preserved for future use")
+                    print(
+                        f"Test collection '{vector_db_name}' preserved for future use"
+                    )
             except Exception as e:
                 print(f"Error during cleanup: {e}")
