@@ -283,7 +283,7 @@ impl ProbNode {
     }
 
     pub fn remove_neighbor_by_id(&self, id: InternalId) -> bool {
-        let _lock = self.freeze();
+        let _lock = self.lowest_index.write();
         for neighbor in &self.neighbors {
             let res = neighbor.fetch_update(Ordering::Release, Ordering::Acquire, |nbr| {
                 if let Some((nbr_id, _, _)) = unsafe { nbr.as_ref() } {
@@ -313,7 +313,7 @@ impl ProbNode {
     }
 
     pub fn remove_neighbor_by_index_and_id(&self, index: u8, id: InternalId) {
-        let _lock = self.freeze();
+        let _lock = self.lowest_index.write();
         let _ = self.neighbors[index as usize].fetch_update(
             Ordering::Release,
             Ordering::Acquire,
