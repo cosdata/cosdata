@@ -17,7 +17,6 @@ from collections import defaultdict
 from typing import Dict, List, Set, Tuple
 from py_rust_stemmers import SnowballStemmer
 from dotenv import load_dotenv
-from utils import poll_transaction_completion
 from cosdata import Client
 
 # Load environment variables from .env file
@@ -504,10 +503,7 @@ def create_db_and_upsert_vectors(vector_db_name, vectors, batch_size, k, b):
 
     # Poll for transaction completion
     print("Waiting for transaction to complete")
-    final_status, success = poll_transaction_completion(
-        client,
-        vector_db_name,
-        txn_id,
+    final_status, success = txn_id.poll_completion(
         target_status="complete",
         max_attempts=10,
         sleep_interval=2,

@@ -12,7 +12,6 @@ from pathlib import Path
 import cupy as cp
 from cupyx.scipy.sparse import csr_matrix
 from dotenv import load_dotenv
-from utils import poll_transaction_completion
 from cosdata import Client
 import getpass
 
@@ -560,10 +559,7 @@ def main():
 
         # Wait for indexing to complete
         print("Waiting for indexing to complete...")
-        final_status, success = poll_transaction_completion(
-            client,
-            vector_db_name,
-            transaction_id,
+        final_status, success = transaction_id.poll_completion(
             target_status="complete",
             max_attempts=30,  # Increase attempts for large dataset
             sleep_interval=5,  # Longer sleep for indexing
