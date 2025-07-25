@@ -158,13 +158,8 @@ def test_performance():
         print("Vectors inserted successfully")
 
         print("Waiting for transaction to complete")
-        final_status, success = txn_id.poll_completion(
-            client,
-            collection_name,
-            txn_id,
-            target_status="complete",
-            max_attempts=10,
-            sleep_interval=2,
+        final_status, success = txn.poll_completion(
+            target_status="complete", max_attempts=10, sleep_interval=2
         )
 
         if not success:

@@ -12,41 +12,37 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
+
 def format_vector(vector):
     """Format a vector for better readability"""
     # Handle Vector class instances
-    if hasattr(vector, 'dense_values'):
+    if hasattr(vector, "dense_values"):
         dense_values = vector.dense_values
         if dense_values:
             # Show first 5 dimensions and total count
             preview = dense_values[:5]
             formatted = {
                 "id": vector.id,
-                "dense_values": f"{preview}... (total: {len(dense_values)} dimensions)"
+                "dense_values": f"{preview}... (total: {len(dense_values)} dimensions)",
             }
         else:
-            formatted = {
-                "id": vector.id,
-                "dense_values": "[]"
-            }
+            formatted = {"id": vector.id, "dense_values": "[]"}
             return json.dumps(formatted, indent=2)
     # Handle dictionary format
     elif isinstance(vector, dict):
-        dense_values = vector.get('dense_values', [])
+        dense_values = vector.get("dense_values", [])
         if dense_values:
             # Show first 5 dimensions and total count
             preview = dense_values[:5]
             formatted = {
                 "id": vector.get("id", "N/A"),
-                "dense_values": f"{preview}... (total: {len(dense_values)} dimensions)"
+                "dense_values": f"{preview}... (total: {len(dense_values)} dimensions)",
             }
         else:
-            formatted = {
-                "id": vector.get("id", "N/A"),
-                "dense_values": "[]"
-            }
+            formatted = {"id": vector.get("id", "N/A"), "dense_values": "[]"}
         return json.dumps(formatted, indent=2)
     return str(vector)
+
 
 def test_basic_functionality():
     # Get password from .env file or prompt securely
@@ -57,12 +53,7 @@ def test_basic_functionality():
     # Initialize client
     host = os.getenv("COSDATA_HOST", "http://127.0.0.1:8443")
     username = os.getenv("COSDATA_USERNAME", "admin")
-    client = Client(
-        host=host,
-        username=username,
-        password=password,
-        verify=False
-    )
+    client = Client(host=host, username=username, password=password, verify=False)
 
     # Test collection name
     collection_name = "test_collection"
@@ -73,7 +64,7 @@ def test_basic_functionality():
         collection = client.create_collection(
             name=collection_name,
             dimension=768,
-            description="Test collection for basic functionality"
+            description="Test collection for basic functionality",
         )
         print("Collection created successfully")
 
@@ -86,7 +77,7 @@ def test_basic_functionality():
             ef_construction=512,
             ef_search=256,
             neighbors_count=32,
-            level_0_neighbors_count=64
+            level_0_neighbors_count=64,
         )
         print("Index created successfully")
 
@@ -95,10 +86,12 @@ def test_basic_functionality():
         test_vectors = []
         for i in range(10):
             values = np.random.uniform(-1, 1, 768).tolist()
-            test_vectors.append({
-                "id": f"vec_{i}",
-                "dense_values": values,
-            })
+            test_vectors.append(
+                {
+                    "id": f"vec_{i}",
+                    "dense_values": values,
+                }
+            )
 
         # Insert vectors using transaction
         print("Inserting vectors...")
@@ -110,22 +103,20 @@ def test_basic_functionality():
         print("Vectors inserted successfully")
 
         print("Waiting for transaction to complete")
-        final_status, success = txn_id.poll_completion( 
-            target_status='complete', 
-            max_attempts=3, 
-            sleep_interval=2
+        final_status, success = txn.poll_completion(
+            target_status="complete", max_attempts=3, sleep_interval=2
         )
-        
+
         if not success:
-            print(f"Transaction did not complete successfully. Final status: {final_status}")
+            print(
+                f"Transaction did not complete successfully. Final status: {final_status}"
+            )
 
         # Test search
         print("\nTesting search...")
         query_vector = test_vectors[0]["dense_values"]
         results = collection.search.dense(
-            query_vector=query_vector,
-            top_k=5,
-            return_raw_text=True
+            query_vector=query_vector, top_k=5, return_raw_text=True
         )
 
         print("\nSearch results:")
@@ -153,6 +144,7 @@ def test_basic_functionality():
             print("Test collection deleted")
         except Exception as e:
             print(f"Error during cleanup: {e}")
+
 
 if __name__ == "__main__":
     test_basic_functionality()

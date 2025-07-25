@@ -355,10 +355,8 @@ def main(
         txn_id = txn.transaction_id
 
     print("Waiting for TF-IDF indexing to complete...")
-    final_status, success = txn_id.poll_completion(
-        target_status="complete",
-        max_attempts=30,
-        sleep_interval=2,
+    final_status, success = txn.poll_completion(
+        target_status="complete", max_attempts=30, sleep_interval=2
     )
 
     if not success:
@@ -433,7 +431,7 @@ def main(
 #     return None
 
 if __name__ == "__main__":
-    main(dataset="arguana")
+    main(dataset="scidocs")
     # datasets = ["trec-covid", "fiqa", "arguana", "webis-touche2020", "quora", "scidocs", "scifact", "nq", "msmarco", "fever", "climate-fever"]
     # results = []
     # for dataset in datasets:

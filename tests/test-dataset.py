@@ -457,11 +457,10 @@ def process_vectors_batch(vectors, collection, batch_size):
         # Ensure all IDs are strings
         for vector in vectors:
             vector["id"] = str(vector["id"])
-        txn_id = None
+        
         with collection.transaction() as txn:
             txn.batch_upsert_vectors(vectors)
-            txn_id = txn.transaction_id
-        return txn_id
+            return txn  # Return the transaction object instead of just the ID
     except Exception as e:
         print(f"Error processing batch: {e}")
         return None
@@ -558,10 +557,10 @@ def process_parquet_files(
                     rps_test_vectors.extend(random.sample(vectors, sample_size))
 
                 insertion_start = time.time()
-                txn_id = process_vectors_batch(vectors, collection, batch_size)
-                print(f"Transaction id for batch upsert: {txn_id}")
-                if txn_id is not None:
-                    txn_ids.append(txn_id)
+                txn = process_vectors_batch(vectors, collection, batch_size)
+                print(f"Transaction id for batch upsert: {txn.transaction_id}")
+                if txn is not None:
+                    txn_ids.append(txn)
                 insertion_end = time.time()
                 insertion_time = insertion_end - insertion_start
                 total_insertion_time += insertion_time
@@ -591,18 +590,20 @@ def process_parquet_files(
     total_time = end_time - start_time
 
     print("Waiting for transactions to complete")
-    for txn_id in txn_ids:
-        print(f"Polling transaction {txn_id}...")
-        final_status, success = txn_id.poll_completion(
-            target_status="complete", max_attempts=10, sleep_interval=30
+    for txn in txn_ids:
+        print(f"Polling transaction {txn.transaction_id}...")
+        final_status, success = txn.poll_completion(
+            target_status="complete",
+            max_attempts=30,
+            sleep_interval=10,
         )
 
         if not success:
             print(
-                f"Transaction {txn_id} did not complete successfully. Final status: {final_status}"
+                f"Transaction {txn.transaction_id} did not complete successfully. Final status: {final_status}"
             )
         else:
-            print(f"Transaction {txn_id} completed successfully")
+            print(f"Transaction {txn.transaction_id} completed successfully")
 
     print("\nProcessing complete!")
     print(f"Total files processed: {file_count}")
