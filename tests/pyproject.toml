@@ -7,7 +7,7 @@ requires-python = ">=3.13"
 dependencies = [
     "beir>=2.1.0",
     "bm25s[core]>=0.2.12",
-    "cosdata-client>=0.2.2",
+    "cosdata-sdk>=0.2.5",
     "cupy-cuda12x>=13.4.1",
     "fastparquet>=2024.11.0",
     "numpy>=2.2.2",
