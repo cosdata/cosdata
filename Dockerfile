@@ -19,4 +19,11 @@ RUN curl -sL https://cosdata.io/install.sh | bash && \
 ENV SHELL=/bin/bash
 WORKDIR /opt/cosdata
 
+# Expose ports
+EXPOSE 8443
+EXPOSE 50051
+
+# Use the symlink path to modify the config
+RUN sed -i 's/host = "127.0.0.1"/host = "0.0.0.0"/' /opt/cosdata/config/config.toml
+
 CMD ["/bin/bash", "-l", "-c", "start-cosdata"]
