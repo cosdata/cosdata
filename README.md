@@ -81,7 +81,7 @@ curl -sL https://cosdata.io/install.sh | bash
 
 2. **Pull the latest Cosdata image**  
    ```bash
-   docker pull cosdatateam/cosdata:latest
+   docker pull cosdataio/cosdata:latest
    ```
 
 3. **Run the container**
@@ -91,7 +91,7 @@ curl -sL https://cosdata.io/install.sh | bash
    --name cosdata-server \
    -p 8443:8443 \
    -p 50051:50051 \
-   cosdatateam/cosdata:latest
+   cosdataio/cosdata:latest
    ```
 
 ✅ The server will be available at `http://localhost:8443`.
@@ -153,7 +153,7 @@ Perfect for contributors and power users who want to customize or extend Cosdata
 
 ### 🧪 Quick Validation Cosdata Server with `test.py`
 
-Cosdata includes a `test.py` script in the top level directory, to validate your server setup. This script will:
+Use the `test.py` script in the `tests/` directory to validate your Cosdata server setup. This script will:
 
 1. **Create** a test collection and a Dense HNSW index.  
 2. **Insert** batches of random vectors in a single transaction.  
@@ -171,10 +171,11 @@ Cosdata includes a `test.py` script in the top level directory, to validate your
 
 
 ### ⚙️ Setup & Execution
-
+Run the following from the `tests/` directory:
 1. **Install dependencies**
 
    ```bash
+   cd tests
    uv sync
    ```
 
@@ -324,7 +325,7 @@ If using Docker, mount your cert directory:
    docker run -it --rm \
      -v "/etc/ssl/certs:/etc/ssl/certs:ro" \
      -v "/etc/ssl/private:/etc/ssl/private:ro" \
-     cosdatateam/cosdata:latest \
+     cosdataio/cosdata:latest \
      cosdata --admin-key YOUR_ADMIN_KEY
    ```
 
@@ -350,7 +351,7 @@ Cosdata provides an officially maintained Python SDK for seamless integration in
 
 **Install**  
 ```bash
-pip install cosdata-client
+pip install cosdata-sdk
 ```
 
 **Quickstart Example**
