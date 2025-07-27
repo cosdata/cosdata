@@ -19,6 +19,9 @@ pub struct AppContext {
 impl AppContext {
     pub fn new(config: Config, args: CosdataArgs) -> Result<Self, WaCustomError> {
         let config = Arc::new(config);
+
+        args.admin_key.as_ref().or(config.admin_api_key.as_ref()).ok_or(WaCustomError::ConfigError(String::from("Admin Key was not provided please add it in the config.toml or pass it as an argument in this form --admin_key=<key>")))?;
+
         let threadpool = Arc::new(
             rayon::ThreadPoolBuilder::new()
                 .num_threads(config.thread_pool.pool_size)

@@ -118,7 +118,7 @@ def merge_cqa_dupstack(data_path: str, verbose: bool = False):
 def create_session():
     """Initialize the cosdata client"""
     # Use environment variable from .env file if available, otherwise prompt
-    password = os.getenv("COSDATA_PASSWORD")
+    password = os.getenv("COSDATA__ADMIN_API_KEY")
     if not password:
         password = getpass.getpass("Enter admin password: ")
 

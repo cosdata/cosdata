@@ -31,7 +31,7 @@ def create_session():
     url = f"{host}/auth/create-session"
     # Get credentials from environment variables
     username = os.getenv("COSDATA_USERNAME", "admin")
-    password = os.getenv("COSDATA_PASSWORD")
+    password = os.getenv("COSDATA__ADMIN_API_KEY")
 
     if not password:
         password = getpass.getpass("Enter admin password: ")
