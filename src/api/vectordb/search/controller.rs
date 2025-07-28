@@ -6,7 +6,7 @@ use crate::models::collection_cache::CollectionCacheExt;
 use super::dtos::{
     BatchDenseSearchRequestDto, BatchSearchResponseDto, BatchSearchTFIDFDocumentsDto,
     BatchSparseSearchRequestDto, DenseSearchRequestDto, FindSimilarTFIDFDocumentDto,
-    HybridSearchRequestDto, SearchResponseDto, SparseSearchRequestDto,
+    HybridSearchRequestDto, SearchResponseDto, SparseSearchRequestDto, BatchHybridSearchRequestDto,
 };
 use super::error::SearchError;
 
@@ -169,6 +169,37 @@ pub(crate) async fn hybrid_search(
         .map_err(|e| SearchError::InternalServerError(format!("Cache update error: {}", e)))?;
 
     let results = service::hybrid_search(ctx.into_inner(), &collection_id, body).await?;
+    Ok(HttpResponse::Ok().json(results))
+}
+
+/// Batch hybrid search combining different search approaches
+///
+/// Performs multiple hybrid searches combining multiple search strategies (dense/sparse/TFIDF) in a single request.
+#[utoipa::path(
+    post,
+    path = "/vectordb/collections/{collection_id}/search/batch-hybrid",
+    tag = "search",
+    params(
+        ("collection_id" = String, Path, description = "Collection identifier")
+    ),
+    request_body = BatchHybridSearchRequestDto,
+    responses(
+        (status = 200, description = "Batch hybrid search successfully completed", body = BatchSearchResponseDto),
+        (status = 404, description = "Collection not found", body = String),
+        (status = 400, description = "Invalid request error", body = String),
+        (status = 500, description = "Internal server error", body = String)
+    )
+)]
+pub(crate) async fn batch_hybrid_search(
+    path: web::Path<String>,
+    web::Json(body): web::Json<BatchHybridSearchRequestDto>,
+    ctx: web::Data<AppContext>,
+) -> Result<HttpResponse, SearchError> {
+    let collection_id = path.into_inner();
+    ctx.update_collection_for_query(&collection_id)
+        .map_err(|e| SearchError::InternalServerError(format!("Cache update error: {}", e)))?;
+
+    let results = service::batch_hybrid_search(ctx.into_inner(), &collection_id, body).await?;
     Ok(HttpResponse::Ok().json(results))
 }
 

@@ -44,6 +44,7 @@ parking_lot = "0.12.3"
 crossbeam = "0.8.4"
 utoipa = {version = "5.3.1", features = ["actix_extras"] }
 tempfile = "3.10.1"
+tokio = { version = "1.37.0", features = ["rt", "macros"] }
 
 [dev-dependencies]
 criterion = "0.5.1"
