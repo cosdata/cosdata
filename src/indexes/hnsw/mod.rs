@@ -344,7 +344,6 @@ impl IndexOps for HNSWIndex {
         };
 
         let range = (range_start, range_end);
-        println!("{:?}", range);
         *self.values_range.write().unwrap() = range;
         self.is_configured.store(true, Ordering::Release);
         store_values_range(lmdb, range)?;
