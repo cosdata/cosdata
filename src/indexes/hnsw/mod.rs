@@ -84,12 +84,16 @@ pub struct SamplingData {
     pub above_03: AtomicUsize,
     pub above_02: AtomicUsize,
     pub above_01: AtomicUsize,
+    pub above_005: AtomicUsize,
+    pub above_0025: AtomicUsize,
 
     pub below_05: AtomicUsize,
     pub below_04: AtomicUsize,
     pub below_03: AtomicUsize,
     pub below_02: AtomicUsize,
     pub below_01: AtomicUsize,
+    pub below_005: AtomicUsize,
+    pub below_0025: AtomicUsize,
 }
 
 unsafe impl Send for HNSWIndex {}
@@ -199,6 +203,16 @@ impl IndexOps for HNSWIndex {
         for value in &embedding.1 {
             let value = *value;
 
+            if value > 0.025 {
+                self.sampling_data
+                    .above_0025
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+
+            if value > 0.05 {
+                self.sampling_data.above_005.fetch_add(1, Ordering::Relaxed);
+            }
+
             if value > 0.1 {
                 self.sampling_data.above_01.fetch_add(1, Ordering::Relaxed);
             }
@@ -217,6 +231,16 @@ impl IndexOps for HNSWIndex {
 
             if value > 0.5 {
                 self.sampling_data.above_05.fetch_add(1, Ordering::Relaxed);
+            }
+
+            if value < -0.025 {
+                self.sampling_data
+                    .below_0025
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+
+            if value < -0.05 {
+                self.sampling_data.below_005.fetch_add(1, Ordering::Relaxed);
             }
 
             if value < -0.1 {
@@ -263,6 +287,10 @@ impl IndexOps for HNSWIndex {
             (self.sampling_data.above_02.load(Ordering::Relaxed) as f32 / values_count) * 100.0;
         let above_01_percent =
             (self.sampling_data.above_01.load(Ordering::Relaxed) as f32 / values_count) * 100.0;
+        let above_005_percent =
+            (self.sampling_data.above_005.load(Ordering::Relaxed) as f32 / values_count) * 100.0;
+        let above_0025_percent =
+            (self.sampling_data.above_0025.load(Ordering::Relaxed) as f32 / values_count) * 100.0;
 
         let below_05_percent =
             (self.sampling_data.below_05.load(Ordering::Relaxed) as f32 / values_count) * 100.0;
@@ -274,8 +302,16 @@ impl IndexOps for HNSWIndex {
             (self.sampling_data.below_02.load(Ordering::Relaxed) as f32 / values_count) * 100.0;
         let below_01_percent =
             (self.sampling_data.below_01.load(Ordering::Relaxed) as f32 / values_count) * 100.0;
+        let below_005_percent =
+            (self.sampling_data.below_005.load(Ordering::Relaxed) as f32 / values_count) * 100.0;
+        let below_0025_percent =
+            (self.sampling_data.below_0025.load(Ordering::Relaxed) as f32 / values_count) * 100.0;
 
-        let range_start = if below_01_percent <= config.indexing.clamp_margin_percent {
+        let range_start = if below_0025_percent <= config.indexing.clamp_margin_percent {
+            -0.025
+        } else if below_005_percent <= config.indexing.clamp_margin_percent {
+            -0.05
+        } else if below_01_percent <= config.indexing.clamp_margin_percent {
             -0.1
         } else if below_02_percent <= config.indexing.clamp_margin_percent {
             -0.2
@@ -289,7 +325,11 @@ impl IndexOps for HNSWIndex {
             -1.0
         };
 
-        let range_end = if above_01_percent <= config.indexing.clamp_margin_percent {
+        let range_end = if above_0025_percent <= config.indexing.clamp_margin_percent {
+            0.025
+        } else if above_005_percent <= config.indexing.clamp_margin_percent {
+            0.05
+        } else if above_01_percent <= config.indexing.clamp_margin_percent {
             0.1
         } else if above_02_percent <= config.indexing.clamp_margin_percent {
             0.2
@@ -304,6 +344,7 @@ impl IndexOps for HNSWIndex {
         };
 
         let range = (range_start, range_end);
+        println!("{:?}", range);
         *self.values_range.write().unwrap() = range;
         self.is_configured.store(true, Ordering::Release);
         store_values_range(lmdb, range)?;
