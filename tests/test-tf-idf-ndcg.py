@@ -349,10 +349,8 @@ def main(
 
     # Create transaction and index vectors
     print("Creating transaction and indexing vectors...")
-    txn_id = None
     with collection.transaction() as txn:
         indexing_time = index(collection, txn, vectors)
-        txn_id = txn.transaction_id
 
     print("Waiting for TF-IDF indexing to complete...")
     final_status, success = txn.poll_completion(
@@ -404,54 +402,11 @@ def main(
             print(f"Error during cleanup: {e}")
 
 
-# def start_server():
-#     # Run the shell command to clean, build, and run the server with taskset
-#     cmd = 'rm -rf data && cargo b -r && taskset 0xFF ./target/release/cosdata --admin-key "" --confirmed'
-#     return subprocess.Popen(cmd, shell=True, preexec_fn=os.setsid)
-
-
-# def stop_server(process):
-#     # Kill the entire process group
-#     os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-
-# def get_memory_usage_gb():
-#     result = subprocess.run(['ps', '-p', str(find_pid_by_name("cosdata")), '-o', 'rss='],
-#                             stdout=subprocess.PIPE, text=True)
-#     return int(result.stdout.strip()) / (1024 * 1024)
-
-# def find_pid_by_name(name):
-#     result = subprocess.run(['ps', 'aux'], stdout=subprocess.PIPE, text=True)
-#     lines = result.stdout.splitlines()
-
-#     for line in lines:
-#         if name in line and 'grep' not in line:
-#             parts = line.split()
-#             pid = int(parts[1])
-#             return pid
-#     return None
-
 if __name__ == "__main__":
-    main(dataset="scidocs")
-    # datasets = ["trec-covid", "fiqa", "arguana", "webis-touche2020", "quora", "scidocs", "scifact", "nq", "msmarco", "fever", "climate-fever"]
-    # results = []
-    # for dataset in datasets:
-    #     time.sleep(5)
-    #     server_proc = start_server()
-    #     time.sleep(5)
-    #     try:
-    #         result = main(dataset)
-    #         memory_usage = get_memory_usage_gb()
-    #         result["memory_usage"] = memory_usage
-    #     except Exception as e:
-    #         print(f"Error with dataset {dataset}: {e}")
-    #         stop_server(server_proc)
-    #         continue
-    #     results.append(result)
-    #     with open("results.csv", "w", newline="") as csvfile:
-    #         fieldnames = ["dataset", "corpus_size", "queries_size", "insertion_time", "recall", "ndcg", "qps", "p50_latency", "p95_latency", "memory_usage"]
-    #         labels = ["Dataset", "Corpus Size", "Queries Size", "Insertion Time (seconds)", "Recall@10", "NDCG@10", "QPS", "p50 Latency (milliseconds)", "p95 Latency (milliseconds)", "Memory Usage (GB)"]
-    #         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+    datasets = ["trec-covid", "fiqa", "arguana", "webis-touche2020", "quora", "scidocs", "scifact", "nq", "msmarco", "fever", "climate-fever"]
+    print("\nChoose a dataset to with:")
+    for i, dataset in enumerate(datasets):
+        print(f"{i + 1}) {dataset}")
 
-    #         writer.writerow({ fieldname: label for fieldname, label in zip(fieldnames, labels) })
-    #         writer.writerows(results)
-    #     stop_server(server_proc)
+    idx = int(input("\nSelect: ")) - 1
+    main(dataset=datasets[idx])
