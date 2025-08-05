@@ -138,9 +138,9 @@ impl<'de> Deserialize<'de> for CreateVectorDto {
                                 sparse_values_raw = Some((indices, Vec::new()));
                             }
                         }
-                        "geo_fencing_metadata" => {
+                        "geo_fence_metadata" => {
                             if geo_fence_metadata.is_some() {
-                                return Err(de::Error::duplicate_field("geo_fencing_metadata"));
+                                return Err(de::Error::duplicate_field("geo_fence_metadata"));
                             }
                             geo_fence_metadata = map.next_value()?;
                         }
