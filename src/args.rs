@@ -5,7 +5,7 @@ use clap::Parser;
 pub struct CosdataArgs {
     /// The admin key used to encrypt data and session tokens.
     #[arg(long)]
-    pub admin_key: String,
+    pub admin_key: Option<String>,
     /// Skip confirmation for admin key (not recommended)
     #[arg(long)]
     pub skip_confirmation: bool,
