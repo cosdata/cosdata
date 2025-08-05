@@ -4,7 +4,8 @@ use std::sync::Arc;
 use super::dtos::{
     BatchDenseSearchRequestDto, BatchSearchResponseDto, BatchSearchTFIDFDocumentsDto,
     BatchSparseSearchRequestDto, DenseSearchRequestDto, FindSimilarTFIDFDocumentDto,
-    HybridSearchRequestDto, SearchResponseDto, SearchResultItemDto, SparseSearchRequestDto,
+    GeoFenceSearchRequestDto, HybridSearchRequestDto, SearchResponseDto, SearchResultItemDto,
+    SparseSearchRequestDto,
 };
 use super::error::SearchError;
 use super::repo;
@@ -63,6 +64,27 @@ pub(crate) async fn sparse_search(
     request: SparseSearchRequestDto,
 ) -> Result<SearchResponseDto, SearchError> {
     let (results, warning) = repo::sparse_search(ctx, collection_id, request).await?;
+
+    Ok(SearchResponseDto {
+        results: results
+            .into_iter()
+            .map(|(id, document_id, score, text)| SearchResultItemDto {
+                id,
+                document_id,
+                score,
+                text,
+            })
+            .collect(),
+        warning,
+    })
+}
+
+pub(crate) async fn geofence_search(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    request: GeoFenceSearchRequestDto,
+) -> Result<SearchResponseDto, SearchError> {
+    let (results, warning) = repo::geofence_search(ctx, collection_id, request).await?;
 
     Ok(SearchResponseDto {
         results: results

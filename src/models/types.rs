@@ -28,6 +28,7 @@ use crate::{
         DistanceError, DistanceFunction,
     },
     indexes::{
+        geozone::GeoZoneIndex,
         hnsw::{
             offset_counter::{HNSWIndexFileOffsetCounter, IndexFileId},
             HNSWIndex,
@@ -611,9 +612,22 @@ impl CollectionsMap {
             };
 
             // if collection has inverted index load it from the lmdb
-            let inverted_index = if collection_meta.sparse_vector.enabled {
+            let inverted_index = if collection_meta.sparse_vector.enabled
+                && !collection_meta.sparse_vector.geofencing
+            {
                 collections_map
                     .load_inverted_index(&collection_meta, &lmdb)?
+                    .map(Arc::new)
+            } else {
+                None
+            };
+
+            // if collection has geozone index load it from the lmdb
+            let geozone_index = if collection_meta.sparse_vector.enabled
+                && collection_meta.sparse_vector.geofencing
+            {
+                collections_map
+                    .load_geozone_index(&collection_meta)?
                     .map(Arc::new)
             } else {
                 None
@@ -734,6 +748,7 @@ impl CollectionsMap {
                 hnsw_index: parking_lot::RwLock::new(hnsw_index),
                 inverted_index: parking_lot::RwLock::new(inverted_index),
                 tf_idf_index: parking_lot::RwLock::new(tf_idf_index),
+                geozone_index: parking_lot::RwLock::new(geozone_index),
                 indexing_manager: parking_lot::RwLock::new(None),
                 is_indexing: AtomicBool::new(false),
             });
@@ -1140,6 +1155,50 @@ impl CollectionsMap {
         Ok(Some(inverted_index))
     }
 
+    /// loads and initiates the geozone index of a collection from lmdb
+    fn load_geozone_index(
+        &self,
+        collection_meta: &CollectionMetadata,
+    ) -> Result<Option<GeoZoneIndex>, WaCustomError> {
+        let collection_path: Arc<Path> = get_collections_path().join(&collection_meta.name).into();
+        let index_path = collection_path.join("sparse_geozone_index");
+
+        if !index_path.exists() {
+            return Ok(None);
+        }
+
+        let Some(geozone_index_data) = GeoZoneIndex::load_data(
+            &self.lmdb_env,
+            self.lmdb_inverted_index_db,
+            &collection_meta.name,
+        )?
+        else {
+            return Ok(None);
+        };
+
+        let zones_dim_file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(index_path.join("zones.dim"))
+            .map_err(BufIoError::Io)?;
+        let zones_dim_bufman = BufferManager::new(zones_dim_file, 8192).map_err(BufIoError::Io)?;
+
+        let zones_data_bufmans = BufferManagerFactory::new(
+            index_path.clone().into(),
+            |root, version: &VersionNumber| root.join(format!("zones.{}.data", **version)),
+            8192,
+        );
+
+        let geozone_index = GeoZoneIndex {
+            root: InvertedIndexRoot::deserialize(index_path, geozone_index_data.quantization_bits)?,
+            zones: TreeMapVec::deserialize(zones_dim_bufman, zones_data_bufmans)?,
+        };
+
+        Ok(Some(geozone_index))
+    }
+
     /// loads and initiates the TF-IDF index of a collection from lmdb
     fn load_tf_idf_index(
         &self,
@@ -1203,6 +1262,20 @@ impl CollectionsMap {
             self.lmdb_inverted_index_db,
         )?;
         *collection.inverted_index.write() = Some(inverted_index);
+        Ok(())
+    }
+
+    pub fn insert_geozone_index(
+        &self,
+        collection: &Collection,
+        geozone_index: Arc<GeoZoneIndex>,
+    ) -> Result<(), WaCustomError> {
+        geozone_index.persist(
+            &collection.meta.name,
+            &self.lmdb_env,
+            self.lmdb_inverted_index_db,
+        )?;
+        *collection.geozone_index.write() = Some(geozone_index);
         Ok(())
     }
 

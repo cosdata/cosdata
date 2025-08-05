@@ -2,7 +2,10 @@ use std::fmt;
 
 use crate::{
     metadata::MetadataFields,
-    models::{collection::RawVectorEmbedding, types::DocumentId},
+    models::{
+        collection::{GeoFenceMetadata, RawVectorEmbedding},
+        types::DocumentId,
+    },
 };
 
 use serde::{
@@ -30,6 +33,9 @@ pub(crate) struct CreateVectorDto {
     pub metadata: Option<MetadataFields>,
     #[schema(value_type = Object, nullable = true)]
     pub sparse_values: Option<Vec<SparsePair>>,
+    #[schema(value_type = Object, nullable = true)]
+    pub geo_fence_metadata: Option<GeoFenceMetadata>,
+    #[schema(value_type = String, nullable = true)]
     pub text: Option<String>,
 }
 
@@ -41,6 +47,7 @@ impl From<CreateVectorDto> for RawVectorEmbedding {
             dense_values: dto.dense_values,
             metadata: dto.metadata,
             sparse_values: dto.sparse_values,
+            geo_fence_metadata: dto.geo_fence_metadata,
             text: dto.text,
         }
     }
@@ -54,6 +61,7 @@ impl From<RawVectorEmbedding> for CreateVectorDto {
             dense_values: emb.dense_values,
             metadata: emb.metadata,
             sparse_values: emb.sparse_values,
+            geo_fence_metadata: emb.geo_fence_metadata,
             text: emb.text,
         }
     }
@@ -85,6 +93,7 @@ impl<'de> Deserialize<'de> for CreateVectorDto {
                 let mut dense_values = None;
                 let mut metadata = None;
                 let mut sparse_values_raw: Option<(Vec<u32>, Vec<f32>)> = None;
+                let mut geo_fence_metadata: Option<GeoFenceMetadata> = None;
                 let mut text = None;
 
                 while let Some(key) = map.next_key::<String>()? {
@@ -128,6 +137,12 @@ impl<'de> Deserialize<'de> for CreateVectorDto {
                             } else {
                                 sparse_values_raw = Some((indices, Vec::new()));
                             }
+                        }
+                        "geo_fencing_metadata" => {
+                            if geo_fence_metadata.is_some() {
+                                return Err(de::Error::duplicate_field("geo_fencing_metadata"));
+                            }
+                            geo_fence_metadata = map.next_value()?;
                         }
                         "text" => {
                             if text.is_some() {
@@ -178,6 +193,7 @@ impl<'de> Deserialize<'de> for CreateVectorDto {
                     dense_values,
                     metadata,
                     sparse_values,
+                    geo_fence_metadata,
                     text,
                 })
             }

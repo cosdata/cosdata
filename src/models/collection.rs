@@ -12,6 +12,7 @@ use super::versioning::{VersionControl, VersionNumber, VersionSource};
 use super::wal::VectorOp;
 use crate::app_context::AppContext;
 use crate::config_loader::Config;
+use crate::indexes::geozone::{GeoZoneIndex, ZoneId};
 use crate::indexes::hnsw::{DenseInputEmbedding, HNSWIndex};
 use crate::indexes::inverted::types::SparsePair;
 use crate::indexes::inverted::{InvertedIndex, SparseInputEmbedding};
@@ -39,6 +40,8 @@ pub struct DenseVectorOptions {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SparseVectorOptions {
     pub enabled: bool,
+    #[serde(default)]
+    pub geofencing: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -52,6 +55,13 @@ pub struct CollectionConfig {
     pub replication_factor: Option<u32>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct GeoFenceMetadata {
+    pub weight: f32,
+    pub coordinates: (f32, f32),
+    pub zone: ZoneId,
+}
+
 #[derive(Debug, Clone)]
 pub struct RawVectorEmbedding {
     pub id: VectorId,
@@ -59,6 +69,7 @@ pub struct RawVectorEmbedding {
     pub dense_values: Option<Vec<f32>>,
     pub metadata: Option<MetadataFields>,
     pub sparse_values: Option<Vec<SparsePair>>,
+    pub geo_fence_metadata: Option<GeoFenceMetadata>,
     pub text: Option<String>,
 }
 
@@ -115,6 +126,7 @@ pub struct Collection {
     pub hnsw_index: RwLock<Option<Arc<HNSWIndex>>>,
     pub inverted_index: RwLock<Option<Arc<InvertedIndex>>>,
     pub tf_idf_index: RwLock<Option<Arc<TFIDFIndex>>>,
+    pub geozone_index: RwLock<Option<Arc<GeoZoneIndex>>>,
     // this field is actually NOT optional, the only reason it is wrapped in
     // `Option` is to allow us to create `Collection` first without the
     // indexing manager, because `IndexingManager`'s constructor also requires
@@ -251,6 +263,7 @@ impl Collection {
             hnsw_index: RwLock::new(None),
             inverted_index: RwLock::new(None),
             tf_idf_index: RwLock::new(None),
+            geozone_index: RwLock::new(None),
             indexing_manager: RwLock::new(None),
             is_indexing: AtomicBool::new(false),
         });
@@ -351,6 +364,10 @@ impl Collection {
         self.inverted_index.read().clone()
     }
 
+    pub fn get_geozone_index(&self) -> Option<Arc<GeoZoneIndex>> {
+        self.geozone_index.read().clone()
+    }
+
     pub fn get_tf_idf_index(&self) -> Option<Arc<TFIDFIndex>> {
         self.tf_idf_index.read().clone()
     }
@@ -420,6 +437,10 @@ impl Collection {
                     let sparse_emb =
                         SparseInputEmbedding(InternalId::from(u32::MAX), sparse_values);
                     inverted_index.validate_embedding(sparse_emb)?;
+                } else if let Some(geozone_index) = self.get_geozone_index() {
+                    let sparse_emb =
+                        SparseInputEmbedding(InternalId::from(u32::MAX), sparse_values);
+                    geozone_index.validate_embedding(sparse_emb)?;
                 }
             }
 
@@ -452,49 +473,61 @@ impl Collection {
             .internal_id_counter
             .fetch_add(num_ids_to_reserve as u32, Ordering::Relaxed);
 
-        let (dense_embs, sparse_embs, tf_idf_embs): (Vec<_>, Vec<_>, Vec<_>) =
-            embeddings.into_iter().enumerate().fold(
-                (Vec::new(), Vec::new(), Vec::new()),
-                |mut acc, (i, mut embedding)| {
-                    let RawVectorEmbedding {
-                        id,
-                        document_id,
-                        dense_values,
-                        metadata,
-                        sparse_values,
-                        text,
-                    } = embedding.clone();
+        let (dense_embs, geo_fenced_documents, sparse_embs, tf_idf_embs): (
+            Vec<_>,
+            Vec<_>,
+            Vec<_>,
+            Vec<_>,
+        ) = embeddings.into_iter().enumerate().fold(
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+            |mut acc, (i, mut embedding)| {
+                let RawVectorEmbedding {
+                    id,
+                    document_id,
+                    dense_values,
+                    metadata,
+                    sparse_values,
+                    geo_fence_metadata,
+                    text,
+                } = embedding.clone();
 
-                    let internal_id = InternalId::from(id_start + (i * num_nodes_per_emb) as u32);
+                let internal_id = InternalId::from(id_start + (i * num_nodes_per_emb) as u32);
 
-                    if let Some(values) = dense_values {
-                        acc.0
-                            .push(DenseInputEmbedding(internal_id, values, metadata, false));
+                if let Some(values) = dense_values {
+                    acc.0
+                        .push(DenseInputEmbedding(internal_id, values, metadata, false));
+                }
+                if let Some(values) = sparse_values {
+                    if let Some(geo_fence_metadata) = geo_fence_metadata {
+                        acc.1.push((
+                            geo_fence_metadata,
+                            SparseInputEmbedding(internal_id, values),
+                        ));
+                    } else {
+                        acc.2.push(SparseInputEmbedding(internal_id, values));
                     }
-                    if let Some(values) = sparse_values {
-                        acc.1.push(SparseInputEmbedding(internal_id, values));
-                    }
-                    if let Some(text) = text {
-                        acc.2.push(TFIDFInputEmbedding(internal_id, text));
-                    }
+                }
+                if let Some(text) = text {
+                    acc.3.push(TFIDFInputEmbedding(internal_id, text));
+                }
 
-                    if !self.meta.store_raw_text {
-                        embedding.text = None;
-                    }
+                if !self.meta.store_raw_text {
+                    embedding.text = None;
+                }
 
-                    self.internal_to_external_map
-                        .insert(version, &internal_id, embedding);
-                    self.external_to_internal_map
-                        .insert(version, &id, internal_id);
+                self.internal_to_external_map
+                    .insert(version, &internal_id, embedding);
+                self.external_to_internal_map
+                    .insert(version, &id, internal_id);
 
-                    if let Some(document_id) = document_id {
-                        self.document_to_internals_map
-                            .push(version, &document_id, internal_id);
-                    }
+                if let Some(document_id) = document_id {
+                    self.document_to_internals_map
+                        .push(version, &document_id, internal_id);
+                }
 
-                    acc
-                },
-            );
+                acc
+            },
+        );
 
         if !dense_embs.is_empty() {
             if let Some(hnsw_index) = &*self.hnsw_index.read() {
@@ -502,9 +535,26 @@ impl Collection {
             }
         }
 
+        if !geo_fenced_documents.is_empty() {
+            if let Some(geozone_index) = &*self.geozone_index.read() {
+                for (metadata, sparse_emb) in geo_fenced_documents {
+                    geozone_index.create_geofenced_document(
+                        sparse_emb.0,
+                        metadata.zone,
+                        metadata.weight,
+                        sparse_emb.1,
+                        metadata.coordinates,
+                        version,
+                    )?;
+                }
+            }
+        }
+
         if !sparse_embs.is_empty() {
             if let Some(inverted_index) = &*self.inverted_index.read() {
                 inverted_index.run_upload(self, sparse_embs, version, config)?;
+            } else if let Some(geozone_index) = &*self.geozone_index.read() {
+                geozone_index.run_upload(self, sparse_embs, version, config)?;
             }
         }
 

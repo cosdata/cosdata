@@ -6,7 +6,7 @@ use crate::models::collection_cache::CollectionCacheExt;
 use super::dtos::{
     BatchDenseSearchRequestDto, BatchSearchResponseDto, BatchSearchTFIDFDocumentsDto,
     BatchSparseSearchRequestDto, DenseSearchRequestDto, FindSimilarTFIDFDocumentDto,
-    HybridSearchRequestDto, SearchResponseDto, SparseSearchRequestDto,
+    GeoFenceSearchRequestDto, HybridSearchRequestDto, SearchResponseDto, SparseSearchRequestDto,
 };
 use super::error::SearchError;
 
@@ -107,6 +107,35 @@ pub(crate) async fn sparse_search(
         .map_err(|e| SearchError::InternalServerError(format!("Cache update error: {}", e)))?;
 
     let results = service::sparse_search(ctx.into_inner(), &collection_id, body).await?;
+    Ok(HttpResponse::Ok().json(results))
+}
+
+/// Geofence search.
+#[utoipa::path(
+    post,
+    path = "/vectordb/collections/{collection_id}/search/geofence",
+    tag = "search",
+    params(
+        ("collection_id" = String, Path, description = "Collection identifier")
+    ),
+    request_body = GeoFenceSearchRequestDto,
+    responses(
+        (status = 200, description = "Search successfully completed", body = SearchResponseDto),
+        (status = 404, description = "Collection not found", body = String),
+        (status = 400, description = "Invalid request error", body = String),
+        (status = 500, description = "Internal server error", body = String)
+    )
+)]
+pub(crate) async fn geofence_search(
+    path: web::Path<String>,
+    web::Json(body): web::Json<GeoFenceSearchRequestDto>,
+    ctx: web::Data<AppContext>,
+) -> Result<HttpResponse, SearchError> {
+    let collection_id = path.into_inner();
+    ctx.update_collection_for_query(&collection_id)
+        .map_err(|e| SearchError::InternalServerError(format!("Cache update error: {}", e)))?;
+
+    let results = service::geofence_search(ctx.into_inner(), &collection_id, body).await?;
     Ok(HttpResponse::Ok().json(results))
 }
 

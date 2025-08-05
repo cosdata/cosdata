@@ -5,13 +5,13 @@ use std::{collections::HashMap, marker::PhantomData, sync::RwLock};
 use crate::models::{
     buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
     types::FileOffset,
-    versioned_vec::VersionedVec,
+    versioned_vec::{StorageTrait, VersionedVec, VersionedVecItem},
     versioning::VersionNumber,
 };
 
 use super::TreeMapSerialize;
 
-impl<T> TreeMapSerialize for VersionedVec<T> {
+impl<T: VersionedVecItem> TreeMapSerialize for VersionedVec<T> {
     fn serialize(
         &self,
         dim_bufman: &BufferManager,
@@ -50,7 +50,7 @@ impl<T> TreeMapSerialize for VersionedVec<T> {
             bufman.close_cursor(cursor)?;
             return Ok(offset.0);
         }
-        let size = 8 * self.list.len() + 16;
+        let size = T::Storage::BYTES_SIZE * self.list.len() + 16;
         let mut buf = Vec::with_capacity(size);
         buf.extend(next_offset.to_le_bytes());
         buf.extend(next_version.to_le_bytes());
@@ -60,7 +60,7 @@ impl<T> TreeMapSerialize for VersionedVec<T> {
         let cursor = bufman.open_cursor()?;
 
         for el in &self.list {
-            buf.extend(el.to_le_bytes());
+            el.serialize(&mut buf);
         }
 
         let offset = bufman.write_to_end_of_file(cursor, &buf)? as u32;
@@ -75,7 +75,7 @@ impl<T> TreeMapSerialize for VersionedVec<T> {
         file_offset: FileOffset,
         version: VersionNumber,
     ) -> Result<Self, BufIoError> {
-        let mut version_data: HashMap<VersionNumber, (FileOffset, Vec<u64>, VersionNumber)> =
+        let mut version_data: HashMap<VersionNumber, (FileOffset, Vec<T::Storage>, VersionNumber)> =
             HashMap::new();
         let mut current_offset = file_offset;
         let mut current_version = version;
@@ -91,7 +91,7 @@ impl<T> TreeMapSerialize for VersionedVec<T> {
             let len = bufman.read_u32_with_cursor(cursor)? as usize;
             let mut list = Vec::with_capacity(len);
             for _ in 0..len {
-                list.push(bufman.read_u64_with_cursor(cursor)?);
+                list.push(T::Storage::deserialize(&bufman, cursor)?);
             }
             version_data.insert(version, (current_offset, list, next_version));
             current_offset = next_offset;
@@ -103,10 +103,9 @@ impl<T> TreeMapSerialize for VersionedVec<T> {
         let mut deletes = Vec::new();
         for (_, list, _) in version_data.values() {
             for &item in list {
-                if (item & (1 << 63)) != 0 {
-                    let target_version = VersionNumber::from(((item >> 32) & 0x7FFFFFFF) as u32);
-                    let target_index = (item & 0xFFFFFFFF) as usize;
-                    deletes.push((target_version, target_index));
+                if item.is_delete_marker() {
+                    let (target_version, target_index) = item.get_delete_marker_fields();
+                    deletes.push((target_version, target_index as usize));
                 }
             }
         }
@@ -115,7 +114,7 @@ impl<T> TreeMapSerialize for VersionedVec<T> {
         for (target_version, target_index) in deletes {
             if let Some((_, target_list, _)) = version_data.get_mut(&target_version) {
                 if target_index < target_list.len() {
-                    target_list[target_index] = u64::MAX;
+                    target_list[target_index] = T::Storage::TOMBSTONE;
                 }
             }
         }

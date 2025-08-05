@@ -106,6 +106,7 @@ fn random_raw_vector_embedding(rng: &mut impl Rng) -> RawVectorEmbedding {
         ),
         metadata: None,
         sparse_values: None,
+        geo_fence_metadata: None,
         text: None,
     }
 }

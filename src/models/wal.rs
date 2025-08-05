@@ -11,11 +11,14 @@ use std::{
 
 use parking_lot::Mutex;
 
-use crate::{indexes::inverted::types::SparsePair, metadata::FieldValue};
+use crate::{
+    indexes::{geozone::ZoneId, inverted::types::SparsePair},
+    metadata::FieldValue,
+};
 
 use super::{
     buffered_io::{BufIoError, FilelessBufferManager},
-    collection::RawVectorEmbedding,
+    collection::{GeoFenceMetadata, RawVectorEmbedding},
     types::{DocumentId, VectorId},
     versioning::VersionNumber,
 };
@@ -79,21 +82,6 @@ pub fn read_string(bufman: &FilelessBufferManager, cursor: u64) -> Result<String
     bufman.read_with_cursor(cursor, &mut buf)?;
     String::from_utf8(buf)
         .map_err(|err| BufIoError::Io(io::Error::new(io::ErrorKind::InvalidData, err)))
-}
-
-pub fn read_opt_string(
-    bufman: &FilelessBufferManager,
-    cursor: u64,
-) -> Result<Option<String>, BufIoError> {
-    let len = read_len(bufman, cursor)? as usize;
-    if len == 0 {
-        return Ok(None);
-    }
-    let mut buf = vec![0; len];
-    bufman.read_with_cursor(cursor, &mut buf)?;
-    let str = String::from_utf8(buf)
-        .map_err(|err| BufIoError::Io(io::Error::new(io::ErrorKind::InvalidData, err)))?;
-    Ok(Some(str))
 }
 
 impl WALFile {
@@ -181,22 +169,46 @@ impl WALFile {
                     .fetch_add(vectors.len() as u32, Ordering::Relaxed);
                 write_len(&mut buf, vectors.len() as u32);
                 for vector in &*vectors {
+                    let mut flags = 0u8;
+                    if vector.document_id.is_some() {
+                        flags |= 1 << 0;
+                    }
+
+                    if vector.dense_values.is_some() {
+                        flags |= 1 << 1;
+                    }
+
+                    if vector.metadata.is_some() {
+                        flags |= 1 << 2;
+                    }
+
+                    if vector.sparse_values.is_some() {
+                        flags |= 1 << 3;
+                    }
+
+                    if vector.geo_fence_metadata.is_some() {
+                        flags |= 1 << 4;
+                    }
+
+                    if vector.text.is_some() {
+                        flags |= 1 << 5;
+                    }
+                    buf.push(flags);
                     write_len(&mut buf, vector.id.len() as u32);
                     buf.extend(vector.id.as_bytes());
+
                     if let Some(document_id) = &vector.document_id {
                         write_len(&mut buf, document_id.len() as u32);
                         buf.extend(document_id.as_bytes());
-                    } else {
-                        write_len(&mut buf, 0);
                     }
+
                     if let Some(dense_values) = &vector.dense_values {
                         write_len(&mut buf, dense_values.len() as u32);
                         for val in dense_values {
                             buf.extend(val.to_le_bytes());
                         }
-                    } else {
-                        write_len(&mut buf, 0);
                     }
+
                     if let Some(metadata) = &vector.metadata {
                         write_len(&mut buf, metadata.len() as u32);
                         for (field, val) in metadata {
@@ -215,8 +227,6 @@ impl WALFile {
                                 }
                             }
                         }
-                    } else {
-                        write_len(&mut buf, 0);
                     }
 
                     if let Some(sparse_values) = &vector.sparse_values {
@@ -225,15 +235,19 @@ impl WALFile {
                             buf.extend(pair.0.to_le_bytes());
                             buf.extend(pair.1.to_le_bytes());
                         }
-                    } else {
-                        write_len(&mut buf, 0);
+                    }
+
+                    if let Some(geo_fence_metadata) = &vector.geo_fence_metadata {
+                        buf.extend(geo_fence_metadata.weight.to_le_bytes());
+                        buf.extend(geo_fence_metadata.coordinates.0.to_le_bytes());
+                        buf.extend(geo_fence_metadata.coordinates.1.to_le_bytes());
+                        write_len(&mut buf, geo_fence_metadata.zone.len() as u32);
+                        buf.extend(geo_fence_metadata.zone.as_bytes());
                     }
 
                     if let Some(text) = &vector.text {
                         write_len(&mut buf, text.len() as u32);
                         buf.extend(text.as_bytes());
-                    } else {
-                        write_len(&mut buf, 0);
                     }
                 }
                 let len = buf.len() as u32 - 4;
@@ -284,22 +298,28 @@ impl WALFile {
             let mut vectors = Vec::with_capacity(len);
 
             for _ in 0..len {
+                let flags = self.bufman.read_u8_with_cursor(cursor)?;
                 let id = VectorId::from(read_string(&self.bufman, cursor)?);
-                let document_id = read_opt_string(&self.bufman, cursor)?.map(DocumentId::from);
-                let dense_values_len = read_len(&self.bufman, cursor)? as usize;
-                let dense_values = if dense_values_len == 0 {
-                    None
+
+                let document_id = if (flags & 1) != 0 {
+                    Some(DocumentId::from(read_string(&self.bufman, cursor)?))
                 } else {
+                    None
+                };
+
+                let dense_values = if (flags & (1 << 1)) != 0 {
+                    let dense_values_len = read_len(&self.bufman, cursor)? as usize;
                     let mut values = Vec::with_capacity(dense_values_len);
                     for _ in 0..dense_values_len {
                         values.push(self.bufman.read_f32_with_cursor(cursor)?);
                     }
                     Some(values)
-                };
-                let metadata_len = read_len(&self.bufman, cursor)? as usize;
-                let metadata = if metadata_len == 0 {
-                    None
                 } else {
+                    None
+                };
+
+                let metadata = if (flags & (1 << 2)) != 0 {
+                    let metadata_len = read_len(&self.bufman, cursor)? as usize;
                     let mut metadata = HashMap::with_capacity(metadata_len);
 
                     for _ in 0..metadata_len {
@@ -321,12 +341,12 @@ impl WALFile {
                     }
 
                     Some(metadata)
+                } else {
+                    None
                 };
 
-                let sparse_values_len = read_len(&self.bufman, cursor)? as usize;
-                let sparse_values = if sparse_values_len == 0 {
-                    None
-                } else {
+                let sparse_values = if (flags & (1 << 3)) != 0 {
+                    let sparse_values_len = read_len(&self.bufman, cursor)? as usize;
                     let mut sparse_values = Vec::with_capacity(sparse_values_len);
 
                     for _ in 0..sparse_values_len {
@@ -337,9 +357,31 @@ impl WALFile {
                     }
 
                     Some(sparse_values)
+                } else {
+                    None
                 };
 
-                let text = read_opt_string(&self.bufman, cursor)?;
+                let geo_fence_metadata = if (flags & (1 << 4)) != 0 {
+                    let weight = self.bufman.read_f32_with_cursor(cursor)?;
+                    let coordinates = (
+                        self.bufman.read_f32_with_cursor(cursor)?,
+                        self.bufman.read_f32_with_cursor(cursor)?,
+                    );
+                    let zone = ZoneId::from(read_string(&self.bufman, cursor)?);
+                    Some(GeoFenceMetadata {
+                        weight,
+                        coordinates,
+                        zone,
+                    })
+                } else {
+                    None
+                };
+
+                let text = if (flags & (1 << 5)) != 0 {
+                    Some(read_string(&self.bufman, cursor)?)
+                } else {
+                    None
+                };
 
                 let vector = RawVectorEmbedding {
                     id,
@@ -347,6 +389,7 @@ impl WALFile {
                     dense_values,
                     metadata,
                     sparse_values,
+                    geo_fence_metadata,
                     text,
                 };
                 vectors.push(vector);
@@ -403,6 +446,11 @@ mod tests {
                     .map(|_| SparsePair(rng.gen(), rng.gen()))
                     .collect(),
             ),
+            geo_fence_metadata: Some(GeoFenceMetadata {
+                weight: rng.gen_range(0.0..1.0),
+                coordinates: (rng.gen(), rng.gen()),
+                zone: ZoneId::from(random_string(7)),
+            }),
             text: Some(random_string(16)),
         }
     }

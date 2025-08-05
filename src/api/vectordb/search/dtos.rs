@@ -1,3 +1,4 @@
+use crate::indexes::geozone::ZoneId;
 use crate::metadata::query_filtering::Filter;
 use crate::models::types::VectorId;
 use crate::{indexes::inverted::types::SparsePair, models::types::DocumentId};
@@ -41,6 +42,21 @@ pub(crate) struct SparseSearchRequestDto {
     #[schema(value_type = Vec<String>)]
     pub query_terms: Vec<SparsePair>,
     pub top_k: Option<usize>,
+    pub early_terminate_threshold: Option<f32>,
+    #[serde(default)]
+    pub return_raw_text: bool,
+}
+
+#[derive(Deserialize, Debug, utoipa::ToSchema)]
+pub(crate) struct GeoFenceSearchRequestDto {
+    #[schema(value_type = Vec<String>)]
+    pub query_terms: Vec<SparsePair>,
+    pub top_k: Option<usize>,
+    #[schema(value_type = Vec<String>)]
+    pub zones: Vec<ZoneId>,
+    #[serde(default)]
+    pub sort_by_distance: bool,
+    pub coordinates: (f32, f32),
     pub early_terminate_threshold: Option<f32>,
     #[serde(default)]
     pub return_raw_text: bool,

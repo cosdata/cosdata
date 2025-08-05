@@ -76,22 +76,46 @@ impl DurableWALFile {
                 self.records_upserted += vectors.len() as u32;
                 write_len(&mut buf, vectors.len() as u32);
                 for vector in &*vectors {
+                    let mut flags = 0u8;
+                    if vector.document_id.is_some() {
+                        flags |= 1 << 0;
+                    }
+
+                    if vector.dense_values.is_some() {
+                        flags |= 1 << 1;
+                    }
+
+                    if vector.metadata.is_some() {
+                        flags |= 1 << 2;
+                    }
+
+                    if vector.sparse_values.is_some() {
+                        flags |= 1 << 3;
+                    }
+
+                    if vector.geo_fence_metadata.is_some() {
+                        flags |= 1 << 4;
+                    }
+
+                    if vector.text.is_some() {
+                        flags |= 1 << 5;
+                    }
+                    buf.push(flags);
                     write_len(&mut buf, vector.id.len() as u32);
                     buf.extend(vector.id.as_bytes());
+
                     if let Some(document_id) = &vector.document_id {
                         write_len(&mut buf, document_id.len() as u32);
                         buf.extend(document_id.as_bytes());
-                    } else {
-                        write_len(&mut buf, 0);
                     }
+
                     if let Some(dense_values) = &vector.dense_values {
                         write_len(&mut buf, dense_values.len() as u32);
                         for val in dense_values {
                             buf.extend(val.to_le_bytes());
                         }
-                    } else {
-                        write_len(&mut buf, 0);
                     }
+
                     if let Some(metadata) = &vector.metadata {
                         write_len(&mut buf, metadata.len() as u32);
                         for (field, val) in metadata {
@@ -110,8 +134,6 @@ impl DurableWALFile {
                                 }
                             }
                         }
-                    } else {
-                        write_len(&mut buf, 0);
                     }
 
                     if let Some(sparse_values) = &vector.sparse_values {
@@ -120,15 +142,19 @@ impl DurableWALFile {
                             buf.extend(pair.0.to_le_bytes());
                             buf.extend(pair.1.to_le_bytes());
                         }
-                    } else {
-                        write_len(&mut buf, 0);
+                    }
+
+                    if let Some(geo_fence_metadata) = &vector.geo_fence_metadata {
+                        buf.extend(geo_fence_metadata.weight.to_le_bytes());
+                        buf.extend(geo_fence_metadata.coordinates.0.to_le_bytes());
+                        buf.extend(geo_fence_metadata.coordinates.1.to_le_bytes());
+                        write_len(&mut buf, geo_fence_metadata.zone.len() as u32);
+                        buf.extend(geo_fence_metadata.zone.as_bytes());
                     }
 
                     if let Some(text) = &vector.text {
                         write_len(&mut buf, text.len() as u32);
                         buf.extend(text.as_bytes());
-                    } else {
-                        write_len(&mut buf, 0);
                     }
                 }
                 let len = buf.len() as u32 - 4;
@@ -159,8 +185,9 @@ impl DurableWALFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::indexes::geozone::ZoneId;
     use crate::metadata::FieldValue;
-    use crate::models::collection::RawVectorEmbedding;
+    use crate::models::collection::{GeoFenceMetadata, RawVectorEmbedding};
     use crate::models::types::VectorId;
     use crate::{indexes::inverted::types::SparsePair, models::wal::WALFile};
     use rand::{distributions::Alphanumeric, thread_rng, Rng};
@@ -202,6 +229,11 @@ mod tests {
                     .map(|_| SparsePair(rng.gen(), rng.gen()))
                     .collect(),
             ),
+            geo_fence_metadata: Some(GeoFenceMetadata {
+                weight: rng.gen_range(0.0..1.0),
+                coordinates: (rng.gen(), rng.gen()),
+                zone: ZoneId::from(random_string(6)),
+            }),
             text: Some(random_string(16)),
         }
     }

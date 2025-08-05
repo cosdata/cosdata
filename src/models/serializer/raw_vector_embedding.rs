@@ -1,36 +1,60 @@
 use std::{collections::HashMap, io};
 
 use crate::{
-    indexes::inverted::types::SparsePair,
+    indexes::{geozone::ZoneId, inverted::types::SparsePair},
     metadata::FieldValue,
     models::{
         buffered_io::{BufIoError, BufferManager},
-        collection::RawVectorEmbedding,
+        collection::{GeoFenceMetadata, RawVectorEmbedding},
         types::{DocumentId, FileOffset, VectorId},
     },
 };
 
-use super::{read_len, read_opt_string, read_string, write_len, SimpleSerialize};
+use super::{read_len, read_string, write_len, SimpleSerialize};
 
 impl SimpleSerialize for RawVectorEmbedding {
     fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
         let mut buf = Vec::new();
+        let mut flags = 0u8;
+        if self.document_id.is_some() {
+            flags |= 1 << 0;
+        }
+
+        if self.dense_values.is_some() {
+            flags |= 1 << 1;
+        }
+
+        if self.metadata.is_some() {
+            flags |= 1 << 2;
+        }
+
+        if self.sparse_values.is_some() {
+            flags |= 1 << 3;
+        }
+
+        if self.geo_fence_metadata.is_some() {
+            flags |= 1 << 4;
+        }
+
+        if self.text.is_some() {
+            flags |= 1 << 5;
+        }
+        buf.push(flags);
         write_len(&mut buf, self.id.len() as u32);
         buf.extend(self.id.as_bytes());
+
         if let Some(document_id) = &self.document_id {
             write_len(&mut buf, document_id.len() as u32);
             buf.extend(document_id.as_bytes());
-        } else {
-            write_len(&mut buf, 0);
         }
+
         if let Some(dense_values) = &self.dense_values {
             write_len(&mut buf, dense_values.len() as u32);
             for val in dense_values {
                 buf.extend(val.to_le_bytes());
             }
-        } else {
-            write_len(&mut buf, 0);
         }
+
         if let Some(metadata) = &self.metadata {
             write_len(&mut buf, metadata.len() as u32);
             for (field, val) in metadata {
@@ -49,8 +73,6 @@ impl SimpleSerialize for RawVectorEmbedding {
                     }
                 }
             }
-        } else {
-            write_len(&mut buf, 0);
         }
 
         if let Some(sparse_values) = &self.sparse_values {
@@ -59,15 +81,19 @@ impl SimpleSerialize for RawVectorEmbedding {
                 buf.extend(pair.0.to_le_bytes());
                 buf.extend(pair.1.to_le_bytes());
             }
-        } else {
-            write_len(&mut buf, 0);
+        }
+
+        if let Some(geo_fence_metadata) = &self.geo_fence_metadata {
+            buf.extend(geo_fence_metadata.weight.to_le_bytes());
+            buf.extend(geo_fence_metadata.coordinates.0.to_le_bytes());
+            buf.extend(geo_fence_metadata.coordinates.1.to_le_bytes());
+            write_len(&mut buf, geo_fence_metadata.zone.len() as u32);
+            buf.extend(geo_fence_metadata.zone.as_bytes());
         }
 
         if let Some(text) = &self.text {
             write_len(&mut buf, text.len() as u32);
             buf.extend(text.as_bytes());
-        } else {
-            write_len(&mut buf, 0);
         }
 
         Ok(bufman.write_to_end_of_file(cursor, &buf)? as u32)
@@ -76,22 +102,28 @@ impl SimpleSerialize for RawVectorEmbedding {
     fn deserialize(bufman: &BufferManager, offset: FileOffset) -> Result<Self, BufIoError> {
         let cursor = bufman.open_cursor()?;
         bufman.seek_with_cursor(cursor, offset.0 as u64)?;
+        let flags = bufman.read_u8_with_cursor(cursor)?;
         let id = VectorId::from(read_string(bufman, cursor)?);
-        let document_id = read_opt_string(bufman, cursor)?.map(DocumentId::from);
-        let dense_values_len = read_len(bufman, cursor)? as usize;
-        let dense_values = if dense_values_len == 0 {
-            None
+
+        let document_id = if (flags & 1) != 0 {
+            Some(DocumentId::from(read_string(bufman, cursor)?))
         } else {
+            None
+        };
+
+        let dense_values = if (flags & (1 << 1)) != 0 {
+            let dense_values_len = read_len(bufman, cursor)? as usize;
             let mut values = Vec::with_capacity(dense_values_len);
             for _ in 0..dense_values_len {
                 values.push(bufman.read_f32_with_cursor(cursor)?);
             }
             Some(values)
-        };
-        let metadata_len = read_len(bufman, cursor)? as usize;
-        let metadata = if metadata_len == 0 {
-            None
         } else {
+            None
+        };
+
+        let metadata = if (flags & (1 << 2)) != 0 {
+            let metadata_len = read_len(bufman, cursor)? as usize;
             let mut metadata = HashMap::with_capacity(metadata_len);
 
             for _ in 0..metadata_len {
@@ -113,12 +145,12 @@ impl SimpleSerialize for RawVectorEmbedding {
             }
 
             Some(metadata)
+        } else {
+            None
         };
 
-        let sparse_values_len = read_len(bufman, cursor)? as usize;
-        let sparse_values = if sparse_values_len == 0 {
-            None
-        } else {
+        let sparse_values = if (flags & (1 << 3)) != 0 {
+            let sparse_values_len = read_len(bufman, cursor)? as usize;
             let mut sparse_values = Vec::with_capacity(sparse_values_len);
 
             for _ in 0..sparse_values_len {
@@ -129,9 +161,31 @@ impl SimpleSerialize for RawVectorEmbedding {
             }
 
             Some(sparse_values)
+        } else {
+            None
         };
 
-        let text = read_opt_string(bufman, cursor)?;
+        let geo_fence_metadata = if (flags & (1 << 4)) != 0 {
+            let weight = bufman.read_f32_with_cursor(cursor)?;
+            let coordinates = (
+                bufman.read_f32_with_cursor(cursor)?,
+                bufman.read_f32_with_cursor(cursor)?,
+            );
+            let zone = ZoneId::from(read_string(bufman, cursor)?);
+            Some(GeoFenceMetadata {
+                weight,
+                coordinates,
+                zone,
+            })
+        } else {
+            None
+        };
+
+        let text = if (flags & (1 << 5)) != 0 {
+            Some(read_string(bufman, cursor)?)
+        } else {
+            None
+        };
 
         Ok(Self {
             id,
@@ -139,6 +193,7 @@ impl SimpleSerialize for RawVectorEmbedding {
             dense_values,
             metadata,
             sparse_values,
+            geo_fence_metadata,
             text,
         })
     }

@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use crate::{
     api_service::{
-        init_hnsw_index_for_collection, init_inverted_index_for_collection,
-        init_tf_idf_index_for_collection,
+        init_geozone_index_for_collection, init_hnsw_index_for_collection,
+        init_inverted_index_for_collection, init_tf_idf_index_for_collection,
     },
     app_context::AppContext,
     models::types::{DistanceMetric, QuantizationMetric},
@@ -87,18 +87,28 @@ pub(crate) async fn create_sparse_index(
             IndexesError::NotFound(format!("Collection '{}' not found", collection_name))
         })?;
 
-    if collection.get_inverted_index().is_some() {
-        return Err(IndexesError::IndexAlreadyExists("sparse".to_string()));
-    }
+    if collection.meta.sparse_vector.geofencing {
+        if collection.get_geozone_index().is_some() {
+            return Err(IndexesError::IndexAlreadyExists("sparse".to_string()));
+        }
 
-    init_inverted_index_for_collection(
-        ctx.clone(),
-        &collection,
-        quantization.into_bits(),
-        sample_threshold,
-    )
-    .await
-    .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;
+        init_geozone_index_for_collection(ctx.clone(), &collection, quantization.into_bits())
+            .await
+            .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;
+    } else {
+        if collection.get_inverted_index().is_some() {
+            return Err(IndexesError::IndexAlreadyExists("sparse".to_string()));
+        }
+
+        init_inverted_index_for_collection(
+            ctx.clone(),
+            &collection,
+            quantization.into_bits(),
+            sample_threshold,
+        )
+        .await
+        .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;
+    }
 
     Ok(())
 }

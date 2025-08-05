@@ -84,6 +84,7 @@ message DenseVectorOptions {
 
 message SparseVectorOptions {
     bool enabled = 1;
+    bool geofencing = 2;
 }
 
 message TFIDFOptions {

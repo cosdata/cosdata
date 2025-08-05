@@ -64,18 +64,6 @@ pub fn read_string(bufman: &BufferManager, cursor: u64) -> Result<String, BufIoE
         .map_err(|err| BufIoError::Io(io::Error::new(io::ErrorKind::InvalidData, err)))
 }
 
-pub fn read_opt_string(bufman: &BufferManager, cursor: u64) -> Result<Option<String>, BufIoError> {
-    let len = read_len(bufman, cursor)? as usize;
-    if len == 0 {
-        return Ok(None);
-    }
-    let mut buf = vec![0; len];
-    bufman.read_with_cursor(cursor, &mut buf)?;
-    let str = String::from_utf8(buf)
-        .map_err(|err| BufIoError::Io(io::Error::new(io::ErrorKind::InvalidData, err)))?;
-    Ok(Some(str))
-}
-
 pub trait SimpleSerialize: Sized {
     fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError>;
     fn deserialize(bufman: &BufferManager, offset: FileOffset) -> Result<Self, BufIoError>;

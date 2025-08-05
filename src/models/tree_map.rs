@@ -30,7 +30,7 @@ pub struct TreeMap<K, V> {
     _marker: PhantomData<K>,
 }
 
-pub struct TreeMapVec<K, V> {
+pub struct TreeMapVec<K, V: VersionedVecItem> {
     pub(crate) root: TreeMapVecNode<V>,
     pub(crate) dim_bufman: BufferManager,
     pub(crate) data_bufmans: BufferManagerFactory<VersionNumber>,
@@ -45,7 +45,7 @@ pub struct TreeMapNode<T> {
     pub dirty: AtomicBool,
 }
 
-pub struct TreeMapVecNode<T> {
+pub struct TreeMapVecNode<T: VersionedVecItem> {
     pub node_idx: u16,
     pub offset: RwLock<Option<FileOffset>>,
     pub quotients: QuotientsMapVec<T>,
@@ -60,7 +60,7 @@ pub struct QuotientsMap<T> {
     pub serialized_upto: AtomicUsize,
 }
 
-pub struct QuotientsMapVec<T> {
+pub struct QuotientsMapVec<T: VersionedVecItem> {
     pub offset: RwLock<Option<FileOffset>>,
     pub map: TSHashTable<u64, Arc<QuotientVec<T>>>,
     pub len: AtomicU64,
@@ -72,7 +72,7 @@ pub struct Quotient<T> {
     pub value: RwLock<VersionedItem<T>>,
 }
 
-pub struct QuotientVec<T> {
+pub struct QuotientVec<T: VersionedVecItem> {
     pub sequence_idx: u64,
     pub value: RwLock<VersionedVec<T>>,
 }
@@ -94,7 +94,7 @@ impl<T: PartialEq> PartialEq for TreeMapNode<T> {
 }
 
 #[cfg(test)]
-impl<T> PartialEq for TreeMapVecNode<T> {
+impl<T: VersionedVecItem> PartialEq for TreeMapVecNode<T> {
     fn eq(&self, other: &Self) -> bool {
         *self.offset.read() == *other.offset.read()
             && self.quotients == other.quotients
@@ -114,7 +114,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for TreeMapNode<T> {
 }
 
 #[cfg(test)]
-impl<T> std::fmt::Debug for TreeMapVecNode<T> {
+impl<T: VersionedVecItem> std::fmt::Debug for TreeMapVecNode<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TreeMapVecNode")
             .field("offset", &*self.offset.read())
@@ -135,7 +135,7 @@ impl<T: PartialEq> PartialEq for QuotientsMap<T> {
 }
 
 #[cfg(test)]
-impl<T> PartialEq for QuotientsMapVec<T> {
+impl<T: VersionedVecItem> PartialEq for QuotientsMapVec<T> {
     fn eq(&self, other: &Self) -> bool {
         self.map == other.map
             && self.len.load(Ordering::Relaxed) == other.len.load(Ordering::Relaxed)
@@ -159,7 +159,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for QuotientsMap<T> {
 }
 
 #[cfg(test)]
-impl<T> std::fmt::Debug for QuotientsMapVec<T> {
+impl<T: VersionedVecItem> std::fmt::Debug for QuotientsMapVec<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("QuotientMapVec")
             .field("map", &self.map)
@@ -180,7 +180,7 @@ impl<T: PartialEq> PartialEq for Quotient<T> {
 }
 
 #[cfg(test)]
-impl<T> PartialEq for QuotientVec<T> {
+impl<T: VersionedVecItem> PartialEq for QuotientVec<T> {
     fn eq(&self, other: &Self) -> bool {
         self.sequence_idx == other.sequence_idx && *self.value.read() == *other.value.read()
     }
@@ -197,7 +197,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for Quotient<T> {
 }
 
 #[cfg(test)]
-impl<T> std::fmt::Debug for QuotientVec<T> {
+impl<T: VersionedVecItem> std::fmt::Debug for QuotientVec<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("QuotientVec")
             .field("sequence_idx", &self.sequence_idx)
@@ -471,7 +471,7 @@ impl<K: TreeMapKey + Clone, V: PartialEq> PartialEq for TreeMap<K, V> {
 }
 
 #[cfg(test)]
-impl<K: TreeMapKey + Clone, V> PartialEq for TreeMapVec<K, V> {
+impl<K: TreeMapKey + Clone, V: VersionedVecItem> PartialEq for TreeMapVec<K, V> {
     fn eq(&self, other: &Self) -> bool {
         self.root == other.root
     }
@@ -620,13 +620,7 @@ impl<K: TreeMapKey, V: VersionedVecItem> TreeMapVec<K, V> {
         let node = self.root.find_or_create_node(&path);
         node.get(key)
     }
-}
 
-impl<K, V> TreeMapVec<K, V>
-where
-    V: SimpleSerialize + VersionedVecItem,
-    <V as VersionedVecItem>::Id: SimpleSerialize,
-{
     pub fn serialize(&self) -> Result<(), BufIoError> {
         let cursor = self.dim_bufman.open_cursor()?;
         self.dim_bufman.update_u32_with_cursor(cursor, u32::MAX)?;

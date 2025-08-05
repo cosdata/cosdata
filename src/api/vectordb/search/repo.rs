@@ -5,6 +5,7 @@ use rustc_hash::FxHashMap;
 use super::dtos;
 use super::error::SearchError;
 use crate::app_context::AppContext;
+use crate::indexes::geozone::GeoZoneSearchOptions;
 use crate::indexes::hnsw::{DenseSearchInput, DenseSearchOptions};
 use crate::indexes::inverted::{SparseSearchInput, SparseSearchOptions};
 use crate::indexes::tf_idf::{TFIDFSearchInput, TFIDFSearchOptions};
@@ -113,6 +114,46 @@ pub(crate) async fn sparse_search(
                 &collection,
                 SparseSearchInput(request.query_terms),
                 &SparseSearchOptions {
+                    top_k: request.top_k,
+                    early_terminate_threshold: request.early_terminate_threshold,
+                },
+                &ctx.config,
+                request.return_raw_text,
+            )
+            .map_err(SearchError::WaCustom)?,
+        warning,
+    ))
+}
+
+pub(crate) async fn geofence_search(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    request: dtos::GeoFenceSearchRequestDto,
+) -> Result<(Vec<SearchResult>, Option<String>), SearchError> {
+    let collection = ctx
+        .ain_env
+        .collections_map
+        .get_collection(collection_id)
+        .ok_or_else(|| SearchError::CollectionNotFound(collection_id.to_string()))?;
+
+    let geozone_index = collection.get_geozone_index().ok_or_else(|| {
+        SearchError::IndexNotFound(format!("geofence index for collection '{}'", collection_id))
+    })?;
+
+    let warning = collection.is_indexing().then(|| {
+        "Embeddings are currently being indexed; some results may be temporarily unavailable."
+            .to_string()
+    });
+
+    Ok((
+        geozone_index
+            .search(
+                &collection,
+                SparseSearchInput(request.query_terms),
+                &GeoZoneSearchOptions {
+                    sort_by_distance: request.sort_by_distance,
+                    coordinates: request.coordinates,
+                    zones: request.zones,
                     top_k: request.top_k,
                     early_terminate_threshold: request.early_terminate_threshold,
                 },

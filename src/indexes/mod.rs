@@ -15,6 +15,7 @@ use crate::{
     },
 };
 
+pub(crate) mod geozone;
 pub(crate) mod hnsw;
 pub(crate) mod inverted;
 pub(crate) mod tf_idf;
@@ -216,6 +217,7 @@ pub trait IndexOps: Send + Sync {
         &self,
         collection: &Collection,
         results: Vec<InternalSearchResult>,
+        _options: &Self::SearchOptions,
         return_raw_text: bool,
     ) -> Result<Vec<SearchResult>, WaCustomError> {
         results
@@ -254,7 +256,7 @@ pub trait IndexOps: Send + Sync {
         return_raw_text: bool,
     ) -> Result<Vec<SearchResult>, WaCustomError> {
         let results = self.search_internal(collection, query, options, config, return_raw_text)?;
-        self.remap_search_results(collection, results, return_raw_text)
+        self.remap_search_results(collection, results, options, return_raw_text)
     }
 
     fn batch_search(
