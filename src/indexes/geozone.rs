@@ -20,6 +20,7 @@ use crate::{
     },
 };
 use std::{
+    f32::consts::PI,
     fs::OpenOptions,
     hash::{DefaultHasher, Hasher},
     ops::Deref,
@@ -362,7 +363,12 @@ impl IndexOps for GeoZoneIndex {
                                 Some(doc_id),
                                 result.2,
                                 result.3,
-                                euclidean_distance(*coords, options.coordinates),
+                                haversine_distance(
+                                    coords.0,
+                                    coords.1,
+                                    options.coordinates.0,
+                                    options.coordinates.1,
+                                ),
                             )
                         })
                     })
@@ -442,8 +448,24 @@ fn finalize_sparse_ann_results(
     Ok(results)
 }
 
-fn euclidean_distance(a: (f32, f32), b: (f32, f32)) -> f32 {
-    let dx = a.0 - b.0;
-    let dy = a.1 - b.1;
-    (dx * dx + dy * dy).sqrt()
+/// Convert degrees to radians
+fn deg2rad(deg: f32) -> f32 {
+    deg * PI / 180.0
+}
+
+/// Haversine distance in kilometers between two lat/lng coordinates
+pub fn haversine_distance(lat1: f32, lon1: f32, lat2: f32, lon2: f32) -> f32 {
+    let r = 6_371.0; // Earth radius in kilometers
+
+    let dlat = deg2rad(lat2 - lat1);
+    let dlon = deg2rad(lon2 - lon1);
+
+    let lat1 = deg2rad(lat1);
+    let lat2 = deg2rad(lat2);
+
+    let a = (dlat / 2.0).sin().powi(2) + lat1.cos() * lat2.cos() * (dlon / 2.0).sin().powi(2);
+
+    let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
+
+    r * c
 }
