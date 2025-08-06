@@ -11,10 +11,6 @@ use crate::indexes::tf_idf::{TFIDFSearchInput, TFIDFSearchOptions};
 use crate::indexes::{IndexOps, SearchResult};
 use crate::models::types::{DocumentId, VectorId};
 
-
-
-
-
 pub(crate) async fn dense_search(
     ctx: Arc<AppContext>,
     collection_id: &str,
@@ -374,32 +370,50 @@ pub(crate) async fn batch_hybrid_search(
                 query_terms,
                 sparse_early_terminate_threshold,
             } => {
+                query_mapping.push((
+                    query_idx,
+                    dense_queries.len(),
+                    sparse_queries.len(),
+                    "dense_sparse",
+                    sparse_early_terminate_threshold,
+                ));
                 dense_queries.push(dtos::BatchDenseSearchRequestQueryDto {
                     vector: query_vector,
                     filter: None,
                 });
                 sparse_queries.push(query_terms);
-                query_mapping.push((query_idx, "dense_sparse", sparse_early_terminate_threshold));
             }
             dtos::HybridSearchQuery::DenseAndTFIDF {
                 query_vector,
                 query_text,
             } => {
+                query_mapping.push((
+                    query_idx,
+                    dense_queries.len(),
+                    tfidf_queries.len(),
+                    "dense_tfidf",
+                    None,
+                ));
                 dense_queries.push(dtos::BatchDenseSearchRequestQueryDto {
                     vector: query_vector,
                     filter: None,
                 });
                 tfidf_queries.push(query_text);
-                query_mapping.push((query_idx, "dense_tfidf", None));
             }
             dtos::HybridSearchQuery::SparseAndTFIDF {
                 query_terms,
                 query_text,
                 sparse_early_terminate_threshold,
             } => {
+                query_mapping.push((
+                    query_idx,
+                    sparse_queries.len(),
+                    tfidf_queries.len(),
+                    "sparse_tfidf",
+                    sparse_early_terminate_threshold,
+                ));
                 sparse_queries.push(query_terms);
                 tfidf_queries.push(query_text);
-                query_mapping.push((query_idx, "sparse_tfidf", sparse_early_terminate_threshold));
             }
         }
     }
@@ -460,7 +474,7 @@ pub(crate) async fn batch_hybrid_search(
     // Apply fusion logic to combine results
     let mut final_results = vec![Vec::new(); queries_count];
 
-    for (query_idx, query_type, _sparse_threshold) in query_mapping {
+    for (query_idx, idx1, idx2, query_type, _sparse_threshold) in query_mapping {
         let mut final_scores: FxHashMap<VectorId, (f32, Option<DocumentId>, Option<String>)> =
             FxHashMap::default();
         let k = request.fusion_constant_k;
@@ -472,26 +486,34 @@ pub(crate) async fn batch_hybrid_search(
         // Get results for this query based on type
         let (first_results, second_results) = match query_type {
             "dense_sparse" => {
-                let dense_idx = query_idx; // Assuming dense queries are in order
-                let sparse_idx = query_idx; // Assuming sparse queries are in order
+                let dense_idx = idx1;
+                let sparse_idx = idx2;
                 (
                     dense_results.0.get(dense_idx).cloned().unwrap_or_default(),
-                    sparse_results.0.get(sparse_idx).cloned().unwrap_or_default(),
+                    sparse_results
+                        .0
+                        .get(sparse_idx)
+                        .cloned()
+                        .unwrap_or_default(),
                 )
             }
             "dense_tfidf" => {
-                let dense_idx = query_idx;
-                let tfidf_idx = query_idx;
+                let dense_idx = idx1;
+                let tfidf_idx = idx2;
                 (
                     dense_results.0.get(dense_idx).cloned().unwrap_or_default(),
                     tfidf_results.0.get(tfidf_idx).cloned().unwrap_or_default(),
                 )
             }
             "sparse_tfidf" => {
-                let sparse_idx = query_idx;
-                let tfidf_idx = query_idx;
+                let sparse_idx = idx1;
+                let tfidf_idx = idx2;
                 (
-                    sparse_results.0.get(sparse_idx).cloned().unwrap_or_default(),
+                    sparse_results
+                        .0
+                        .get(sparse_idx)
+                        .cloned()
+                        .unwrap_or_default(),
                     tfidf_results.0.get(tfidf_idx).cloned().unwrap_or_default(),
                 )
             }
@@ -499,12 +521,14 @@ pub(crate) async fn batch_hybrid_search(
         };
 
         // Apply RRF fusion (same logic as hybrid_search)
-        for (rank, (vector_id, document_id, _score, text)) in first_results.into_iter().enumerate() {
+        for (rank, (vector_id, document_id, _score, text)) in first_results.into_iter().enumerate()
+        {
             let score = 1.0 / (rank as f32 + k + f32::EPSILON);
             final_scores.insert(vector_id, (score, document_id, text));
         }
 
-        for (rank, (vector_id, document_id, _score, text)) in second_results.into_iter().enumerate() {
+        for (rank, (vector_id, document_id, _score, text)) in second_results.into_iter().enumerate()
+        {
             let score = 1.0 / (rank as f32 + k + f32::EPSILON);
             final_scores
                 .entry(vector_id)
@@ -513,10 +537,11 @@ pub(crate) async fn batch_hybrid_search(
         }
 
         // Convert to final results
-        let mut query_results: Vec<(VectorId, Option<DocumentId>, f32, Option<String>)> = final_scores
-            .into_iter()
-            .map(|(id, (score, document_id, text))| (id, document_id, score, text))
-            .collect();
+        let mut query_results: Vec<(VectorId, Option<DocumentId>, f32, Option<String>)> =
+            final_scores
+                .into_iter()
+                .map(|(id, (score, document_id, text))| (id, document_id, score, text))
+                .collect();
 
         if query_results.len() > request.top_k {
             query_results.select_nth_unstable_by(request.top_k, |a, b| b.2.total_cmp(&a.2));
