@@ -257,52 +257,86 @@ def merge_cqa_dupstack(data_path: str, verbose: bool = False):
     dataset = data_path.name
     assert dataset == "cqadupstack", "Dataset must be CQADupStack"
 
+    # check if corpus.jsonl exists
     corpus_path = data_path / "corpus.jsonl"
     if not corpus_path.exists():
+        # combine all the corpus files into one
+        # corpus files are located under cqadupstack/<name>/corpus.jsonl
         corpus_files = list(data_path.glob("*/corpus.jsonl"))
         with open(corpus_path, "w") as f:
             for file in tqdm(corpus_files, desc="Merging Corpus", disable=not verbose):
+                # get the name of the corpus
                 corpus_name = file.parent.name
+
                 with open(file, "r") as f2:
                     for line in tqdm(
-                        f2, desc=f"Merging {corpus_name} Corpus", leave=False, disable=not verbose
+                        f2,
+                        desc=f"Merging {corpus_name} Corpus",
+                        leave=False,
+                        disable=not verbose,
                     ):
+                        # first, read with json
                         line = json.loads(line)
+                        # add the corpus name to _id
                         line["_id"] = f"{corpus_name}_{line['_id']}"
+                        # write back to file
                         f.write(json.dumps(line))
                         f.write("\n")
 
+    # now, do the same for queries.jsonl
     queries_path = data_path / "queries.jsonl"
     if not queries_path.exists():
         queries_files = list(data_path.glob("*/queries.jsonl"))
         with open(queries_path, "w") as f:
-            for file in tqdm(queries_files, desc="Merging Queries", disable=not verbose):
+            for file in tqdm(
+                queries_files, desc="Merging Queries", disable=not verbose
+            ):
+                # get the name of the corpus
                 corpus_name = file.parent.name
+
                 with open(file, "r") as f2:
                     for line in tqdm(
-                        f2, desc=f"Merging {corpus_name} Queries", leave=False, disable=not verbose
+                        f2,
+                        desc=f"Merging {corpus_name} Queries",
+                        leave=False,
+                        disable=not verbose,
                     ):
+                        # first, read with json
                         line = json.loads(line)
+                        # add the corpus name to _id
                         line["_id"] = f"{corpus_name}_{line['_id']}"
+                        # write back to file
                         f.write(json.dumps(line))
                         f.write("\n")
 
+    # now, do the same for qrels/test.tsv
     qrels_path = data_path / "qrels" / "test.tsv"
     qrels_path.parent.mkdir(parents=True, exist_ok=True)
+
     if not qrels_path.exists():
         qrels_files = list(data_path.glob("*/qrels/test.tsv"))
         with open(qrels_path, "w") as f:
+            # First, write the columns: query-id    corpus-id   score
             f.write("query-id\tcorpus-id\tscore\n")
             for file in tqdm(qrels_files, desc="Merging Qrels", disable=not verbose):
+                # get the name of the corpus
                 corpus_name = file.parent.parent.name
                 with open(file, "r") as f2:
+                    # skip first line
                     next(f2)
+
                     for line in tqdm(
-                        f2, desc=f"Merging {corpus_name} Qrels", leave=False, disable=not verbose
+                        f2,
+                        desc=f"Merging {corpus_name} Qrels",
+                        leave=False,
+                        disable=not verbose,
                     ):
+                        # since it's a tsv, split by tab
                         qid, cid, score = line.strip().split("\t")
+                        # add the corpus name to _id
                         qid = f"{corpus_name}_{qid}"
                         cid = f"{corpus_name}_{cid}"
+                        # write back to file
                         f.write(f"{qid}\t{cid}\t{score}\n")
 
 
@@ -376,6 +410,7 @@ def batch_hybrid(
 
     url = f"{self.collection.client.base_url}/collections/{self.collection.name}/search/batch-hybrid"
 
+    # Build the list of query objects expected by the server - no client-side processing
     queries = []
     for dv, sv in zip(dense_queries, sparse_queries):
         queries.append(
@@ -402,15 +437,16 @@ def batch_hybrid(
         raise Exception(f"Batch hybrid search failed: {rsp.text}")
 
     data = rsp.json()
+    # Return the list exactly as the server sent it
     return data["responses"]
 
 def create_session():
     """Initialize the cosdata client"""
     global client
     client = Client(
-        host=DEFAULT_HOST, 
-        username=DEFAULT_USER, 
-        password=_password(), 
+        host=DEFAULT_HOST,
+        username=DEFAULT_USER,
+        password=_password(),
         verify=False
     )
     return client
@@ -434,7 +470,7 @@ def setup_embedding_model():
 
 def get_beir_dataset(dataset: str) -> Tuple[Dict, Dict, Dict]:
     """Download and load BEIR dataset"""
-    save_dir = Path("datasets") / f"hybrid_raw_{dataset}"
+    save_dir = Path("datasets") / f"hybrid_{dataset}"
     archive_dir = save_dir / "archive"
     save_dir.mkdir(parents=True, exist_ok=True)
     archive_dir.mkdir(parents=True, exist_ok=True)
@@ -448,6 +484,7 @@ def get_beir_dataset(dataset: str) -> Tuple[Dict, Dict, Dict]:
     else:
         split = "test"
 
+    # Merge cqadupstack subdatasets if needed
     if dataset == "cqadupstack":
         merge_cqa_dupstack(data_path, verbose=True)
 
@@ -458,11 +495,11 @@ def get_beir_dataset(dataset: str) -> Tuple[Dict, Dict, Dict]:
     loader._load_queries()
     corpus = loader.corpus
     queries = loader.queries
-    
+
     loader.qrels_file = os.path.join(loader.qrels_folder, split + ".tsv")
     loader._load_qrels()
     qrels = loader.qrels
-    
+
     return corpus, queries, qrels
 
 def generate_dense_embeddings(corpus: Dict, queries: Dict, dataset: str, embedding_model) -> Tuple[List[str], np.ndarray, List[str], np.ndarray]:
@@ -488,6 +525,7 @@ def generate_dense_embeddings(corpus: Dict, queries: Dict, dataset: str, embeddi
     query_ids = list(queries.keys())
     query_texts = [queries[qid] for qid in query_ids]
 
+    # Generate corpus embeddings
     corpus_embeddings = []
     for i in tqdm(
         range(0, len(corpus_texts), EMBEDDING_BATCH_SIZE), desc="Corpus embeddings"
@@ -496,12 +534,14 @@ def generate_dense_embeddings(corpus: Dict, queries: Dict, dataset: str, embeddi
         corpus_embeddings.extend(list(embedding_model.embed(batch)))
     corpus_embeddings = np.array(corpus_embeddings)
 
+    # Generate query embeddings
     query_embeddings = []
     for i in tqdm(range(0, len(query_texts), EMBEDDING_BATCH_SIZE), desc="Query embeddings"):
         batch = query_texts[i : i + EMBEDDING_BATCH_SIZE]
         query_embeddings.extend(list(embedding_model.embed(batch)))
     query_embeddings = np.array(query_embeddings)
 
+    # Cache the embeddings
     cache_file.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         cache_file,
@@ -511,6 +551,7 @@ def generate_dense_embeddings(corpus: Dict, queries: Dict, dataset: str, embeddi
         query_embeddings=query_embeddings,
     )
     return corpus_ids, corpus_embeddings, query_ids, query_embeddings
+
 
 def brute_force_dense(
     query_embeddings: np.ndarray,
@@ -589,7 +630,7 @@ def build_sparse_vectors_for_bf(corpus: Dict, dataset: str) -> List[Dict]:
             tf_score = compute_bm25_tf(raw, doc["length"], avg_len)
             bm25_score = idf * tf_score
             if bm25_score > 0:
-                indices.append(hash(tok) % (2**31))
+                indices.append(hash(tok) % (2**31))  # Simple hash for index
                 values.append(bm25_score)
         return {
             "id": doc["id"],
@@ -601,7 +642,9 @@ def build_sparse_vectors_for_bf(corpus: Dict, dataset: str) -> List[Dict]:
     vectors = []
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
         futures = [ex.submit(build_vector, d) for d in docs]
-        for f in tqdm(as_completed(futures), total=len(futures), desc="Building sparse"):
+        for f in tqdm(
+            as_completed(futures), total=len(futures), desc="Building sparse"
+        ):
             vectors.append(f.result())
 
     cache_file.parent.mkdir(parents=True, exist_ok=True)
@@ -635,7 +678,7 @@ def build_sparse_queries_for_bf(queries: Dict, dataset: str, corpus_stats) -> Li
                 tf_score = compute_bm25_tf(raw, len(terms), avg_len)
                 bm25_score = idf * tf_score
                 if bm25_score > 0:
-                    indices.append(hash(tok) % (2**31))
+                    indices.append(hash(tok) % (2**31))  # Simple hash for index
                     values.append(bm25_score)
         query_vecs.append(
             {"id": qid, "text": " ".join(terms), "indices": indices, "values": values}
@@ -715,17 +758,17 @@ def ensure_collection(name: str):
         )
         collection.create_index(distance_metric="cosine")
         collection.create_tf_idf_index(name=name, k1=K1, b=B)
-        
+
         # Add hybrid search methods to collection via monkey patching
         collection.search.hybrid = hybrid.__get__(collection.search)
         collection.search.batch_hybrid = batch_hybrid.__get__(collection.search)
-        
+
         return collection
 
 def upsert_hybrid_vectors(collection, corpus_ids, corpus_embeddings, corpus):
     """Upsert both dense embeddings and raw text for hybrid search"""
     print("Upserting hybrid vectors (dense + raw text)...")
-    
+
     txn_ = None
     with collection.transaction() as txn:
         for start in tqdm(
@@ -736,14 +779,15 @@ def upsert_hybrid_vectors(collection, corpus_ids, corpus_embeddings, corpus):
             for i in range(start, end):
                 doc_id = corpus_ids[i]
                 doc = corpus[doc_id]
-                
+
+                # Combine title and text for the raw text field
                 raw_text = f"{doc.get('title', '')} {doc['text']}".strip()
-                
+
                 batch.append(
                     {
                         "id": doc_id,
                         "dense_values": corpus_embeddings[i].tolist(),
-                        "text": raw_text,
+                        "text": raw_text,  # Raw text for server-side processing
                         "metadata": {
                             "text": doc["text"],
                             "title": doc.get("title", ""),
@@ -751,8 +795,9 @@ def upsert_hybrid_vectors(collection, corpus_ids, corpus_embeddings, corpus):
                     }
                 )
 
+            # Process batch within the transaction
             txn.batch_upsert_vectors(batch)
-        
+
         txn_ = txn
 
     if txn_:
@@ -789,7 +834,8 @@ def hybrid_search_comprehensive(
         try:
             batch_dense = [dense_query_vectors[i].tolist() for i in batch_indices]
             batch_text = [text_queries[i] for i in batch_indices]
-            
+
+            # Use batch_hybrid for better performance
             batch_results = collection.search.batch_hybrid(
                 dense_queries=batch_dense,
                 sparse_queries=batch_text,
@@ -797,27 +843,29 @@ def hybrid_search_comprehensive(
                 dense_weight=0.5,
                 sparse_weight=0.5,
             )
-            
+
+            # Format results consistently
             formatted_results = []
             for result in batch_results:
                 if isinstance(result, dict) and "results" in result:
                     formatted = [
-                        {"id": r["id"], "score": r["score"]} 
+                        {"id": r["id"], "score": r["score"]}
                         for r in result["results"]
                     ]
                 else:
                     formatted = [{"id": r["id"], "score": r["score"]} for r in result]
                 formatted_results.append(formatted)
-            
+
         except Exception as e:
             print(f"Batch hybrid search failed: {e}")
             failed_count = len(batch_indices)
             formatted_results = [[]] * len(batch_indices)
-        
+
         batch_duration = time.time() - batch_start_time
         qps_tracker.record_query_batch(len(batch_indices), batch_duration, failed_count)
         return formatted_results
 
+    # Prepare batches
     batches = []
     for idx, start in enumerate(range(0, len(query_ids), SEARCH_BATCH_SIZE)):
         end = min(start + SEARCH_BATCH_SIZE, len(query_ids))
@@ -845,23 +893,26 @@ def hybrid_search_comprehensive(
 
 def search_documents_hybrid(
     collection,
-    queries: List[Tuple[str, str]], 
+    queries: List[Tuple[str, str]],
     dense_query_vectors: np.ndarray,
     top_k: int,
 ) -> Dict[str, Dict[str, float]]:
     """Search using hybrid approach with raw text"""
     results = {}
-    
-    text_queries = [query[1] for query in queries]
-    query_ids = [query[0] for query in queries]
-    
+
+    # Convert queries to text format
+    text_queries = [query[1] for query in queries]  # Extract query text
+    query_ids = [query[0] for query in queries]    # Extract query IDs
+
+    # Perform hybrid search using the comprehensive search function
     search_results, _, _ = hybrid_search_comprehensive(
         collection, dense_query_vectors, text_queries, query_ids, top_k
     )
-    
+
+    # Format results for evaluation
     for qid, search_result in zip(query_ids, search_results):
         results[qid] = {doc["id"]: doc["score"] for doc in search_result}
-    
+
     return results
 
 def evaluate(
@@ -871,6 +922,7 @@ def evaluate(
     query_ids: List[str],
     qrels: Dict,
 ) -> Dict:
+    # Hybrid vs dense brute-force recall
     hybrid_dict = {
         qid: {r["id"]: r["score"] for r in res}
         for qid, res in zip(query_ids, hybrid_results)
@@ -885,6 +937,7 @@ def evaluate(
         recalls_dense.append(len(srv_ids & set(bf_ids)) / len(bf_ids) if bf_ids else 0)
     bf_recall_dense = sum(recalls_dense) / len(recalls_dense) if recalls_dense else 0
 
+    # Hybrid vs sparse brute-force recall
     bf_sparse_dict = {
         r["query_id"]: {rr["id"]: rr["score"] for rr in r["top_results"]}
         for r in bf_sparse
@@ -898,6 +951,7 @@ def evaluate(
         sum(recalls_sparse) / len(recalls_sparse) if recalls_sparse else 0
     )
 
+    # BEIR metrics (using hybrid results)
     try:
         evaluator = EvaluateRetrieval(k_values=[1, 5, 10])
         ndcg, _map, recall, precision = evaluator.evaluate(qrels, hybrid_dict, [1, 5, 10])
@@ -912,8 +966,12 @@ def evaluate(
     except Exception as e:
         print(f"BEIR evaluation failed: {e}")
         beir_metrics = {
-            "ndcg@10": 0.0, "beir_recall@10": 0.0, "map": 0.0,
-            "p@1": 0.0, "p@5": 0.0, "p@10": 0.0,
+            "ndcg@10": 0.0,
+            "beir_recall@10": 0.0,
+            "map": 0.0,
+            "p@1": 0.0,
+            "p@5": 0.0,
+            "p@10": 0.0,
         }
 
     return {
@@ -921,6 +979,7 @@ def evaluate(
         "bf_recall_sparse@10": bf_recall_sparse,
         **beir_metrics,
     }
+
 
 def run_qps_latency(
     dense_query_vectors: np.ndarray,
@@ -953,6 +1012,7 @@ def run_qps_latency(
     elapsed = time.time() - start
     qps = subset_size / elapsed
 
+    # P50 / P95 latency
     times = []
     latency_subset_size = min(100, len(dense_query_vectors))
     for i in tqdm(range(latency_subset_size), desc="Latency"):
@@ -973,6 +1033,7 @@ def run_qps_latency(
         return qps, 0.0, 0.0
     return qps, times[len(times) // 2], times[int(len(times) * 0.95)]
 
+
 def save_comprehensive_results(
     dataset: str,
     corpus_size: int,
@@ -991,23 +1052,37 @@ def save_comprehensive_results(
     qps, p50, p95 = latency_metrics
     success_rate = (
         (qps_metrics["successful_queries"] / qps_metrics["total_queries"]) * 100
-        if qps_metrics["total_queries"] > 0 else 0
+        if qps_metrics["total_queries"] > 0
+        else 0
     )
 
     results = {
-        "dataset": dataset, "corpus_size": corpus_size, "queries_size": queries_size,
-        "qrels_size": qrels_size, "avg_query_len": avg_query_len,
+        "dataset": dataset,
+        "corpus_size": corpus_size,
+        "queries_size": queries_size,
+        "qrels_size": qrels_size,
+        "avg_query_len": avg_query_len,
         "bf_recall_dense@10": eval_metrics["bf_recall_dense@10"],
         "bf_recall_sparse@10": eval_metrics["bf_recall_sparse@10"],
-        "ndcg@10": eval_metrics["ndcg@10"], "beir_recall@10": eval_metrics["beir_recall@10"],
-        "map": eval_metrics["map"], "p@1": eval_metrics["p@1"], "p@5": eval_metrics["p@5"],
-        "p@10": eval_metrics["p@10"], "concurrent_qps": qps_metrics["qps"],
-        "sequential_qps": qps, "avg_query_time_ms": qps_metrics["avg_query_time"],
-        "p50_latency_ms": p50, "p95_latency_ms": p95, "total_queries": qps_metrics["total_queries"],
-        "successful_queries": qps_metrics["successful_queries"], "failed_queries": qps_metrics["failed_queries"],
-        "success_rate_pct": success_rate, "search_duration_s": search_duration,
+        "ndcg@10": eval_metrics["ndcg@10"],
+        "beir_recall@10": eval_metrics["beir_recall@10"],
+        "map": eval_metrics["map"],
+        "p@1": eval_metrics["p@1"],
+        "p@5": eval_metrics["p@5"],
+        "p@10": eval_metrics["p@10"],
+        "concurrent_qps": qps_metrics["qps"],
+        "sequential_qps": qps,
+        "avg_query_time_ms": qps_metrics["avg_query_time"],
+        "p50_latency_ms": p50,
+        "p95_latency_ms": p95,
+        "total_queries": qps_metrics["total_queries"],
+        "successful_queries": qps_metrics["successful_queries"],
+        "failed_queries": qps_metrics["failed_queries"],
+        "success_rate_pct": success_rate,
+        "search_duration_s": search_duration,
         "total_test_duration_s": qps_metrics["total_duration"],
-        "max_cpu_usage_pct": cpu_stats["max_cpu"], "avg_cpu_usage_pct": cpu_stats["avg_cpu"],
+        "max_cpu_usage_pct": cpu_stats["max_cpu"],
+        "avg_cpu_usage_pct": cpu_stats["avg_cpu"],
         "cpu_samples": cpu_stats["samples"],
     }
 
@@ -1026,28 +1101,35 @@ def main(
     print("=" * 60)
     print("Raw Hybrid Search Benchmark (dense + server-side sparse)")
     print("=" * 60)
-    
+
     try:
+        # Setup
         embedding_model = setup_embedding_model()
         create_session()
-        
+
+        # Load dataset
         corpus, queries, qrels = get_beir_dataset(dataset)
         print(f"Loaded {dataset}: {len(corpus)} docs, {len(queries)} queries, {len(qrels)} qrels")
-        
+
+        # Calculate average query length (for raw text)
         avg_query_len = sum(len(q.split()) for q in queries.values()) / len(queries)
         print(f"Average query length: {avg_query_len:.1f} tokens")
-        
+
+        # Generate dense embeddings
         corpus_ids, corpus_embeddings, query_ids, query_embeddings = generate_dense_embeddings(
             corpus, queries, dataset, embedding_model
         )
-        
+
+        # Build brute-force baselines for evaluation
         print("\nBuilding brute-force baselines...")
         bf_dense = brute_force_dense(
             query_embeddings, corpus_embeddings, corpus_ids, query_ids, top_k, dataset
         )
-        
+
+        # Build sparse vectors for brute-force comparison
         sparse_vectors = build_sparse_vectors_for_bf(corpus, dataset)
-        
+
+        # Get corpus stats for sparse queries
         total_docs = len(sparse_vectors)
         term_doc_freq = defaultdict(int)
         total_len = sum(len(v["text"].split()) for v in sparse_vectors)
@@ -1055,37 +1137,42 @@ def main(
         for v in sparse_vectors:
             for idx in v["indices"]:
                 term_doc_freq[idx] += 1
-        
+
         sparse_queries = build_sparse_queries_for_bf(
             queries, dataset, (total_docs, term_doc_freq, avg_len)
         )
         bf_sparse = brute_force_sparse(sparse_queries, sparse_vectors, top_k, dataset)
-        
+
+        # Create collection and indexes
         collection_name = f"{COLLECTION_PREFIX}_{dataset}"
         collection = ensure_collection(collection_name)
-        
+
+        # Upsert hybrid vectors (dense + raw text)
         start_time = time.time()
         upsert_hybrid_vectors(collection, corpus_ids, corpus_embeddings, corpus)
         indexing_time = time.time() - start_time
-        
+
         print("\n" + "=" * 60)
         print("HYBRID SEARCH WITH RAW TEXT")
         print("=" * 60)
-        
+
+        # Prepare queries for evaluation (only use queries that exist in qrels)
         eval_queries = [(qid, queries[qid]) for qid in qrels.keys() if qid in query_ids]
         eval_query_ids = [q[0] for q in eval_queries]
         eval_dense_vectors = np.array([
             query_embeddings[query_ids.index(qid)] for qid in eval_query_ids
         ])
         eval_text_queries = [q[1] for q in eval_queries]
-        
+
+        # Perform comprehensive hybrid search
         print("Running comprehensive hybrid search...")
         search_start = time.time()
         hybrid_results, cpu_stats, qps_metrics = hybrid_search_comprehensive(
             collection, eval_dense_vectors, eval_text_queries, eval_query_ids, top_k
         )
         search_duration = time.time() - search_start
-        
+
+        # Evaluate results
         print("Evaluating results...")
         eval_metrics = evaluate(
             hybrid_results,
@@ -1094,12 +1181,14 @@ def main(
             eval_query_ids,
             qrels,
         )
-        
+
+        # Sequential QPS and latency test
         print("Running sequential QPS and latency tests...")
         seq_qps, p50, p95 = run_qps_latency(
             eval_dense_vectors, eval_text_queries, collection, top_k
         )
-        
+
+        # Print comprehensive results
         print("\n" + "=" * 60)
         print("COMPREHENSIVE RESULTS")
         print("=" * 60)
@@ -1134,12 +1223,21 @@ def main(
         print(f"  Avg CPU: {cpu_stats['avg_cpu']:.1f}%")
         print(f"  Search Duration: {search_duration:.2f}s")
         print("=" * 60)
-        
+
+        # Save comprehensive results
         save_comprehensive_results(
-            dataset, len(corpus), len(queries), len(qrels), avg_query_len,
-            eval_metrics, qps_metrics, cpu_stats, (seq_qps, p50, p95), search_duration,
+            dataset,
+            len(corpus),
+            len(queries),
+            len(qrels),
+            avg_query_len,
+            eval_metrics,
+            qps_metrics,
+            cpu_stats,
+            (seq_qps, p50, p95),
+            search_duration,
         )
-        
+
     except KeyboardInterrupt:
         print("\nOperation cancelled by user")
     except Exception as e:
@@ -1158,13 +1256,17 @@ def main(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Raw Hybrid Search Benchmark")
     parser.add_argument(
-        "--dataset", type=str, default="arguana",
+        "--dataset",
+        type=str,
+        default="arguana",
         help="BEIR dataset to benchmark (default: arguana)",
     )
     parser.add_argument(
-        "--top-k", type=int, default=10,
+        "--top-k",
+        type=int,
+        default=10,
         help="Number of top results to retrieve (default: 10)",
     )
     args = parser.parse_args()
-    
+
     main(args.dataset, args.top_k)
