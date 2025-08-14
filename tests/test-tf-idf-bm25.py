@@ -479,7 +479,6 @@ def create_db_and_upsert_vectors(vector_db_name, vectors, batch_size, k, b):
 
     # Insert vectors into server
     print("Creating transaction")
-    txn_id = None
 
     print(f"Inserting {len(vectors)} vectors in batches of {batch_size}...")
     start = time.time()
@@ -498,8 +497,6 @@ def create_db_and_upsert_vectors(vector_db_name, vectors, batch_size, k, b):
                     future.result()
                 except Exception as e:
                     print(f"Batch {i + 1} failed: {e}")
-
-        txn_id = txn.transaction_id
 
     # Poll for transaction completion
     print("Waiting for transaction to complete")
@@ -527,20 +524,126 @@ def search_sparse_vector(collection, vector, top_k):
 
 
 def batch_ann_search(collection, batch, top_k):
-    """Batch TF-IDF search using individual requests since batch endpoint is failing"""
+    """Optimized batch TF-IDF search using true batch endpoint"""
     start_time = time.time()
 
-    results = []
-    for query_text in batch:
-        try:
-            result = collection.search.text(query_text=query_text, top_k=top_k)
-            results.append(result)
-        except Exception as e:
-            print(f"Individual search failed for query: {e}")
-            results.append({"results": []})
+    try:
+        # Use the batch_text method from the search API
+        batch_result = collection.search.batch_text(
+            query_texts=batch, top_k=top_k, return_raw_text=False
+        )
+
+        # Extract results from batch response
+        if "responses" in batch_result:
+            results = [
+                response.get("results", []) for response in batch_result["responses"]
+            ]
+        else:
+            # Handle direct list response format
+            results = batch_result if isinstance(batch_result, list) else []
+
+    except Exception as e:
+        print(f"Batch search failed: {e}")
+        # Return empty results for all queries in batch
+        results = [{"results": []} for _ in batch]
 
     elapsed_ms = (time.time() - start_time) * 1000.0
     return results, elapsed_ms
+
+
+def batch_tfidf_search_optimized(collection, query_vectors, top_k):
+    """
+    High-performance batch TF-IDF search using parallel HTTP requests.
+    Uses true batching where multiple queries are sent in a single HTTP request.
+    """
+    query_texts = [query["text"] for query in query_vectors]
+
+    # Use smaller batches for better parallelization
+    SEARCH_BATCH_SIZE = 100
+    MAX_WORKERS = 32
+
+    print(
+        f"Performing parallel batch TF-IDF search with batches of {SEARCH_BATCH_SIZE} and {MAX_WORKERS} workers..."
+    )
+
+    def make_batch_request(batch_queries, batch_index):
+        """Make a single batch TF-IDF search request"""
+        try:
+            batch_result = collection.search.batch_text(
+                query_texts=batch_queries, top_k=top_k, return_raw_text=False
+            )
+
+            # Extract results from batch response
+            if "responses" in batch_result:
+                results = [
+                    response.get("results", [])
+                    for response in batch_result["responses"]
+                ]
+            else:
+                # Handle direct list response format
+                results = batch_result if isinstance(batch_result, list) else []
+
+            return batch_index, results, True
+
+        except Exception as e:
+            print(f"Batch {batch_index} failed: {e}")
+            return batch_index, [], False
+
+    # Prepare all batches with their indices for proper ordering
+    batch_data = []
+    for batch_index, batch_start in enumerate(
+        range(0, len(query_texts), SEARCH_BATCH_SIZE)
+    ):
+        batch_end = min(batch_start + SEARCH_BATCH_SIZE, len(query_texts))
+        batch_queries = query_texts[batch_start:batch_end]
+        batch_data.append((batch_index, batch_queries))
+
+    # Parallel batch execution
+    start_time = time.time()
+
+    # Results array for order
+    num_batches = len(batch_data)
+    batch_results_ordered = [None] * num_batches
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        # Submit batch requests
+        future_to_batch = {}
+        for batch_index, batch_queries in batch_data:
+            future = executor.submit(make_batch_request, batch_queries, batch_index)
+            future_to_batch[future] = batch_index
+
+        # Collect results
+        completed_batches = 0
+        for future in tqdm(
+            as_completed(future_to_batch),
+            total=len(future_to_batch),
+            desc="Parallel batches",
+        ):
+            batch_index, batch_results, success = future.result()
+            if success:
+                batch_results_ordered[batch_index] = batch_results
+                completed_batches += 1
+            else:
+                # Fill with empty results for failed batch
+                batch_size = len(batch_data[batch_index][1])
+                batch_results_ordered[batch_index] = [
+                    {"results": []} for _ in range(batch_size)
+                ]
+
+    # Flatten results
+    all_results = []
+    for batch_results in batch_results_ordered:
+        if batch_results is not None:
+            all_results.extend(batch_results)
+
+    # Trim to query count
+    all_results = all_results[: len(query_texts)]
+
+    total_latency = time.time() - start_time
+    print(f"Parallel batch TF-IDF search latency: {total_latency:.2f}s")
+    print(f"Completed {completed_batches}/{num_batches} batches successfully")
+
+    return all_results, total_latency
 
 
 def calculate_recall(brute_force_results, server_results, top_k=10):
@@ -549,7 +652,15 @@ def calculate_recall(brute_force_results, server_results, top_k=10):
 
     for bf_result, server_result in zip(brute_force_results, server_results):
         bf_ids = set(item["id"] for item in bf_result["top_results"])
-        server_ids = set(item["id"] for item in server_result["results"])
+
+        # Handle both formats: direct list or dict with "results" key
+        if isinstance(server_result, dict) and "results" in server_result:
+            server_ids = set(item["id"] for item in server_result["results"])
+            server_result_list = server_result["results"]
+        else:
+            # Direct list format from batch search
+            server_ids = set(item["id"] for item in server_result)
+            server_result_list = server_result
 
         if not bf_ids:
             continue  # Skip if brute force found no results
@@ -565,7 +676,7 @@ def calculate_recall(brute_force_results, server_results, top_k=10):
         for idx, result in enumerate(bf_result["top_results"]):
             print(f"{idx + 1}. {result['id']} ({result['score']})")
         print("Server results: ")
-        for idx, result in enumerate(server_result["results"]):
+        for idx, result in enumerate(server_result_list):
             print(f"{idx + 1}. {result['id']} ({result['score']})")
         print()
         recalls.append(recall)
@@ -575,23 +686,60 @@ def calculate_recall(brute_force_results, server_results, top_k=10):
 
 
 def run_qps_tests(qps_test_vectors, collection, batch_size=100, top_k=10):
-    """Run QPS (Queries Per Second) tests with vectors"""
-    print(f"Using {len(qps_test_vectors)} different test vectors for QPS testing")
+    """Run QPS (Queries Per Second) tests using optimized batch search"""
+    print(
+        f"Using {len(qps_test_vectors)} different test vectors for QPS testing with batch size {batch_size}"
+    )
 
+    MAX_WORKERS = 32
     start_time_qps = time.perf_counter()
     results = []
+    all_batch_results = []
 
-    with ThreadPoolExecutor(max_workers=8) as executor:
+    def perform_batch_search(batch_queries):
+        """Perform a single batch TF-IDF search"""
+        request_start = time.perf_counter()
+        try:
+            batch_result = collection.search.batch_text(
+                query_texts=batch_queries, top_k=top_k, return_raw_text=False
+            )
+
+            # Extract results from batch response
+            if "responses" in batch_result:
+                batch_response_results = [
+                    response.get("results", [])
+                    for response in batch_result["responses"]
+                ]
+            else:
+                # Handle direct list response format
+                batch_response_results = (
+                    batch_result if isinstance(batch_result, list) else []
+                )
+
+            request_end = time.perf_counter()
+            request_duration = request_end - request_start
+            return True, batch_response_results, request_duration
+        except Exception as e:
+            print(f"Error in batch TF-IDF search: {e}")
+            request_end = time.perf_counter()
+            request_duration = request_end - request_start
+            return False, [], request_duration
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = []
         for i in range(0, len(qps_test_vectors), batch_size):
-            batch = [vector["text"] for vector in qps_test_vectors[i : i + batch_size]]
+            batch_end = min(i + batch_size, len(qps_test_vectors))
+            batch_queries = [vector["text"] for vector in qps_test_vectors[i:batch_end]]
 
-            futures.append(executor.submit(batch_ann_search, collection, batch, top_k))
+            future = executor.submit(perform_batch_search, batch_queries)
+            futures.append(future)
 
         for future in as_completed(futures):
             try:
-                future.result()
-                results.append(True)
+                success, batch_response_results, request_duration = future.result()
+                results.append(success)
+                if success:
+                    all_batch_results.extend(batch_response_results)
             except Exception as e:
                 print(f"Error in QPS test: {e}")
                 results.append(False)
@@ -599,25 +747,26 @@ def run_qps_tests(qps_test_vectors, collection, batch_size=100, top_k=10):
     end_time_qps = time.perf_counter()
     actual_duration = end_time_qps - start_time_qps
 
-    successful_queries = sum(results) * batch_size
-    failed_queries = (len(results) * batch_size) - successful_queries
-    total_queries = len(results) * batch_size
-    qps = successful_queries / actual_duration
+    successful_requests = sum(results) * batch_size
+    failed_requests = (len(results) * batch_size) - successful_requests
+    total_requests = len(results) * batch_size
+    qps = successful_requests / actual_duration if actual_duration > 0 else 0
 
     print("QPS Test Results:")
-    print(f"Total Queries: {total_queries}")
-    print(f"Successful Queries: {successful_queries}")
-    print(f"Failed Queries: {failed_queries}")
+    print(f"Total Requests: {total_requests}")
+    print(f"Successful Requests: {successful_requests}")
+    print(f"Failed Requests: {failed_requests}")
     print(f"Test Duration: {actual_duration:.2f} seconds")
     print(f"Queries Per Second (QPS): {qps:.2f}")
-    print(f"Success Rate: {(successful_queries / total_queries * 100):.2f}%")
+    print(f"Success Rate: {(successful_requests / total_requests * 100):.2f}%")
 
     return (
         qps,
         actual_duration,
-        successful_queries,
-        failed_queries,
-        total_queries,
+        successful_requests,
+        failed_requests,
+        total_requests,
+        all_batch_results,
     )
 
 
@@ -625,7 +774,7 @@ def run_latency_test(collection, query_vectors, top_k):
     print(f"Testing latency {len(query_vectors)} vectors and comparing results...")
     latencies = []
 
-    with ThreadPoolExecutor(max_workers=16) as executor:
+    with ThreadPoolExecutor(max_workers=32) as executor:
         futures = []
 
         def timed_query(query):
@@ -667,20 +816,16 @@ def run_recall_and_qps_and_latency_test(
     brute_force_results,
     batch_size,
 ):
-    # Search vectors and compare results
-    print(f"Searching {len(query_vectors)} vectors and comparing results...")
-    server_results = []
+    # Search vectors and compare results using optimized batch search
+    print(f"Searching {len(query_vectors)} vectors using optimized batch search...")
 
     start_search = time.time()
-    for query in tqdm(query_vectors):
-        try:
-            result = search_sparse_vector(collection, query, top_k)
-            server_results.append(result)
-        except Exception as e:
-            print(f"Search failed for query {query['id']}: {e}")
-            server_results.append({"results": []})
+    server_results, search_latency = batch_tfidf_search_optimized(
+        collection, query_vectors, top_k
+    )
 
     search_time = time.time() - start_search
+    print(f"Total search time: {search_time:.2f} seconds")
     print(
         f"Average search time: {search_time / len(query_vectors):.4f} seconds per query"
     )
@@ -699,9 +844,14 @@ def run_recall_and_qps_and_latency_test(
         f"Queries with perfect recall: {perfect_recalls} out of {len(recalls)} ({perfect_recalls / len(recalls) * 100:.2f}%)"
     )
 
-    qps, qps_duration, _, _, _ = run_qps_tests(
-        qps_test_vectors, collection, batch_size, top_k
-    )
+    (
+        qps,
+        qps_duration,
+        successful_requests,
+        failed_requests,
+        total_requests,
+        batch_results,
+    ) = run_qps_tests(qps_test_vectors, collection, batch_size, top_k)
 
     p50_latency, p95_latency = run_latency_test(
         collection,
@@ -919,7 +1069,7 @@ def main_non_it(dataset, num_queries=100, batch_size=100, top_k=10, k=1.5, b=0.7
 
 
 if __name__ == "__main__":
-    main(dataset="scidocs")
+    main(dataset="fiqa")
     # datasets = ["trec-covid", "fiqa", "arguana", "webis-touche2020", "quora", "scidocs", "scifact", "nq", "msmarco", "fever", "climate-fever"]
     # results = []
     # for dataset in datasets:

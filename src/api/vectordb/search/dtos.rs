@@ -89,6 +89,17 @@ pub(crate) enum HybridSearchQuery {
     },
 }
 
+#[derive(Deserialize, Debug, utoipa::ToSchema)]
+pub(crate) struct BatchHybridSearchRequestDto {
+    pub queries: Vec<HybridSearchQuery>,
+    #[serde(default = "default_top_k")]
+    pub top_k: usize,
+    #[serde(default = "default_fusion_constant_k")]
+    pub fusion_constant_k: f32,
+    #[serde(default)]
+    pub return_raw_text: bool,
+}
+
 #[derive(Serialize, Debug, Clone, utoipa::ToSchema)]
 pub(crate) struct SearchResultItemDto {
     #[schema(value_type = String)]

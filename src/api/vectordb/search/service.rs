@@ -2,9 +2,10 @@ use crate::app_context::AppContext;
 use std::sync::Arc;
 
 use super::dtos::{
-    BatchDenseSearchRequestDto, BatchSearchResponseDto, BatchSearchTFIDFDocumentsDto,
-    BatchSparseSearchRequestDto, DenseSearchRequestDto, FindSimilarTFIDFDocumentDto,
-    HybridSearchRequestDto, SearchResponseDto, SearchResultItemDto, SparseSearchRequestDto,
+    BatchDenseSearchRequestDto, BatchHybridSearchRequestDto, BatchSearchResponseDto,
+    BatchSearchTFIDFDocumentsDto, BatchSparseSearchRequestDto, DenseSearchRequestDto,
+    FindSimilarTFIDFDocumentDto, HybridSearchRequestDto, SearchResponseDto, SearchResultItemDto,
+    SparseSearchRequestDto,
 };
 use super::error::SearchError;
 use super::repo;
@@ -120,6 +121,33 @@ pub(crate) async fn hybrid_search(
                 document_id,
                 score,
                 text,
+            })
+            .collect(),
+        warning,
+    })
+}
+
+pub(crate) async fn batch_hybrid_search(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    request: BatchHybridSearchRequestDto,
+) -> Result<BatchSearchResponseDto, SearchError> {
+    let (results_list, warning) = repo::batch_hybrid_search(ctx, collection_id, request).await?;
+
+    Ok(BatchSearchResponseDto {
+        responses: results_list
+            .into_iter()
+            .map(|results| SearchResponseDto {
+                results: results
+                    .into_iter()
+                    .map(|(id, document_id, score, text)| SearchResultItemDto {
+                        id,
+                        document_id,
+                        score,
+                        text,
+                    })
+                    .collect(),
+                warning: None,
             })
             .collect(),
         warning,
