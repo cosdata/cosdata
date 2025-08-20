@@ -36,7 +36,6 @@ pub(crate) async fn create_sparse_index(
         collection_id,
         create_index_dto.name,
         create_index_dto.quantization,
-        create_index_dto.sample_threshold,
     )
     .await
 }

@@ -184,7 +184,6 @@ pub(crate) struct CreateDenseIndexDto {
 pub(crate) struct CreateSparseIndexDto {
     pub name: String,
     pub quantization: SparseIndexQuantization,
-    pub sample_threshold: usize,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]

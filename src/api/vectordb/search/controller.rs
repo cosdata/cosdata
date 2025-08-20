@@ -5,8 +5,8 @@ use crate::models::collection_cache::CollectionCacheExt;
 
 use super::dtos::{
     BatchDenseSearchRequestDto, BatchSearchResponseDto, BatchSearchTFIDFDocumentsDto,
-    BatchSparseSearchRequestDto, DenseSearchRequestDto, FindSimilarTFIDFDocumentDto,
-    GeoFenceSearchRequestDto, HybridSearchRequestDto, SearchResponseDto, SparseSearchRequestDto,
+    DenseSearchRequestDto, FindSimilarTFIDFDocumentDto, GeoFenceSearchRequestDto,
+    HybridSearchRequestDto, SearchResponseDto,
 };
 use super::error::SearchError;
 
@@ -79,37 +79,6 @@ pub(crate) async fn batch_dense_search(
     Ok(HttpResponse::Ok().json(results))
 }
 
-/// Search using sparse vector embeddings
-///
-/// Performs a similarity search using sparse vector embeddings.
-#[utoipa::path(
-    post,
-    path = "/vectordb/collections/{collection_id}/search/sparse",
-    tag = "search",
-    params(
-        ("collection_id" = String, Path, description = "Collection identifier")
-    ),
-    request_body = SparseSearchRequestDto,
-    responses(
-        (status = 200, description = "Search successfully completed", body = SearchResponseDto),
-        (status = 404, description = "Collection not found", body = String),
-        (status = 400, description = "Invalid request error", body = String),
-        (status = 500, description = "Internal server error", body = String)
-    )
-)]
-pub(crate) async fn sparse_search(
-    path: web::Path<String>,
-    web::Json(body): web::Json<SparseSearchRequestDto>,
-    ctx: web::Data<AppContext>,
-) -> Result<HttpResponse, SearchError> {
-    let collection_id = path.into_inner();
-    ctx.update_collection_for_query(&collection_id)
-        .map_err(|e| SearchError::InternalServerError(format!("Cache update error: {}", e)))?;
-
-    let results = service::sparse_search(ctx.into_inner(), &collection_id, body).await?;
-    Ok(HttpResponse::Ok().json(results))
-}
-
 /// Geofence search.
 #[utoipa::path(
     post,
@@ -136,37 +105,6 @@ pub(crate) async fn geofence_search(
         .map_err(|e| SearchError::InternalServerError(format!("Cache update error: {}", e)))?;
 
     let results = service::geofence_search(ctx.into_inner(), &collection_id, body).await?;
-    Ok(HttpResponse::Ok().json(results))
-}
-
-/// Batch search using sparse vector embeddings
-///
-/// Performs multiple similarity searches using sparse vector embeddings in a single request.
-#[utoipa::path(
-    post,
-    path = "/vectordb/collections/{collection_id}/search/batch-sparse",
-    tag = "search",
-    params(
-        ("collection_id" = String, Path, description = "Collection identifier")
-    ),
-    request_body = BatchSparseSearchRequestDto,
-    responses(
-        (status = 200, description = "Batch search successfully completed", body = BatchSearchResponseDto),
-        (status = 404, description = "Collection not found", body = String),
-        (status = 400, description = "Invalid request error", body = String),
-        (status = 500, description = "Internal server error", body = String)
-    )
-)]
-pub(crate) async fn batch_sparse_search(
-    path: web::Path<String>,
-    web::Json(body): web::Json<BatchSparseSearchRequestDto>,
-    ctx: web::Data<AppContext>,
-) -> Result<HttpResponse, SearchError> {
-    let collection_id = path.into_inner();
-    ctx.update_collection_for_query(&collection_id)
-        .map_err(|e| SearchError::InternalServerError(format!("Cache update error: {}", e)))?;
-
-    let results = service::batch_sparse_search(ctx.into_inner(), &collection_id, body).await?;
     Ok(HttpResponse::Ok().json(results))
 }
 

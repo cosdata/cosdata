@@ -1,4 +1,5 @@
 use rayon::prelude::*;
+use rustc_hash::FxHashMap;
 
 use std::{hash::Hasher, sync::RwLock};
 
@@ -15,7 +16,6 @@ use crate::{
     },
 };
 
-pub(crate) mod geozone;
 pub(crate) mod hnsw;
 pub(crate) mod inverted;
 pub(crate) mod tf_idf;
@@ -26,9 +26,18 @@ pub type InternalSearchResult = (
     Option<DocumentId>,
     f32,
     Option<String>,
+    Option<Matches>,
 );
 
-pub type SearchResult = (VectorId, Option<DocumentId>, f32, Option<String>);
+pub type Matches = FxHashMap<String, Vec<(String, f32)>>;
+
+pub type SearchResult = (
+    VectorId,
+    Option<DocumentId>,
+    f32,
+    Option<String>,
+    Option<Matches>,
+);
 
 pub trait IndexOps: Send + Sync {
     type IndexingInput: Send + Sync;
@@ -222,9 +231,9 @@ pub trait IndexOps: Send + Sync {
     ) -> Result<Vec<SearchResult>, WaCustomError> {
         results
             .into_iter()
-            .map(|(internal_id, id, document_id, score, text)| {
+            .map(|(internal_id, id, document_id, score, text, matches)| {
                 Ok(if let Some(id) = id {
-                    (id, document_id, score, text)
+                    (id, document_id, score, text, matches)
                 } else {
                     let raw_emb = collection
                         .get_raw_emb_by_internal_id(&internal_id)
@@ -241,6 +250,7 @@ pub trait IndexOps: Send + Sync {
                         } else {
                             None
                         },
+                        matches,
                     )
                 })
             })

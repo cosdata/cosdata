@@ -1,7 +1,9 @@
 use std::{collections::HashMap, io};
 
+use rustc_hash::FxHashMap;
+
 use crate::{
-    indexes::{geozone::ZoneId, inverted::types::SparsePair},
+    indexes::inverted::ZoneId,
     metadata::FieldValue,
     models::{
         buffered_io::{BufIoError, BufferManager},
@@ -28,7 +30,7 @@ impl SimpleSerialize for RawVectorEmbedding {
             flags |= 1 << 2;
         }
 
-        if self.sparse_values.is_some() {
+        if self.geo_fence_values.is_some() {
             flags |= 1 << 3;
         }
 
@@ -75,11 +77,13 @@ impl SimpleSerialize for RawVectorEmbedding {
             }
         }
 
-        if let Some(sparse_values) = &self.sparse_values {
-            write_len(&mut buf, sparse_values.len() as u32);
-            for pair in sparse_values {
-                buf.extend(pair.0.to_le_bytes());
-                buf.extend(pair.1.to_le_bytes());
+        if let Some(geo_fence_values) = &self.geo_fence_values {
+            write_len(&mut buf, geo_fence_values.len() as u32);
+            for (field, value) in geo_fence_values {
+                write_len(&mut buf, field.len() as u32);
+                buf.extend(field.as_bytes());
+                write_len(&mut buf, value.len() as u32);
+                buf.extend(value.as_bytes());
             }
         }
 
@@ -149,18 +153,17 @@ impl SimpleSerialize for RawVectorEmbedding {
             None
         };
 
-        let sparse_values = if (flags & (1 << 3)) != 0 {
-            let sparse_values_len = read_len(bufman, cursor)? as usize;
-            let mut sparse_values = Vec::with_capacity(sparse_values_len);
+        let geo_fence_values = if (flags & (1 << 3)) != 0 {
+            let geo_fence_values_len = read_len(bufman, cursor)? as usize;
+            let mut geo_fence_values = FxHashMap::default();
 
-            for _ in 0..sparse_values_len {
-                let index = bufman.read_u32_with_cursor(cursor)?;
-                let value = bufman.read_f32_with_cursor(cursor)?;
-                let pair = SparsePair(index, value);
-                sparse_values.push(pair);
+            for _ in 0..geo_fence_values_len {
+                let field = read_string(bufman, cursor)?;
+                let value = read_string(bufman, cursor)?;
+                geo_fence_values.insert(field, value);
             }
 
-            Some(sparse_values)
+            Some(geo_fence_values)
         } else {
             None
         };
@@ -192,7 +195,7 @@ impl SimpleSerialize for RawVectorEmbedding {
             document_id,
             dense_values,
             metadata,
-            sparse_values,
+            geo_fence_values,
             geo_fence_metadata,
             text,
         })

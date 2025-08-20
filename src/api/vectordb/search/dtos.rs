@@ -1,4 +1,5 @@
-use crate::indexes::geozone::ZoneId;
+use crate::indexes::inverted::ZoneId;
+use crate::indexes::Matches;
 use crate::metadata::query_filtering::Filter;
 use crate::models::types::VectorId;
 use crate::{indexes::inverted::types::SparsePair, models::types::DocumentId};
@@ -38,35 +39,14 @@ pub(crate) struct BatchDenseSearchRequestDto {
 }
 
 #[derive(Deserialize, Debug, utoipa::ToSchema)]
-pub(crate) struct SparseSearchRequestDto {
-    #[schema(value_type = Vec<String>)]
-    pub query_terms: Vec<SparsePair>,
-    pub top_k: Option<usize>,
-    pub early_terminate_threshold: Option<f32>,
-    #[serde(default)]
-    pub return_raw_text: bool,
-}
-
-#[derive(Deserialize, Debug, utoipa::ToSchema)]
 pub(crate) struct GeoFenceSearchRequestDto {
-    #[schema(value_type = Vec<String>)]
-    pub query_terms: Vec<SparsePair>,
+    pub query: String,
     pub top_k: Option<usize>,
     #[schema(value_type = Vec<String>)]
     pub zones: Vec<ZoneId>,
     #[serde(default)]
     pub sort_by_distance: bool,
     pub coordinates: (f32, f32),
-    pub early_terminate_threshold: Option<f32>,
-    #[serde(default)]
-    pub return_raw_text: bool,
-}
-
-#[derive(Deserialize, Debug, utoipa::ToSchema)]
-pub(crate) struct BatchSparseSearchRequestDto {
-    #[schema(value_type = Vec<Vec<String>>)]
-    pub query_terms_list: Vec<Vec<SparsePair>>,
-    pub top_k: Option<usize>,
     pub early_terminate_threshold: Option<f32>,
     #[serde(default)]
     pub return_raw_text: bool,
@@ -113,6 +93,8 @@ pub(crate) struct SearchResultItemDto {
     pub document_id: Option<DocumentId>,
     pub score: f32,
     pub text: Option<String>,
+    #[schema(value_type = Option<Object>)]
+    pub matches: Option<Matches>,
 }
 
 #[derive(Serialize, Debug, utoipa::ToSchema)]

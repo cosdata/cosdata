@@ -8,12 +8,13 @@ use crate::{
     },
 };
 
+use rustc_hash::FxHashMap;
 use serde::{
     de::{self, MapAccess, Visitor},
     Deserialize, Deserializer, Serialize,
 };
 
-use crate::{indexes::inverted::types::SparsePair, models::types::VectorId};
+use crate::models::types::VectorId;
 
 #[derive(Deserialize, utoipa::ToSchema)]
 pub struct VectorsQueryDto {
@@ -32,7 +33,7 @@ pub(crate) struct CreateVectorDto {
     #[schema(value_type = Object, nullable = true)]
     pub metadata: Option<MetadataFields>,
     #[schema(value_type = Object, nullable = true)]
-    pub sparse_values: Option<Vec<SparsePair>>,
+    pub geo_fence_values: Option<FxHashMap<String, String>>,
     #[schema(value_type = Object, nullable = true)]
     pub geo_fence_metadata: Option<GeoFenceMetadata>,
     #[schema(value_type = String, nullable = true)]
@@ -46,7 +47,7 @@ impl From<CreateVectorDto> for RawVectorEmbedding {
             document_id: dto.document_id,
             dense_values: dto.dense_values,
             metadata: dto.metadata,
-            sparse_values: dto.sparse_values,
+            geo_fence_values: dto.geo_fence_values,
             geo_fence_metadata: dto.geo_fence_metadata,
             text: dto.text,
         }
@@ -60,7 +61,7 @@ impl From<RawVectorEmbedding> for CreateVectorDto {
             document_id: emb.document_id,
             dense_values: emb.dense_values,
             metadata: emb.metadata,
-            sparse_values: emb.sparse_values,
+            geo_fence_values: emb.geo_fence_values,
             geo_fence_metadata: emb.geo_fence_metadata,
             text: emb.text,
         }
@@ -92,7 +93,7 @@ impl<'de> Deserialize<'de> for CreateVectorDto {
                 let mut document_id = None;
                 let mut dense_values = None;
                 let mut metadata = None;
-                let mut sparse_values_raw: Option<(Vec<u32>, Vec<f32>)> = None;
+                let mut geo_fence_values: Option<FxHashMap<String, String>> = None;
                 let mut geo_fence_metadata: Option<GeoFenceMetadata> = None;
                 let mut text = None;
 
@@ -122,21 +123,11 @@ impl<'de> Deserialize<'de> for CreateVectorDto {
                             }
                             metadata = map.next_value()?;
                         }
-                        "sparse_values" => {
-                            let values: Vec<f32> = map.next_value()?;
-                            if let Some((indices, _)) = sparse_values_raw.take() {
-                                sparse_values_raw = Some((indices, values));
-                            } else {
-                                sparse_values_raw = Some((Vec::new(), values));
+                        "geo_fence_values" => {
+                            if geo_fence_metadata.is_some() {
+                                return Err(de::Error::duplicate_field("geo_fence_values"));
                             }
-                        }
-                        "sparse_indices" => {
-                            let indices: Vec<u32> = map.next_value()?;
-                            if let Some((_, values)) = sparse_values_raw.take() {
-                                sparse_values_raw = Some((indices, values));
-                            } else {
-                                sparse_values_raw = Some((indices, Vec::new()));
-                            }
+                            geo_fence_values = map.next_value()?;
                         }
                         "geo_fence_metadata" => {
                             if geo_fence_metadata.is_some() {
@@ -158,8 +149,8 @@ impl<'de> Deserialize<'de> for CreateVectorDto {
                                     "document_id",
                                     "dense_values",
                                     "metadata",
-                                    "sparse_values",
-                                    "sparse_indices",
+                                    "geo_fence_values",
+                                    "geo_fence_metadata",
                                     "text",
                                 ],
                             ));
@@ -169,30 +160,12 @@ impl<'de> Deserialize<'de> for CreateVectorDto {
 
                 let id = id.ok_or_else(|| de::Error::missing_field("id"))?;
 
-                let sparse_values = match sparse_values_raw {
-                    Some((indices, values)) => {
-                        if indices.len() != values.len() {
-                            return Err(de::Error::custom(
-                                "length mismatch between sparse_indices and sprase_values",
-                            ));
-                        }
-                        Some(
-                            indices
-                                .into_iter()
-                                .zip(values)
-                                .map(|(dim, val)| SparsePair(dim, val))
-                                .collect(),
-                        )
-                    }
-                    None => None,
-                };
-
                 Ok(CreateVectorDto {
                     id,
                     document_id,
                     dense_values,
                     metadata,
-                    sparse_values,
+                    geo_fence_values,
                     geo_fence_metadata,
                     text,
                 })

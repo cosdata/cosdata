@@ -10,13 +10,13 @@ message Vector {
     string id = 1;
     optional string document_id = 2;
     repeated float dense_values = 3;
-    repeated SparsePair sparse_values = 4;
+    repeated GeoFenceField geo_fence_values = 4;
     optional string text = 5;
 }
 
-message SparsePair {
-    uint32 index = 1;
-    float value = 2;
+message GeoFenceField {
+    string name = 1;
+    string value = 2;
 }
 
 // Metadata types
@@ -84,7 +84,6 @@ message DenseVectorOptions {
 
 message SparseVectorOptions {
     bool enabled = 1;
-    bool geofencing = 2;
 }
 
 message TFIDFOptions {
@@ -259,8 +258,8 @@ message FindSimilarVectorsRequest {
     string collection_id = 1;
     oneof query {
         FindSimilarDenseVectorsQuery dense = 2;
-        FindSimilarSparseVectorsQuery sparse = 3;
-        FindSimilarTFIDFDocumentQuery tf_idf = 4;
+        FindSimilarGeoFencedDocumentsQuery geo_fence = 3;
+        FindSimilarTFIDFDocumentsQuery tf_idf = 4;
     }
 }
 
@@ -270,17 +269,25 @@ message FindSimilarDenseVectorsQuery {
     optional bool return_raw_text = 3;
 }
 
-message FindSimilarSparseVectorsQuery {
-    repeated SparsePair values = 1;
-    optional float early_terminate_threshold = 2;
-    optional uint64 top_k = 3;
-    optional bool return_raw_text = 4;
-}
-
-message FindSimilarTFIDFDocumentQuery {
+message FindSimilarTFIDFDocumentsQuery {
     string query = 1;
     optional uint64 top_k = 2;
     optional bool return_raw_text = 3;
+}
+
+message Coordinates {
+    float lat = 1;
+    float lon = 2;
+};
+
+message FindSimilarGeoFencedDocumentsQuery {
+    string query = 1;
+    optional uint64 top_k = 2;
+    optional bool return_raw_text = 3;
+    repeated string zones = 4;
+    bool sort_by_distance = 5;
+    Coordinates coordinates = 6;
+    optional float early_terminate_threshold = 7;
 }
 
 message SimilarVectorMatch {

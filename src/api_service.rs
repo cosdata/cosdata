@@ -1,5 +1,4 @@
 use crate::app_context::AppContext;
-use crate::indexes::geozone::GeoZoneIndex;
 use crate::indexes::hnsw::offset_counter::{HNSWIndexFileOffsetCounter, IndexFileId};
 use crate::indexes::hnsw::types::HNSWHyperParams;
 use crate::indexes::hnsw::{DenseInputEmbedding, HNSWIndex};
@@ -219,7 +218,6 @@ pub async fn init_inverted_index_for_collection(
     ctx: Arc<AppContext>,
     collection: &Collection,
     quantization_bits: u8,
-    sample_threshold: usize,
 ) -> Result<Arc<InvertedIndex>, WaCustomError> {
     let collection_path: Arc<Path> = collection.get_path();
     let index_path = collection_path.join("sparse_inverted_index");
@@ -227,31 +225,13 @@ pub async fn init_inverted_index_for_collection(
 
     let index = Arc::new(InvertedIndex::new(
         index_path.clone(),
+        *collection.current_version.read(),
         quantization_bits,
-        sample_threshold,
     )?);
 
     ctx.ain_env
         .collections_map
         .insert_inverted_index(collection, index.clone())?;
-    Ok(index)
-}
-
-/// creates an geofenced sparse index for a collection
-pub async fn init_geozone_index_for_collection(
-    ctx: Arc<AppContext>,
-    collection: &Collection,
-    quantization_bits: u8,
-) -> Result<Arc<GeoZoneIndex>, WaCustomError> {
-    let collection_path: Arc<Path> = collection.get_path();
-    let index_path = collection_path.join("sparse_geozone_index");
-    fs::create_dir_all(&index_path).map_err(|e| WaCustomError::FsError(e.to_string()))?;
-
-    let index = Arc::new(GeoZoneIndex::new(index_path.clone(), quantization_bits)?);
-
-    ctx.ain_env
-        .collections_map
-        .insert_geozone_index(collection, index.clone())?;
     Ok(index)
 }
 

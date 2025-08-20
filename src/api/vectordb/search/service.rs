@@ -3,9 +3,8 @@ use std::sync::Arc;
 
 use super::dtos::{
     BatchDenseSearchRequestDto, BatchSearchResponseDto, BatchSearchTFIDFDocumentsDto,
-    BatchSparseSearchRequestDto, DenseSearchRequestDto, FindSimilarTFIDFDocumentDto,
-    GeoFenceSearchRequestDto, HybridSearchRequestDto, SearchResponseDto, SearchResultItemDto,
-    SparseSearchRequestDto,
+    DenseSearchRequestDto, FindSimilarTFIDFDocumentDto, GeoFenceSearchRequestDto,
+    HybridSearchRequestDto, SearchResponseDto, SearchResultItemDto,
 };
 use super::error::SearchError;
 use super::repo;
@@ -20,12 +19,15 @@ pub(crate) async fn dense_search(
     Ok(SearchResponseDto {
         results: results
             .into_iter()
-            .map(|(id, document_id, score, text)| SearchResultItemDto {
-                id,
-                document_id,
-                score,
-                text,
-            })
+            .map(
+                |(id, document_id, score, text, matches)| SearchResultItemDto {
+                    id,
+                    document_id,
+                    score,
+                    text,
+                    matches,
+                },
+            )
             .collect(),
         warning,
     })
@@ -44,35 +46,17 @@ pub(crate) async fn batch_dense_search(
             .map(|results| SearchResponseDto {
                 results: results
                     .into_iter()
-                    .map(|(id, document_id, score, text)| SearchResultItemDto {
-                        id,
-                        document_id,
-                        score,
-                        text,
-                    })
+                    .map(
+                        |(id, document_id, score, text, matches)| SearchResultItemDto {
+                            id,
+                            document_id,
+                            score,
+                            text,
+                            matches,
+                        },
+                    )
                     .collect(),
                 warning: None,
-            })
-            .collect(),
-        warning,
-    })
-}
-
-pub(crate) async fn sparse_search(
-    ctx: Arc<AppContext>,
-    collection_id: &str,
-    request: SparseSearchRequestDto,
-) -> Result<SearchResponseDto, SearchError> {
-    let (results, warning) = repo::sparse_search(ctx, collection_id, request).await?;
-
-    Ok(SearchResponseDto {
-        results: results
-            .into_iter()
-            .map(|(id, document_id, score, text)| SearchResultItemDto {
-                id,
-                document_id,
-                score,
-                text,
             })
             .collect(),
         warning,
@@ -89,39 +73,15 @@ pub(crate) async fn geofence_search(
     Ok(SearchResponseDto {
         results: results
             .into_iter()
-            .map(|(id, document_id, score, text)| SearchResultItemDto {
-                id,
-                document_id,
-                score,
-                text,
-            })
-            .collect(),
-        warning,
-    })
-}
-
-pub(crate) async fn batch_sparse_search(
-    ctx: Arc<AppContext>,
-    collection_id: &str,
-    request: BatchSparseSearchRequestDto,
-) -> Result<BatchSearchResponseDto, SearchError> {
-    let (results_list, warning) = repo::batch_sparse_search(ctx, collection_id, request).await?;
-
-    Ok(BatchSearchResponseDto {
-        responses: results_list
-            .into_iter()
-            .map(|results| SearchResponseDto {
-                results: results
-                    .into_iter()
-                    .map(|(id, document_id, score, text)| SearchResultItemDto {
-                        id,
-                        document_id,
-                        score,
-                        text,
-                    })
-                    .collect(),
-                warning: None,
-            })
+            .map(
+                |(id, document_id, score, text, matches)| SearchResultItemDto {
+                    id,
+                    document_id,
+                    score,
+                    text,
+                    matches,
+                },
+            )
             .collect(),
         warning,
     })
@@ -137,12 +97,15 @@ pub(crate) async fn hybrid_search(
     Ok(SearchResponseDto {
         results: results
             .into_iter()
-            .map(|(id, document_id, score, text)| SearchResultItemDto {
-                id,
-                document_id,
-                score,
-                text,
-            })
+            .map(
+                |(id, document_id, score, text, matches)| SearchResultItemDto {
+                    id,
+                    document_id,
+                    score,
+                    text,
+                    matches,
+                },
+            )
             .collect(),
         warning,
     })
@@ -158,12 +121,15 @@ pub(crate) async fn tf_idf_search(
     Ok(SearchResponseDto {
         results: results
             .into_iter()
-            .map(|(id, document_id, score, text)| SearchResultItemDto {
-                id,
-                document_id,
-                score,
-                text,
-            })
+            .map(
+                |(id, document_id, score, text, matches)| SearchResultItemDto {
+                    id,
+                    document_id,
+                    score,
+                    text,
+                    matches,
+                },
+            )
             .collect(),
         warning,
     })
@@ -182,12 +148,15 @@ pub(crate) async fn batch_tf_idf_search(
             .map(|results| SearchResponseDto {
                 results: results
                     .into_iter()
-                    .map(|(id, document_id, score, text)| SearchResultItemDto {
-                        id,
-                        document_id,
-                        score,
-                        text,
-                    })
+                    .map(
+                        |(id, document_id, score, text, matches)| SearchResultItemDto {
+                            id,
+                            document_id,
+                            score,
+                            text,
+                            matches,
+                        },
+                    )
                     .collect(),
                 warning: None,
             })

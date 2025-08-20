@@ -1,4 +1,5 @@
 use std::{
+    hash::{DefaultHasher, Hash, Hasher},
     marker::PhantomData,
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -6,7 +7,7 @@ use std::{
     },
 };
 
-use parking_lot::{RwLock, RwLockReadGuard};
+use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use super::{
     atomic_array::AtomicArray,
@@ -21,6 +22,14 @@ use super::{
 
 pub trait TreeMapKey: std::hash::Hash + Eq {
     fn key(&self) -> u64;
+}
+
+impl TreeMapKey for String {
+    fn key(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.hash(&mut hasher);
+        hasher.finish()
+    }
 }
 
 pub struct TreeMap<K, V> {
@@ -357,6 +366,10 @@ impl<T: VersionedVecItem> TreeMapVecNode<T> {
     pub fn get(&self, quotient: u64) -> Option<RwLockReadGuard<'_, VersionedVec<T>>> {
         self.quotients.get(quotient)
     }
+
+    pub fn get_mut(&self, quotient: u64) -> Option<RwLockWriteGuard<'_, VersionedVec<T>>> {
+        self.quotients.get_mut(quotient)
+    }
 }
 
 impl<T> Default for QuotientsMap<T> {
@@ -459,6 +472,15 @@ impl<T: VersionedVecItem> QuotientsMapVec<T> {
                 RwLockReadGuard<'_, VersionedVec<T>>,
                 RwLockReadGuard<'_, VersionedVec<T>>,
             >(q.value.read())
+        })
+    }
+
+    fn get_mut(&self, quotient: u64) -> Option<RwLockWriteGuard<'_, VersionedVec<T>>> {
+        self.map.lookup(&quotient).map(|q| unsafe {
+            std::mem::transmute::<
+                RwLockWriteGuard<'_, VersionedVec<T>>,
+                RwLockWriteGuard<'_, VersionedVec<T>>,
+            >(q.value.write())
         })
     }
 }
@@ -619,6 +641,14 @@ impl<K: TreeMapKey, V: VersionedVecItem> TreeMapVec<K, V> {
         let path = calculate_path(node_pos, 0);
         let node = self.root.find_or_create_node(&path);
         node.get(key)
+    }
+
+    pub fn get_mut(&self, key: &K) -> Option<RwLockWriteGuard<'_, VersionedVec<V>>> {
+        let key = key.key();
+        let node_pos = (key % 65536) as u32;
+        let path = calculate_path(node_pos, 0);
+        let node = self.root.find_or_create_node(&path);
+        node.get_mut(key)
     }
 
     pub fn serialize(&self) -> Result<(), BufIoError> {

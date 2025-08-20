@@ -273,6 +273,7 @@ impl IndexOps for TFIDFIndex {
                     None,
                     result.score,
                     None,
+                    None,
                 )
             })
             .collect())

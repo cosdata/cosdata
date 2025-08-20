@@ -41,7 +41,6 @@ crate::cfg_grpc! {
 
             let sparse_vector = SparseVectorOptions {
                 enabled: req.sparse_vector.as_ref().is_some_and(|d| d.enabled),
-                geofencing: req.sparse_vector.as_ref().is_some_and(|d| d.geofencing),
             };
 
             let tf_idf_options = TFIDFOptions {

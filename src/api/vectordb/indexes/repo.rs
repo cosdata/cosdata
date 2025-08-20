@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use crate::{
     api_service::{
-        init_geozone_index_for_collection, init_hnsw_index_for_collection,
-        init_inverted_index_for_collection, init_tf_idf_index_for_collection,
+        init_hnsw_index_for_collection, init_inverted_index_for_collection,
+        init_tf_idf_index_for_collection,
     },
     app_context::AppContext,
     models::types::{DistanceMetric, QuantizationMetric},
@@ -77,7 +77,6 @@ pub(crate) async fn create_sparse_index(
     collection_name: String,
     _name: String,
     quantization: SparseIndexQuantization,
-    sample_threshold: usize,
 ) -> Result<(), IndexesError> {
     let collection = ctx
         .ain_env
@@ -87,28 +86,13 @@ pub(crate) async fn create_sparse_index(
             IndexesError::NotFound(format!("Collection '{}' not found", collection_name))
         })?;
 
-    if collection.meta.sparse_vector.geofencing {
-        if collection.get_geozone_index().is_some() {
-            return Err(IndexesError::IndexAlreadyExists("sparse".to_string()));
-        }
+    if collection.get_inverted_index().is_some() {
+        return Err(IndexesError::IndexAlreadyExists("sparse".to_string()));
+    }
 
-        init_geozone_index_for_collection(ctx.clone(), &collection, quantization.into_bits())
-            .await
-            .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;
-    } else {
-        if collection.get_inverted_index().is_some() {
-            return Err(IndexesError::IndexAlreadyExists("sparse".to_string()));
-        }
-
-        init_inverted_index_for_collection(
-            ctx.clone(),
-            &collection,
-            quantization.into_bits(),
-            sample_threshold,
-        )
+    init_inverted_index_for_collection(ctx.clone(), &collection, quantization.into_bits())
         .await
         .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;
-    }
 
     Ok(())
 }
@@ -180,13 +164,11 @@ pub(crate) async fn get_index(
     }
 
     if let Some(inverted) = collection.get_inverted_index() {
-        let values_upper_bound = *inverted.values_upper_bound.read().unwrap();
         indexes_array.push(serde_json::json!({
             "type": "sparse",
             "name": collection_name,
             "algorithm": "InvertedIndex",
             "quantization_bits": inverted.root.root.quantization_bits,
-            "values_upper_bound": values_upper_bound,
         }));
     }
 

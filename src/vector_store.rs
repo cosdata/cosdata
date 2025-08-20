@@ -435,9 +435,10 @@ pub fn finalize_ann_results(
             } else {
                 None
             },
+            None,
         ));
     }
-    results.sort_unstable_by(|(_, _, _, a, _), (_, _, _, b, _)| b.total_cmp(a));
+    results.sort_unstable_by(|(_, _, _, a, _, _), (_, _, _, b, _, _)| b.total_cmp(a));
     if let Some(k) = top_k {
         results.truncate(k);
     }

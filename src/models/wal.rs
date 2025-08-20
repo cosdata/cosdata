@@ -10,11 +10,9 @@ use std::{
 };
 
 use parking_lot::Mutex;
+use rustc_hash::FxHashMap;
 
-use crate::{
-    indexes::{geozone::ZoneId, inverted::types::SparsePair},
-    metadata::FieldValue,
-};
+use crate::{indexes::inverted::ZoneId, metadata::FieldValue};
 
 use super::{
     buffered_io::{BufIoError, FilelessBufferManager},
@@ -182,7 +180,7 @@ impl WALFile {
                         flags |= 1 << 2;
                     }
 
-                    if vector.sparse_values.is_some() {
+                    if vector.geo_fence_values.is_some() {
                         flags |= 1 << 3;
                     }
 
@@ -229,11 +227,13 @@ impl WALFile {
                         }
                     }
 
-                    if let Some(sparse_values) = &vector.sparse_values {
-                        write_len(&mut buf, sparse_values.len() as u32);
-                        for pair in sparse_values {
-                            buf.extend(pair.0.to_le_bytes());
-                            buf.extend(pair.1.to_le_bytes());
+                    if let Some(geo_fence_values) = &vector.geo_fence_values {
+                        write_len(&mut buf, geo_fence_values.len() as u32);
+                        for (field, value) in geo_fence_values {
+                            write_len(&mut buf, field.len() as u32);
+                            buf.extend(field.as_bytes());
+                            write_len(&mut buf, value.len() as u32);
+                            buf.extend(value.as_bytes());
                         }
                     }
 
@@ -345,18 +345,17 @@ impl WALFile {
                     None
                 };
 
-                let sparse_values = if (flags & (1 << 3)) != 0 {
-                    let sparse_values_len = read_len(&self.bufman, cursor)? as usize;
-                    let mut sparse_values = Vec::with_capacity(sparse_values_len);
+                let geo_fence_values = if (flags & (1 << 3)) != 0 {
+                    let geo_fence_values_len = read_len(&self.bufman, cursor)? as usize;
+                    let mut geo_fence_values = FxHashMap::default();
 
-                    for _ in 0..sparse_values_len {
-                        let index = self.bufman.read_u32_with_cursor(cursor)?;
-                        let value = self.bufman.read_f32_with_cursor(cursor)?;
-                        let pair = SparsePair(index, value);
-                        sparse_values.push(pair);
+                    for _ in 0..geo_fence_values_len {
+                        let field = read_string(&self.bufman, cursor)?;
+                        let value = read_string(&self.bufman, cursor)?;
+                        geo_fence_values.insert(field, value);
                     }
 
-                    Some(sparse_values)
+                    Some(geo_fence_values)
                 } else {
                     None
                 };
@@ -388,7 +387,7 @@ impl WALFile {
                     document_id,
                     dense_values,
                     metadata,
-                    sparse_values,
+                    geo_fence_values,
                     geo_fence_metadata,
                     text,
                 };
@@ -405,7 +404,6 @@ impl WALFile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::indexes::inverted::types::SparsePair;
     use crate::metadata::FieldValue;
     use rand::{distributions::Alphanumeric, thread_rng, Rng};
     use std::collections::HashMap;
@@ -423,7 +421,7 @@ mod tests {
         let mut rng = thread_rng();
         let dense_len = rng.gen_range(1..8);
         let metadata_len = rng.gen_range(1..4);
-        let sparse_len = rng.gen_range(0..4);
+        let geo_fence_values_len = rng.gen_range(4..10);
 
         let mut metadata = HashMap::new();
         for _ in 0..metadata_len {
@@ -436,16 +434,21 @@ mod tests {
             metadata.insert(key, val);
         }
 
+        let mut geo_fence_values = FxHashMap::default();
+
+        for _ in 0..geo_fence_values_len {
+            let field = random_string(5);
+            let value = random_string(5);
+
+            geo_fence_values.insert(field, value);
+        }
+
         RawVectorEmbedding {
             id: random_string(8).into(),
             document_id: Some(random_string(12).into()),
             dense_values: Some((0..dense_len).map(|_| rng.gen()).collect()),
             metadata: Some(metadata),
-            sparse_values: Some(
-                (0..sparse_len)
-                    .map(|_| SparsePair(rng.gen(), rng.gen()))
-                    .collect(),
-            ),
+            geo_fence_values: Some(geo_fence_values),
             geo_fence_metadata: Some(GeoFenceMetadata {
                 weight: rng.gen_range(0.0..1.0),
                 coordinates: (rng.gen(), rng.gen()),

@@ -12,16 +12,15 @@ use super::versioning::{VersionControl, VersionNumber, VersionSource};
 use super::wal::VectorOp;
 use crate::app_context::AppContext;
 use crate::config_loader::Config;
-use crate::indexes::geozone::{GeoZoneIndex, ZoneId};
 use crate::indexes::hnsw::{DenseInputEmbedding, HNSWIndex};
-use crate::indexes::inverted::types::SparsePair;
-use crate::indexes::inverted::{InvertedIndex, SparseInputEmbedding};
+use crate::indexes::inverted::{GeoFenceInputEmbedding, InvertedIndex, ZoneId};
 use crate::indexes::tf_idf::{TFIDFIndex, TFIDFInputEmbedding};
 use crate::indexes::IndexOps;
 use crate::metadata::{MetadataFields, MetadataSchema};
 use chrono::{DateTime, TimeZone, Utc};
 use lmdb::{Database, Environment, Transaction, WriteFlags};
 use parking_lot::RwLock;
+use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use serde_cbor::to_vec;
 use siphasher::sip::SipHasher24;
@@ -40,8 +39,6 @@ pub struct DenseVectorOptions {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SparseVectorOptions {
     pub enabled: bool,
-    #[serde(default)]
-    pub geofencing: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -62,13 +59,13 @@ pub struct GeoFenceMetadata {
     pub zone: ZoneId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RawVectorEmbedding {
     pub id: VectorId,
     pub document_id: Option<DocumentId>,
     pub dense_values: Option<Vec<f32>>,
     pub metadata: Option<MetadataFields>,
-    pub sparse_values: Option<Vec<SparsePair>>,
+    pub geo_fence_values: Option<FxHashMap<String, String>>,
     pub geo_fence_metadata: Option<GeoFenceMetadata>,
     pub text: Option<String>,
 }
@@ -126,7 +123,6 @@ pub struct Collection {
     pub hnsw_index: RwLock<Option<Arc<HNSWIndex>>>,
     pub inverted_index: RwLock<Option<Arc<InvertedIndex>>>,
     pub tf_idf_index: RwLock<Option<Arc<TFIDFIndex>>>,
-    pub geozone_index: RwLock<Option<Arc<GeoZoneIndex>>>,
     // this field is actually NOT optional, the only reason it is wrapped in
     // `Option` is to allow us to create `Collection` first without the
     // indexing manager, because `IndexingManager`'s constructor also requires
@@ -263,7 +259,6 @@ impl Collection {
             hnsw_index: RwLock::new(None),
             inverted_index: RwLock::new(None),
             tf_idf_index: RwLock::new(None),
-            geozone_index: RwLock::new(None),
             indexing_manager: RwLock::new(None),
             is_indexing: AtomicBool::new(false),
         });
@@ -364,10 +359,6 @@ impl Collection {
         self.inverted_index.read().clone()
     }
 
-    pub fn get_geozone_index(&self) -> Option<Arc<GeoZoneIndex>> {
-        self.geozone_index.read().clone()
-    }
-
     pub fn get_tf_idf_index(&self) -> Option<Arc<TFIDFIndex>> {
         self.tf_idf_index.read().clone()
     }
@@ -432,15 +423,14 @@ impl Collection {
                 }
             }
 
-            if let Some(sparse_values) = embedding.sparse_values {
+            if let Some(geo_fence_values) = embedding.geo_fence_values {
                 if let Some(inverted_index) = self.get_inverted_index() {
-                    let sparse_emb =
-                        SparseInputEmbedding(InternalId::from(u32::MAX), sparse_values);
+                    let sparse_emb = GeoFenceInputEmbedding(
+                        InternalId::from(u32::MAX),
+                        RawVectorEmbedding::default(),
+                        geo_fence_values,
+                    );
                     inverted_index.validate_embedding(sparse_emb)?;
-                } else if let Some(geozone_index) = self.get_geozone_index() {
-                    let sparse_emb =
-                        SparseInputEmbedding(InternalId::from(u32::MAX), sparse_values);
-                    geozone_index.validate_embedding(sparse_emb)?;
                 }
             }
 
@@ -478,7 +468,7 @@ impl Collection {
             Vec<_>,
             Vec<_>,
             Vec<_>,
-        ) = embeddings.into_iter().enumerate().fold(
+        ) = embeddings.into_iter().enumerate().try_fold(
             (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
             |mut acc, (i, mut embedding)| {
                 let RawVectorEmbedding {
@@ -486,7 +476,7 @@ impl Collection {
                     document_id,
                     dense_values,
                     metadata,
-                    sparse_values,
+                    geo_fence_values,
                     geo_fence_metadata,
                     text,
                 } = embedding.clone();
@@ -497,14 +487,36 @@ impl Collection {
                     acc.0
                         .push(DenseInputEmbedding(internal_id, values, metadata, false));
                 }
-                if let Some(values) = sparse_values {
+                if let Some(values) = geo_fence_values {
                     if let Some(geo_fence_metadata) = geo_fence_metadata {
-                        acc.1.push((
-                            geo_fence_metadata,
-                            SparseInputEmbedding(internal_id, values),
-                        ));
+                        acc.1.push((geo_fence_metadata, internal_id, values));
                     } else {
-                        acc.2.push(SparseInputEmbedding(internal_id, values));
+                        let Some(document_id) = &document_id else {
+                            return Err(WaCustomError::InvalidData(
+                                "`document_id` not present for geofence product".to_string(),
+                            ));
+                        };
+                        let document_id = VectorId::from((**document_id).clone());
+                        let Some(internal_document_id) =
+                            self.external_to_internal_map.get_latest(&document_id)
+                        else {
+                            return Err(WaCustomError::InvalidData(
+                                "Invalid `document_id` for geofence document".to_string(),
+                            ));
+                        };
+                        let Some(document) = self
+                            .internal_to_external_map
+                            .get_latest(internal_document_id)
+                        else {
+                            return Err(WaCustomError::InvalidData(
+                                "Invalid `document_id` for geofence document".to_string(),
+                            ));
+                        };
+                        acc.2.push(GeoFenceInputEmbedding(
+                            internal_id,
+                            document.clone(),
+                            values,
+                        ));
                     }
                 }
                 if let Some(text) = text {
@@ -525,9 +537,9 @@ impl Collection {
                         .push(version, &document_id, internal_id);
                 }
 
-                acc
+                Ok(acc)
             },
-        );
+        )?;
 
         if !dense_embs.is_empty() {
             if let Some(hnsw_index) = &*self.hnsw_index.read() {
@@ -536,13 +548,13 @@ impl Collection {
         }
 
         if !geo_fenced_documents.is_empty() {
-            if let Some(geozone_index) = &*self.geozone_index.read() {
-                for (metadata, sparse_emb) in geo_fenced_documents {
+            if let Some(geozone_index) = &*self.inverted_index.read() {
+                for (metadata, id, values) in geo_fenced_documents {
                     geozone_index.create_geofenced_document(
-                        sparse_emb.0,
+                        id,
                         metadata.zone,
                         metadata.weight,
-                        sparse_emb.1,
+                        values,
                         metadata.coordinates,
                         version,
                     )?;
@@ -553,8 +565,6 @@ impl Collection {
         if !sparse_embs.is_empty() {
             if let Some(inverted_index) = &*self.inverted_index.read() {
                 inverted_index.run_upload(self, sparse_embs, version, config)?;
-            } else if let Some(geozone_index) = &*self.geozone_index.read() {
-                geozone_index.run_upload(self, sparse_embs, version, config)?;
             }
         }
 

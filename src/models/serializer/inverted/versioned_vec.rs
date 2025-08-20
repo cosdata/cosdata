@@ -61,7 +61,7 @@ impl<T: VersionedVecItem> InvertedIndexSerialize for VersionedVec<T> {
         let cursor = bufman.open_cursor()?;
 
         for el in &self.list {
-            el.serialize(&mut buf);
+            el.serialize(&bufman, &mut buf)?;
         }
 
         let offset = bufman.write_to_end_of_file(cursor, &buf)? as u32;
@@ -104,7 +104,7 @@ impl<T: VersionedVecItem> InvertedIndexSerialize for VersionedVec<T> {
         // Collect delete operations
         let mut deletes = Vec::new();
         for (_, list, _) in version_data.values() {
-            for &item in list {
+            for item in list {
                 if item.is_delete_marker() {
                     let (target_version, target_index) = item.get_delete_marker_fields();
                     deletes.push((target_version, target_index as usize));

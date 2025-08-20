@@ -5,11 +5,10 @@ use rustc_hash::FxHashMap;
 use super::dtos;
 use super::error::SearchError;
 use crate::app_context::AppContext;
-use crate::indexes::geozone::GeoZoneSearchOptions;
 use crate::indexes::hnsw::{DenseSearchInput, DenseSearchOptions};
 use crate::indexes::inverted::{SparseSearchInput, SparseSearchOptions};
 use crate::indexes::tf_idf::{TFIDFSearchInput, TFIDFSearchOptions};
-use crate::indexes::{IndexOps, SearchResult};
+use crate::indexes::{IndexOps, Matches, SearchResult};
 use crate::models::types::{DocumentId, VectorId};
 
 pub(crate) async fn dense_search(
@@ -88,43 +87,6 @@ pub(crate) async fn batch_dense_search(
     ))
 }
 
-pub(crate) async fn sparse_search(
-    ctx: Arc<AppContext>,
-    collection_id: &str,
-    request: dtos::SparseSearchRequestDto,
-) -> Result<(Vec<SearchResult>, Option<String>), SearchError> {
-    let collection = ctx
-        .ain_env
-        .collections_map
-        .get_collection(collection_id)
-        .ok_or_else(|| SearchError::CollectionNotFound(collection_id.to_string()))?;
-
-    let inverted_index = collection.get_inverted_index().ok_or_else(|| {
-        SearchError::IndexNotFound(format!("Sparse index for collection '{}'", collection_id))
-    })?;
-
-    let warning = collection.is_indexing().then(|| {
-        "Embeddings are currently being indexed; some results may be temporarily unavailable."
-            .to_string()
-    });
-
-    Ok((
-        inverted_index
-            .search(
-                &collection,
-                SparseSearchInput(request.query_terms),
-                &SparseSearchOptions {
-                    top_k: request.top_k,
-                    early_terminate_threshold: request.early_terminate_threshold,
-                },
-                &ctx.config,
-                request.return_raw_text,
-            )
-            .map_err(SearchError::WaCustom)?,
-        warning,
-    ))
-}
-
 pub(crate) async fn geofence_search(
     ctx: Arc<AppContext>,
     collection_id: &str,
@@ -136,48 +98,8 @@ pub(crate) async fn geofence_search(
         .get_collection(collection_id)
         .ok_or_else(|| SearchError::CollectionNotFound(collection_id.to_string()))?;
 
-    let geozone_index = collection.get_geozone_index().ok_or_else(|| {
-        SearchError::IndexNotFound(format!("geofence index for collection '{}'", collection_id))
-    })?;
-
-    let warning = collection.is_indexing().then(|| {
-        "Embeddings are currently being indexed; some results may be temporarily unavailable."
-            .to_string()
-    });
-
-    Ok((
-        geozone_index
-            .search(
-                &collection,
-                SparseSearchInput(request.query_terms),
-                &GeoZoneSearchOptions {
-                    sort_by_distance: request.sort_by_distance,
-                    coordinates: request.coordinates,
-                    zones: request.zones,
-                    top_k: request.top_k,
-                    early_terminate_threshold: request.early_terminate_threshold,
-                },
-                &ctx.config,
-                request.return_raw_text,
-            )
-            .map_err(SearchError::WaCustom)?,
-        warning,
-    ))
-}
-
-pub(crate) async fn batch_sparse_search(
-    ctx: Arc<AppContext>,
-    collection_id: &str,
-    request: dtos::BatchSparseSearchRequestDto,
-) -> Result<(Vec<Vec<SearchResult>>, Option<String>), SearchError> {
-    let collection = ctx
-        .ain_env
-        .collections_map
-        .get_collection(collection_id)
-        .ok_or_else(|| SearchError::CollectionNotFound(collection_id.to_string()))?;
-
     let inverted_index = collection.get_inverted_index().ok_or_else(|| {
-        SearchError::IndexNotFound(format!("Sparse index for collection '{}'", collection_id))
+        SearchError::IndexNotFound(format!("inverted index for collection '{}'", collection_id))
     })?;
 
     let warning = collection.is_indexing().then(|| {
@@ -187,14 +109,13 @@ pub(crate) async fn batch_sparse_search(
 
     Ok((
         inverted_index
-            .batch_search(
+            .search(
                 &collection,
-                request
-                    .query_terms_list
-                    .into_iter()
-                    .map(SparseSearchInput)
-                    .collect(),
+                SparseSearchInput(request.query),
                 &SparseSearchOptions {
+                    sort_by_distance: request.sort_by_distance,
+                    coordinates: request.coordinates,
+                    zones: request.zones,
                     top_k: request.top_k,
                     early_terminate_threshold: request.early_terminate_threshold,
                 },
@@ -244,18 +165,7 @@ pub(crate) async fn hybrid_search(
                     request.return_raw_text,
                 )
                 .map_err(SearchError::WaCustom)?;
-            let sparse_results = inverted_index
-                .search(
-                    &collection,
-                    SparseSearchInput(query_terms),
-                    &SparseSearchOptions {
-                        top_k: Some(request.top_k * 3),
-                        early_terminate_threshold: sparse_early_terminate_threshold,
-                    },
-                    &ctx.config,
-                    request.return_raw_text,
-                )
-                .map_err(SearchError::WaCustom)?;
+            let sparse_results = todo!();
 
             (dense_results, sparse_results)
         }
@@ -316,18 +226,7 @@ pub(crate) async fn hybrid_search(
                 ))
             })?;
 
-            let sparse_results = inverted_index
-                .search(
-                    &collection,
-                    SparseSearchInput(query_terms),
-                    &SparseSearchOptions {
-                        top_k: Some(request.top_k * 3),
-                        early_terminate_threshold: sparse_early_terminate_threshold,
-                    },
-                    &ctx.config,
-                    request.return_raw_text,
-                )
-                .map_err(SearchError::WaCustom)?;
+            let sparse_results = todo!();
             let tf_idf_results = tf_idf_index
                 .search(
                     &collection,
@@ -349,29 +248,41 @@ pub(crate) async fn hybrid_search(
             .to_string()
     });
 
-    let mut final_scores: FxHashMap<VectorId, (f32, Option<DocumentId>, Option<String>)> =
-        FxHashMap::default();
+    let mut final_scores: FxHashMap<
+        VectorId,
+        (f32, Option<DocumentId>, Option<String>, Option<Matches>),
+    > = FxHashMap::default();
     let k = request.fusion_constant_k;
     if k < 0.0 {
         log::warn!("RRF fusion_constant_k ({}) is non-positive.", k);
     }
 
-    for (rank, (vector_id, document_id, _score, text)) in results_pair.0.into_iter().enumerate() {
+    for (rank, (vector_id, document_id, _score, text, matches)) in
+        results_pair.0.into_iter().enumerate()
+    {
         let score = 1.0 / (rank as f32 + k + f32::EPSILON);
-        final_scores.insert(vector_id, (score, document_id, text));
+        final_scores.insert(vector_id, (score, document_id, text, matches));
     }
 
-    for (rank, (vector_id, document_id, _score, text)) in results_pair.1.into_iter().enumerate() {
+    for (rank, (vector_id, document_id, _score, text, matches)) in
+        results_pair.1.into_iter().enumerate()
+    {
         let score = 1.0 / (rank as f32 + k + f32::EPSILON);
         final_scores
             .entry(vector_id)
-            .or_insert((0.0, document_id, text))
+            .or_insert((0.0, document_id, text, matches))
             .0 += score;
     }
 
-    let mut final_results: Vec<(VectorId, Option<DocumentId>, f32, Option<String>)> = final_scores
+    let mut final_results: Vec<(
+        VectorId,
+        Option<DocumentId>,
+        f32,
+        Option<String>,
+        Option<Matches>,
+    )> = final_scores
         .into_iter()
-        .map(|(id, (score, document_id, text))| (id, document_id, score, text))
+        .map(|(id, (score, document_id, text, matches))| (id, document_id, score, text, matches))
         .collect();
 
     if final_results.len() > request.top_k {
