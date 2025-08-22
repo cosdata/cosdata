@@ -2,9 +2,9 @@ use crate::app_context::AppContext;
 use std::sync::Arc;
 
 use super::dtos::{
-    BatchDenseSearchRequestDto, BatchSearchResponseDto, BatchSearchTFIDFDocumentsDto,
-    DenseSearchRequestDto, FindSimilarTFIDFDocumentDto, GeoFenceSearchRequestDto,
-    HybridSearchRequestDto, SearchResponseDto, SearchResultItemDto,
+    BatchDenseSearchRequestDto, BatchGeoFenceSearchRequestDto, BatchSearchResponseDto,
+    BatchSearchTFIDFDocumentsDto, DenseSearchRequestDto, FindSimilarTFIDFDocumentDto,
+    GeoFenceSearchRequestDto, HybridSearchRequestDto, SearchResponseDto, SearchResultItemDto,
 };
 use super::error::SearchError;
 use super::repo;
@@ -82,6 +82,36 @@ pub(crate) async fn geofence_search(
                     matches,
                 },
             )
+            .collect(),
+        warning,
+    })
+}
+
+pub(crate) async fn batch_geofence_search(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    request: BatchGeoFenceSearchRequestDto,
+) -> Result<BatchSearchResponseDto, SearchError> {
+    let (results_list, warning) = repo::batch_geofence_search(ctx, collection_id, request).await?;
+
+    Ok(BatchSearchResponseDto {
+        responses: results_list
+            .into_iter()
+            .map(|results| SearchResponseDto {
+                results: results
+                    .into_iter()
+                    .map(
+                        |(id, document_id, score, text, matches)| SearchResultItemDto {
+                            id,
+                            document_id,
+                            score,
+                            text,
+                            matches,
+                        },
+                    )
+                    .collect(),
+                warning: None,
+            })
             .collect(),
         warning,
     })

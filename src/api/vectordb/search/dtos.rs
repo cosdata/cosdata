@@ -53,6 +53,20 @@ pub(crate) struct GeoFenceSearchRequestDto {
 }
 
 #[derive(Deserialize, Debug, utoipa::ToSchema)]
+pub(crate) struct BatchGeoFenceSearchRequestDto {
+    pub queries: Vec<String>,
+    pub top_k: Option<usize>,
+    #[schema(value_type = Vec<String>)]
+    pub zones: Vec<ZoneId>,
+    #[serde(default)]
+    pub sort_by_distance: bool,
+    pub coordinates: (f32, f32),
+    pub early_terminate_threshold: Option<f32>,
+    #[serde(default)]
+    pub return_raw_text: bool,
+}
+
+#[derive(Deserialize, Debug, utoipa::ToSchema)]
 pub(crate) struct HybridSearchRequestDto {
     #[serde(flatten)]
     pub query: HybridSearchQuery,

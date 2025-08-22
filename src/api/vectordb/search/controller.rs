@@ -4,9 +4,9 @@ use crate::app_context::AppContext;
 use crate::models::collection_cache::CollectionCacheExt;
 
 use super::dtos::{
-    BatchDenseSearchRequestDto, BatchSearchResponseDto, BatchSearchTFIDFDocumentsDto,
-    DenseSearchRequestDto, FindSimilarTFIDFDocumentDto, GeoFenceSearchRequestDto,
-    HybridSearchRequestDto, SearchResponseDto,
+    BatchDenseSearchRequestDto, BatchGeoFenceSearchRequestDto, BatchSearchResponseDto,
+    BatchSearchTFIDFDocumentsDto, DenseSearchRequestDto, FindSimilarTFIDFDocumentDto,
+    GeoFenceSearchRequestDto, HybridSearchRequestDto, SearchResponseDto,
 };
 use super::error::SearchError;
 
@@ -105,6 +105,38 @@ pub(crate) async fn geofence_search(
         .map_err(|e| SearchError::InternalServerError(format!("Cache update error: {}", e)))?;
 
     let results = service::geofence_search(ctx.into_inner(), &collection_id, body).await?;
+    Ok(HttpResponse::Ok().json(results))
+}
+
+/// Batch geofence search
+#[utoipa::path(
+    post,
+    path = "/vectordb/collections/{collection_id}/search/batch-geofence",
+    tag = "search",
+    params(
+        ("collection_id" = String, Path, description = "Collection identifier")
+    ),
+    request_body = BatchGeoFenceSearchRequestDto,
+    responses(
+        (status = 200, description = "Batch search successfully completed", body = BatchSearchResponseDto),
+        (status = 404, description = "Collection not found", body = String),
+        (status = 400, description = "Invalid filter or other request error", body = String),
+        (status = 500, description = "Internal server error", body = String)
+    )
+)]
+pub(crate) async fn batch_geofence_search(
+    path: web::Path<String>,
+    web::Json(body): web::Json<BatchGeoFenceSearchRequestDto>,
+    ctx: web::Data<AppContext>,
+) -> Result<HttpResponse, SearchError> {
+    let collection_id = path.into_inner();
+
+    // Update cache usage
+    ctx.update_collection_for_query(&collection_id)
+        .map_err(|e| SearchError::InternalServerError(format!("Cache update error: {}", e)))?;
+
+    let results = service::batch_geofence_search(ctx.into_inner(), &collection_id, body).await?;
+
     Ok(HttpResponse::Ok().json(results))
 }
 

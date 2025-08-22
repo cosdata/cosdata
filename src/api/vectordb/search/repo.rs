@@ -127,6 +127,46 @@ pub(crate) async fn geofence_search(
     ))
 }
 
+pub(crate) async fn batch_geofence_search(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    request: dtos::BatchGeoFenceSearchRequestDto,
+) -> Result<(Vec<Vec<SearchResult>>, Option<String>), SearchError> {
+    let collection = ctx
+        .ain_env
+        .collections_map
+        .get_collection(collection_id)
+        .ok_or_else(|| SearchError::CollectionNotFound(collection_id.to_string()))?;
+
+    let inverted_index = collection.get_inverted_index().ok_or_else(|| {
+        SearchError::IndexNotFound(format!("sparse index for collection '{}'", collection_id))
+    })?;
+
+    let warning = collection.is_indexing().then(|| {
+        "Embeddings are currently being indexed; some results may be temporarily unavailable."
+            .to_string()
+    });
+
+    Ok((
+        inverted_index
+            .batch_search(
+                &collection,
+                request.queries.into_iter().map(SparseSearchInput).collect(),
+                &SparseSearchOptions {
+                    sort_by_distance: request.sort_by_distance,
+                    coordinates: request.coordinates,
+                    zones: request.zones,
+                    top_k: request.top_k,
+                    early_terminate_threshold: request.early_terminate_threshold,
+                },
+                &ctx.config,
+                request.return_raw_text,
+            )
+            .map_err(SearchError::WaCustom)?,
+        warning,
+    ))
+}
+
 pub(crate) async fn hybrid_search(
     ctx: Arc<AppContext>,
     collection_id: &str,

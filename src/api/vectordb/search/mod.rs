@@ -1,7 +1,7 @@
 use actix_web::{web, Scope};
 use controller::{
-    batch_dense_search, batch_tf_idf_search, dense_search, geofence_search, hybrid_search,
-    tf_idf_search,
+    batch_dense_search, batch_geofence_search, batch_tf_idf_search, dense_search, geofence_search,
+    hybrid_search, tf_idf_search,
 };
 
 pub mod controller;
@@ -15,6 +15,7 @@ pub(crate) fn search_module() -> Scope {
         .route("/dense", web::post().to(dense_search))
         .route("/batch-dense", web::post().to(batch_dense_search))
         .route("/geofence", web::post().to(geofence_search))
+        .route("/batch-geofence", web::post().to(batch_geofence_search))
         .route("/tf-idf", web::post().to(tf_idf_search))
         .route("/batch-tf-idf", web::post().to(batch_tf_idf_search))
         .route("/hybrid", web::post().to(hybrid_search))
