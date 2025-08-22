@@ -1163,11 +1163,12 @@ impl CollectionsMap {
         let bufman = fields_bufmans.get(VersionNumber::from(0))?;
         let cursor = bufman.open_cursor()?;
         let offset = bufman.read_u32_with_cursor(cursor)?;
+        let version = bufman.read_u32_with_cursor(cursor)?;
         let fields = VersionedVec::deserialize(
             &fields_values_dim_bufman,
             &fields_bufmans,
             FileOffset(offset),
-            VersionNumber::from(0),
+            VersionNumber::from(version),
         )?;
 
         let inverted_index = InvertedIndex {

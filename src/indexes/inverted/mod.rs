@@ -365,14 +365,15 @@ impl IndexOps for InvertedIndex {
         let bufman = self.fields_bufmans.get(VersionNumber::from(0))?;
         let cursor = bufman.open_cursor()?;
         bufman.update_u32_with_cursor(cursor, u32::MAX)?;
-        let offset = self.fields.read().unwrap().serialize(
-            &self.fields_values.dim_bufman,
-            &self.fields_bufmans,
-            cursor,
-        )?;
+        let fields = self.fields.read().unwrap();
+        bufman.update_u32_with_cursor(cursor, *fields.version)?;
+        let offset =
+            fields.serialize(&self.fields_values.dim_bufman, &self.fields_bufmans, cursor)?;
+        drop(fields);
         bufman.seek_with_cursor(cursor, 0)?;
         bufman.update_u32_with_cursor(cursor, offset)?;
         bufman.close_cursor(cursor)?;
+        self.fields_bufmans.flush_all()?;
         Ok(())
     }
 
