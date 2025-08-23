@@ -8,8 +8,7 @@ use crate::app_context::AppContext;
 use crate::indexes::hnsw::{DenseSearchInput, DenseSearchOptions};
 use crate::indexes::inverted::{SparseSearchInput, SparseSearchOptions};
 use crate::indexes::tf_idf::{TFIDFSearchInput, TFIDFSearchOptions};
-use crate::indexes::{IndexOps, Matches, SearchResult};
-use crate::models::types::{DocumentId, VectorId};
+use crate::indexes::{IndexOps, SearchResult};
 
 pub(crate) async fn dense_search(
     ctx: Arc<AppContext>,
@@ -179,9 +178,12 @@ pub(crate) async fn hybrid_search(
         .ok_or_else(|| SearchError::CollectionNotFound(collection_id.to_string()))?;
 
     let results_pair = match request.query {
-        dtos::HybridSearchQuery::DenseAndSparse {
+        dtos::HybridSearchQuery::DenseAndGeoFence {
             query_vector,
-            query_terms,
+            geo_fence_query,
+            zones,
+            sort_by_distance,
+            coordinates,
             sparse_early_terminate_threshold,
         } => {
             let hnsw_index = collection.get_hnsw_index().ok_or_else(|| {
@@ -205,7 +207,19 @@ pub(crate) async fn hybrid_search(
                     request.return_raw_text,
                 )
                 .map_err(SearchError::WaCustom)?;
-            let sparse_results = todo!();
+            let sparse_results = inverted_index.search(
+                &collection,
+                SparseSearchInput(geo_fence_query),
+                &SparseSearchOptions {
+                    top_k: Some(request.top_k * 3),
+                    early_terminate_threshold: sparse_early_terminate_threshold,
+                    sort_by_distance,
+                    coordinates,
+                    zones,
+                },
+                &ctx.config,
+                request.return_raw_text,
+            )?;
 
             (dense_results, sparse_results)
         }
@@ -248,9 +262,11 @@ pub(crate) async fn hybrid_search(
 
             (dense_results, tf_idf_results)
         }
-        dtos::HybridSearchQuery::SparseAndTFIDF {
-            query_terms,
-            query_text,
+        dtos::HybridSearchQuery::GeoFenceAndTFIDF {
+            query,
+            zones,
+            sort_by_distance,
+            coordinates,
             sparse_early_terminate_threshold,
         } => {
             let inverted_index = collection.get_inverted_index().ok_or_else(|| {
@@ -266,11 +282,23 @@ pub(crate) async fn hybrid_search(
                 ))
             })?;
 
-            let sparse_results = todo!();
+            let sparse_results = inverted_index.search(
+                &collection,
+                SparseSearchInput(query.clone()),
+                &SparseSearchOptions {
+                    top_k: Some(request.top_k * 3),
+                    early_terminate_threshold: sparse_early_terminate_threshold,
+                    sort_by_distance,
+                    coordinates,
+                    zones,
+                },
+                &ctx.config,
+                request.return_raw_text,
+            )?;
             let tf_idf_results = tf_idf_index
                 .search(
                     &collection,
-                    TFIDFSearchInput(query_text),
+                    TFIDFSearchInput(query),
                     &TFIDFSearchOptions {
                         top_k: Some(request.top_k * 3),
                     },
@@ -288,10 +316,7 @@ pub(crate) async fn hybrid_search(
             .to_string()
     });
 
-    let mut final_scores: FxHashMap<
-        VectorId,
-        (f32, Option<DocumentId>, Option<String>, Option<Matches>),
-    > = FxHashMap::default();
+    let mut final_scores = FxHashMap::default();
     let k = request.fusion_constant_k;
     if k < 0.0 {
         log::warn!("RRF fusion_constant_k ({}) is non-positive.", k);
@@ -314,13 +339,7 @@ pub(crate) async fn hybrid_search(
             .0 += score;
     }
 
-    let mut final_results: Vec<(
-        VectorId,
-        Option<DocumentId>,
-        f32,
-        Option<String>,
-        Option<Matches>,
-    )> = final_scores
+    let mut final_results: Vec<SearchResult> = final_scores
         .into_iter()
         .map(|(id, (score, document_id, text, matches))| (id, document_id, score, text, matches))
         .collect();

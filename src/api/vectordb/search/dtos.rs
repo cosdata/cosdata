@@ -1,8 +1,8 @@
 use crate::indexes::inverted::ZoneId;
 use crate::indexes::Matches;
 use crate::metadata::query_filtering::Filter;
+use crate::models::types::DocumentId;
 use crate::models::types::VectorId;
-use crate::{indexes::inverted::types::SparsePair, models::types::DocumentId};
 use serde::{Deserialize, Serialize};
 
 fn default_top_k() -> usize {
@@ -81,20 +81,27 @@ pub(crate) struct HybridSearchRequestDto {
 #[derive(Deserialize, Debug, utoipa::ToSchema)]
 #[serde(untagged)]
 pub(crate) enum HybridSearchQuery {
-    DenseAndSparse {
+    DenseAndGeoFence {
         query_vector: Vec<f32>,
+        geo_fence_query: String,
         #[schema(value_type = Vec<String>)]
-        query_terms: Vec<SparsePair>,
+        zones: Vec<ZoneId>,
+        #[serde(default)]
+        sort_by_distance: bool,
+        coordinates: (f32, f32),
         sparse_early_terminate_threshold: Option<f32>,
     },
     DenseAndTFIDF {
         query_vector: Vec<f32>,
         query_text: String,
     },
-    SparseAndTFIDF {
+    GeoFenceAndTFIDF {
+        query: String,
         #[schema(value_type = Vec<String>)]
-        query_terms: Vec<SparsePair>,
-        query_text: String,
+        zones: Vec<ZoneId>,
+        #[serde(default)]
+        sort_by_distance: bool,
+        coordinates: (f32, f32),
         sparse_early_terminate_threshold: Option<f32>,
     },
 }
