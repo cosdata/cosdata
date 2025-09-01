@@ -151,10 +151,8 @@ def test_performance():
 
         # Insert vectors in a single transaction
         print("Inserting vectors...")
-        txn_id = None
         with collection.transaction() as txn:
             txn.batch_upsert_vectors(test_vectors)
-            txn_id = txn.transaction_id
         print("Vectors inserted successfully")
 
         print("Waiting for transaction to complete")
@@ -188,14 +186,29 @@ def test_performance():
             print(f"\nResult {i} (score: {result['score']:.4f}):")
             print(format_vector(vector))
 
+        print("\nAll tests completed successfully!")
+
     except Exception as e:
         print(f"Test failed with error: {e}")
         raise
     finally:
         # Cleanup
         try:
-            collection.delete()
-            print("Test collection deleted")
+            # Ask user if they want to delete the collection
+            print(f"\nCollection '{collection_name}' was created for testing.")
+            delete_choice = (
+                input("Do you want to delete the test collection? (y/N): ")
+                .lower()
+                .strip()
+            )
+
+            if delete_choice in ["y", "yes"]:
+                collection.delete()
+                print("Test collection deleted")
+            else:
+                print(
+                    f"Test collection '{collection_name}' preserved for future use"
+                )
         except Exception as e:
             print(f"Error during cleanup: {e}")
 
