@@ -39,7 +39,7 @@ datasets = {
         "description": "Cohere Wikipedia embeddings dataset (100k vectors)",
     },
     "million-text-embeddings": {
-        "id": None,
+        "id": "id",
         "embeddings": "embedding",
         "size": 1_000_000,
         "dimension": 768,
@@ -414,9 +414,13 @@ def generate_brute_force_results(dataset_name, quick_test=False):
 def pre_process_vector(id, values):
     corrected_values = [float(v) for v in values]
     
+    # Normalize the vector for cosine distance
+    vector_array = np.array(corrected_values).reshape(1, -1)
+    normalized_values = normalize(vector_array, norm='l2').flatten().tolist()
+    
     result = {
         "id": str(id),  # Keep as string for server compatibility
-        "dense_values": corrected_values,
+        "dense_values": normalized_values,
     }
     
     # Only add document_id if id is an integer

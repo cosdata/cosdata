@@ -2,6 +2,7 @@
 
 import numpy as np
 import pandas as pd
+from sklearn.preprocessing import normalize
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
@@ -14,6 +15,8 @@ import json
 import urllib3
 import gzip
 import shutil
+import zipfile
+import heapq
 from pathlib import Path
 import sys
 from datasets import load_dataset
@@ -149,31 +152,49 @@ def download_file(url, destination):
         raise
 
 def prepare_glove_dataset(dataset_dir):
-    """Prepare GloVe dataset by converting it to parquet format"""
+    """Prepare GloVe dataset by converting it to parquet format with chunking"""
     zip_path = os.path.join(dataset_dir, "glove.6B.zip")
     if not os.path.exists(zip_path):
         print("Downloading GloVe dataset...")
         download_file(datasets["glove-100"]["url"], zip_path)
     
     print("Extracting GloVe dataset...")
-    with gzip.open(zip_path, 'rb') as f_in:
-        with open(os.path.join(dataset_dir, "glove.6B.100d.txt"), 'wb') as f_out:
-            shutil.copyfileobj(f_in, f_out)
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        zip_ref.extract("glove.6B.100d.txt", dataset_dir)
     
-    print("Converting GloVe to parquet format...")
-    # Read the GloVe text file
-    data = []
-    with open(os.path.join(dataset_dir, "glove.6B.100d.txt"), 'r', encoding='utf-8') as f:
-        for line in f:
+    print("Converting GloVe to parquet format with chunking...")
+    # Read the GloVe text file in chunks
+    chunk_size = 200_000
+    chunk = []
+    file_index = 0
+    
+    with open(
+        os.path.join(dataset_dir, "glove.6B.100d.txt"), "r", encoding="utf-8"
+    ) as f:
+        for i, line in enumerate(f):
             values = line.split()
             word = values[0]
             vector = [float(x) for x in values[1:]]
-            data.append({"id": word, "embeddings": vector})
-    
-    # Convert to DataFrame and save as parquet
-    df = pd.DataFrame(data)
-    df.to_parquet(os.path.join(dataset_dir, "test0.parquet"))
-    
+            chunk.append({"id": word, "embeddings": vector})
+            
+            if (i + 1) % chunk_size == 0:
+                # Convert chunk to DataFrame and save
+                df = pd.DataFrame(chunk)
+                parquet_path = os.path.join(dataset_dir, f"test{file_index}.parquet")
+                print(f"Saving chunk {file_index} to {parquet_path}")
+                df.to_parquet(parquet_path)
+                
+                # Clear chunk for next batch
+                chunk.clear()
+                file_index += 1
+        
+        # Save any remaining data
+        if chunk:
+            df = pd.DataFrame(chunk)
+            parquet_path = os.path.join(dataset_dir, f"test{file_index}.parquet")
+            print(f"Saving remaining chunk to {parquet_path}")
+            df.to_parquet(parquet_path)
+
     # Clean up temporary files
     os.remove(os.path.join(dataset_dir, "glove.6B.100d.txt"))
     os.remove(zip_path)
@@ -182,53 +203,75 @@ def prepare_dataset(dataset_name):
     """Download and prepare a dataset"""
     dataset_dir = os.path.join("datasets", dataset_name)
     dataset_config = datasets[dataset_name]
-    parquet_path = os.path.join(dataset_dir, "test0.parquet")
-    
+
     print(f"Downloading {dataset_name}...")
-    prepare_huggingface_dataset(dataset_config["dataset_id"], parquet_path)
-    
+    if dataset_name == "glove-100":
+        prepare_glove_dataset(dataset_dir)
+    else:
+        prepare_huggingface_dataset(dataset_config["dataset_id"], dataset_dir)
+
     print(f"Dataset {dataset_name} is ready at {dataset_dir}")
 
-def prepare_huggingface_dataset(dataset_id, destination):
+def prepare_huggingface_dataset(dataset_id, base_destination):
     """Download and prepare a dataset from Hugging Face"""
-    print(f"Loading dataset {dataset_id} from Hugging Face...")
+    print(f"Loading dataset {dataset_id} from Hugging Face with streaming...")
+
+    # Find dataset configuration by dataset_id
+    dataset_config = None
+    for name, config in datasets.items():
+        if config["dataset_id"] == dataset_id:
+            dataset_config = config
+            break
     
+    if not dataset_config:
+        raise ValueError(f"No configuration found for dataset {dataset_id}")
+
     try:
-        # Try loading with default config first
-        dataset = load_dataset(dataset_id, split="train")
-    except ValueError as e:
-        if "Config name is missing" in str(e):
-            # If config is required, try with 'train' config
-            print("Config name required, using 'train' config...")
-            dataset = load_dataset(dataset_id, 'train', split="train")
-        else:
-            raise
-    
-    # Convert to pandas DataFrame
-    df = dataset.to_pandas()
-    
-    # Print dataset structure
-    print("\nDataset Structure:")
-    print(f"Columns: {df.columns.tolist()}")
-    print(f"First row sample: {df.iloc[0].to_dict()}")
-    print(f"Number of rows: {len(df)}")
-    
-    # Ensure the required columns exist
-    if "id" not in df.columns:
-        df["id"] = range(len(df))
-    
-    if "dense_values" not in df.columns:
-        # Find the embedding column
-        embedding_cols = [col for col in df.columns if "emb" in col.lower() or "embedding" in col.lower() or "vector" in col.lower()]
-        if not embedding_cols:
-            raise ValueError(f"No embedding column found in dataset {dataset_id}. Available columns: {df.columns.tolist()}")
-        df["dense_values"] = df[embedding_cols[0]]
-    
-    # Save as parquet
-    print(f"\nSaving dataset to {destination}")
-    df.to_parquet(destination)
-    
-    print(f"Dataset saved successfully with {len(df)} rows")
+        # Stream the dataset and process in chunks
+        dataset = load_dataset(dataset_id, split='train', streaming=True)
+        chunk_size = 200_000
+        chunk = []
+        file_index = 0
+
+        for i, example in enumerate(dataset):
+            chunk.append(example)
+            if (i + 1) % chunk_size == 0:
+                # Convert chunk to DataFrame
+                chunk_df = pd.DataFrame(chunk)
+
+                # Ensure columns
+                if "id" not in chunk_df.columns:
+                    offset = chunk_size * file_index
+                    chunk_df["id"] = range(offset, offset + len(chunk_df))
+
+                if "dense_values" not in chunk_df.columns:
+                    # Use the predefined embedding column from configuration
+                    embedding_col = dataset_config["embeddings"]
+                    if embedding_col not in chunk_df.columns:
+                        raise ValueError(
+                            f"Configured embedding column '{embedding_col}' not found in dataset {dataset_id}. Available columns: {chunk_df.columns.tolist()}"
+                        )
+                    chunk_df["dense_values"] = chunk_df[embedding_col]
+
+                # Save the chunk as parquet
+                destination = f"{base_destination}/test{file_index}.parquet"
+                print(f"\nSaving chunk to {destination}")
+                chunk_df.to_parquet(destination)
+
+                # Clear chunk for next batch
+                chunk.clear()
+                file_index += 1
+
+        # Save any remaining data
+        if chunk:
+            chunk_df = pd.DataFrame(chunk)
+            destination = f"{base_destination}/test{file_index}.parquet"
+            print(f"\nSaving remaining chunk to {destination}")
+            chunk_df.to_parquet(destination)
+
+    except Exception as e:
+        print(f"Error in processing dataset {dataset_id}: {e}")
+        raise
 
 def ensure_dataset_available(dataset_name):
     """Ensure a dataset is downloaded and ready to use"""
@@ -292,69 +335,116 @@ def cosine_sim_matrix(A, B):
     B[np.isnan(B)] = 0
     return np.dot(A, B.T)
 
-def generate_brute_force_results(dataset_name, vector_list, quick_test=False):
-    """Load brute force results from CSV, or generate them if file doesn't exist"""
-    csv_path = f"datasets/{dataset_name}/brute-force-results.csv"
-    os.makedirs(f"datasets/{dataset_name}", exist_ok=True)
+def generate_brute_force_results(dataset_name, quick_test=False):
+    """Generate brute force results by processing dataset in chunks"""
+    print("Generating brute force results using chunk processing...")
+    
+    dataset_config = datasets[dataset_name]
+    dataset_dir = os.path.join("datasets", dataset_name)
+    
+    # Determine sample size
+    k = 10 if quick_test else 100
+    reservoir = []
+    total_vectors = 0
+    file_count = 0
+    
+    # Pass 1: Reservoir sampling to select query vectors
+    random.seed(42)
+    while True:
+        path = os.path.join(dataset_dir, f"test{file_count}.parquet")
+        if not os.path.exists(path):
+            break
+            
+        df = pd.read_parquet(path)
+        for index, row in df.iterrows():
+            total_vectors += 1
+            # Get vector data
+            id_val = row[dataset_config["id"]] if dataset_config["id"] else index
+            embedding = row[dataset_config["embeddings"]]
+            vector = pre_process_vector(id_val, embedding)
+            
+            # Reservoir sampling
+            if len(reservoir) < k:
+                reservoir.append((vector["id"], vector["dense_values"]))
+            else:
+                j = random.randint(0, total_vectors-1)
+                if j < k:
+                    reservoir[j] = (vector["id"], vector["dense_values"])
+        file_count += 1
 
-    total_vectors = len(vector_list)
-    print(f"Total vectors for brute force computation: {total_vectors}")
-
-    # Pre-process vectors into NumPy arrays
-    ids = [v["id"] for v in vector_list]
-    vectors = np.array([v["dense_values"] for v in vector_list], dtype=np.float64)
-
-    # Use smaller sample for quick test
-    num_test_vectors = 10 if quick_test else 100
-    np.random.seed(42)
-    test_indices = np.random.choice(total_vectors, num_test_vectors, replace=False)
-    test_ids = [ids[i] for i in test_indices]
-    test_vectors = vectors[test_indices]
-
-    print("Computing brute force similarities...")
-    sim_matrix = cosine_sim_matrix(test_vectors, vectors)
-
+    # Prepare query data
+    query_ids = [item[0] for item in reservoir]
+    query_vectors = np.array([item[1] for item in reservoir], dtype=np.float32)
+    
+    # Initialize heaps for each query (min-heap for top-k)
+    heaps = [[] for _ in range(len(query_vectors))]
+    
+    # Pass 2: Process dataset in chunks to find top matches
+    file_count = 0
+    while True:
+        path = os.path.join(dataset_dir, f"test{file_count}.parquet")
+        if not os.path.exists(path):
+            break
+            
+        df = pd.read_parquet(path)
+        chunk_vectors = []
+        chunk_ids = []
+        
+        for index, row in df.iterrows():
+            id_val = row[dataset_config["id"]] if dataset_config["id"] else index
+            embedding = row[dataset_config["embeddings"]]
+            vector = pre_process_vector(id_val, embedding)
+            chunk_vectors.append(vector["dense_values"])
+            chunk_ids.append(vector["id"])
+        
+        # Convert to numpy array
+        chunk_vectors_arr = np.array(chunk_vectors, dtype=np.float32)
+        
+        # Compute cosine similarities
+        query_norm = normalize(query_vectors, norm='l2', axis=1)
+        chunk_norm = normalize(chunk_vectors_arr, norm='l2', axis=1)
+        sim_matrix = np.dot(query_norm, chunk_norm.T)
+        
+        # Update heaps for each query
+        for i in range(len(query_vectors)):
+            for j in range(len(chunk_vectors)):
+                sim = sim_matrix[i, j]
+                if len(heaps[i]) < 5:
+                    heapq.heappush(heaps[i], (sim, chunk_ids[j]))
+                else:
+                    if sim > heaps[i][0][0]:
+                        heapq.heapreplace(heaps[i], (sim, chunk_ids[j]))
+        file_count += 1
+    
+    # Prepare results
     results = []
-    for i, sims in enumerate(sim_matrix):
-        if i % 10 == 0:
-            print(f"Processing query vector {i + 1}/{num_test_vectors}, ID: {test_ids[i]}")
-
-        top5_idx = np.argpartition(-sims, 5)[:5]
-        top5_sorted = top5_idx[np.argsort(-sims[top5_idx])]
-
-        top_ids = [ids[j] for j in top5_sorted]
-        top_sims = [sims[j] for j in top5_sorted]
-
-        results.append({
-            "query_id": test_ids[i],
-            **{f"top{j+1}_id": top_ids[j] for j in range(5)},
-            **{f"top{j+1}_sim": top_sims[j] for j in range(5)},
-        })
-
-    df = pd.DataFrame(results)
-    df.to_csv(csv_path, index=False)
-    print(f"\nGenerated and saved results to {csv_path}")
+    for i in range(len(query_vectors)):
+        top5 = sorted(heaps[i], key=lambda x: x[0], reverse=True)
+        result = {"query_id": query_ids[i]}
+        for rank, (sim, vec_id) in enumerate(top5):
+            result[f"top{rank+1}_id"] = vec_id
+            result[f"top{rank+1}_sim"] = sim
+        results.append(result)
+    
+    print(f"Generated brute force results for {len(results)} queries")
     return results
 
 def load_or_generate_brute_force_results(dataset_name, quick_test=False):
     """Load brute force results from CSV, or generate them if file doesn't exist"""
-    # For quick test, always regenerate results
-    if quick_test:
-        print("Quick test mode: Regenerating brute force results with limited dataset")
-        vectors = read_dataset_from_parquet(dataset_name)
-        # Only use first 1000 vectors for quick test
-        vectors = vectors[:1000]
-        results = generate_brute_force_results(dataset_name, vectors, quick_test=True)
+    csv_path = f"datasets/{dataset_name}/brute-force-results.csv"
+    
+    try:
+        print("Attempting to load pre-computed brute force results...")
+        df = pd.read_csv(csv_path)
+        print(f"Successfully loaded results from {csv_path}")
+        return df.to_dict("records")
+    except FileNotFoundError:
+        print("No pre-computed results found, generating new ones...")
+        results = generate_brute_force_results(dataset_name, quick_test)
+        df = pd.DataFrame(results)
+        df.to_csv(csv_path, index=False)
+        print(f"Saved results to {csv_path}")
         return results
-
-    # For full test, try to load from CSV first
-    results = load_brute_force_results(dataset_name)
-    if results:
-        return results
-    vectors = read_dataset_from_parquet(dataset_name)
-    results = generate_brute_force_results(dataset_name, vectors, quick_test=False)
-    del vectors
-    return results
 
 def pre_process_vector(id, values):
     corrected_values = [float(v) for v in values]
@@ -364,26 +454,12 @@ def pre_process_vector(id, values):
         "document_id": f"doc_{id//10}"  # Group vectors into documents
     }
 
-def read_dataset_from_parquet(dataset_name):
-    """Read dataset from parquet files in the datasets directory"""
+def read_dataset_from_parquet(dataset_name, max_vectors=50000):
+    """Read dataset from parquet files with a strict limit to prevent memory issues."""
     metadata = datasets[dataset_name]
-    dfs = []
 
-    # Check if datasets directory exists
     datasets_dir = "datasets"
-    if not os.path.exists(datasets_dir):
-        os.makedirs(datasets_dir)
-        print(f"Created datasets directory at {os.path.abspath(datasets_dir)}")
-
-    # Check if dataset directory exists
     dataset_dir = os.path.join(datasets_dir, dataset_name)
-    if not os.path.exists(dataset_dir):
-        os.makedirs(dataset_dir)
-        print(f"Created dataset directory at {os.path.abspath(dataset_dir)}")
-        raise FileNotFoundError(
-            f"No parquet files found for dataset {dataset_name}. "
-            f"Please place your parquet files in: {os.path.abspath(dataset_dir)}"
-        )
 
     path = os.path.join(dataset_dir, "test0.parquet")
     if not os.path.exists(path):
@@ -392,34 +468,43 @@ def read_dataset_from_parquet(dataset_name):
             f"Please place your parquet files in: {os.path.abspath(dataset_dir)}"
         )
 
-    while os.path.exists(path):
-        dfs.append(pd.read_parquet(path))
-        count = len(dfs)
-        path = os.path.join(dataset_dir, f"test{count}.parquet")
-
-    if not dfs:
-        raise FileNotFoundError(
-            f"No parquet files found for dataset {dataset_name}. "
-            f"Please place your parquet files in: {os.path.abspath(dataset_dir)}"
-        )
-
-    df = pd.concat(dfs, ignore_index=True)
-
-    print("Pre-processing ...")
-    dataset = (
-        df[[metadata["id"], metadata["embeddings"]]].values.tolist()
-        if metadata["id"] is not None
-        else list(enumerate(row[0] for row in df[[metadata["embeddings"]]].values))
-    )
-
     vectors = []
-    print("Dimension:", len(dataset[0][1]))
-    print("Size: ", len(dataset))
+    file_count = 0
+    
+    print(f"Reading dataset with limit of {max_vectors} vectors to prevent memory issues...")
+    
+    while os.path.exists(path) and len(vectors) < max_vectors:
+        # Read the full parquet file but limit processing
+        df = pd.read_parquet(path)
+        
+        # Limit rows to prevent memory overload
+        rows_to_read = min(len(df), max_vectors - len(vectors))
+        df = df.head(rows_to_read)
+        
+        emb_col = "dense_values" if "dense_values" in df.columns else metadata["embeddings"]
+        
+        if metadata["id"] is not None:
+            id_col = metadata["id"]
+            dataset_chunk = df[[id_col, emb_col]].values.tolist()
+        else:
+            dataset_chunk = list(enumerate(df[emb_col].values))
 
-    for row in dataset:
-        vector = pre_process_vector(row[0], row[1])
-        vectors.append(vector)
+        for row in dataset_chunk:
+            if len(vectors) >= max_vectors:
+                break
+            vector = pre_process_vector(row[0], row[1])
+            vectors.append(vector)
 
+        file_count += 1
+        path = os.path.join(dataset_dir, f"test{file_count}.parquet")
+        
+        # Clear dataframe from memory
+        del df
+
+    if not vectors:
+        raise ValueError(f"No data found in dataset {dataset_name}")
+
+    print(f"Loaded {len(vectors)} vectors from dataset {dataset_name}")
     return vectors
 
 def read_single_parquet_file(path, dataset_name, file_index, base_id, quick_test=False):
@@ -462,22 +547,14 @@ def process_vectors_batch(vectors, collection, batch_size):
         # Ensure all IDs are strings
         for vector in vectors:
             vector["id"] = str(vector["id"])
-
-        url = f"{collection.client.base_url}/collections/{collection.name}/streaming/upsert"
-        for batch_start in range(0, len(vectors), 200):
-            batch = vectors[batch_start:batch_start+200]
-            data = {"vectors": batch}
-        
-            requests.post(
-                url,
-                headers=collection.client._get_headers(),
-                data=json.dumps(data),
-                verify=collection.client.verify_ssl
-            )
-        return True
+        txn_ = None
+        with collection.transaction() as txn:
+            txn.batch_upsert_vectors(vectors)
+            txn_ = txn
+        return txn_
     except Exception as e:
         print(f"Error processing batch: {e}")
-        return False
+        return None
 
 def process_parquet_files(
     dataset_name,
@@ -504,6 +581,7 @@ def process_parquet_files(
     id_counter = 0
     matches_test_vectors = []
     rps_test_vectors = []
+    txns = []
     
     # For quick test, use the first 10 vectors as test vectors
     if quick_test:
@@ -562,7 +640,9 @@ def process_parquet_files(
                     rps_test_vectors.extend(random.sample(vectors, sample_size))
 
                 insertion_start = time.time()
-                vectors_inserted = process_vectors_batch(vectors, collection, batch_size)
+                txn = process_vectors_batch(vectors, collection, batch_size)
+                print(f"Transaction id for batch upsert: {txn.transaction_id}")
+                txns.append(txn)
                 insertion_end = time.time()
                 insertion_time = insertion_end - insertion_start
                 total_insertion_time += insertion_time
@@ -590,6 +670,20 @@ def process_parquet_files(
 
     end_time = time.time()
     total_time = end_time - start_time
+
+    print("\nWaiting for transactions to complete")
+    for txn in txns:
+        print(f"Polling transaction {txn.transaction_id}...")
+        final_status, success = txn.poll_completion(
+            target_status="complete", max_attempts=10, sleep_interval=30
+        )
+
+        if not success:
+            print(
+                f"Transaction {txn.transaction_id} did not complete successfully. Final status: {final_status}"
+            )
+        else:
+            print(f"Transaction {txn.transaction_id} completed successfully")
 
     print("\nProcessing complete!")
     print(f"Total files processed: {file_count}")
@@ -760,40 +854,74 @@ if __name__ == "__main__":
 
     dataset_name, dataset_metadata, quick_test = prompt_and_get_dataset_metadata()
 
+    # Create dynamic collection name based on dataset and test mode
+    test_mode_suffix = "quick" if quick_test else "full"
+    vector_db_name = f"{dataset_name}-{test_mode_suffix}"
+    print(f"Using collection name: {vector_db_name}")
+
     # Load or generate brute force results
     brute_force_results = load_or_generate_brute_force_results(dataset_name, quick_test)
     print(f"Loaded {len(brute_force_results)} pre-computed brute force results")
 
-    # Create collection
-    print("Creating collection...")
-    collection = client.create_collection(
-        name=vector_db_name,
-        dimension=dataset_metadata["dimension"],
-        description="Test collection for vector database"
-    )
+    collection = None
+    try:
+        # Create collection
+        print("Creating collection...")
+        collection = client.create_collection(
+            name=vector_db_name,
+            dimension=dataset_metadata["dimension"],
+            description=f"Test collection for {dataset_metadata['description']} - {test_mode_suffix} mode",
+        )
 
-    # Create index
-    print("Creating index...")
-    collection.create_index(
-        distance_metric="cosine",
-        num_layers=10,
-        max_cache_size=1000,
-        ef_construction=64,
-        ef_search=64,
-        neighbors_count=16,
-        level_0_neighbors_count=32
-    )
+        # Create index
+        print("Creating index...")
+        collection.create_index(
+            distance_metric="cosine",
+            num_layers=10,
+            max_cache_size=1000,
+            ef_construction=128,
+            ef_search=64,
+            neighbors_count=32,
+            level_0_neighbors_count=32,
+        )
 
-    matches_test_vectors, rps_test_vectors = process_parquet_files(
-        dataset_name,
-        collection,
-        brute_force_results,
-        batch_size,
-        num_match_test_vectors,
-        num_rps_test_vectors,
-        quick_test
-    )
+        matches_test_vectors, rps_test_vectors = process_parquet_files(
+            dataset_name,
+            collection,
+            brute_force_results,
+            batch_size,
+            num_match_test_vectors,
+            num_rps_test_vectors,
+            quick_test,
+        )
 
-    run_matching_tests(matches_test_vectors, collection, brute_force_results)
+        run_matching_tests(matches_test_vectors, collection, brute_force_results)
 
-    run_rps_tests(rps_test_vectors, collection, rps_batch_size)
+        run_rps_tests(rps_test_vectors, collection, rps_batch_size)
+
+        print("\nAll tests completed successfully!")
+
+    except Exception as e:
+        print(f"Test failed with error: {e}")
+        raise
+    finally:
+        # Cleanup
+        if collection is not None:
+            try:
+                # Ask user if they want to delete the collection
+                print(f"\nCollection '{vector_db_name}' was created for testing.")
+                delete_choice = (
+                    input("Do you want to delete the test collection? (y/N): ")
+                    .lower()
+                    .strip()
+                )
+
+                if delete_choice in ["y", "yes"]:
+                    collection.delete()
+                    print("Test collection deleted")
+                else:
+                    print(
+                        f"Test collection '{vector_db_name}' preserved for future use"
+                    )
+            except Exception as e:
+                print(f"Error during cleanup: {e}")
