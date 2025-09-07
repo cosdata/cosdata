@@ -58,7 +58,7 @@ def generate_headers():
 def create_session():
     url = f"{host}/auth/create-session"
     # Get password from .env file or prompt securely
-    password = os.getenv("COSDATA_PASSWORD")
+    password = os.getenv("COSDATA__ADMIN_API_KEY")
     if not password:
         password = getpass.getpass("Enter admin password: ")
 

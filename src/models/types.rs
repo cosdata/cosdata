@@ -1420,7 +1420,11 @@ pub struct AppEnv {
     pub active_sessions: Arc<DashMap<String, SessionDetails>>,
 }
 
-fn get_admin_key(env: Arc<Environment>, args: CosdataArgs) -> lmdb::Result<SingleSHA256Hash> {
+fn get_admin_key(
+    env: Arc<Environment>,
+    config: &Config,
+    args: CosdataArgs,
+) -> lmdb::Result<SingleSHA256Hash> {
     // Create meta database if it doesn't exist
     let init_txn = env.begin_rw_txn()?;
     unsafe { init_txn.create_db(Some("meta"), DatabaseFlags::empty())? };
@@ -1428,8 +1432,13 @@ fn get_admin_key(env: Arc<Environment>, args: CosdataArgs) -> lmdb::Result<Singl
 
     let txn = env.begin_ro_txn()?;
     let db = unsafe { txn.open_db(Some("meta"))? };
-
-    let admin_key_from_lmdb = match txn.get(db, &"admin_key") {
+    // Keeping this for backwards compatibility
+    let admin_key_from_lmdb = match txn.get(db, &"admin_key").or(config
+        .admin_api_key
+        .as_ref()
+        .map(|inner| inner.as_bytes())
+        .ok_or(lmdb::Error::NotFound))
+    {
         Ok(bytes) => {
             let mut hash_array = [0u8; 32];
             // Copy bytes from the database to the fixed-size array
@@ -1446,10 +1455,15 @@ fn get_admin_key(env: Arc<Environment>, args: CosdataArgs) -> lmdb::Result<Singl
     };
     txn.abort();
 
+    let arg_admin_key = args
+        .admin_key
+        .as_ref()
+        .or(config.admin_api_key.as_ref())
+        .ok_or(lmdb::Error::Other(5))?;
+
     let admin_key_hash = if let Some(admin_key_from_lmdb) = admin_key_from_lmdb {
         // Database already exists, verify admin key
-        let arg_admin_key = args.admin_key;
-        let arg_admin_key_hash = SingleSHA256Hash::from_str(&arg_admin_key).unwrap();
+        let arg_admin_key_hash = SingleSHA256Hash::from_str(arg_admin_key).unwrap();
         let arg_admin_key_double_hash = arg_admin_key_hash.hash_again();
         if !admin_key_from_lmdb.verify_eq(&arg_admin_key_double_hash) {
             log::error!("Invalid admin key!");
@@ -1458,8 +1472,7 @@ fn get_admin_key(env: Arc<Environment>, args: CosdataArgs) -> lmdb::Result<Singl
         arg_admin_key_hash
     } else {
         // First-time setup
-        let arg_admin_key = args.admin_key;
-        let arg_admin_key_hash = SingleSHA256Hash::from_str(&arg_admin_key).unwrap();
+        let arg_admin_key_hash = SingleSHA256Hash::from_str(arg_admin_key).unwrap();
         let arg_admin_key_double_hash = arg_admin_key_hash.hash_again();
 
         // Store the admin key double hash in the database
@@ -1487,6 +1500,12 @@ pub fn get_app_env(
     args: CosdataArgs,
 ) -> Result<Arc<AppEnv>, WaCustomError> {
     // Check both possible db path locations
+    let admin_key = args
+        .admin_key
+        .clone()
+        .or(config.admin_api_key.clone())
+        .expect("Admin API key is not present");
+
     let db_path_1 = get_data_path().join("_mdb");
     let db_path_2 = get_data_path().join("data/_mdb");
 
@@ -1519,7 +1538,7 @@ pub fn get_app_env(
         // Remove trailing newline
         confirmation = confirmation.trim().to_string();
 
-        if confirmation != args.admin_key {
+        if confirmation != admin_key {
             return Err(WaCustomError::ConfigError(
                 "Admin key and confirmation do not match".to_string(),
             ));
@@ -1548,7 +1567,7 @@ pub fn get_app_env(
 
     let env_arc = Arc::new(env);
 
-    let admin_key = get_admin_key(env_arc.clone(), confirmed_args)
+    let admin_key = get_admin_key(env_arc.clone(), &config, confirmed_args)
         .map_err(|err| WaCustomError::DatabaseError(err.to_string()))?;
 
     // Add more resilient error handling for collections_map loading
@@ -1564,8 +1583,7 @@ pub fn get_app_env(
 
     // Use the admin key as the password instead of hardcoded "admin"
     let username = "admin".to_string();
-    let password = args.admin_key.clone();
-    let password_hash = DoubleSHA256Hash::from_str(&password).unwrap();
+    let password_hash = admin_key.clone().hash_again();
 
     // Don't fail if user already exists
     match users_map.add_user(username, password_hash) {
