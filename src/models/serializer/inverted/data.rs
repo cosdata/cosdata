@@ -3,7 +3,7 @@ use crate::models::{
     cache_loader::InvertedIndexCache,
     common::TSHashTable,
     inverted_index::InvertedIndexNodeData,
-    // serializer::SimpleSerialize,
+    serializer::tree_map::TreeMapSerialize,
     types::FileOffset,
     versioned_vec::VersionedVec,
     versioning::VersionNumber,
@@ -42,7 +42,7 @@ impl InvertedIndexSerialize for InvertedIndexNodeData {
         data_bufmans: &BufferManagerFactory<VersionNumber>,
         file_offset: FileOffset,
         _version: VersionNumber,
-        cache: &InvertedIndexCache,
+        _cache: &InvertedIndexCache,
     ) -> Result<Self, BufIoError> {
         let cursor = dim_bufman.open_cursor()?;
         dim_bufman.seek_with_cursor(cursor, file_offset.0 as u64 - 1)?;
@@ -62,7 +62,6 @@ impl InvertedIndexSerialize for InvertedIndexNodeData {
                 data_bufmans,
                 FileOffset(offset),
                 VersionNumber::from(version),
-                cache,
             )?;
             map.insert(i, pool);
         }

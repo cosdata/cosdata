@@ -18,6 +18,8 @@ pub mod kmeans;
 pub mod lazy_item;
 pub mod lru_cache;
 pub mod meta_persist;
+pub mod om_tree_map;
+pub mod om_versioned_vec;
 pub mod paths;
 pub mod prob_node;
 pub mod rpc;

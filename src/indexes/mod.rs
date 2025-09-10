@@ -17,6 +17,7 @@ use crate::{
 
 pub(crate) mod hnsw;
 pub(crate) mod inverted;
+pub(crate) mod om;
 pub(crate) mod tf_idf;
 
 pub type InternalSearchResult = (
@@ -144,6 +145,7 @@ pub trait IndexOps: Send + Sync {
         version: VersionNumber,
         config: &Config,
     ) -> Result<(), WaCustomError> {
+        println!("pre commit version: {}", *version);
         self.force_index(collection, version, config)?;
         self.flush(collection, version)
     }

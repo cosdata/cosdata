@@ -26,6 +26,10 @@ pub(crate) fn transactions_module() -> Scope {
             web::post().to(controller::upsert),
         )
         .route(
+            "/{transaction_id}/om_upsert",
+            web::post().to(controller::om_upsert),
+        )
+        .route(
             "/{transaction_id}/vectors/{vector_id}",
             web::delete().to(controller::delete_vector_by_id),
         )

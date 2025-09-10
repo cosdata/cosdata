@@ -1,6 +1,6 @@
 use super::{
     buffered_io::BufIoError,
-    collection::{Collection, RawVectorEmbedding},
+    collection::{Collection, OmVectorEmbedding, RawVectorEmbedding},
     collection_transaction::{
         BackgroundExplicitTransaction, ExplicitTransactionID, ImplicitTransaction, ProcessingStats,
         TransactionStatus,
@@ -163,6 +163,71 @@ impl IndexingManager {
                     VectorOp::Delete(vector_id) => {
                         vectors_to_be_deleted.push(vector_id);
                     }
+                    VectorOp::OmUpsert(embeddings) => {
+                        s.spawn(|_| {
+                            let fallible = || {
+                                let len = embeddings.len() as u32;
+                                match config.indexing.mode {
+                                    VectorsIndexingMode::Sequential => {
+                                        collection.index_om_embeddings(
+                                            embeddings,
+                                            txn.version,
+                                            config,
+                                        )?;
+                                    }
+                                    VectorsIndexingMode::Batch { batch_size } => {
+                                        embeddings
+                                            .into_par_iter()
+                                            .chunks(batch_size)
+                                            .try_for_each(|embeddings| {
+                                                collection.index_om_embeddings(
+                                                    embeddings,
+                                                    txn.version,
+                                                    config,
+                                                )
+                                            })?;
+                                    }
+                                }
+                                let old_count = records_indexed.fetch_add(len, Ordering::AcqRel);
+                                let new_count = old_count + len;
+                                let now = Utc::now();
+                                let delta = now - start;
+                                let delta_seconds = (delta.num_seconds() as u32).max(1);
+                                let rate_per_second = new_count as f32 / delta_seconds as f32;
+                                let mut status = status.write();
+                                *status = TransactionStatus::InProgress {
+                                    started_at: start,
+                                    stats: ProcessingStats {
+                                        records_upserted: new_count,
+                                        records_deleted: 0,
+                                        total_operations,
+                                        percentage_complete: (new_count as f32
+                                            / total_records_upserted as f32)
+                                            * 100.0,
+                                        processing_time_seconds: None,
+                                        average_throughput: None,
+                                        current_processing_rate: Some(rate_per_second),
+                                        estimated_completion: Some(
+                                            Utc::now()
+                                                + Duration::seconds(
+                                                    ((total_records_upserted - new_count) as f32
+                                                        / rate_per_second)
+                                                        as i64,
+                                                ),
+                                        ),
+                                        version_created: Some(version),
+                                    },
+                                    last_updated: now,
+                                };
+
+                                Ok::<_, WaCustomError>(())
+                            };
+
+                            if let Err(err) = fallible() {
+                                errors.write().push(err);
+                            }
+                        });
+                    }
                 }
             }
             Ok::<_, WaCustomError>(())
@@ -219,6 +284,30 @@ impl IndexingManager {
                             Ok::<_, WaCustomError>(())
                         }
                         VectorOp::Delete(_vector_id) => unimplemented!(),
+                        VectorOp::OmUpsert(embeddings) => {
+                            match config.indexing.mode {
+                                VectorsIndexingMode::Sequential => {
+                                    collection.index_om_embeddings(
+                                        embeddings,
+                                        txn.version,
+                                        config,
+                                    )?;
+                                }
+                                VectorsIndexingMode::Batch { batch_size } => {
+                                    embeddings.into_par_iter().chunks(batch_size).try_for_each(
+                                        |embeddings| {
+                                            collection.index_om_embeddings(
+                                                embeddings,
+                                                txn.version,
+                                                config,
+                                            )
+                                        },
+                                    )?;
+                                }
+                            }
+
+                            Ok::<_, WaCustomError>(())
+                        }
                     };
 
                     if let Err(err) = fallible() {
@@ -284,6 +373,30 @@ impl IndexingManager {
                     .chunks(batch_size)
                     .try_for_each(|embeddings| {
                         collection.index_embeddings(embeddings, version, config)
+                    })?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn implicit_txn_om_upsert(
+        collection: &Collection,
+        transaction: &ImplicitTransaction,
+        config: &Config,
+        embeddings: Vec<OmVectorEmbedding>,
+    ) -> Result<(), WaCustomError> {
+        let version = transaction.version(collection)?;
+        transaction.append_to_wal(collection, VectorOp::OmUpsert(embeddings.clone()))?;
+        match config.indexing.mode {
+            VectorsIndexingMode::Sequential => {
+                collection.index_om_embeddings(embeddings, version, config)?;
+            }
+            VectorsIndexingMode::Batch { batch_size } => {
+                embeddings
+                    .into_par_iter()
+                    .chunks(batch_size)
+                    .try_for_each(|embeddings| {
+                        collection.index_om_embeddings(embeddings, version, config)
                     })?;
             }
         }

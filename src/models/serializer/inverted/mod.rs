@@ -2,7 +2,6 @@ mod atomic_array;
 mod data;
 mod lazy_item;
 mod node;
-mod versioned_vec;
 
 #[cfg(test)]
 mod tests;

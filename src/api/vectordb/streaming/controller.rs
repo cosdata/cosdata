@@ -2,7 +2,10 @@ use actix_web::{web, HttpResponse};
 
 use super::service;
 use crate::{
-    api::vectordb::transactions::{dtos::UpsertDto, error::TransactionError},
+    api::vectordb::transactions::{
+        dtos::{OmUpsertDto, UpsertDto},
+        error::TransactionError,
+    },
     app_context::AppContext,
     models::collection_cache::CollectionCacheExt,
 };
@@ -36,6 +39,35 @@ pub(crate) async fn upsert(
         .map_err(|e| TransactionError::FailedToCreateTransaction(format!("Cache error: {}", e)))?;
 
     service::upsert_vectors(ctx.into_inner(), &collection_id, upsert_dto.vectors).await?;
+
+    Ok(HttpResponse::Ok().finish())
+}
+
+#[utoipa::path(
+    post,
+    path = "/vectordb/collections/{collection_id}/streaming/om_upsert",
+    tag = "streaming",
+    params(
+        ("collection_id" = String, Path, description = "Collection ID")
+    ),
+    request_body = OmUpsertDto,
+    responses(
+        (status = 200, description = "Vectors upserted successfully"),
+        (status = 404, description = "Collection not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub(crate) async fn om_upsert(
+    collection_id: web::Path<String>,
+    ctx: web::Data<AppContext>,
+    web::Json(upsert_dto): web::Json<OmUpsertDto>,
+) -> Result<HttpResponse, TransactionError> {
+    let collection_id = collection_id.into_inner();
+
+    ctx.update_collection_for_transaction(&collection_id)
+        .map_err(|e| TransactionError::FailedToCreateTransaction(format!("Cache error: {}", e)))?;
+
+    service::upsert_om_vectors(ctx.into_inner(), &collection_id, upsert_dto.vectors).await?;
 
     Ok(HttpResponse::Ok().finish())
 }

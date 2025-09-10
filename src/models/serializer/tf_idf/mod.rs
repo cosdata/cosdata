@@ -3,7 +3,6 @@ mod data;
 mod lazy_item;
 mod node;
 mod term;
-mod versioned_vec;
 
 #[cfg(test)]
 mod tests;

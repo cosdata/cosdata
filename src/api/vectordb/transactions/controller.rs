@@ -8,6 +8,7 @@ use crate::{
     models::collection_transaction::ExplicitTransactionID,
 };
 
+use super::dtos::OmUpsertDto;
 use super::{
     dtos::{CreateTransactionResponseDto, UpsertDto},
     error::TransactionError,
@@ -238,6 +239,40 @@ pub(crate) async fn upsert(
         .map_err(|e| TransactionError::FailedToCreateVector(format!("Cache error: {}", e)))?;
 
     service::upsert_vectors(
+        ctx.into_inner(),
+        &collection_id,
+        transaction_id,
+        upsert_dto.vectors,
+    )
+    .await?;
+    Ok(HttpResponse::Ok().finish())
+}
+
+#[utoipa::path(
+    post,
+    path = "/vectordb/collections/{collection_id}/transactions/{transaction_id}/om_upsert",
+    tag = "transactions",
+    params(
+        ("collection_id" = String, Path, description = "Collection identifier"),
+        ("transaction_id" = ExplicitTransactionID, Path, description = "Transaction identifier")
+    ),
+    request_body = UpsertDto,
+    responses(
+        (status = 200, description = "Vectors upserted successfully"),
+        (status = 400, description = "Failed to upsert vectors")
+    )
+)]
+pub(crate) async fn om_upsert(
+    path: web::Path<(String, ExplicitTransactionID)>,
+    ctx: web::Data<AppContext>,
+    web::Json(upsert_dto): web::Json<OmUpsertDto>,
+) -> Result<HttpResponse, TransactionError> {
+    let (collection_id, transaction_id) = path.into_inner();
+
+    ctx.update_collection_for_transaction(&collection_id)
+        .map_err(|e| TransactionError::FailedToCreateVector(format!("Cache error: {}", e)))?;
+
+    service::upsert_om_vectors(
         ctx.into_inner(),
         &collection_id,
         transaction_id,

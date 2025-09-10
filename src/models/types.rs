@@ -33,6 +33,7 @@ use crate::{
             HNSWIndex,
         },
         inverted::InvertedIndex,
+        om::OmIndex,
         tf_idf::TFIDFIndex,
         IndexOps,
     },
@@ -627,6 +628,14 @@ impl CollectionsMap {
                 None
             };
 
+            let om_index = if collection_meta.om_options.enabled {
+                collections_map
+                    .load_om_index(&collection_meta)?
+                    .map(Arc::new)
+            } else {
+                None
+            };
+
             let collection_path: Arc<Path> =
                 get_collections_path().join(&collection_meta.name).into();
 
@@ -734,6 +743,7 @@ impl CollectionsMap {
                 hnsw_index: parking_lot::RwLock::new(hnsw_index),
                 inverted_index: parking_lot::RwLock::new(inverted_index),
                 tf_idf_index: parking_lot::RwLock::new(tf_idf_index),
+                om_index: parking_lot::RwLock::new(om_index),
                 indexing_manager: parking_lot::RwLock::new(None),
                 is_indexing: AtomicBool::new(false),
             });
@@ -1178,6 +1188,21 @@ impl CollectionsMap {
         Ok(Some(inverted_index))
     }
 
+    fn load_om_index(
+        &self,
+        collection_meta: &CollectionMetadata,
+    ) -> Result<Option<OmIndex>, WaCustomError> {
+        let collection_path: Arc<Path> = get_collections_path().join(&collection_meta.name).into();
+        let index_path = collection_path.join("om_index");
+
+        if !index_path.exists() {
+            return Ok(None);
+        }
+
+        // TODO(a-rustacean)
+        todo!()
+    }
+
     pub fn insert_hnsw_index(
         &self,
         collection: &Collection,
@@ -1217,6 +1242,20 @@ impl CollectionsMap {
             self.lmdb_tf_idf_index_db,
         )?;
         *collection.tf_idf_index.write() = Some(tf_idf_index);
+        Ok(())
+    }
+
+    pub fn insert_om_index(
+        &self,
+        collection: &Collection,
+        om_index: Arc<OmIndex>,
+    ) -> Result<(), WaCustomError> {
+        om_index.persist(
+            &collection.meta.name,
+            &self.lmdb_env,
+            self.lmdb_tf_idf_index_db,
+        )?;
+        *collection.om_index.write() = Some(om_index);
         Ok(())
     }
 

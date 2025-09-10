@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::{
     api::vectordb::{transactions::error::TransactionError, vectors::dtos::CreateVectorDto},
     app_context::AppContext,
-    models::{indexing_manager::IndexingManager, types::VectorId},
+    models::{collection::OmVectorEmbedding, indexing_manager::IndexingManager, types::VectorId},
 };
 
 pub(crate) async fn upsert_vectors(
@@ -26,6 +26,25 @@ pub(crate) async fn upsert_vectors(
         vectors.into_iter().map(Into::into).collect(),
     )
     .map_err(|err| TransactionError::FailedToCreateVector(err.to_string()))?;
+
+    Ok(())
+}
+
+pub(crate) async fn upsert_om_vectors(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    vectors: Vec<OmVectorEmbedding>,
+) -> Result<(), TransactionError> {
+    let collection = ctx
+        .ain_env
+        .collections_map
+        .get_collection(collection_id)
+        .ok_or(TransactionError::CollectionNotFound)?;
+
+    let txn = collection.current_implicit_transaction.read();
+
+    IndexingManager::implicit_txn_om_upsert(&collection, &txn, &ctx.config, vectors)
+        .map_err(|err| TransactionError::FailedToCreateVector(err.to_string()))?;
 
     Ok(())
 }

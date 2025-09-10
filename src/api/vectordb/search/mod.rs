@@ -1,7 +1,7 @@
 use actix_web::{web, Scope};
 use controller::{
-    batch_dense_search, batch_sparse_search, batch_tf_idf_search, batch_hybrid_search, dense_search, hybrid_search,
-    sparse_search, tf_idf_search,
+    batch_dense_search, batch_hybrid_search, batch_om_sum_query, batch_sparse_search,
+    batch_tf_idf_search, dense_search, hybrid_search, om_sum_query, sparse_search, tf_idf_search,
 };
 
 pub mod controller;
@@ -20,4 +20,6 @@ pub(crate) fn search_module() -> Scope {
         .route("/batch-tf-idf", web::post().to(batch_tf_idf_search))
         .route("/hybrid", web::post().to(hybrid_search))
         .route("/batch-hybrid", web::post().to(batch_hybrid_search))
+        .route("/om-sum", web::post().to(om_sum_query))
+        .route("/batch-om-sum", web::post().to(batch_om_sum_query))
 }

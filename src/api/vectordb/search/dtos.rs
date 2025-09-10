@@ -124,6 +124,16 @@ pub(crate) struct BatchSearchResponseDto {
     pub warning: Option<String>,
 }
 
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(crate) struct OmSumQueryResponse {
+    pub sum: f32,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(crate) struct BatchOmSumQueryResponse {
+    pub sums: Vec<f32>,
+}
+
 #[derive(Deserialize, Debug, utoipa::ToSchema)]
 pub(crate) struct FindSimilarTFIDFDocumentDto {
     pub query: String,
@@ -138,4 +148,14 @@ pub(crate) struct BatchSearchTFIDFDocumentsDto {
     pub top_k: Option<usize>,
     #[serde(default)]
     pub return_raw_text: bool,
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub(crate) struct OmSumQueryRequest {
+    pub labels: Vec<u32>,
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub(crate) struct BatchOmSumQueryRequest {
+    pub queries: Vec<OmSumQueryRequest>,
 }

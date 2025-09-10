@@ -91,20 +91,23 @@ impl Cursor {
 pub struct BufferManagerFactory<K> {
     bufmans: Arc<DashMap<K, Arc<BufferManager>>>,
     root_path: Arc<Path>,
-    path_function: fn(&Path, &K) -> PathBuf,
+    path_function: Box<dyn Fn(&Path, &K) -> PathBuf>,
     buffer_size: usize,
 }
+
+unsafe impl<K> Send for BufferManagerFactory<K> {}
+unsafe impl<K> Sync for BufferManagerFactory<K> {}
 
 impl<K: Hash + Eq + Clone> BufferManagerFactory<K> {
     pub fn new(
         root_path: Arc<Path>,
-        path_function: fn(&Path, &K) -> PathBuf,
+        path_function: impl Fn(&Path, &K) -> PathBuf + 'static,
         buffer_size: usize,
     ) -> Self {
         Self {
             bufmans: Arc::new(DashMap::new()),
             root_path,
-            path_function,
+            path_function: Box::new(path_function),
             buffer_size,
         }
     }

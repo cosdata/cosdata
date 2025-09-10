@@ -57,6 +57,13 @@ pub(crate) async fn create_tf_idf_index(
     .await
 }
 
+pub(crate) async fn create_om_index(
+    collection_id: String,
+    ctx: Arc<AppContext>,
+) -> Result<(), IndexesError> {
+    repo::create_om_index(ctx, collection_id).await
+}
+
 pub(crate) async fn get_index(
     collection_id: String,
     ctx: Arc<AppContext>,

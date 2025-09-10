@@ -3,6 +3,7 @@ use crate::indexes::hnsw::offset_counter::{HNSWIndexFileOffsetCounter, IndexFile
 use crate::indexes::hnsw::types::HNSWHyperParams;
 use crate::indexes::hnsw::{DenseInputEmbedding, HNSWIndex};
 use crate::indexes::inverted::InvertedIndex;
+use crate::indexes::om::OmIndex;
 use crate::indexes::tf_idf::TFIDFIndex;
 use crate::indexes::IndexOps;
 use crate::metadata::{pseudo_level_probs, pseudo_node_vector, pseudo_root_id};
@@ -258,5 +259,21 @@ pub async fn init_tf_idf_index_for_collection(
     ctx.ain_env
         .collections_map
         .insert_tf_idf_index(collection, index.clone())?;
+    Ok(index)
+}
+
+pub async fn init_om_index_for_collection(
+    ctx: Arc<AppContext>,
+    collection: &Collection,
+) -> Result<Arc<OmIndex>, WaCustomError> {
+    let collection_path: Arc<Path> = collection.get_path();
+    let index_path = collection_path.join("om_index");
+    fs::create_dir_all(&index_path).map_err(|e| WaCustomError::FsError(e.to_string()))?;
+
+    let index = Arc::new(OmIndex::new(&index_path)?);
+
+    ctx.ain_env
+        .collections_map
+        .insert_om_index(collection, index.clone())?;
     Ok(index)
 }

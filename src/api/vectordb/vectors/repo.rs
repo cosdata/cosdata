@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
+use crate::models::collection::OmVectorEmbedding;
 use crate::models::types::DocumentId;
+use crate::models::wal::VectorOp;
 use crate::models::{
     collection::Collection, collection_transaction::ExplicitTransaction, types::VectorId,
 };
@@ -78,6 +80,17 @@ pub(crate) fn upsert_vectors_in_transaction(
     collection
         .run_upload(vectors.into_iter().map(Into::into).collect(), transaction)
         .map_err(VectorsError::WaCustom)
+}
+
+pub(crate) fn upsert_om_vectors_in_transaction(
+    _collection: &Collection,
+    transaction: &ExplicitTransaction,
+    vectors: Vec<OmVectorEmbedding>,
+) -> Result<(), VectorsError> {
+    transaction
+        .wal
+        .append(VectorOp::OmUpsert(vectors))
+        .map_err(|e| VectorsError::WaCustom(e.into()))
 }
 
 pub(crate) async fn check_vector_existence(

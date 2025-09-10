@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::{
     api_service::{
         init_hnsw_index_for_collection, init_inverted_index_for_collection,
-        init_tf_idf_index_for_collection,
+        init_om_index_for_collection, init_tf_idf_index_for_collection,
     },
     app_context::AppContext,
     models::types::{DistanceMetric, QuantizationMetric},
@@ -122,6 +122,27 @@ pub(crate) async fn create_tf_idf_index(
     }
 
     init_tf_idf_index_for_collection(ctx, &collection, sample_threshold, k1, b)
+        .await
+        .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;
+
+    Ok(())
+}
+
+pub(crate) async fn create_om_index(
+    ctx: Arc<AppContext>,
+    collection_name: String,
+) -> Result<(), IndexesError> {
+    let collection = ctx
+        .ain_env
+        .collections_map
+        .get_collection(&collection_name)
+        .ok_or(IndexesError::CollectionNotFound)?;
+
+    if collection.get_om_index().is_some() {
+        return Err(IndexesError::IndexAlreadyExists("om".to_string()));
+    }
+
+    init_om_index_for_collection(ctx, &collection)
         .await
         .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;
 

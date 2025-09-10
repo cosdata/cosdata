@@ -3,6 +3,7 @@ use std::sync::Arc;
 use self::vectors::dtos::CreateVectorDto;
 
 use super::{dtos::CreateTransactionResponseDto, error::TransactionError};
+use crate::models::collection::OmVectorEmbedding;
 use crate::models::collection_transaction::{
     ExplicitTransaction, ExplicitTransactionID, TransactionStatus,
 };
@@ -231,6 +232,35 @@ pub(crate) async fn upsert_vectors(
     }
 
     vectors::repo::upsert_vectors_in_transaction(&collection, current_open_transaction, vectors)
+        .map_err(|e| TransactionError::FailedToCreateVector(e.to_string()))?;
+
+    Ok(())
+}
+
+pub(crate) async fn upsert_om_vectors(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    transaction_id: ExplicitTransactionID,
+    vectors: Vec<OmVectorEmbedding>,
+) -> Result<(), TransactionError> {
+    let collection = ctx
+        .ain_env
+        .collections_map
+        .get_collection(collection_id)
+        .ok_or(TransactionError::CollectionNotFound)?;
+
+    let current_open_transaction_guard = collection.current_explicit_transaction.read();
+    let Some(current_open_transaction) = &*current_open_transaction_guard else {
+        return Err(TransactionError::NotFound);
+    };
+
+    if current_open_transaction.id != transaction_id {
+        return Err(TransactionError::FailedToCreateVector(
+            "This is not the currently open transaction!".into(),
+        ));
+    }
+
+    vectors::repo::upsert_om_vectors_in_transaction(&collection, current_open_transaction, vectors)
         .map_err(|e| TransactionError::FailedToCreateVector(e.to_string()))?;
 
     Ok(())

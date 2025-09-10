@@ -49,6 +49,9 @@ impl BackgroundExplicitTransaction {
         if let Some(tf_idf_index) = &*collection.tf_idf_index.read() {
             tf_idf_index.pre_commit_transaction(collection, self.version, config)?;
         }
+        if let Some(om_index) = &*collection.om_index.read() {
+            om_index.pre_commit_transaction(collection, self.version, config)?;
+        }
         collection.flush()?;
         Ok(())
     }
@@ -261,6 +264,9 @@ impl ImplicitTransaction {
         }
         if let Some(tf_idf_index) = &*collection.tf_idf_index.read() {
             tf_idf_index.pre_commit_transaction(collection, data.version, config)?;
+        }
+        if let Some(om_index) = &*collection.om_index.read() {
+            om_index.pre_commit_transaction(collection, data.version, config)?;
         }
         collection.flush()?;
         drop(data.channel);

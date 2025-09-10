@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use rustc_hash::FxHashMap;
 
 use super::dtos;
@@ -624,4 +625,46 @@ pub(crate) async fn batch_tf_idf_search(
             .map_err(SearchError::WaCustom)?,
         warning,
     ))
+}
+
+pub(crate) async fn om_sum_query(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    request: dtos::OmSumQueryRequest,
+) -> Result<f32, SearchError> {
+    let collection = ctx
+        .ain_env
+        .collections_map
+        .get_collection(collection_id)
+        .ok_or_else(|| SearchError::CollectionNotFound(collection_id.to_string()))?;
+
+    let om_index = collection.get_om_index().ok_or_else(|| {
+        SearchError::IndexNotFound(format!("OM index for collection '{}'", collection_id))
+    })?;
+
+    Ok(om_index.sum(&request.labels))
+}
+
+pub(crate) async fn batch_om_sum_query(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    request: dtos::BatchOmSumQueryRequest,
+) -> Result<Vec<f32>, SearchError> {
+    let collection = ctx
+        .ain_env
+        .collections_map
+        .get_collection(collection_id)
+        .ok_or_else(|| SearchError::CollectionNotFound(collection_id.to_string()))?;
+
+    let om_index = collection.get_om_index().ok_or_else(|| {
+        SearchError::IndexNotFound(format!("OM index for collection '{}'", collection_id))
+    })?;
+
+    let sums = request
+        .queries
+        .into_par_iter()
+        .map(|query| om_index.sum(&query.labels))
+        .collect();
+
+    Ok(sums)
 }

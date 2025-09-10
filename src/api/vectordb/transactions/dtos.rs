@@ -1,6 +1,6 @@
 use crate::{
     api::vectordb::vectors::dtos::CreateVectorDto,
-    models::collection_transaction::ExplicitTransactionID,
+    models::{collection::OmVectorEmbedding, collection_transaction::ExplicitTransactionID},
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -16,4 +16,9 @@ pub struct CreateTransactionResponseDto {
 #[derive(Deserialize, ToSchema)]
 pub struct UpsertDto {
     pub vectors: Vec<CreateVectorDto>,
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct OmUpsertDto {
+    pub vectors: Vec<OmVectorEmbedding>,
 }

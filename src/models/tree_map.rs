@@ -1,5 +1,6 @@
 use std::{
     marker::PhantomData,
+    mem,
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc,
@@ -81,7 +82,7 @@ pub struct VersionedItem<T> {
     pub serialized_at: RwLock<Option<FileOffset>>,
     pub version: VersionNumber,
     pub value: Option<T>,
-    pub next: Option<Box<Self>>,
+    pub prev: Option<Box<Self>>,
 }
 
 #[cfg(test)]
@@ -209,7 +210,7 @@ impl<T> std::fmt::Debug for QuotientVec<T> {
 #[cfg(test)]
 impl<T: PartialEq> PartialEq for VersionedItem<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.version == other.version && self.value == other.value && self.next == other.next
+        self.version == other.version && self.value == other.value && self.prev == other.prev
     }
 }
 
@@ -219,7 +220,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for VersionedItem<T> {
         f.debug_struct("UnsafeVersionedItem")
             .field("version", &self.version)
             .field("value", &self.value)
-            .field("next", &self.next)
+            .field("prev", &self.prev)
             .finish()
     }
 }
@@ -230,7 +231,7 @@ impl<T> VersionedItem<T> {
             serialized_at: RwLock::new(None),
             version,
             value: Some(value),
-            next: None,
+            prev: None,
         }
     }
 
@@ -239,40 +240,18 @@ impl<T> VersionedItem<T> {
             serialized_at: RwLock::new(None),
             version,
             value: None,
-            next: None,
+            prev: None,
         }
     }
 
     pub fn insert(&mut self, version: VersionNumber, value: T) {
-        self.insert_inner(Box::new(Self::new(version, value)));
+        let old = mem::replace(self, VersionedItem::new(version, value));
+        self.prev = Some(Box::new(old));
     }
 
     pub fn delete(&mut self, version: VersionNumber) {
-        self.insert_inner(Box::new(Self::new_delete(version)));
-    }
-
-    fn insert_inner(&mut self, version: Box<Self>) {
-        if let Some(next) = &mut self.next {
-            return next.insert_inner(version);
-        }
-
-        self.next = Some(version);
-    }
-
-    pub fn latest(&self) -> Option<&T> {
-        if let Some(next) = &self.next {
-            return next.latest();
-        }
-
-        self.value.as_ref()
-    }
-
-    pub fn latest_item(&self) -> &Self {
-        if let Some(next) = &self.next {
-            return next.latest_item();
-        }
-
-        self
+        let old = mem::replace(self, VersionedItem::new_delete(version));
+        self.prev = Some(Box::new(old));
     }
 }
 
@@ -311,10 +290,6 @@ impl<T> TreeMapNode<T> {
 
     pub fn get_latest(&self, quotient: u64) -> Option<&T> {
         self.quotients.get_latest(quotient)
-    }
-
-    pub fn get_versioned(&self, quotient: u64) -> Option<RwLockReadGuard<'_, VersionedItem<T>>> {
-        self.quotients.get_versioned(quotient)
     }
 }
 
@@ -409,19 +384,10 @@ impl<T> QuotientsMap<T> {
             // SAFETY: here we are changing the lifetime of the value by using
             // `std::mem::transmute`, which by definition is not safe, but given our use of
             // this value and how we destroy it, its actually safe in this context.
-            unsafe { std::mem::transmute::<Option<&T>, Option<&T>>(q.value.read().latest()) }
+            unsafe { std::mem::transmute::<Option<&T>, Option<&T>>(q.value.read().value.as_ref()) }
         });
 
         op_val.and_then(|op_val| op_val)
-    }
-
-    fn get_versioned(&self, quotient: u64) -> Option<RwLockReadGuard<'_, VersionedItem<T>>> {
-        self.map.lookup(&quotient).map(|q| {
-            // SAFETY: here we are changing the lifetime of the value by using
-            // `std::mem::transmute`, which by definition is not safe, but given our use of
-            // this value and how we destroy it, its actually safe in this context.
-            unsafe { std::mem::transmute(q.value.read()) }
-        })
     }
 }
 
@@ -534,14 +500,6 @@ impl<K: TreeMapKey, V> TreeMap<K, V> {
         let path = calculate_path(node_pos, 0);
         let node = self.root.find_or_create_node(&path);
         node.get_latest(key)
-    }
-
-    pub fn get_versioned(&self, key: &K) -> Option<RwLockReadGuard<'_, VersionedItem<V>>> {
-        let key = key.key();
-        let node_pos = (key % 65536) as u32;
-        let path = calculate_path(node_pos, 0);
-        let node = self.root.find_or_create_node(&path);
-        node.get_versioned(key)
     }
 }
 
@@ -698,14 +656,5 @@ mod tests {
         assert_eq!(map.get_latest(&0), Some(&23));
         map.insert(1.into(), &0, 29);
         assert_eq!(map.get_latest(&0), Some(&29));
-        assert_eq!(
-            map.get_versioned(&0).as_deref(),
-            Some(&VersionedItem {
-                version: 0.into(),
-                serialized_at: RwLock::new(None),
-                value: Some(23),
-                next: Some(Box::new(VersionedItem::new(1.into(), 29)))
-            })
-        );
     }
 }

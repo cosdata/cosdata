@@ -15,6 +15,7 @@ use crate::config_loader::Config;
 use crate::indexes::hnsw::{DenseInputEmbedding, HNSWIndex};
 use crate::indexes::inverted::types::SparsePair;
 use crate::indexes::inverted::{InvertedIndex, SparseInputEmbedding};
+use crate::indexes::om::OmIndex;
 use crate::indexes::tf_idf::{TFIDFIndex, TFIDFInputEmbedding};
 use crate::indexes::IndexOps;
 use crate::metadata::{MetadataFields, MetadataSchema};
@@ -47,6 +48,11 @@ pub struct TFIDFOptions {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct OmOptions {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct CollectionConfig {
     pub max_vectors: Option<u32>,
     pub replication_factor: Option<u32>,
@@ -62,6 +68,12 @@ pub struct RawVectorEmbedding {
     pub text: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct OmVectorEmbedding {
+    pub key: Vec<u32>,
+    pub value: f32,
+}
+
 #[derive(Deserialize, Clone, Serialize, Debug)]
 pub struct CollectionMetadata {
     pub name: String,
@@ -69,6 +81,7 @@ pub struct CollectionMetadata {
     pub dense_vector: DenseVectorOptions,
     pub sparse_vector: SparseVectorOptions,
     pub tf_idf_options: TFIDFOptions,
+    pub om_options: OmOptions,
     pub metadata_schema: Option<MetadataSchema>,
     pub config: CollectionConfig,
     pub store_raw_text: bool,
@@ -115,6 +128,7 @@ pub struct Collection {
     pub hnsw_index: RwLock<Option<Arc<HNSWIndex>>>,
     pub inverted_index: RwLock<Option<Arc<InvertedIndex>>>,
     pub tf_idf_index: RwLock<Option<Arc<TFIDFIndex>>>,
+    pub om_index: RwLock<Option<Arc<OmIndex>>>,
     // this field is actually NOT optional, the only reason it is wrapped in
     // `Option` is to allow us to create `Collection` first without the
     // indexing manager, because `IndexingManager`'s constructor also requires
@@ -131,6 +145,7 @@ impl Collection {
         dense_vector_options: DenseVectorOptions,
         sparse_vector_options: SparseVectorOptions,
         tf_idf_options: TFIDFOptions,
+        om_options: OmOptions,
         metadata_schema: Option<MetadataSchema>,
         collection_config: CollectionConfig,
         store_raw_text: bool,
@@ -221,6 +236,7 @@ impl Collection {
                 dense_vector: dense_vector_options,
                 sparse_vector: sparse_vector_options,
                 tf_idf_options,
+                om_options,
                 metadata_schema,
                 config: collection_config,
                 store_raw_text,
@@ -251,6 +267,7 @@ impl Collection {
             hnsw_index: RwLock::new(None),
             inverted_index: RwLock::new(None),
             tf_idf_index: RwLock::new(None),
+            om_index: RwLock::new(None),
             indexing_manager: RwLock::new(None),
             is_indexing: AtomicBool::new(false),
         });
@@ -353,6 +370,10 @@ impl Collection {
 
     pub fn get_tf_idf_index(&self) -> Option<Arc<TFIDFIndex>> {
         self.tf_idf_index.read().clone()
+    }
+
+    pub fn get_om_index(&self) -> Option<Arc<OmIndex>> {
+        self.om_index.read().clone()
     }
 
     /// Returns the raw embedding mapped to an internal id
@@ -512,6 +533,19 @@ impl Collection {
             if let Some(tf_idf_index) = &*self.tf_idf_index.read() {
                 tf_idf_index.run_upload(self, tf_idf_embs, version, config)?;
             }
+        }
+
+        Ok(())
+    }
+
+    pub fn index_om_embeddings(
+        &self,
+        embeddings: Vec<OmVectorEmbedding>,
+        version: VersionNumber,
+        config: &Config,
+    ) -> Result<(), WaCustomError> {
+        if let Some(om_index) = &*self.om_index.read() {
+            om_index.run_upload(self, embeddings, version, config)?;
         }
 
         Ok(())

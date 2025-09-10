@@ -114,6 +114,34 @@ pub(crate) async fn create_tf_idf_index(
     }))
 }
 
+/// Create a OM index for a collection
+///
+/// Creates a new OM index for the specified collection
+#[utoipa::path(
+    post,
+    path = "/vectordb/collections/{collection_id}/indexes/om",
+    params(
+        ("collection_id" = String, Path, description = "Collection identifier")
+    ),
+    responses(
+        (status = 201, description = "OM index created successfully", body = IndexResponseDto),
+        (status = 400, description = "Bad request", body = serde_json::Value),
+        (status = 404, description = "Collection not found", body = serde_json::Value),
+        (status = 409, description = "Index already exists", body = serde_json::Value),
+        (status = 500, description = "Internal server error", body = serde_json::Value)
+    ),
+    tag = "indexes"
+)]
+pub(crate) async fn create_om_index(
+    ctx: web::Data<AppContext>,
+    collection_id: web::Path<String>,
+) -> Result<HttpResponse> {
+    service::create_om_index(collection_id.into_inner(), ctx.into_inner()).await?;
+    Ok(HttpResponse::Created().json(IndexResponseDto {
+        message: "OM index created successfully".to_string(),
+    }))
+}
+
 /// Get indexes for a collection
 ///
 /// Retrieves all indexes associated with the specified collection

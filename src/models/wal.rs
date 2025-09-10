@@ -15,7 +15,7 @@ use crate::{indexes::inverted::types::SparsePair, metadata::FieldValue};
 
 use super::{
     buffered_io::{BufIoError, FilelessBufferManager},
-    collection::RawVectorEmbedding,
+    collection::{OmVectorEmbedding, RawVectorEmbedding},
     types::{DocumentId, VectorId},
     versioning::VersionNumber,
 };
@@ -24,6 +24,7 @@ use super::{
 pub enum VectorOp {
     Upsert(Vec<RawVectorEmbedding>),
     Delete(VectorId),
+    OmUpsert(Vec<OmVectorEmbedding>),
 }
 
 pub struct WALFile {
@@ -179,6 +180,7 @@ impl WALFile {
             VectorOp::Upsert(vectors) => {
                 self.records_upserted
                     .fetch_add(vectors.len() as u32, Ordering::Relaxed);
+                buf.push(0);
                 write_len(&mut buf, vectors.len() as u32);
                 for vector in &*vectors {
                     write_len(&mut buf, vector.id.len() as u32);
@@ -236,15 +238,29 @@ impl WALFile {
                         write_len(&mut buf, 0);
                     }
                 }
-                let len = buf.len() as u32 - 4;
+                let len = buf.len() as u32;
                 buf[0..4].copy_from_slice(&len.to_le_bytes());
             }
             VectorOp::Delete(id) => {
                 self.records_deleted.fetch_add(1, Ordering::Relaxed);
+                buf.push(1);
                 write_len(&mut buf, id.len() as u32);
                 buf.extend(id.as_bytes());
-                let len = buf.len() as u32 - 4;
-                buf[0..4].copy_from_slice(&(len | (1u32 << 31)).to_le_bytes());
+                let len = buf.len() as u32;
+                buf[0..4].copy_from_slice(&len.to_le_bytes());
+            }
+            VectorOp::OmUpsert(embeddings) => {
+                buf.push(2);
+                write_len(&mut buf, embeddings.len() as u32);
+                for emb in embeddings {
+                    write_len(&mut buf, emb.key.len() as u32);
+                    for hash in emb.key {
+                        buf.extend(hash.to_le_bytes());
+                    }
+                    buf.extend(emb.value.to_le_bytes());
+                }
+                let len = buf.len() as u32;
+                buf[0..4].copy_from_slice(&len.to_le_bytes());
             }
         }
         self.total_operations.fetch_add(1, Ordering::Relaxed);
@@ -263,23 +279,16 @@ impl WALFile {
             return Ok(None);
         }
 
-        let len_with_tag = self.bufman.read_u32_with_cursor(self.cursor)?;
-        let (len, is_delete) = if len_with_tag & (1u32 << 31) != 0 {
-            (0x7FFFFFFF & len_with_tag, true)
-        } else {
-            (len_with_tag, false)
-        };
+        let len = self.bufman.read_u32_with_cursor(self.cursor)?;
+        let tag = self.bufman.read_u8_with_cursor(self.cursor)?;
         self.bufman
-            .seek_with_cursor(self.cursor, len as u64 + 4 + cursor_pos)?;
+            .seek_with_cursor(self.cursor, len as u64 + cursor_pos)?;
 
         drop(guard);
 
         let cursor = self.bufman.open_cursor()?;
-        self.bufman.seek_with_cursor(cursor, cursor_pos + 4)?;
-        let op = if is_delete {
-            let id = read_string(&self.bufman, cursor)?;
-            VectorOp::Delete(VectorId::from(id))
-        } else {
+        self.bufman.seek_with_cursor(cursor, cursor_pos + 5)?;
+        let op = if tag == 0 {
             let len = read_len(&self.bufman, cursor)? as usize;
             let mut vectors = Vec::with_capacity(len);
 
@@ -353,6 +362,27 @@ impl WALFile {
             }
 
             VectorOp::Upsert(vectors)
+        } else if tag == 1 {
+            let id = read_string(&self.bufman, cursor)?;
+            VectorOp::Delete(VectorId::from(id))
+        } else {
+            debug_assert_eq!(tag, 2);
+            let len = read_len(&self.bufman, cursor)?;
+
+            let mut embeddings = Vec::with_capacity(len as usize);
+
+            for _ in 0..len {
+                let len = read_len(&self.bufman, cursor)?;
+                let mut key = Vec::with_capacity(len as usize);
+                for _ in 0..len {
+                    let hash = self.bufman.read_u32_with_cursor(cursor)?;
+                    key.push(hash);
+                }
+                let value = self.bufman.read_f32_with_cursor(cursor)?;
+                embeddings.push(OmVectorEmbedding { key, value });
+            }
+
+            VectorOp::OmUpsert(embeddings)
         };
 
         Ok(Some(op))

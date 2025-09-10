@@ -4,6 +4,7 @@ use crate::{
     api::vectordb::vectors::dtos::CreateVectorDto,
     app_context::AppContext,
     models::{
+        collection::OmVectorEmbedding,
         collection_transaction::{ExplicitTransactionID, TransactionStatus},
         types::VectorId,
     },
@@ -67,4 +68,13 @@ pub(crate) async fn upsert_vectors(
     vectors: Vec<CreateVectorDto>,
 ) -> Result<(), TransactionError> {
     repo::upsert_vectors(ctx, collection_id, transaction_id, vectors).await
+}
+
+pub(crate) async fn upsert_om_vectors(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    transaction_id: ExplicitTransactionID,
+    vectors: Vec<OmVectorEmbedding>,
+) -> Result<(), TransactionError> {
+    repo::upsert_om_vectors(ctx, collection_id, transaction_id, vectors).await
 }

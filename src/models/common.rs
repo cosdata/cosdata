@@ -538,6 +538,12 @@ impl<K: Eq + Hash, V> TSHashTable<K, V> {
         ht.get(k).cloned()
     }
 
+    pub fn contains_key(&self, k: &K) -> bool {
+        let index = self.hash_key(k);
+        let ht = self.hash_table_list[index].lock().unwrap();
+        ht.contains_key(k)
+    }
+
     pub fn mutate<F>(&self, k: K, f: F)
     where
         F: FnOnce(Option<V>) -> Option<V>,
@@ -582,7 +588,7 @@ impl<K: Eq + Hash, V> TSHashTable<K, V> {
     // works exactly like `modify_or_insert`, but takes a value `T`, which is passed to both
     // closures (only one actually runs, so only passed to one of them), which is not possible
     // with `modify_or_insert` because of Rust's borrow checking rules
-    pub fn modify_or_insert_with_value<M, I, T>(&self, k: K, v: T, modify: M, insert: I)
+    pub fn modify_or_insert_with_value<M, I, T>(&self, k: K, v: T, modify: M, insert: I) -> bool
     where
         M: FnOnce(T, &mut V),
         I: FnOnce(T) -> V,
@@ -592,9 +598,11 @@ impl<K: Eq + Hash, V> TSHashTable<K, V> {
         match ht.entry(k) {
             Entry::Occupied(mut entry) => {
                 modify(v, entry.get_mut());
+                false
             }
             Entry::Vacant(entry) => {
                 entry.insert(insert(v));
+                true
             }
         }
     }
@@ -701,6 +709,25 @@ impl<K: Eq + Hash, V> TSHashTable<K, V> {
                 ht.iter()
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    pub fn clear(&self) {
+        self.hash_table_list
+            .iter()
+            .for_each(|ht| ht.lock().unwrap().clear());
+    }
+
+    pub fn keys(&self) -> Vec<K>
+    where
+        K: Clone,
+    {
+        self.hash_table_list
+            .iter()
+            .flat_map(|ht| {
+                let ht = ht.lock().unwrap();
+                ht.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>()
             })
             .collect()
     }

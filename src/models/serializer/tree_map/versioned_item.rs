@@ -19,35 +19,23 @@ impl<T: SimpleSerialize> TreeMapSerialize for VersionedItem<T> {
         data_bufmans: &BufferManagerFactory<VersionNumber>,
         cursor: u64,
     ) -> Result<u32, BufIoError> {
-        let (next_offset, next_version) = if let Some(next) = &self.next {
-            (
-                next.serialize(dim_bufman, data_bufmans, cursor)?,
-                *next.version,
-            )
-        } else {
-            (u32::MAX, u32::MAX)
-        };
         let offset_read_guard = self.serialized_at.read();
         if let Some(FileOffset(offset)) = *offset_read_guard {
-            let bufman = data_bufmans.get(self.version)?;
-            let cursor = bufman.open_cursor()?;
-            bufman.seek_with_cursor(cursor, offset as u64)?;
-            bufman.update_u32_with_cursor(cursor, next_offset)?;
-            bufman.update_u32_with_cursor(cursor, next_version)?;
-            bufman.close_cursor(cursor)?;
             return Ok(offset);
         }
         drop(offset_read_guard);
         let mut offset_write_guard = self.serialized_at.write();
         if let Some(FileOffset(offset)) = *offset_write_guard {
-            let bufman = data_bufmans.get(self.version)?;
-            let cursor = bufman.open_cursor()?;
-            bufman.seek_with_cursor(cursor, offset as u64)?;
-            bufman.update_u32_with_cursor(cursor, next_offset)?;
-            bufman.update_u32_with_cursor(cursor, next_version)?;
-            bufman.close_cursor(cursor)?;
             return Ok(offset);
         }
+        let (prev_offset, prev_version) = if let Some(prev) = &self.prev {
+            (
+                prev.serialize(dim_bufman, data_bufmans, cursor)?,
+                *prev.version,
+            )
+        } else {
+            (u32::MAX, u32::MAX)
+        };
 
         let mut buf = Vec::with_capacity(16);
         let bufman = data_bufmans.get(self.version)?;
@@ -59,8 +47,8 @@ impl<T: SimpleSerialize> TreeMapSerialize for VersionedItem<T> {
             u32::MAX
         };
 
-        buf.extend(next_offset.to_le_bytes());
-        buf.extend(next_version.to_le_bytes());
+        buf.extend(prev_offset.to_le_bytes());
+        buf.extend(prev_version.to_le_bytes());
         buf.extend(self.version.to_le_bytes());
         buf.extend(value_offset.to_le_bytes());
 
@@ -81,8 +69,8 @@ impl<T: SimpleSerialize> TreeMapSerialize for VersionedItem<T> {
         let bufman = data_bufmans.get(version)?;
         let cursor = bufman.open_cursor()?;
         bufman.seek_with_cursor(cursor, offset.0 as u64)?;
-        let next_offset = bufman.read_u32_with_cursor(cursor)?;
-        let next_version = bufman.read_u32_with_cursor(cursor)?;
+        let prev_offset = bufman.read_u32_with_cursor(cursor)?;
+        let prev_version = bufman.read_u32_with_cursor(cursor)?;
         let version = VersionNumber::from(bufman.read_u32_with_cursor(cursor)?);
         let value_offset = bufman.read_u32_with_cursor(cursor)?;
         bufman.close_cursor(cursor)?;
@@ -91,14 +79,14 @@ impl<T: SimpleSerialize> TreeMapSerialize for VersionedItem<T> {
         } else {
             Some(T::deserialize(&bufman, FileOffset(value_offset))?)
         };
-        let next = if next_offset == u32::MAX {
+        let prev = if prev_offset == u32::MAX {
             None
         } else {
             Some(Box::new(Self::deserialize(
                 dim_bufman,
                 data_bufmans,
-                FileOffset(next_offset),
-                VersionNumber::from(next_version),
+                FileOffset(prev_offset),
+                VersionNumber::from(prev_version),
             )?))
         };
 
@@ -106,7 +94,7 @@ impl<T: SimpleSerialize> TreeMapSerialize for VersionedItem<T> {
             serialized_at: RwLock::new(Some(offset)),
             version,
             value,
-            next,
+            prev,
         })
     }
 }

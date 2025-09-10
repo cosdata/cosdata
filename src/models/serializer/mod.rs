@@ -81,6 +81,13 @@ pub trait SimpleSerialize: Sized {
     fn deserialize(bufman: &BufferManager, offset: FileOffset) -> Result<Self, BufIoError>;
 }
 
+pub trait InlineSerialize: Sized {
+    const SIZE: usize;
+
+    fn serialize(&self, vec: &mut Vec<u8>, bufman: &BufferManager) -> Result<(), BufIoError>;
+    fn deserialize(bufman: &BufferManager, cursor: u64) -> Result<Self, BufIoError>;
+}
+
 impl SimpleSerialize for u16 {
     fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
         Ok(bufman.write_to_end_of_file(cursor, &self.to_le_bytes())? as u32)
@@ -199,5 +206,31 @@ impl SimpleSerialize for u32 {
 
     fn deserialize(_bufman: &BufferManager, offset: FileOffset) -> Result<Self, BufIoError> {
         Ok(offset.0)
+    }
+}
+
+impl InlineSerialize for f32 {
+    const SIZE: usize = 4;
+
+    fn serialize(&self, vec: &mut Vec<u8>, _bufman: &BufferManager) -> Result<(), BufIoError> {
+        vec.extend(self.to_le_bytes());
+        Ok(())
+    }
+
+    fn deserialize(bufman: &BufferManager, cursor: u64) -> Result<Self, BufIoError> {
+        bufman.read_f32_with_cursor(cursor)
+    }
+}
+
+impl InlineSerialize for u32 {
+    const SIZE: usize = 4;
+
+    fn serialize(&self, vec: &mut Vec<u8>, _bufman: &BufferManager) -> Result<(), BufIoError> {
+        vec.extend(self.to_le_bytes());
+        Ok(())
+    }
+
+    fn deserialize(bufman: &BufferManager, cursor: u64) -> Result<Self, BufIoError> {
+        bufman.read_u32_with_cursor(cursor)
     }
 }

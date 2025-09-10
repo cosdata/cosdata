@@ -74,6 +74,7 @@ impl DurableWALFile {
         match op {
             VectorOp::Upsert(vectors) => {
                 self.records_upserted += vectors.len() as u32;
+                buf.push(0);
                 write_len(&mut buf, vectors.len() as u32);
                 for vector in &*vectors {
                     write_len(&mut buf, vector.id.len() as u32);
@@ -131,14 +132,29 @@ impl DurableWALFile {
                         write_len(&mut buf, 0);
                     }
                 }
-                let len = buf.len() as u32 - 4;
+                let len = buf.len() as u32;
                 buf[0..4].copy_from_slice(&len.to_le_bytes());
             }
             VectorOp::Delete(id) => {
+                buf.push(1);
                 write_len(&mut buf, id.len() as u32);
                 buf.extend(id.as_bytes());
-                let len = buf.len() as u32 - 4;
-                buf[0..4].copy_from_slice(&(len | (1u32 << 31)).to_le_bytes());
+                let len = buf.len() as u32;
+                buf[0..4].copy_from_slice(&len.to_le_bytes());
+            }
+            VectorOp::OmUpsert(embeddings) => {
+                buf.push(2);
+                write_len(&mut buf, embeddings.len() as u32);
+
+                for emb in embeddings {
+                    write_len(&mut buf, emb.key.len() as u32);
+                    for hash in emb.key {
+                        buf.extend(hash.to_le_bytes());
+                    }
+                    buf.extend(emb.value.to_le_bytes());
+                }
+                let len = buf.len() as u32;
+                buf[0..4].copy_from_slice(&len.to_le_bytes());
             }
         }
 

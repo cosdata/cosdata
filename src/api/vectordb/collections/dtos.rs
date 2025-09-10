@@ -1,6 +1,6 @@
 use crate::metadata;
 use crate::models::collection::{
-    CollectionConfig, DenseVectorOptions, SparseVectorOptions, TFIDFOptions,
+    CollectionConfig, DenseVectorOptions, OmOptions, SparseVectorOptions, TFIDFOptions,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -80,6 +80,7 @@ pub(crate) struct CreateCollectionDto {
     pub dense_vector: DenseVectorOptions,
     pub sparse_vector: SparseVectorOptions,
     pub tf_idf_options: TFIDFOptions,
+    pub om_options: OmOptions,
     pub metadata_schema: Option<MetadataSchemaParam>, //object (optional)
     pub config: CollectionConfig,
     #[serde(default)]

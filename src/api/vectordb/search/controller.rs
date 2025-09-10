@@ -4,9 +4,10 @@ use crate::app_context::AppContext;
 use crate::models::collection_cache::CollectionCacheExt;
 
 use super::dtos::{
-    BatchDenseSearchRequestDto, BatchSearchResponseDto, BatchSearchTFIDFDocumentsDto,
-    BatchSparseSearchRequestDto, DenseSearchRequestDto, FindSimilarTFIDFDocumentDto,
-    HybridSearchRequestDto, SearchResponseDto, SparseSearchRequestDto, BatchHybridSearchRequestDto,
+    BatchDenseSearchRequestDto, BatchHybridSearchRequestDto, BatchOmSumQueryRequest,
+    BatchSearchResponseDto, BatchSearchTFIDFDocumentsDto, BatchSparseSearchRequestDto,
+    DenseSearchRequestDto, FindSimilarTFIDFDocumentDto, HybridSearchRequestDto, OmSumQueryRequest,
+    SearchResponseDto, SparseSearchRequestDto,
 };
 use super::error::SearchError;
 
@@ -262,5 +263,61 @@ pub(crate) async fn batch_tf_idf_search(
         .map_err(|e| SearchError::InternalServerError(format!("Cache update error: {}", e)))?;
 
     let results = service::batch_tf_idf_search(ctx.into_inner(), &collection_id, body).await?;
+    Ok(HttpResponse::Ok().json(results))
+}
+
+#[utoipa::path(
+    post,
+    path = "/vectordb/collections/{collection_id}/search/om-sum",
+    tag = "search",
+    params(
+        ("collection_id" = String, Path, description = "Collection identifier")
+    ),
+    request_body = OmSumQueryRequest,
+    responses(
+        (status = 200, description = "Sum query successfully completed", body = BatchSearchResponseDto),
+        (status = 404, description = "Collection not found", body = String),
+        (status = 400, description = "Invalid request error", body = String),
+        (status = 500, description = "Internal server error", body = String)
+    )
+)]
+pub(crate) async fn om_sum_query(
+    path: web::Path<String>,
+    web::Json(body): web::Json<OmSumQueryRequest>,
+    ctx: web::Data<AppContext>,
+) -> Result<HttpResponse, SearchError> {
+    let collection_id = path.into_inner();
+    ctx.update_collection_for_query(&collection_id)
+        .map_err(|e| SearchError::InternalServerError(format!("Cache update error: {}", e)))?;
+
+    let results = service::om_sum_query(ctx.into_inner(), &collection_id, body).await?;
+    Ok(HttpResponse::Ok().json(results))
+}
+
+#[utoipa::path(
+    post,
+    path = "/vectordb/collections/{collection_id}/search/batch-om-sum",
+    tag = "search",
+    params(
+        ("collection_id" = String, Path, description = "Collection identifier")
+    ),
+    request_body = BatchOmSumQueryRequest,
+    responses(
+        (status = 200, description = "Sum query successfully completed", body = BatchSearchResponseDto),
+        (status = 404, description = "Collection not found", body = String),
+        (status = 400, description = "Invalid request error", body = String),
+        (status = 500, description = "Internal server error", body = String)
+    )
+)]
+pub(crate) async fn batch_om_sum_query(
+    path: web::Path<String>,
+    web::Json(body): web::Json<BatchOmSumQueryRequest>,
+    ctx: web::Data<AppContext>,
+) -> Result<HttpResponse, SearchError> {
+    let collection_id = path.into_inner();
+    ctx.update_collection_for_query(&collection_id)
+        .map_err(|e| SearchError::InternalServerError(format!("Cache update error: {}", e)))?;
+
+    let results = service::batch_om_sum_query(ctx.into_inner(), &collection_id, body).await?;
     Ok(HttpResponse::Ok().json(results))
 }

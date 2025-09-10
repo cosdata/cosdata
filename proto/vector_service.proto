@@ -90,6 +90,10 @@ message TFIDFOptions {
     bool enabled = 1;
 }
 
+message OmOptions {
+    bool enabled = 1;
+}
+
 message CollectionConfig {
     optional uint32 max_vectors = 1;
     optional uint32 replication_factor = 2;
@@ -101,9 +105,10 @@ message CreateCollectionRequest {
     DenseVectorOptions dense_vector = 3;
     SparseVectorOptions sparse_vector = 4;
     TFIDFOptions tf_idf_options = 5;
-    optional MetadataSchema metadata_schema = 6;
-    CollectionConfig config = 7;
-    optional bool store_raw_text = 8;
+    OmOptions om_options = 6;
+    optional MetadataSchema metadata_schema = 7;
+    CollectionConfig config = 8;
+    optional bool store_raw_text = 9;
 }
 
 message CreateCollectionResponse {

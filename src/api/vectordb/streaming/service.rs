@@ -4,7 +4,7 @@ use super::repo;
 use crate::{
     api::vectordb::{transactions::error::TransactionError, vectors::dtos::CreateVectorDto},
     app_context::AppContext,
-    models::types::VectorId,
+    models::{collection::OmVectorEmbedding, types::VectorId},
 };
 
 pub(crate) async fn upsert_vectors(
@@ -13,6 +13,14 @@ pub(crate) async fn upsert_vectors(
     vectors: Vec<CreateVectorDto>,
 ) -> Result<(), TransactionError> {
     repo::upsert_vectors(ctx, collection_id, vectors).await
+}
+
+pub(crate) async fn upsert_om_vectors(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    vectors: Vec<OmVectorEmbedding>,
+) -> Result<(), TransactionError> {
+    repo::upsert_om_vectors(ctx, collection_id, vectors).await
 }
 
 pub(crate) async fn delete_vector_by_id(

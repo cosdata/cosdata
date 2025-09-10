@@ -2,10 +2,11 @@ use crate::app_context::AppContext;
 use std::sync::Arc;
 
 use super::dtos::{
-    BatchDenseSearchRequestDto, BatchHybridSearchRequestDto, BatchSearchResponseDto,
-    BatchSearchTFIDFDocumentsDto, BatchSparseSearchRequestDto, DenseSearchRequestDto,
-    FindSimilarTFIDFDocumentDto, HybridSearchRequestDto, SearchResponseDto, SearchResultItemDto,
-    SparseSearchRequestDto,
+    BatchDenseSearchRequestDto, BatchHybridSearchRequestDto, BatchOmSumQueryRequest,
+    BatchOmSumQueryResponse, BatchSearchResponseDto, BatchSearchTFIDFDocumentsDto,
+    BatchSparseSearchRequestDto, DenseSearchRequestDto, FindSimilarTFIDFDocumentDto,
+    HybridSearchRequestDto, OmSumQueryRequest, OmSumQueryResponse, SearchResponseDto,
+    SearchResultItemDto, SparseSearchRequestDto,
 };
 use super::error::SearchError;
 use super::repo;
@@ -200,4 +201,24 @@ pub(crate) async fn batch_tf_idf_search(
             .collect(),
         warning,
     })
+}
+
+pub(crate) async fn om_sum_query(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    request: OmSumQueryRequest,
+) -> Result<OmSumQueryResponse, SearchError> {
+    let sum = repo::om_sum_query(ctx, collection_id, request).await?;
+
+    Ok(OmSumQueryResponse { sum })
+}
+
+pub(crate) async fn batch_om_sum_query(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    request: BatchOmSumQueryRequest,
+) -> Result<BatchOmSumQueryResponse, SearchError> {
+    let sums = repo::batch_om_sum_query(ctx, collection_id, request).await?;
+
+    Ok(BatchOmSumQueryResponse { sums })
 }
