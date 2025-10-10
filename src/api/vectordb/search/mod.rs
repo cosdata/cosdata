@@ -1,7 +1,7 @@
 use actix_web::{web, Scope};
 use controller::{
-    batch_dense_search, batch_sparse_search, batch_tf_idf_search, batch_hybrid_search, dense_search, hybrid_search,
-    sparse_search, tf_idf_search,
+    batch_dense_search, batch_hybrid_search, batch_sparse_search, batch_tf_idf_search,
+    dense_search, hybrid_search, sparse_search, tf_idf_search,
 };
 
 pub mod controller;
