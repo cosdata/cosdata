@@ -291,60 +291,42 @@ where
         let mut oldest_counter = u32::MAX;
 
         for entry in self.map.iter() {
-            let (key, (value, counter_val)) = entry.pair();
+            let (key, (_, counter_val)) = entry.pair();
             if *counter_val < oldest_counter {
                 oldest_counter = *counter_val;
-                oldest_pair = Some((key.clone(), value.clone()));
+                oldest_pair = Some((key.clone()));
             }
         }
 
-        if let Some((key, value)) = oldest_pair {
-            // If item didn't exist it will return None. This can
-            // happen if another thread finds the same item to evict
-            // and "wins". This implies for temporarily the dashmap
-            // size could exceed max capacity. It's fine for now but
-            // needs to be fixed.
-            if let Some(evict_hook) = self.evict_hook {
-                evict_hook(&value);
-            }
-            let removed = self.map.remove(&key);
-            if removed.is_none() {
-                log::warn!("Item already evicted by another thread");
+        if let Some(key) = oldest_pair {
+            if let Some((key, (value, _))) = self.map.remove(&key) {
+                if let Some(evict_hook) = self.evict_hook {
+                    evict_hook(&value);
+                }
             }
         }
     }
 
     fn evict_lru_probabilistic(&self, strategy: &ProbEviction) {
-        let num_to_evict = (1.0_f32 / strategy.prob.to_f32()) as u8;
+        let num_to_evict = self
+            .map
+            .len()
+            .checked_sub(self.capacity)
+            .unwrap_or_default();
         if num_to_evict > 0 {
-            let global_counter = self.counter.load(Ordering::SeqCst);
-            let mut pairs_to_evict = Vec::with_capacity(num_to_evict as usize);
-            // @TODO: What if num_to_evict is > 256?
-            for (idx, key) in self.index.get_keys(num_to_evict) {
-                if pairs_to_evict.len() as u8 >= num_to_evict {
-                    break;
-                }
-                if let Some(entry) = self.map.get(&K::from(key)) {
-                    let (key, (value, counter_val)) = entry.pair();
-                    if strategy.should_evict(global_counter, *counter_val) {
-                        // @NOTE: We need to collect the pairs in a
-                        // vector and remove the keys from the dashmap
-                        // later whereas values are used for calling
-                        // `evict_hook` (if specified). Directly
-                        // calling the `remove` method here causes a
-                        // deadlock because of the existing reference
-                        // into the dashmap. See `DashMap.remove` docs
-                        // for more info.
-                        pairs_to_evict.push((idx, key.clone(), value.clone()));
+            let keys: Vec<_> = self
+                .map
+                .iter()
+                .map(|entry| (entry.key().clone(), entry.1))
+                .collect();
+            let oldest_keys = take_j_smallest(keys, num_to_evict);
+
+            for (key, _) in oldest_keys {
+                if let Some((key, (value, _))) = self.map.remove(&key) {
+                    if let Some(hook) = self.evict_hook {
+                        hook(&value)
                     }
                 }
-            }
-            for (idx, key, value) in pairs_to_evict {
-                if let Some(evict_hook) = self.evict_hook {
-                    evict_hook(&value)
-                }
-                self.map.remove(&key);
-                self.index.remove(idx);
             }
         }
     }
@@ -368,7 +350,7 @@ where
     /// Removes an entry from the cache.
     ///
     /// Returns the value if the key was present, otherwise `None`.
-    pub fn remove(&self, key: &K) -> Option<V> {
+    pub fn remove(&self, key: &K) {
         if let Some((k, (v, _))) = self.map.remove(key) {
             // Call the evict hook if provided
             if let Some(hook) = self.evict_hook {
@@ -377,11 +359,34 @@ where
             // Remove all instances of the key from the eviction index
             let key_u64: u64 = k.into();
             self.index.remove_key(key_u64);
-            Some(v)
-        } else {
-            None
         }
     }
+}
+
+fn take_j_smallest<K>(mut arr: Vec<(K, u32)>, j: usize) -> Vec<(K, u32)> {
+    if j == 0 {
+        return Vec::new();
+    }
+    if j >= arr.len() {
+        return arr;
+    }
+
+    // Find the j-th smallest value
+    let (_, &mut (_, threshold), _) =
+        arr.select_nth_unstable_by_key(j - 1, |(_, counter)| *counter);
+
+    // Keep exactly j elements that are <= threshold
+    let mut remaining = j;
+    arr.retain(|&(_, val)| {
+        if remaining > 0 && val <= threshold {
+            remaining -= 1;
+            true // keep it
+        } else {
+            false // drop it
+        }
+    });
+
+    arr
 }
 
 pub struct Values<'a, K: 'a, V: 'a> {
