@@ -294,7 +294,7 @@ where
             let (key, (_, counter_val)) = entry.pair();
             if *counter_val < oldest_counter {
                 oldest_counter = *counter_val;
-                oldest_pair = Some((key.clone()));
+                oldest_pair = Some(key.clone());
             }
         }
 
