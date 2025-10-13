@@ -38,16 +38,15 @@
 
 # 🚀 Overview
 
-Cosdata is cutting-edge AI data platform engineered for exceptional performance. Featuring immutability and version control, it's designed to elevate a wide range of AI and machine learning projects.
+Cosdata is a next-generation retrieval infrastructure engineered for AI-native applications that demand relevance beyond simple vector similarity. Built with immutability and version control at its core, Cosdata delivers exceptional performance for modern semantic search and retrieval workloads.
+Cosdata advances retrieval technology through a relevance-first architecture that combines multiple search modalities:
 
-Cosdata is at the forefront of advancing search technology, excelling in critical areas that will define the next generation of search pipelines:
-- **Semantic Search**: Leverage embedding-based hybrid search, seamlessly managing both dense and sparse vectors to deliver deep semantic analysis.
-- **Structured Knowledge Graphs**: Sophisticated context retrieval by leveraging structured knowledge graphs.
-- **Hybrid Search Capabilities**: Combine explicit relationship queries with vector similarity search.
-- **Real-Time Search at Scale**: Execute real-time vector search with unmatched scalability, ensuring that your search pipeline performs flawlessly under any load.
-- **ML Pipeline Integration**: Enjoy seamless integration with your existing machine learning pipeline, enhancing your search capabilities without disrupting your workflow.
+- **Multi-Modal Retrieval**: Seamlessly integrate BM25 full-text search, HNSW dense vectors, SPLADE learned sparse embeddings, and metadata-rich sparse vectors in a unified platform
+- **Context-Aware Capabilities**: Leverage geofencing, hierarchical document organization, and explainable ranking that understands user intent and real-world complexity
+- **Enterprise-Grade Architecture**: Benefit from colocated storage, streaming ingestion, transactional versioning, and comprehensive security features
+- **Relevance Optimization**: Move beyond cosine similarity with sophisticated ranking algorithms that optimize for actual user satisfaction, not just mathematical proximity
 
-Cosdata is designed to meet the demands of modern search applications, empowering businesses to harness the full potential of their data.
+Cosdata is designed to meet the demands of production AI applications, delivering 60-120% reduction in compute requirements while improving retrieval quality by 20-50% (NDCG@10).
 
 <br>
 
@@ -504,13 +503,15 @@ const results = await collection.getSearch().dense({
 # ✨ Features
 
 ### Search Relevance
-- **Hybrid Search**: Enhance search precision with our vector database, leveraging the power of combined sparse and dense vector searches to deliver highly relevant, context-rich results for complex queries.
-- **Knowledge-Graph**: Improve the relevance of your search results by seamlessly combining structured information from knowledge graphs with the nuanced semantics of vector embedding, enabling our vector database to deliver richer and more relevant insights.
+
+- **Hybrid Multi-Modal Search**: Combine BM25 full-text search with dense vector similarity (HNSW) and SPLADE learned sparse representations to deliver highly relevant results that balance lexical matching, semantic understanding, and context
+- **Metadata-Rich Retrieval**: Search across hierarchical document structures with inherited metadata, enabling complex boolean queries, temporal filtering, and geospatial ranking without requiring embedding models
+- **Explainable Results**: Understand exactly why results were surfaced with transparent scoring that decomposes semantic similarity, metadata matches, geographic relevance, and hierarchical relationships
 
 ### High performance
-- **Indexing**: Experience lightning-fast indexing with our vector database, optimized for handling high-dimensional data at scale. Our advanced indexing algorithms ensure that your sparse and dense vectors are always ready for instant querying, no matter how large or complex your dataset grows.
-- **Latency**: Power your applications with lightning-fast search performance—our vector database is engineered to deliver exceptionally fast query responses.
-- **Requests per second**: Achieve industry-leading concurrent requests per second (RPS) across different indices with an advanced architecture designed for optimal performance under heavy loads.
+- **Blazing-Fast Indexing**: Achieve up to 12× faster indexing than Elasticsearch on large datasets with optimized implementations for both full-text and vector workloads
+- **Ultra-Low Latency**: Power applications with sub-100ms response times—our BM25 implementation delivers up to 151× higher QPS than Elasticsearch on benchmark datasets, while dense vector search achieves 1758+ QPS on million-record datasets
+- **Massive Throughput**: Handle thousands of concurrent requests per second with an architecture designed for optimal performance under heavy loads, outperforming competitors by 42-146% on standard benchmarks
 
 ### Customizable
 - **Configurability**: Gain precise control over your setup with manual configuration of all indexing and querying hyperparameters, enabling you to optimize performance, resource utilization and tailor results to your exact specifications.
@@ -527,17 +528,15 @@ const results = await collection.getSearch().dense({
 - **Product quantization**: A pioneering product quantization approach to not only compress data more effectively but also enhance recall performance beyond what scalar quantization offers, optimizing both data efficiency and retrieval recall.
 
 ### Enterprise-grade
-- **Data isolation**: Experience enterprise-grade privacy with our vector database, providing robust data isolation to ensure secure and consistent access.
-- **Data security**: Achieve reliable data security with our vector database, designed with robust safeguards such as role-based-access-control to protect your information and maintain its integrity against unauthorized access and threats.
-- **Multiple deployment modes**: Deploy our vector database in various environments—whether at the edge, in a private cloud, public cloud, or serverless setup—providing you with flexible, scalable solutions to meet your unique operational needs.
-- **Reliability**: Cosdata delivers reliable performance and data integrity with fault-tolerance, backup, and recovery features, designed to meet enterprise demands and ensure uninterrupted operation.
-- **Versioning**: Experience Git-like version control with our vector database, enabling you to compare search performance, use time travel to access past states, audit data, and effortlessly roll back when necessary.
+- **Colocated Storage**: Eliminate architectural complexity by storing document chunks, embeddings, and metadata together—retrieve complete content in a single operation without external database calls
+- **Versioning & Time Travel**: Query historical data states with immutable, append-only architecture supporting transactional indexing, A/B testing, and full audit trails
+- **Streaming Ingestion**: Process real-time data feeds with immediate queryability while maintaining consistency guarantees and enterprise-grade durability
+Production-Ready Security: Deploy with end-to-end encryption, optional client-side encryption for zero-trust environments, and fine-grained RBAC for multi-tenant use cases
 
 ### Easy to use
 - **Auto-configuration of hyper-parameters**: Achieve peak performance with our vector database, utilizing insights-driven auto-configuration of hyperparameters to automatically fine-tune your system for the best results, no manual adjustments needed.
 - **Intuitive API**: Elegantly crafted HTTP Restful APIs featuring _"Transactions as a resource"_. Manage all functions of our vector database effortlessly with intuitive HTTP RESTful APIs.
 - **Client SDKs in your favourite language**: Access our vector database effortlessly with client SDKs available in multiple programming languages.
-- **Powerful and expressive cosQuery language**: Leverage cosQuery, a powerful and expressive declarative query language, to seamlessly query data across vector embedding and knowledge graph, enabling deep and nuanced insights into your data.
 
 ### Manage Multi-modal data
 - Supports real-time querying and dynamic index updates, ensuring that new multi-modal data (text, images, audio, etc.) is immediately searchable without downtime or delays.
