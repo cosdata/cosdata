@@ -3,19 +3,29 @@
 </p>
 
 <p align="center">
-    <b>Next-gen vector database delivering lightning-fast performance at billion-vector scale.</b>
-</p>
-<p align="center">
-  <a href="https://cosdata.io"><img src="https://flat.badgen.net/badge/www/cosdata.io/pink"></a>
-  <a href="https://github.com/cosdata/cosdata/actions"><img src="https://flat.badgen.net/badge/build/passing/green"></a>
-  <a href="https://www.rust-lang.org/"><img src="https://flat.badgen.net/badge/language/%F0%9F%A6%80%20Rust/yellow"></a>
-  <a href="https://www.rust-lang.org/"><img src="https://flat.badgen.net/badge/language/%F0%9F%90%8D%20Python/black"></a>
+  <a href="https://cosdata.io">
+    <img src="https://img.shields.io/badge/www-cosdata.io-pink">
+  </a>
+  <a href="https://github.com/cosdata/cosdata/actions">
+    <img src="https://img.shields.io/github/actions/workflow/status/cosdata/cosdata/ci.yml?label=build&color=green">
+  </a>
+  <img src="https://img.shields.io/badge/language-Rust-yellow">
+  <img src="https://img.shields.io/badge/language-Python-black">
   <br>
-  <a href="https://discord.gg/WbSbXYWvta"><img src="https://flat.badgen.net/discord/members/WbSbXYWvta?icon=discord"></a>
-  <a href="https://www.linkedin.com/company/cosdata/"><img alt="Profile" src="https://img.shields.io/badge/our_journey-LinkedIn-blue"/></a>
-  <a href="https://github.com/cosdata/cosdata/blob/master/LICENSE"><img src="https://flat.badgen.net/static/license/Apache-2.0"></a> 
-  <a href="https://github.com/cosdata/cosdata/pulls"><img src="https://flat.badgen.net/badge/PRs/open/pink"></a> 
+  <a href="https://discord.gg/QFsrBfFVVY">
+    <img src="https://img.shields.io/badge/Discord-Join%20Us-7289da?logo=discord&logoColor=white">
+  </a>
+  <a href="https://www.linkedin.com/company/cosdata/">
+    <img src="https://img.shields.io/badge/our_journey-LinkedIn-blue">
+  </a>
+  <a href="https://github.com/cosdata/cosdata/blob/master/LICENSE">
+    <img src="https://img.shields.io/badge/license-Apache--2.0-blue">
+  </a>
+  <a href="https://github.com/cosdata/cosdata/pulls">
+    <img src="https://img.shields.io/github/issues-pr/cosdata/cosdata?color=pink">
+  </a> 
 </p>
+
 </br>
 <p></p>
 
