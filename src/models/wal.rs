@@ -235,6 +235,13 @@ impl WALFile {
                     } else {
                         write_len(&mut buf, 0);
                     }
+
+                    if let Some(bytes) = &vector.bytes {
+                        write_len(&mut buf, bytes.len() as u32);
+                        buf.extend(bytes);
+                    } else {
+                        write_len(&mut buf, 0);
+                    }
                 }
                 let len = buf.len() as u32 - 4;
                 buf[0..4].copy_from_slice(&len.to_le_bytes());
@@ -341,6 +348,15 @@ impl WALFile {
 
                 let text = read_opt_string(&self.bufman, cursor)?;
 
+                let bytes_len = read_len(&self.bufman, cursor)?;
+                let bytes = if bytes_len == 0 {
+                    None
+                } else {
+                    let mut buf = vec![0; bytes_len as usize];
+                    self.bufman.read_with_cursor(cursor, &mut buf)?;
+                    Some(buf)
+                };
+
                 let vector = RawVectorEmbedding {
                     id,
                     document_id,
@@ -348,6 +364,7 @@ impl WALFile {
                     metadata,
                     sparse_values,
                     text,
+                    bytes,
                 };
                 vectors.push(vector);
             }
@@ -381,6 +398,7 @@ mod tests {
         let dense_len = rng.gen_range(1..8);
         let metadata_len = rng.gen_range(1..4);
         let sparse_len = rng.gen_range(0..4);
+        let bytes_len = rng.gen_range(100..200);
 
         let mut metadata = HashMap::new();
         for _ in 0..metadata_len {
@@ -391,6 +409,12 @@ mod tests {
                 FieldValue::String(random_string(6))
             };
             metadata.insert(key, val);
+        }
+
+        let mut bytes = Vec::with_capacity(bytes_len);
+
+        for _ in 0..bytes_len {
+            bytes.push(rng.gen());
         }
 
         RawVectorEmbedding {
@@ -404,6 +428,7 @@ mod tests {
                     .collect(),
             ),
             text: Some(random_string(16)),
+            bytes: Some(bytes),
         }
     }
 

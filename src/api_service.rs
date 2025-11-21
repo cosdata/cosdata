@@ -3,6 +3,7 @@ use crate::indexes::hnsw::offset_counter::{HNSWIndexFileOffsetCounter, IndexFile
 use crate::indexes::hnsw::types::HNSWHyperParams;
 use crate::indexes::hnsw::{DenseInputEmbedding, HNSWIndex};
 use crate::indexes::inverted::InvertedIndex;
+use crate::indexes::key_value::KeyValueIndex;
 use crate::indexes::tf_idf::TFIDFIndex;
 use crate::indexes::IndexOps;
 use crate::metadata::{pseudo_level_probs, pseudo_node_vector, pseudo_root_id};
@@ -258,5 +259,22 @@ pub async fn init_tf_idf_index_for_collection(
     ctx.ain_env
         .collections_map
         .insert_tf_idf_index(collection, index.clone())?;
+    Ok(index)
+}
+
+/// creates an key value index for a collection
+pub async fn init_key_value_index_for_collection(
+    ctx: Arc<AppContext>,
+    collection: &Collection,
+) -> Result<Arc<KeyValueIndex>, WaCustomError> {
+    let collection_path: Arc<Path> = collection.get_path();
+    let index_path = collection_path.join("key_value_index");
+    fs::create_dir_all(&index_path).map_err(|e| WaCustomError::FsError(e.to_string()))?;
+
+    let index = Arc::new(KeyValueIndex::new(index_path.clone())?);
+
+    ctx.ain_env
+        .collections_map
+        .insert_key_value_index(collection, index.clone())?;
     Ok(index)
 }

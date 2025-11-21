@@ -15,6 +15,7 @@ use crate::config_loader::Config;
 use crate::indexes::hnsw::{DenseInputEmbedding, HNSWIndex};
 use crate::indexes::inverted::types::SparsePair;
 use crate::indexes::inverted::{InvertedIndex, SparseInputEmbedding};
+use crate::indexes::key_value::{KeyValueIndex, KeyValueInputPair};
 use crate::indexes::tf_idf::{TFIDFIndex, TFIDFInputEmbedding};
 use crate::indexes::IndexOps;
 use crate::metadata::{MetadataFields, MetadataSchema};
@@ -30,19 +31,24 @@ use std::thread;
 use std::{fs, hash::Hasher, path::Path, sync::Arc};
 use utoipa::ToSchema;
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, ToSchema)]
 pub struct DenseVectorOptions {
     pub enabled: bool,
     pub dimension: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SparseVectorOptions {
     pub enabled: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, ToSchema)]
 pub struct TFIDFOptions {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, ToSchema)]
+pub struct KeyValueOptions {
     pub enabled: bool,
 }
 
@@ -60,15 +66,21 @@ pub struct RawVectorEmbedding {
     pub metadata: Option<MetadataFields>,
     pub sparse_values: Option<Vec<SparsePair>>,
     pub text: Option<String>,
+    pub bytes: Option<Vec<u8>>,
 }
 
 #[derive(Deserialize, Clone, Serialize, Debug)]
 pub struct CollectionMetadata {
     pub name: String,
     pub description: Option<String>,
+    #[serde(default)]
     pub dense_vector: DenseVectorOptions,
+    #[serde(default)]
     pub sparse_vector: SparseVectorOptions,
+    #[serde(default)]
     pub tf_idf_options: TFIDFOptions,
+    #[serde(default)]
+    pub key_value_index: KeyValueOptions,
     pub metadata_schema: Option<MetadataSchema>,
     pub config: CollectionConfig,
     pub store_raw_text: bool,
@@ -115,6 +127,7 @@ pub struct Collection {
     pub hnsw_index: RwLock<Option<Arc<HNSWIndex>>>,
     pub inverted_index: RwLock<Option<Arc<InvertedIndex>>>,
     pub tf_idf_index: RwLock<Option<Arc<TFIDFIndex>>>,
+    pub key_value_index: RwLock<Option<Arc<KeyValueIndex>>>,
     // this field is actually NOT optional, the only reason it is wrapped in
     // `Option` is to allow us to create `Collection` first without the
     // indexing manager, because `IndexingManager`'s constructor also requires
@@ -131,6 +144,7 @@ impl Collection {
         dense_vector_options: DenseVectorOptions,
         sparse_vector_options: SparseVectorOptions,
         tf_idf_options: TFIDFOptions,
+        key_value_options: KeyValueOptions,
         metadata_schema: Option<MetadataSchema>,
         collection_config: CollectionConfig,
         store_raw_text: bool,
@@ -221,6 +235,7 @@ impl Collection {
                 dense_vector: dense_vector_options,
                 sparse_vector: sparse_vector_options,
                 tf_idf_options,
+                key_value_index: key_value_options,
                 metadata_schema,
                 config: collection_config,
                 store_raw_text,
@@ -251,6 +266,7 @@ impl Collection {
             hnsw_index: RwLock::new(None),
             inverted_index: RwLock::new(None),
             tf_idf_index: RwLock::new(None),
+            key_value_index: RwLock::new(None),
             indexing_manager: RwLock::new(None),
             is_indexing: AtomicBool::new(false),
         });
@@ -355,6 +371,10 @@ impl Collection {
         self.tf_idf_index.read().clone()
     }
 
+    pub fn get_key_value_index(&self) -> Option<Arc<KeyValueIndex>> {
+        self.key_value_index.read().clone()
+    }
+
     /// Returns the raw embedding mapped to an internal id
     ///
     /// It's recommended to call this method instead of directly
@@ -452,49 +472,60 @@ impl Collection {
             .internal_id_counter
             .fetch_add(num_ids_to_reserve as u32, Ordering::Relaxed);
 
-        let (dense_embs, sparse_embs, tf_idf_embs): (Vec<_>, Vec<_>, Vec<_>) =
-            embeddings.into_iter().enumerate().fold(
-                (Vec::new(), Vec::new(), Vec::new()),
-                |mut acc, (i, mut embedding)| {
-                    let RawVectorEmbedding {
-                        id,
-                        document_id,
-                        dense_values,
-                        metadata,
-                        sparse_values,
-                        text,
-                    } = embedding.clone();
+        let (dense_embs, sparse_embs, tf_idf_embs, key_value_embs): (
+            Vec<_>,
+            Vec<_>,
+            Vec<_>,
+            Vec<_>,
+        ) = embeddings.into_iter().enumerate().fold(
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+            |mut acc, (i, mut embedding)| {
+                let RawVectorEmbedding {
+                    id,
+                    document_id,
+                    dense_values,
+                    metadata,
+                    sparse_values,
+                    text,
+                    bytes,
+                } = embedding.clone();
 
-                    let internal_id = InternalId::from(id_start + (i * num_nodes_per_emb) as u32);
+                let internal_id = InternalId::from(id_start + (i * num_nodes_per_emb) as u32);
 
-                    if let Some(values) = dense_values {
-                        acc.0
-                            .push(DenseInputEmbedding(internal_id, values, metadata, false));
-                    }
-                    if let Some(values) = sparse_values {
-                        acc.1.push(SparseInputEmbedding(internal_id, values));
-                    }
-                    if let Some(text) = text {
-                        acc.2.push(TFIDFInputEmbedding(internal_id, text));
-                    }
+                if let Some(values) = dense_values {
+                    acc.0
+                        .push(DenseInputEmbedding(internal_id, values, metadata, false));
+                }
+                if let Some(values) = sparse_values {
+                    acc.1.push(SparseInputEmbedding(internal_id, values));
+                }
+                if let Some(text) = text {
+                    acc.2.push(TFIDFInputEmbedding(internal_id, text));
+                }
+                if let Some(bytes) = bytes {
+                    acc.3.push(KeyValueInputPair {
+                        id: internal_id,
+                        value: bytes,
+                    });
+                }
 
-                    if !self.meta.store_raw_text {
-                        embedding.text = None;
-                    }
+                if !self.meta.store_raw_text {
+                    embedding.text = None;
+                }
 
-                    self.internal_to_external_map
-                        .insert(version, &internal_id, embedding);
-                    self.external_to_internal_map
-                        .insert(version, &id, internal_id);
+                self.internal_to_external_map
+                    .insert(version, &internal_id, embedding);
+                self.external_to_internal_map
+                    .insert(version, &id, internal_id);
 
-                    if let Some(document_id) = document_id {
-                        self.document_to_internals_map
-                            .push(version, &document_id, internal_id);
-                    }
+                if let Some(document_id) = document_id {
+                    self.document_to_internals_map
+                        .push(version, &document_id, internal_id);
+                }
 
-                    acc
-                },
-            );
+                acc
+            },
+        );
 
         if !dense_embs.is_empty() {
             if let Some(hnsw_index) = &*self.hnsw_index.read() {
@@ -511,6 +542,12 @@ impl Collection {
         if !tf_idf_embs.is_empty() {
             if let Some(tf_idf_index) = &*self.tf_idf_index.read() {
                 tf_idf_index.run_upload(self, tf_idf_embs, version, config)?;
+            }
+        }
+
+        if !key_value_embs.is_empty() {
+            if let Some(key_value_index) = &*self.key_value_index.read() {
+                key_value_index.run_upload(self, key_value_embs, version, config)?;
             }
         }
 

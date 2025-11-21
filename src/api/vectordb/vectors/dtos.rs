@@ -31,6 +31,7 @@ pub(crate) struct CreateVectorDto {
     #[schema(value_type = Object, nullable = true)]
     pub sparse_values: Option<Vec<SparsePair>>,
     pub text: Option<String>,
+    pub bytes: Option<Vec<u8>>,
 }
 
 impl From<CreateVectorDto> for RawVectorEmbedding {
@@ -42,6 +43,7 @@ impl From<CreateVectorDto> for RawVectorEmbedding {
             metadata: dto.metadata,
             sparse_values: dto.sparse_values,
             text: dto.text,
+            bytes: dto.bytes,
         }
     }
 }
@@ -55,6 +57,7 @@ impl From<RawVectorEmbedding> for CreateVectorDto {
             metadata: emb.metadata,
             sparse_values: emb.sparse_values,
             text: emb.text,
+            bytes: emb.bytes,
         }
     }
 }
@@ -86,6 +89,7 @@ impl<'de> Deserialize<'de> for CreateVectorDto {
                 let mut metadata = None;
                 let mut sparse_values_raw: Option<(Vec<u32>, Vec<f32>)> = None;
                 let mut text = None;
+                let mut bytes = None;
 
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
@@ -135,6 +139,12 @@ impl<'de> Deserialize<'de> for CreateVectorDto {
                             }
                             text = Some(map.next_value()?);
                         }
+                        "bytes" => {
+                            if bytes.is_some() {
+                                return Err(de::Error::duplicate_field("bytes"));
+                            }
+                            bytes = map.next_value()?;
+                        }
                         _ => {
                             return Err(de::Error::unknown_field(
                                 &key,
@@ -146,6 +156,7 @@ impl<'de> Deserialize<'de> for CreateVectorDto {
                                     "sparse_values",
                                     "sparse_indices",
                                     "text",
+                                    "bytes",
                                 ],
                             ));
                         }
@@ -179,6 +190,7 @@ impl<'de> Deserialize<'de> for CreateVectorDto {
                     metadata,
                     sparse_values,
                     text,
+                    bytes,
                 })
             }
         }

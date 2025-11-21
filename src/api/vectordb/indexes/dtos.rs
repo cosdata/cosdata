@@ -195,6 +195,11 @@ pub(crate) struct CreateTFIDFIndexDto {
     pub b: f32,
 }
 
+#[derive(Debug, Deserialize, ToSchema)]
+pub(crate) struct CreateKeyValueIndexDto {
+    pub name: String,
+}
+
 impl HNSWHyperParamsDto {
     pub fn into_params(self, config: &Config) -> HNSWHyperParams {
         let mut default = HNSWHyperParams::default_from_config(config);

@@ -17,6 +17,7 @@ use crate::{
 
 pub(crate) mod hnsw;
 pub(crate) mod inverted;
+pub(crate) mod key_value;
 pub(crate) mod tf_idf;
 
 pub type InternalSearchResult = (

@@ -23,6 +23,12 @@ pub trait TreeMapKey: std::hash::Hash + Eq {
     fn key(&self) -> u64;
 }
 
+impl TreeMapKey for u32 {
+    fn key(&self) -> u64 {
+        *self as u64
+    }
+}
+
 pub struct TreeMap<K, V> {
     pub(crate) root: TreeMapNode<V>,
     pub(crate) dim_bufman: BufferManager,

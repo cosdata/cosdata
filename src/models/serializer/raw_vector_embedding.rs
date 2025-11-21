@@ -70,6 +70,13 @@ impl SimpleSerialize for RawVectorEmbedding {
             write_len(&mut buf, 0);
         }
 
+        if let Some(bytes) = &self.bytes {
+            write_len(&mut buf, bytes.len() as u32);
+            buf.extend(bytes);
+        } else {
+            write_len(&mut buf, 0);
+        }
+
         Ok(bufman.write_to_end_of_file(cursor, &buf)? as u32)
     }
 
@@ -133,6 +140,15 @@ impl SimpleSerialize for RawVectorEmbedding {
 
         let text = read_opt_string(bufman, cursor)?;
 
+        let bytes_len = read_len(bufman, cursor)?;
+        let bytes = if bytes_len == 0 {
+            None
+        } else {
+            let mut buf = vec![0; bytes_len as usize];
+            bufman.read_with_cursor(cursor, &mut buf)?;
+            Some(buf)
+        };
+
         Ok(Self {
             id,
             document_id,
@@ -140,6 +156,7 @@ impl SimpleSerialize for RawVectorEmbedding {
             metadata,
             sparse_values,
             text,
+            bytes,
         })
     }
 }

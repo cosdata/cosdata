@@ -6,7 +6,8 @@ use crate::models::collection_cache::CollectionCacheExt;
 use super::dtos::{
     BatchDenseSearchRequestDto, BatchHybridSearchRequestDto, BatchSearchResponseDto,
     BatchSearchTFIDFDocumentsDto, BatchSparseSearchRequestDto, DenseSearchRequestDto,
-    FindSimilarTFIDFDocumentDto, HybridSearchRequestDto, SearchResponseDto, SparseSearchRequestDto,
+    FindSimilarTFIDFDocumentDto, HybridSearchRequestDto, KeyValueIndexLookupRequestDto,
+    SearchResponseDto, SparseSearchRequestDto,
 };
 use super::error::SearchError;
 
@@ -231,6 +232,35 @@ pub(crate) async fn tf_idf_search(
         .map_err(|e| SearchError::InternalServerError(format!("Cache update error: {}", e)))?;
 
     let results = service::tf_idf_search(ctx.into_inner(), &collection_id, body).await?;
+    Ok(HttpResponse::Ok().json(results))
+}
+
+/// Key lookup
+#[utoipa::path(
+    post,
+    path = "/vectordb/collections/{collection_id}/search/key-value",
+    tag = "search",
+    params(
+        ("collection_id" = String, Path, description = "Collection identifier")
+    ),
+    request_body = KeyValueIndexLookupRequestDto,
+    responses(
+        (status = 200, description = "key-value search successfully completed", body = SearchResponseDto),
+        (status = 404, description = "Collection not found", body = String),
+        (status = 400, description = "Invalid request error", body = String),
+        (status = 500, description = "Internal server error", body = String)
+    )
+)]
+pub(crate) async fn key_value_search(
+    path: web::Path<String>,
+    web::Json(body): web::Json<KeyValueIndexLookupRequestDto>,
+    ctx: web::Data<AppContext>,
+) -> Result<HttpResponse, SearchError> {
+    let collection_id = path.into_inner();
+    ctx.update_collection_for_query(&collection_id)
+        .map_err(|e| SearchError::InternalServerError(format!("Cache update error: {}", e)))?;
+
+    let results = service::key_value_search(ctx.into_inner(), &collection_id, body).await?;
     Ok(HttpResponse::Ok().json(results))
 }
 
