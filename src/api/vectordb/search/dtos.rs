@@ -139,3 +139,13 @@ pub(crate) struct BatchSearchTFIDFDocumentsDto {
     #[serde(default)]
     pub return_raw_text: bool,
 }
+
+#[derive(Deserialize, Debug, utoipa::ToSchema)]
+pub(crate) struct KeyValueIndexLookupRequestDto {
+    pub key: String,
+}
+
+#[derive(Serialize, Debug, utoipa::ToSchema)]
+pub(crate) struct KeyValueIndexLookupResponseDto {
+    pub bytes: Option<Vec<u8>>,
+}

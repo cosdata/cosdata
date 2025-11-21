@@ -4,8 +4,8 @@ use std::sync::Arc;
 use super::dtos::{
     BatchDenseSearchRequestDto, BatchHybridSearchRequestDto, BatchSearchResponseDto,
     BatchSearchTFIDFDocumentsDto, BatchSparseSearchRequestDto, DenseSearchRequestDto,
-    FindSimilarTFIDFDocumentDto, HybridSearchRequestDto, SearchResponseDto, SearchResultItemDto,
-    SparseSearchRequestDto,
+    FindSimilarTFIDFDocumentDto, HybridSearchRequestDto, KeyValueIndexLookupRequestDto,
+    KeyValueIndexLookupResponseDto, SearchResponseDto, SearchResultItemDto, SparseSearchRequestDto,
 };
 use super::error::SearchError;
 use super::repo;
@@ -173,6 +173,16 @@ pub(crate) async fn tf_idf_search(
             .collect(),
         warning,
     })
+}
+
+pub(crate) async fn key_value_search(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    request: KeyValueIndexLookupRequestDto,
+) -> Result<KeyValueIndexLookupResponseDto, SearchError> {
+    let bytes = repo::key_value_search(ctx, collection_id, request).await?;
+
+    Ok(KeyValueIndexLookupResponseDto { bytes })
 }
 
 pub(crate) async fn batch_tf_idf_search(

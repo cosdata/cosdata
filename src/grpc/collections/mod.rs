@@ -4,7 +4,8 @@ use tonic::{Request, Response, Status};
 use crate::app_context::AppContext;
 use crate::metadata::schema::MetadataSchema;
 use crate::models::collection::{
-    Collection, CollectionConfig, DenseVectorOptions, SparseVectorOptions, TFIDFOptions,
+    Collection, CollectionConfig, DenseVectorOptions, KeyValueOptions, SparseVectorOptions,
+    TFIDFOptions,
 };
 use crate::models::common::WaCustomError;
 use crate::models::meta_persist::update_current_version;
@@ -47,6 +48,10 @@ crate::cfg_grpc! {
                 enabled: req.tf_idf_options.as_ref().is_some_and(|d| d.enabled),
             };
 
+            let key_value_options = KeyValueOptions {
+                enabled: req.key_value_options.as_ref().is_some_and(|d| d.enabled),
+            };
+
             let config = CollectionConfig {
                 max_vectors: req.config.as_ref().and_then(|c| c.max_vectors),
                 replication_factor: req.config.as_ref().and_then(|c| c.replication_factor),
@@ -73,6 +78,7 @@ crate::cfg_grpc! {
                 dense_vector,
                 sparse_vector,
                 tf_idf_options,
+                key_value_options,
                 metadata_schema,
                 config,
                 req.store_raw_text.unwrap_or_default(),

@@ -590,6 +590,34 @@ pub(crate) async fn tf_idf_search(
     ))
 }
 
+pub(crate) async fn key_value_search(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    request: dtos::KeyValueIndexLookupRequestDto,
+) -> Result<Option<Vec<u8>>, SearchError> {
+    let collection = ctx
+        .ain_env
+        .collections_map
+        .get_collection(collection_id)
+        .ok_or_else(|| SearchError::CollectionNotFound(collection_id.to_string()))?;
+
+    let key_value_index = collection.get_key_value_index().ok_or_else(|| {
+        SearchError::IndexNotFound(format!(
+            "key value index for collection '{}'",
+            collection_id
+        ))
+    })?;
+
+    let Some(id) = collection
+        .external_to_internal_map
+        .get_latest(&VectorId::from(request.key))
+    else {
+        return Ok(None);
+    };
+
+    Ok(key_value_index.lookup(id))
+}
+
 pub(crate) async fn batch_tf_idf_search(
     ctx: Arc<AppContext>,
     collection_id: &str,

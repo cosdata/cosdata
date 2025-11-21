@@ -201,3 +201,26 @@ impl SimpleSerialize for u32 {
         Ok(offset.0)
     }
 }
+
+impl SimpleSerialize for Vec<u8> {
+    fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
+        let mut new_buf = Vec::with_capacity(4 + self.len());
+        new_buf.extend((self.len() as u32).to_le_bytes());
+        new_buf.extend(self);
+        let offset = bufman.write_to_end_of_file(cursor, &new_buf)? as u32;
+
+        Ok(offset)
+    }
+
+    fn deserialize(bufman: &BufferManager, offset: FileOffset) -> Result<Self, BufIoError> {
+        let cursor = bufman.open_cursor()?;
+        bufman.seek_with_cursor(cursor, offset.0 as u64)?;
+        let len = bufman.read_u32_with_cursor(cursor)?;
+
+        let mut buf = vec![0; len as usize];
+
+        bufman.read_with_cursor(cursor, &mut buf)?;
+
+        Ok(buf)
+    }
+}

@@ -2,7 +2,9 @@ use actix_web::{web, HttpResponse, Result};
 
 use crate::app_context::AppContext;
 
-use super::dtos::{CreateTFIDFIndexDto, IndexDetailsDto, IndexResponseDto, IndexType};
+use super::dtos::{
+    CreateKeyValueIndexDto, CreateTFIDFIndexDto, IndexDetailsDto, IndexResponseDto, IndexType,
+};
 use super::error::IndexesError;
 use super::{
     dtos::{CreateDenseIndexDto, CreateSparseIndexDto},
@@ -111,6 +113,41 @@ pub(crate) async fn create_tf_idf_index(
     .await?;
     Ok(HttpResponse::Created().json(IndexResponseDto {
         message: "TF-IDF index created successfully".to_string(),
+    }))
+}
+
+/// Create a Key Value index for a collection
+///
+/// Creates a new Key Value index for the specified collection
+#[utoipa::path(
+    post,
+    path = "/vectordb/collections/{collection_id}/indexes/key-value",
+    request_body = CreateKeyValueIndexDto,
+    params(
+        ("collection_id" = String, Path, description = "Collection identifier")
+    ),
+    responses(
+        (status = 201, description = "Key Value index created successfully", body = IndexResponseDto),
+        (status = 400, description = "Bad request", body = serde_json::Value),
+        (status = 404, description = "Collection not found", body = serde_json::Value),
+        (status = 409, description = "Index already exists", body = serde_json::Value),
+        (status = 500, description = "Internal server error", body = serde_json::Value)
+    ),
+    tag = "indexes"
+)]
+pub(crate) async fn create_key_value_index(
+    web::Json(create_index_dto): web::Json<CreateKeyValueIndexDto>,
+    ctx: web::Data<AppContext>,
+    collection_id: web::Path<String>,
+) -> Result<HttpResponse> {
+    service::create_key_value_index(
+        collection_id.into_inner(),
+        create_index_dto,
+        ctx.into_inner(),
+    )
+    .await?;
+    Ok(HttpResponse::Created().json(IndexResponseDto {
+        message: "Key value index created successfully".to_string(),
     }))
 }
 

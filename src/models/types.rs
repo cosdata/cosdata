@@ -33,6 +33,7 @@ use crate::{
             HNSWIndex,
         },
         inverted::InvertedIndex,
+        key_value::KeyValueIndex,
         tf_idf::TFIDFIndex,
         IndexOps,
     },
@@ -587,6 +588,7 @@ impl CollectionsMap {
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
         for collection_meta in collections {
+            println!("Loading collection: {}", collection_meta.name);
             let lmdb = MetaDb::from_env(collections_map.lmdb_env.clone(), &collection_meta.name)?;
             let current_version = retrieve_current_version(&lmdb)?;
             let vcs = VersionControl::from_existing(lmdb.env.clone(), lmdb.db);
@@ -622,6 +624,14 @@ impl CollectionsMap {
             let tf_idf_index = if collection_meta.tf_idf_options.enabled {
                 collections_map
                     .load_tf_idf_index(&collection_meta, &lmdb)?
+                    .map(Arc::new)
+            } else {
+                None
+            };
+
+            let key_value_index = if collection_meta.key_value_index.enabled {
+                collections_map
+                    .load_key_value_index(&collection_meta)?
                     .map(Arc::new)
             } else {
                 None
@@ -734,6 +744,7 @@ impl CollectionsMap {
                 hnsw_index: parking_lot::RwLock::new(hnsw_index),
                 inverted_index: parking_lot::RwLock::new(inverted_index),
                 tf_idf_index: parking_lot::RwLock::new(tf_idf_index),
+                key_value_index: parking_lot::RwLock::new(key_value_index),
                 indexing_manager: parking_lot::RwLock::new(None),
                 is_indexing: AtomicBool::new(false),
             });
@@ -1178,6 +1189,37 @@ impl CollectionsMap {
         Ok(Some(inverted_index))
     }
 
+    fn load_key_value_index(
+        &self,
+        collection_meta: &CollectionMetadata,
+    ) -> Result<Option<KeyValueIndex>, WaCustomError> {
+        let collection_path: Arc<Path> = get_collections_path().join(&collection_meta.name).into();
+        let index_path = collection_path.join("key_value_index");
+
+        if !index_path.exists() {
+            return Ok(None);
+        }
+
+        let dim_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(index_path.join("tree-map.dim"))
+            .map_err(BufIoError::Io)?;
+        let dim_bufman = BufferManager::new(dim_file, 8192).map_err(BufIoError::Io)?;
+        let data_bufmans = BufferManagerFactory::new(
+            index_path.into(),
+            |root, ver: &VersionNumber| root.join(format!("{}.data", **ver)),
+            8192,
+        );
+        let tree_map = TreeMap::deserialize(dim_bufman, data_bufmans)?;
+
+        let key_value_index = KeyValueIndex { tree_map };
+
+        Ok(Some(key_value_index))
+    }
+
     pub fn insert_hnsw_index(
         &self,
         collection: &Collection,
@@ -1217,6 +1259,15 @@ impl CollectionsMap {
             self.lmdb_tf_idf_index_db,
         )?;
         *collection.tf_idf_index.write() = Some(tf_idf_index);
+        Ok(())
+    }
+
+    pub fn insert_key_value_index(
+        &self,
+        collection: &Collection,
+        key_value_index: Arc<KeyValueIndex>,
+    ) -> Result<(), WaCustomError> {
+        *collection.key_value_index.write() = Some(key_value_index);
         Ok(())
     }
 
