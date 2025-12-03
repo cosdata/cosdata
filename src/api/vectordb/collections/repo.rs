@@ -27,6 +27,7 @@ pub(crate) async fn create_collection(
         sparse_vector,
         tf_idf_options,
         key_value_options,
+        usv_options,
         store_raw_text,
     }: CreateCollectionDto,
 ) -> Result<Arc<Collection>, CollectionsError> {
@@ -59,6 +60,7 @@ pub(crate) async fn create_collection(
         sparse_vector,
         tf_idf_options,
         key_value_options,
+        usv_options,
         metadata_schema,
         config,
         store_raw_text,

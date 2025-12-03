@@ -76,6 +76,8 @@ pub(crate) enum HybridSearchQuery {
         #[schema(value_type = Vec<String>)]
         query_terms: Vec<SparsePair>,
         sparse_early_terminate_threshold: Option<f32>,
+        #[serde(default)]
+        use_usv: bool,
     },
     DenseAndTFIDF {
         query_vector: Vec<f32>,
@@ -86,6 +88,8 @@ pub(crate) enum HybridSearchQuery {
         query_terms: Vec<SparsePair>,
         query_text: String,
         sparse_early_terminate_threshold: Option<f32>,
+        #[serde(default)]
+        use_usv: bool,
     },
 }
 

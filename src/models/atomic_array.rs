@@ -74,10 +74,14 @@ impl<T, const N: usize> AtomicArray<T, N> {
     }
 
     pub fn get(&self, idx: usize) -> Option<*mut T> {
-        if idx >= N || self.items[idx].load(Ordering::SeqCst).is_null() {
+        if idx >= N {
             return None;
         }
-        Some(self.items[idx].load(Ordering::SeqCst))
+        let ptr = self.items[idx].load(Ordering::SeqCst);
+        if ptr.is_null() {
+            return None;
+        }
+        Some(ptr)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -103,6 +107,32 @@ impl<T, const N: usize> AtomicArray<T, N> {
                 None
             }
         });
+        (return_value, res.is_ok())
+    }
+
+    pub fn get_or_insert_with<F>(&self, idx: usize, mut f: F) -> (*mut T, bool)
+    where
+        F: FnMut() -> T,
+    {
+        let mut return_value = ptr::null_mut();
+        let mut v: *mut T = ptr::null_mut();
+        let res = self.items[idx].fetch_update(Ordering::SeqCst, Ordering::SeqCst, |existing| {
+            if existing.is_null() {
+                if v.is_null() {
+                    v = Box::into_raw(Box::new(f()))
+                }
+                return_value = v;
+                Some(v)
+            } else {
+                return_value = existing;
+                None
+            }
+        });
+        if !v.is_null() && res.is_err() {
+            unsafe {
+                drop(Box::from_raw(v));
+            }
+        }
         (return_value, res.is_ok())
     }
 }

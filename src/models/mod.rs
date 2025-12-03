@@ -28,6 +28,7 @@ pub mod tf_idf_index;
 pub mod tree_map;
 pub mod types;
 pub mod user;
+pub mod usv_index;
 pub mod utils;
 pub mod versioned_vec;
 pub mod versioning;

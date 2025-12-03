@@ -8,6 +8,7 @@ use crate::app_context::AppContext;
 use crate::indexes::hnsw::{DenseSearchInput, DenseSearchOptions};
 use crate::indexes::inverted::{SparseSearchInput, SparseSearchOptions};
 use crate::indexes::tf_idf::{TFIDFSearchInput, TFIDFSearchOptions};
+use crate::indexes::usv::{USVSearchInput, USVSearchOptions};
 use crate::indexes::{IndexOps, SearchResult};
 use crate::models::types::{DocumentId, VectorId};
 
@@ -181,15 +182,10 @@ pub(crate) async fn hybrid_search(
             query_vector,
             query_terms,
             sparse_early_terminate_threshold,
+            use_usv,
         } => {
             let hnsw_index = collection.get_hnsw_index().ok_or_else(|| {
                 SearchError::IndexNotFound(format!("HNSW index for collection '{}'", collection_id))
-            })?;
-            let inverted_index = collection.get_inverted_index().ok_or_else(|| {
-                SearchError::IndexNotFound(format!(
-                    "Sparse index for collection '{}'",
-                    collection_id
-                ))
             })?;
 
             let dense_results = hnsw_index
@@ -203,18 +199,46 @@ pub(crate) async fn hybrid_search(
                     request.return_raw_text,
                 )
                 .map_err(SearchError::WaCustom)?;
-            let sparse_results = inverted_index
-                .search(
-                    &collection,
-                    SparseSearchInput(query_terms),
-                    &SparseSearchOptions {
-                        top_k: Some(request.top_k * 3),
-                        early_terminate_threshold: sparse_early_terminate_threshold,
-                    },
-                    &ctx.config,
-                    request.return_raw_text,
-                )
-                .map_err(SearchError::WaCustom)?;
+
+            let sparse_results = if use_usv {
+                let usv_index = collection.get_usv_index().ok_or_else(|| {
+                    SearchError::IndexNotFound(format!(
+                        "USV index for collection '{}'",
+                        collection_id
+                    ))
+                })?;
+                usv_index
+                    .search(
+                        &collection,
+                        USVSearchInput(query_terms),
+                        &USVSearchOptions {
+                            top_k: Some(request.top_k * 3),
+                            early_terminate_threshold: sparse_early_terminate_threshold,
+                        },
+                        &ctx.config,
+                        request.return_raw_text,
+                    )
+                    .map_err(SearchError::WaCustom)?
+            } else {
+                let inverted_index = collection.get_inverted_index().ok_or_else(|| {
+                    SearchError::IndexNotFound(format!(
+                        "Sparse index for collection '{}'",
+                        collection_id
+                    ))
+                })?;
+                inverted_index
+                    .search(
+                        &collection,
+                        SparseSearchInput(query_terms),
+                        &SparseSearchOptions {
+                            top_k: Some(request.top_k * 3),
+                            early_terminate_threshold: sparse_early_terminate_threshold,
+                        },
+                        &ctx.config,
+                        request.return_raw_text,
+                    )
+                    .map_err(SearchError::WaCustom)?
+            };
 
             (dense_results, sparse_results)
         }
@@ -261,13 +285,8 @@ pub(crate) async fn hybrid_search(
             query_terms,
             query_text,
             sparse_early_terminate_threshold,
+            use_usv,
         } => {
-            let inverted_index = collection.get_inverted_index().ok_or_else(|| {
-                SearchError::IndexNotFound(format!(
-                    "Sparse index for collection '{}'",
-                    collection_id
-                ))
-            })?;
             let tf_idf_index = collection.get_tf_idf_index().ok_or_else(|| {
                 SearchError::IndexNotFound(format!(
                     "TF-IDF index for collection '{}'",
@@ -275,18 +294,45 @@ pub(crate) async fn hybrid_search(
                 ))
             })?;
 
-            let sparse_results = inverted_index
-                .search(
-                    &collection,
-                    SparseSearchInput(query_terms),
-                    &SparseSearchOptions {
-                        top_k: Some(request.top_k * 3),
-                        early_terminate_threshold: sparse_early_terminate_threshold,
-                    },
-                    &ctx.config,
-                    request.return_raw_text,
-                )
-                .map_err(SearchError::WaCustom)?;
+            let sparse_results = if use_usv {
+                let usv_index = collection.get_usv_index().ok_or_else(|| {
+                    SearchError::IndexNotFound(format!(
+                        "USV index for collection '{}'",
+                        collection_id
+                    ))
+                })?;
+                usv_index
+                    .search(
+                        &collection,
+                        USVSearchInput(query_terms),
+                        &USVSearchOptions {
+                            top_k: Some(request.top_k * 3),
+                            early_terminate_threshold: sparse_early_terminate_threshold,
+                        },
+                        &ctx.config,
+                        request.return_raw_text,
+                    )
+                    .map_err(SearchError::WaCustom)?
+            } else {
+                let inverted_index = collection.get_inverted_index().ok_or_else(|| {
+                    SearchError::IndexNotFound(format!(
+                        "Sparse index for collection '{}'",
+                        collection_id
+                    ))
+                })?;
+                inverted_index
+                    .search(
+                        &collection,
+                        SparseSearchInput(query_terms),
+                        &SparseSearchOptions {
+                            top_k: Some(request.top_k * 3),
+                            early_terminate_threshold: sparse_early_terminate_threshold,
+                        },
+                        &ctx.config,
+                        request.return_raw_text,
+                    )
+                    .map_err(SearchError::WaCustom)?
+            };
             let tf_idf_results = tf_idf_index
                 .search(
                     &collection,
@@ -361,6 +407,7 @@ pub(crate) async fn batch_hybrid_search(
     let mut dense_queries = Vec::new();
     let mut sparse_queries = Vec::new();
     let mut tfidf_queries = Vec::new();
+    let mut usv_queries = Vec::new();
     let mut query_mapping = Vec::new(); // Track which queries use which types
 
     for (query_idx, query) in request.queries.into_iter().enumerate() {
@@ -369,19 +416,24 @@ pub(crate) async fn batch_hybrid_search(
                 query_vector,
                 query_terms,
                 sparse_early_terminate_threshold,
+                use_usv,
             } => {
                 query_mapping.push((
                     query_idx,
                     dense_queries.len(),
                     sparse_queries.len(),
-                    "dense_sparse",
+                    if use_usv { "dense_usv" } else { "dense_sparse" },
                     sparse_early_terminate_threshold,
                 ));
                 dense_queries.push(dtos::BatchDenseSearchRequestQueryDto {
                     vector: query_vector,
                     filter: None,
                 });
-                sparse_queries.push(query_terms);
+                if use_usv {
+                    usv_queries.push(query_terms);
+                } else {
+                    sparse_queries.push(query_terms);
+                }
             }
             dtos::HybridSearchQuery::DenseAndTFIDF {
                 query_vector,
@@ -404,22 +456,27 @@ pub(crate) async fn batch_hybrid_search(
                 query_terms,
                 query_text,
                 sparse_early_terminate_threshold,
+                use_usv,
             } => {
                 query_mapping.push((
                     query_idx,
                     sparse_queries.len(),
                     tfidf_queries.len(),
-                    "sparse_tfidf",
+                    if use_usv { "usv_tfidf" } else { "sparse_tfidf" },
                     sparse_early_terminate_threshold,
                 ));
-                sparse_queries.push(query_terms);
+                if use_usv {
+                    usv_queries.push(query_terms);
+                } else {
+                    sparse_queries.push(query_terms);
+                }
                 tfidf_queries.push(query_text);
             }
         }
     }
 
     // Call batch functions in parallel using tokio::join
-    let (dense_results, sparse_results, tfidf_results) = tokio::try_join!(
+    let (dense_results, sparse_results, tfidf_results, usv_results) = tokio::try_join!(
         async {
             if !dense_queries.is_empty() {
                 batch_dense_search(
@@ -468,7 +525,24 @@ pub(crate) async fn batch_hybrid_search(
             } else {
                 Ok((vec![], None))
             }
-        }
+        },
+        async {
+            if !usv_queries.is_empty() {
+                batch_usv_search(
+                    ctx.clone(),
+                    collection_id,
+                    dtos::BatchSparseSearchRequestDto {
+                        query_terms_list: usv_queries,
+                        top_k: Some(request.top_k * 3),
+                        early_terminate_threshold: None,
+                        return_raw_text: request.return_raw_text,
+                    },
+                )
+                .await
+            } else {
+                Ok((vec![], None))
+            }
+        },
     )?;
 
     // Apply fusion logic to combine results
@@ -497,6 +571,14 @@ pub(crate) async fn batch_hybrid_search(
                         .unwrap_or_default(),
                 )
             }
+            "dense_usv" => {
+                let dense_idx = idx1;
+                let usv_idx = idx2;
+                (
+                    dense_results.0.get(dense_idx).cloned().unwrap_or_default(),
+                    usv_results.0.get(usv_idx).cloned().unwrap_or_default(),
+                )
+            }
             "dense_tfidf" => {
                 let dense_idx = idx1;
                 let tfidf_idx = idx2;
@@ -514,6 +596,14 @@ pub(crate) async fn batch_hybrid_search(
                         .get(sparse_idx)
                         .cloned()
                         .unwrap_or_default(),
+                    tfidf_results.0.get(tfidf_idx).cloned().unwrap_or_default(),
+                )
+            }
+            "usv_tfidf" => {
+                let usv_idx = idx1;
+                let tfidf_idx = idx2;
+                (
+                    usv_results.0.get(usv_idx).cloned().unwrap_or_default(),
                     tfidf_results.0.get(tfidf_idx).cloned().unwrap_or_default(),
                 )
             }
@@ -645,6 +735,84 @@ pub(crate) async fn batch_tf_idf_search(
                 request.queries.into_iter().map(TFIDFSearchInput).collect(),
                 &TFIDFSearchOptions {
                     top_k: request.top_k,
+                },
+                &ctx.config,
+                request.return_raw_text,
+            )
+            .map_err(SearchError::WaCustom)?,
+        warning,
+    ))
+}
+
+pub(crate) async fn usv_search(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    request: dtos::SparseSearchRequestDto,
+) -> Result<(Vec<SearchResult>, Option<String>), SearchError> {
+    let collection = ctx
+        .ain_env
+        .collections_map
+        .get_collection(collection_id)
+        .ok_or_else(|| SearchError::CollectionNotFound(collection_id.to_string()))?;
+
+    let usv_index = collection.get_usv_index().ok_or_else(|| {
+        SearchError::IndexNotFound(format!("USV index for collection '{}'", collection_id))
+    })?;
+
+    let warning = collection.is_indexing().then(|| {
+        "Embeddings are currently being indexed; some results may be temporarily unavailable."
+            .to_string()
+    });
+
+    Ok((
+        usv_index
+            .search(
+                &collection,
+                USVSearchInput(request.query_terms),
+                &USVSearchOptions {
+                    top_k: request.top_k,
+                    early_terminate_threshold: request.early_terminate_threshold,
+                },
+                &ctx.config,
+                request.return_raw_text,
+            )
+            .map_err(SearchError::WaCustom)?,
+        warning,
+    ))
+}
+
+pub(crate) async fn batch_usv_search(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    request: dtos::BatchSparseSearchRequestDto,
+) -> Result<(Vec<Vec<SearchResult>>, Option<String>), SearchError> {
+    let collection = ctx
+        .ain_env
+        .collections_map
+        .get_collection(collection_id)
+        .ok_or_else(|| SearchError::CollectionNotFound(collection_id.to_string()))?;
+
+    let usv_index = collection.get_usv_index().ok_or_else(|| {
+        SearchError::IndexNotFound(format!("USV index for collection '{}'", collection_id))
+    })?;
+
+    let warning = collection.is_indexing().then(|| {
+        "Embeddings are currently being indexed; some results may be temporarily unavailable."
+            .to_string()
+    });
+
+    Ok((
+        usv_index
+            .batch_search(
+                &collection,
+                request
+                    .query_terms_list
+                    .into_iter()
+                    .map(USVSearchInput)
+                    .collect(),
+                &USVSearchOptions {
+                    top_k: request.top_k,
+                    early_terminate_threshold: request.early_terminate_threshold,
                 },
                 &ctx.config,
                 request.return_raw_text,

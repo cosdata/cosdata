@@ -211,3 +211,51 @@ pub(crate) async fn batch_tf_idf_search(
         warning,
     })
 }
+
+pub(crate) async fn usv_search(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    request: SparseSearchRequestDto,
+) -> Result<SearchResponseDto, SearchError> {
+    let (results, warning) = repo::usv_search(ctx, collection_id, request).await?;
+
+    Ok(SearchResponseDto {
+        results: results
+            .into_iter()
+            .map(|(id, document_id, score, text)| SearchResultItemDto {
+                id,
+                document_id,
+                score,
+                text,
+            })
+            .collect(),
+        warning,
+    })
+}
+
+pub(crate) async fn batch_usv_search(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    request: BatchSparseSearchRequestDto,
+) -> Result<BatchSearchResponseDto, SearchError> {
+    let (results_list, warning) = repo::batch_usv_search(ctx, collection_id, request).await?;
+
+    Ok(BatchSearchResponseDto {
+        responses: results_list
+            .into_iter()
+            .map(|results| SearchResponseDto {
+                results: results
+                    .into_iter()
+                    .map(|(id, document_id, score, text)| SearchResultItemDto {
+                        id,
+                        document_id,
+                        score,
+                        text,
+                    })
+                    .collect(),
+                warning: None,
+            })
+            .collect(),
+        warning,
+    })
+}

@@ -28,6 +28,8 @@ pub(crate) struct CreateVectorDto {
     pub dense_values: Option<Vec<f32>>,
     #[schema(value_type = Object, nullable = true)]
     pub metadata: Option<MetadataFields>,
+    #[serde(default)]
+    pub use_usv: bool,
     #[schema(value_type = Object, nullable = true)]
     pub sparse_values: Option<Vec<SparsePair>>,
     pub text: Option<String>,
@@ -41,6 +43,7 @@ impl From<CreateVectorDto> for RawVectorEmbedding {
             document_id: dto.document_id,
             dense_values: dto.dense_values,
             metadata: dto.metadata,
+            use_usv: dto.use_usv,
             sparse_values: dto.sparse_values,
             text: dto.text,
             bytes: dto.bytes,
@@ -55,6 +58,7 @@ impl From<RawVectorEmbedding> for CreateVectorDto {
             document_id: emb.document_id,
             dense_values: emb.dense_values,
             metadata: emb.metadata,
+            use_usv: emb.use_usv,
             sparse_values: emb.sparse_values,
             text: emb.text,
             bytes: emb.bytes,
@@ -87,6 +91,7 @@ impl<'de> Deserialize<'de> for CreateVectorDto {
                 let mut document_id = None;
                 let mut dense_values = None;
                 let mut metadata = None;
+                let mut use_usv = None;
                 let mut sparse_values_raw: Option<(Vec<u32>, Vec<f32>)> = None;
                 let mut text = None;
                 let mut bytes = None;
@@ -116,6 +121,12 @@ impl<'de> Deserialize<'de> for CreateVectorDto {
                                 return Err(de::Error::duplicate_field("metadata"));
                             }
                             metadata = map.next_value()?;
+                        }
+                        "use_usv" => {
+                            if use_usv.is_some() {
+                                return Err(de::Error::duplicate_field("use_usv"));
+                            }
+                            use_usv = Some(map.next_value()?);
                         }
                         "sparse_values" => {
                             let values: Vec<f32> = map.next_value()?;
@@ -188,6 +199,7 @@ impl<'de> Deserialize<'de> for CreateVectorDto {
                     document_id,
                     dense_values,
                     metadata,
+                    use_usv: use_usv.unwrap_or_default(),
                     sparse_values,
                     text,
                     bytes,

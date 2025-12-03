@@ -85,6 +85,19 @@ pub fn store_values_upper_bound(lmdb: &MetaDb, bound: f32) -> lmdb::Result<()> {
     Ok(())
 }
 
+pub fn store_usv_values_upper_bound(lmdb: &MetaDb, bound: f32) -> lmdb::Result<()> {
+    let env = lmdb.env.clone();
+    let db = lmdb.db;
+
+    let mut txn = env.begin_rw_txn()?;
+    let key = key!(m:usv_values_upper_bound);
+    let bytes = bound.to_le_bytes();
+
+    txn.put(db, &key, &bytes, WriteFlags::empty())?;
+    txn.commit()?;
+    Ok(())
+}
+
 pub fn store_average_document_length(lmdb: &MetaDb, len: f32) -> lmdb::Result<()> {
     let env = lmdb.env.clone();
     let db = lmdb.db;
@@ -195,6 +208,30 @@ pub fn retrieve_values_upper_bound(lmdb: &MetaDb) -> Result<Option<f32>, WaCusto
         .begin_ro_txn()
         .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
     let key = key!(m:values_upper_bound);
+
+    let serialized = match txn.get(db, &key) {
+        Ok(bytes) => bytes,
+        Err(lmdb::Error::NotFound) => return Ok(None),
+        Err(e) => return Err(WaCustomError::DatabaseError(e.to_string())),
+    };
+
+    let bytes: [u8; 4] = serialized.try_into().map_err(|_| {
+        WaCustomError::DeserializationError(
+            "Failed to deserialize values upper bound: length mismatch".to_string(),
+        )
+    })?;
+    let bound = f32::from_le_bytes(bytes);
+
+    Ok(Some(bound))
+}
+
+pub fn retrieve_usv_values_upper_bound(lmdb: &MetaDb) -> Result<Option<f32>, WaCustomError> {
+    let env = lmdb.env.clone();
+    let db = lmdb.db;
+    let txn = env
+        .begin_ro_txn()
+        .map_err(|e| WaCustomError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
+    let key = key!(m:usv_values_upper_bound);
 
     let serialized = match txn.get(db, &key) {
         Ok(bytes) => bytes,

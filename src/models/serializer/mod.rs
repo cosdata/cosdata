@@ -2,6 +2,7 @@ pub mod hnsw;
 pub mod inverted;
 pub mod tf_idf;
 pub mod tree_map;
+pub mod usv;
 
 mod metric_distance;
 mod raw_vector_embedding;

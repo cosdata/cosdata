@@ -5,7 +5,7 @@ use crate::app_context::AppContext;
 use super::{
     dtos::{
         CreateDenseIndexDto, CreateKeyValueIndexDto, CreateSparseIndexDto, CreateTFIDFIndexDto,
-        IndexDetailsDto, IndexType,
+        CreateUSVIndexDto, IndexDetailsDto, IndexType,
     },
     error::IndexesError,
     repo,
@@ -64,6 +64,21 @@ pub(crate) async fn create_key_value_index(
     ctx: Arc<AppContext>,
 ) -> Result<(), IndexesError> {
     repo::create_key_value_index(ctx, collection_id, create_index_dto.name).await
+}
+
+pub(crate) async fn create_usv_index(
+    collection_id: String,
+    create_index_dto: CreateUSVIndexDto,
+    ctx: Arc<AppContext>,
+) -> Result<(), IndexesError> {
+    repo::create_usv_index(
+        ctx,
+        collection_id,
+        create_index_dto.name,
+        create_index_dto.quantization.into_bits(),
+        create_index_dto.sample_threshold,
+    )
+    .await
 }
 
 pub(crate) async fn get_index(
