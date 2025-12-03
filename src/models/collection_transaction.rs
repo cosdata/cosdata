@@ -52,6 +52,9 @@ impl BackgroundExplicitTransaction {
         if let Some(key_value_index) = &*collection.key_value_index.read() {
             key_value_index.pre_commit_transaction(collection, self.version, config)?;
         }
+        if let Some(usv_index) = &*collection.usv_index.read() {
+            usv_index.pre_commit_transaction(collection, self.version, config)?;
+        }
         collection.flush()?;
         Ok(())
     }
@@ -267,6 +270,9 @@ impl ImplicitTransaction {
         }
         if let Some(key_value_index) = &*collection.key_value_index.read() {
             key_value_index.pre_commit_transaction(collection, data.version, config)?;
+        }
+        if let Some(usv_index) = &*collection.usv_index.read() {
+            usv_index.pre_commit_transaction(collection, data.version, config)?;
         }
         collection.flush()?;
         drop(data.channel);

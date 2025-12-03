@@ -1248,7 +1248,7 @@ impl CollectionsMap {
 
         let Some(usv_index_data) = USVIndex::load_data(
             &self.lmdb_env,
-            self.lmdb_inverted_index_db,
+            self.lmdb_usv_index_db,
             &collection_meta.name,
         )?
         else {
