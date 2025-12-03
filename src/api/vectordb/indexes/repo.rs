@@ -6,6 +6,7 @@ use crate::{
     api_service::{
         init_hnsw_index_for_collection, init_inverted_index_for_collection,
         init_key_value_index_for_collection, init_tf_idf_index_for_collection,
+        init_usv_index_for_collection,
     },
     app_context::AppContext,
     models::types::{DistanceMetric, QuantizationMetric},
@@ -144,6 +145,30 @@ pub(crate) async fn create_key_value_index(
     }
 
     init_key_value_index_for_collection(ctx, &collection)
+        .await
+        .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;
+
+    Ok(())
+}
+
+pub(crate) async fn create_usv_index(
+    ctx: Arc<AppContext>,
+    collection_name: String,
+    _name: String,
+    quantization_bits: u8,
+    sample_threshold: usize,
+) -> Result<(), IndexesError> {
+    let collection = ctx
+        .ain_env
+        .collections_map
+        .get_collection(&collection_name)
+        .ok_or(IndexesError::CollectionNotFound)?;
+
+    if collection.get_usv_index().is_some() {
+        return Err(IndexesError::IndexAlreadyExists("usv".to_string()));
+    }
+
+    init_usv_index_for_collection(ctx, &collection, quantization_bits, sample_threshold)
         .await
         .map_err(|e| IndexesError::FailedToCreateIndex(e.to_string()))?;
 

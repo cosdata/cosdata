@@ -1,0 +1,449 @@
+use parking_lot::RwLock;
+use rayon::prelude::*;
+use std::{
+    fs::OpenOptions,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering},
+        Arc,
+    },
+};
+
+use super::{
+    atomic_array::AtomicArray,
+    buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
+    cache_loader::USVIndexCache,
+    common::TSHashTable,
+    lazy_item::LazyItem,
+    serializer::usv::{USVIndexSerialize, USV_INDEX_DATA_CHUNK_SIZE},
+    types::{FileOffset, SparseVector},
+    utils::calculate_path,
+    versioned_vec::VersionedVec,
+    versioning::VersionNumber,
+};
+
+pub struct USVIndexNodeData {
+    pub map: QuotientMap,
+    pub map_len: AtomicU16,
+    pub num_entries_serialized: RwLock<u16>,
+}
+
+#[cfg_attr(test, derive(PartialEq, Debug))]
+pub struct IdLists {
+    pub offset: FileOffset,
+    pub map: TSHashTable<u8, VersionedVec<u32>>,
+    pub sequence_idx: u16,
+}
+
+type QuotientMap = TSHashTable<u16, Arc<IdLists>>;
+
+impl Default for USVIndexNodeData {
+    fn default() -> Self {
+        Self {
+            map: TSHashTable::new(16),
+            map_len: AtomicU16::new(0),
+            num_entries_serialized: RwLock::new(0),
+        }
+    }
+}
+
+pub struct USVIndexNode {
+    pub is_serialized: AtomicBool,
+    pub is_dirty: AtomicBool,
+    pub file_offset: FileOffset,
+    pub dim_index: u32,
+    // (4, 5, 6)
+    pub quantization_bits: u8,
+    pub data: *mut LazyItem<USVIndexNodeData, ()>,
+    pub children: AtomicArray<USVIndexNode, 16>,
+}
+
+#[cfg(test)]
+impl PartialEq for USVIndexNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.file_offset == other.file_offset
+            && self.dim_index == other.dim_index
+            && self.quantization_bits == other.quantization_bits
+            && unsafe { *self.data == *other.data }
+            && self.children == other.children
+    }
+}
+
+#[cfg(test)]
+impl std::fmt::Debug for USVIndexNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("InvertedIndexNode")
+            .field("file_offset", &self.file_offset)
+            .field("dim_index", &self.dim_index)
+            .field("quantization_bits", &self.quantization_bits)
+            .field("data", unsafe { &*self.data })
+            .field("children", &self.children)
+            .finish()
+    }
+}
+
+#[cfg(test)]
+impl PartialEq for USVIndexNodeData {
+    fn eq(&self, other: &Self) -> bool {
+        self.map == other.map
+            && self.map_len.load(Ordering::Relaxed) == other.map_len.load(Ordering::Relaxed)
+            && *self.num_entries_serialized.read() == *other.num_entries_serialized.read()
+    }
+}
+
+#[cfg(test)]
+impl std::fmt::Debug for USVIndexNodeData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("USVIndexNodeData")
+            .field("map", &self.map)
+            .field("map_len", &self.map_len.load(Ordering::Relaxed))
+            .field(
+                "num_entries_serialized",
+                &*self.num_entries_serialized.read(),
+            )
+            .finish()
+    }
+}
+
+pub struct USVIndexRoot {
+    pub root: USVIndexNode,
+    pub cache: USVIndexCache,
+}
+
+#[cfg(test)]
+impl PartialEq for USVIndexRoot {
+    fn eq(&self, other: &Self) -> bool {
+        self.root == other.root
+    }
+}
+
+#[cfg(test)]
+impl std::fmt::Debug for USVIndexRoot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("USVIndexRoot")
+            .field("root", &self.root)
+            .finish()
+    }
+}
+
+unsafe impl Send for USVIndexNode {}
+unsafe impl Sync for USVIndexNode {}
+unsafe impl Send for USVIndexRoot {}
+unsafe impl Sync for USVIndexRoot {}
+
+impl USVIndexNodeData {
+    pub fn insert(
+        &self,
+        quotient: u16,
+        quantized_value: u8,
+        vector_id: u32,
+        version: VersionNumber,
+        offset_fn: impl Fn() -> u32,
+    ) {
+        self.map.modify_or_insert(
+            quotient,
+            |ids_list| {
+                ids_list.map.modify_or_insert(
+                    quantized_value,
+                    |list| {
+                        list.push(version, vector_id);
+                    },
+                    || {
+                        let mut pool = VersionedVec::new(version);
+                        pool.push(version, vector_id);
+                        pool
+                    },
+                );
+            },
+            || {
+                let map = TSHashTable::new(16);
+                let sequence_idx = self.map_len.fetch_add(1, Ordering::Relaxed);
+                let mut list = VersionedVec::new(version);
+                list.push(version, vector_id);
+                map.insert(quantized_value, list);
+
+                Arc::new(IdLists {
+                    offset: FileOffset(offset_fn()),
+                    map,
+                    sequence_idx,
+                })
+            },
+        );
+    }
+
+    pub fn delete(
+        &self,
+        quotient: u16,
+        quantized_value: u8,
+        vector_id: u32,
+        version: VersionNumber,
+    ) {
+        self.map.with_value(&quotient, |ids_list| {
+            ids_list.map.with_value_mut(&quantized_value, |list| {
+                list.delete(version, vector_id);
+            });
+        });
+    }
+}
+
+impl USVIndexNode {
+    pub fn new(
+        dim_index: u32,
+        // 4, 5, 6
+        quantization_bits: u8,
+        file_offset: FileOffset,
+    ) -> Self {
+        let data = LazyItem::new(
+            USVIndexNodeData::default(),
+            (),
+            FileOffset(file_offset.0 + 4),
+        );
+
+        Self {
+            is_serialized: AtomicBool::new(false),
+            is_dirty: AtomicBool::new(true),
+            file_offset,
+            dim_index,
+            data,
+            children: AtomicArray::new(),
+            quantization_bits,
+        }
+    }
+
+    /// Finds or creates the node where the data should be inserted.
+    /// Traverses the tree iteratively and returns a reference to the node.
+    pub fn find_or_create_node(&self, path: &[u8], mut offset_fn: impl FnMut() -> u32) -> &Self {
+        let mut current_node = self;
+        for &child_index in path {
+            let new_dim_index = current_node.dim_index + (1u32 << (child_index * 2));
+            if let Some(child) = current_node.children.get(child_index as usize) {
+                let res = unsafe { &*child };
+                current_node = res;
+                continue;
+            }
+            let (new_child, _is_newly_created) =
+                current_node
+                    .children
+                    .get_or_insert_with(child_index as usize, || {
+                        Self::new(
+                            new_dim_index,
+                            self.quantization_bits,
+                            FileOffset(offset_fn()),
+                        )
+                    });
+            let res = unsafe { &*new_child };
+            current_node = res;
+        }
+
+        current_node
+    }
+
+    pub fn quantize(&self, value: f32, values_upper_bound: f32) -> u8 {
+        let quantization = ((1u32 << self.quantization_bits) - 1) as u8;
+        let max_val = quantization as f32;
+        (((value / values_upper_bound) * max_val).clamp(0.0, max_val) as u8).min(quantization)
+    }
+
+    pub fn insert(
+        &self,
+        quotient: u16,
+        value: f32,
+        vector_id: u32,
+        cache: &USVIndexCache,
+        version: VersionNumber,
+        values_upper_bound: f32,
+    ) -> Result<(), BufIoError> {
+        let quantized_value = self.quantize(value, values_upper_bound);
+        unsafe { &*self.data }.try_get_data(cache)?.insert(
+            quotient,
+            quantized_value,
+            vector_id,
+            version,
+            || {
+                let size = 8 * (1u32 << self.quantization_bits);
+                cache.offset_counter.fetch_add(size, Ordering::Relaxed)
+            },
+        );
+        self.is_dirty.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    pub fn delete(
+        &self,
+        quotient: u16,
+        value: f32,
+        vector_id: u32,
+        cache: &USVIndexCache,
+        version: VersionNumber,
+        values_upper_bound: f32,
+    ) -> Result<(), BufIoError> {
+        let quantized_value = self.quantize(value, values_upper_bound);
+        unsafe { &*self.data }.try_get_data(cache)?.delete(
+            quotient,
+            quantized_value,
+            vector_id,
+            version,
+        );
+        self.is_dirty.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    /// See [`crate::models::serializer::usv::node`] for how its calculated
+    pub fn get_serialized_size() -> u32 {
+        USV_INDEX_DATA_CHUNK_SIZE as u32 * 6 + 74
+    }
+}
+
+impl USVIndexRoot {
+    pub fn new(root_path: PathBuf, quantization_bits: u8) -> Result<Self, BufIoError> {
+        let dim_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(root_path.join("index-tree.dim"))?;
+        let node_size = USVIndexNode::get_serialized_size();
+        let dim_bufman = Arc::new(BufferManager::new(dim_file, node_size as usize * 1000)?);
+        let offset_counter = AtomicU32::new(node_size);
+        let data_bufmans = Arc::new(BufferManagerFactory::new(
+            root_path.into(),
+            |root, version: &VersionNumber| root.join(format!("{}.idat", **version)),
+            8192,
+        ));
+        let cache = USVIndexCache::new(dim_bufman, data_bufmans, offset_counter, quantization_bits);
+
+        Ok(USVIndexRoot {
+            root: USVIndexNode::new(0, quantization_bits, FileOffset(0)),
+            cache,
+        })
+    }
+
+    /// Finds the node at a given dimension
+    /// Traverses the tree iteratively and returns a reference to the node.
+    pub fn find_node(&self, dim_index: u32) -> Option<&USVIndexNode> {
+        let mut current_node = &self.root;
+        let path = calculate_path(dim_index, self.root.dim_index);
+        for child_index in path {
+            let child = current_node.children.get(child_index as usize)?;
+            let node_res = unsafe { &*child };
+            current_node = node_res;
+        }
+
+        Some(current_node)
+    }
+
+    // Inserts vec_id, quantized value u8 at particular node based on path
+    pub fn insert(
+        &self,
+        dim_index: u32,
+        value: f32,
+        vector_id: u32,
+        version: VersionNumber,
+        values_upper_bound: f32,
+    ) -> Result<(), BufIoError> {
+        let storage_dim = dim_index & (u16::MAX as u32);
+        let quotient = (dim_index >> 16) as u16;
+        let path = calculate_path(storage_dim, self.root.dim_index);
+        let node = self.root.find_or_create_node(&path, || {
+            self.cache
+                .offset_counter
+                .fetch_add(USVIndexNode::get_serialized_size(), Ordering::Relaxed)
+        });
+        // value will be quantized while being inserted into the Node.
+        node.insert(
+            quotient,
+            value,
+            vector_id,
+            &self.cache,
+            version,
+            values_upper_bound,
+        )
+    }
+
+    pub fn delete(
+        &self,
+        dim_index: u32,
+        value: f32,
+        vector_id: u32,
+        version: VersionNumber,
+        values_upper_bound: f32,
+    ) -> Result<(), BufIoError> {
+        let storage_dim = dim_index & (u16::MAX as u32);
+        let quotient = (dim_index >> 16) as u16;
+        let node_optional = self.find_node(storage_dim);
+        let Some(node) = node_optional else {
+            return Ok(());
+        };
+        node.delete(
+            quotient,
+            value,
+            vector_id,
+            &self.cache,
+            version,
+            values_upper_bound,
+        )
+    }
+
+    /// Adds a sparse vector to the index.
+    #[allow(unused)]
+    pub fn add_sparse_vector(
+        &self,
+        vector: SparseVector,
+        version: VersionNumber,
+        values_upper_bound: f32,
+    ) -> Result<(), BufIoError> {
+        let vector_id = vector.vector_id;
+        vector
+            .entries
+            .par_iter()
+            .map(|(dim_index, value)| {
+                if *value != 0.0 {
+                    return self.insert(*dim_index, *value, vector_id, version, values_upper_bound);
+                }
+                Ok(())
+            })
+            .collect()
+    }
+
+    pub fn serialize(&self) -> Result<(), BufIoError> {
+        let cursor = self.cache.dim_bufman.open_cursor()?;
+        self.root.serialize(
+            &self.cache.dim_bufman,
+            &self.cache.data_bufmans,
+            self.root.quantization_bits,
+            &self.cache.offset_counter,
+            cursor,
+        )?;
+        self.cache.dim_bufman.close_cursor(cursor)?;
+        Ok(())
+    }
+
+    pub fn deserialize(root_path: PathBuf, quantization_bits: u8) -> Result<Self, BufIoError> {
+        let dim_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(root_path.join("index-tree.dim"))?;
+        let node_size = USVIndexNode::get_serialized_size();
+        let dim_bufman = Arc::new(BufferManager::new(dim_file, node_size as usize * 1000)?);
+        let offset_counter = AtomicU32::new(dim_bufman.file_size() as u32);
+        let data_bufmans = Arc::new(BufferManagerFactory::new(
+            root_path.into(),
+            |root, version: &VersionNumber| root.join(format!("{}.idat", **version)),
+            8192,
+        ));
+        let cache = USVIndexCache::new(dim_bufman, data_bufmans, offset_counter, quantization_bits);
+
+        Ok(Self {
+            root: USVIndexNode::deserialize(
+                &cache.dim_bufman,
+                &cache.data_bufmans,
+                FileOffset(0),
+                VersionNumber::from(u32::MAX), // not used
+                &cache,
+            )?,
+            cache,
+        })
+    }
+}

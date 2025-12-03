@@ -94,6 +94,10 @@ message KeyValueOptions {
     bool enabled = 1;
 }
 
+message USVOptions {
+    bool enabled = 1;
+}
+
 message CollectionConfig {
     optional uint32 max_vectors = 1;
     optional uint32 replication_factor = 2;
@@ -106,9 +110,10 @@ message CreateCollectionRequest {
     SparseVectorOptions sparse_vector = 4;
     TFIDFOptions tf_idf_options = 5;
     KeyValueOptions key_value_options = 6;
-    optional MetadataSchema metadata_schema = 7;
-    CollectionConfig config = 8;
-    optional bool store_raw_text = 9;
+    USVOptions usv_options = 7;
+    optional MetadataSchema metadata_schema = 8;
+    CollectionConfig config = 9;
+    optional bool store_raw_text = 10;
 }
 
 message CreateCollectionResponse {

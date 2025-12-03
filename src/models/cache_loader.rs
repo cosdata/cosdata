@@ -10,8 +10,10 @@ use super::prob_node::{ProbNode, SharedNode};
 use super::serializer::hnsw::HNSWIndexSerialize;
 use super::serializer::inverted::InvertedIndexSerialize;
 use super::serializer::tf_idf::TFIDFIndexSerialize;
+use super::serializer::usv::USVIndexSerialize;
 use super::tf_idf_index::TFIDFIndexNodeData;
 use super::types::*;
+use super::usv_index::USVIndexNodeData;
 use super::versioning::VersionNumber;
 use dashmap::DashMap;
 use rustc_hash::FxHashSet;
@@ -465,6 +467,114 @@ impl TFIDFIndexCache {
 
     #[allow(unused)]
     pub fn load_item<T: TFIDFIndexSerialize>(
+        &self,
+        file_offset: FileOffset,
+        version: VersionNumber,
+    ) -> Result<T, BufIoError> {
+        T::deserialize(
+            &self.dim_bufman,
+            &self.data_bufmans,
+            file_offset,
+            version,
+            self,
+        )
+    }
+
+    pub fn flush_all(&self) -> Result<(), BufIoError> {
+        self.dim_bufman.flush()?;
+        self.data_bufmans.flush_all()
+    }
+}
+
+pub struct USVIndexCache {
+    registry: LRUCache<u64, *mut LazyItem<USVIndexNodeData, ()>>,
+    pub quantization_bits: u8,
+    pub dim_bufman: Arc<BufferManager>,
+    pub data_bufmans: Arc<BufferManagerFactory<VersionNumber>>,
+    pub offset_counter: AtomicU32,
+    loading_data: TSHashTable<u64, Arc<Mutex<bool>>>,
+}
+
+unsafe impl Send for USVIndexCache {}
+unsafe impl Sync for USVIndexCache {}
+
+impl USVIndexCache {
+    pub fn new(
+        dim_bufman: Arc<BufferManager>,
+        data_bufmans: Arc<BufferManagerFactory<VersionNumber>>,
+        offset_counter: AtomicU32,
+        quantization_bits: u8,
+    ) -> Self {
+        let data_registry = LRUCache::with_prob_eviction(100_000_000, 0.03125);
+
+        Self {
+            registry: data_registry,
+            quantization_bits,
+            dim_bufman,
+            data_bufmans,
+            offset_counter,
+            loading_data: TSHashTable::new(16),
+        }
+    }
+
+    pub fn get_data(
+        &self,
+        file_offset: FileOffset,
+    ) -> Result<*mut LazyItem<USVIndexNodeData, ()>, BufIoError> {
+        let combined_index = Self::combine_index(file_offset, 0);
+
+        if let Some(item) = self.registry.get(&combined_index) {
+            return Ok(item);
+        }
+
+        let mut mutex = self
+            .loading_data
+            .get_or_create(combined_index, || Arc::new(Mutex::new(false)));
+        let mut load_complete = mutex.lock().unwrap();
+
+        loop {
+            // check again
+            if let Some(item) = self.registry.get(&combined_index) {
+                return Ok(item);
+            }
+
+            // another thread loaded the data but its not in the registry (got evicted), retry
+            if *load_complete {
+                drop(load_complete);
+                mutex = self
+                    .loading_data
+                    .get_or_create(combined_index, || Arc::new(Mutex::new(false)));
+                load_complete = mutex.lock().unwrap();
+                continue;
+            }
+
+            break;
+        }
+
+        let data = USVIndexNodeData::deserialize(
+            &self.dim_bufman,
+            &self.data_bufmans,
+            file_offset,
+            VersionNumber::from(u32::MAX), // not used
+            self,
+        )?;
+
+        let item = LazyItem::new(data, (), file_offset);
+
+        self.registry.insert(combined_index, item);
+
+        *load_complete = true;
+        self.loading_data.delete(&combined_index);
+
+        Ok(item)
+    }
+
+    pub fn combine_index(file_offset: FileOffset, data_file_idx: u8) -> u64 {
+        ((data_file_idx as u64) << 32) | file_offset.0 as u64
+    }
+
+    #[allow(unused)]
+    pub fn load_item<T: USVIndexSerialize>(
         &self,
         file_offset: FileOffset,
         version: VersionNumber,

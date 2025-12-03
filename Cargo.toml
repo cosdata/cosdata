@@ -53,7 +53,7 @@ quickcheck_macros = "1.0.0"
 tokio = { version = "1.37.0", features = ["rt"] }
 
 [features]
-default = []
+default = ["grpc-server"]
 grpc-server = ["prost", "prost-types", "tonic", "tonic-reflection", "tonic-build"]
 
 [[bench]]

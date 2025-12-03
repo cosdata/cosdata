@@ -105,6 +105,7 @@ fn random_raw_vector_embedding(rng: &mut impl Rng) -> RawVectorEmbedding {
                 .collect(),
         ),
         metadata: None,
+        use_usv: false,
         sparse_values: None,
         text: None,
         bytes: Some((0..rng.gen_range(100..200)).map(|_| rng.gen()).collect()),

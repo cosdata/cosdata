@@ -5,6 +5,7 @@ use crate::indexes::hnsw::{DenseInputEmbedding, HNSWIndex};
 use crate::indexes::inverted::InvertedIndex;
 use crate::indexes::key_value::KeyValueIndex;
 use crate::indexes::tf_idf::TFIDFIndex;
+use crate::indexes::usv::USVIndex;
 use crate::indexes::IndexOps;
 use crate::metadata::{pseudo_level_probs, pseudo_node_vector, pseudo_root_id};
 use crate::models::buffered_io::{BufferManagerFactory, FilelessBufferManager};
@@ -276,5 +277,28 @@ pub async fn init_key_value_index_for_collection(
     ctx.ain_env
         .collections_map
         .insert_key_value_index(collection, index.clone())?;
+    Ok(index)
+}
+
+/// creates an USV for a collection
+pub async fn init_usv_index_for_collection(
+    ctx: Arc<AppContext>,
+    collection: &Collection,
+    quantization_bits: u8,
+    sample_threshold: usize,
+) -> Result<Arc<USVIndex>, WaCustomError> {
+    let collection_path: Arc<Path> = collection.get_path();
+    let index_path = collection_path.join("usv_index");
+    fs::create_dir_all(&index_path).map_err(|e| WaCustomError::FsError(e.to_string()))?;
+
+    let index = Arc::new(USVIndex::new(
+        index_path.clone(),
+        quantization_bits,
+        sample_threshold,
+    )?);
+
+    ctx.ain_env
+        .collections_map
+        .insert_usv_index(collection, index.clone())?;
     Ok(index)
 }

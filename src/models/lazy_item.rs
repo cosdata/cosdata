@@ -20,6 +20,8 @@ use crate::{
     },
 };
 
+use super::{cache_loader::USVIndexCache, usv_index::USVIndexNodeData};
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct FileIndex<FileId> {
     pub offset: FileOffset,
@@ -144,6 +146,22 @@ impl LazyItem<TFIDFIndexNodeData, ()> {
         &self,
         cache: &TFIDFIndexCache,
     ) -> Result<&'a TFIDFIndexNodeData, BufIoError> {
+        unsafe {
+            if let Some(data) = self.data.load(Ordering::Relaxed).as_ref() {
+                return Ok(data);
+            }
+
+            let offset = self.file_index.offset;
+            (*(cache.get_data(offset)?)).try_get_data(cache)
+        }
+    }
+}
+
+impl LazyItem<USVIndexNodeData, ()> {
+    pub fn try_get_data<'a>(
+        &self,
+        cache: &USVIndexCache,
+    ) -> Result<&'a USVIndexNodeData, BufIoError> {
         unsafe {
             if let Some(data) = self.data.load(Ordering::Relaxed).as_ref() {
                 return Ok(data);

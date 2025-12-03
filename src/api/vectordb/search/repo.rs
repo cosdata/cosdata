@@ -8,6 +8,7 @@ use crate::app_context::AppContext;
 use crate::indexes::hnsw::{DenseSearchInput, DenseSearchOptions};
 use crate::indexes::inverted::{SparseSearchInput, SparseSearchOptions};
 use crate::indexes::tf_idf::{TFIDFSearchInput, TFIDFSearchOptions};
+use crate::indexes::usv::{USVSearchInput, USVSearchOptions};
 use crate::indexes::{IndexOps, SearchResult};
 use crate::models::types::{DocumentId, VectorId};
 
@@ -645,6 +646,84 @@ pub(crate) async fn batch_tf_idf_search(
                 request.queries.into_iter().map(TFIDFSearchInput).collect(),
                 &TFIDFSearchOptions {
                     top_k: request.top_k,
+                },
+                &ctx.config,
+                request.return_raw_text,
+            )
+            .map_err(SearchError::WaCustom)?,
+        warning,
+    ))
+}
+
+pub(crate) async fn usv_search(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    request: dtos::SparseSearchRequestDto,
+) -> Result<(Vec<SearchResult>, Option<String>), SearchError> {
+    let collection = ctx
+        .ain_env
+        .collections_map
+        .get_collection(collection_id)
+        .ok_or_else(|| SearchError::CollectionNotFound(collection_id.to_string()))?;
+
+    let usv_index = collection.get_usv_index().ok_or_else(|| {
+        SearchError::IndexNotFound(format!("USV index for collection '{}'", collection_id))
+    })?;
+
+    let warning = collection.is_indexing().then(|| {
+        "Embeddings are currently being indexed; some results may be temporarily unavailable."
+            .to_string()
+    });
+
+    Ok((
+        usv_index
+            .search(
+                &collection,
+                USVSearchInput(request.query_terms),
+                &USVSearchOptions {
+                    top_k: request.top_k,
+                    early_terminate_threshold: request.early_terminate_threshold,
+                },
+                &ctx.config,
+                request.return_raw_text,
+            )
+            .map_err(SearchError::WaCustom)?,
+        warning,
+    ))
+}
+
+pub(crate) async fn batch_usv_search(
+    ctx: Arc<AppContext>,
+    collection_id: &str,
+    request: dtos::BatchSparseSearchRequestDto,
+) -> Result<(Vec<Vec<SearchResult>>, Option<String>), SearchError> {
+    let collection = ctx
+        .ain_env
+        .collections_map
+        .get_collection(collection_id)
+        .ok_or_else(|| SearchError::CollectionNotFound(collection_id.to_string()))?;
+
+    let usv_index = collection.get_usv_index().ok_or_else(|| {
+        SearchError::IndexNotFound(format!("USV index for collection '{}'", collection_id))
+    })?;
+
+    let warning = collection.is_indexing().then(|| {
+        "Embeddings are currently being indexed; some results may be temporarily unavailable."
+            .to_string()
+    });
+
+    Ok((
+        usv_index
+            .batch_search(
+                &collection,
+                request
+                    .query_terms_list
+                    .into_iter()
+                    .map(USVSearchInput)
+                    .collect(),
+                &USVSearchOptions {
+                    top_k: request.top_k,
+                    early_terminate_threshold: request.early_terminate_threshold,
                 },
                 &ctx.config,
                 request.return_raw_text,

@@ -77,6 +77,8 @@ impl SimpleSerialize for RawVectorEmbedding {
             write_len(&mut buf, 0);
         }
 
+        buf.push(self.use_usv as u8);
+
         Ok(bufman.write_to_end_of_file(cursor, &buf)? as u32)
     }
 
@@ -149,11 +151,14 @@ impl SimpleSerialize for RawVectorEmbedding {
             Some(buf)
         };
 
+        let use_usv = bufman.read_u8_with_cursor(cursor)? != 0;
+
         Ok(Self {
             id,
             document_id,
             dense_values,
             metadata,
+            use_usv,
             sparse_values,
             text,
             bytes,

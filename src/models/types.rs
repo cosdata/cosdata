@@ -9,12 +9,13 @@ use super::{
     meta_persist::{
         lmdb_init_collections_db, lmdb_init_db, load_collections, retrieve_average_document_length,
         retrieve_background_version, retrieve_current_version, retrieve_highest_internal_id,
-        retrieve_values_upper_bound,
+        retrieve_usv_values_upper_bound, retrieve_values_upper_bound,
     },
     paths::get_data_path,
     prob_node::ProbNode,
     tf_idf_index::TFIDFIndexRoot,
     tree_map::{TreeMap, TreeMapKey, TreeMapVec},
+    usv_index::USVIndexRoot,
     versioning::{VersionControl, VersionNumber},
 };
 use crate::{
@@ -35,6 +36,7 @@ use crate::{
         inverted::InvertedIndex,
         key_value::KeyValueIndex,
         tf_idf::TFIDFIndex,
+        usv::USVIndex,
         IndexOps,
     },
     metadata::{schema::MetadataDimensions, QueryFilterDimensions, HIGH_WEIGHT},
@@ -553,6 +555,7 @@ pub struct CollectionsMap {
     lmdb_hnsw_index_db: Database,
     lmdb_inverted_index_db: Database,
     lmdb_tf_idf_index_db: Database,
+    lmdb_usv_index_db: Database,
 }
 
 impl CollectionsMap {
@@ -561,6 +564,7 @@ impl CollectionsMap {
         let hnsw_index_db = lmdb_init_db(&env, "hnsw_indexes")?;
         let inverted_index_db = lmdb_init_db(&env, "inverted_indexes")?;
         let tf_idf_index_db = lmdb_init_db(&env, "tf_idf_indexes")?;
+        let usv_index_db = lmdb_init_db(&env, "usv_indexes")?;
         let res = Self {
             inner_collections: DashMap::new(),
             lmdb_env: env,
@@ -568,6 +572,7 @@ impl CollectionsMap {
             lmdb_hnsw_index_db: hnsw_index_db,
             lmdb_inverted_index_db: inverted_index_db,
             lmdb_tf_idf_index_db: tf_idf_index_db,
+            lmdb_usv_index_db: usv_index_db,
         };
         Ok(res)
     }
@@ -632,6 +637,14 @@ impl CollectionsMap {
             let key_value_index = if collection_meta.key_value_index.enabled {
                 collections_map
                     .load_key_value_index(&collection_meta)?
+                    .map(Arc::new)
+            } else {
+                None
+            };
+
+            let usv_index = if collection_meta.usv_options.enabled {
+                collections_map
+                    .load_usv_index(&collection_meta, &lmdb)?
                     .map(Arc::new)
             } else {
                 None
@@ -745,6 +758,7 @@ impl CollectionsMap {
                 inverted_index: parking_lot::RwLock::new(inverted_index),
                 tf_idf_index: parking_lot::RwLock::new(tf_idf_index),
                 key_value_index: parking_lot::RwLock::new(key_value_index),
+                usv_index: parking_lot::RwLock::new(usv_index),
                 indexing_manager: parking_lot::RwLock::new(None),
                 is_indexing: AtomicBool::new(false),
             });
@@ -1220,6 +1234,41 @@ impl CollectionsMap {
         Ok(Some(key_value_index))
     }
 
+    fn load_usv_index(
+        &self,
+        collection_meta: &CollectionMetadata,
+        lmdb: &MetaDb,
+    ) -> Result<Option<USVIndex>, WaCustomError> {
+        let collection_path: Arc<Path> = get_collections_path().join(&collection_meta.name).into();
+        let index_path = collection_path.join("usv_index");
+
+        if !index_path.exists() {
+            return Ok(None);
+        }
+
+        let Some(usv_index_data) = USVIndex::load_data(
+            &self.lmdb_env,
+            self.lmdb_inverted_index_db,
+            &collection_meta.name,
+        )?
+        else {
+            return Ok(None);
+        };
+
+        let values_upper_bound = retrieve_usv_values_upper_bound(lmdb)?;
+        let usv_index = USVIndex {
+            root: USVIndexRoot::deserialize(index_path, usv_index_data.quantization_bits)?,
+            values_upper_bound: RwLock::new(values_upper_bound.unwrap_or(1.0)),
+            is_configured: AtomicBool::new(values_upper_bound.is_some()),
+            vectors: RwLock::new(Vec::new()),
+            vectors_collected: AtomicUsize::new(0),
+            sampling_data: crate::indexes::inverted::types::SamplingData::default(),
+            sample_threshold: usv_index_data.sample_threshold,
+        };
+
+        Ok(Some(usv_index))
+    }
+
     pub fn insert_hnsw_index(
         &self,
         collection: &Collection,
@@ -1268,6 +1317,20 @@ impl CollectionsMap {
         key_value_index: Arc<KeyValueIndex>,
     ) -> Result<(), WaCustomError> {
         *collection.key_value_index.write() = Some(key_value_index);
+        Ok(())
+    }
+
+    pub fn insert_usv_index(
+        &self,
+        collection: &Collection,
+        usv_index: Arc<USVIndex>,
+    ) -> Result<(), WaCustomError> {
+        usv_index.persist(
+            &collection.meta.name,
+            &self.lmdb_env,
+            self.lmdb_usv_index_db,
+        )?;
+        *collection.usv_index.write() = Some(usv_index);
         Ok(())
     }
 

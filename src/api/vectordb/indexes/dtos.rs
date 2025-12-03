@@ -188,6 +188,13 @@ pub(crate) struct CreateSparseIndexDto {
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
+pub(crate) struct CreateUSVIndexDto {
+    pub name: String,
+    pub quantization: SparseIndexQuantization,
+    pub sample_threshold: usize,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
 pub(crate) struct CreateTFIDFIndexDto {
     pub name: String,
     pub sample_threshold: usize,

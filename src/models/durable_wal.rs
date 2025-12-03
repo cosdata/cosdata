@@ -137,6 +137,8 @@ impl DurableWALFile {
                     } else {
                         write_len(&mut buf, 0);
                     }
+
+                    buf.push(vector.use_usv as u8);
                 }
                 let len = buf.len() as u32 - 4;
                 buf[0..4].copy_from_slice(&len.to_le_bytes());
@@ -211,6 +213,7 @@ mod tests {
             document_id: Some(random_string(12).into()),
             dense_values: Some((0..dense_len).map(|_| rng.gen()).collect()),
             metadata: Some(metadata),
+            use_usv: true,
             sparse_values: Some(
                 (0..sparse_len)
                     .map(|_| SparsePair(rng.gen(), rng.gen()))

@@ -19,6 +19,7 @@ pub(crate) mod hnsw;
 pub(crate) mod inverted;
 pub(crate) mod key_value;
 pub(crate) mod tf_idf;
+pub(crate) mod usv;
 
 pub type InternalSearchResult = (
     InternalId,

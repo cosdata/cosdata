@@ -17,6 +17,7 @@ use crate::indexes::inverted::types::SparsePair;
 use crate::indexes::inverted::{InvertedIndex, SparseInputEmbedding};
 use crate::indexes::key_value::{KeyValueIndex, KeyValueInputPair};
 use crate::indexes::tf_idf::{TFIDFIndex, TFIDFInputEmbedding};
+use crate::indexes::usv::{USVIndex, USVInputEmbedding};
 use crate::indexes::IndexOps;
 use crate::metadata::{MetadataFields, MetadataSchema};
 use chrono::{DateTime, TimeZone, Utc};
@@ -52,6 +53,11 @@ pub struct KeyValueOptions {
     pub enabled: bool,
 }
 
+#[derive(Debug, Default, Clone, Serialize, Deserialize, ToSchema)]
+pub struct USVOptions {
+    pub enabled: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct CollectionConfig {
     pub max_vectors: Option<u32>,
@@ -64,6 +70,7 @@ pub struct RawVectorEmbedding {
     pub document_id: Option<DocumentId>,
     pub dense_values: Option<Vec<f32>>,
     pub metadata: Option<MetadataFields>,
+    pub use_usv: bool,
     pub sparse_values: Option<Vec<SparsePair>>,
     pub text: Option<String>,
     pub bytes: Option<Vec<u8>>,
@@ -81,6 +88,8 @@ pub struct CollectionMetadata {
     pub tf_idf_options: TFIDFOptions,
     #[serde(default)]
     pub key_value_index: KeyValueOptions,
+    #[serde(default)]
+    pub usv_options: USVOptions,
     pub metadata_schema: Option<MetadataSchema>,
     pub config: CollectionConfig,
     pub store_raw_text: bool,
@@ -128,6 +137,7 @@ pub struct Collection {
     pub inverted_index: RwLock<Option<Arc<InvertedIndex>>>,
     pub tf_idf_index: RwLock<Option<Arc<TFIDFIndex>>>,
     pub key_value_index: RwLock<Option<Arc<KeyValueIndex>>>,
+    pub usv_index: RwLock<Option<Arc<USVIndex>>>,
     // this field is actually NOT optional, the only reason it is wrapped in
     // `Option` is to allow us to create `Collection` first without the
     // indexing manager, because `IndexingManager`'s constructor also requires
@@ -145,6 +155,7 @@ impl Collection {
         sparse_vector_options: SparseVectorOptions,
         tf_idf_options: TFIDFOptions,
         key_value_options: KeyValueOptions,
+        usv_options: USVOptions,
         metadata_schema: Option<MetadataSchema>,
         collection_config: CollectionConfig,
         store_raw_text: bool,
@@ -236,6 +247,7 @@ impl Collection {
                 sparse_vector: sparse_vector_options,
                 tf_idf_options,
                 key_value_index: key_value_options,
+                usv_options,
                 metadata_schema,
                 config: collection_config,
                 store_raw_text,
@@ -267,6 +279,7 @@ impl Collection {
             inverted_index: RwLock::new(None),
             tf_idf_index: RwLock::new(None),
             key_value_index: RwLock::new(None),
+            usv_index: RwLock::new(None),
             indexing_manager: RwLock::new(None),
             is_indexing: AtomicBool::new(false),
         });
@@ -325,7 +338,7 @@ impl Collection {
         to_vec(&self.meta).map_err(|e| WaCustomError::SerializationError(e.to_string()))
     }
 
-    /// perists the collection instance on disk (lmdb -> collections database)
+    /// persists the collection instance on disk (lmdb -> collections database)
     pub fn persist(&self, env: &Environment, db: Database) -> Result<(), WaCustomError> {
         let key = self.get_key();
         let value = self.serialize()?;
@@ -373,6 +386,10 @@ impl Collection {
 
     pub fn get_key_value_index(&self) -> Option<Arc<KeyValueIndex>> {
         self.key_value_index.read().clone()
+    }
+
+    pub fn get_usv_index(&self) -> Option<Arc<USVIndex>> {
+        self.usv_index.read().clone()
     }
 
     /// Returns the raw embedding mapped to an internal id
@@ -472,19 +489,21 @@ impl Collection {
             .internal_id_counter
             .fetch_add(num_ids_to_reserve as u32, Ordering::Relaxed);
 
-        let (dense_embs, sparse_embs, tf_idf_embs, key_value_embs): (
+        let (dense_embs, sparse_embs, tf_idf_embs, key_value_embs, usv_embs): (
+            Vec<_>,
             Vec<_>,
             Vec<_>,
             Vec<_>,
             Vec<_>,
         ) = embeddings.into_iter().enumerate().fold(
-            (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()),
             |mut acc, (i, mut embedding)| {
                 let RawVectorEmbedding {
                     id,
                     document_id,
                     dense_values,
                     metadata,
+                    use_usv,
                     sparse_values,
                     text,
                     bytes,
@@ -497,7 +516,11 @@ impl Collection {
                         .push(DenseInputEmbedding(internal_id, values, metadata, false));
                 }
                 if let Some(values) = sparse_values {
-                    acc.1.push(SparseInputEmbedding(internal_id, values));
+                    if use_usv {
+                        acc.4.push(USVInputEmbedding(internal_id, values));
+                    } else {
+                        acc.1.push(SparseInputEmbedding(internal_id, values));
+                    }
                 }
                 if let Some(text) = text {
                     acc.2.push(TFIDFInputEmbedding(internal_id, text));
@@ -548,6 +571,12 @@ impl Collection {
         if !key_value_embs.is_empty() {
             if let Some(key_value_index) = &*self.key_value_index.read() {
                 key_value_index.run_upload(self, key_value_embs, version, config)?;
+            }
+        }
+
+        if !usv_embs.is_empty() {
+            if let Some(usv_index) = &*self.usv_index.read() {
+                usv_index.run_upload(self, usv_embs, version, config)?;
             }
         }
 
