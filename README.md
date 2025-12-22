@@ -32,31 +32,283 @@
 ## 📦 Table of Contents
 
 - [Overview](#-overview)
+- [Why Cosdata?](#-why-cosdata)
+  - [The Cosine Similarity Problem](#the-cosine-similarity-problem)
+  - [The Relevance-First Approach](#the-relevance-first-approach)
+  - [How Cosdata Delivers Relevance](#how-cosdata-delivers-relevance)
+  - [Real-World Impact](#real-world-impact)
+- [Benchmarks](#-benchmarks)
+  - [Full-Text Search (BM25)](#-full-text-search-bm25)
+  - [Dense Vector Search (HNSW)](#-dense-vector-search-hnsw)
+  - [SPLADE Learned Sparse Embeddings](#-splade-learned-sparse-embeddings)
+  - [Hybrid Search](#-hybrid-search-best-of-both-worlds)
+  - [Cost Efficiency](#-cost-efficiency)
+  - [Benchmark Methodology](#-benchmark-methodology)
+- [Features](#-features)
+  - [Search Relevance & Quality](#-search-relevance--quality)
+  - [Performance at Scale](#-performance-at-scale)
+  - [Enterprise-Grade Architecture](#-enterprise-grade-architecture)
+  - [Developer Experience](#-developer-experience)
+  - [Advanced Capabilities](#-advanced-capabilities)
 - [Getting Started](#️-getting-started)
+  - [Install](#1-install)
+  - [Build from Source](#2-build-from-source)
+  - [Testing Your Installation](#3-testing-your-installation)
+  - [HTTPS Configuration (TLS)](#4-https-configuration-tls)
 - [Client SDKs](#-client-sdks)
   - [Python SDK](#-python-sdk)
   - [Node.js SDK](#-nodejs-sdk)
-- [Features](#-features)
-- [Benchmarks](https://www.cosdata.io/resources/benchmarks)
 - [Documentation](https://docs.cosdata.io/getting-started/introduction/)
 - [Contributing](#-contributing)
 - [Contacts & Community](#-contacts--community)
 - [Show Your Support](#️-show-your-support)
-
+  
 <br>
 <br>
 
 # 🚀 Overview
 
-Cosdata is a next-generation retrieval infrastructure engineered for AI-native applications that demand relevance beyond simple vector similarity. Built with immutability and version control at its core, Cosdata delivers exceptional performance for modern semantic search and retrieval workloads.
-Cosdata advances retrieval technology through a relevance-first architecture that combines multiple search modalities:
+Cosdata is a next-generation retrieval infrastructure engineered for AI-native applications that demand **relevance beyond simple vector similarity**. 
+
+## The Challenge
+Traditional vector databases optimize for cosine similarity rather than what users actually find useful. Decades of search evolution prove that effective retrieval requires sophisticated ranking systems that understand context, incorporate multiple signals, and optimize for user satisfaction—not just mathematical proximity.
+
+## Our Solution
+Built with immutability and version control at its core, Cosdata delivers a **relevance-first architecture** combining:
 
 - **Multi-Modal Retrieval**: Seamlessly integrate BM25 full-text search, HNSW dense vectors, SPLADE learned sparse embeddings, and metadata-rich sparse vectors in a unified platform
 - **Context-Aware Capabilities**: Leverage geofencing, hierarchical document organization, and explainable ranking that understands user intent and real-world complexity
 - **Enterprise-Grade Architecture**: Benefit from colocated storage, streaming ingestion, transactional versioning, and comprehensive security features
-- **Relevance Optimization**: Move beyond cosine similarity with sophisticated ranking algorithms that optimize for actual user satisfaction, not just mathematical proximity
 
-Cosdata is designed to meet the demands of production AI applications, delivering 60-120% reduction in compute requirements while improving retrieval quality by 20-50% (NDCG@10).
+## Proven Impact
+Organizations using Cosdata achieve **60-120% reduction in compute requirements** while improving retrieval quality by **20-50% (NDCG@10)**. Our unified architecture eliminates external document stores and complex multi-database queries, reducing infrastructure costs and latency.
+
+<br>
+
+# 💡 Why Cosdata? 
+
+## The Cosine Similarity Problem
+
+Most vector databases treat retrieval as a pure similarity problem—if two embeddings are mathematically close in vector space, they must be relevant to each other. **This assumption is fundamentally flawed.**
+
+High cosine similarity ≠ High relevance to users.
+
+Cosine similarity measures the angle between embedding vectors—a mathematical distance determined by how a model was trained. But this metric has no inherent connection to what users actually find useful or relevant. Two documents can be mathematically similar while being practically useless for a user's information need, or vice versa.
+
+## The Relevance-First Approach
+
+**True relevance requires understanding context, not just proximity.**
+
+Decades of search engine evolution—from Google's PageRank to modern recommendation systems—prove that effective retrieval demands:
+
+- **Multiple signals**: Lexical matching, semantic understanding, metadata, recency, authority, and user context
+- **Ground truth from users**: Real relevance comes from actual user behavior and expert judgments, not embedding distances
+- **Explainable ranking**: Systems must show *why* results matter, not just that they're "similar"
+- **Business logic integration**: Geographic constraints, temporal filters, hierarchical relationships, and domain-specific rules
+
+## How Cosdata Delivers Relevance
+
+Cosdata is built from the ground up to **optimize for user satisfaction, not mathematical convenience**:
+
+1. **Hybrid Multi-Modal Search**: Combines BM25 lexical matching, dense vectors (HNSW), SPLADE learned sparse embeddings, and metadata-rich representations—letting each signal contribute what it does best
+
+2. **Context-Aware Ranking**: Native support for geofencing, hierarchical document structures, temporal filtering, and custom business logic without requiring everything to be embedded
+
+3. **Explainable Results**: Every result comes with transparent scoring showing semantic similarity contributions, metadata matches, geographic relevance, and hierarchical context
+
+4. **Proven Quality Metrics**: We measure success using NDCG (Normalized Discounted Cumulative Gain) and recall against human-judged relevance datasets like BEIR—not just precision against our own similarity rankings
+
+## Real-World Impact
+
+Organizations using Cosdata see:
+- **20-50% improvement in retrieval quality** (NDCG@10) compared to pure vector similarity approaches
+- **60-120% reduction in compute requirements** through efficient multi-modal indexing
+- **Sub-100ms response times** while maintaining relevance quality
+- **Simplified architecture** with colocated storage eliminating external document stores
+
+**Bottom line**: Cosdata treats retrieval as a relevance problem, not a storage problem. We've learned from decades of search evolution to build infrastructure that understands what users actually need.
+
+<br>
+
+
+# 📊 Benchmarks
+
+Cosdata delivers exceptional performance across all retrieval modalities. Our benchmarks use industry-standard datasets and compare against leading solutions to demonstrate real-world performance gains.
+
+## 🔍 Full-Text Search (BM25)
+
+Our custom BM25 implementation outperforms Elasticsearch with dramatically higher throughput and lower latency while maintaining comparable ranking quality.
+
+### Performance Highlights
+
+- **Up to 151× higher QPS** than Elasticsearch (SciFact dataset)
+- **Average 44× QPS improvement** across multiple IR benchmark datasets
+- **Up to 12× faster indexing** on large-scale datasets
+- **Lower latency** at both p50 and p95 percentiles across all tested datasets
+
+### Detailed Comparison: Cosdata vs. Elasticsearch
+
+| Dataset | Corpus Size | System | Indexing (sec) | QPS | NDCG@10 | p50 (ms) | p95 (ms) |
+|---------|-------------|--------|----------------|-----|---------|----------|----------|
+| **arguana** | 8.7K | **Cosdata** | **0.1** | **2,167** | 0.40 | **9** | **15** |
+| | | Elasticsearch | 1.4 | 263 | 0.48 | 44 | 74 |
+| **climate-fever** | 5.4M | **Cosdata** | **40.6** | **135** | 0.13 | **106** | 379 |
+| | | Elasticsearch | 522.8 | 84 | 0.14 | 162 | 263 |
+| **fever** | 5.4M | **Cosdata** | **40.3** | **314** | 0.47 | **52** | 157 |
+| | | Elasticsearch | 525.7 | 154 | 0.52 | 80 | 138 |
+| **fiqa** | 57K | **Cosdata** | **0.5** | **4,942** | 0.25 | **7** | **12** |
+| | | Elasticsearch | 6.7 | 251 | 0.25 | 39 | 60 |
+| **msmarco** | 8.8M | **Cosdata** | **57.7** | **315** | 0.23 | **46** | 162 |
+| | | Elasticsearch | 714.7 | 166 | 0.23 | 73 | 129 |
+| **nq** | 2.6M | **Cosdata** | **19.3** | **483** | 0.29 | **30** | **81** |
+| | | Elasticsearch | 243.2 | 197 | 0.29 | 59 | 100 |
+| **quora** | 522K | **Cosdata** | **2.7** | **1,425** | **0.81** | **11** | **36** |
+| | | Elasticsearch | 30.2 | 323 | **0.81** | 39 | 55 |
+| **scidocs** | 25K | **Cosdata** | **0.3** | **13,338** | **0.16** | **7** | **12** |
+| | | Elasticsearch | 3.6 | 319 | 0.15 | 33 | 48 |
+| **scifact** | 5.2K | **Cosdata** | **0.1** | **40,909** | **0.69** | **7** | **13** |
+| | | Elasticsearch | 1.0 | 271 | 0.68 | 34 | 51 |
+| **trec-covid** | 171K | **Cosdata** | **1.7** | **2,219** | 0.61 | **10** | **18** |
+| | | Elasticsearch | 22.1 | 110 | 0.62 | 57 | 88 |
+| **webis-touche2020** | 382K | **Cosdata** | **5.5** | **2,789** | **0.34** | **10** | **18** |
+| | | Elasticsearch | 63.1 | 108 | **0.34** | 62 | 99 |
+
+**Key Takeaway**: Cosdata maintains comparable or better ranking quality (NDCG@10) while delivering dramatically higher throughput and lower latency.
+
+---
+
+## 🎯 Dense Vector Search (HNSW)
+
+Our HNSW implementation achieves industry-leading performance on large-scale vector datasets with high-dimensional embeddings.
+
+### Performance Highlights
+
+- **1,758 QPS** on 1 million records (1536 dimensions)
+- **~42% faster** than Qdrant
+- **~54% faster** than Weaviate  
+- **~146% faster** than Elasticsearch
+- **Consistent 97% precision** at high throughput
+
+### Detailed Comparison: Million-Scale Vector Search
+
+**Dataset**: DbPedia (Qdrant benchmark) | **Size**: 1 million records | **Dimensions**: 1536
+
+| System | Indexing (min) | QPS | Precision | p50 (ms) | p95 (ms) |
+|--------|----------------|-----|-----------|----------|----------|
+| **Cosdata** | **16.32** | **1,758** | 0.97 | 7 | 8 |
+| Qdrant | 24.43 | 1,238 | **0.99** | **4** | **5** |
+| Weaviate | **13.94** | 1,142 | 0.97 | 5 | 7 |
+| Elasticsearch | 83.72 | 716 | 0.98 | 22 | 73 |
+
+**Key Takeaway**: Cosdata delivers the highest throughput with competitive precision and fast indexing times, making it ideal for production workloads requiring both speed and accuracy.
+
+---
+
+## 🧠 SPLADE Learned Sparse Embeddings
+
+SPLADE combines neural and lexical matching for improved retrieval quality in domain-specific applications. While offering 15-25% better ranking quality, it trades throughput for precision.
+
+### Quality vs. Performance Trade-offs
+
+| Dataset | BM25 NDCG | SPLADE NDCG | Quality Gain | BM25 QPS | SPLADE QPS | Throughput Cost |
+|---------|-----------|-------------|--------------|----------|------------|-----------------|
+| Arguana | 0.40 | **0.528** | **+32%** | 2,167 | 570 | 3.8× |
+| FiQA | 0.25 | **0.294** | **+18%** | 4,942 | 1,390 | 3.6× |
+| Quora | 0.81 | 0.810 | -0.5% | 1,425 | 296 | 4.8× |
+| Trec-Covid | 0.61 | **0.643** | **+5%** | 2,219 | 792 | 2.8× |
+| SciFact | **0.69** | 0.622 | -10% | 40,909 | 1,692 | 24× |
+| SciDocs | **0.16** | 0.149 | -7% | 13,338 | 1,611 | 8.3× |
+| Webis-Touche | **0.34** | 0.228 | -33% | 2,789 | 357 | 7.8× |
+
+### Recall Improvements
+
+| Dataset | BM25 Recall@10 | SPLADE Recall@10 | Improvement |
+|---------|----------------|------------------|-------------|
+| Arguana | 0.647 | **0.787** | **+22%** |
+| FiQA | 0.315 | **0.356** | **+13%** |
+| Quora | 0.902 | **0.905** | +0.3% |
+| SciFact | **0.820** | 0.753 | -8% |
+
+**When to Use SPLADE**:
+- ✅ Domain-specific retrieval requiring maximum quality
+- ✅ Reranking pipelines where initial recall matters more than throughput
+- ✅ Applications where 1.5-2× latency increase is acceptable
+- ❌ High-volume, latency-sensitive search (use BM25 or hybrid approach)
+
+---
+
+## 🔄 Hybrid Search: Best of Both Worlds
+
+Cosdata's hybrid approach combines multiple retrieval modalities to optimize for both relevance and performance:
+
+- **BM25 + Dense Vectors**: Lexical precision with semantic understanding
+- **SPLADE + HNSW**: Neural matching with efficient ANN search
+- **Metadata Filtering**: Context-aware ranking without embedding overhead
+
+**Result**: 20-50% improvement in NDCG@10 over single-modality approaches while maintaining sub-100ms latency.
+
+---
+
+## 💰 Cost Efficiency
+
+Organizations using Cosdata achieve:
+- **60-120% reduction** in compute requirements vs. traditional vector databases
+- **Eliminated infrastructure costs** from external document stores
+- **Lower memory footprint** through intelligent caching and quantization
+- **Predictable scaling costs** with horizontal sharding
+
+---
+
+## 🔬 Benchmark Methodology
+
+All benchmarks use:
+- **Industry-standard datasets**: BEIR, Qdrant benchmarks, MS MARCO
+- **Consistent hardware**: Same server specifications across all comparisons
+- **Default configurations**: Out-of-the-box settings unless otherwise noted
+- **Reproducible tests**: Open-source benchmark scripts available in our repository
+
+For detailed benchmark results, methodology, and reproduction instructions, visit: **[cosdata.io/resources/benchmarks](https://www.cosdata.io/resources/benchmarks)**
+
+<br>
+
+# ✨ Features
+
+## 🎯 Search Relevance & Quality
+
+**Move Beyond Cosine Similarity**
+- **Hybrid Multi-Modal Search**: Combine BM25 (up to 151× faster than Elasticsearch), dense vectors (HNSW), and SPLADE learned sparse representations
+- **Context-Aware Retrieval**: Native GPS geofencing, hierarchical document structures with inherited metadata, temporal filtering, and boolean queries—no embedding models required
+- **Explainable Results**: Transparent scoring shows why results were surfaced, decomposing semantic similarity, metadata matches, geographic relevance, and hierarchical relationships
+
+## ⚡ Performance at Scale
+
+**Industry-Leading Benchmarks**
+- **Ultra-Fast Indexing**: Up to 12× faster than Elasticsearch on large datasets
+- **Massive Throughput**: 1758+ QPS on million-record datasets; 151× higher QPS than Elasticsearch on SciFact
+- **Sub-100ms Latency**: Optimized for real-time applications with consistent p50/p95 performance
+
+## 🏢 Enterprise-Grade Architecture
+
+**Production-Ready Infrastructure**
+- **Colocated Storage**: Retrieve complete content in single operations—no external database calls required
+- **Versioning & Time Travel**: Query historical data states with immutable, append-only architecture supporting A/B testing and full audit trails
+- **Streaming Ingestion**: Process real-time data feeds with immediate queryability while maintaining consistency guarantees
+- **End-to-End Security**: Encryption at rest and in transit, optional client-side encryption for zero-trust environments, fine-grained RBAC
+
+## 🔧 Developer Experience
+
+**Built for Rapid Integration**
+- **Auto-Configuration**: Insights-driven hyperparameter tuning for optimal performance out-of-the-box
+- **Intuitive RESTful APIs**: "Transactions as a resource" design pattern
+- **Native SDKs**: Python and Node.js with more coming soon
+- **Comprehensive Documentation**: Full guides at docs.cosdata.io
+
+## 📊 Advanced Capabilities
+
+- **Dense Vector Indexing**: Optimized HNSW algorithm with dynamic updates, no full rebuilds required
+- **SPLADE Support**: 15-25% better ranking quality for domain-specific retrieval tasks
+- **Product & Scalar Quantization**: Quarter-nary (2-bit) and octal (3-bit) options for enhanced compression
+- **Multi-Modal Data Management**: Real-time querying across text, images, audio with immediate searchability
 
 <br>
 
@@ -508,48 +760,6 @@ const results = await collection.getSearch().dense({
 -   📦 GitHub: [cosdata-sdk-node](https://github.com/cosdata/cosdata-sdk-node)
 
 
-<br>
-
-# ✨ Features
-
-### Search Relevance
-
-- **Hybrid Multi-Modal Search**: Combine BM25 full-text search with dense vector similarity (HNSW) and SPLADE learned sparse representations to deliver highly relevant results that balance lexical matching, semantic understanding, and context
-- **Metadata-Rich Retrieval**: Search across hierarchical document structures with inherited metadata, enabling complex boolean queries, temporal filtering, and geospatial ranking without requiring embedding models
-- **Explainable Results**: Understand exactly why results were surfaced with transparent scoring that decomposes semantic similarity, metadata matches, geographic relevance, and hierarchical relationships
-
-### High performance
-- **Blazing-Fast Indexing**: Achieve up to 12× faster indexing than Elasticsearch on large datasets with optimized implementations for both full-text and vector workloads
-- **Ultra-Low Latency**: Power applications with sub-100ms response times—our BM25 implementation delivers up to 151× higher QPS than Elasticsearch on benchmark datasets, while dense vector search achieves 1758+ QPS on million-record datasets
-- **Massive Throughput**: Handle thousands of concurrent requests per second with an architecture designed for optimal performance under heavy loads, outperforming competitors by 42-146% on standard benchmarks
-
-### Customizable
-- **Configurability**: Gain precise control over your setup with manual configuration of all indexing and querying hyperparameters, enabling you to optimize performance, resource utilization and tailor results to your exact specifications.
-- **Dense Vector indexing**: Achieve efficient and precise indexing with our vector database's optimized HNSW (Hierarchical Navigable Small World) algorithm, designed to enhance search performance and accuracy for large-scale data sets.
-- **Sparse vectors**: Expertly designed to work seamlessly with SPLADE-generated sparse vectors, our solution offers superior performance compared to BM25 indices for more precise and meaningful insights.
-
-### Scalability
-- Unlock unbounded scalability with our vector database, engineered to grow alongside your data and query demands. Whether you're handling millions of records or scaling up to massive datasets, enjoy consistent, high-speed performance without compromise
-- Achieve predictable and efficient query performance with our vector database, engineered for near-linear scalability that ensures fast results, even as your data expands.
-
-### Efficient
-- **Resource utilization**: Efficiency is at the core of our vector database, where ingenious provably efficient data structures and algorithms ensure outstanding performance while providing increasingly relevant search results.
-- **Scalar quantization**: Configure finer quantization resolutions, including quarter-nary (2-bit) and octal (3-bit), for enhanced compression and improved recall trade-offs, giving you more control over data efficiency and performance.
-- **Product quantization**: A pioneering product quantization approach to not only compress data more effectively but also enhance recall performance beyond what scalar quantization offers, optimizing both data efficiency and retrieval recall.
-
-### Enterprise-grade
-- **Colocated Storage**: Eliminate architectural complexity by storing document chunks, embeddings, and metadata together—retrieve complete content in a single operation without external database calls
-- **Versioning & Time Travel**: Query historical data states with immutable, append-only architecture supporting transactional indexing, A/B testing, and full audit trails
-- **Streaming Ingestion**: Process real-time data feeds with immediate queryability while maintaining consistency guarantees and enterprise-grade durability
-Production-Ready Security: Deploy with end-to-end encryption, optional client-side encryption for zero-trust environments, and fine-grained RBAC for multi-tenant use cases
-
-### Easy to use
-- **Auto-configuration of hyper-parameters**: Achieve peak performance with our vector database, utilizing insights-driven auto-configuration of hyperparameters to automatically fine-tune your system for the best results, no manual adjustments needed.
-- **Intuitive API**: Elegantly crafted HTTP Restful APIs featuring _"Transactions as a resource"_. Manage all functions of our vector database effortlessly with intuitive HTTP RESTful APIs.
-- **Client SDKs in your favourite language**: Access our vector database effortlessly with client SDKs available in multiple programming languages.
-
-### Manage Multi-modal data
-- Supports real-time querying and dynamic index updates, ensuring that new multi-modal data (text, images, audio, etc.) is immediately searchable without downtime or delays.
 
 <br>
 
