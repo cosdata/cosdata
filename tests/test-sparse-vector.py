@@ -34,7 +34,7 @@ BRUTE_FORCE_RESULTS_FILE = "datasets/sparse_dataset/brute_force_results.pkl"
 def create_session():
     """Initialize the cosdata client"""
     # Use environment variable from .env file if available, otherwise prompt
-    password = os.getenv("COSDATA_PASSWORD")
+    password = os.getenv("COSDATA__ADMIN_API_KEY")
     if not password:
         password = getpass.getpass("Enter admin password: ")
 

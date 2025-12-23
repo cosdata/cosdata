@@ -9,6 +9,7 @@ use std::{io, vec};
 pub struct Config {
     #[serde(default)]
     pub thread_pool: ThreadPool,
+    pub admin_api_key: Option<String>,
     pub server: Server,
     pub hnsw: Hnsw,
     pub indexing: Indexing,
@@ -189,11 +190,21 @@ pub struct Search {
 pub fn load_config() -> Result<Config, WaCustomError> {
     let config_path = get_config_path();
 
-    let config_contents = std::fs::read_to_string(&config_path)
-        .map_err(|e| WaCustomError::ConfigError(format!("Failed to read config file: {}", e)))?;
+    let config_path = config_path
+        .to_str()
+        .ok_or(WaCustomError::ConfigError(String::from(
+            "Invalid path, the config path should be a UTF8 string",
+        )))?;
 
-    toml::from_str(&config_contents)
-        .map_err(|e| WaCustomError::ConfigError(format!("Invalid config format: {}", e)))
+    let config = config::Config::builder()
+        .add_source(config::File::with_name(config_path))
+        .add_source(config::Environment::with_prefix("COSDATA"))
+        .build()
+        .map_err(|err| WaCustomError::ConfigError(format!("Invalid config error {}", err)))?;
+
+    config
+        .try_deserialize()
+        .map_err(|err| WaCustomError::ConfigError(format!("Invalid config {}", err)))
 }
 
 #[derive(Debug, Deserialize, Clone)]

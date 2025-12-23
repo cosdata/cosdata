@@ -46,7 +46,7 @@ def format_vector(vector):
 
 def test_basic_functionality():
     # Get password from .env file or prompt securely
-    password = os.getenv("COSDATA_PASSWORD")
+    password = os.getenv("COSDATA__ADMIN_API_KEY")
     if not password:
         password = getpass.getpass("Enter your database password: ")
 

@@ -58,7 +58,7 @@ def read_dataset_from_parquet(dataset_name, ids, num_rps_test_vectors):
 
 if __name__ == "__main__":
     # Get password from .env file or prompt securely
-    password = os.getenv("COSDATA_PASSWORD")
+    password = os.getenv("COSDATA__ADMIN_API_KEY")
     if not password:
         password = getpass.getpass("Enter admin password: ")
 

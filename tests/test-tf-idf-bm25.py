@@ -33,7 +33,7 @@ host = os.getenv("COSDATA_HOST", "http://127.0.0.1:8443")
 def create_session():
     """Initialize the cosdata client"""
     # Use environment variable from .env file if available, otherwise prompt
-    password = os.getenv("COSDATA_PASSWORD")
+    password = os.getenv("COSDATA__ADMIN_API_KEY")
     if not password:
         password = getpass.getpass("Enter admin password: ")
 
@@ -1023,7 +1023,7 @@ def main_non_it(dataset, num_queries=100, batch_size=100, top_k=10, k=1.5, b=0.7
 
     # Login to get access token
     print("Logging in to server...")
-    os.environ["COSDATA_PASSWORD"] = ""
+    os.environ["COSDATA__ADMIN_API_KEY"] = ""
     create_session()
     print("Session established")
 
