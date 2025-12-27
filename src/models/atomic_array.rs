@@ -55,12 +55,13 @@ impl<T, const N: usize> AtomicArray<T, N> {
     }
 
     pub fn len(&self) -> usize {
+        let mut n = 0;
         for i in 0..N {
-            if self.items[i].load(Ordering::SeqCst).is_null() {
-                return i;
+            if !self.items[i].load(Ordering::SeqCst).is_null() {
+                n += 1;
             }
         }
-        N
+        n
     }
 
     pub fn last(&self) -> Option<*mut T> {
@@ -85,7 +86,7 @@ impl<T, const N: usize> AtomicArray<T, N> {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.items[0].load(Ordering::SeqCst).is_null()
+        self.len() == 0
     }
 
     pub fn insert(&self, idx: usize, value: *mut T) {
@@ -134,5 +135,29 @@ impl<T, const N: usize> AtomicArray<T, N> {
             }
         }
         (return_value, res.is_ok())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AtomicArray;
+
+    #[test]
+    fn test_atomic_array_len() {
+        let arr: AtomicArray<u8, 8> = AtomicArray::new();
+        assert_eq!(0, arr.len());
+        assert!(arr.is_empty());
+
+        let mut x: u8 = 100;
+        let x_ptr: *mut u8 = &mut x;
+        arr.push(x_ptr);
+
+        assert_eq!(1, arr.len());
+
+        let mut y: u8 = 200;
+        let y_ptr: *mut u8 = &mut y;
+        arr.insert(4, y_ptr);
+
+        assert_eq!(2, arr.len());
     }
 }
