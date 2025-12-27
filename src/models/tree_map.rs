@@ -1,6 +1,5 @@
 use std::{
-    marker::PhantomData,
-    sync::{
+    collections::VecDeque, marker::PhantomData, sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc,
     },
@@ -29,6 +28,8 @@ impl TreeMapKey for u32 {
     }
 }
 
+// TreeMap is a BufferManager-backed key-value store for internal use
+// in cosdata.
 pub struct TreeMap<K, V> {
     pub(crate) root: TreeMapNode<V>,
     pub(crate) dim_bufman: BufferManager,
@@ -429,6 +430,21 @@ impl<T> QuotientsMap<T> {
             unsafe { std::mem::transmute(q.value.read()) }
         })
     }
+
+    fn latest_values(&self) -> Vec<&T> {
+        self.map
+            .to_list()
+            .into_iter()
+            .map(|(_, v)| {
+                // SAFETY: here we are changing the lifetime of the value by using
+                // `std::mem::transmute`, which by definition is not safe, but given our use of
+                // this value and how we destroy it, its actually safe in this context.
+                unsafe { std::mem::transmute::<Option<&T>, Option<&T>>(v.value.read().latest()) }
+            })
+            .take_while(|v| v.is_some())
+            .map(|v| v.unwrap())
+            .collect()
+    }
 }
 
 impl<T: VersionedVecItem> QuotientsMapVec<T> {
@@ -506,6 +522,11 @@ where
 }
 
 impl<K: TreeMapKey, V> TreeMap<K, V> {
+    /// Constructor to create a new TreeMap
+    ///
+    /// @NOTE: In order to load an existing TreeMap that's already
+    /// been serialized to disk, use `TreeMap::deserialize` method
+    /// from the `SimpleSerialize` trait implementation.
     pub fn new(
         dim_bufman: BufferManager,
         data_bufmans: BufferManagerFactory<VersionNumber>,
@@ -549,6 +570,17 @@ impl<K: TreeMapKey, V> TreeMap<K, V> {
         let node = self.root.find_or_create_node(&path);
         node.get_versioned(key)
     }
+
+    /// Returns an iterator over all values in the TreeMap
+    ///
+    /// @NOTE: There's no equivalent iterator for keys because the
+    /// TreeMap doesn't actually store keys in it's raw form (keys are
+    /// hashed and stored). One way to workaround this is to store the
+    /// key additionally in every value, so that iterating over the
+    /// values also obtains the keys.
+    pub fn latest_values(&self) -> TreeMapValuesIter<'_, V> {
+        TreeMapValuesIter::new(&self.root)
+    }
 }
 
 impl<K, V: SimpleSerialize> TreeMap<K, V> {
@@ -584,6 +616,52 @@ impl<K, V: SimpleSerialize> TreeMap<K, V> {
             data_bufmans,
             _marker: PhantomData,
         })
+    }
+}
+
+pub struct TreeMapValuesIter<'a, T> {
+    stack: VecDeque<&'a TreeMapNode<T>>,
+    curr_iter: Option<(u16, std::vec::IntoIter<&'a T>)>,
+}
+
+impl<'a, T> TreeMapValuesIter<'a, T> {
+    pub fn new(root_node: &'a TreeMapNode<T>) -> Self {
+        let mut stack = VecDeque::new();
+        stack.push_front(root_node);
+        Self {
+            stack,
+            curr_iter: None,
+        }
+    }
+}
+
+impl<'a, T: std::fmt::Debug> Iterator for TreeMapValuesIter<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            // @NOTE: Keeping node idx in state helps with debugging
+            if let Some((_nidx, iter)) = &mut self.curr_iter {
+                if let Some(item) = iter.next() {
+                    return Some(item);
+                }
+            }
+
+            if let Some(node) = self.stack.pop_front() {
+                let node_values = node.quotients.latest_values().into_iter();
+                self.curr_iter = Some((node.node_idx, node_values));
+                for child_ptr in &node.children {
+                    if !child_ptr.is_null() {
+                        unsafe {
+                            let child = &*child_ptr;
+                            self.stack.push_front(child)
+                        }
+                    }
+                }
+            } else {
+                return None;
+            }
+        }
     }
 }
 
@@ -676,8 +754,9 @@ impl TreeMapKey for u64 {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::OpenOptions;
+    use std::{collections::HashSet, fs::OpenOptions};
 
+    use rand::Rng;
     use tempfile::tempdir;
 
     use super::*;
@@ -713,5 +792,125 @@ mod tests {
                 next: Some(Box::new(VersionedItem::new(1.into(), 29)))
             })
         );
+    }
+
+    #[test]
+    fn test_latest_values() {
+        let tempdir = tempdir().unwrap();
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .create(true)
+            .open(tempdir.as_ref().join("tree_map-2.dim"))
+            .unwrap();
+        let dim_bufman = BufferManager::new(file, 8192).unwrap();
+        let data_bufmans = BufferManagerFactory::new(
+            tempdir.as_ref().into(),
+            |root, version: &VersionNumber| root.join(format!("tree_map-2.{}.data", **version)),
+            8192,
+        );
+        let map: TreeMap<u64, u64> = TreeMap::new(dim_bufman, data_bufmans);
+
+        let mut rng = rand::thread_rng();
+
+        // Test with u16::MAX random values between 1 and u64::MAX
+        let count = u16::MAX as usize;
+
+        let test_values: Vec<u64> = (0..count).map(|_| rng.gen_range(1..=u64::MAX)).collect();
+
+        for i in &test_values {
+            map.insert(0.into(), i, *i);
+        }
+
+        let result: HashSet<&u64> = map.latest_values().collect();
+
+        assert_eq!(count, result.len());
+
+        for i in test_values {
+            assert!(result.contains(&i));
+        }
+    }
+
+    #[test]
+    fn test_treemap_latest_values_same_version() {
+        let tempdir = tempdir().unwrap();
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .create(true)
+            .open(tempdir.as_ref().join("tree_map-3.dim"))
+            .unwrap();
+        let dim_bufman = BufferManager::new(file, 8192).unwrap();
+        let data_bufmans = BufferManagerFactory::new(
+            tempdir.as_ref().into(),
+            |root, version: &VersionNumber| root.join(format!("tree_map-3.{}.data", **version)),
+            8192,
+        );
+        let map: TreeMap<u64, u64> = TreeMap::new(dim_bufman, data_bufmans);
+
+        map.insert(0.into(), &1, 100);
+        map.insert(0.into(), &2, 200);
+
+        map.serialize().unwrap();
+
+        // overwrite without changing version
+        map.insert(0.into(), &2, 250);
+
+        map.serialize().unwrap();
+
+        let result: HashSet<u64> = map.latest_values().copied().collect();
+        assert!(result.contains(&100));
+        assert!(result.contains(&250));
+        assert!(!result.contains(&200));
+    }
+
+    #[test]
+    fn test_treemap_latest_values_from_disk() {
+        let tempdir = tempdir().unwrap();
+
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(tempdir.as_ref().join("tree_map-4.dim"))
+            .unwrap();
+        let dim_bufman = BufferManager::new(file, 8192).unwrap();
+        let data_bufmans = BufferManagerFactory::new(
+            tempdir.as_ref().into(),
+            |root, version: &VersionNumber| root.join(format!("tree_map-4.{}.data", **version)),
+            8192,
+        );
+        let map: TreeMap<u64, u64> = TreeMap::new(dim_bufman, data_bufmans);
+        map.insert(0.into(), &1, 100);
+        map.insert(0.into(), &20, 2000);
+        map.insert(0.into(), &300, 30000);
+        map.insert(0.into(), &4000, 400000);
+
+        map.serialize().unwrap();
+
+        drop(map);
+
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(false)
+            .open(tempdir.as_ref().join("tree_map-4.dim"))
+            .unwrap();
+        let dim_bufman = BufferManager::new(file, 8192).unwrap();
+        let data_bufmans = BufferManagerFactory::new(
+            tempdir.as_ref().into(),
+            |root, version: &VersionNumber| root.join(format!("tree_map-4.{}.data", **version)),
+            8192,
+        );
+        let map: TreeMap<u64, u64> = TreeMap::deserialize(dim_bufman, data_bufmans).unwrap();
+
+        let result: HashSet<u64> = map.latest_values().copied().collect();
+
+        assert!(result.contains(&100));
+        assert!(result.contains(&2000));
+        assert!(result.contains(&30000));
+        assert!(result.contains(&400000));
     }
 }
