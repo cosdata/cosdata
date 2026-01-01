@@ -1,22 +1,9 @@
 use super::{
-    buffered_io::{BufIoError, BufferManagerFactory},
-    cache_loader::HNSWIndexCache,
-    collection::{Collection, CollectionMetadata},
-    collection_transaction::ImplicitTransaction,
-    crypto::{DoubleSHA256Hash, SingleSHA256Hash},
-    indexing_manager::IndexingManager,
-    inverted_index::InvertedIndexRoot,
-    meta_persist::{
+    buffered_io::{BufIoError, BufferManagerFactory}, cache_loader::HNSWIndexCache, collection::{Collection, CollectionMetadata}, collection_transaction::ImplicitTransaction, crypto::{DoubleSHA256Hash, SingleSHA256Hash}, indexing_manager::IndexingManager, inverted_index::InvertedIndexRoot, meta_persist::{
         lmdb_init_collections_db, lmdb_init_db, load_collections, retrieve_average_document_length,
         retrieve_background_version, retrieve_current_version, retrieve_highest_internal_id,
         retrieve_usv_values_upper_bound, retrieve_values_upper_bound,
-    },
-    paths::get_data_path,
-    prob_node::ProbNode,
-    tf_idf_index::TFIDFIndexRoot,
-    tree_map::{TreeMap, TreeMapKey, TreeMapVec},
-    usv_index::USVIndexRoot,
-    versioning::{VersionControl, VersionNumber},
+    }, paths::get_data_path, prob_node::ProbNode, serializer::SimpleSerialize, tf_idf_index::TFIDFIndexRoot, tree_map::{TreeMap, TreeMapKey, TreeMapVec}, usv_index::USVIndexRoot, versioning::{VersionControl, VersionNumber}
 };
 use crate::{
     args::CosdataArgs,
@@ -56,7 +43,7 @@ use crate::{
 };
 use crossbeam::channel;
 use dashmap::DashMap;
-use lmdb::{Cursor, Database, DatabaseFlags, Environment, Transaction, WriteFlags};
+use lmdb::{Database, DatabaseFlags, Environment, Transaction, WriteFlags};
 use rayon::ThreadPool;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
@@ -1435,55 +1422,71 @@ impl CollectionsMap {
 }
 
 pub struct UsersMap {
-    env: Arc<Environment>,
-    users_db: Database,
-    // (username, user details)
-    map: DashMap<String, User>,
+    inner: TreeMap<String, User>
 }
 
 impl UsersMap {
-    pub fn new(env: Arc<Environment>) -> lmdb::Result<Self> {
-        let users_db = env.create_db(Some("users"), DatabaseFlags::empty())?;
-        let txn = env.begin_ro_txn()?;
-        let mut cursor = txn.open_ro_cursor(users_db)?;
-        let map = DashMap::new();
+    /// Loads the UsersMap from disk (if it exists) or creates a new
+    /// one (if it's the first run).
+    ///
+    /// # Panics
+    /// The method panics if:
+    ///
+    ///   1. fails to open/read from files or
+    ///   2. fails to deserialize existing data
+    ///   3. fails to serialize empty TreeMap on first run
+    pub fn load_or_create() -> Self {
+        let data_path = get_data_path();
+        let file_path = data_path.join("users.dim");
+        let is_file_exists = std::fs::exists(&file_path).expect("Failed to check if file exists");
 
-        for (username, user_bytes) in cursor.iter() {
-            let username = String::from_utf8(username.to_vec()).unwrap();
-            let user = User::deserialize(user_bytes).unwrap();
-            map.insert(username, user);
-        }
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(!is_file_exists)
+            .open(file_path)
+            .unwrap();
 
-        drop(cursor);
-        txn.abort();
+        let dim_bufman = BufferManager::new(file, 8192).unwrap();
+        let data_bufmans = BufferManagerFactory::new(
+            data_path.into(),
+            |root, version: &VersionNumber| root.join(format!("users.{}.data", **version)),
+            8192,
+        );
 
-        Ok(Self { env, users_db, map })
+        // @NOTE: The TreeMap can be deserialized from disk only if
+        // it's initialized and serialized at least once, else it
+        // results in stack overflow. Hence, deserialize if the file
+        // exists, otherwise create a new TreeMap and immediately
+        // serialize it.
+        let inner = if is_file_exists {
+            TreeMap::deserialize(dim_bufman, data_bufmans)
+                .expect("Failed to deserialize TreeMap for UsersMap")
+        } else {
+            let map = TreeMap::new(dim_bufman, data_bufmans);
+            // Immediately serialize it so that the file is created
+            map.serialize().expect("Failed to serialize TreeMap");
+            map
+        };
+        Self { inner }
     }
 
-    pub fn add_user(&self, username: String, password_hash: DoubleSHA256Hash) -> lmdb::Result<()> {
+    pub fn add_user(
+        &self,
+        username: String,
+        password_hash: DoubleSHA256Hash,
+    ) -> Result<(), BufIoError> {
         let user = User {
             username: username.clone(),
             password_hash,
         };
-        let user_bytes = user.serialize();
-        let username_bytes = username.as_bytes();
-
-        let mut txn = self.env.begin_rw_txn()?;
-        txn.put(
-            self.users_db,
-            &username_bytes,
-            &user_bytes,
-            WriteFlags::empty(),
-        )?;
-        txn.commit()?;
-
-        self.map.insert(username, user);
-
+        self.inner.insert(0.into(), &username, user);
+        self.inner.serialize()?;
         Ok(())
     }
 
     pub fn get_user(&self, username: &str) -> Option<User> {
-        self.map.get(username).map(|user| user.value().clone())
+        self.inner.get_latest(&username.into()).cloned()
     }
 }
 
@@ -1493,26 +1496,33 @@ pub struct User {
     pub password_hash: DoubleSHA256Hash,
 }
 
-impl User {
-    fn serialize(&self) -> Vec<u8> {
+impl SimpleSerialize for User {
+    fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
         let username_bytes = self.username.as_bytes();
-        let mut buf = Vec::with_capacity(32 + username_bytes.len());
+        let mut buf = Vec::with_capacity(32 + 1 + username_bytes.len());
         buf.extend_from_slice(&self.password_hash.0);
+        buf.push(username_bytes.len() as u8);
         buf.extend_from_slice(username_bytes);
-        buf
+        Ok(bufman.write_to_end_of_file(cursor, &buf)? as u32)
     }
 
-    fn deserialize(buf: &[u8]) -> Result<Self, String> {
-        if buf.len() < 32 {
-            return Err("Input must be at least 32 bytes".to_string());
-        }
-        let mut password_hash = [0u8; 32];
-        password_hash.copy_from_slice(&buf[..32]);
-        let username_bytes = buf[32..].to_vec();
-        let username = String::from_utf8(username_bytes).map_err(|err| err.to_string())?;
-        Ok(Self {
+    fn deserialize(bufman: &BufferManager, offset: FileOffset) -> Result<Self, BufIoError> {
+        let cursor = bufman.open_cursor()?;
+        bufman.seek_with_cursor(cursor, offset.0 as u64)?;
+
+        let mut password_hash_buf = [0u8; 32];
+        bufman.read_with_cursor(cursor, &mut password_hash_buf)?;
+        let password_hash = DoubleSHA256Hash(password_hash_buf);
+
+        let username_size = bufman.read_u8_with_cursor(cursor)?;
+        let mut username_buf = vec![0u8; username_size as usize];
+        bufman.read_with_cursor(cursor, &mut username_buf)?;
+        let username = std::str::from_utf8(&username_buf)
+            .expect("Invalid utf-8")
+            .to_string();
+        Ok(User {
             username,
-            password_hash: DoubleSHA256Hash(password_hash),
+            password_hash,
         })
     }
 }
@@ -1668,13 +1678,7 @@ pub fn get_app_env(
     // Add more resilient error handling for collections_map loading
     let collections_map = CollectionsMap::load(env_arc.clone(), config, threadpool)?;
 
-    let users_map = match UsersMap::new(env_arc.clone()) {
-        Ok(map) => map,
-        Err(err) => {
-            println!("Warning: Failed to load users map: {}", err);
-            return Err(WaCustomError::DatabaseError(err.to_string()));
-        }
-    };
+    let users_map = UsersMap::load_or_create();
 
     // Use the admin key as the password instead of hardcoded "admin"
     let username = "admin".to_string();

@@ -1,11 +1,12 @@
 use std::{
-    collections::VecDeque, marker::PhantomData, sync::{
+    collections::VecDeque, hash::{Hash, Hasher}, marker::PhantomData, sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc,
     },
 };
 
 use parking_lot::{RwLock, RwLockReadGuard};
+use siphasher::sip::SipHasher24;
 
 use super::{
     atomic_array::AtomicArray,
@@ -749,6 +750,14 @@ where
 impl TreeMapKey for u64 {
     fn key(&self) -> u64 {
         *self
+    }
+}
+
+impl TreeMapKey for String {
+    fn key(&self) -> u64 {
+        let mut hasher = SipHasher24::new();
+        self.hash(&mut hasher);
+        hasher.finish()
     }
 }
 
