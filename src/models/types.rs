@@ -1,9 +1,23 @@
 use super::{
-    buffered_io::{BufIoError, BufferManagerFactory}, cache_loader::HNSWIndexCache, collection::{Collection, CollectionMetadata}, collection_transaction::ImplicitTransaction, crypto::{DoubleSHA256Hash, SingleSHA256Hash}, indexing_manager::IndexingManager, inverted_index::InvertedIndexRoot, meta_persist::{
-        lmdb_init_collections_db, lmdb_init_db, load_collections, retrieve_average_document_length,
-        retrieve_background_version, retrieve_current_version, retrieve_highest_internal_id,
-        retrieve_usv_values_upper_bound, retrieve_values_upper_bound,
-    }, paths::get_data_path, prob_node::ProbNode, serializer::SimpleSerialize, tf_idf_index::TFIDFIndexRoot, tree_map::{TreeMap, TreeMapKey, TreeMapVec}, usv_index::USVIndexRoot, versioning::{VersionControl, VersionNumber}
+    buffered_io::{BufIoError, BufferManagerFactory},
+    cache_loader::HNSWIndexCache,
+    collection::{Collection, CollectionMetadata, CollectionMetadataMap},
+    collection_transaction::ImplicitTransaction,
+    crypto::{DoubleSHA256Hash, SingleSHA256Hash},
+    indexing_manager::IndexingManager,
+    inverted_index::InvertedIndexRoot,
+    meta_persist::{
+        lmdb_init_db, retrieve_average_document_length, retrieve_background_version,
+        retrieve_current_version, retrieve_highest_internal_id, retrieve_usv_values_upper_bound,
+        retrieve_values_upper_bound,
+    },
+    paths::get_data_path,
+    prob_node::ProbNode,
+    serializer::SimpleSerialize,
+    tf_idf_index::TFIDFIndexRoot,
+    tree_map::{TreeMap, TreeMapKey, TreeMapVec},
+    usv_index::USVIndexRoot,
+    versioning::{VersionControl, VersionNumber},
 };
 use crate::{
     args::CosdataArgs,
@@ -535,10 +549,8 @@ impl MetaDb {
 
 pub struct CollectionsMap {
     inner_collections: DashMap<String, Arc<Collection>>,
+    metadata_map: CollectionMetadataMap,
     lmdb_env: Arc<Environment>,
-    // made it public temporarily
-    // just to be able to persist collections from outside CollectionsMap
-    pub(crate) lmdb_collections_db: Database,
     lmdb_hnsw_index_db: Database,
     lmdb_inverted_index_db: Database,
     lmdb_tf_idf_index_db: Database,
@@ -547,15 +559,14 @@ pub struct CollectionsMap {
 
 impl CollectionsMap {
     fn new(env: Arc<Environment>) -> lmdb::Result<Self> {
-        let collections_db = lmdb_init_collections_db(&env)?;
         let hnsw_index_db = lmdb_init_db(&env, "hnsw_indexes")?;
         let inverted_index_db = lmdb_init_db(&env, "inverted_indexes")?;
         let tf_idf_index_db = lmdb_init_db(&env, "tf_idf_indexes")?;
         let usv_index_db = lmdb_init_db(&env, "usv_indexes")?;
         let res = Self {
             inner_collections: DashMap::new(),
+            metadata_map: CollectionMetadataMap::load_or_create(),
             lmdb_env: env,
-            lmdb_collections_db: collections_db,
             lmdb_hnsw_index_db: hnsw_index_db,
             lmdb_inverted_index_db: inverted_index_db,
             lmdb_tf_idf_index_db: tf_idf_index_db,
@@ -573,13 +584,7 @@ impl CollectionsMap {
         let collections_map =
             Self::new(env.clone()).map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
-        let collections = load_collections(
-            &collections_map.lmdb_env,
-            collections_map.lmdb_collections_db,
-        )
-        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-
-        for collection_meta in collections {
+        for collection_meta in collections_map.metadata_map.values() {
             println!("Loading collection: {}", collection_meta.name);
             let lmdb = MetaDb::from_env(collections_map.lmdb_env.clone(), &collection_meta.name)?;
             let current_version = retrieve_current_version(&lmdb)?;
@@ -1321,11 +1326,16 @@ impl CollectionsMap {
         Ok(())
     }
 
-    /// inserts a collection into the collections map
-    #[allow(dead_code)]
+    /// inserts a collection into the collections map, as well as
+    /// stores the collection metadata (along with persisting it to
+    /// disk)
     pub fn insert_collection(&self, collection: Arc<Collection>) -> Result<(), WaCustomError> {
+        let metadata = collection.meta.clone();
         self.inner_collections
             .insert(collection.meta.name.to_owned(), collection);
+        self.metadata_map
+            .insert(metadata)
+            .map_err(|e| WaCustomError::BufIo(Arc::new(e)))?;
         Ok(())
     }
 
@@ -1391,15 +1401,21 @@ impl CollectionsMap {
         }
     }
 
-    /// removes a collection from the in-memory map
+    /// Removes a collection from the in-memory map, as well as
+    /// deletes the collection metadata persisted on the disk
     ///
     /// returns the removed collection in case of success
     ///
-    /// returns error if not found
-    #[allow(dead_code)]
+    /// returns error if not found or in case there's an error
+    /// removing the metadata from the TreeMap persisted to disk
     pub fn remove_collection(&self, name: &str) -> Result<Arc<Collection>, WaCustomError> {
         match self.inner_collections.remove(name) {
-            Some((_, collection)) => Ok(collection),
+            Some((_, collection)) => {
+                self.metadata_map
+                    .remove(name)
+                    .map_err(|e| WaCustomError::BufIo(Arc::new(e)))?;
+                Ok(collection)
+            }
             None => {
                 // collection not found, return an error response
                 Err(WaCustomError::NotFound("collection".into()))
@@ -1422,7 +1438,7 @@ impl CollectionsMap {
 }
 
 pub struct UsersMap {
-    inner: TreeMap<String, User>
+    inner: TreeMap<String, User>,
 }
 
 impl UsersMap {

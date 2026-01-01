@@ -1,5 +1,8 @@
 use std::{
-    collections::VecDeque, hash::{Hash, Hasher}, marker::PhantomData, sync::{
+    collections::VecDeque,
+    hash::{Hash, Hasher},
+    marker::PhantomData,
+    sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc,
     },

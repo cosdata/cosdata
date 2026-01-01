@@ -94,18 +94,12 @@ crate::cfg_grpc! {
             )
             .map_err(Status::from)?;
 
-            // Store collection
+            // Add the created collection to the collections map (also
+            // persists the collection metadata to disk)
             self.context
                 .ain_env
                 .collections_map
                 .insert_collection(collection.clone())
-                .map_err(Status::from)?;
-            // persisting collection after creation
-            collection
-                .persist(
-                    env,
-                    self.context.ain_env.collections_map.lmdb_collections_db,
-                )
                 .map_err(Status::from)?;
 
             collection
