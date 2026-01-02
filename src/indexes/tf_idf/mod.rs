@@ -1,4 +1,4 @@
-use super::{IndexOps, InternalSearchResult};
+use super::{IndexData, IndexOps, InternalSearchResult};
 use crate::{
     config_loader::Config,
     models::{
@@ -141,7 +141,6 @@ impl IndexOps for TFIDFIndex {
     type IndexingInput = TFIDFInputEmbedding;
     type SearchInput = TFIDFSearchInput;
     type SearchOptions = TFIDFSearchOptions;
-    type Data = TFIDFIndexData;
 
     fn validate_embedding(&self, _embedding: Self::IndexingInput) -> Result<(), WaCustomError> {
         Ok(())
@@ -232,12 +231,13 @@ impl IndexOps for TFIDFIndex {
         Ok(())
     }
 
-    fn get_data(&self) -> Self::Data {
-        Self::Data {
+    fn get_data(&self) -> Option<IndexData> {
+        let data = TFIDFIndexData {
             sample_threshold: self.sample_threshold,
             k1: self.k1,
             b: self.b,
-        }
+        };
+        Some(IndexData::TfIdf(data))
     }
 
     fn search_internal(

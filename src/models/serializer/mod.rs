@@ -253,8 +253,7 @@ where
         let num_bytes = bufman.read_u32_with_cursor(cursor)?;
         let mut buf = vec![0u8; num_bytes as usize];
         bufman.read_with_cursor(cursor, &mut buf)?;
-        let coll_meta = serde_cbor::from_slice(&buf)
-            .expect("Failed to deserialize from cbor");
+        let coll_meta = serde_cbor::from_slice(&buf).expect("Failed to deserialize from cbor");
         Ok(coll_meta)
     }
 }

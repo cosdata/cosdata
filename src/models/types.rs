@@ -7,9 +7,8 @@ use super::{
     indexing_manager::IndexingManager,
     inverted_index::InvertedIndexRoot,
     meta_persist::{
-        lmdb_init_db, retrieve_average_document_length, retrieve_background_version,
-        retrieve_current_version, retrieve_highest_internal_id, retrieve_usv_values_upper_bound,
-        retrieve_values_upper_bound,
+        retrieve_average_document_length, retrieve_background_version, retrieve_current_version,
+        retrieve_highest_internal_id, retrieve_usv_values_upper_bound, retrieve_values_upper_bound,
     },
     paths::get_data_path,
     prob_node::ProbNode,
@@ -38,7 +37,7 @@ use crate::{
         key_value::KeyValueIndex,
         tf_idf::TFIDFIndex,
         usv::USVIndex,
-        IndexOps,
+        IndexData, IndexDataMap, IndexOps, IndexType,
     },
     metadata::{schema::MetadataDimensions, QueryFilterDimensions, HIGH_WEIGHT},
     models::{
@@ -550,27 +549,17 @@ impl MetaDb {
 pub struct CollectionsMap {
     inner_collections: DashMap<String, Arc<Collection>>,
     metadata_map: CollectionMetadataMap,
+    index_data_map: IndexDataMap,
     lmdb_env: Arc<Environment>,
-    lmdb_hnsw_index_db: Database,
-    lmdb_inverted_index_db: Database,
-    lmdb_tf_idf_index_db: Database,
-    lmdb_usv_index_db: Database,
 }
 
 impl CollectionsMap {
     fn new(env: Arc<Environment>) -> lmdb::Result<Self> {
-        let hnsw_index_db = lmdb_init_db(&env, "hnsw_indexes")?;
-        let inverted_index_db = lmdb_init_db(&env, "inverted_indexes")?;
-        let tf_idf_index_db = lmdb_init_db(&env, "tf_idf_indexes")?;
-        let usv_index_db = lmdb_init_db(&env, "usv_indexes")?;
         let res = Self {
             inner_collections: DashMap::new(),
             metadata_map: CollectionMetadataMap::load_or_create(),
+            index_data_map: IndexDataMap::load_or_create(),
             lmdb_env: env,
-            lmdb_hnsw_index_db: hnsw_index_db,
-            lmdb_inverted_index_db: inverted_index_db,
-            lmdb_tf_idf_index_db: tf_idf_index_db,
-            lmdb_usv_index_db: usv_index_db,
         };
         Ok(res)
     }
@@ -803,14 +792,22 @@ impl CollectionsMap {
             return Ok(None);
         }
 
-        let Some(hnsw_index_data) = HNSWIndex::load_data(
-            &self.lmdb_env,
-            self.lmdb_hnsw_index_db,
-            &collection_meta.name,
-        )?
-        else {
-            return Ok(None);
+        let data = self
+            .index_data_map
+            .get(&collection_meta.name, IndexType::Hnsw);
+        let hnsw_index_data = match data {
+            Some(index_data) => {
+                if let IndexData::Hnsw(d) = index_data {
+                    d
+                } else {
+                    // As index data is loaded at initialization, it's
+                    // better to panic
+                    panic!("Index data type mismatch");
+                }
+            }
+            None => return Ok(None),
         };
+
         let prop_file_path = index_path.join("prop.data");
         let prop_file_result = OpenOptions::new()
             .create(true)
@@ -1101,12 +1098,12 @@ impl CollectionsMap {
         let hnsw_index = HNSWIndex::new(
             root_ptr,
             pseudo_root_ptr,
-            hnsw_index_data.levels_prob,
+            hnsw_index_data.levels_prob.clone(),
             hnsw_index_data.dim,
-            hnsw_index_data.quantization_metric,
+            hnsw_index_data.quantization_metric.clone(),
             distance_metric,
             hnsw_index_data.storage_type,
-            hnsw_index_data.hnsw_params,
+            hnsw_index_data.hnsw_params.clone(),
             cache,
             values_range.unwrap_or((-1.0, 1.0)),
             hnsw_index_data.sample_threshold,
@@ -1131,13 +1128,20 @@ impl CollectionsMap {
             return Ok(None);
         }
 
-        let Some(inverted_index_data) = InvertedIndex::load_data(
-            &self.lmdb_env,
-            self.lmdb_inverted_index_db,
-            &collection_meta.name,
-        )?
-        else {
-            return Ok(None);
+        let data = self
+            .index_data_map
+            .get(&collection_meta.name, IndexType::Inverted);
+        let inverted_index_data = match data {
+            Some(index_data) => {
+                if let IndexData::Inverted(d) = index_data {
+                    d
+                } else {
+                    // As index data is loaded at initialization, it's
+                    // better to panic
+                    panic!("Index data type mismatch");
+                }
+            }
+            None => return Ok(None),
         };
 
         let values_upper_bound = retrieve_values_upper_bound(lmdb)?;
@@ -1170,13 +1174,20 @@ impl CollectionsMap {
             return Ok(None);
         }
 
-        let Some(inverted_index_data) = TFIDFIndex::load_data(
-            &self.lmdb_env,
-            self.lmdb_tf_idf_index_db,
-            &collection_meta.name,
-        )?
-        else {
-            return Ok(None);
+        let data = self
+            .index_data_map
+            .get(&collection_meta.name, IndexType::TfIdf);
+        let tfidf_index_data = match data {
+            Some(index_data) => {
+                if let IndexData::TfIdf(d) = index_data {
+                    d
+                } else {
+                    // As index data is loaded at initialization, it's
+                    // better to panic
+                    panic!("Index data type mismatch");
+                }
+            }
+            None => return Ok(None),
         };
 
         let average_document_length = retrieve_average_document_length(lmdb)?;
@@ -1187,9 +1198,9 @@ impl CollectionsMap {
             documents: RwLock::new(Vec::new()),
             documents_collected: AtomicUsize::new(0),
             sampling_data: crate::indexes::tf_idf::SamplingData::default(),
-            sample_threshold: inverted_index_data.sample_threshold,
-            k1: inverted_index_data.k1,
-            b: inverted_index_data.b,
+            sample_threshold: tfidf_index_data.sample_threshold,
+            k1: tfidf_index_data.k1,
+            b: tfidf_index_data.b,
         };
 
         Ok(Some(inverted_index))
@@ -1238,13 +1249,20 @@ impl CollectionsMap {
             return Ok(None);
         }
 
-        let Some(usv_index_data) = USVIndex::load_data(
-            &self.lmdb_env,
-            self.lmdb_usv_index_db,
-            &collection_meta.name,
-        )?
-        else {
-            return Ok(None);
+        let data = self
+            .index_data_map
+            .get(&collection_meta.name, IndexType::Usv);
+        let usv_index_data = match data {
+            Some(index_data) => {
+                if let IndexData::Usv(d) = index_data {
+                    d
+                } else {
+                    // As index data is loaded at initialization, it's
+                    // better to panic
+                    panic!("Index data type mismatch");
+                }
+            }
+            None => return Ok(None),
         };
 
         let values_upper_bound = retrieve_usv_values_upper_bound(lmdb)?;
@@ -1266,11 +1284,7 @@ impl CollectionsMap {
         collection: &Collection,
         hnsw_index: Arc<HNSWIndex>,
     ) -> Result<(), WaCustomError> {
-        hnsw_index.persist(
-            &collection.meta.name,
-            &self.lmdb_env,
-            self.lmdb_hnsw_index_db,
-        )?;
+        hnsw_index.persist(&self.index_data_map, &collection.meta.name)?;
         *collection.hnsw_index.write() = Some(hnsw_index);
         Ok(())
     }
@@ -1280,11 +1294,7 @@ impl CollectionsMap {
         collection: &Collection,
         inverted_index: Arc<InvertedIndex>,
     ) -> Result<(), WaCustomError> {
-        inverted_index.persist(
-            &collection.meta.name,
-            &self.lmdb_env,
-            self.lmdb_inverted_index_db,
-        )?;
+        inverted_index.persist(&self.index_data_map, &collection.meta.name)?;
         *collection.inverted_index.write() = Some(inverted_index);
         Ok(())
     }
@@ -1294,11 +1304,7 @@ impl CollectionsMap {
         collection: &Collection,
         tf_idf_index: Arc<TFIDFIndex>,
     ) -> Result<(), WaCustomError> {
-        tf_idf_index.persist(
-            &collection.meta.name,
-            &self.lmdb_env,
-            self.lmdb_tf_idf_index_db,
-        )?;
+        tf_idf_index.persist(&self.index_data_map, &collection.meta.name)?;
         *collection.tf_idf_index.write() = Some(tf_idf_index);
         Ok(())
     }
@@ -1317,11 +1323,7 @@ impl CollectionsMap {
         collection: &Collection,
         usv_index: Arc<USVIndex>,
     ) -> Result<(), WaCustomError> {
-        usv_index.persist(
-            &collection.meta.name,
-            &self.lmdb_env,
-            self.lmdb_usv_index_db,
-        )?;
+        usv_index.persist(&self.index_data_map, &collection.meta.name)?;
         *collection.usv_index.write() = Some(usv_index);
         Ok(())
     }
@@ -1360,7 +1362,7 @@ impl CollectionsMap {
         match self.inner_collections.get(name) {
             Some(collection) => match collection.hnsw_index.write().take() {
                 Some(hnsw_index) => {
-                    HNSWIndex::delete(&self.lmdb_env, self.lmdb_hnsw_index_db, name)?;
+                    self.index_data_map.remove(name, IndexType::Hnsw)?;
                     Ok(Some(hnsw_index))
                 }
                 None => Ok(None),
@@ -1376,7 +1378,7 @@ impl CollectionsMap {
         match self.inner_collections.get(name) {
             Some(collection) => match collection.inverted_index.write().take() {
                 Some(inverted_index) => {
-                    InvertedIndex::delete(&self.lmdb_env, self.lmdb_inverted_index_db, name)?;
+                    self.index_data_map.remove(name, IndexType::Inverted)?;
                     Ok(Some(inverted_index))
                 }
                 None => Ok(None),
@@ -1392,7 +1394,7 @@ impl CollectionsMap {
         match self.inner_collections.get(name) {
             Some(collection) => match collection.tf_idf_index.write().take() {
                 Some(tf_idf_index) => {
-                    TFIDFIndex::delete(&self.lmdb_env, self.lmdb_tf_idf_index_db, name)?;
+                    self.index_data_map.remove(name, IndexType::TfIdf)?;
                     Ok(Some(tf_idf_index))
                 }
                 None => Ok(None),
@@ -1400,6 +1402,8 @@ impl CollectionsMap {
             None => Ok(None),
         }
     }
+
+    // @TODO: Why not `remove_usv_index`?
 
     /// Removes a collection from the in-memory map, as well as
     /// deletes the collection metadata persisted on the disk

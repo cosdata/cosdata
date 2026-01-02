@@ -1,5 +1,5 @@
 pub(crate) mod types;
-use super::{IndexOps, InternalSearchResult};
+use super::{IndexData, IndexOps, InternalSearchResult};
 use crate::{
     config_loader::Config,
     models::{
@@ -112,7 +112,6 @@ impl IndexOps for InvertedIndex {
     type IndexingInput = SparseInputEmbedding;
     type SearchInput = SparseSearchInput;
     type SearchOptions = SparseSearchOptions;
-    type Data = InvertedIndexData;
 
     fn validate_embedding(&self, _embedding: Self::IndexingInput) -> Result<(), WaCustomError> {
         Ok(())
@@ -268,11 +267,12 @@ impl IndexOps for InvertedIndex {
         Ok(())
     }
 
-    fn get_data(&self) -> Self::Data {
-        Self::Data {
+    fn get_data(&self) -> Option<IndexData> {
+        let data = InvertedIndexData {
             quantization_bits: self.root.root.quantization_bits,
             sample_threshold: self.sample_threshold,
-        }
+        };
+        Some(IndexData::Inverted(data))
     }
 
     fn search_internal(

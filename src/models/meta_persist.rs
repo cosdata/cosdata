@@ -2,7 +2,7 @@ use crate::macros::key;
 use crate::models::common::*;
 use crate::models::types::*;
 use crate::models::versioning::*;
-use lmdb::{Database, DatabaseFlags, Environment, Transaction, WriteFlags};
+use lmdb::{Transaction, WriteFlags};
 
 /// updates the current version of a collection
 pub fn update_current_version(
@@ -292,8 +292,4 @@ pub fn retrieve_highest_internal_id(lmdb: &MetaDb) -> Result<Option<u32>, WaCust
     let id = u32::from_le_bytes(bytes);
 
     Ok(Some(id))
-}
-
-pub fn lmdb_init_db(env: &Environment, name: &str) -> lmdb::Result<Database> {
-    env.create_db(Some(name), DatabaseFlags::empty())
 }
