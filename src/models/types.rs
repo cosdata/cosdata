@@ -13,7 +13,7 @@ use super::{
     },
     paths::get_data_path,
     prob_node::ProbNode,
-    serializer::SimpleSerialize,
+    serializer::{CborDeserialize, CborSerialize},
     tf_idf_index::TFIDFIndexRoot,
     tree_map::{TreeMap, TreeMapKey, TreeMapVec},
     usv_index::USVIndexRoot,
@@ -1506,42 +1506,14 @@ impl UsersMap {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct User {
     pub username: String,
     pub password_hash: DoubleSHA256Hash,
 }
 
-impl SimpleSerialize for User {
-    fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
-        let username_bytes = self.username.as_bytes();
-        let mut buf = Vec::with_capacity(32 + 1 + username_bytes.len());
-        buf.extend_from_slice(&self.password_hash.0);
-        buf.push(username_bytes.len() as u8);
-        buf.extend_from_slice(username_bytes);
-        Ok(bufman.write_to_end_of_file(cursor, &buf)? as u32)
-    }
-
-    fn deserialize(bufman: &BufferManager, offset: FileOffset) -> Result<Self, BufIoError> {
-        let cursor = bufman.open_cursor()?;
-        bufman.seek_with_cursor(cursor, offset.0 as u64)?;
-
-        let mut password_hash_buf = [0u8; 32];
-        bufman.read_with_cursor(cursor, &mut password_hash_buf)?;
-        let password_hash = DoubleSHA256Hash(password_hash_buf);
-
-        let username_size = bufman.read_u8_with_cursor(cursor)?;
-        let mut username_buf = vec![0u8; username_size as usize];
-        bufman.read_with_cursor(cursor, &mut username_buf)?;
-        let username = std::str::from_utf8(&username_buf)
-            .expect("Invalid utf-8")
-            .to_string();
-        Ok(User {
-            username,
-            password_hash,
-        })
-    }
-}
+impl CborSerialize for User {}
+impl CborDeserialize for User {}
 
 pub struct SessionDetails {
     pub created_at: u64,

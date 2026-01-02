@@ -15,7 +15,7 @@ pub struct SingleSHA256Hash(pub [u8; 32]);
 
 // Double SHA256 hash
 // Flow: Input -> |SHA256| -> Hash1 -> |SHA256| -> Final 32-byte hash
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct DoubleSHA256Hash(pub [u8; 32]);
 
 // Master key derived from user password and admin key

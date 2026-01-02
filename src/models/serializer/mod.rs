@@ -225,3 +225,36 @@ impl SimpleSerialize for Vec<u8> {
         Ok(buf)
     }
 }
+
+/// Marker traits for CBOR serialization
+///
+/// Any structs marked with these traits will automatically implement
+/// SimpleSerialize using `serde_cbor`.
+pub trait CborSerialize: serde::Serialize {}
+pub trait CborDeserialize: for<'de> serde::Deserialize<'de> {}
+
+// Blanket implementation of SimpleSerialize for types that opt-in via marker traits
+impl<T> SimpleSerialize for T
+where
+    T: CborSerialize + CborDeserialize,
+{
+    fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
+        let value = serde_cbor::to_vec(&self).expect("Failed to serialize to cbor");
+        let num_bytes = value.len();
+        let mut buf = Vec::with_capacity(4 + num_bytes);
+        buf.extend_from_slice(&(num_bytes as u32).to_le_bytes());
+        buf.extend_from_slice(&value);
+        Ok(bufman.write_to_end_of_file(cursor, &buf)? as u32)
+    }
+
+    fn deserialize(bufman: &BufferManager, offset: FileOffset) -> Result<Self, BufIoError> {
+        let cursor = bufman.open_cursor()?;
+        bufman.seek_with_cursor(cursor, offset.0 as u64)?;
+        let num_bytes = bufman.read_u32_with_cursor(cursor)?;
+        let mut buf = vec![0u8; num_bytes as usize];
+        bufman.read_with_cursor(cursor, &mut buf)?;
+        let coll_meta = serde_cbor::from_slice(&buf)
+            .expect("Failed to deserialize from cbor");
+        Ok(coll_meta)
+    }
+}

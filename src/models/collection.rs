@@ -6,7 +6,7 @@ use super::common::WaCustomError;
 use super::indexing_manager::IndexingManager;
 use super::meta_persist::store_highest_internal_id;
 use super::paths::get_data_path;
-use super::serializer::SimpleSerialize;
+use super::serializer::{CborDeserialize, CborSerialize};
 use super::tree_map::{TreeMap, TreeMapVec};
 use super::types::{get_collections_path, DocumentId, InternalId, MetaDb, VectorId};
 use super::versioning::{VersionControl, VersionNumber, VersionSource};
@@ -95,30 +95,8 @@ pub struct CollectionMetadata {
     pub store_raw_text: bool,
 }
 
-impl SimpleSerialize for CollectionMetadata {
-    fn serialize(&self, bufman: &BufferManager, cursor: u64) -> Result<u32, BufIoError> {
-        let value = to_vec(&self).expect("Failed to serialize CollectionMetadata to cbor");
-        let num_bytes = value.len();
-        let mut buf = Vec::with_capacity(4 + num_bytes);
-        buf.extend_from_slice(&(num_bytes as u32).to_le_bytes());
-        buf.extend_from_slice(&value);
-        Ok(bufman.write_to_end_of_file(cursor, &buf)? as u32)
-    }
-
-    fn deserialize(
-        bufman: &BufferManager,
-        offset: super::types::FileOffset,
-    ) -> Result<Self, BufIoError> {
-        let cursor = bufman.open_cursor()?;
-        bufman.seek_with_cursor(cursor, offset.0 as u64)?;
-        let num_bytes = bufman.read_u32_with_cursor(cursor)?;
-        let mut buf = vec![0u8; num_bytes as usize];
-        bufman.read_with_cursor(cursor, &mut buf)?;
-        let coll_meta = serde_cbor::from_slice(&buf)
-            .expect("Failed to deserialize CollectionMetadata from cbor");
-        Ok(coll_meta)
-    }
-}
+impl CborSerialize for CollectionMetadata {}
+impl CborDeserialize for CollectionMetadata {}
 
 pub struct CollectionMetadataMap {
     inner: TreeMap<String, CollectionMetadata>,
