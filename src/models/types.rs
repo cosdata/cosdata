@@ -1,18 +1,18 @@
 use super::{
     buffered_io::{BufIoError, BufferManagerFactory},
     cache_loader::HNSWIndexCache,
-    collection::{Collection, CollectionMetadata},
+    collection::{Collection, CollectionMetadata, CollectionMetadataMap},
     collection_transaction::ImplicitTransaction,
     crypto::{DoubleSHA256Hash, SingleSHA256Hash},
     indexing_manager::IndexingManager,
     inverted_index::InvertedIndexRoot,
     meta_persist::{
-        lmdb_init_collections_db, lmdb_init_db, load_collections, retrieve_average_document_length,
-        retrieve_background_version, retrieve_current_version, retrieve_highest_internal_id,
-        retrieve_usv_values_upper_bound, retrieve_values_upper_bound,
+        retrieve_average_document_length, retrieve_background_version, retrieve_current_version,
+        retrieve_highest_internal_id, retrieve_usv_values_upper_bound, retrieve_values_upper_bound,
     },
     paths::get_data_path,
     prob_node::ProbNode,
+    serializer::{CborDeserialize, CborSerialize},
     tf_idf_index::TFIDFIndexRoot,
     tree_map::{TreeMap, TreeMapKey, TreeMapVec},
     usv_index::USVIndexRoot,
@@ -37,7 +37,7 @@ use crate::{
         key_value::KeyValueIndex,
         tf_idf::TFIDFIndex,
         usv::USVIndex,
-        IndexOps,
+        IndexData, IndexDataMap, IndexOps, IndexType,
     },
     metadata::{schema::MetadataDimensions, QueryFilterDimensions, HIGH_WEIGHT},
     models::{
@@ -56,7 +56,7 @@ use crate::{
 };
 use crossbeam::channel;
 use dashmap::DashMap;
-use lmdb::{Cursor, Database, DatabaseFlags, Environment, Transaction, WriteFlags};
+use lmdb::{Database, DatabaseFlags, Environment, Transaction, WriteFlags};
 use rayon::ThreadPool;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
@@ -548,31 +548,18 @@ impl MetaDb {
 
 pub struct CollectionsMap {
     inner_collections: DashMap<String, Arc<Collection>>,
+    metadata_map: CollectionMetadataMap,
+    index_data_map: IndexDataMap,
     lmdb_env: Arc<Environment>,
-    // made it public temporarily
-    // just to be able to persist collections from outside CollectionsMap
-    pub(crate) lmdb_collections_db: Database,
-    lmdb_hnsw_index_db: Database,
-    lmdb_inverted_index_db: Database,
-    lmdb_tf_idf_index_db: Database,
-    lmdb_usv_index_db: Database,
 }
 
 impl CollectionsMap {
     fn new(env: Arc<Environment>) -> lmdb::Result<Self> {
-        let collections_db = lmdb_init_collections_db(&env)?;
-        let hnsw_index_db = lmdb_init_db(&env, "hnsw_indexes")?;
-        let inverted_index_db = lmdb_init_db(&env, "inverted_indexes")?;
-        let tf_idf_index_db = lmdb_init_db(&env, "tf_idf_indexes")?;
-        let usv_index_db = lmdb_init_db(&env, "usv_indexes")?;
         let res = Self {
             inner_collections: DashMap::new(),
+            metadata_map: CollectionMetadataMap::load_or_create(),
+            index_data_map: IndexDataMap::load_or_create(),
             lmdb_env: env,
-            lmdb_collections_db: collections_db,
-            lmdb_hnsw_index_db: hnsw_index_db,
-            lmdb_inverted_index_db: inverted_index_db,
-            lmdb_tf_idf_index_db: tf_idf_index_db,
-            lmdb_usv_index_db: usv_index_db,
         };
         Ok(res)
     }
@@ -586,13 +573,7 @@ impl CollectionsMap {
         let collections_map =
             Self::new(env.clone()).map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
-        let collections = load_collections(
-            &collections_map.lmdb_env,
-            collections_map.lmdb_collections_db,
-        )
-        .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-
-        for collection_meta in collections {
+        for collection_meta in collections_map.metadata_map.values() {
             println!("Loading collection: {}", collection_meta.name);
             let lmdb = MetaDb::from_env(collections_map.lmdb_env.clone(), &collection_meta.name)?;
             let current_version = retrieve_current_version(&lmdb)?;
@@ -811,14 +792,22 @@ impl CollectionsMap {
             return Ok(None);
         }
 
-        let Some(hnsw_index_data) = HNSWIndex::load_data(
-            &self.lmdb_env,
-            self.lmdb_hnsw_index_db,
-            &collection_meta.name,
-        )?
-        else {
-            return Ok(None);
+        let data = self
+            .index_data_map
+            .get(&collection_meta.name, IndexType::Hnsw);
+        let hnsw_index_data = match data {
+            Some(index_data) => {
+                if let IndexData::Hnsw(d) = index_data {
+                    d
+                } else {
+                    // As index data is loaded at initialization, it's
+                    // better to panic
+                    panic!("Index data type mismatch");
+                }
+            }
+            None => return Ok(None),
         };
+
         let prop_file_path = index_path.join("prop.data");
         let prop_file_result = OpenOptions::new()
             .create(true)
@@ -1109,12 +1098,12 @@ impl CollectionsMap {
         let hnsw_index = HNSWIndex::new(
             root_ptr,
             pseudo_root_ptr,
-            hnsw_index_data.levels_prob,
+            hnsw_index_data.levels_prob.clone(),
             hnsw_index_data.dim,
-            hnsw_index_data.quantization_metric,
+            hnsw_index_data.quantization_metric.clone(),
             distance_metric,
             hnsw_index_data.storage_type,
-            hnsw_index_data.hnsw_params,
+            hnsw_index_data.hnsw_params.clone(),
             cache,
             values_range.unwrap_or((-1.0, 1.0)),
             hnsw_index_data.sample_threshold,
@@ -1139,13 +1128,20 @@ impl CollectionsMap {
             return Ok(None);
         }
 
-        let Some(inverted_index_data) = InvertedIndex::load_data(
-            &self.lmdb_env,
-            self.lmdb_inverted_index_db,
-            &collection_meta.name,
-        )?
-        else {
-            return Ok(None);
+        let data = self
+            .index_data_map
+            .get(&collection_meta.name, IndexType::Inverted);
+        let inverted_index_data = match data {
+            Some(index_data) => {
+                if let IndexData::Inverted(d) = index_data {
+                    d
+                } else {
+                    // As index data is loaded at initialization, it's
+                    // better to panic
+                    panic!("Index data type mismatch");
+                }
+            }
+            None => return Ok(None),
         };
 
         let values_upper_bound = retrieve_values_upper_bound(lmdb)?;
@@ -1178,13 +1174,20 @@ impl CollectionsMap {
             return Ok(None);
         }
 
-        let Some(inverted_index_data) = TFIDFIndex::load_data(
-            &self.lmdb_env,
-            self.lmdb_tf_idf_index_db,
-            &collection_meta.name,
-        )?
-        else {
-            return Ok(None);
+        let data = self
+            .index_data_map
+            .get(&collection_meta.name, IndexType::TfIdf);
+        let tfidf_index_data = match data {
+            Some(index_data) => {
+                if let IndexData::TfIdf(d) = index_data {
+                    d
+                } else {
+                    // As index data is loaded at initialization, it's
+                    // better to panic
+                    panic!("Index data type mismatch");
+                }
+            }
+            None => return Ok(None),
         };
 
         let average_document_length = retrieve_average_document_length(lmdb)?;
@@ -1195,9 +1198,9 @@ impl CollectionsMap {
             documents: RwLock::new(Vec::new()),
             documents_collected: AtomicUsize::new(0),
             sampling_data: crate::indexes::tf_idf::SamplingData::default(),
-            sample_threshold: inverted_index_data.sample_threshold,
-            k1: inverted_index_data.k1,
-            b: inverted_index_data.b,
+            sample_threshold: tfidf_index_data.sample_threshold,
+            k1: tfidf_index_data.k1,
+            b: tfidf_index_data.b,
         };
 
         Ok(Some(inverted_index))
@@ -1246,13 +1249,20 @@ impl CollectionsMap {
             return Ok(None);
         }
 
-        let Some(usv_index_data) = USVIndex::load_data(
-            &self.lmdb_env,
-            self.lmdb_usv_index_db,
-            &collection_meta.name,
-        )?
-        else {
-            return Ok(None);
+        let data = self
+            .index_data_map
+            .get(&collection_meta.name, IndexType::Usv);
+        let usv_index_data = match data {
+            Some(index_data) => {
+                if let IndexData::Usv(d) = index_data {
+                    d
+                } else {
+                    // As index data is loaded at initialization, it's
+                    // better to panic
+                    panic!("Index data type mismatch");
+                }
+            }
+            None => return Ok(None),
         };
 
         let values_upper_bound = retrieve_usv_values_upper_bound(lmdb)?;
@@ -1274,11 +1284,7 @@ impl CollectionsMap {
         collection: &Collection,
         hnsw_index: Arc<HNSWIndex>,
     ) -> Result<(), WaCustomError> {
-        hnsw_index.persist(
-            &collection.meta.name,
-            &self.lmdb_env,
-            self.lmdb_hnsw_index_db,
-        )?;
+        hnsw_index.persist(&self.index_data_map, &collection.meta.name)?;
         *collection.hnsw_index.write() = Some(hnsw_index);
         Ok(())
     }
@@ -1288,11 +1294,7 @@ impl CollectionsMap {
         collection: &Collection,
         inverted_index: Arc<InvertedIndex>,
     ) -> Result<(), WaCustomError> {
-        inverted_index.persist(
-            &collection.meta.name,
-            &self.lmdb_env,
-            self.lmdb_inverted_index_db,
-        )?;
+        inverted_index.persist(&self.index_data_map, &collection.meta.name)?;
         *collection.inverted_index.write() = Some(inverted_index);
         Ok(())
     }
@@ -1302,11 +1304,7 @@ impl CollectionsMap {
         collection: &Collection,
         tf_idf_index: Arc<TFIDFIndex>,
     ) -> Result<(), WaCustomError> {
-        tf_idf_index.persist(
-            &collection.meta.name,
-            &self.lmdb_env,
-            self.lmdb_tf_idf_index_db,
-        )?;
+        tf_idf_index.persist(&self.index_data_map, &collection.meta.name)?;
         *collection.tf_idf_index.write() = Some(tf_idf_index);
         Ok(())
     }
@@ -1325,20 +1323,21 @@ impl CollectionsMap {
         collection: &Collection,
         usv_index: Arc<USVIndex>,
     ) -> Result<(), WaCustomError> {
-        usv_index.persist(
-            &collection.meta.name,
-            &self.lmdb_env,
-            self.lmdb_usv_index_db,
-        )?;
+        usv_index.persist(&self.index_data_map, &collection.meta.name)?;
         *collection.usv_index.write() = Some(usv_index);
         Ok(())
     }
 
-    /// inserts a collection into the collections map
-    #[allow(dead_code)]
+    /// inserts a collection into the collections map, as well as
+    /// stores the collection metadata (along with persisting it to
+    /// disk)
     pub fn insert_collection(&self, collection: Arc<Collection>) -> Result<(), WaCustomError> {
+        let metadata = collection.meta.clone();
         self.inner_collections
             .insert(collection.meta.name.to_owned(), collection);
+        self.metadata_map
+            .insert(metadata)
+            .map_err(|e| WaCustomError::BufIo(Arc::new(e)))?;
         Ok(())
     }
 
@@ -1363,7 +1362,7 @@ impl CollectionsMap {
         match self.inner_collections.get(name) {
             Some(collection) => match collection.hnsw_index.write().take() {
                 Some(hnsw_index) => {
-                    HNSWIndex::delete(&self.lmdb_env, self.lmdb_hnsw_index_db, name)?;
+                    self.index_data_map.remove(name, IndexType::Hnsw)?;
                     Ok(Some(hnsw_index))
                 }
                 None => Ok(None),
@@ -1379,7 +1378,7 @@ impl CollectionsMap {
         match self.inner_collections.get(name) {
             Some(collection) => match collection.inverted_index.write().take() {
                 Some(inverted_index) => {
-                    InvertedIndex::delete(&self.lmdb_env, self.lmdb_inverted_index_db, name)?;
+                    self.index_data_map.remove(name, IndexType::Inverted)?;
                     Ok(Some(inverted_index))
                 }
                 None => Ok(None),
@@ -1395,7 +1394,7 @@ impl CollectionsMap {
         match self.inner_collections.get(name) {
             Some(collection) => match collection.tf_idf_index.write().take() {
                 Some(tf_idf_index) => {
-                    TFIDFIndex::delete(&self.lmdb_env, self.lmdb_tf_idf_index_db, name)?;
+                    self.index_data_map.remove(name, IndexType::TfIdf)?;
                     Ok(Some(tf_idf_index))
                 }
                 None => Ok(None),
@@ -1404,15 +1403,23 @@ impl CollectionsMap {
         }
     }
 
-    /// removes a collection from the in-memory map
+    // @TODO: Why not `remove_usv_index`?
+
+    /// Removes a collection from the in-memory map, as well as
+    /// deletes the collection metadata persisted on the disk
     ///
     /// returns the removed collection in case of success
     ///
-    /// returns error if not found
-    #[allow(dead_code)]
+    /// returns error if not found or in case there's an error
+    /// removing the metadata from the TreeMap persisted to disk
     pub fn remove_collection(&self, name: &str) -> Result<Arc<Collection>, WaCustomError> {
         match self.inner_collections.remove(name) {
-            Some((_, collection)) => Ok(collection),
+            Some((_, collection)) => {
+                self.metadata_map
+                    .remove(name)
+                    .map_err(|e| WaCustomError::BufIo(Arc::new(e)))?;
+                Ok(collection)
+            }
             None => {
                 // collection not found, return an error response
                 Err(WaCustomError::NotFound("collection".into()))
@@ -1435,87 +1442,82 @@ impl CollectionsMap {
 }
 
 pub struct UsersMap {
-    env: Arc<Environment>,
-    users_db: Database,
-    // (username, user details)
-    map: DashMap<String, User>,
+    inner: TreeMap<String, User>,
 }
 
 impl UsersMap {
-    pub fn new(env: Arc<Environment>) -> lmdb::Result<Self> {
-        let users_db = env.create_db(Some("users"), DatabaseFlags::empty())?;
-        let txn = env.begin_ro_txn()?;
-        let mut cursor = txn.open_ro_cursor(users_db)?;
-        let map = DashMap::new();
+    /// Loads the UsersMap from disk (if it exists) or creates a new
+    /// one (if it's the first run).
+    ///
+    /// # Panics
+    /// The method panics if:
+    ///
+    ///   1. fails to open/read from files or
+    ///   2. fails to deserialize existing data
+    ///   3. fails to serialize empty TreeMap on first run
+    pub fn load_or_create() -> Self {
+        let data_path = get_data_path();
+        let file_path = data_path.join("users.dim");
+        let is_file_exists = std::fs::exists(&file_path).expect("Failed to check if file exists");
 
-        for (username, user_bytes) in cursor.iter() {
-            let username = String::from_utf8(username.to_vec()).unwrap();
-            let user = User::deserialize(user_bytes).unwrap();
-            map.insert(username, user);
-        }
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(!is_file_exists)
+            .open(file_path)
+            .unwrap();
 
-        drop(cursor);
-        txn.abort();
+        let dim_bufman = BufferManager::new(file, 8192).unwrap();
+        let data_bufmans = BufferManagerFactory::new(
+            data_path.into(),
+            |root, version: &VersionNumber| root.join(format!("users.{}.data", **version)),
+            8192,
+        );
 
-        Ok(Self { env, users_db, map })
+        // @NOTE: The TreeMap can be deserialized from disk only if
+        // it's initialized and serialized at least once, else it
+        // results in stack overflow. Hence, deserialize if the file
+        // exists, otherwise create a new TreeMap and immediately
+        // serialize it.
+        let inner = if is_file_exists {
+            TreeMap::deserialize(dim_bufman, data_bufmans)
+                .expect("Failed to deserialize TreeMap for UsersMap")
+        } else {
+            let map = TreeMap::new(dim_bufman, data_bufmans);
+            // Immediately serialize it so that the file is created
+            map.serialize().expect("Failed to serialize TreeMap");
+            map
+        };
+        Self { inner }
     }
 
-    pub fn add_user(&self, username: String, password_hash: DoubleSHA256Hash) -> lmdb::Result<()> {
+    pub fn add_user(
+        &self,
+        username: String,
+        password_hash: DoubleSHA256Hash,
+    ) -> Result<(), BufIoError> {
         let user = User {
             username: username.clone(),
             password_hash,
         };
-        let user_bytes = user.serialize();
-        let username_bytes = username.as_bytes();
-
-        let mut txn = self.env.begin_rw_txn()?;
-        txn.put(
-            self.users_db,
-            &username_bytes,
-            &user_bytes,
-            WriteFlags::empty(),
-        )?;
-        txn.commit()?;
-
-        self.map.insert(username, user);
-
+        self.inner.insert(0.into(), &username, user);
+        self.inner.serialize()?;
         Ok(())
     }
 
     pub fn get_user(&self, username: &str) -> Option<User> {
-        self.map.get(username).map(|user| user.value().clone())
+        self.inner.get_latest(&username.into()).cloned()
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct User {
     pub username: String,
     pub password_hash: DoubleSHA256Hash,
 }
 
-impl User {
-    fn serialize(&self) -> Vec<u8> {
-        let username_bytes = self.username.as_bytes();
-        let mut buf = Vec::with_capacity(32 + username_bytes.len());
-        buf.extend_from_slice(&self.password_hash.0);
-        buf.extend_from_slice(username_bytes);
-        buf
-    }
-
-    fn deserialize(buf: &[u8]) -> Result<Self, String> {
-        if buf.len() < 32 {
-            return Err("Input must be at least 32 bytes".to_string());
-        }
-        let mut password_hash = [0u8; 32];
-        password_hash.copy_from_slice(&buf[..32]);
-        let username_bytes = buf[32..].to_vec();
-        let username = String::from_utf8(username_bytes).map_err(|err| err.to_string())?;
-        Ok(Self {
-            username,
-            password_hash: DoubleSHA256Hash(password_hash),
-        })
-    }
-}
+impl CborSerialize for User {}
+impl CborDeserialize for User {}
 
 pub struct SessionDetails {
     pub created_at: u64,
@@ -1668,13 +1670,7 @@ pub fn get_app_env(
     // Add more resilient error handling for collections_map loading
     let collections_map = CollectionsMap::load(env_arc.clone(), config, threadpool)?;
 
-    let users_map = match UsersMap::new(env_arc.clone()) {
-        Ok(map) => map,
-        Err(err) => {
-            println!("Warning: Failed to load users map: {}", err);
-            return Err(WaCustomError::DatabaseError(err.to_string()));
-        }
-    };
+    let users_map = UsersMap::load_or_create();
 
     // Use the admin key as the password instead of hardcoded "admin"
     let username = "admin".to_string();

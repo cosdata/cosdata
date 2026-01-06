@@ -1,7 +1,7 @@
 pub(crate) mod offset_counter;
 pub(crate) mod types;
 
-use super::{IndexOps, InternalSearchResult};
+use super::{IndexData, IndexOps, InternalSearchResult};
 use crate::{
     config_loader::Config,
     metadata::{
@@ -14,6 +14,7 @@ use crate::{
         common::{TSHashTable, WaCustomError},
         meta_persist::store_values_range,
         prob_node::SharedLatestNode,
+        serializer::{CborDeserialize, CborSerialize},
         types::{DistanceMetric, FileOffset, HNSWLevel, InternalId, MetaDb, QuantizationMetric},
         versioning::VersionNumber,
     },
@@ -55,6 +56,9 @@ pub struct HNSWIndexData {
     pub storage_type: StorageType,
     pub sample_threshold: usize,
 }
+
+impl CborSerialize for HNSWIndexData {}
+impl CborDeserialize for HNSWIndexData {}
 
 pub struct HNSWIndex {
     pub root_vec: SharedLatestNode,
@@ -163,7 +167,6 @@ impl IndexOps for HNSWIndex {
     type IndexingInput = DenseInputEmbedding;
     type SearchInput = DenseSearchInput;
     type SearchOptions = DenseSearchOptions;
-    type Data = HNSWIndexData;
 
     fn validate_embedding(&self, embedding: Self::IndexingInput) -> Result<(), WaCustomError> {
         // @TODO(vineet): Add validation for metadata fields (if
@@ -371,10 +374,10 @@ impl IndexOps for HNSWIndex {
         Ok(())
     }
 
-    fn get_data(&self) -> Self::Data {
+    fn get_data(&self) -> Option<IndexData> {
         let offset = self.root_vec_ptr_offset();
         let offset_pseudo = self.pseudo_root_vec_ptr_offset();
-        Self::Data {
+        let data = HNSWIndexData {
             hnsw_params: self.hnsw_params.read().unwrap().clone(),
             levels_prob: self.levels_prob.clone(),
             dim: self.dim,
@@ -384,7 +387,8 @@ impl IndexOps for HNSWIndex {
             distance_metric: *self.distance_metric.read().unwrap(),
             storage_type: *self.storage_type.read().unwrap(),
             sample_threshold: self.sample_threshold,
-        }
+        };
+        Some(IndexData::Hnsw(data))
     }
 
     fn search_internal(

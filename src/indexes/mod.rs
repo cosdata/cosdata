@@ -1,15 +1,22 @@
 use rayon::prelude::*;
 
-use std::{hash::Hasher, sync::RwLock};
+use std::{
+    fs::OpenOptions,
+    hash::{Hash, Hasher},
+    sync::{Arc, RwLock},
+};
 
-use lmdb::{Transaction, WriteFlags};
 use siphasher::sip::SipHasher24;
 
 use crate::{
     config_loader::Config,
     models::{
+        buffered_io::{BufIoError, BufferManager, BufferManagerFactory},
         collection::{Collection, RawVectorEmbedding},
         common::WaCustomError,
+        paths::get_data_path,
+        serializer::{CborDeserialize, CborSerialize},
+        tree_map::{TreeMap, TreeMapKey},
         types::{DocumentId, InternalId, MetaDb, VectorId},
         versioning::VersionNumber,
     },
@@ -20,6 +27,15 @@ pub(crate) mod inverted;
 pub(crate) mod key_value;
 pub(crate) mod tf_idf;
 pub(crate) mod usv;
+
+#[derive(PartialEq, Eq, Hash)]
+pub enum IndexType {
+    Hnsw,
+    Inverted,
+    TfIdf,
+    KeyValue,
+    Usv,
+}
 
 pub type InternalSearchResult = (
     InternalId,
@@ -35,7 +51,6 @@ pub trait IndexOps: Send + Sync {
     type IndexingInput: Send + Sync;
     type SearchInput: Send + Sync;
     type SearchOptions: Send + Sync;
-    type Data: serde::Serialize + serde::de::DeserializeOwned;
 
     fn validate_embedding(&self, embedding: Self::IndexingInput) -> Result<(), WaCustomError>;
 
@@ -156,54 +171,38 @@ pub trait IndexOps: Send + Sync {
         hasher.finish()
     }
 
-    fn get_data(&self) -> Self::Data;
+    fn get_data(&self) -> Option<IndexData>;
 
     fn persist(
         &self,
+        index_data_map: &IndexDataMap,
         collection_name: &str,
-        env: &lmdb::Environment,
-        db: lmdb::Database,
     ) -> Result<(), WaCustomError> {
-        let data = self.get_data();
-        let key = Self::get_key_for_name(collection_name).to_le_bytes();
-        let val = serde_cbor::to_vec(&data)
-            .map_err(|e| WaCustomError::SerializationError(e.to_string()))?;
-
-        let mut txn = env.begin_rw_txn()?;
-        txn.put(db, &key, &val, WriteFlags::empty())?;
-        txn.commit()?;
+        if let Some(data) = self.get_data() {
+            index_data_map
+                .insert(collection_name, data)
+                .map_err(|e| WaCustomError::BufIo(Arc::new(e)))?;
+        }
         Ok(())
     }
 
-    fn load_data(
-        env: &lmdb::Environment,
-        db: lmdb::Database,
-        collection_name: &str,
-    ) -> Result<Option<Self::Data>, WaCustomError> {
-        let txn = env.begin_ro_txn()?;
-        let key = Self::get_key_for_name(collection_name).to_le_bytes();
-        let data_bytes = match txn.get(db, &key) {
-            Ok(bytes) => Ok(bytes),
-            Err(lmdb::Error::NotFound) => return Ok(None),
-            Err(err) => Err(err),
-        }?;
-        let data = serde_cbor::from_slice(data_bytes)
-            .map_err(|e| WaCustomError::DeserializationError(e.to_string()))?;
+    // fn load_data<'a>(
+    //     index_data_map: &'a IndexDataMap,
+    //     collection_name: &str,
+    //     index_type: IndexType,
+    // ) -> Option<&'a IndexData> {
+    //     index_data_map.get(collection_name, index_type)
+    // }
 
-        Ok(data)
-    }
-
-    fn delete(
-        env: &lmdb::Environment,
-        db: lmdb::Database,
-        collection_name: &str,
-    ) -> Result<(), WaCustomError> {
-        let key = Self::get_key_for_name(collection_name).to_le_bytes();
-        let mut txn = env.begin_rw_txn()?;
-        txn.del(db, &key, None)?;
-        txn.commit()?;
-        Ok(())
-    }
+    // // @TODO: To be implemented in terms of TreeMap
+    // fn delete(
+    //     index_data_map: &'a IndexDataMap,
+    //     collection_name: &str,
+    //     index_type: IndexType,
+    // ) -> Result<(), WaCustomError> {
+    //     index_data_map.remove
+    //     Ok(())
+    // }
 
     fn search_internal(
         &self,
@@ -271,5 +270,111 @@ pub trait IndexOps: Send + Sync {
             .into_par_iter()
             .map(|query| self.search(collection, query, options, config, return_raw_text))
             .collect()
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub enum IndexData {
+    Hnsw(hnsw::HNSWIndexData),
+    Inverted(inverted::InvertedIndexData),
+    TfIdf(tf_idf::TFIDFIndexData),
+    Usv(usv::USVIndexData),
+}
+
+impl IndexData {
+    fn index_type(&self) -> IndexType {
+        match self {
+            Self::Hnsw(_) => IndexType::Hnsw,
+            Self::Inverted(_) => IndexType::Inverted,
+            Self::TfIdf(_) => IndexType::TfIdf,
+            Self::Usv(_) => IndexType::Usv,
+        }
+    }
+}
+
+impl CborSerialize for IndexData {}
+impl CborDeserialize for IndexData {}
+
+/// Index is identified by collection name (string) and type of index
+#[derive(PartialEq, Eq, Hash)]
+struct IndexId(String, IndexType);
+
+impl TreeMapKey for IndexId {
+    fn key(&self) -> u64 {
+        let mut hasher = SipHasher24::new();
+        self.hash(&mut hasher);
+        hasher.finish()
+    }
+}
+
+/// Persistent storage for index data, implemented using TreeMap
+pub struct IndexDataMap {
+    inner: TreeMap<IndexId, IndexData>,
+}
+
+impl IndexDataMap {
+    /// Loads the IndexDataMap from disk (if it exists) or
+    /// creates a new one (if it's the first run).
+    ///
+    /// # Panics
+    /// The method panics if:
+    ///
+    ///   1. fails to open/read from files or
+    ///   2. fails to deserialize existing data
+    ///   3. fails to serialize empty TreeMap on first run
+    pub fn load_or_create() -> Self {
+        let data_path = get_data_path();
+        let file_path = data_path.join("indexes.dim");
+        let is_file_exists = std::fs::exists(&file_path).expect("Failed to check if file exists");
+
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(!is_file_exists)
+            .open(file_path)
+            .unwrap();
+
+        let dim_bufman = BufferManager::new(file, 8192).unwrap();
+        let data_bufmans = BufferManagerFactory::new(
+            data_path.into(),
+            |root, version: &VersionNumber| root.join(format!("indexes.{}.data", **version)),
+            8192,
+        );
+
+        // @NOTE: The TreeMap can be deserialized from disk only if
+        // it's initialized and serialized at least once, else it
+        // results in stack overflow. Hence, deserialize if the file
+        // exists, otherwise create a new TreeMap and immediately
+        // serialize it.
+        let inner = if is_file_exists {
+            TreeMap::deserialize(dim_bufman, data_bufmans)
+                .expect("Failed to deserialize TreeMap for CollectionMetadataMap")
+        } else {
+            let map = TreeMap::new(dim_bufman, data_bufmans);
+            // Immediately serialize it so that the file is created
+            map.serialize().expect("Failed to serialize TreeMap");
+            map
+        };
+        Self { inner }
+    }
+
+    pub fn get(&self, collection_name: &str, index_type: IndexType) -> Option<&IndexData> {
+        let index_id = IndexId(collection_name.to_owned(), index_type);
+        self.inner.get_latest(&index_id)
+    }
+
+    pub fn insert(&self, collection_name: &str, data: IndexData) -> Result<(), BufIoError> {
+        let index_type = data.index_type();
+        let index_id = IndexId(collection_name.to_owned(), index_type);
+        self.inner.insert(0.into(), &index_id, data);
+        self.inner.serialize()?;
+        Ok(())
+    }
+
+    pub fn remove(&self, collection_name: &str, index_type: IndexType) -> Result<(), BufIoError> {
+        let index_id = IndexId(collection_name.to_owned(), index_type);
+        self.inner.delete(0.into(), &index_id);
+        self.inner.serialize()?;
+        Ok(())
     }
 }

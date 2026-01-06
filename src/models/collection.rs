@@ -6,6 +6,7 @@ use super::common::WaCustomError;
 use super::indexing_manager::IndexingManager;
 use super::meta_persist::store_highest_internal_id;
 use super::paths::get_data_path;
+use super::serializer::{CborDeserialize, CborSerialize};
 use super::tree_map::{TreeMap, TreeMapVec};
 use super::types::{get_collections_path, DocumentId, InternalId, MetaDb, VectorId};
 use super::versioning::{VersionControl, VersionNumber, VersionSource};
@@ -21,7 +22,6 @@ use crate::indexes::usv::{USVIndex, USVInputEmbedding};
 use crate::indexes::IndexOps;
 use crate::metadata::{MetadataFields, MetadataSchema};
 use chrono::{DateTime, TimeZone, Utc};
-use lmdb::{Database, Environment, Transaction, WriteFlags};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_cbor::to_vec;
@@ -93,6 +93,77 @@ pub struct CollectionMetadata {
     pub metadata_schema: Option<MetadataSchema>,
     pub config: CollectionConfig,
     pub store_raw_text: bool,
+}
+
+impl CborSerialize for CollectionMetadata {}
+impl CborDeserialize for CollectionMetadata {}
+
+pub struct CollectionMetadataMap {
+    inner: TreeMap<String, CollectionMetadata>,
+}
+
+impl CollectionMetadataMap {
+    /// Loads the CollectionMetadataMap from disk (if it exists) or
+    /// creates a new one (if it's the first run).
+    ///
+    /// # Panics
+    /// The method panics if:
+    ///
+    ///   1. fails to open/read from files or
+    ///   2. fails to deserialize existing data
+    ///   3. fails to serialize empty TreeMap on first run
+    pub fn load_or_create() -> Self {
+        let data_path = get_data_path();
+        let file_path = data_path.join("collections.dim");
+        let is_file_exists = std::fs::exists(&file_path).expect("Failed to check if file exists");
+
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(!is_file_exists)
+            .open(file_path)
+            .unwrap();
+
+        let dim_bufman = BufferManager::new(file, 8192).unwrap();
+        let data_bufmans = BufferManagerFactory::new(
+            data_path.into(),
+            |root, version: &VersionNumber| root.join(format!("collections.{}.data", **version)),
+            8192,
+        );
+
+        // @NOTE: The TreeMap can be deserialized from disk only if
+        // it's initialized and serialized at least once, else it
+        // results in stack overflow. Hence, deserialize if the file
+        // exists, otherwise create a new TreeMap and immediately
+        // serialize it.
+        let inner = if is_file_exists {
+            TreeMap::deserialize(dim_bufman, data_bufmans)
+                .expect("Failed to deserialize TreeMap for CollectionMetadataMap")
+        } else {
+            let map = TreeMap::new(dim_bufman, data_bufmans);
+            // Immediately serialize it so that the file is created
+            map.serialize().expect("Failed to serialize TreeMap");
+            map
+        };
+        Self { inner }
+    }
+
+    pub fn values(&self) -> Vec<CollectionMetadata> {
+        self.inner.latest_values().cloned().collect()
+    }
+
+    pub fn insert(&self, metadata: CollectionMetadata) -> Result<(), BufIoError> {
+        let coll_name = metadata.name.clone();
+        self.inner.insert(0.into(), &coll_name, metadata);
+        self.inner.serialize()?;
+        Ok(())
+    }
+
+    pub fn remove(&self, coll_name: &str) -> Result<(), BufIoError> {
+        self.inner.delete(0.into(), &coll_name.to_owned());
+        self.inner.serialize()?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -336,40 +407,6 @@ impl Collection {
     /// serializes the collection
     pub fn serialize(&self) -> Result<Vec<u8>, WaCustomError> {
         to_vec(&self.meta).map_err(|e| WaCustomError::SerializationError(e.to_string()))
-    }
-
-    /// persists the collection instance on disk (lmdb -> collections database)
-    pub fn persist(&self, env: &Environment, db: Database) -> Result<(), WaCustomError> {
-        let key = self.get_key();
-        let value = self.serialize()?;
-
-        let mut txn = env
-            .begin_rw_txn()
-            .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-
-        txn.put(db, &key, &value, WriteFlags::empty())
-            .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-        txn.commit()
-            .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-
-        Ok(())
-    }
-
-    /// deletes a collection instance from the disk (lmdb -> collections database)
-    #[allow(dead_code)]
-    pub fn delete(&self, env: &Environment, db: Database) -> Result<(), WaCustomError> {
-        let key = self.get_key();
-
-        let mut txn = env
-            .begin_rw_txn()
-            .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-
-        txn.del(db, &key, None)
-            .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-        txn.commit()
-            .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
-
-        Ok(())
     }
 
     pub fn get_hnsw_index(&self) -> Option<Arc<HNSWIndex>> {

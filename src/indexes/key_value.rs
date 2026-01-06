@@ -12,7 +12,7 @@ use crate::{
     },
 };
 
-use super::IndexOps;
+use super::{IndexData, IndexOps};
 
 pub struct KeyValueInputPair {
     pub id: InternalId,
@@ -55,7 +55,6 @@ impl IndexOps for KeyValueIndex {
     type IndexingInput = KeyValueInputPair;
     type SearchInput = ();
     type SearchOptions = ();
-    type Data = ();
 
     fn validate_embedding(&self, _embedding: Self::IndexingInput) -> Result<(), WaCustomError> {
         Ok(())
@@ -122,7 +121,9 @@ impl IndexOps for KeyValueIndex {
         Ok(())
     }
 
-    fn get_data(&self) -> Self::Data {}
+    fn get_data(&self) -> Option<IndexData> {
+        None
+    }
 
     fn search_internal(
         &self,
@@ -135,14 +136,5 @@ impl IndexOps for KeyValueIndex {
         Err(WaCustomError::NotImplemented(
             "Regular index search cannot be used with key value index".to_string(),
         ))
-    }
-
-    fn persist(
-        &self,
-        _collection_name: &str,
-        _env: &lmdb::Environment,
-        _db: lmdb::Database,
-    ) -> Result<(), WaCustomError> {
-        Ok(())
     }
 }

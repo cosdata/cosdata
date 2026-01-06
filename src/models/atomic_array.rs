@@ -136,3 +136,69 @@ impl<T, const N: usize> AtomicArray<T, N> {
         (return_value, res.is_ok())
     }
 }
+
+pub struct AtomicArrayIter<'a, T, const N: usize> {
+    array: &'a AtomicArray<T, N>,
+    index: usize,
+}
+
+impl<T, const N: usize> Iterator for AtomicArrayIter<'_, T, N> {
+    type Item = *mut T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index >= N {
+            return None;
+        }
+
+        let ptr = self.array.items[self.index].load(Ordering::Acquire);
+        self.index += 1;
+        Some(ptr)
+    }
+}
+
+impl<'a, T, const N: usize> IntoIterator for &'a AtomicArray<T, N> {
+    type Item = *mut T;
+    type IntoIter = AtomicArrayIter<'a, T, N>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        AtomicArrayIter {
+            array: self,
+            index: 0,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AtomicArray;
+
+    #[test]
+    fn test_atomic_array_iterator() {
+        let arr: AtomicArray<u8, 8> = AtomicArray::new();
+        assert_eq!(0, arr.len());
+        assert!(arr.is_empty());
+
+        let mut x: u8 = 100;
+        let x_ptr: *mut u8 = &mut x;
+        arr.push(x_ptr);
+
+        assert_eq!(1, arr.len());
+
+        let mut y: u8 = 200;
+        let y_ptr: *mut u8 = &mut y;
+        arr.insert(4, y_ptr);
+
+        let mut itr = arr.into_iter();
+        unsafe {
+            assert_eq!(100, *itr.next().unwrap()); // 0
+            assert!(itr.next().unwrap().is_null()); // 1
+            assert!(itr.next().unwrap().is_null()); // 2
+            assert!(itr.next().unwrap().is_null()); // 3
+            assert_eq!(200, *itr.next().unwrap()); // 4
+            assert!(itr.next().unwrap().is_null()); // 5
+            assert!(itr.next().unwrap().is_null()); // 6
+            assert!(itr.next().unwrap().is_null()); // 7
+            assert!(itr.next().is_none())
+        };
+    }
+}

@@ -37,7 +37,6 @@ pub(crate) async fn create_collection(
     }
 
     let env = &ctx.ain_env.persist;
-    let collections_db = &ctx.ain_env.collections_map.lmdb_collections_db;
     let lmdb = MetaDb::from_env(env.clone(), &name)
         .map_err(|err| CollectionsError::WaCustomError(WaCustomError::from(err)))?;
     let (vcs, hash) = VersionControl::new(env.clone(), lmdb.db)
@@ -71,15 +70,11 @@ pub(crate) async fn create_collection(
     )
     .map_err(CollectionsError::WaCustomError)?;
 
-    // adding the created collection into the in-memory map
+    // Add the created collection to the collections map (also
+    // persists the collection metadata to disk)
     ctx.ain_env
         .collections_map
         .insert_collection(collection.clone())
-        .map_err(CollectionsError::WaCustomError)?;
-
-    // persisting collection after creation
-    collection
-        .persist(env, *collections_db)
         .map_err(CollectionsError::WaCustomError)?;
 
     collection
@@ -144,22 +139,10 @@ pub(crate) async fn delete_collection_by_name(
     ctx: Arc<AppContext>,
     name: &str,
 ) -> Result<Arc<Collection>, CollectionsError> {
-    let env = &ctx.ain_env.persist;
-    let collections_db = &ctx.ain_env.collections_map.lmdb_collections_db;
-
-    let collection = get_collection_by_name(ctx.clone(), name).await?;
-
-    // deleting collection from disk
-    collection
-        .delete(env, *collections_db)
-        .map_err(CollectionsError::WaCustomError)?;
-
-    // deleting collection from in-memory map
     let collection = ctx
         .ain_env
         .collections_map
         .remove_collection(name)
         .map_err(CollectionsError::WaCustomError)?;
-
     Ok(collection)
 }

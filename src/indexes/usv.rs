@@ -1,5 +1,5 @@
 use super::inverted::types::{SamplingData, SparsePair};
-use super::{IndexOps, InternalSearchResult};
+use super::{IndexData, IndexOps, InternalSearchResult};
 use crate::models::meta_persist::store_usv_values_upper_bound;
 use crate::models::usv_index::USVIndexRoot;
 use crate::{
@@ -111,7 +111,6 @@ impl IndexOps for USVIndex {
     type IndexingInput = USVInputEmbedding;
     type SearchInput = USVSearchInput;
     type SearchOptions = USVSearchOptions;
-    type Data = USVIndexData;
 
     fn validate_embedding(&self, _embedding: Self::IndexingInput) -> Result<(), WaCustomError> {
         Ok(())
@@ -267,11 +266,12 @@ impl IndexOps for USVIndex {
         Ok(())
     }
 
-    fn get_data(&self) -> Self::Data {
-        Self::Data {
+    fn get_data(&self) -> Option<IndexData> {
+        let data = USVIndexData {
             quantization_bits: self.root.root.quantization_bits,
             sample_threshold: self.sample_threshold,
-        }
+        };
+        Some(IndexData::Usv(data))
     }
 
     fn search_internal(

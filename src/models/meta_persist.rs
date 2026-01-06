@@ -2,10 +2,7 @@ use crate::macros::key;
 use crate::models::common::*;
 use crate::models::types::*;
 use crate::models::versioning::*;
-use lmdb::{Cursor, Database, DatabaseFlags, Environment, Transaction, WriteFlags};
-use serde_cbor::from_slice;
-
-use super::collection::CollectionMetadata;
+use lmdb::{Transaction, WriteFlags};
 
 /// updates the current version of a collection
 pub fn update_current_version(
@@ -295,27 +292,4 @@ pub fn retrieve_highest_internal_id(lmdb: &MetaDb) -> Result<Option<u32>, WaCust
     let id = u32::from_le_bytes(bytes);
 
     Ok(Some(id))
-}
-
-// TODO use lmdb_init_db function inside this function
-pub fn lmdb_init_collections_db(env: &Environment) -> lmdb::Result<Database> {
-    env.create_db(Some("collections"), DatabaseFlags::empty())
-}
-
-pub fn lmdb_init_db(env: &Environment, name: &str) -> lmdb::Result<Database> {
-    env.create_db(Some(name), DatabaseFlags::empty())
-}
-
-pub(crate) fn load_collections(
-    env: &Environment,
-    db: Database,
-) -> lmdb::Result<Vec<CollectionMetadata>> {
-    let mut collections = Vec::new();
-    let txn = env.begin_ro_txn().unwrap();
-    let mut cursor = txn.open_ro_cursor(db).unwrap();
-    for (_k, v) in cursor.iter() {
-        let col: CollectionMetadata = from_slice(v).unwrap();
-        collections.push(col);
-    }
-    Ok(collections)
 }
