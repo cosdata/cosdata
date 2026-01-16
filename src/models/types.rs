@@ -1653,10 +1653,23 @@ pub fn get_app_env(
 
     // Ensure the database directory exists
     create_dir_all(&db_path).map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
+
+    let lmdb_cfg = config.lmdb.as_ref();
+
+    let lmdb_map_size = lmdb_cfg.map(|c| c.map_size).unwrap_or(1_073_741_824); // default: 1GB
+
+    let lmdb_max_dbs = lmdb_cfg.map(|c| c.max_dbs).unwrap_or(10);
+
+    log::info!(
+        "Initializing LMDB: map_size={} bytes, max_dbs={}",
+        lmdb_map_size,
+        lmdb_max_dbs
+    );
+
     // Initialize the environment
     let env = Environment::new()
-        .set_max_dbs(10)
-        .set_map_size(1048576000) // Set the maximum size of the database to 1GB
+        .set_max_dbs(lmdb_max_dbs)
+        .set_map_size(lmdb_map_size)
         .open(&db_path)
         .map_err(|e| WaCustomError::DatabaseError(e.to_string()))?;
 
