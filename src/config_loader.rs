@@ -25,6 +25,7 @@ pub struct Config {
     #[serde(default)]
     pub cache: CacheConfig,
     pub epoch_length: u64,
+    pub lmdb: Option<LmdbConfig>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -204,6 +205,12 @@ pub struct CacheConfig {
     // Probability factor for eviction (0.0-1.0)
     #[serde(default = "default_eviction_probability")]
     pub eviction_probability: f32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LmdbConfig {
+    pub map_size: usize,
+    pub max_dbs: u32,
 }
 
 fn default_max_collections() -> usize {

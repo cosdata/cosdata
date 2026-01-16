@@ -40,3 +40,7 @@ batch_size = 8  # only required with "batch" indexing mode
 [grpc]
 host = "127.0.0.1" # Optional - if not specified uses default loopback address
 port = 50051       # Optional - if not specified will use default 50051
+
+[lmdb]
+map_size = 1_073_741_824 # 1 GB default
+max_dbs = 10
